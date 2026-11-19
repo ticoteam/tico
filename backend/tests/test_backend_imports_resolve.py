@@ -50,12 +50,9 @@ def imported_modules(file):
 
 
 def test_every_backend_import_names_a_module_that_exists():
-    from backend.migrations import SUPERSEDED  # recorded and never loaded: they may import what is gone
-
     missing = [
         f"{file.relative_to(REPO)}:{line}: {'.'.join(module)}"
         for file in sorted(BACKEND.rglob("*.py"))
-        if not (file.parent.name == "migrations" and file.stem in SUPERSEDED)
         for line, module in imported_modules(file)
         if not is_module(module)
     ]

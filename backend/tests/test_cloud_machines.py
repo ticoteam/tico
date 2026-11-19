@@ -11,7 +11,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -550,6 +549,102 @@ def test_an_hq_outage_never_uses_up_the_tries(cloud):
     assert cloud.tick(CM.BACKOFF_MAX) == ["create"] and cloud.row()["machine_id"]
 
 
+def test_shared_create_busy_backs_off_until_a_machine_can_enroll(cloud, monkeypatch):
+    adopt(cloud, place="shared")
+    work(cloud)
+    create = cloud.hq.create
+    tries = CM.ENROLL_TRIES + 1
+
+    def busy(*args):
+        machine = create(*args)
+        if cloud.hq.n <= tries:
+            cloud.hq.machines[machine["id"]].update(state="failed", last_error="busy")
+            raise CM.Refused("busy", 503)
+        return machine
+
+    monkeypatch.setattr(cloud.hq, "create", busy)
+    for attempt in range(tries):
+        assert cloud.tick() == ["create"] * (attempt + 1)
+        delay = CM.BACKOFF * 2**attempt
+        retry_at = cloud.at[0] + delay
+        cloud.tick(delay - 1)
+        failed = cloud.row(CM.SHARED)
+        assert failed["state"] == "failed" and failed["problem"] == "hq:busy"
+        assert failed["enroll_fails"] == 0 and failed["next_try_at"] == retry_at
+        assert len(cloud.hq.actions()) == attempt + 1
+        cloud.at[0] += 1
+
+    assert cloud.tick() == ["create"] * (tries + 1)
+    computer = post(
+        cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"}
+    )
+    enrolled = cloud.row(CM.SHARED)
+    assert enrolled["runner_id"] == computer["runner_id"]
+    assert enrolled["enroll_fails"] == 0 and enrolled["problem"] == ""
+
+
+@pytest.mark.parametrize("already_counted", [False, True])
+def test_a_listed_temporary_failure_backs_off_without_extending_on_each_list(cloud, already_counted):
+    adopt(cloud)
+    work(cloud)
+    assert cloud.tick() == ["create"]
+    machine_id = cloud.row()["machine_id"]
+    code = "removing" if already_counted else "version_conflict"
+    cloud.hq.machines[machine_id].update(state="failed", last_error=code)
+    if already_counted:
+        with cloud.store.transaction() as c:
+            CM.save(c, "ops", state="failed", last_error=code, problem="no_enroll", enroll_fails=CM.ENROLL_TRIES)
+            c.execute("INSERT INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, "ops"))
+    expected_count = CM.ENROLL_TRIES - 1 if already_counted else 0
+    assert cloud.tick(CM.SYNC) == ["create"]
+    failed = cloud.row()
+    assert failed["state"] == "failed" and failed["problem"] == "hq:" + code
+    assert failed["enroll_fails"] == expected_count
+    assert failed["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cloud.manager.synced = None
+    assert cloud.tick(CM.BACKOFF - 1) == ["create"]
+    assert cloud.row()["next_try_at"] == failed["next_try_at"]
+    assert cloud.tick(1) == ["create", "create"]
+    assert cloud.row()["machine_id"] != machine_id and cloud.row()["enroll_fails"] == expected_count
+
+
+def test_a_failed_machine_that_enrolled_does_not_use_the_replacements_retry_budget(cloud):
+    runner_id = shared_enrolled(cloud, "ops")
+    machine_id = cloud.row(CM.SHARED)["machine_id"]
+    cloud.hq.machines[machine_id].update(state="failed", last_error="not_ready")
+    assert cloud.tick(CM.SYNC) == ["create", "create"]
+    fresh = cloud.row(CM.SHARED)
+    assert fresh["machine_id"] != machine_id and fresh["enroll_fails"] == 0
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()[0]
+
+
+def test_heartbeat_not_running_relists_and_resumes_the_same_shared_machine(cloud, monkeypatch):
+    runner_id = shared_enrolled(cloud, "ops")
+    machine_id = cloud.row(CM.SHARED)["machine_id"]
+    idle(cloud)
+    assert cloud.tick(CM.PAUSE_MINUTES * 60)[-1] == "stop"
+    post(cloud.api, "cloud-machines/shared", {"always_on": True})
+    assert cloud.tick()[-1] == "start"
+    heartbeat = cloud.hq.heartbeat
+
+    def stopped(mid):
+        cloud.hq.machines[mid]["state"] = "stopped"
+        return heartbeat(mid)
+
+    monkeypatch.setattr(cloud.hq, "heartbeat", stopped)
+    cloud.hq.fail["heartbeat"] = [CM.Refused("not_running", 409)]
+    assert cloud.tick(CM.HEARTBEAT)[-1] == "heartbeat"
+    assert cloud.tick(CM.BACKOFF - 1)[-1] == "heartbeat"
+    assert cloud.row(CM.SHARED)["state"] == "stopped"
+    assert cloud.tick(1)[-1] == "start"
+    current = cloud.row(CM.SHARED)
+    assert current["machine_id"] == machine_id and current["runner_id"] == runner_id
+    assert cloud.hq.actions().count("create") == 1
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()[0] is None
+
+
 def test_a_made_machine_boat_then_fails_is_made_again_for_the_same_work(cloud):
     adopt(cloud)
     work(cloud)
@@ -789,15 +884,20 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
 
 
 def silent_with_waiting_work(cloud):
-    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job."""
+    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job.
+
+    Both times are on the manager's clock (`cloud.at[0]`), which starts at the real time and then moves only by ticks.
+    A job's created_at and a heartbeat are stamped with the real time, which has moved on by however long setup took:
+    on a slow runner over a second, so OFFLINE_RESTART_DELAY + 1 after the post was not yet the delay after it."""
     computer = enrolled(cloud)
     idle(cloud)
     work(cloud, text="Please run after the machine restarts.")
     with cloud.store.transaction() as c:
         CM.save(c, "ops", state="running")
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (CM.stamp(cloud.at[0]),))
         c.execute(
             "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-            (H.shift(H.now(), minutes=-30), computer["runner_id"]),
+            (CM.stamp(cloud.at[0] - 30 * 60), computer["runner_id"]),
         )
     cloud.hq.machines["m1"]["state"] = "running"
     cloud.hq.calls.clear()
@@ -839,8 +939,8 @@ def with_botops(cloud):
 def machine_cards(cloud):
     with cloud.store.read() as c:
         return [
-            dict(r)
-            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+            {**dict(r), "body": H.task_words(c, r["id"])}  # what Tico gave BotOps: its instructions
+            for r in c.execute("SELECT id,title,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
         ]
 
 
@@ -881,7 +981,7 @@ def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud
         assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
     assert len(machine_cards(cloud)) == 1
     with cloud.store.transaction() as c:
-        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        H.task_done(c, H.TICO_ACTOR, first, "Machine replaced.")
         assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 
@@ -1254,7 +1354,7 @@ def test_deletion_cleanup_is_bounded_and_continues_without_sizes_or_a_readable_l
             mid = f"old-{n}"
             CM.intend_delete(c, {"bot": "ops", "machine_id": mid, "runner_id": None})
             cloud.hq.machines[mid] = {"id": mid, "key": f"ops:superseded:{n}", "state": "deleted"}
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("unreachable")))
+    cloud.hq.fail["list"] = CM.Refused("unreachable")
     cloud.manager.synced = None
     for left in (3, 1, 0):
         cloud.tick(CM.TICK)
@@ -1273,7 +1373,7 @@ def test_a_fresh_machine_can_enroll_after_its_create_reply_is_lost_while_the_old
     cloud.hq.fail["delete"] = CM.Refused("unreachable")
     assert delete_target(cloud, target).status_code == 502
     cloud.hq.machines[old_id].update(key="ops:superseded:old", pending="delete")
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     create = cloud.hq.create
 
     def lost(*args):
@@ -1475,7 +1575,7 @@ def test_expiry_is_counted_before_delete_and_old_settlement_cannot_spend_it_agai
         raise CM.Refused("unreachable")
 
     monkeypatch.setattr(cloud.hq, "delete", lost)
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)
     assert cloud.row()["enroll_fails"] == 1 and cloud.row()["deleting"]
     cloud.tick(CM.TICK)
@@ -1551,10 +1651,14 @@ def test_an_ambiguous_create_has_bounded_recovery_across_restarts(cloud, monkeyp
     target = deletion_target(cloud, kind)
     old_id = cloud.row(target.key)["machine_id"]
     assert delete_target(cloud, target).status_code == 200
-    listed = cloud.hq.list
-    monkeypatch.setattr(cloud.hq, "delete", Mock(return_value={"ok": True}))
+
+    def accepted(mid):  # HQ takes the delete but does not settle it: the intent stays until a later reply does
+        cloud.hq.calls.append(("delete", mid))
+        return {"ok": True}
+
+    monkeypatch.setattr(cloud.hq, "delete", accepted)
     cloud.hq.fail["create"] = [refusal]
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick(CM.TICK)
     asked = cloud.row(target.key)["create_asked_at"]
     assert asked == cloud.at[0]
@@ -1567,7 +1671,7 @@ def test_an_ambiguous_create_has_bounded_recovery_across_restarts(cloud, monkeyp
         assert delete_target(cloud, target).status_code == 200
         assert cloud.row(target.key)["create_asked_at"] is None
     elif recover == "list":
-        monkeypatch.setattr(cloud.hq, "list", listed)
+        cloud.hq.fail.pop("list")
         cloud.manager.synced = None
     else:
         cloud.at[0] = asked + CM.CREATE_HOLD - 1
@@ -1587,7 +1691,7 @@ def test_an_ambiguous_first_create_retries_at_the_deadline_without_a_readable_li
     adopt(cloud)
     work(cloud)
     cloud.hq.fail["create"] = [CM.Refused("http_503", 503)]
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
+    cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick()
     asked = cloud.row()["create_asked_at"]
     cloud.tick(CM.CREATE_HOLD - 1)
@@ -1610,6 +1714,8 @@ def test_shared_settings_and_member_moves_keep_the_failure_limit_until_explicit_
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
     cloud.tick(CM.TICK)
     assert cloud.hq.n == CM.ENROLL_TRIES and cloud.row(CM.SHARED)["problem"] == "no_enroll"
+    waiting = health_of(cloud)["waiting"]
+    assert waiting["status"] == "bad" and "Shared cloud machine" in waiting["summary"]
     response = cloud.api.delete("/api/v2/cloud-machines/shared", headers=headers())
     assert response.status_code == 200, response.text
     assert cloud.row(CM.SHARED)["enroll_fails"] == 0
@@ -1734,18 +1840,22 @@ def test_delete_retries_without_a_per_id_read_and_only_its_settlement_clears_int
     target = deletion_target(cloud, "replace")
     old_id = cloud.row()["machine_id"]
     assert delete_target(cloud, target).status_code == 200
-    monkeypatch.setattr(cloud.hq, "list", Mock(side_effect=CM.Refused("oversized")))
-    delete = Mock(return_value={"ok": True})
+    cloud.hq.fail["list"] = CM.Refused("oversized")
+
+    def answer(mid):  # HQ's reply to a delete: final (state deleted) or only accepted
+        cloud.hq.calls.append(("delete", mid))
+        return {"id": mid, "state": "deleted"} if settled == "deleted" else {"ok": True}
+
     if settled == "404":
-        delete.side_effect = CM.Refused("http_404", 404)
+        cloud.hq.fail["delete"] = CM.Refused("http_404", 404)
     elif settled == "not_found":
-        delete.side_effect = CM.Refused("not_found", 400)
-    elif settled == "deleted":
-        delete.return_value = {"id": old_id, "state": "deleted"}
-    monkeypatch.setattr(cloud.hq, "delete", delete)
+        cloud.hq.fail["delete"] = CM.Refused("not_found", 400)
+    else:
+        monkeypatch.setattr(cloud.hq, "delete", answer)
+    cloud.hq.calls.clear()
     cloud.at[0] += CM.SYNC
     cloud.manager.sync(cloud.hq, cloud.at[0])
-    delete.assert_called_once_with(old_id)
+    assert [c for c in cloud.hq.calls if c[0] == "delete"] == [("delete", old_id)]
     with cloud.store.read() as c:
         assert CM.deleting(c, old_id) == (not settled)
 
@@ -2821,7 +2931,7 @@ def sign_in_report(cloud, computer, authenticated):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
@@ -2941,9 +3051,67 @@ def test_a_plan_an_owner_took_off_a_computer_is_not_brought_back_by_a_later_chan
 def test_a_claude_bot_with_a_codex_task_model_gets_the_codex_plan_too(cloud):
     sid = plan_company(cloud, "ops")
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    task_on(cloud.api, "ops", "gpt-6.1-sol", "codex")
+    task_on(cloud.api, "ops", "gpt-6.2-sol", "codex")
     computer = own_computer(cloud, "ops")
     assert given(cloud, computer["runner_id"]) == {"claude": sid, "codex": csid}
+
+
+def people(cloud, runner_id):
+    with cloud.store.read() as c:
+        return {
+            r["runtime"]: r["person"]
+            for r in c.execute("SELECT runtime,person FROM computer_subscriptions WHERE runner_id=?", (runner_id,))
+        }
+
+
+def test_a_replaced_machine_keeps_every_plan_the_old_one_had_a_persons_plans_included(cloud):
+    # Tico Team, Nov 18: Reviewer 1 (a GPT bot) had Chris's Claude plans given to its machine by hand for its Claude
+    # reviews. Its replacement got only what the company lends a GPT bot (ChatGPT), so its next Claude review had none.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    assert given(cloud, old["runner_id"]) == {"codex": csid}  # the bot runs Codex only: Claude is not lent
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert people(cloud, old["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    replaced = cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers())
+    assert replaced.status_code == 200, replaced.text
+    new = enroll_made(cloud, "ops")
+    assert placed(cloud)["ops"] == new["runner_id"] != old["runner_id"]
+    assert given(cloud, new["runner_id"]) == {"claude": sid, "codex": csid}
+    assert people(cloud, new["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    carried = events(cloud, "subscription.carried_over")
+    assert sorted(json.loads(e["detail"])["runtime"] for e in carried) == ["claude", "codex"]
+    assert {json.loads(e["detail"])["from"] for e in carried} == {old["runner_id"]}
+    sign_in_report(cloud, new, "missing")
+    assert can_run(cloud, "ops", new["runner_id"]) is True
+
+
+def test_a_plan_removed_from_the_company_is_not_carried_to_the_replacement(cloud):
+    sid = plan_company(cloud, "ops")
+    old = own_computer(cloud)
+    assert given(cloud, old["runner_id"]) == {"claude": sid}
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM model_subscriptions")
+    new = enroll_made(cloud, "ops")
+    assert given(cloud, new["runner_id"]) == {} and not events(cloud, "subscription.carried_over")
+
+
+def test_a_bot_moving_off_a_computer_still_in_use_leaves_its_plans_there(cloud):
+    sid = plan_company(cloud, "ops")
+    laptop = runner(cloud.api, label="Office Mac")
+    assign(cloud.api, laptop, "ops")
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(cloud.api, laptop, "codex", csid)
+    computer = own_computer(cloud)
+    assert placed(cloud)["ops"] == computer["runner_id"]
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}  # lent as before; the laptop's ChatGPT stays there
+    assert given(cloud, laptop["runner_id"])["codex"] == csid and not events(cloud, "subscription.carried_over")
 
 
 def generation(cloud, bot):
@@ -3657,7 +3825,7 @@ def codex_heartbeat(cloud, computer):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {
@@ -3676,7 +3844,7 @@ def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(
     shared = shared_for(cloud, "cpo", token="ben-test")
     codex_heartbeat(cloud, shared)
     csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     box = runner(cloud.api, label="Box")
     assign(cloud.api, box, "ops")
     idle(cloud)
@@ -3698,7 +3866,7 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     plan_company(cloud, "cpo")
     shared = shared_for(cloud, "cpo")
     codex_heartbeat(cloud, shared)
-    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
     change_as(cloud, "ops", mode="cloud", placement="shared")
     checks = health_of(cloud)
     assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]
@@ -3710,10 +3878,10 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     )
     claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
     assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
-    from backend import getting_started
+    from backend import getting_started, runner_online
 
     with cloud.store.read() as c:
-        online = getting_started._online_runners(c)
+        online = runner_online.online_rows(c)
         assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
         assert getting_started._login_target(online, {"claude"}, c) is None
     add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
@@ -3838,7 +4006,7 @@ def _beat(cloud, token):
     body = {
         "version": "test",
         "platform": "linux",
-        "capabilities": [MS.CAPABILITY, "model_sign_out_v1", "model_connect_v1"],
+        "capabilities": ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"],
     }
     post(cloud.api, "runners/heartbeat", {**body, "readiness": {"schema_version": 1, "runtimes": tools}}, token=token)
 
@@ -3922,3 +4090,206 @@ def test_a_failed_sign_in_lets_the_machine_pause_and_out_of_credit_starts_nothin
     cloud.hq.calls.clear()
     assert _connect(cloud, expected=409)["error"]["code"] == "offline"
     assert "start" not in cloud.tick(10)
+
+
+def test_a_machine_made_again_keeps_a_persons_plans_when_its_bot_left_the_old_computer_meanwhile(cloud):
+    # Tico Team, Nov 18: Reviewer 1's and Reviewer 2's machines were made again. adopt() saves the row with the new
+    # attempt's runner (None until it enrolls), so enrolled() saw no old computer, and the bot was no longer assigned
+    # to the old one either: only the company's ChatGPT came back (lend_plans), and Chris's Claude set was lost.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert people(cloud, old["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    first = cloud.row()["machine_id"]
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("not_found", 404)]
+    cloud.hq.machines[first]["state"] = "deleted"
+    for _ in range(4):
+        cloud.tick(10)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.row()["machine_id"] != first and cloud.hq.calls[-1][0] == "create"
+    assert cloud.row()["runner_id"] is None  # made again: adopt() saved the new attempt with no runner yet
+    with cloud.store.transaction() as c:  # meanwhile the bot left the revoked computer (moved, or placed elsewhere)
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert placed(cloud)["ops"] == new["runner_id"] != old["runner_id"]
+    assert people(cloud, new["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    assert given(cloud, new["runner_id"]) == {"claude": sid, "codex": csid}
+    carried = events(cloud, "subscription.carried_over")
+    assert {json.loads(e["detail"])["from"] for e in carried} == {old["runner_id"]}
+
+
+def test_a_replaced_machine_keeps_a_persons_plans_when_its_bot_left_the_old_computer_meanwhile(cloud):
+    # The same through a Replace: deleted() clears the row's computer before the new one enrolls.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    add(cloud.api)
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = enroll_made(cloud, "ops")
+    assert people(cloud, new["runner_id"])["claude"] == "human:ana"
+
+
+def test_a_machine_deleted_for_good_gives_a_later_machine_none_of_its_plans(cloud):
+    # Review of #2178: only a machine that takes another's place carries its plans over. A bot that moved away, had
+    # its machine deleted and later came back gets a new machine with no person's plan unless someone gives it again.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    add(cloud.api)
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    first = cloud.row()["machine_id"]
+    laptop = runner(cloud.api, label="Office Mac")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+        moved = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
+    assign(cloud.api, laptop, "ops", moved)
+    assert cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers()).status_code == 200
+    cloud.hq.machines[first]["state"] = "deleted"
+    with cloud.store.read() as c:
+        assert not CM.were(c, "ops")
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    work(cloud, "ops")
+    cloud.manager.synced = None
+    for _ in range(4):
+        cloud.tick(CM.BACKOFF)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.hq.calls[-1][0] == "create" and cloud.row()["machine_id"] != first
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert new["runner_id"] != old["runner_id"]
+    assert "claude" not in people(cloud, new["runner_id"])
+    assert not [e for e in events(cloud, "subscription.carried_over") if old["runner_id"] in e["detail"]]
+    assert given(cloud, new["runner_id"]).get("codex") in (csid, None)
+
+
+def person_on_own(cloud, with_codex=False):
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"] if with_codex else None
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    return old, sid, csid
+
+
+def test_replace_then_first_new_machine_never_enrolls_still_keeps_person_plan(cloud):
+    # QA of #2178: the never-enrolled cleanup is part of the same replacement, so it keeps the old computer.
+    old, _, _ = person_on_own(cloud)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    assert cloud.tick()[-1] == "create"
+    first_new = cloud.row()["machine_id"]
+    cloud.tick(CM.ENROLL_MINUTES * 60 + CM.ENROLL_GRACE)  # the first new machine never enrolls
+    cloud.hq.machines[first_new]["state"] = "deleted"
+    cloud.manager.synced = None
+    for _ in range(6):
+        if cloud.row()["machine_id"] != first_new and cloud.hq.calls[-1][0] == "create":
+            break
+        cloud.tick(CM.BACKOFF)
+    assert cloud.hq.calls[-1][0] == "create" and cloud.row()["machine_id"] != first_new
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert new["runner_id"] != old["runner_id"]
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+
+
+def test_made_again_after_hq_failed_an_enrolled_machine_keeps_person_plan(cloud):
+    # adopt() itself revokes the row's enrolled computer (HQ lists the machine failed, a new one is created)
+    old, _, _ = person_on_own(cloud)
+    first = cloud.row()["machine_id"]
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.machines[first]["state"] = "failed"
+    cloud.manager.synced = None
+    for _ in range(6):
+        cloud.tick(20)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.row()["machine_id"] != first and cloud.hq.calls[-1][0] == "create"
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+
+
+def test_plan_removed_from_the_replacement_does_not_return_at_the_next_replace(cloud):
+    person_on_own(cloud)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    second = enroll_made(cloud, "ops")
+    assert people(cloud, second["runner_id"]).get("claude") == "human:ana"
+    with cloud.store.transaction() as c:  # a person takes the Claude set off the new computer
+        c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime='claude'", (second["runner_id"],))
+    cloud.tick(400)
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    third = enroll_made(cloud, "ops")
+    assert "claude" not in people(cloud, third["runner_id"])
+
+
+def test_removed_company_plan_not_carried_through_the_kept_record(cloud):
+    from backend.tests.helpers.api import put
+
+    old, _, csid = person_on_own(cloud, with_codex=True)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "codex", "subscription": csid})
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+        c.execute("DELETE FROM model_subscriptions WHERE id=?", (csid,))
+    new = enroll_made(cloud, "ops")
+    assert people(cloud, new["runner_id"]).get("claude") == "human:ana"
+    assert given(cloud, new["runner_id"]).get("codex") != csid
+
+
+def test_replace_then_deleted_for_good_before_enrolling_gives_a_later_machine_no_plan(cloud):
+    old, _, _ = person_on_own(cloud)
+    laptop = runner(cloud.api, label="Office Mac")
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    assert cloud.tick()[-1] == "create"  # the replacement is made but has not enrolled yet
+    with cloud.store.read() as c:
+        assert CM.were(c, "ops") == [old["runner_id"]]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+        moved = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
+    assign(cloud.api, laptop, "ops", moved)
+    gone = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
+    assert gone.status_code == 200
+    with cloud.store.read() as c:
+        assert not CM.were(c, "ops")
+    for mid in list(cloud.hq.machines):
+        cloud.hq.machines[mid]["state"] = "deleted"
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    work(cloud, "ops")
+    cloud.manager.synced = None
+    before = len([x for x in cloud.hq.calls if x[0] == "create"])
+    for _ in range(6):
+        cloud.tick(CM.BACKOFF)
+        if len([x for x in cloud.hq.calls if x[0] == "create"]) > before:
+            break
+    code = [x for x in cloud.hq.calls if x[0] == "create"][-1][3]
+    new = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    assert "claude" not in people(cloud, new["runner_id"])

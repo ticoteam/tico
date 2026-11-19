@@ -1,23 +1,28 @@
 {
   "name": "tico-observability",
   "private": true,
-  "engines": {"node": ">=22.18"},
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "build:ui": "node scripts/build-ui.cjs",
     "watch:ui": "node scripts/build-ui.cjs --watch",
     "build:observability": "esbuild ui/observability-vendors.ts --bundle --format=esm --minify --outfile=ui/assets/observability-vendors.js",
     "check:observability": "npm run build:ui && node --check build/ui/observability.js && node --check ui/assets/observability-vendors.js",
     "screenshots": "node scripts/screenshots/index.cts",
-    "test:ui": "node scripts/ui-tests.cts"
+    "test:ui": "node scripts/ui-tests.cts",
+    "typecheck": "node node_modules/typescript/bin/tsc -p ui/tsconfig.strict.json --pretty false"
   },
   "dependencies": {
-    "@sentry/browser": "10.76.2",
-    "posthog-js": "1.438.11"
+    "@sentry/browser": "11.14.0",
+    "posthog-js": "1.450.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
-    "@types/node": "22.18.13",
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "24.19.2",
+    "@typescript/typescript6": "6.0.2",
     "esbuild": "0.28.2",
-    "playwright": "1.64.1"
+    "playwright": "1.65.1",
+    "typescript": "7.0.2"
   }
 }

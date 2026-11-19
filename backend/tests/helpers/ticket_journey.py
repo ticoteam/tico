@@ -19,7 +19,7 @@ from backend import source_actions as SA
 from backend.item_sources import github as GS
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.sample_company import machine, rows, signed_in
+from backend.tests.helpers.fresh_install import machine, rows, signed_in
 from clients import hubcli
 
 REPO = "acme/app"
@@ -42,7 +42,7 @@ def default_company(environment):
     """The default company as setup makes it (onboarding with no chart picked), with its computer. Returns the API
     client and the computer's enrolment."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api, machine(api)
 
@@ -109,6 +109,19 @@ class Turn:
         _, out, _ = self.cli("page", "publish", name, "--title", title, "--task", task_id or self.task_id)
         made = json.loads(out)["file"]
         return made["id"], made["version"]
+
+    def write(self, document, name, title, text, task_id=None):
+        """`tico task attach <task> <name> --doc <document>`: the next version of the task's document, written in the
+        bot's checkout. In the stage that approves that document it is the version a person approves. Returns the
+        document's file id."""
+        import json
+
+        self.company.pages += 1
+        (self.checkout / name).write_text(
+            f"<html><body><h1>{title}</h1><p>{text}</p><p>Edition {self.company.pages}.</p></body></html>"
+        )
+        _, out, _ = self.cli("task", "attach", task_id or self.task_id, name, "--doc", document)
+        return json.loads(out)["file_id"]
 
     def attach(self, requirement, file_id, task_id=None):
         """`tico task attach <task> page:<file> --req <requirement>` at the version the bot was last shown."""
@@ -195,11 +208,14 @@ class Company:
 
     def sign_off(self, task_id, note=None):
         """The person OKs the one sign-off the task waits on, from their list: they open it and
-        answer ok, as the ask screen does."""
+        answer ok, as the ask screen does, with the approval's key when it approves a document."""
         asks = [i for i in self.needs_you() if i["task_id"] == task_id and i["kind"] == "ask"]
         assert len(asks) == 1, f"the person's list holds {len(asks)} asks for the task, not one. {self.line(task_id)}"
         assert "ok" in asks[0]["ask"]["may"], f"the person may not OK it: {asks[0]['ask']}"
         body = {"value": "ok", **({"note": note} if note else {})}
+        approval = asks[0]["ask"].get("approval")
+        if approval:
+            body.update(page_version=f"{approval['file_id']}@{approval['version']}", visit_id=approval["visit_id"])
         return self.person("POST", f"tasks/{task_id}/asks/{asks[0]['requirement_id']}/answer", body)
 
     # ------------------------------------------------------------------ the computer

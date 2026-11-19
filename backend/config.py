@@ -162,41 +162,34 @@ def _emails(value):
 
 
 def slack_credentials(settings=None):
-    """The Slack gateway's tokens, read the way `_secret` reads the decisions keys and nowhere else.
+    """The Slack gateway's tokens from the JSON secret at `TICO_SLACK_SECRET_ARN`
+    (`{"bot_token","app_token","team_id","app_id"}`), read the way `_secret` reads the decisions keys.
 
-    Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token.
-    Precedence: `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment, then the JSON secret at
-    `TICO_SLACK_SECRET_ARN` (`{"bot_token","app_token","team_id","app_id"}`), then
-    `/etc/tico/slack` in the same shape for a self-hosted instance. `team_id` and `app_id` from
-    `SLACK_TEAM_ID`/`SLACK_APP_ID` win over the secret's, so the workspace the gateway will
-    accept events from is fixed in the reviewed server configuration.
+    Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token. Unset, the
+    tokens are empty and the gateway uses the ones sealed by Tools > Slack (`backend/slack_app.py`); they are
+    never read from the environment or a file. `team_id` and `app_id` from `SLACK_TEAM_ID`/`SLACK_APP_ID` win
+    over the secret's, so the workspace the gateway will accept events from is fixed in the reviewed server
+    configuration.
     """
     data = {}
-    bot, app = os.environ.get("SLACK_BOT_TOKEN", "").strip(), os.environ.get("SLACK_APP_TOKEN", "").strip()
-    if not (bot and app):
-        secret = (settings.slack_secret_arn if settings else os.environ.get("TICO_SLACK_SECRET_ARN", "")).strip()
-        if secret:
-            try:
-                import boto3
+    secret = (settings.slack_secret_arn if settings else os.environ.get("TICO_SLACK_SECRET_ARN", "")).strip()
+    if secret:
+        try:
+            import boto3
 
-                value = (
-                    boto3.client("secretsmanager", region_name=os.environ.get("AWS_DEFAULT_REGION") or None)
-                    .get_secret_value(SecretId=secret)
-                    .get("SecretString", "")
-                )
-                data = json.loads(value or "{}")
-            except Exception as exc:
-                # The gateway refuses to start without tokens; say why in its log, never the value.
-                logging.getLogger("tico.slack").error("Slack secret could not be read: %s", type(exc).__name__)
-                data = {}
-        else:
-            try:
-                data = json.loads(Path("/etc/tico/slack").read_text() or "{}")
-            except (OSError, ValueError):
-                data = {}
+            value = (
+                boto3.client("secretsmanager", region_name=os.environ.get("AWS_DEFAULT_REGION") or None)
+                .get_secret_value(SecretId=secret)
+                .get("SecretString", "")
+            )
+            data = json.loads(value or "{}")
+        except Exception as exc:
+            # The gateway refuses to start without tokens; say why in its log, never the value.
+            logging.getLogger("tico.slack").error("Slack secret could not be read: %s", type(exc).__name__)
+            data = {}
     return {
-        "bot_token": bot or str(data.get("bot_token") or "").strip(),
-        "app_token": app or str(data.get("app_token") or "").strip(),
+        "bot_token": str(data.get("bot_token") or "").strip(),
+        "app_token": str(data.get("app_token") or "").strip(),
         "team_id": (
             (settings.slack_team_id if settings else os.environ.get("SLACK_TEAM_ID", ""))
             or str(data.get("team_id") or "")
@@ -214,6 +207,8 @@ class Settings:
     # The bot templates onboarding offers. A deployment may ship its own set of cards.
     catalog_dir: Path = ROOT / "templates" / "catalog"
     ui_dir: Path = ROOT / "ui"
+    # The new web app's build, served at /next (backend/web_routes.py); /next is a 404 while it is missing.
+    web_dir: Path = ROOT / "build" / "web"
     integrations_dir: Path = ROOT / "integrations"
     # A company's own pages and query catalogs, layered over integrations_dir; None means
     # <registry_dir>/integrations.
@@ -314,7 +309,6 @@ class Settings:
     # {bucket: https base} from TICO_S3_VIEW_URLS (clients/s3links.py): where people open a bucket's objects.
     s3_view_urls: dict = field(default_factory=dict)
     processing_operators: tuple[str, ...] = ()
-    mail_retention_days: int = 180
     release_id: str = ""
     # The commit and repository the running release was built from (a release-manifest.json
     # at the repository root, when one is present); what marks a merged product task shipped.
@@ -356,7 +350,7 @@ class Settings:
     # What the team's decision calls may cost in a UTC month, in USD, counted from the audit's `cost_usd`; 0 is no
     # cap. At the cap every server-side caller carries on as if Decide were off. backend/judge.py.
     decisions_monthly_usd: float = 50.0
-    # Jev's price in USD per 1M input and output tokens, for the audit's cost when TypeSafe's answer carries none:
+    # Rates in USD per 1M tokens for the optional direct TypeSafe fallback when it omits cost. Gateway decisions use their own rates.
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
@@ -364,13 +358,16 @@ class Settings:
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
-    # TICO_SAMPLE_COMPANY=on: a new company starts as Tico's sample company (backend/sample_company.py,
-    # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
-    # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
-    sample_company: bool = False
+    # Each API client's fair share of the server (backend/fair_share.py): requests running at once and requests a
+    # minute, for one API token or service key, and for one bot or one person's Assistant. 0 turns that limit off.
+    # The app itself reads a task once when it opens and once per change after that, a few a minute.
+    fair_share_token_concurrent: int = 4
+    fair_share_token_per_minute: int = 240
+    fair_share_bot_concurrent: int = 8
+    fair_share_bot_per_minute: int = 600
     company_file_data: str = field(default="", repr=False)
     # Whether the installer named a company file at all, apart from whether its text could be read, and why not: an
-    # empty or unreadable file is a failed import the owner sees, never a reason to start the sample company instead.
+    # empty or unreadable file is a failed import the owner sees.
     company_file_configured: bool = False
     company_file_error: str = ""
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
@@ -379,9 +376,16 @@ class Settings:
     default_runtime: str = ""
     default_model: str = ""
     # The models choice the installer asks for (backend/models_preset.py; scripts/install.sh writes
-    # TICO_MODELS_PRESET=subscriptions-gateway for the recommended setup). First boot only, like the three above.
+    # TICO_MODELS_PRESET=subscriptions for the recommended setup). First boot only, like the three above.
     models_preset: str = ""
     credential_kms_key: str = ""
+    # A hosted company's own KMS settings (setup/cell.py writes them; backend/credentials.py `CredentialCipher`): its id as
+    # the KMS encryption context, so one company's access cannot unwrap another's key under the cell's one KMS key, and
+    # its own AWS access key (a container cannot use the host's role). Unset: today's context and boto's default chain.
+    credential_kms_context: str = ""
+    credential_kms_access_key_id: str = ""
+    credential_kms_secret_access_key: str = field(default="", repr=False)
+    credential_kms_region: str = ""
     # The Slack gateway (backend/slack_gateway.py): off unless the server configuration says so.
     # The thresholds are the routing rules in docs/slack-gateway.md; the tokens are read by
     # `slack_credentials()` in the gateway process only.
@@ -392,12 +396,6 @@ class Settings:
     slack_route_threshold: float = 0.6
     slack_ask_threshold: float = 0.5
     slack_max_recipients: int = 3
-    # Channels read like an employee reads them: every message in a channel Tico is in is stored;
-    # the readers a channel names in the list in Settings > Tools > Slack get what is unread every
-    # `slack_digest_minutes` (0 pauses delivery, storage goes on), at most `slack_digest_cap`
-    # messages per channel per pass.
-    slack_digest_minutes: int = 60
-    slack_digest_cap: int = 200
     # Link previews (backend/slack_unfurl.py): task links on these hosts, besides the server's own, get a preview in
     # Slack, whose button opens `slack_open_url` ("{id}" is the task id; default the task in the web app).
     slack_unfurl_hosts: tuple = ()
@@ -655,7 +653,6 @@ class Settings:
             upload_max_bytes=int(os.environ.get("TICO_UPLOAD_MAX_BYTES") or 2 * 1024**3),
             s3_view_urls=os.environ.get("TICO_S3_VIEW_URLS", ""),
             processing_operators=tuple(filter(None, os.environ.get("TICO_PROCESSING_OPERATORS", "").split(","))),
-            mail_retention_days=max(1, int(os.environ.get("TICO_MAIL_RETENTION_DAYS", "180") or "180")),
             release_id=os.environ.get("TICO_RELEASE", ""),
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),
@@ -690,7 +687,10 @@ class Settings:
             ),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
-            sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
+            fair_share_token_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_CONCURRENT", "") or 4)),
+            fair_share_token_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_TOKEN_PER_MINUTE", "") or 240)),
+            fair_share_bot_concurrent=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_CONCURRENT", "") or 8)),
+            fair_share_bot_per_minute=max(0, int(os.environ.get("TICO_FAIR_SHARE_BOT_PER_MINUTE", "") or 600)),
             **_company_file_fields(rehearsal),
             enabled_providers=tuple(
                 part.strip().lower() for part in os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()
@@ -699,6 +699,10 @@ class Settings:
             default_model=os.environ.get("TICO_DEFAULT_MODEL", "").strip(),
             models_preset=os.environ.get("TICO_MODELS_PRESET", "").strip().lower(),
             credential_kms_key=os.environ.get("TICO_CREDENTIAL_KMS_KEY", ""),
+            credential_kms_context=os.environ.get("TICO_CREDENTIAL_KMS_CONTEXT", "").strip(),
+            credential_kms_access_key_id=os.environ.get("TICO_CREDENTIAL_KMS_ACCESS_KEY_ID", "").strip(),
+            credential_kms_secret_access_key=os.environ.get("TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY", "").strip(),
+            credential_kms_region=os.environ.get("TICO_CREDENTIAL_KMS_REGION", "").strip(),
             slack_gateway_enabled=not rehearsal and os.environ.get("TICO_SLACK_GATEWAY_ENABLED", "0") == "1",
             slack_team_id=os.environ.get("SLACK_TEAM_ID", "").strip(),
             slack_app_id=os.environ.get("SLACK_APP_ID", "").strip(),
@@ -706,8 +710,6 @@ class Settings:
             slack_route_threshold=float(os.environ.get("TICO_SLACK_ROUTE_THRESHOLD", "0.6") or "0.6"),
             slack_ask_threshold=float(os.environ.get("TICO_SLACK_ASK_THRESHOLD", "0.5") or "0.5"),
             slack_max_recipients=max(1, int(os.environ.get("TICO_SLACK_MAX_RECIPIENTS", "3") or "3")),
-            slack_digest_minutes=max(0, int(os.environ.get("TICO_SLACK_DIGEST_MINUTES", "60") or "60")),
-            slack_digest_cap=max(1, int(os.environ.get("TICO_SLACK_DIGEST_CAP", "200") or "200")),
             slack_unfurl_hosts=tuple(
                 h.strip() for h in os.environ.get("TICO_SLACK_UNFURL_HOSTS", "").split(",") if h.strip()
             ),

@@ -86,8 +86,6 @@
 .dream-intro p,.dream-q-text p,.dream-summary p,.dream-quiet p{margin:0 0 4px}
 .dream-q-text{display:flex;gap:8px;font-size:var(--t-base);line-height:var(--lh)}
 .dream-n{flex:none;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:color-mix(in srgb,var(--dream-v) 30%,var(--surface2));font-size:var(--t-sm);font-weight:600}
-.dream-chip{align-self:flex-start;max-width:100%;padding:3px 10px;border:1px dashed color-mix(in srgb,var(--dream-v) 55%,var(--line));border-radius:999px;background:none;color:var(--ink);font-size:var(--t-sm);text-align:left;cursor:pointer;overflow-wrap:anywhere}
-.dream-chip:hover{background:color-mix(in srgb,var(--dream-v) 14%,transparent)}
 .dream-q textarea{min-height:44px;font-size:var(--t-base)}
 .dream-actions{display:flex;justify-content:flex-end}
 .dream-commits{list-style:none;margin:0;padding:0 12px}
@@ -107,8 +105,7 @@
 }
 @media (max-width:760px){
   .learn-dream{min-height:44px;padding:0 12px}
-  .dream-chip{min-height:44px;padding:6px 12px}
-  .dream-actions .primary,.dream-foot button{min-height:44px;min-width:88px}
+    .dream-actions .primary,.dream-foot button{min-height:44px;min-width:88px}
   .dream-foot a{display:inline-flex;align-items:center;min-height:44px}
   .learn-panel.dreaming{height:85dvh}
   .learn-panel{margin:auto 0 0;width:100vw;max-width:100vw;height:auto;max-height:85dvh;border-left:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;box-shadow:0 -12px 40px rgba(0,0,0,.35)}

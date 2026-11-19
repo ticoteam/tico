@@ -33,4 +33,4 @@ For a macro, the full new text; if it states a policy, cite the doc the Libraria
 
 ## 4. Put it forward
 
-Attach the steps to the task and apply the requested change with your Tools. If access or a setting is missing, name it on the task and ask only for that information or Tool. Verify the result, update `knowledge/config-map.md` and `knowledge/change-log.md`, commit, and finish the task. Check its effect at the next monthly audit.
+Attach the steps to the task and apply the requested change with your Tools. If access or a setting is missing, file it for BotOps from your task (`tico task file --parent <id> --owner botops "<what is missing>"`) and wait on that. Verify the result, update `knowledge/config-map.md` and `knowledge/change-log.md`, commit, and finish the task. Check its effect at the next monthly audit.

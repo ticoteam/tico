@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import threading
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ from backend.maintenance_steps import update as update_step
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, put  # noqa: F401
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 
 @pytest.fixture(autouse=True)
@@ -84,20 +86,23 @@ def install(api, monkeypatch):
 def http(install, monkeypatch):
     calls, state = [], {"items": [item()], "status": 200, "reply": None}
     original = install.transaction
+    # The threads in a write transaction on this store now. The rule is about the thread that calls HTTP or KMS: it
+    # holds no write transaction. Another thread may write meanwhile: the app's inbound-mail loop runs its first tick,
+    # a write, on a worker thread when the app starts, and on a slow runner that tick overlapped this test's KMS call.
     writing = []
-    state["writing"] = writing
+    state["writing"] = lambda: threading.current_thread() in writing
 
     @contextmanager
     def transaction(*args, **kwargs):
         with original(*args, **kwargs) as c:
-            writing.append(c)
+            writing.append(threading.current_thread())
             try:
                 yield c
             finally:
-                writing.pop()
+                writing.remove(threading.current_thread())
 
     def handle(request):
-        assert not writing, "HTTP must run outside every write transaction"
+        assert not state["writing"](), "HTTP must run outside every write transaction"
         assert request.headers["authorization"] == "Bearer install-test-key"
         assert request.headers["user-agent"].startswith("Tico-Client/")  # the edge refuses a library's default
         payload = json.loads(request.content)
@@ -597,12 +602,12 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     class KMS(KMSWithEncrypt):
         def encrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("encrypt")
             return super().encrypt(**kwargs)
 
         def decrypt(self, **kwargs):
-            assert not http[1]["writing"], "KMS must run outside every write transaction"
+            assert not http[1]["writing"](), "KMS must run outside every write transaction"
             calls.append("decrypt")
             return super().decrypt(**kwargs)
 
@@ -613,7 +618,7 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
         with original_read() as c:
 
             def trace(sql):
-                if sql.startswith("UPDATE credential_keys"):
+                if belongs(writes) and sql.startswith("UPDATE credential_keys"):
                     writes.append(bool(c.in_transaction and c.write_transaction))
 
             c.set_trace_callback(trace)
@@ -629,7 +634,8 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     monkeypatch.setattr(install, "read", read)
     monkeypatch.setattr(credentials, "Vault", fresh_vault)
-    assert run_step(install)["status"] == "ran"
+    with measuring(writes):
+        assert run_step(install)["status"] == "ran"
     assert suggestions.target(install) == ("install-test-key", "https://gateway.acme.example")
     assert calls == ["encrypt", "decrypt"] and writes == [True]
     with install.read() as c:
@@ -692,24 +698,6 @@ def test_condition_validation_matches_hq_dictionary_types_and_bounds():
         condition,
         {"spend_month_usd": 51, "spend_month_cap_usd": 50, "source_github_connected": True, "plan_tier": "starter"},
     )
-
-
-def test_migration_is_idempotent_and_preserves_receipts():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010200_suggestions.py"
-    spec = importlib.util.spec_from_file_location("suggestions_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        c.execute(
-            "INSERT INTO suggestions(id,fingerprint,owner_role,title,body,condition,cooldown_days,created_at,updated_at) "
-            "VALUES('id','hash','botops','Title','Body','{}',7,'then','then')"
-        )
-        migration.up(c)
-        assert c.execute("SELECT status,message_id FROM suggestions").fetchone() == ("new", None)
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE suggestions SET status='unknown'")
-        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
 def test_engineering_lead_role_goes_to_a_new_org_engineering_team_manager(install, api):

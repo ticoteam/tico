@@ -156,12 +156,36 @@ def test_pr_numbers_come_from_merge_and_squash_subjects_once_and_in_order():
     assert notes.pr_numbers(commits) == [5, 6]
 
 
+def test_a_commit_citing_a_ticket_number_that_is_no_pull_request_is_skipped():
+    """A bot commit on a PR branch ends "(#546)" for its ticket; pulls/546 is a 404, which drops it from the notes."""
+
+    class Missing(Exception):
+        status = 404
+
+    class Api(FakeApi):
+        def get(self, path):
+            if path.startswith("pulls/546"):
+                raise Missing("GitHub GET pulls/546: 404 Not Found")
+            return super().get(path)
+
+    assert notes.load(Api({}), 546, set()) is None
+
+    class Down(Exception):
+        status = 502
+
+    class Broken(FakeApi):
+        def get(self, path):
+            raise Down("GitHub GET %s: 502" % path)
+
+    with pytest.raises(Down):  # anything but a 404 still fails the step
+        notes.load(Broken({}), 546, set())
+
+
 @pytest.mark.parametrize(
     "path, area",
     [
         ("app/main.swift", "app"),
         ("runner_support/x.py", "runner"),
-        ("recorder/src/lib.rs", "recorder"),
         ("templates/catalog/x.md", "templates"),
         (".github/workflows/train.yml", "ci"),
         ("README.md", "other"),
@@ -344,10 +368,12 @@ def test_a_range_that_is_cut_short_says_so(monkeypatch):
 def test_high_risk_and_cut_short_are_read_from_the_notes_built_here(monkeypatch):
     built = notes.build(scenario(), "v0.5.200", "v0.5.201")
     assert notes.high_risk(built) and not notes.cut_short(built)
+    assert notes.high_risk_prs(built) == {12}
     # Inside an approval issue's body, under its candidate line, the notes still read the same.
     assert notes.high_risk("Candidate v0.5.201 at abc (validated: u)\n\n" + built)
     empty = notes.build(FakeApi({"compare/v0.5.200...v0.5.201": {"commits": []}}), "v0.5.200", "v0.5.201")
     assert not notes.high_risk(empty), "the count line's '0 high risk' is no High risk item"
+    assert notes.high_risk_prs(empty) == set()
     assert not notes.high_risk("### #3 High risk of rain in the demo copy\n- Risk: low")
     monkeypatch.setattr(notes, "PAGE", 2)
     monkeypatch.setattr(notes, "COMMIT_PAGES", 1)

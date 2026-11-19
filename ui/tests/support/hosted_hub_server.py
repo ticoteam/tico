@@ -125,14 +125,14 @@ class Hub:
     def finish_setup(self):
         self.call(
             "put",
-            "onboarding",
+            "setup",
             {
                 "names": {"company_name": "First Day", "app_name": "Tico", "assistant_name": "Assistant"},
                 "answers": {"what_we_do": "We sell a booking app to salons.", "customers": "businesses"},
                 "selected": {},
             },
         )
-        return self.call("post", "onboarding/complete", {})
+        return self.call("post", "setup/complete", {})
 
 
 def build(hub, state):
@@ -155,18 +155,35 @@ def build(hub, state):
                 (H.now(), "human:owner"),
             )
         facts["agent"] = "botops"  # the walk waits for its row on Settings > Computers before auditing
-        ask = (
-            {"to": "owner", "kind": "ok", "line": "OK to give the Builder write access to the app repository?"}
-            if state == "sign-off"
-            else {
+        if state == "sign-off":
+            # An OK approves what it shows: BotOps files the page it asks about on the task, and the OK shows it.
+            page = hub.call(
+                "post",
+                "pages",
+                {
+                    "name": "repo-access.html",
+                    "title": "Repository access",
+                    "task": task["id"],
+                    "text": "<h1>Repository access</h1><p>The Builder gets write access to the app repository.</p>",
+                },
+                token=BOT_TOKEN,
+            )["page"]["file_id"]
+            task = hub.call("get", f"tasks/{task['id']}")["task"]
+            ask = {
                 "to": "owner",
-                "kind": "answer",
-                "line": "Which GitHub organization holds your app's code?",
-                # A bot's question to a person says why it matters (backend/ask_shape.py).
-                "why": "The Builder can only open pull requests in that organization.",
+                "kind": "ok",
+                "line": "OK to give the Builder write access to the app repository?",
+                "show": [f"page:{page}"],
             }
-        )
-        hub.call("post", f"tasks/{task['id']}/asks", {**ask, "version": task.get("version", 1)}, token=BOT_TOKEN)
+            hub.call("post", f"tasks/{task['id']}/asks", {**ask, "version": task.get("version", 1)}, token=BOT_TOKEN)
+        else:
+            # A question only the owner can answer: a ❓ on the task's chat (backend/question_marks.py).
+            hub.call(
+                "post",
+                f"tasks/{task['id']}/questions",
+                {"to": "owner", "text": "Which GitHub organization holds your app's code?"},
+                token=BOT_TOKEN,
+            )
         facts["task"] = task["id"]
     return facts
 

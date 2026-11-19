@@ -1,6 +1,8 @@
 ---
 name: "write-a-win-loss-interview-guide"
 description: "Write the guide for a win/loss conversation a person holds with a buyer after a decision: a purpose the buyer can trust, consent asked first, open questions, nothing pitched, and a clear stop."
+metadata:
+  function: sales
 ---
 # Write a win/loss interview guide
 

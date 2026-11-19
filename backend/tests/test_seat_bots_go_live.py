@@ -11,10 +11,12 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from backend import never_stuck
 from backend.store import H
 from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
 
 
 def _post(api, path, body, token):
@@ -58,7 +60,7 @@ def _company(environment):
     """A company made the way staff create makes one: setup completed with no chart (the default org), then its
     computer. Returns the client, the computer and {bot id: (slug, setup task id)} for the seat bots."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     computer = machine(api)
     found = rows(
@@ -117,6 +119,12 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
     assert work and work["task"]["title"] == "Set yourself up", work
 
 
+def _words(api, task_id):
+    """What the task was filed with: its first message and any instructions Tico gave its bot."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id)
+
+
 def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_second_one(environment):
     """Tico Team on rc.7: BotOps ran `tico bot create --template growth-manager --name "Growth Manager"` on the Growth
     Manager's own "Set up" task, without the slug. The server picked `growth-manager-2`, made a second bot with the
@@ -128,7 +136,7 @@ def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_
     task = attempt["task"]["id"]
     bot, slug = next((bot, slug) for bot, (slug, setup) in seats.items() if setup == task)
     template = rows(api, "SELECT template FROM bot_settings WHERE bot_id=?", (bot,))[0]["template"]
-    assert f"`tico bot create {slug} --template {template}`" in attempt["task"]["body"]
+    assert f"`tico bot create {slug} --template {template}`" in _words(api, task)
     before = rows(api, "SELECT id FROM bots ORDER BY id")
     name = rows(api, "SELECT display_name FROM bots WHERE id=?", (bot,))[0]["display_name"]
     made = act(api, attempt, "POST", "bots/register", {"template": template, "display_name": name})
@@ -508,13 +516,14 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
         task = task[0]
         assert task["status"] == "open" and task["owner_id"].endswith(row["id"]), (row["slug"], task)
         assert task["requester_id"].endswith("botops"), task["requester_id"]
+        said = _words(api, task["id"])
         for name in expected:
-            assert f"`{name}`" in task["body"], (row["slug"], name)
-        assert "ask nothing" in task["body"] and "Not yet told:" in task["body"]
+            assert f"`{name}`" in said, (row["slug"], name)
+        assert "ask nothing" in said and "Not yet told:" in said
         assert _turn(api, task["id"])["state"] == "bot", row["slug"]
     # Product's stages a feature owner holds are its tasks' assignee's: its manager is told it manages it.
     pm = next(row for row in found if row["slug"] == "product-manager")
-    assert "Product (you manage it" in rows(api, "SELECT body FROM tasks WHERE id=?", (pm["task"],))[0]["body"]
+    assert "Product (you manage it" in _words(api, pm["task"])
 
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
     assert not rows(api, "SELECT 1 FROM messages WHERE body LIKE '%set you up%'")
@@ -530,3 +539,99 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
     assert (first["task"]["id"], own) != (waiting["id"], own) and first["task"]["id"] == own, (first["task"], own)
     again = act(api, attempt, "POST", "bots/feature-owner/go-live", {})
     assert again.status_code == 200 and "own_setup_task_id" not in again.json(), again.text
+
+
+def test_only_a_seat_bot_that_reports_to_the_owner_ends_its_setup_with_the_one_ping_for_their_questions(environment):
+    """The one automatic ping (backend/flow_ping.py on_setup) takes the button's default scope: a team manager, whose
+    manager is the owner, ends its own setup task by running add-to-flow for them, and the owner's ping is recorded
+    quiet (no run of its own) so it may ask them; nothing pings it again. A bot under a manager (the Builder) gets
+    neither: a default company's every bot asking the owner at once is the flood this avoids."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    manager, _ = _seat(seats, "product-manager")
+    builder, _ = _seat(seats, "feature-owner")
+    _report(api, computer, present=list(seats))
+    query = (
+        "SELECT sender_id, json_extract(refs, '$.quiet') AS quiet FROM messages WHERE recipient_id=? "
+        "AND json_extract(refs, '$.add_to_flow') IS NOT NULL"
+    )
+    for slug in ("product-manager", "feature-owner"):
+        act(api, attempt, "POST", f"bots/{slug}/go-live", {})
+    [own] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + manager,))
+    own = _words(api, own["id"])
+    assert own.rstrip().endswith("ask them, not your manager.") and "skills/add-to-flow/SKILL.md" in own
+    [ping] = rows(api, query, ("bot:" + manager,))
+    assert ping["sender_id"] == "human:owner" and ping["quiet"]
+    [builds] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + builder,))
+    assert "add-to-flow" not in _words(api, builds["id"]) and not rows(api, query, ("bot:" + builder,))
+    act(api, attempt, "POST", "bots/product-manager/go-live", {})
+    assert len(rows(api, query, ("bot:" + manager,))) == 1
+
+
+FIRST_JOB_SEATS = {
+    "plan": "feature-owner",
+    "grow": "growth-manager",
+    "customers": "success-manager",
+    "legal": "legal-owner",
+}
+
+
+def _not_built_in(api):
+    """The slugs of the bots whose template is not a built-in's (a card with `required`): the seat bots."""
+    from backend import onboarding as O
+
+    required = {card["template"] for card in O.read_cards(api.app.state.onboarding.settings) if card["required"]}
+    found = rows(api, "SELECT b.slug, s.template FROM bots b JOIN bot_settings s ON s.bot_id=b.id")
+    return {row["slug"] for row in found if row["template"] not in required}
+
+
+@pytest.mark.parametrize("job,slug", sorted(FIRST_JOB_SEATS.items()))
+def test_the_one_bot_a_first_job_makes_runs_its_own_setup_first_with_every_other_seat_recruiting(
+    environment, job, slug
+):
+    """Setup's first job (#610, criterion 6): a company created with a first job has one bot that is not a built-in, and
+    that bot's setup starts alone. BotOps takes it live, it gets its own setup task first in its queue, and nothing waits
+    on a seat still Recruiting: it reports to a person or a live bot, its setup tasks depend on no task, and both are its
+    turn."""
+    api = environment()
+    saved = api.put("/api/v2/setup", json={"answers": {"first_job": job}}, headers=signed_in())
+    assert saved.status_code == 200, saved.text
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    computer = machine(api)
+    assert _not_built_in(api) == {slug}
+    [seat_bot] = rows(
+        api,
+        "SELECT b.id, b.slug, json_extract(s.extra,'$.setup_task_id') AS task FROM bots b "
+        "JOIN bot_settings s ON s.bot_id=b.id WHERE json_extract(s.extra,'$.goes_live_on_setup')",
+    )
+    assert seat_bot["slug"] == slug and seat_bot["task"]
+    recruiting = {
+        row["id"] for row in rows(api, "SELECT id FROM seats WHERE COALESCE(filled_by,'')='' AND closed_at IS NULL")
+    }
+    assert recruiting, "the default chart's other seats are Recruiting seats"
+    _report(api, computer)
+
+    attempt = _claim(api, computer, "botops")
+    assert attempt, "BotOps claims the bot's Set up task"
+    assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
+    _report(api, computer, present=[seat_bot["id"]])
+    state = _state(api, seat_bot["id"])
+    assert state["state"] == "active" and not state["onboarding_state"], state
+
+    [own] = rows(api, "SELECT id FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + seat_bot["id"],))
+    said = _words(api, own["id"])
+    assert "ask nothing" in said and "Not yet told:" in said
+    # Its line goes to a person or a live bot, never to an empty seat.
+    [line] = rows(api, "SELECT reports_to FROM bot_config WHERE bot=?", (seat_bot["id"],))
+    parent = line["reports_to"] or ""
+    assert parent not in recruiting and parent.removeprefix("bot:") not in recruiting, parent
+    assert parent.startswith("human:") or _state(api, parent.removeprefix("bot:"))["state"] == "active", parent
+    waits = "SELECT 1 FROM task_relations WHERE from_task=? AND kind IN ('depends_on','after')"
+    for task in (own["id"], seat_bot["task"]):
+        assert not rows(api, waits, (task,)), task
+    assert _turn(api, own["id"])["state"] == "bot"
+    first = _claim(api, computer, seat_bot["id"])
+    assert first and first["task"]["id"] == own["id"], first
+    # Still the only one: going live made no second bot that is not a built-in.
+    assert _not_built_in(api) == {slug}

@@ -2,7 +2,10 @@
 //! bot thread. The prompt goes in on stdin as a stream-json user message and stdin stays open for steers;
 //! `--replay-user-messages` echoes each message as Claude reads it, so a `result` ends the runner's turn only
 //! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
-//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
+//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
+//! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
+//! Once the process is gone, whatever the turn started and left running is stopped (crate::turn_sweep), except the
+//! shells a turn that ended on its wait keeps.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -17,10 +20,13 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::{
-    event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions,
+    event, failed, hub_mcp_server_by_name, is_auth_retryable, is_limit, shell_outside_actions,
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
 use crate::util::{iso, log, py_dumps, text_of};
+
+mod process;
+pub(crate) use process::{ends_turn, ClaudeProcess, TurnUsage};
 
 pub const STREAM_ARGS: &[&str] = &[
     "--input-format",
@@ -35,6 +41,12 @@ pub const STREAM_ARGS: &[&str] = &[
 ];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a stopped turn has to end on Claude's own interrupt before its process is closed and killed.
+const INTERRUPT_GRACE: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(10)
+};
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
 /// How long a turn waits for Claude's `result` after Claude reported a usage limit and did no further model work.
@@ -44,6 +56,9 @@ const LIMIT_SETTLE: Duration = if cfg!(test) {
     Duration::from_secs(20)
 };
 const STEER_MIN_VERSION: (u64, u64, u64) = (2, 1, 296);
+/// The first Claude Code with `--effort`; an older one refuses the whole command for an unknown option. Every other
+/// flag `argv` passes is as old as the manifest's `[version] minimum` (runner-rs/harnesses/claude-code.toml).
+const EFFORT_MIN_VERSION: (u64, u64, u64) = (2, 1, 38);
 /// The tools that start a subagent: `Agent`, called `Task` by older Claude Code.
 const AGENT_TOOLS: &[&str] = &["Agent", "Task"];
 /// The tools whose every call keeps running in the background.
@@ -51,9 +66,13 @@ const BACKGROUND_TOOLS: &[&str] = &["Monitor"];
 pub const RESTORING: &str =
     "Saved provider session is unavailable; restoring this conversation's context.";
 
-pub fn version_tuple(text: &str) -> Option<(u64, u64, u64)> {
+/// The version on Claude Code's own `--version` line, `2.1.326 (Claude Code)`, and nothing else: a launcher or wrapper
+/// in front of it (`npx`, `op run --`) that answers with its own number never decides which flags a turn passes.
+pub fn own_version(text: &str) -> Option<(u64, u64, u64)> {
     static R: OnceLock<regex::Regex> = OnceLock::new();
-    let r = R.get_or_init(|| regex::Regex::new(r"(\d+)\.(\d+)\.(\d+)").unwrap());
+    let r = R.get_or_init(|| {
+        regex::Regex::new(r"(?mi)(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?[ \t]+\(Claude Code\)").unwrap()
+    });
     let c = r.captures(text)?;
     Some((c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?))
 }
@@ -115,9 +134,9 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64) {
 }
 
 /// A model request's usage from a stream-json line: (its message id, when the line names one; uncached input with cache
-/// writes, cache reads, output). `message_start` and each content block's `assistant` line carry the request's usage so
-/// far; the `message_delta` that ends it names no id and carries the final output count.
-fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
+/// writes, cache reads, output, and the cache writes alone). `message_start` and each content block's `assistant` line
+/// carry the request's usage so far; the `message_delta` that ends it names no id and carries the final output count.
+fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 4])> {
     let ev = &msg["event"];
     let (id, u) = match (
         msg["type"].as_str()?,
@@ -135,17 +154,41 @@ fn request_usage(msg: &Value) -> Option<(Option<&str>, [i64; 3])> {
         usage_tokens(u).0 - cached,
         cached,
         count(u, "output_tokens"),
+        count(u, "cache_creation_input_tokens"),
     ];
-    tokens
+    tokens[..3]
         .iter()
         .any(|n| *n > 0)
         .then_some((id.filter(|id| !id.is_empty()), tokens))
 }
 
-pub fn user_line(mid: &str, text: &str) -> String {
-    py_dumps(
-        &json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}}),
-    ) + "\n"
+/// A user message for stdin. `priority` "now" is a steer as the Agent SDK sends one: it ends the running step at once
+/// and the turn goes on with the message; with none, Claude reads it once the step ends.
+pub fn user_line(mid: &str, text: &str, priority: Option<&str>) -> String {
+    let mut msg = json!({"type": "user", "uuid": mid, "message": {"role": "user", "content": [{"type": "text", "text": text}]}});
+    if let Some(p) = priority {
+        msg["priority"] = json!(p);
+    }
+    py_dumps(&msg) + "\n"
+}
+
+/// The stream-json control request that interrupts the running turn, as the Agent SDK's `interrupt()` sends it.
+/// `cancel_queued` drops the follow-ups Claude has not started on too (older Claude Code ignores it).
+pub fn interrupt_line(request_id: &str) -> String {
+    py_dumps(&json!({"type": "control_request", "request_id": request_id,
+                     "request": {"subtype": "interrupt", "cancel_queued": true}}))
+        + "\n"
+}
+
+pub(crate) fn voice_delta(frame: &Value) -> Option<&str> {
+    let event = &frame["event"];
+    (frame["type"] == "stream_event"
+        && frame["parent_tool_use_id"].is_null()
+        && event["type"] == "content_block_delta"
+        && event["delta"]["type"] == "text_delta")
+        .then(|| event["delta"]["text"].as_str())
+        .flatten()
+        .filter(|text| !text.is_empty())
 }
 
 #[derive(Clone)]
@@ -156,9 +199,6 @@ pub(crate) struct Thread {
     session_id: Option<String>,
     /// The saved session was not on this computer and the thread restarted as a new one under the same id.
     restored: bool,
-    /// The next turn is a keep-warm turn (crate::prompt::keep_warm): one model turn, `--max-turns 1`. The tools stay
-    /// as they are, so the cached prefix the turn is there to read is the same.
-    one_turn: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -170,7 +210,10 @@ struct Pipe {
     order: Vec<String>,
     /// The follow-ups written after the prompt, in order: a restart of a missing session writes them again.
     followups: Vec<String>,
-    cost: f64,
+    /// What the session had spent, by Claude's own cumulative count, before this process's next `result`: the
+    /// transcript's last `cost-state` when the process started (Claude restores it on `--resume`, a fork's too), then
+    /// each `result`'s. None when that start is not known.
+    cost: Option<Spent>,
     awaiting: Option<Instant>,
     timed_out: bool,
     /// Claude reported a usage limit: unless model work follows, the turn ends here, `result` or not.
@@ -192,6 +235,8 @@ struct Pipe {
     wait: Option<Duration>,
     /// Claude's pid, for finding its shells.
     pid: Option<u32>,
+    /// The id of the interrupt request a stop sent: the turn's `result`, or Claude's answer to it, closes stdin.
+    interrupting: Option<String>,
     /// The turn ended on its wait: Claude was killed so its shells run on, and these are the ones kept.
     kept: Option<Vec<Value>>,
     /// Claude runs under a reaping parent that writes its shells' exit codes here.
@@ -200,13 +245,13 @@ struct Pipe {
 
 impl Pipe {
     /// Writes a follow-up message after the prompt; Claude has not read it until it replays it.
-    fn follow_up(&mut self, text: &str) {
+    fn follow_up(&mut self, text: &str, priority: Option<&str>) {
         let mid = uuid::Uuid::new_v4().to_string();
         self.unread.insert(mid.clone());
         self.order.push(mid.clone());
         self.followups.push(text.to_string());
         self.answered = false;
-        let _ = self.lines.send(Some(user_line(&mid, text)));
+        let _ = self.lines.send(Some(user_line(&mid, text, priority)));
     }
 
     fn close(&mut self) {
@@ -224,9 +269,10 @@ impl Pipe {
     }
 
     /// The bot answered and nothing is left but shells it started in the background: no subagent works, no
-    /// follow-up is unread.
+    /// follow-up is unread. Not once stopped: a stop ends the shells too.
     fn only_waiting(&self) -> bool {
         self.open
+            && self.interrupting.is_none()
             && self.answered
             && self.unread.is_empty()
             && self.background > 0
@@ -440,12 +486,229 @@ struct Usage {
     cached: i64,
     /// Prompt tokens written to the cache (`cache_creation_input_tokens`), a part of `input`.
     cache_write: i64,
+    /// The part of `cache_write` written with the 1-hour TTL (`cache_creation.ephemeral_1h_input_tokens`); None until a
+    /// result reports the split (an older Claude Code reports none), so the server guesses it.
+    cache_write_1h: Option<i64>,
+    /// A result wrote to the cache without saying for how long: the turn's split is unknown and is not reported.
+    cache_write_unsplit: bool,
     cost: Option<f64>,
     texts: Vec<String>,
-    /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
-    requests: Vec<(String, [i64; 3], bool)>,
+    /// Each model request this turn, the bot's and its subagents', in the order Claude made them ([`request_usage`]);
+    /// true for the bot's own.
+    requests: Vec<(String, [i64; 4], bool)>,
+    /// How many of `requests` a `result` has accounted for: those after it no result counted yet.
+    settled: usize,
+    /// A `result` spent money this turn that could not be told apart from the session's earlier spend: the turn's
+    /// cost is left unknown, and the server prices its tokens (backend/execution.py run_usage), never a session total.
+    cost_unknown: bool,
     /// The request each stream (the bot's, or a subagent's by its `parent_tool_use_id`) is in, for its `message_delta`.
     streaming: HashMap<String, String>,
+}
+
+impl Usage {
+    fn add_result_counts(&mut self, result: &Value) {
+        let usage = &result["usage"];
+        let (input, output) = usage_tokens(usage);
+        self.input += input;
+        self.output += output;
+        self.cached += count(usage, "cache_read_input_tokens");
+        let writes = count(usage, "cache_creation_input_tokens");
+        self.cache_write += writes;
+        let split = &usage["cache_creation"];
+        if !split["ephemeral_1h_input_tokens"].is_null() {
+            self.cache_write_1h =
+                Some(self.cache_write_1h.unwrap_or(0) + count(split, "ephemeral_1h_input_tokens"));
+        } else if writes > 0 {
+            self.cache_write_unsplit = true;
+        }
+    }
+
+    fn record_request(&mut self, msg: &Value, id: Option<&str>, tokens: [i64; 4]) {
+        let stream = msg["parent_tool_use_id"].as_str().unwrap_or_default();
+        let id = match id {
+            Some(id) => {
+                self.streaming.insert(stream.to_owned(), id.to_owned());
+                Some(id)
+            }
+            None => self.streaming.get(stream).map(String::as_str),
+        };
+        if let Some(id) = id {
+            match self.requests.iter_mut().find(|(seen, _, _)| seen == id) {
+                Some((_, had, _)) => (0..4).for_each(|i| had[i] = had[i].max(tokens[i])),
+                None => self
+                    .requests
+                    .push((id.to_owned(), tokens, stream.is_empty())),
+            }
+        }
+    }
+
+    fn context_tokens(&self) -> i64 {
+        self.requests
+            .iter()
+            .rev()
+            .find(|(_, _, main)| *main)
+            .map_or(self.input + self.output, |(_, r, _)| r[0] + r[1] + r[2])
+    }
+
+    fn token_event(&self) -> Value {
+        let mut tokens = json!({
+            "input": self.input, "output": self.output, "total": self.input + self.output,
+            "cost_usd": self.cost.filter(|_| !self.cost_unknown),
+            "usage": {
+                "input": self.input, "cached": self.cached, "cache_write": self.cache_write, "output": self.output,
+                // The fourth count tells the server which requests describe the main context.
+                "requests": self.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
+                    .collect::<Vec<_>>()
+            }
+        });
+        if let Some(hour) = self.cache_write_1h.filter(|_| !self.cache_write_unsplit) {
+            tokens["usage"]["cache_write_1h"] = json!(hour);
+        }
+        tokens
+    }
+
+    /// Adds the requests no `result` has accounted for yet to the turn's totals; false when they used nothing. Their
+    /// cache writes come with no TTL, so they leave the turn's 1-hour split unknown.
+    fn add_unsettled(&mut self) -> bool {
+        let mut used = false;
+        for (_, [inp, cached, out, writes], _) in self.requests.iter().skip(self.settled) {
+            self.input += inp + cached;
+            self.cached += cached;
+            self.cache_write += writes;
+            self.cache_write_unsplit |= *writes > 0;
+            self.output += out;
+            used |= inp + cached + out > 0;
+        }
+        self.settled = self.requests.len();
+        used
+    }
+}
+
+/// A Claude session's spend so far as Claude counts it: a `result`'s `total_cost_usd` and `modelUsage`, or the
+/// transcript's `cost-state` record (`totalCostUSD`, `modelUsage`) that Claude writes as a process exits and restores
+/// when a later process resumes or forks the session.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Spent {
+    cost: f64,
+    models: serde_json::Map<String, Value>,
+}
+
+/// The `modelUsage` counts compared: uncached input, cache reads, cache writes, output.
+const MODEL_TOKENS: [&str; 4] = [
+    "inputTokens",
+    "cacheReadInputTokens",
+    "cacheCreationInputTokens",
+    "outputTokens",
+];
+
+/// How far back from a transcript's end its last `cost-state` is looked for: past that the start is unknown.
+const COST_STATE_SCAN: u64 = 8 << 20;
+
+impl Spent {
+    fn of(cost: &Value, models: &Value) -> Option<Spent> {
+        let cost = cost.as_f64().filter(|c| c.is_finite() && *c >= 0.0)?;
+        let models = models.as_object().cloned().unwrap_or_default();
+        Some(Spent { cost, models })
+    }
+
+    fn of_result(result: &Value) -> Option<Spent> {
+        Spent::of(&result["total_cost_usd"], &result["modelUsage"])
+    }
+
+    /// What was spent since `before`: (USD, [uncached input, cache reads, cache writes, output]). None when this
+    /// count cannot have grown from `before`, as when Claude restored a different start than the runner read: less
+    /// money, a model's count that shrank or went missing, or fewer tokens than the `result` itself reports (`used`).
+    fn since(&self, before: &Spent, used: i64) -> Option<(f64, [i64; 4])> {
+        let cost = self.cost - before.cost;
+        if cost < -1e-9 {
+            return None;
+        }
+        let mut added = [0i64; 4];
+        for (model, had) in &before.models {
+            let now = self.models.get(model)?;
+            if MODEL_TOKENS.iter().any(|k| count(now, k) < count(had, k)) {
+                return None;
+            }
+        }
+        for (model, now) in &self.models {
+            let had = before.models.get(model);
+            for (i, k) in MODEL_TOKENS.iter().enumerate() {
+                added[i] += count(now, k) - had.map_or(0, |h| count(h, k));
+            }
+        }
+        if !self.models.is_empty() && added.iter().sum::<i64>() < used {
+            return None;
+        }
+        Some((cost.max(0.0), added))
+    }
+}
+
+/// What the session a turn's Claude starts from had spent: nothing for a new one, else the last `cost-state` in the
+/// transcript it resumes (a fork's source's, which Claude restores too). None when it cannot be read.
+fn start_spent(t: &Thread, thread_id: &str) -> Option<Spent> {
+    let from = match &t.fork_from {
+        Some(from) => from.clone(),
+        None if t.started => session_of(thread_id, t),
+        None => return Some(Spent::default()),
+    };
+    let path = transcript(&t.settings, &from)?;
+    last_cost_state(&path, COST_STATE_SCAN)
+        .ok()
+        .map(Option::unwrap_or_default)
+}
+
+/// The last `cost-state` record in a transcript, read back from its end: Ok(None) when it has none, Err when it cannot
+/// be read, the record is garbled, or none is within `limit` bytes of the end of a longer file.
+fn last_cost_state(path: &std::path::Path, limit: u64) -> Result<Option<Spent>, ()> {
+    const CHUNK: u64 = 64 << 10;
+    // A line longer than this is not a cost-state record (a few hundred bytes a model): it is skipped, not kept whole.
+    const RECORD: usize = 256 << 10;
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    let len = file.metadata().map_err(|_| ())?.len();
+    // `tail`: the start of the line the chunks after this one began, or nothing while skipping a long line (`long`).
+    let (mut end, mut tail, mut long) = (len, Vec::new(), false);
+    while end > 0 {
+        if len - end >= limit {
+            return Err(());
+        }
+        let start = end.saturating_sub(CHUNK);
+        let mut buf = vec![0; (end - start) as usize];
+        file.seek(SeekFrom::Start(start)).map_err(|_| ())?;
+        file.read_exact(&mut buf).map_err(|_| ())?;
+        buf.extend_from_slice(&tail);
+        end = start;
+        // The first line may begin in the chunk before: it waits for that one, unless this is the file's start.
+        let whole = match buf.iter().position(|b| *b == b'\n') {
+            _ if start == 0 => 0,
+            Some(i) => i + 1,
+            None => {
+                long |= buf.len() > RECORD;
+                tail = if long { vec![] } else { buf };
+                continue;
+            }
+        };
+        let mut lines: Vec<&[u8]> = buf[whole..].split(|b| *b == b'\n').collect();
+        if std::mem::take(&mut long) {
+            lines.pop(); // where the long line began
+        }
+        for line in lines.into_iter().rev() {
+            if !line.windows(10).any(|w| w == b"cost-state") {
+                continue;
+            }
+            let record: Value = serde_json::from_slice(line).map_err(|_| ())?;
+            if record["type"] == "cost-state" {
+                return Spent::of(&record["totalCostUSD"], &record["modelUsage"])
+                    .map(Some)
+                    .ok_or(());
+            }
+        }
+        tail = buf[..whole].to_vec();
+        long = tail.len() > RECORD;
+        if long {
+            tail.clear();
+        }
+    }
+    Ok(None)
 }
 
 #[derive(Default)]
@@ -464,6 +727,8 @@ struct Inner {
     reader: Option<tokio::task::JoinHandle<()>>,
     /// The status file of the reaping parent the last launched Claude runs under (crate::reap).
     reaping: Option<std::path::PathBuf>,
+    /// What the session the last launched Claude starts from had spent (Pipe::cost).
+    start_spent: Option<Spent>,
     /// How far each thread's transcript has been read for goal records.
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
@@ -504,8 +769,11 @@ struct Shared {
     cmd: Vec<String>,
     tx: Events,
     steer: std::sync::atomic::AtomicBool,
+    effort: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
+    /// The run this host's turn belongs to, for its timing marks (flight.rs); empty until the runner names it.
+    attempt: Mutex<String>,
 }
 
 #[derive(Clone)]
@@ -515,7 +783,10 @@ pub struct ClaudeHost(Arc<Shared>);
 #[derive(Clone)]
 struct Features {
     version: String,
+    /// Steering (STEER_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it off.
     steer: bool,
+    /// `--effort` (EFFORT_MIN_VERSION), read from Claude Code's own version line only; unknown leaves it out.
+    effort: bool,
 }
 
 fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
@@ -523,11 +794,14 @@ fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION): read from the version alone.
+/// Steering (it needs a Claude Code that replays its input) and `--effort` are both read from the version line that is
+/// Claude Code's own: a wrapper's number never turns either on.
 fn read_features(version: &str) -> Features {
+    let own = own_version(version);
     Features {
         version: version.to_string(),
-        steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
+        steer: own.is_some_and(|v| v >= STEER_MIN_VERSION),
+        effort: own.is_some_and(|v| v >= EFFORT_MIN_VERSION),
     }
 }
 
@@ -557,9 +831,32 @@ impl ClaudeHost {
             cmd,
             tx,
             steer: false.into(),
+            effort: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
+            attempt: Mutex::new(String::new()),
         }))
+    }
+
+    /// Names the run this host's turns belong to, so its own marks land on that run's timings.
+    pub fn set_attempt(&self, aid: &str) {
+        *self.0.attempt.lock().unwrap_or_else(|p| p.into_inner()) = aid.to_string();
+    }
+
+    fn attempt(&self) -> String {
+        self.0
+            .attempt
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// A timing mark on the named run (crate::util::mark); nothing before `set_attempt`.
+    fn mark(&self, name: &str) {
+        let aid = self.attempt();
+        if !aid.is_empty() {
+            crate::util::mark(name, &aid);
+        }
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -604,6 +901,9 @@ impl ClaudeHost {
         self.0
             .steer
             .store(known.steer, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .effort
+            .store(known.effort, std::sync::atomic::Ordering::Relaxed);
         self.inner().up = true;
         Ok(())
     }
@@ -674,7 +974,6 @@ impl ClaudeHost {
                 fork_from,
                 session_id: None,
                 restored: false,
-                one_turn: false,
             },
         );
         id
@@ -689,7 +988,6 @@ impl ClaudeHost {
                 fork_from: None,
                 session_id: None,
                 restored: false,
-                one_turn: false,
             },
         );
         thread_id.into()
@@ -736,23 +1034,6 @@ impl ClaudeHost {
         };
     }
 
-    /// Whether the session `thread_id` resumes is saved on this computer (its transcript is here). Claude itself finds
-    /// out only when a turn runs; a keep-warm turn must know before, so it never starts a session that is not there.
-    pub fn session_saved(&self, thread_id: &str) -> bool {
-        let inner = self.inner();
-        inner
-            .threads
-            .get(thread_id)
-            .is_some_and(|t| transcript(&t.settings, &session_of(thread_id, t)).is_some())
-    }
-
-    /// The next turn on `thread_id` makes one model turn and no more (a keep-warm turn).
-    pub fn one_turn(&self, thread_id: &str) {
-        if let Some(t) = self.inner().threads.get_mut(thread_id) {
-            t.one_turn = true;
-        }
-    }
-
     pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
         let mut inner = self.inner();
         match text {
@@ -766,7 +1047,9 @@ impl ClaudeHost {
         argv.push("-p".into());
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
-        if let Some(hub) = hub_mcp_server(&t.settings.env) {
+        // `--mcp-config` is on the command line, which any user on the computer can read: the hub's token and other
+        // values go as `${VAR}`, which Claude expands from the turn's environment (`turn_env`).
+        if let Some(hub) = hub_mcp_server_by_name(&t.settings.env) {
             servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
@@ -795,19 +1078,24 @@ impl ClaudeHost {
         if let Some(m) = model_for(t.settings.model.as_deref()) {
             argv.extend(["--model".into(), m]);
         }
-        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
+        // Only to a Claude Code that has the flag (start): an older one would refuse the turn, so it runs at its default.
+        if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref()))
+            .filter(|_| self.0.effort.load(std::sync::atomic::Ordering::Relaxed))
+        {
             argv.extend(["--effort".into(), e]);
         }
-        if t.one_turn {
-            argv.extend(["--max-turns".into(), "1".into()]);
-        }
         // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
-        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
+        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move,
+        // and the bot's output style goes in the same one `--settings` (a second would replace the first).
+        let mut flag = serde_json::Map::new();
         if let Some(dir) = t.settings.memory_dir.as_deref() {
-            argv.extend([
-                "--settings".into(),
-                py_dumps(&json!({"autoMemoryDirectory": dir})),
-            ]);
+            flag.insert("autoMemoryDirectory".into(), json!(dir));
+        }
+        if let Some(style) = t.settings.output_style.as_deref() {
+            flag.insert("outputStyle".into(), json!(style));
+        }
+        if !flag.is_empty() {
+            argv.extend(["--settings".into(), py_dumps(&Value::Object(flag))]);
         }
         if let Some(from) = &t.fork_from {
             argv.extend([
@@ -834,6 +1122,7 @@ impl ClaudeHost {
         thread_id: &str,
         t: &Thread,
         effort: Option<&str>,
+        mark: &str,
     ) -> std::io::Result<(
         Child,
         crate::run_diagnostics::Stderr,
@@ -889,6 +1178,8 @@ impl ClaudeHost {
             .stderr(Stdio::piped())
             .current_dir(&t.settings.cwd);
         command.env_clear().envs(turn_env(&t.settings));
+        // Inherited by all the turn starts, a job that leaves its session too: what is left when it ends is stopped.
+        command.env(crate::turn_sweep::MARK_ENV, mark);
         #[cfg(test)]
         if let Some(path) = &reaping {
             let mut args = vec![json!(path), json!("--")];
@@ -912,7 +1203,10 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let (child, stderr) = {
+        // Read before the turn takes the lock: a long transcript is read back a chunk at a time.
+        let thread = self.inner().threads.get(thread_id).cloned();
+        let spent = thread.as_ref().and_then(|t| start_spent(t, thread_id));
+        let (child, stderr, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed("claude host is not running"));
@@ -925,25 +1219,27 @@ impl ClaudeHost {
                 .get(thread_id)
                 .cloned()
                 .ok_or_else(|| failed(format!("unknown claude thread {thread_id}")))?;
-            if let Some(size) = transcript(&t.settings, &session_of(thread_id, &t))
+            let size = transcript(&t.settings, &session_of(thread_id, &t))
                 .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-            {
+                .map(|m| m.len());
+            if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
+            inner.start_spent = spent;
             let (child, stderr, reaping) = self
-                .launch(thread_id, &t, effort)
+                .launch(thread_id, &t, effort, &turn)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
-            if let Some(kept) = inner.threads.get_mut(thread_id) {
-                kept.one_turn = false; // that turn only
-            }
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
             inner.context.remove(thread_id);
-            (child, stderr)
+            (child, stderr, size.unwrap_or(0))
         };
+        // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
+        self.mark("claude_spawned");
+        // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
+        crate::flight::fact(&self.attempt(), "transcript_bytes", transcript_bytes);
         log(&format!(
             "claude[{}]: turn started pid {}",
             self.0.bot,
@@ -982,7 +1278,7 @@ impl ClaudeHost {
     ) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
-        let _ = tx.send(Some(user_line(&first, text)));
+        let _ = tx.send(Some(user_line(&first, text, None)));
         let mut stdin = stdin;
         let capture = self.capture();
         // Its own task: a prompt can be larger than the pipe's buffer, and nothing else waits on it.
@@ -1011,7 +1307,7 @@ impl ClaudeHost {
             unread: HashSet::from([first.clone()]),
             order: vec![first],
             followups: vec![],
-            cost: 0.0,
+            cost: inner.start_spent.take(),
             awaiting: None,
             timed_out: false,
             limit_at: None,
@@ -1026,9 +1322,11 @@ impl ClaudeHost {
             pid,
             kept: None,
             reaping,
+            interrupting: None,
         };
+        // Written right behind the prompt, they steer no running step.
         for text in carried {
-            pipe.follow_up(&text);
+            pipe.follow_up(&text, None);
         }
         inner.pipe = Some(pipe);
     }
@@ -1045,10 +1343,13 @@ impl ClaudeHost {
         let mut recovered = false;
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
+        // Each Claude process of the turn (a restored session has two): the groups and scopes it left.
+        let mut launched: Vec<u32> = vec![];
         loop {
             let stdout = child.stdout.take();
             let stdin = child.stdin.take();
             let pid = child.id();
+            launched.extend(pid);
             let (stopper, exited) = super::own(child);
             self.open_pipe(
                 &tid,
@@ -1139,6 +1440,7 @@ impl ClaudeHost {
                         if self.before_prompt(&msg) {
                             continue;
                         }
+                        self.mark("claude_result");
                         self.settle(&turn, &msg);
                         self.track_wait(&msg);
                         result = Some(msg);
@@ -1227,7 +1529,9 @@ impl ClaudeHost {
                             t.session_id = None;
                             t.restored = true;
                             let t = t.clone();
-                            self.launch(&tid, &t, effort.as_deref())
+                            // A new session: Claude restores no earlier spend.
+                            inner.start_spent = Some(Spent::default());
+                            self.launch(&tid, &t, effort.as_deref(), &turn)
                                 .ok()
                                 .map(|(c, s, r)| {
                                     inner.reaping = r;
@@ -1260,9 +1564,65 @@ impl ClaudeHost {
                     continue;
                 }
             }
+            self.sweep(&tid, &turn, &launched).await;
             self.finish(&tid, &turn, result, rc, &tail, failure);
             return;
         }
+    }
+
+    /// Stops what the ended turn left running (crate::turn_sweep) and says so on the turn. Claude has exited, or was
+    /// killed on its wait: then the shells it kept stay with what they run, and their reaping parent stays for them.
+    async fn sweep(&self, tid: &str, turn: &str, launched: &[u32]) {
+        let target = {
+            let inner = self.inner();
+            let stem = inner.threads.get(tid).and_then(|t| {
+                turn_env(&t.settings)
+                    .get(crate::turn_limits::SCOPE_ENV)
+                    .cloned()
+            });
+            let (keep, keep_trees) = match inner
+                .pipe
+                .as_ref()
+                .and_then(|p| p.kept.as_ref().map(|k| (p, k)))
+            {
+                Some((p, kept)) => (
+                    p.reaping.as_ref().and(p.pid).into_iter().collect(),
+                    kept.iter()
+                        .filter_map(|k| k["pid"].as_u64())
+                        .map(|pid| pid as u32)
+                        .collect(),
+                ),
+                None => (vec![], vec![]),
+            };
+            crate::turn_sweep::Turn {
+                mark: turn.to_string(),
+                groups: launched.to_vec(),
+                cgroups: launched
+                    .iter()
+                    .filter_map(|&pid| crate::turn_limits::scope_dir(stem.as_deref(), pid))
+                    .collect(),
+                keep,
+                keep_trees,
+            }
+        };
+        let stopped = tokio::task::spawn_blocking(move || crate::turn_sweep::sweep(&target))
+            .await
+            .unwrap_or_default();
+        if stopped.is_empty() {
+            return;
+        }
+        log(&format!(
+            "claude[{}]: turn ended: stopped {} processes it left running ({})",
+            self.0.bot,
+            stopped.len(),
+            crate::turn_sweep::programs(&stopped)
+        ));
+        self.emit(event(
+            "diagnostic",
+            Some(tid),
+            Some(turn),
+            crate::turn_sweep::report(&stopped),
+        ));
     }
 
     /// Claude read message `mid`; one missing or not written here stands for the oldest unread message.
@@ -1424,23 +1784,48 @@ impl ClaudeHost {
     fn settle(&self, turn: &str, result: &Value) {
         let (inp, out) = usage_tokens(&result["usage"]);
         let mut inner = self.inner();
-        let cost = result["total_cost_usd"].as_f64();
         let text = result["result"].as_str().unwrap_or_default().to_string();
-        let mut pipe_cost = inner.pipe.as_ref().map_or(0.0, |p| p.cost);
+        // `total_cost_usd` and `modelUsage` are the session's whole spend, a resumed one's from before this process
+        // too: the turn is charged what they grew by since the process's last known count.
+        let before = inner.pipe.as_ref().and_then(|p| p.cost.clone());
+        let now = Spent::of_result(result);
+        let added = before
+            .as_ref()
+            .zip(now.as_ref())
+            .and_then(|(b, n)| n.since(b, inp + out));
         let u = inner.usage.entry(turn.into()).or_default();
-        u.input += inp;
-        u.output += out;
-        u.cached += count(&result["usage"], "cache_read_input_tokens");
-        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
-        if let Some(c) = cost {
-            u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
-            pipe_cost = c;
+        if inp + out > 0 {
+            u.add_result_counts(result);
+        } else {
+            // A step a "now" steer cut short ends on a result of no usage though its request ran, and a /compact's
+            // summary request is in no stream at all. The session's count has both, when its start is known; else
+            // the stream's requests since the last result do.
+            match added.filter(|(_, t)| t.iter().any(|n| *n > 0)) {
+                Some((_, [i, c, w, o])) => {
+                    u.input += i + c + w;
+                    u.cached += c;
+                    // The session's count says nothing of the writes' TTL.
+                    u.cache_write += w;
+                    u.cache_write_unsplit |= w > 0;
+                    u.output += o;
+                }
+                None => {
+                    u.add_unsettled();
+                }
+            }
+        }
+        u.settled = u.requests.len();
+        match (&now, added) {
+            (_, Some((cost, _))) => u.cost = Some(u.cost.unwrap_or(0.0) + cost),
+            (Some(n), None) if n.cost > 0.0 => u.cost_unknown = true,
+            _ => {}
         }
         if !text.is_empty() && u.texts.last() != Some(&text) {
             u.texts.push(text);
         }
         if let Some(p) = inner.pipe.as_mut() {
-            p.cost = pipe_cost;
+            // This process's own count from here on, whatever it started from; none, and the next is unknown.
+            p.cost = now;
             let first = p.first.clone();
             p.unread.remove(&first);
             if crate::util::truthy(result.get("is_error")) {
@@ -1462,27 +1847,11 @@ impl ClaudeHost {
             self.on_tools(msg, tid, turn);
         }
         if let Some((id, tokens)) = request_usage(msg) {
-            // Some models price each request by its prompt length (backend/providers.py LONG_PROMPT), subagents' too.
-            let stream = msg["parent_tool_use_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let main = stream.is_empty();
-            let mut inner = self.inner();
-            let u = inner.usage.entry(turn.into()).or_default();
-            let id = match id {
-                Some(id) => {
-                    u.streaming.insert(stream, id.to_string());
-                    Some(id.to_string())
-                }
-                None => u.streaming.get(&stream).cloned(),
-            };
-            if let Some(id) = id {
-                match u.requests.iter_mut().find(|(seen, _, _)| *seen == id) {
-                    Some((_, had, _)) => (0..3).for_each(|i| had[i] = had[i].max(tokens[i])),
-                    None => u.requests.push((id, tokens, main)),
-                }
-            }
+            self.inner()
+                .usage
+                .entry(turn.into())
+                .or_default()
+                .record_request(msg, id, tokens);
         }
         if !msg.is_object() || crate::util::truthy(msg.get("parent_tool_use_id")) {
             return false; // subagent traffic is not the bot's reply
@@ -1499,7 +1868,7 @@ impl ClaudeHost {
                 let ev = &msg["event"];
                 let delta = &ev["delta"];
                 if ev["type"] == "content_block_delta" && delta["type"] == "text_delta" {
-                    if let Some(text) = delta["text"].as_str().filter(|t| !t.is_empty()) {
+                    if let Some(text) = voice_delta(msg) {
                         self.emit(event(
                             "delta",
                             Some(tid),
@@ -1510,6 +1879,11 @@ impl ClaudeHost {
                 }
             }
             "assistant" => {
+                // A reply the limit blocked carries the limit itself, and Claude does not repeat an unchanged
+                // `rate_limit_event`, so this may be the only sign of it.
+                if msg["error"] == "rate_limit" || msg["api_error"] == "usage_limit_reached" {
+                    self.rate_limit_info(&msg["api_error_params"]["rate_limit_info"], tid, turn);
+                }
                 let m = &msg["message"];
                 let text: String = m["content"]
                     .as_array()
@@ -1576,11 +1950,12 @@ impl ClaudeHost {
                         .as_mut()
                         .filter(|p| p.open && p.limit_at.is_none())
                     {
-                        p.follow_up(&text);
+                        p.follow_up(&text, None);
                     }
                 }
             }
             "system" if msg["subtype"] == "init" => {
+                self.mark("claude_init");
                 let session = msg["session_id"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -1600,23 +1975,29 @@ impl ClaudeHost {
                     json!({"session_id": session}),
                 ));
             }
-            "rate_limit_event" => {
-                let info = &msg["rate_limit_info"];
-                // Rejected with overage in use: extra usage pays and the model keeps working.
-                if info["status"] == "rejected" && info["isUsingOverage"] != true {
-                    let mut inner = self.inner();
-                    inner.limited.insert(turn.into());
-                    if let Some(p) = inner.pipe.as_mut() {
-                        p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
-                        p.limit_text
-                            .get_or_insert_with(|| "Claude usage limit reached".into());
+            "rate_limit_event" => self.rate_limit_info(&msg["rate_limit_info"], tid, turn),
+            "control_response" => {
+                let mut inner = self.inner();
+                if let Some(p) = inner.pipe.as_mut() {
+                    // Claude took the stop: the turn is over, so nothing more goes in.
+                    if p.interrupting.is_some()
+                        && msg["response"]["request_id"].as_str() == p.interrupting.as_deref()
+                    {
+                        p.close();
                     }
                 }
-                for payload in rate_limit_windows(info) {
-                    self.emit(event("rate_limits", Some(tid), Some(turn), payload));
-                }
             }
-            "result" => return true,
+            "result" => {
+                if let Some(p) = self
+                    .inner()
+                    .pipe
+                    .as_mut()
+                    .filter(|p| p.interrupting.is_some())
+                {
+                    p.close();
+                }
+                return true;
+            }
             _ => {}
         }
         false
@@ -1837,16 +2218,16 @@ impl ClaudeHost {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            let usage = inner.usage.remove(turn);
-            if let Some(u) = usage.as_ref() {
+            let mut usage = inner.usage.remove(turn);
+            if let Some(u) = usage.as_mut() {
+                // Requests no `result` came after (a stopped or killed process) ran all the same; what they cost
+                // Claude never said, so a cost from earlier results is not the turn's.
+                if u.add_unsettled() {
+                    u.cost_unknown = true;
+                }
                 // The newest of the bot's own requests is the session's context; without them, the turn's whole usage
                 // is more than it, never less.
-                let last = u
-                    .requests
-                    .iter()
-                    .rev()
-                    .find(|(_, _, main)| *main)
-                    .map_or(u.input + u.output, |(_, r, _)| r[0] + r[1] + r[2]);
+                let last = u.context_tokens();
                 if last > 0 {
                     inner.context.insert(tid.into(), last);
                 }
@@ -1854,17 +2235,7 @@ impl ClaudeHost {
             (inner.interrupted.contains(turn), usage, reply, limited)
         };
         if let Some(u) = usage.as_ref().filter(|u| u.input + u.output > 0) {
-            self.emit(event(
-                "tokens",
-                Some(tid),
-                Some(turn),
-                json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
-                                 // The fourth count marks the bot's own requests (1) from its subagents' (0): the
-                                 // newest of the bot's own is the session's context size (backend/topic_change.py).
-                                 "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
-                                     .collect::<Vec<_>>()}}),
-            ));
+            self.emit(event("tokens", Some(tid), Some(turn), u.token_event()));
         }
         self.poll_goal(tid);
         let ok = result
@@ -1952,7 +2323,8 @@ impl ClaudeHost {
             ));
         }
         let turn = self.start_goal(thread_id, "set", objective, effort)?;
-        if let Err(HostError::SteerRefused(_)) = self.steer(thread_id, &turn, text) {
+        // Part of the turn's input, not a steer: it must not cut the goal's first step short.
+        if let Err(HostError::SteerRefused(_)) = self.write_in(thread_id, &turn, text, None) {
             // Only a turn that ended at once refuses it: the goal holds, and the task's next turn brings its prompt.
             log(&format!(
                 "claude[{}]: the task prompt missed the goal turn",
@@ -2027,8 +2399,19 @@ impl ClaudeHost {
             .insert(thread_id.into(), offset + complete as u64);
     }
 
-    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending.
+    /// Write `text` into the running turn, or refuse with nothing written once it is over or ending. It goes as the
+    /// Agent SDK sends a steer (priority "now"): the running step ends and the turn goes on with it.
     pub fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
+        self.write_in(thread_id, turn_id, text, Some("now"))
+    }
+
+    fn write_in(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        text: &str,
+        priority: Option<&str>,
+    ) -> Result<(), HostError> {
         let mut inner = self.inner();
         let running = inner
             .turn
@@ -2036,8 +2419,8 @@ impl ClaudeHost {
             .is_some_and(|(t, u)| t == thread_id && u == turn_id);
         match inner.pipe.as_mut() {
             // Not once Claude reported a limit: the turn is ending, so the input goes to the next one.
-            Some(p) if running && p.open && p.limit_at.is_none() => {
-                p.follow_up(text);
+            Some(p) if running && p.open && p.limit_at.is_none() && p.interrupting.is_none() => {
+                p.follow_up(text, priority);
                 Ok(())
             }
             _ => Err(HostError::SteerRefused(format!(
@@ -2052,24 +2435,82 @@ impl ClaudeHost {
         self.inner().replay_fallback_logged
     }
 
+    /// Stops the turn as the Agent SDK does: an interrupt request on stdin, so Claude ends the turn itself and saves
+    /// it; its `result`, or its answer to the request, closes stdin and the process exits. A turn not over within
+    /// `INTERRUPT_GRACE`, or one whose stdin is already closed, is closed and killed with all it started.
     pub fn interrupt(&self, _thread_id: &str, turn_id: &str) {
         let mut inner = self.inner();
         if inner.turn.as_ref().is_none_or(|(_, t)| t != turn_id) {
             return; // already over; nothing to stop
         }
         inner.interrupted.insert(turn_id.into());
-        if let Some(p) = inner.pipe.as_mut() {
-            p.close();
-            p.stopper.terminate(STOP_TIMEOUT);
+        let Some(p) = inner.pipe.as_mut() else { return };
+        if !p.open || p.interrupting.is_some() {
+            if p.interrupting.is_none() {
+                p.stopper.terminate(STOP_TIMEOUT);
+            }
+            return;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let _ = p.lines.send(Some(interrupt_line(&id)));
+        p.interrupting = Some(id);
+        p.awaiting = None;
+        p.limit_at = None;
+        drop(inner);
+        let host = self.clone();
+        let turn = turn_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(INTERRUPT_GRACE).await;
+            let mut inner = host.inner();
+            if inner.turn.as_ref().is_some_and(|(_, t)| *t == turn) {
+                if let Some(p) = inner.pipe.as_mut().filter(|p| p.kept.is_none()) {
+                    log(&format!(
+                        "claude[{}]: the turn did not end on its interrupt; stopping Claude",
+                        host.0.bot
+                    ));
+                    p.close();
+                    p.stopper.terminate(STOP_TIMEOUT);
+                }
+            }
+        });
+    }
+
+    /// Records a `rate_limit_info` (from a `rate_limit_event`, or a reply the limit blocked) and passes on its usage
+    /// windows. A rejection extra usage does not pay for ends the turn as limited.
+    fn rate_limit_info(&self, info: &Value, tid: &str, turn: &str) {
+        if !info.is_object() {
+            return;
+        }
+        if limit_rejected(info) {
+            let mut inner = self.inner();
+            inner.limited.insert(turn.into());
+            if let Some(p) = inner.pipe.as_mut() {
+                p.limit_at.get_or_insert(Instant::now() + LIMIT_SETTLE);
+                p.limit_text
+                    .get_or_insert_with(|| "Claude usage limit reached".into());
+            }
+        }
+        for payload in rate_limit_windows(info) {
+            self.emit(event("rate_limits", Some(tid), Some(turn), payload));
         }
     }
+}
+
+/// A rejection that stops the model: overage allowed or in use pays for the request and the model keeps working.
+fn limit_rejected(info: &Value) -> bool {
+    let overage = matches!(
+        info["overageStatus"].as_str(),
+        Some("allowed" | "allowed_warning")
+    ) || info["isUsingOverage"] == true
+        || info["overageInUse"] == true;
+    info["status"] == "rejected" && !overage
 }
 
 /// The usage windows of a `rate_limit_event` as `rate_limits` payloads. Claude Code 2.1.30x adds `unifiedWindows`
 /// (`five_hour`, `seven_day`), each with a `utilization` from 0 to 1; that field is undocumented, so a window whose
 /// utilization is missing or out of range reads unknown (null), never 0 or 100, and any other window name is left out.
 /// Without it (an older CLI) only `rateLimitType`'s window goes, with no percentage.
-fn rate_limit_windows(info: &Value) -> Vec<Value> {
+pub(crate) fn rate_limit_windows(info: &Value) -> Vec<Value> {
     let minutes = |name: &str| match name {
         "five_hour" => Some(300),
         "seven_day" => Some(7 * 24 * 60),
@@ -2123,7 +2564,8 @@ fn session_of(thread_id: &str, t: &Thread) -> String {
 
 /// This exact session's transcript: other bots' and people's transcripts stay private.
 fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> {
-    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env never lets CLAUDE_CONFIG_DIR through.
+    // Where the turn's Claude keeps it: its HOME's .claude, as turn_env lets no other CLAUDE_CONFIG_DIR through (a full
+    // login's links `projects` back there).
     let home = turn_env(settings).remove("HOME").unwrap_or_default();
     let dir = std::path::Path::new(&home).join(".claude");
     let name = format!("{session}.jsonl");
@@ -2199,8 +2641,15 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
         }
     }
     // Claude reads CLAUDE_CONFIG_DIR ahead of HOME: one inherited from this process (or brought by a grant) would run
-    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME.
-    env.remove("CLAUDE_CONFIG_DIR");
+    // the turn on some other folder's login, not the one its sign-in and readiness check wrote under HOME. The one
+    // exception is the home of a full Claude login handed to this turn (model_subscriptions.rs), which links the rest
+    // of HOME's .claude in, `projects` among it.
+    if !env
+        .get("CLAUDE_CONFIG_DIR")
+        .is_some_and(|d| crate::model_subscriptions::is_config_home(d))
+    {
+        env.remove("CLAUDE_CONFIG_DIR");
+    }
     env
 }
 
@@ -2465,6 +2914,61 @@ mod tests {
     }
 
     #[test]
+    fn no_secret_value_is_on_the_claude_command_line() {
+        // Synthetic values only: any process on the computer can read a command line.
+        let token = "synthetic-run-token-0f3a9c";
+        let header = "synthetic-header-secret-7b21";
+        let dir =
+            std::env::temp_dir().join(format!("claude-argv-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            mcp_servers: vec![json!({"name": "linear", "transport": "http",
+                "url": "https://mcp.invalid/mcp", "headers": {"Authorization": "Bearer ${LINEAR_KEY}"}})],
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("HUB_API_URL", "http://hub.invalid"),
+            ("HUB_TOKEN", token),
+            ("HUB_BOT", "acme"),
+            ("HUB_EMPLOYEE", "acme"),
+            ("HUB_DIR", "/hub.invalid"),
+            ("LINEAR_KEY", header),
+        ] {
+            settings.env.insert(k.into(), v.into());
+        }
+        // Every kind of Claude turn builds its command line here: a fresh, a resumed and a forked one.
+        let fresh = host.start_thread(&settings);
+        let forked = host.start_thread_forked(&settings, "old-session");
+        for thread in [&fresh, &forked] {
+            let argv = host.argv(thread, &host.inner().threads[thread].clone(), Some("high"));
+            for arg in &argv {
+                assert!(!arg.contains(token), "run token in {arg}");
+                assert!(!arg.contains(header), "header secret in {arg}");
+            }
+            let config: Value = serde_json::from_str(
+                &argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1],
+            )
+            .unwrap();
+            let tico = &config["mcpServers"]["tico"];
+            for k in crate::hosts::HUB_MCP_ENV {
+                assert_eq!(tico["env"][*k], format!("${{{k}}}"));
+            }
+            assert_eq!(
+                config["mcpServers"]["linear"]["headers"]["Authorization"],
+                "Bearer ${LINEAR_KEY}"
+            );
+        }
+        // Claude expands the placeholders from the turn's own environment, which keeps the values.
+        let env = turn_env(&settings);
+        assert_eq!(env["HUB_TOKEN"], token);
+        assert_eq!(env["LINEAR_KEY"], header);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
@@ -2493,6 +2997,43 @@ mod tests {
         let env = turn_env(&settings);
         assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
         assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn the_output_style_goes_in_the_one_settings_flag_beside_auto_memory_and_default_adds_none() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let given = |settings: &Settings| -> Vec<Value> {
+            let thread = host.start_thread(settings);
+            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            argv.iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--settings")
+                .map(|(i, _)| serde_json::from_str(&argv[i + 1]).unwrap())
+                .collect()
+        };
+        let mut settings = Settings {
+            cwd: "/w/bot-acme".into(),
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            given(&settings),
+            vec![
+                json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude", "outputStyle": "Concise"})
+            ]
+        );
+        settings.memory_dir = None;
+        assert_eq!(given(&settings), vec![json!({"outputStyle": "Concise"})]);
+        // Default (none saved, or an older server) passes no outputStyle, and with no memory folder no --settings.
+        settings.output_style = None;
+        assert!(given(&settings).is_empty());
+        settings.memory_dir = Some("/w/bot-acme/memory/claude".into());
+        assert_eq!(
+            given(&settings),
+            vec![json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})]
+        );
     }
 
     #[test]
@@ -2547,7 +3088,7 @@ mod tests {
             .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let thread = host.start_thread(&settings);
         let t = host.inner().threads[&thread].clone();
-        let (mut child, _stderr, _status) = host.launch(&thread, &t, None).unwrap();
+        let (mut child, _stderr, _status) = host.launch(&thread, &t, None, "turn").unwrap();
         drop(child.stdin.take());
         child.wait().await.unwrap();
         assert_eq!(
@@ -2709,6 +3250,450 @@ mod tests {
         }
         std::fs::remove_dir_all(dir).unwrap();
         (got, steered)
+    }
+
+    /// A `modelUsage` for one model: uncached input, cache reads, cache writes, output.
+    fn model_usage(n: [i64; 4]) -> Value {
+        json!({"claude-haiku-5-5": {"inputTokens": n[0], "cacheReadInputTokens": n[1], "cacheCreationInputTokens": n[2],
+                                    "outputTokens": n[3], "costUSD": 0}})
+    }
+
+    fn cost_state(cost: f64, n: [i64; 4]) -> String {
+        json!({"type": "cost-state", "sessionId": "s", "totalCostUSD": cost, "modelUsage": model_usage(n)}).to_string()
+    }
+
+    fn cost_result(cost: f64, usage: [i64; 4], session: [i64; 4]) -> String {
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "num_turns": 1,
+               "total_cost_usd": cost, "modelUsage": model_usage(session),
+               "usage": {"input_tokens": usage[0], "cache_read_input_tokens": usage[1],
+                         "cache_creation_input_tokens": usage[2], "output_tokens": usage[3]}})
+        .to_string()
+    }
+
+    /// One turn whose Claude prints `out`: on a new session, on a resumed one or on a fork of "old-session", with
+    /// `saved` as the transcript the resumed or forked session starts from (none: not on this computer). Its events.
+    async fn cost_turn(how: &str, saved: Option<&str>, out: &str) -> Vec<Value> {
+        let dir =
+            std::env::temp_dir().join(format!("claude-cost-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join(".claude/projects/acme")).unwrap();
+        std::fs::write(dir.join("out.jsonl"), out).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.327 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let (thread, session) = match how {
+            "new" => (host.start_thread(&settings), String::new()),
+            "fork" => (
+                host.start_thread_forked(&settings, "old-session"),
+                "old-session".to_string(),
+            ),
+            _ => {
+                let id = uuid::Uuid::new_v4().to_string();
+                (host.resume_thread(&id, &settings), id)
+            }
+        };
+        if let Some(saved) = saved {
+            std::fs::write(
+                dir.join(format!(".claude/projects/acme/{session}.jsonl")),
+                saved,
+            )
+            .unwrap();
+        }
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+        got
+    }
+
+    fn tokens_of(got: &[Value]) -> Value {
+        got.iter()
+            .find(|e| e["kind"] == "tokens")
+            .cloned()
+            .unwrap_or_else(|| panic!("no tokens: {got:?}"))
+    }
+
+    /// A transcript as Claude leaves it: messages, the cost-state its last process wrote as it exited, and what a
+    /// later killed process wrote with no cost-state of its own; a message that names the record is not one.
+    fn saved(cost: f64, n: [i64; 4]) -> String {
+        [
+            r#"{"type": "user", "message": {"role": "user", "content": "hello"}}"#.to_string(),
+            cost_state(0.4, [1, 100, 100, 10]),
+            r#"{"type": "system", "subtype": "compact_boundary"}"#.to_string(),
+            cost_state(cost, n),
+            r#"{"type": "user", "message": {"role": "user", "content": "what is a cost-state record?"}}"#.to_string(),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[tokio::test]
+    async fn a_resumed_session_records_only_what_this_turn_spent() {
+        // Claude restores the session's 1.50 and counts on from it: this turn spent 0.25 of the 1.75 it reports.
+        let out = cost_result(1.75, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        let got = cost_turn("resume", Some(&saved(1.5, [10, 20000, 2000, 200])), &out).await;
+        let tokens = tokens_of(&got);
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.25).abs() < 1e-9,
+            "{tokens}"
+        );
+        assert_eq!(tokens["usage"]["input"], json!(3502), "{tokens}");
+    }
+
+    #[tokio::test]
+    async fn a_fork_records_only_what_it_spent_past_its_source() {
+        // `--fork-session` restores the source session's spend as well (Claude Code 2.1.327).
+        let out = cost_result(2.1, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        let got = cost_turn("fork", Some(&saved(2.0, [10, 20000, 2000, 200])), &out).await;
+        assert!(
+            (tokens_of(&got)["cost_usd"].as_f64().unwrap() - 0.1).abs() < 1e-9,
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_session_records_what_it_reports() {
+        let out = cost_result(0.3, [2, 3000, 500, 40], [2, 3000, 500, 40]) + "\n";
+        let got = cost_turn("new", None, &out).await;
+        assert!(
+            (tokens_of(&got)["cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-9,
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_start_leaves_the_cost_to_the_server_never_the_session_total() {
+        let out = cost_result(1.75, [2, 3000, 500, 40], [12, 23000, 2500, 240]) + "\n";
+        // No transcript where the turn's Claude keeps it; a garbled cost-state; a start Claude did not restore (less
+        // spent than it, or fewer tokens): the tokens still go, at no cost of the runner's.
+        let garbled = saved(1.5, [10, 20000, 2000, 200])
+            + "{\"type\": \"cost-state\", \"totalCostUSD\": 1.\n";
+        let more = saved(2.5, [10, 20000, 2000, 200]);
+        let fewer = saved(1.0, [10, 90000, 2000, 200]);
+        for (start, why) in [
+            (None, "missing"),
+            (Some(garbled.as_str()), "garbled"),
+            (Some(more.as_str()), "not restored"),
+            (Some(fewer.as_str()), "fewer tokens"),
+        ] {
+            let got = cost_turn("resume", start, &out).await;
+            let tokens = tokens_of(&got);
+            assert_eq!(tokens["cost_usd"], Value::Null, "{why}: {tokens}");
+            assert_eq!(tokens["usage"]["input"], json!(3502), "{why}: {tokens}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_step_a_steer_cut_short_keeps_the_tokens_its_stream_reported() {
+        // Claude Code 2.1.327 ends the cut-short step on a result of no usage; the steer's own result follows.
+        let start = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}}"#;
+        let delta = r#"{"type": "stream_event", "event": {"type": "message_delta", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 3704, "cache_read_input_tokens": 14877, "output_tokens": 8}}}"#;
+        let cut = cost_result(0.0009, [0, 0, 0, 0], [2, 14877, 3704, 8]);
+        let steer = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 79, "cache_read_input_tokens": 18556, "output_tokens": 4}}}}"#;
+        let done = cost_result(0.0011, [2, 18556, 79, 4], [4, 33433, 3783, 12]);
+        let out = [start, delta, &cut, steer, &done].join("\n") + "\n";
+        let got = cost_turn("new", None, &out).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(
+            (
+                &tokens["usage"]["input"],
+                &tokens["usage"]["cached"],
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["output"]
+            ),
+            (
+                &json!(3706 + 14877 + 18637),
+                &json!(14877 + 18556),
+                &json!(3704 + 79),
+                &json!(12)
+            ),
+            "{tokens}"
+        );
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.0011).abs() < 1e-9,
+            "{tokens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_turns_unsettled_cache_writes_leave_the_one_hour_split_unreported() {
+        // The result's 500 writes were all 1-hour; a later request no result followed wrote 100 more of no stated TTL.
+        // Reporting 500 as the 1-hour share of 600 would understate it: no split is reported and the server falls back.
+        let mut first: Value = serde_json::from_str(&cost_result(
+            1.75,
+            [2, 3000, 500, 40],
+            [12, 23000, 2500, 240],
+        ))
+        .unwrap();
+        first["usage"]["cache_creation"] =
+            json!({"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 500});
+        let more = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 3500, "output_tokens": 5}}}}"#;
+        let out = [first.to_string().as_str(), more].join("\n") + "\n";
+        let got = cost_turn("resume", Some(&saved(1.5, [10, 20000, 2000, 200])), &out).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(tokens["usage"]["cache_write"], json!(600), "{tokens}");
+        assert!(tokens["usage"].get("cache_write_1h").is_none(), "{tokens}");
+    }
+
+    #[tokio::test]
+    async fn a_request_no_result_followed_keeps_its_tokens_and_leaves_the_cost_unknown() {
+        // A priced result, then a follow-up's request the process was stopped in: what that cost Claude never said.
+        let first = cost_result(0.05, [2, 10584, 5833, 8], [2, 10584, 5833, 8]);
+        let more = r#"{"type": "stream_event", "event": {"type": "message_start", "message": {"id": "m2", "usage": {"input_tokens": 2, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 16000, "output_tokens": 30}}}}"#;
+        let got = cost_turn("new", None, &[first.as_str(), more].join("\n")).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(tokens["cost_usd"], Value::Null, "{tokens}");
+        assert_eq!(
+            (&tokens["usage"]["input"], &tokens["usage"]["output"]),
+            (&json!(16419 + 16102), &json!(38)),
+            "{tokens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_compaction_counts_its_summary_from_the_session_count() {
+        // /compact's summary request is in no stream and its result reports no usage; the session's count grew.
+        // Claude echoes the /compact it read, so this result answers it.
+        let read = r#"{"type": "user", "isReplay": true, "message": {"role": "user", "content": "/compact"}}"#;
+        let out = read.to_string()
+            + "\n"
+            + &json!({"type": "result", "subtype": "success", "is_error": false, "result": "", "num_turns": 0,
+                         "total_cost_usd": 0.0856146, "modelUsage": model_usage([2000, 23378, 9460, 407]),
+                         "usage": {"input_tokens": 0, "output_tokens": 0}})
+        .to_string()
+            + "\n";
+        let got = cost_turn("resume", Some(&saved(0.0488888, [2, 10584, 5833, 5])), &out).await;
+        let tokens = tokens_of(&got);
+        assert_eq!(
+            (
+                &tokens["usage"]["input"],
+                &tokens["usage"]["cached"],
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["output"]
+            ),
+            (
+                &json!(1998 + 12794 + 3627),
+                &json!(12794),
+                &json!(3627),
+                &json!(402)
+            ),
+            "{tokens}"
+        );
+        assert!(
+            (tokens["cost_usd"].as_f64().unwrap() - 0.0367258).abs() < 1e-9,
+            "{tokens}"
+        );
+    }
+
+    #[test]
+    fn the_last_cost_state_is_read_back_across_chunks() {
+        let dir = std::env::temp_dir().join(format!("claude-cs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let filler = |n: usize| {
+            (0..n)
+                .map(|i| {
+                    json!({"type": "assistant", "text": "x".repeat(700 + i % 300)}).to_string()
+                        + "\n"
+                })
+                .collect::<String>()
+        };
+        // Records far from the end and straddling a chunk edge: the last one wins.
+        let text = filler(150)
+            + &cost_state(1.0, [1, 2, 3, 4])
+            + "\n"
+            + &filler(100)
+            + &cost_state(2.0, [1, 2, 3, 4])
+            + "\n"
+            + &filler(180);
+        std::fs::write(&path, &text).unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            2.0
+        );
+        // Not within reach of a longer file's end: unknown, unlike a file with none.
+        assert!(last_cost_state(&path, 4096).is_err());
+        std::fs::write(&path, filler(200)).unwrap();
+        assert_eq!(last_cost_state(&path, COST_STATE_SCAN), Ok(None));
+        // A line far longer than any record, between two records, is skipped over.
+        let huge = json!({"type": "assistant", "text": "y".repeat(3 << 20)}).to_string();
+        std::fs::write(
+            &path,
+            cost_state(4.0, [1, 2, 3, 4]) + "\n" + &huge + "\n" + &filler(3),
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            4.0
+        );
+        std::fs::write(
+            &path,
+            huge.clone() + "\n" + &cost_state(5.0, [1, 2, 3, 4]) + "\n" + &huge,
+        )
+        .unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            5.0
+        );
+        // The first line of the file, and a file of one line with no newline.
+        std::fs::write(&path, cost_state(3.0, [1, 2, 3, 4])).unwrap();
+        assert_eq!(
+            last_cost_state(&path, COST_STATE_SCAN)
+                .unwrap()
+                .unwrap()
+                .cost,
+            3.0
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_uses_the_handed_model_effort_and_style_for_both_utterances() {
+        let dir = std::env::temp_dir().join(format!("claude-voice-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            r#"#!/bin/sh
+case "$1" in --version) echo '2.1.296 (Claude Code)'; exit 0;; esac
+echo "$$" >> launches
+printf '%s\n' "$@" > args
+IFS= read -r line || exit 1
+case "$line" in *READY*) printf '%s\n' '{"type":"result","result":"READY"}';; *) exit 2;; esac
+IFS= read -r line || exit 1
+case "$line" in *First*) printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Here."}}}' '{"type":"result","result":"Here."}';; *) exit 3;; esac
+IFS= read -r line || exit 1
+case "$line" in *Second*) printf '%s\n' '{"type":"result","result":"Again."}';; *) exit 4;; esac
+"#,
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let thread = host.start_thread(&Settings {
+            cwd: dir.display().to_string(),
+            model: Some("synthetic-voice-model".into()),
+            effort: Some("low".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        });
+        let mut resident =
+            ClaudeProcess::spawn(&host, &thread, None, "voice-attempt", "voice session").unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            resident.send_turn("Reply with READY").await.unwrap();
+            assert_eq!(resident.next_event().await.unwrap()["result"], "READY");
+            resident.send_turn("First utterance").await.unwrap();
+            assert_eq!(
+                voice_delta(&resident.next_event().await.unwrap()),
+                Some("Here.")
+            );
+            assert_eq!(resident.next_event().await.unwrap()["result"], "Here.");
+            resident.send_turn("Second utterance").await.unwrap();
+            assert_eq!(resident.next_event().await.unwrap()["result"], "Again.");
+        })
+        .await
+        .expect("the resident Claude process did not answer each input");
+        drop(resident);
+        let argv = std::fs::read_to_string(dir.join("args")).unwrap();
+        let args: Vec<_> = argv.lines().collect();
+        let value_after = |flag| args.windows(2).find(|pair| pair[0] == flag).unwrap()[1];
+        assert_eq!(value_after("--model"), "synthetic-voice-model");
+        assert_eq!(value_after("--effort"), "low");
+        let settings: Value = serde_json::from_str(value_after("--settings")).unwrap();
+        assert_eq!(settings["outputStyle"], "Concise");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("launches"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_turn_marks_its_spawn_init_and_result_and_its_transcript_size() {
+        let dir =
+            std::env::temp_dir().join(format!("claude-marks-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("out.jsonl"),
+            concat!(
+                r#"{"type": "system", "subtype": "init", "session_id": "s-marks"}"#,
+                "\n",
+                r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 1, "output_tokens": 1}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\ncat out.jsonl\ncat >/dev/null\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        let thread = host.start_thread(&settings);
+        // The session it resumes: its size goes with the turn's marks.
+        let folder = dir.join(".claude/projects/acme");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{thread}.jsonl")), "x".repeat(1234)).unwrap();
+        let aid = format!("marks-{}", uuid::Uuid::new_v4().simple());
+        crate::flight::track();
+        crate::flight::phase("claimed", &aid);
+        host.set_attempt(&aid);
+        host.start_turn(&thread, "hello", None).unwrap();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev["kind"] == "status" && ev["state"] == "idle" {
+                break;
+            }
+        }
+        let t = crate::flight::timings(&aid).unwrap();
+        let at = |name: &str| {
+            t["phases"][name]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{name}: {t}"))
+        };
+        assert!(at("claude_spawned") <= at("claude_init"), "{t}");
+        assert!(at("claude_init") <= at("claude_result"), "{t}");
+        assert_eq!(t["transcript_bytes"], 1234, "{t}");
+        crate::flight::turn_end(&aid, "acme", "claude", "completed", true);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     const BG_STARTED: &str = r#"{"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "a1", "task_type": "local_agent", "description": "Build concept A"}]}"#;
@@ -2885,6 +3870,52 @@ mod tests {
         );
     }
 
+    /// A turn that ends on its wait keeps the shell it waited on, and stops a job the bot left behind that is no
+    /// background task of Claude's and has left Claude's tree (double-forked), which the wait's own stray stop misses.
+    #[tokio::test]
+    async fn a_turn_ended_on_its_wait_keeps_its_shell_and_stops_the_rest() {
+        let stray_file = std::env::temp_dir().join(format!(
+            "claude-wait-stray-{}.pid",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let rest = format!(
+            "( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > {} )",
+            stray_file.display()
+        );
+        let first = format!(
+            "{SHELL_STARTED}\n{}\n{}\n",
+            assistant_line("m1", "Suite running."),
+            result_line("Suite running.")
+        );
+        let (got, _, pid) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
+        let stray: i32 = std::fs::read_to_string(&stray_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let _ = std::fs::remove_file(&stray_file);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while alive(stray) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (shell_up, stray_up) = (alive(pid), alive(stray));
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::kill(stray, libc::SIGKILL);
+        }
+        assert!(shell_up, "the kept shell was stopped");
+        assert!(!stray_up, "a job the turn left outlived it");
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
+        );
+    }
+
     #[tokio::test]
     async fn a_stopped_turn_leaves_nothing_it_started_running() {
         let dir = std::env::temp_dir().join(format!(
@@ -2952,6 +3983,130 @@ mod tests {
         assert!(
             group_gone,
             "something of the turn's group outlived the stop"
+        );
+    }
+
+    /// A turn that ends on its own (the answer is in, stdin closes, Claude exits) leaves none of what it started
+    /// running: a background job, one that double-forked away, and on Linux one that left the session (`setsid`).
+    /// Nothing is stopped while the turn still runs, and a process of no turn of this one's is never stopped.
+    #[tokio::test]
+    async fn an_ended_turn_leaves_nothing_it_started_running_and_a_running_one_keeps_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "claude-leftovers-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("first.jsonl"),
+            format!(
+                "{}\n{}\n",
+                assistant_line("m1", "Done."),
+                result_line("Done.")
+            ),
+        )
+        .unwrap();
+        let setsid = if cfg!(target_os = "linux") {
+            "setsid sh -c 'echo $$ > detached.pid; exec sleep 900' </dev/null >/dev/null 2>&1 &\n"
+        } else {
+            "echo 0 > detached.pid\n"
+        };
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\n\
+                 sh -c 'while :; do sleep 1; done' </dev/null >/dev/null 2>&1 &\necho $! > job.pid\n\
+                 ( sleep 900 </dev/null >/dev/null 2>&1 & echo $! > forked.pid )\n{setsid}\
+                 while [ ! -e go ]; do sleep 0.05; done\ncat first.jsonl\ncat >/dev/null\n"
+            ),
+        );
+        let mut bystander = std::process::Command::new("sleep")
+            .arg("900")
+            .spawn()
+            .unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            // As on a cloud machine: on Linux, Claude runs under its reaping parent.
+            background_wait: Some(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ["job.pid", "forked.pid", "detached.pid"]
+            .iter()
+            .any(|n| read(n).is_none())
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (job, forked, detached) = (
+            read("job.pid").unwrap(),
+            read("forked.pid").unwrap(),
+            read("detached.pid").unwrap(),
+        );
+        let running = [job, forked, detached]
+            .iter()
+            .filter(|&&p| p > 0)
+            .all(|&p| alive(p));
+        std::fs::write(dir.join("go"), "").unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let left = || -> Vec<i32> {
+            [job, forked, detached]
+                .into_iter()
+                .filter(|&p| p > 0 && alive(p))
+                .collect()
+        };
+        while !left().is_empty() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let left = left();
+        let bystander_up = alive(bystander.id() as i32);
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+        for pid in [job, forked, detached].into_iter().filter(|&p| p > 0) {
+            // SAFETY: processes this test's fake started.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        host.stop().await;
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(running, "a process was stopped while its turn still ran");
+        assert!(left.is_empty(), "outlived the turn: {left:?} of {got:?}");
+        assert!(bystander_up, "a process of no turn was stopped");
+        assert!(
+            got.iter()
+                .any(|e| e["kind"] == "turn_completed" && e["status"] == "completed"),
+            "{got:?}"
+        );
+        let swept = got
+            .iter()
+            .find(|e| e["kind"] == "diagnostic" && e["leftover_processes"].is_object())
+            .expect("the turn says what it stopped");
+        let least = if cfg!(target_os = "linux") { 3 } else { 2 };
+        assert!(
+            swept["leftover_processes"]["count"].as_u64().unwrap() >= least,
+            "{swept}"
+        );
+        assert!(
+            swept["text"].as_str().unwrap().contains("sleep 900"),
+            "{swept}"
         );
     }
 
@@ -3339,6 +4494,23 @@ mod tests {
         );
         // Cache writes are counted apart (they cost more than input): the input above includes them.
         assert_eq!(tokens["usage"]["cache_write"], json!(3000), "{got:?}");
+        // A result without `cache_creation` says nothing of their TTL: the server guesses it.
+        assert!(tokens["usage"].get("cache_write_1h").is_none(), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn one_hour_cache_writes_are_reported_from_the_results_split() {
+        let result = r#"{"type": "result", "subtype": "success", "is_error": false, "result": "Done.", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 500, "output_tokens": 7, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 3000}}}"#;
+        let (got, _) = background_turn(&format!("{result}\n"), "", "", false).await;
+        let tokens = got.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(
+            (
+                &tokens["usage"]["cache_write"],
+                &tokens["usage"]["cache_write_1h"]
+            ),
+            (&json!(3000), &json!(3000)),
+            "{got:?}"
+        );
     }
 
     #[tokio::test]
@@ -3357,6 +4529,123 @@ mod tests {
         let (got, _) = limit_turn(&format!("{overage}\n"), &format!("{result}\n"), false).await;
         assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_the_limit_blocked_marks_the_limit_and_its_reset_with_no_rate_limit_event() {
+        // Claude Code does not repeat an unchanged `rate_limit_event`; each reply the limit blocks carries it instead.
+        let blocked = r#"{"type": "assistant", "message": {"id": "m", "model": "<synthetic>", "role": "assistant", "content": [{"type": "text", "text": "API Error: Request rejected (429)"}]}, "parent_tool_use_id": null, "error": "rate_limit", "api_error": "usage_limit_reached", "api_error_params": {"rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day", "resetsAt": 4102444800, "overageStatus": "rejected", "isUsingOverage": false}}}"#;
+        let (got, _) = limit_turn(&format!("{blocked}\n"), "", false).await;
+        let failed = got.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failed["limit"], true, "{got:?}");
+        let window = got.iter().find(|e| e["kind"] == "rate_limits").unwrap();
+        assert_eq!(
+            (
+                &window["status"],
+                &window["window_minutes"],
+                &window["resets_at"]
+            ),
+            (
+                &json!("rejected"),
+                &json!(10080),
+                &json!("2100-01-01T00:00:00+00:00")
+            ),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejection_extra_usage_pays_for_is_no_limit() {
+        let rejected = json!({"status": "rejected", "rateLimitType": "five_hour"});
+        assert!(limit_rejected(&rejected));
+        for paid in [
+            json!({"isUsingOverage": true}),
+            json!({"overageInUse": true}),
+            json!({"overageStatus": "allowed"}),
+            json!({"overageStatus": "allowed_warning"}),
+        ] {
+            let mut info = rejected.clone();
+            info.as_object_mut()
+                .unwrap()
+                .extend(paid.as_object().unwrap().clone());
+            assert!(!limit_rejected(&info), "{info}");
+        }
+        assert!(!limit_rejected(&json!({"status": "allowed_warning"})));
+    }
+
+    /// Runs one turn on a `claude` that writes an assistant line, keeps the next line it reads in `sent`, and then
+    /// runs `after`; a SIGTERM leaves a `termed` file. Stops the turn once the assistant line is read and returns the
+    /// events, the line Claude was sent, whether it was signalled, and how long the turn took to end after the stop.
+    async fn stopped_turn(after: &str) -> (Vec<Value>, Value, bool, Duration) {
+        let dir =
+            std::env::temp_dir().join(format!("claude-stop-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(
+            &path,
+            &format!("#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\ntrap 'touch termed; exit 143' TERM\nIFS= read -r line\necho '{}'\nIFS= read -r line\nprintf '%s\\n' \"$line\" > sent\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"request_id\": *\"\\([^\"]*\\)\".*/\\1/p')\n{after}\n", assistant_line("m1", "Working on it.")),
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        let turn = host.start_turn(&thread, "hello", None).unwrap();
+        let (mut got, mut stopped) = (vec![], None);
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if stopped.is_none() && ev["kind"] == "message" {
+                host.interrupt(&thread, &turn);
+                stopped = Some(Instant::now());
+            }
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let took = stopped.expect("the turn was stopped").elapsed();
+        let sent = std::fs::read_to_string(dir.join("sent")).unwrap_or_default();
+        let sent = serde_json::from_str(sent.trim()).unwrap_or(Value::Null);
+        let termed = dir.join("termed").exists();
+        std::fs::remove_dir_all(dir).unwrap();
+        (got, sent, termed, took)
+    }
+
+    #[tokio::test]
+    async fn a_stop_asks_claude_to_interrupt_and_the_turn_ends_on_its_answer() {
+        // Claude answers the request, ends the turn with its `result`, and exits once stdin closes.
+        let answer = r#"printf '{"type": "control_response", "response": {"subtype": "success", "request_id": "%s"}}\n' "$id"
+echo '{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 1, "result": "", "usage": {"input_tokens": 1, "output_tokens": 1}}'
+cat >/dev/null"#;
+        let (got, sent, termed, took) = stopped_turn(answer).await;
+        assert_eq!(sent["type"], "control_request", "{sent}");
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        // The grace ends in a SIGTERM, so a turn that ended on it was never signalled.
+        assert!(
+            !termed,
+            "Claude was signalled though it ended the turn itself, {took:?} after the stop"
+        );
+        let end: Vec<_> = got
+            .iter()
+            .filter(|e| e["kind"].as_str().is_some_and(|k| k.starts_with("turn_")))
+            .collect();
+        assert_eq!(end.len(), 1, "{got:?}");
+        assert_eq!(end[0]["kind"], "turn_completed");
+        assert_eq!(end[0]["status"], "interrupted");
+    }
+
+    #[tokio::test]
+    async fn a_stop_claude_does_not_answer_closes_and_kills_it_after_the_grace() {
+        let (got, sent, termed, took) = stopped_turn("while :; do sleep 0.05; done").await;
+        assert_eq!(sent["request"]["subtype"], "interrupt", "{sent}");
+        assert!(termed, "the turn ended without its process being stopped");
+        assert!(took >= INTERRUPT_GRACE, "{took:?}");
+        let end = got.iter().find(|e| e["kind"] == "turn_completed").unwrap();
+        assert_eq!(end["status"], "interrupted", "{got:?}");
     }
 
     #[test]
@@ -3501,10 +4790,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_bots_model_and_effort_reach_claude_code() {
+    /// `--model` and `--effort` of a turn on a Claude Code whose `--version` the probe read as `version`.
+    async fn model_and_effort(version: &str) -> (Option<String>, Option<String>) {
         let (tx, _rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        // A command of its own, so the features noted here are this case's alone.
+        let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+        note_version(&cmd, version).await;
+        let host = ClaudeHost::new("acme", cmd, tx);
+        host.start().await.unwrap();
         let settings = Settings {
             model: Some("claude-haiku-5-5".into()),
             effort: Some("xhigh".into()),
@@ -3515,12 +4808,70 @@ mod tests {
         let after = |flag: &str| {
             argv.iter()
                 .position(|a| a == flag)
-                .map(|i| argv[i + 1].as_str())
+                .map(|i| argv[i + 1].clone())
         };
+        (after("--model"), after("--effort"))
+    }
+
+    #[tokio::test]
+    async fn a_bots_model_and_effort_reach_a_claude_code_that_has_the_flag() {
+        let both = (Some("claude-haiku-5-5".into()), Some("xhigh".into()));
+        assert_eq!(model_and_effort("2.1.38 (Claude Code)").await, both);
+        assert_eq!(model_and_effort("2.1.326 (Claude Code)").await, both);
+        // Older than `--effort`: the turn runs at Claude Code's default rather than failing on an unknown option.
+        let model_only = (Some("claude-haiku-5-5".into()), None);
+        assert_eq!(model_and_effort("2.1.37 (Claude Code)").await, model_only);
+        // A wrapper's own number is not Claude Code's version: unknown, so the flag stays out.
+        assert_eq!(model_and_effort("2.1.999").await, model_only);
+    }
+
+    #[test]
+    fn only_claude_codes_own_version_line_counts() {
+        assert_eq!(own_version("2.1.326 (Claude Code)"), Some((2, 1, 326)));
+        assert_eq!(own_version("  2.1.38 (claude code)\n"), Some((2, 1, 38)));
+        assert_eq!(own_version("2.1.40-beta.1 (Claude Code)"), Some((2, 1, 40)));
+        // A launcher that prints its own version first, then Claude Code's line.
         assert_eq!(
-            (after("--model"), after("--effort")),
-            (Some("claude-haiku-5-5"), Some("xhigh"))
+            own_version("op 2.30.0\n2.1.300 (Claude Code)"),
+            Some((2, 1, 300))
         );
+        for other in [
+            "2.1.326",
+            "npx 10.9.2",
+            "v2.1.326 (Claude Code)",
+            "codex-cli 0.169.0",
+            "",
+        ] {
+            assert_eq!(own_version(other), None, "{other:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_or_wrapped_version_leaves_steering_and_goals_off() {
+        // Steering and goals read Claude Code's own version line, as --effort does: a number on any other line (a
+        // bare `2.1.999`, a launcher's `npx 10.9.2`) is not Claude Code's version, so none of the three turns on.
+        for text in ["2.1.999", "npx 10.9.2"] {
+            let features = read_features(text);
+            assert!(!features.steer && !features.effort, "{text:?}");
+            let (supported, commands) =
+                crate::hosts::probe_goals("claude", std::path::Path::new("claude"), text).await;
+            assert!(
+                !supported && commands.is_empty(),
+                "{text:?} turned goals on"
+            );
+            // The turn a probe that read this version starts: its features come from the version alone.
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let cmd = vec![format!("claude-{}", uuid::Uuid::new_v4().simple())];
+            note_version(&cmd, text).await;
+            let host = ClaudeHost::new("acme", cmd, tx);
+            host.start().await.unwrap();
+            assert!(!host.supports_steer(), "{text:?} turned steering on");
+        }
+        let own = "2.1.999 (Claude Code)";
+        assert!(read_features(own).steer);
+        let (supported, _) =
+            crate::hosts::probe_goals("claude", std::path::Path::new("claude"), own).await;
+        assert!(supported);
     }
 
     #[test]
@@ -3532,7 +4883,6 @@ mod tests {
         );
         assert_eq!(effort_for(Some("XHIGH")).as_deref(), Some("xhigh"));
         assert_eq!(effort_for(Some("minimal")), None);
-        assert_eq!(version_tuple("2.1.296 (Claude Code)"), Some((2, 1, 296)));
         assert_eq!(
             usage_tokens(
                 &json!({"input_tokens": 3, "cache_creation_input_tokens": 4, "cache_read_input_tokens": "5", "output_tokens": 7})
@@ -3675,24 +5025,5 @@ mod feature_tests {
             "a changed version runs no process either"
         );
         std::fs::remove_dir_all(root).ok();
-    }
-
-    #[test]
-    fn a_keep_warm_turn_runs_one_model_turn_with_the_same_tools() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
-        let thread = host.resume_thread("s-1", &Settings::default());
-        let plain = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        host.one_turn(&thread);
-        let warm = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
-        let at = warm
-            .iter()
-            .position(|a| a == "--max-turns")
-            .expect("--max-turns");
-        assert_eq!(warm[at + 1], "1");
-        // Only the limit is added: the tools and settings that make up the cached prefix are the same.
-        let mut without = warm.clone();
-        without.drain(at..at + 2);
-        assert_eq!(without, plain);
     }
 }

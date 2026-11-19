@@ -39,7 +39,8 @@ def as_assistant(api, person, work):
 
 
 def needs_ids(api, token="ben-test"):
-    return {i["task_id"] for i in get(api, "needs-you", token)["items"] if i.get("task_id")}
+    """The open tasks on the person's list: their own work is in Tasks (Needs you holds only what is asked of them)."""
+    return {t["id"] for t in get(api, "tasks?status=open", token)["tasks"]}
 
 
 def close_on_turn(api, task_id, attempt, said, version=None, to="closed", why=None):

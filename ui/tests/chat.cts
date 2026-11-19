@@ -443,7 +443,7 @@ async function sideThreads(browser: Browser) {
   const say = (id: string, from: string, to: string, body: string, n: number, extra: Record<string, unknown> = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', sender_id: from, recipient_id: to, body, created_at: at(n), refs: {}, ...extra});
   const long = 'From dot (Dots): the national continuation is delivered. ' + 'It adds reviewed records with samples in every provisional destination. '.repeat(6);
   const side = Array.from({length: 20}, (_, i) => i === 7
-    ? say('relay', 'bot:assistant', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
+    ? say('relay', 'bot:assistant', 'human:ana', long, 10 + i, {prompted_by: 'bot', refs: {attachments: [{id: 'f-report', name: 'report.pdf', content_type: 'application/pdf'}]}})
     : i === 11 ? say('note', 'bot:assistant', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
     : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:assistant', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
     : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:assistant', i % 2 ? 'bot:assistant' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
@@ -512,11 +512,12 @@ async function sideThreads(browser: Browser) {
   await summary.tap();
   await page.waitForFunction(() => V2C.openFolds?.has('side:side-0'));
   assert.equal(await big.locator('.cs-item').count(), 21);
-  const relay = big.locator('.cs-item[data-message="relay"]'), more = relay.locator('[data-cs-more]');
-  assert.ok((await relay.locator('.cs-text').boundingBox())!.height < 40, 'a long item shows two lines');
-  await more.tap();
-  await relay.locator('[data-cs-more]', {hasText: 'Show less'}).waitFor();
-  assert.ok((await big.locator('.cs-item[data-message="relay"] .cs-text').boundingBox())!.height > 100, 'show more opens the whole message');
+  // A long item is drawn in full, with its file on cloud, and no Show more.
+  const relay = big.locator('.cs-item[data-message="relay"]');
+  assert.equal(await relay.getByRole('button', {name: 'Show more'}).count(), 0, 'a long item has no Show more');
+  assert.ok((await relay.locator('.cs-text').boundingBox())!.height > 100, 'a long item shows in full');
+  assert.equal(await relay.locator('.cs-text').evaluate(el => el.scrollHeight <= el.clientHeight + 2), true, 'nothing of a long item is cut off');
+  await relay.locator('a.pill', {hasText: 'report.pdf'}).waitFor();
   // The bots' conversation is its newest message until opened; then its newest page joins the line.
   assert.equal(await big.locator('.cs-item[data-message="b1"]').count(), 0, 'only the newest message of the bots\' conversation');
   if (process.env.TICO_SHOTS) {

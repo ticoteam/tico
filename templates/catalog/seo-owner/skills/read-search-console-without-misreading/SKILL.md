@@ -1,6 +1,8 @@
 ---
 name: read-search-console-without-misreading
 description: Turn a Search Console export into search-movement numbers a reader can trust, without summing query rows, adding AI-feature reports to totals, or reading hidden queries as zero.
+metadata:
+  function: marketing
 ---
 # Read search performance without misreading it
 

@@ -1,6 +1,8 @@
 ---
 name: review-routing-corrections
 description: Read the routing proposals a person accepted, changed or refused, and decide whether a correction is a one-off note or a rule that belongs in knowledge/routing.md.
+metadata:
+  function: growth
 ---
 # Review routing corrections
 

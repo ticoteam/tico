@@ -3,7 +3,7 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper, which is the only host there is.
+stdlib, one file. It grew up under the local Tico, which is the only host there is.
 
 Shape of every write:
 
@@ -60,6 +60,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -75,40 +76,18 @@ from .task_rights import represents as task_represents, participant as task_part
 from . import task_roles as TRo
 from . import run_triggers as RT
 from . import status_values as SV
-from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
-from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
-from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
-from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA, SIGNING_SCHEMA as TRIGGER_SIGNING_SCHEMA
-from backend.rules_schema import SCHEMA as RULE_EVENTS_SCHEMA
-from backend.triggers_incoming_schema import (
-    SCHEMA as TRIGGERS_INCOMING_SCHEMA,
-    CONSUMER_SCHEMA as TRIGGERS_CONSUMER_SCHEMA,
-)
-from backend.hook_relay_schema import SCHEMA as HOOK_RELAY_SCHEMA
-from backend.webhooks_schema import SCHEMA as WEBHOOKS_SCHEMA
-from backend.sleep_idle_schema import SCHEMA as SLEEP_IDLE_SCHEMA
-from backend.tico_notices_schema import SCHEMA as TICO_NOTICES_SCHEMA
-from backend.postal_mail_schema import (
-    SCHEMA as POSTAL_MAIL_SCHEMA,
-    V2 as POSTAL_MAIL_V2_SCHEMA,
-    V3 as POSTAL_MAIL_V3_SCHEMA,
-)
-from backend.webhooks_v2_schema import SCHEMA as WEBHOOKS_V2_SCHEMA
-from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
-from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
-from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
-from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 from . import bot_settings as BS
 from . import sources as SRC
 
 from .hubdb_core import (
-    KEEPER,
+    TICO_ACTOR,
     bot_actor,
     human_actor,
     actor_kind,
     actor_id,
     is_bot,
     is_human,
+    run_notice,
 )
 from .hubdb_text import (
     LINT_MAX_WORDS,  # noqa: F401
@@ -148,10 +127,6 @@ from .hubdb_text import (
     lint_plain,  # noqa: F401
     person_ask_of_body,
     person_ask_refusal,
-    LINT_LISTED_PICKS,  # noqa: F401
-    lint_question,  # noqa: F401
-    QUESTION_EXAMPLE,  # noqa: F401
-    question_refusal,
     lint_approval,  # noqa: F401
     URL_SPECIAL,  # noqa: F401
     url_authority,  # noqa: F401
@@ -169,16 +144,16 @@ DEFAULT_DB = ROOT / "runtime" / "hub.db"
 
 
 def task_news(sender_id, refs):
-    """A keeper message about a task: started, finished. It is the task's own history,
+    """A Tico message about a task: started, finished. It is the task's own history,
     shown on the task, and it never reaches a person (no delivery, so no unread, Inbox row, digest or push): people are
     not chatted about their own tasks. Bots still get it, as before."""
-    return sender_id == KEEPER and isinstance(refs, dict) and bool(refs.get("task"))
+    return sender_id == TICO_ACTOR and isinstance(refs, dict) and bool(refs.get("task"))
 
 
 def task_news_sql(m="m"):
     """SQL: the messages row `m` is task news (`task_news`)."""
     refs = f"CASE WHEN json_valid({m}.refs) THEN {m}.refs END"
-    return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
+    return f"({m}.sender_id='{TICO_ACTOR}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
 
 
 # A bot's posts in a task's own thread reach a person only for these reasons: an @mention, a reply to them, or
@@ -197,7 +172,7 @@ def task_post_sql(m="m"):
     )
 
 
-def delivery_counts_sql(m, recipient, reason):
+def delivery_counts_sql(m: str, recipient: str, reason: str) -> str:
     """SQL: a delivery of message `m` to `recipient`, whose reason is the SQL `reason`, is a reason for a person to see
     it. Not when the recipient is a person and the message is task news (`task_news_sql`), nor when it is a bot's post
     in a task's own thread (`task_post_sql`) for a reason outside `BOT_TASK_REASONS`. One rule for the write side
@@ -233,10 +208,10 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
+# to a person is a message marked ❓, `tico task ask` or `tico chat ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\"; "
     "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
@@ -246,12 +221,9 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 TASK_STATUSES = ("open", "done", "closed")
 ACTIVE_STATUSES = ("open",)  # not yet finished
 TASK_ENDED = {"done": "marked done", "closed": "closed"}
-# The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
-STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
 # still a lane to read and filter), but every new or moved task is company work.
 TASK_LANES = ("company", "product")
-LANE_TEAMS = ("product", "engineering")  # store.py's one-time lane migration (history)
 # People who may move any task: change its state, rank, lane, owner, labels, parent, blockers or
 # parent. Keyed on the roster team in
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
@@ -280,768 +252,7 @@ QUARANTINE_AT = 10  # rule 8: repeated refusals in a day that hold the task/chat
 QUARANTINE_TOTAL_AT = 3 * QUARANTINE_AT  # rule 8: any refusals in a day, repeated or not (a loop over new targets)
 NOTICE_DAYS = 14  # how long a notice stays in the inbox
 
-# ----------------------------------------------------------------------------- schema
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bots (
-  id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
-  state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);
-
-CREATE TABLE IF NOT EXISTS humans (
-  id TEXT PRIMARY KEY, name TEXT, email TEXT, slack_id TEXT, teams TEXT);
-
-CREATE TABLE IF NOT EXISTS conversations (
-  id TEXT PRIMARY KEY, kind TEXT, subject TEXT, task_id TEXT, participants TEXT,
-  created_at TEXT, last_message_at TEXT, closed_at TEXT);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id),
-  sender_id TEXT, recipient_id TEXT, kind TEXT, body TEXT, refs TEXT, in_reply_to TEXT,
-  created_at TEXT, delivered_at TEXT, read_at TEXT, expires_at TEXT, wait_s INTEGER);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, status TEXT,
-  due_at TEXT, parent_id TEXT, conversation_id TEXT,
-  created_at TEXT, updated_at TEXT, done_at TEXT, closed_at TEXT, closed_by_id TEXT, note TEXT);
-
-CREATE TABLE IF NOT EXISTS task_events (
-  id TEXT PRIMARY KEY, task_id TEXT REFERENCES tasks(id), created_at TEXT, actor TEXT,
-  field TEXT, old TEXT, new TEXT, note TEXT);
-
-CREATE TABLE IF NOT EXISTS approvals (
-  id TEXT PRIMARY KEY, kind TEXT, task_id TEXT, message_id TEXT, payload TEXT,
-  payload_hash TEXT, requested_by_id TEXT, decided_by_id TEXT, decision TEXT,
-  decided_at TEXT, consumed_at TEXT, created_at TEXT);
-
-CREATE TABLE IF NOT EXISTS bot_status (
-  bot TEXT PRIMARY KEY, state TEXT, focus TEXT, task_id TEXT, changed_at TEXT, last_turn_at TEXT,
-  last_result TEXT, next_due_at TEXT, open_tasks INTEGER DEFAULT 0, needs_human INTEGER DEFAULT 0,
-  updated_at TEXT);
-
-CREATE TABLE IF NOT EXISTS bot_status_history (
-  id TEXT PRIMARY KEY, bot TEXT, state TEXT, focus TEXT, task_id TEXT,
-  started_at TEXT, ended_at TEXT, reason TEXT, by TEXT);
-
-CREATE TABLE IF NOT EXISTS schedules (
-  id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT,
-  last_fired_at TEXT, next_due_at TEXT);
-
-CREATE TABLE IF NOT EXISTS turns (
-  id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, trigger TEXT,
-  message_id TEXT, task_id TEXT, exit TEXT, summary TEXT);
-
-CREATE TABLE IF NOT EXISTS deltas (
-  id TEXT PRIMARY KEY, turn_id TEXT, seq INTEGER, kind TEXT, text TEXT, created_at TEXT);
-
-CREATE TABLE IF NOT EXISTS rate_limits (
-  runtime TEXT PRIMARY KEY, used_percent REAL, window_minutes INTEGER,
-  resets_at TEXT, updated_at TEXT);
-
-CREATE TABLE IF NOT EXISTS refusals (
-  id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, rule TEXT, detail TEXT, severity TEXT);
-
-CREATE TABLE IF NOT EXISTS events (
-  id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, action TEXT, target TEXT, detail TEXT);
-
-CREATE INDEX IF NOT EXISTS messages_to_delivered ON messages(recipient_id, delivered_at);
-CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS events_ts ON events(created_at);
-CREATE INDEX IF NOT EXISTS deltas_turn ON deltas(turn_id, seq);
-CREATE INDEX IF NOT EXISTS refusals_actor_ts ON refusals(actor, created_at);
-CREATE INDEX IF NOT EXISTS status_history_bot ON bot_status_history(bot, started_at);
-CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started_at);
-"""
-
-from .meetings_schema import (
-    MEETING_BRAIN_SCHEMA,
-    MEETING_COMMENTS_SCHEMA,
-    MEETING_ITEMS_SCHEMA,
-    MEETING_SCHEMA,
-    RECORDING_SOURCES_SCHEMA,
-    MEETING_REVIEW_SCHEMA,
-    LIVE_MEETINGS_SCHEMA,
-    LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-    LIVE_MEETINGS_CHAT_ROUTING_SCHEMA,
-    LIVE_MEETING_ACCESS_SCHEMA,
-    LIVE_MEETINGS_CLIENT_SCHEMA,
-    LIVE_MEETINGS_MODEL_SCHEMA,
-    LIVE_MEETING_BOT_CONVERSATION_SCHEMA,
-    LIVE_MEETING_TURN_RETRY_SCHEMA,
-)
-
-# Goals and KPIs (backend/goals.py). A task may name the goal
-# it serves; the column is optional and nothing requires it.
-GOALS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goals (
-  id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, parent_id TEXT,
-  body TEXT NOT NULL DEFAULT '', status TEXT, status_note TEXT NOT NULL DEFAULT '',
-  status_by_id TEXT, status_at TEXT, rank INTEGER,
-  last_read_at TEXT, last_read_by_id TEXT,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS goals_owner ON goals(owner_id);
-CREATE INDEX IF NOT EXISTS goals_parent ON goals(parent_id);
-
-CREATE TABLE IF NOT EXISTS goal_events (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, created_at TEXT NOT NULL, actor TEXT NOT NULL,
-  field TEXT NOT NULL, old TEXT, new TEXT, note TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS goal_events_goal ON goal_events(goal_id, created_at);
-
-CREATE TABLE IF NOT EXISTS kpis (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT '',
-  target REAL, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS kpis_goal ON kpis(goal_id);
-
-CREATE TABLE IF NOT EXISTS kpi_readings (
-  id TEXT PRIMARY KEY, kpi_id TEXT NOT NULL, measured_at TEXT NOT NULL, value REAL NOT NULL,
-  actor_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'measured', note TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS kpi_readings_kpi ON kpi_readings(kpi_id, measured_at);
-ALTER TABLE tasks ADD COLUMN goal_id TEXT;
-"""
-
-# KPIs as records of their own, and how goals are coloured (backend/kpis.py, backend/goals.py). A KPI
-# no longer belongs to one goal: `goal_kpis` links a goal to a KPI and holds the target (an improvement
-# from a baseline to a value by a deadline, or a range to stay inside). Readings keep the business time
-# (`period_start`/`period_end`) apart from `collected_at`, and a correction is a new reading that
-# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here; migration 0044
-# drops `goal_id` (and its index), and `kpis.target` stays, read by nothing. Rows that existed before this migration
-# are recognised by `owner IS NULL`.
-KPIS_SCHEMA = """
-ALTER TABLE kpis ADD COLUMN slug TEXT;
-ALTER TABLE kpis ADD COLUMN definition TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpis ADD COLUMN direction TEXT NOT NULL DEFAULT 'up';
-ALTER TABLE kpis ADD COLUMN cadence TEXT NOT NULL DEFAULT 'weekly';
-ALTER TABLE kpis ADD COLUMN owner_id TEXT;
-ALTER TABLE kpis ADD COLUMN source_note TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpis ADD COLUMN definition_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE kpis ADD COLUMN updated_at TEXT;
-ALTER TABLE kpi_readings ADD COLUMN period_start TEXT;
-ALTER TABLE kpi_readings ADD COLUMN period_end TEXT;
-ALTER TABLE kpi_readings ADD COLUMN collected_at TEXT;
-ALTER TABLE kpi_readings ADD COLUMN evidence TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpi_readings ADD COLUMN quality TEXT NOT NULL DEFAULT 'measured';
-ALTER TABLE kpi_readings ADD COLUMN definition_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE kpi_readings ADD COLUMN supersedes TEXT;
-CREATE INDEX IF NOT EXISTS kpi_readings_supersedes ON kpi_readings(supersedes);
-ALTER TABLE goals ADD COLUMN status_source TEXT;
-ALTER TABLE goals ADD COLUMN suggest_status TEXT;
-ALTER TABLE goals ADD COLUMN suggest_note TEXT;
-ALTER TABLE goals ADD COLUMN suggest_at TEXT;
-ALTER TABLE goal_events ADD COLUMN status_by TEXT;
-ALTER TABLE goal_events ADD COLUMN status_source TEXT;
-
-CREATE TABLE IF NOT EXISTS goal_kpis (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, kpi_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'none',
-  baseline REAL, baseline_at TEXT, target REAL, deadline TEXT, min REAL, max REAL,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL,
-  UNIQUE (goal_id, kpi_id));
-CREATE INDEX IF NOT EXISTS goal_kpis_kpi ON goal_kpis(kpi_id);
-
-CREATE TABLE IF NOT EXISTS kpi_definitions (
-  id TEXT PRIMARY KEY, kpi_id TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, actor TEXT NOT NULL,
-  name TEXT NOT NULL, definition TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '',
-  direction TEXT NOT NULL, cadence TEXT NOT NULL, source_note TEXT NOT NULL DEFAULT '',
-  UNIQUE (kpi_id, version));
-
-CREATE TABLE IF NOT EXISTS goal_checkins (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, kpi_id TEXT, created_at TEXT NOT NULL, author TEXT NOT NULL,
-  sender_id TEXT NOT NULL, body TEXT NOT NULL, signal TEXT);
-CREATE INDEX IF NOT EXISTS goal_checkins_goal ON goal_checkins(goal_id, created_at);
-
-CREATE TABLE IF NOT EXISTS goal_proposals (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, goal_id TEXT, kpi_id TEXT, payload TEXT NOT NULL DEFAULT '{}',
-  reason TEXT NOT NULL DEFAULT '', proposed_by TEXT NOT NULL, proposed_at TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending', decided_by TEXT, decided_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
-  result TEXT);
-CREATE INDEX IF NOT EXISTS goal_proposals_status ON goal_proposals(status, proposed_at);
-
-UPDATE kpi_readings SET period_end=measured_at, period_start=measured_at, collected_at=created_at WHERE period_end IS NULL;
-UPDATE kpi_readings SET quality='estimate' WHERE source='estimate' AND quality='measured' AND supersedes IS NULL AND period_start=period_end;
-UPDATE kpis SET owner_id=COALESCE((SELECT owner_id FROM goals WHERE goals.id=kpis.goal_id), 'company'),
-  cadence='monthly', updated_at=created_at WHERE owner_id IS NULL;
-INSERT OR IGNORE INTO goal_kpis (id, goal_id, kpi_id, kind, target, created_at, created_by_id, updated_at, updated_by_id)
-  SELECT id, goal_id, id, CASE WHEN target IS NULL THEN 'none' ELSE 'improve' END, target, created_at, created_by_id,
-         created_at, created_by_id FROM kpis WHERE goal_id != '' AND goal_id IN (SELECT id FROM goals);
-INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note)
-  SELECT id || ':1', id, 1, created_at, created_by_id, name, definition, unit, direction, cadence, source_note FROM kpis;
-UPDATE goals SET status_source='person' WHERE status IS NOT NULL AND status_source IS NULL;
-UPDATE goal_events SET status_by=actor, status_source='person' WHERE field='status' AND status_source IS NULL;
-"""
-
-KPI_ARCHIVE_SCHEMA = """
-ALTER TABLE kpis ADD COLUMN archived_at TEXT;
-ALTER TABLE kpis ADD COLUMN archived_by_id TEXT;
-"""
-
-# The shared market model (backend/market.py).
-# Six tables plus an FTS index. Rows are retired, merged or ended, never deleted.
-MARKET_SCHEMA = """
-CREATE TABLE IF NOT EXISTS market_entities (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  name TEXT NOT NULL,
-  aliases TEXT NOT NULL DEFAULT '[]',
-  external_ids TEXT NOT NULL DEFAULT '{}',
-  tier TEXT,
-  summary TEXT NOT NULL DEFAULT '',
-  properties TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'active',
-  merged_into TEXT,
-  last_verified_at TEXT,
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-
-CREATE TABLE IF NOT EXISTS market_edges (
-  id TEXT PRIMARY KEY,
-  src TEXT NOT NULL,
-  rel TEXT NOT NULL,
-  dst TEXT NOT NULL,
-  valid_from_on TEXT,
-  valid_until_on TEXT,
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  properties TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_edges_src ON market_edges(src, rel);
-CREATE INDEX IF NOT EXISTS market_edges_dst ON market_edges(dst, rel);
-CREATE INDEX IF NOT EXISTS market_edges_until ON market_edges(valid_until_on);
-
-CREATE TABLE IF NOT EXISTS market_evidence (
-  id TEXT PRIMARY KEY,
-  source_url TEXT NOT NULL DEFAULT '',
-  source_kind TEXT NOT NULL DEFAULT 'other',
-  captured_at TEXT,
-  captured_by TEXT NOT NULL,
-  quote TEXT NOT NULL DEFAULT '',
-  our_read TEXT NOT NULL DEFAULT '',
-  blob_id TEXT);
-
-CREATE TABLE IF NOT EXISTS market_citations (
-  claim_kind TEXT NOT NULL,
-  claim_id TEXT NOT NULL,
-  evidence_id TEXT NOT NULL,
-  PRIMARY KEY (claim_kind, claim_id, evidence_id));
-CREATE INDEX IF NOT EXISTS market_citations_evidence ON market_citations(evidence_id);
-
-CREATE TABLE IF NOT EXISTS market_insights (
-  id TEXT PRIMARY KEY,
-  reported_by TEXT NOT NULL,
-  reported_at TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  about TEXT NOT NULL DEFAULT '',
-  claim TEXT NOT NULL DEFAULT '',
-  source_url TEXT NOT NULL DEFAULT '',
-  quote TEXT NOT NULL DEFAULT '',
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  urgent INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'new',
-  resolution TEXT NOT NULL DEFAULT '',
-  applied_events TEXT NOT NULL DEFAULT '[]',
-  resolved_at TEXT,
-  resolved_by TEXT,
-  filed_task TEXT);
-CREATE INDEX IF NOT EXISTS market_insights_status ON market_insights(status, reported_at);
-
-CREATE TABLE IF NOT EXISTS market_events (
-  id TEXT PRIMARY KEY,
-  subject_kind TEXT NOT NULL,
-  subject_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  actor TEXT NOT NULL,
-  field TEXT NOT NULL,
-  old TEXT,
-  new TEXT,
-  insight_id TEXT,
-  note TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS market_events_subject ON market_events(subject_kind, subject_id, created_at);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS market_fts USING fts5(
-  kind UNINDEXED,
-  ref UNINDEXED,
-  name,
-  aliases,
-  summary,
-  quote,
-  our_read,
-  tokenize = 'unicode61 remove_diacritics 1');
-
-CREATE TRIGGER IF NOT EXISTS market_entities_ai AFTER INSERT ON market_entities BEGIN
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('entity', new.id, new.name, new.aliases, new.summary, '', '');
-END;
-CREATE TRIGGER IF NOT EXISTS market_entities_ad AFTER DELETE ON market_entities BEGIN
-  DELETE FROM market_fts WHERE kind='entity' AND ref=old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS market_entities_au AFTER UPDATE ON market_entities BEGIN
-  DELETE FROM market_fts WHERE kind='entity' AND ref=old.id;
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('entity', new.id, new.name, new.aliases, new.summary, '', '');
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_ai AFTER INSERT ON market_evidence BEGIN
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('evidence', new.id, '', '', '', new.quote, new.our_read);
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_ad AFTER DELETE ON market_evidence BEGIN
-  DELETE FROM market_fts WHERE kind='evidence' AND ref=old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_au AFTER UPDATE ON market_evidence BEGIN
-  DELETE FROM market_fts WHERE kind='evidence' AND ref=old.id;
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('evidence', new.id, '', '', '', new.quote, new.our_read);
-END;
-"""
-
-# A person's reply closes whatever that bot asked them. `answered_by` is the message that did it.
-REPLY_ANSWERS_ASKS = """
-ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
--- Stays after step 6d: sender and recipient lookups use it (teammate_access, triggers, assistant, auth).
-CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
-"""
-
-# A market insight names what it was filed from in `source_ref`, once per reporter. (The listening tables this once
-# made are gone: backend/migrations/20261111190425_listening_feed.py.)
-LISTENING_SCHEMA = """
-ALTER TABLE market_insights ADD COLUMN source_ref TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS market_insights_source_ref
-  ON market_insights(reported_by, source_ref) WHERE source_ref IS NOT NULL;
-"""
-
-# Usage (backend/usage.py): what a run's tokens were, on which model, and what they cost at list price.
-# `billing` is `subscription` for a run on a ChatGPT or Claude sign-in, whose cost is an API-equivalent
-# and not money spent. Every statement is safe to run twice.
-USAGE_SCHEMA = """
-ALTER TABLE turns ADD COLUMN input_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN cached_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN output_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN model TEXT;
-ALTER TABLE turns ADD COLUMN provider TEXT;
-ALTER TABLE turns ADD COLUMN est_cost_usd REAL;
-ALTER TABLE turns ADD COLUMN billing TEXT;
-CREATE INDEX IF NOT EXISTS turns_started ON turns(started_at);
-"""
-
-# Spend limits (backend/usage_limits.py): a bot's own daily and monthly cap in estimated USD (null: follow the
-# company default), and the warnings already sent, one per bot, period, limit and level.
-USAGE_LIMITS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_limits (
-  bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, updated_by TEXT);
-CREATE TABLE IF NOT EXISTS usage_alerts (
-  bot TEXT NOT NULL, period TEXT NOT NULL, level INTEGER NOT NULL, sent TEXT NOT NULL,
-  PRIMARY KEY (bot, period, level));
-"""
-
-TAGS_TABLES_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';
-CREATE TABLE IF NOT EXISTS tags (
-  id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, label TEXT NOT NULL,
-  metadata TEXT NOT NULL DEFAULT '{}', markdown TEXT NOT NULL DEFAULT '',
-  is_template INTEGER NOT NULL DEFAULT 0, template_id TEXT REFERENCES tags(id),
-  owner TEXT, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS task_tags (
-  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  tag_id TEXT NOT NULL REFERENCES tags(id), PRIMARY KEY(task_id, tag_id));
-CREATE INDEX IF NOT EXISTS task_tags_tag ON task_tags(tag_id, task_id);
-"""
-
-TAGS_BACKFILL = """
-INSERT OR IGNORE INTO tags(id,key,label,created_at,updated_at)
-  SELECT 'tag-'||lower(hex(randomblob(16))), value, value,
-         strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
-  FROM (SELECT DISTINCT value FROM tasks, json_each(tasks.labels) WHERE type='text' AND value<>'');
-INSERT OR IGNORE INTO task_tags(task_id,tag_id)
-  SELECT tasks.id,tags.id FROM tasks,json_each(tasks.labels) old
-  JOIN tags ON tags.key=old.value;
-"""
-
-TAGS_SCHEMA = TAGS_TABLES_SCHEMA + TAGS_BACKFILL
-
-GENERAL_TYPE = "general"
 GENERAL_PIPELINE = "general"  # the pipeline a task goes into when none is named
-# Numbered step 14 made the old engine's task types and steps. A database that ran it has them until the Pipelines v3
-# cut-over drops them; a new database never makes them (only a database with no tasks runs these steps). The two
-# columns stay: a shipped migration file reads them, and the cut-over drops them with the old tasks table.
-PIPELINES_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN type_id TEXT;
-ALTER TABLE tasks ADD COLUMN step_id TEXT;
-"""
-
-TASK_LINKS_V2_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
-  kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL,
-  pr_sha TEXT, pr_merged_at TEXT);
-ALTER TABLE task_links ADD COLUMN repo TEXT;
-ALTER TABLE task_links ADD COLUMN number INTEGER;
-ALTER TABLE task_links ADD COLUMN branch TEXT;
-ALTER TABLE task_links ADD COLUMN computer_id TEXT;
-ALTER TABLE task_links ADD COLUMN path TEXT;
-ALTER TABLE task_links ADD COLUMN checks TEXT;
-ALTER TABLE task_links ADD COLUMN mergeable TEXT;
-ALTER TABLE task_links ADD COLUMN review_state TEXT;
-ALTER TABLE task_links ADD COLUMN pending_comments INTEGER;
-ALTER TABLE task_links ADD COLUMN detail TEXT;
-ALTER TABLE task_links ADD COLUMN updated_at TEXT;
-CREATE INDEX IF NOT EXISTS task_links_repo_number ON task_links(repo,number);
-UPDATE task_links SET repo=substr(url,20,instr(url,'/pull/')-20),
-  number=CAST(substr(url,instr(url,'/pull/')+6) AS INTEGER), updated_at=created_at
-  WHERE kind='pr' AND url LIKE 'https://github.com/%/pull/%' AND repo IS NULL;
-
-"""
-
-# Migration 20 is the storage engineer's schema; reviews append migration 21.
-from .storage_schema import SCHEMA as STORAGE_SCHEMA
-
-TASK_REVIEW_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_file_reviews(
- file_id TEXT NOT NULL, version INTEGER NOT NULL, note TEXT,
- ask_message_id TEXT REFERENCES messages(id), comment_id TEXT REFERENCES messages(id),
- PRIMARY KEY(file_id,version));
-"""
-
-# Each task's team-wide number, kept for good. (This step also numbered the old engine's types and ranked tasks in
-# their steps; a new database never makes those.)
-NUMBERS_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN number INTEGER;
-CREATE UNIQUE INDEX IF NOT EXISTS tasks_number ON tasks(number);
-"""
-
-# Existing records have no reliable sensitivity marker. Preserve them privately on upgrade;
-# legacy inserts that omit the new field also fail closed. Current creates specify the default.
-TASK_PRIVACY_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1));
-"""
-
-# The person a bot's `waiting` task waited on, until step 6b of threads + tasks: migration
-# 20261106112609_derived_waiting turns each into a question task and drops the column (question_tasks.waiting_on).
-WAITING_ON_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN waiting_on TEXT;
-"""
-
-# Every task-to-task relationship (backend/task_relations.py). Migration 30 creates the table, moves
-# tasks.parent_id and tasks.blocked_by into it and drops both columns (task_relations.migrate).
-TASK_RELATIONS_SCHEMA = TR.SCHEMA
-
-# Immutable primary/fallback usage reports; append to preserve existing installations.
-USAGE_SEGMENTS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS turn_usage_segments (
-  turn_id TEXT NOT NULL REFERENCES turns(id), position INTEGER NOT NULL,
-  input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER,
-  model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT,
-  runtime TEXT, harness TEXT, effort TEXT, profile TEXT,
-  PRIMARY KEY(turn_id, position));
-"""
-
-# A subtask a bot runs on another model (backend/check_models.py); append to preserve existing installations.
-CHECK_MODELS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_check_models (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created_at TEXT);
-"""
-
-# What the Strategy Owner has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
-# KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
-GOAL_ASKS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goal_asks (
-  kind TEXT NOT NULL, ref TEXT NOT NULL, owner TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
-  PRIMARY KEY (kind, ref, owner));
-CREATE INDEX IF NOT EXISTS goal_asks_task ON goal_asks(task_id);
-"""
-
-# What woke a run and whether it changed anything (backend/run_triggers.py); append to preserve existing installations.
-# A run from before this has NULLs, which `run_weekly` in hub sql reads as `unknown`.
-RUN_TRIGGERS_SCHEMA = """
-ALTER TABLE turns ADD COLUMN trigger_kind TEXT;
-ALTER TABLE turns ADD COLUMN trigger_source TEXT;
-ALTER TABLE turns ADD COLUMN writes INTEGER;
-ALTER TABLE turns ADD COLUMN outcome TEXT;
-ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
-"""
-
-# What a run is for (backend/run_triggers.py); the migration fills it on every run already recorded.
-RUN_PURPOSE_SCHEMA = """
-ALTER TABLE turns ADD COLUMN purpose TEXT;
-"""
-
-# The one person a private task with no person on it could reach, before its reader list (migration
-# 20261105213649_task_readers turns it into a reader and drops the column).
-TASK_GUEST_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN guest TEXT;
-"""
-
-# Why a run left its session for a fresh one (runner-rs/src/rotate.rs; backend/run_triggers.py rotation): `tokens` or
-# `turns`, NULL for a run that resumed or started fresh for any other reason. Append to preserve existing installations.
-RUN_ROTATION_SCHEMA = """
-ALTER TABLE turns ADD COLUMN rotated TEXT;
-"""
-
-# Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
-# `turns.session_why`; backend/run_triggers.py session), and the one-shot mark that makes a thread's next run compact
-# its session before it starts after a prompt too large to send (backend/run_backoff.py compact_first). Append to
-# preserve existing installations.
-RUN_SESSION_SCHEMA = """
-ALTER TABLE turns ADD COLUMN session_kind TEXT;
-ALTER TABLE turns ADD COLUMN session_why TEXT;
-CREATE TABLE IF NOT EXISTS compact_first(
-  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, marked_at TEXT NOT NULL, taken_by TEXT,
-  PRIMARY KEY(bot, conversation_id));
-"""
-
-# The Strategy Owner's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Owner item stands for, and what became of it.
-STRATEGY_MERGES_SCHEMA = """
-CREATE TABLE IF NOT EXISTS strategy_merges (
-  merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
-  how TEXT NOT NULL DEFAULT 'asked', ask_id TEXT,
-  state TEXT NOT NULL DEFAULT 'merged', created_at TEXT NOT NULL, settled_at TEXT, note TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (merged_into, original));
-CREATE INDEX IF NOT EXISTS strategy_merges_original ON strategy_merges(original, state);
-CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, created_at);
-"""
-
-# The Strategy Owner log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
-# because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
-STRATEGY_ACTIONS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS strategy_actions (
-  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
-  goal_id TEXT, state TEXT NOT NULL, proposal_task TEXT, note TEXT NOT NULL DEFAULT '',
-  changes TEXT NOT NULL DEFAULT '{}', undone_at TEXT, undone_by TEXT, undo TEXT);
-CREATE INDEX IF NOT EXISTS strategy_actions_created ON strategy_actions(created_at);
-ALTER TABLE task_events ADD COLUMN action_id TEXT;
-CREATE INDEX IF NOT EXISTS task_events_action ON task_events(action_id);
-"""
-
-# One login per AI tool per computer (backend/subscriptions.py): a bot's own subscription choice goes, and the bot
-# runs on its computer's login. The table and the computers' profile reports stay, unread, for one release.
-ONE_LOGIN_PER_COMPUTER_SCHEMA = """
-DELETE FROM subscription_assignments WHERE scope='bot';
-"""
-
-# The market by spend (backend/market_spend.py): sized segments, player figures and the team's own sources. Rows are
-# retired or rejected, never deleted. A size's evidence is a list of market_evidence ids.
-MARKET_SPEND_SCHEMA = """
-CREATE TABLE IF NOT EXISTS market_sizes (
-  id TEXT PRIMARY KEY,
-  segment_id TEXT NOT NULL,
-  dimension TEXT NOT NULL DEFAULT 'offering',
-  basis TEXT NOT NULL DEFAULT 'product',
-  year INTEGER NOT NULL,
-  spend_usd REAL NOT NULL,
-  low_usd REAL NOT NULL,
-  high_usd REAL NOT NULL,
-  growth_pct REAL,
-  method TEXT NOT NULL,
-  arithmetic TEXT NOT NULL DEFAULT '',
-  formula TEXT,
-  params TEXT NOT NULL DEFAULT '{}',
-  evidence_ids TEXT NOT NULL DEFAULT '[]',
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  overlaps TEXT NOT NULL DEFAULT '',
-  spread TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'proposed',
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_sizes_segment ON market_sizes(segment_id, dimension, year, status);
-
-CREATE TABLE IF NOT EXISTS market_figures (
-  id TEXT PRIMARY KEY,
-  entity_id TEXT NOT NULL,
-  segment_id TEXT NOT NULL,
-  metric TEXT NOT NULL,
-  value REAL,
-  text TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL,
-  as_of TEXT NOT NULL,
-  evidence_id TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_figures_segment ON market_figures(segment_id, entity_id);
-
-CREATE TABLE IF NOT EXISTS market_sources (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  covers TEXT NOT NULL DEFAULT '[]',
-  access TEXT NOT NULL,
-  reliability TEXT NOT NULL,
-  how TEXT NOT NULL DEFAULT '',
-  url TEXT,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL);
-"""
-
-# Task caps (backend/task_caps.py, redesign/CONTRACT.md §1): the cap per sender and manager, every send (kept per task,
-# so a hand-over counts too), and the caps a bot proposes for a person to approve.
-TASK_CAPS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_caps(sender TEXT, receiver TEXT, per_day INTEGER, updated_at TEXT, updated_by TEXT,
-  PRIMARY KEY(sender, receiver));
-"""
-
-# Every task cap send is kept (backend/task_caps.py): one row per task, sender, receiver and time, so a hand-over adds a
-# send and never replaces the one before it.
-TASK_CAP_LOG_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_cap_log(task_id TEXT NOT NULL, sender TEXT NOT NULL, receiver TEXT NOT NULL,
-  sent_at TEXT NOT NULL, PRIMARY KEY(task_id, sender, receiver, sent_at));
-CREATE INDEX IF NOT EXISTS task_cap_log_pair ON task_cap_log(sender, receiver, sent_at);
-"""
-
-# A pull request's last activity (CONTRACT section 6, PR find): the time of its newest GitHub pull_request, review or
-# review comment event. NULL on rows from before it, which read as their creation (automation_actions FIND).
-TASK_LINK_ACTIVITY_SCHEMA = """
-ALTER TABLE task_links ADD COLUMN activity_at TEXT;
-"""
-
-# Task trigger tables (rule_task_runs, rule_task_state) were added to RULE_EVENTS_SCHEMA after it shipped, so an
-# install that ran it earlier never got them and every task trigger failed quietly. Every statement is IF NOT EXISTS.
-RULE_TASK_TABLES_SCHEMA = (
-    "-- rule_task_runs, rule_task_state for installs that ran RULE_EVENTS_SCHEMA first\n" + RULE_EVENTS_SCHEMA
-)
-
-# The model one task's runs use (backend/task_run_models.py), kept apart from task_check_models: a check holds when its
-# model cannot run, and this falls back to the bot's own model. One row per task; appended so existing installs get it.
-TASK_RUN_MODELS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_run_models (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT, compact_at INTEGER);
-"""
-
-# Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
-# cap; a bot browses through one such computer; what went through, per day, bot and hostname, is kept 30 days.
-# `generation` fences the relay's grants read before a change: an exit's policy (bumped with each change and when the
-# computer is removed), a bot's selection (its exit, cleared to NULL rather than deleted so the number only grows, and
-# the computer it runs on, bumped in the same transaction as the assignment by browser_exit.TRIGGERS, which
-# store.initialize creates once the execution tables exist). The relay's usage batches are recorded once each: per relay
-# boot, the highest batch sequence recorded (`browser_exit_marks`).
-BROWSER_EXITS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS browser_exits (
-  runner_id TEXT PRIMARY KEY, sharing INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]',
-  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, generation INTEGER NOT NULL DEFAULT 1,
-  changed_by TEXT, changed_at TEXT);
-CREATE TABLE IF NOT EXISTS bot_browser_exits (
-  bot TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER NOT NULL DEFAULT 1, set_by TEXT, set_at TEXT);
-CREATE TABLE IF NOT EXISTS browser_exit_usage (
-  runner_id TEXT NOT NULL, day TEXT NOT NULL, bot TEXT NOT NULL, host TEXT NOT NULL,
-  bytes INTEGER NOT NULL DEFAULT 0, tunnels INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, day, bot, host));
-CREATE INDEX IF NOT EXISTS browser_exit_usage_day ON browser_exit_usage(day);
-CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGER NOT NULL);
-"""
-
-
-# Growth (backend/growth.py) and the brand page (backend/brand.py). The brand keeps one draft row (id 1, with a revision
-# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables are
-# gone: backend/migrations/0035_growth_rethink.py dropped the ones an older database still had, so this step creates
-# only what is live.
-# A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
-# rule is an expression index over coalesce(channel_id, '').
-GROWTH_SCHEMA = """
-CREATE TABLE IF NOT EXISTS brand_drafts (
-  id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
-  updated_by TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS brand_versions (
-  id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
-  published_by TEXT, published_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS gtm_sources (
-  id TEXT PRIMARY KEY, truth_for TEXT NOT NULL, system TEXT NOT NULL,
-  reach_kind TEXT NOT NULL CHECK(reach_kind IN ('mcp','credential','url','person')), reach_ref TEXT NOT NULL DEFAULT '',
-  may TEXT NOT NULL DEFAULT '', owner_ref TEXT, created_at TEXT NOT NULL, retired_at TEXT);
-CREATE TABLE IF NOT EXISTS growth_channels (
-  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-  track TEXT NOT NULL DEFAULT 'performance' CHECK(track IN ('performance','brand')),
-  stage TEXT NOT NULL DEFAULT 'idea' CHECK(stage IN ('idea','testing','scaling','paused')),
-  owner_ref TEXT, budget_month REAL, source_id TEXT, why TEXT NOT NULL DEFAULT '', guardrail_kpi_id TEXT,
-  guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT);
-CREATE TABLE IF NOT EXISTS growth_cohorts (
-  id TEXT PRIMARY KEY, channel_id TEXT, month TEXT NOT NULL, spend REAL, bot_cost REAL, new_customers INTEGER,
-  kept_d30 REAL, kept_d90 REAL, kept_d180 REAL, revenue_month REAL, margin_pct REAL,
-  quality TEXT NOT NULL DEFAULT 'actual' CHECK(quality IN ('actual','estimate')), sources TEXT NOT NULL DEFAULT '{}',
-  updated_by TEXT, updated_at TEXT NOT NULL);
-CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month ON growth_cohorts(coalesce(channel_id, ''), month);
-CREATE TABLE IF NOT EXISTS growth_settings (
-  id INTEGER PRIMARY KEY CHECK(id=1), unit TEXT NOT NULL DEFAULT 'customers', revenue_month REAL, margin_pct REAL);
-ALTER TABLE kpis ADD COLUMN parent_kpi_id TEXT;
-ALTER TABLE kpis ADD COLUMN growth_role TEXT;
-ALTER TABLE kpis ADD COLUMN stage TEXT;
-ALTER TABLE kpis ADD COLUMN loop_name TEXT;
-ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
-"""
-
-
-MIGRATIONS = [
-    SCHEMA,
-    MEETING_SCHEMA,
-    MEETING_ITEMS_SCHEMA,  # index i takes user_version from i
-    MEETING_BRAIN_SCHEMA,
-    MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
-    GOALS_SCHEMA,
-    RECORDING_SOURCES_SCHEMA,
-    MARKET_SCHEMA,
-    REPLY_ANSWERS_ASKS,
-    LISTENING_SCHEMA,
-    KPIS_SCHEMA,
-    USAGE_SCHEMA,
-    USAGE_LIMITS_SCHEMA,
-    TAGS_SCHEMA,
-    PIPELINES_SCHEMA,
-    CHAT_GOALS_SCHEMA,
-    REPOSITORIES_SCHEMA,
-    TASK_LINKS_V2_SCHEMA,
-    SUBSCRIPTIONS_SCHEMA,
-    STORAGE_SCHEMA,
-    TASK_REVIEW_SCHEMA,
-    MEETING_REVIEW_SCHEMA,
-    NUMBERS_SCHEMA,
-    TASK_PRIVACY_SCHEMA,
-    USAGE_SEGMENTS_SCHEMA,
-    KPI_ARCHIVE_SCHEMA,
-    WAITING_ON_SCHEMA,
-    LIVE_MEETINGS_SCHEMA,
-    LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-    LIVE_MEETINGS_CHAT_ROUTING_SCHEMA,
-    TASK_RELATIONS_SCHEMA,
-    TRIGGERS_SCHEMA,
-    TRIGGER_SIGNING_SCHEMA,
-    CHECK_MODELS_SCHEMA,
-    GOAL_ASKS_SCHEMA,
-    RUN_TRIGGERS_SCHEMA,
-    TASK_GUEST_SCHEMA,
-    STRATEGY_MERGES_SCHEMA,
-    ONE_LOGIN_PER_COMPUTER_SCHEMA,
-    RUN_PURPOSE_SCHEMA,
-    RUN_ROTATION_SCHEMA,
-    LIVE_MEETING_ACCESS_SCHEMA,
-    STRATEGY_ACTIONS_SCHEMA,
-    MARKET_SPEND_SCHEMA,
-    RULE_EVENTS_SCHEMA,
-    TRIGGERS_INCOMING_SCHEMA,
-    HOOK_RELAY_SCHEMA,
-    WEBHOOKS_SCHEMA,
-    SLEEP_IDLE_SCHEMA,
-    TICO_NOTICES_SCHEMA,
-    WEBHOOKS_V2_SCHEMA,
-    WEBHOOKS_V3_SCHEMA,
-    WEBHOOKS_V4_SCHEMA,
-    WEBHOOKS_V5_SCHEMA,
-    WEBHOOKS_V6_SCHEMA,
-    RUN_SESSION_SCHEMA,
-    TASK_CAPS_SCHEMA,
-    TASK_CAP_LOG_SCHEMA,
-    TASK_LINK_ACTIVITY_SCHEMA,
-    RULE_TASK_TABLES_SCHEMA,
-    TASK_RUN_MODELS_SCHEMA,
-    LIVE_MEETINGS_CLIENT_SCHEMA,
-    LIVE_MEETINGS_MODEL_SCHEMA,
-    LIVE_MEETING_BOT_CONVERSATION_SCHEMA,
-    LIVE_MEETING_TURN_RETRY_SCHEMA,
-    POSTAL_MAIL_SCHEMA,
-    POSTAL_MAIL_V2_SCHEMA,
-    POSTAL_MAIL_V3_SCHEMA,
-    TRIGGERS_CONSUMER_SCHEMA,
-    GROWTH_SCHEMA,
-    BROWSER_EXITS_SCHEMA,
-]
-# The list ends here, at user_version 71 (migrations.MIN_BRIDGE_USER_VERSION): every later persistent change is a file in
-# backend/migrations.
 
 
 class Refused(Exception):
@@ -1118,14 +329,14 @@ def by_own_hand(actor) -> bool:
 
 def in_person_name(message):
     """Whether a message is in a person's name: one they typed, one the Assistant, BotOps or a token wrote for them
-    (they act with the person's rights), or the keeper's carrier of one (threads._carrier: refs.carries, refs.from).
+    (they act with the person's rights), or Tico's carrier of one (threads._carrier: refs.carries, refs.from).
     Enough for the claim's order, a snooze or done hold, fences and labels. in_person_name_sql is the row test."""
     message = message or {}
     sender = str(message.get("sender_id") or "")
     if is_human(sender):
         return True
     refs = _json(message.get("refs"), {}) or {}
-    return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
+    return sender == TICO_ACTOR and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
 def typed_by_person(message):
@@ -1166,17 +377,6 @@ def sourced_text(text, sources=(), refs=None):
     if kept:
         refs["body_sources"] = kept
     return text, refs
-
-
-def answer_question(conn, target):
-    """The stored question behind a structured answer target: a comment ask, or a file version's."""
-    if target.get("comment"):
-        return message(conn, target["comment"])
-    row = conn.execute(
-        "SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
-        (target.get("file"), target.get("version")),
-    ).fetchone()
-    return message(conn, row[0]) if row and row[0] else None
 
 
 def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
@@ -1318,7 +518,22 @@ def leave_wal_for_litestream(conn):
     return conn
 
 
-def connect(path=None, adopt_legacy=False):
+def wal_mode(conn, wait=30.0):
+    """Switch the file to WAL. Two connections switching a new file at once is the one place SQLite answers "database is
+    locked" without waiting for the other (its busy handler is not asked, to avoid a deadlock), so the loser tries again
+    until `wait` seconds have passed; the switch itself takes milliseconds."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def connect(path=None):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
     Precedence: the `path` argument, then `$HUB_DB`, then `<projects>/runtime/hub.db`.
@@ -1336,44 +551,21 @@ def connect(path=None, adopt_legacy=False):
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        wal_mode(conn)
+    except Exception:
+        conn.close()
+        raise
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
     conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
     try:
-        migrate(conn, adopt_legacy=adopt_legacy)
+        migrate(conn)
     except Exception:
         conn.close()
         raise
     return conn
-
-
-class UnknownDatabase(RuntimeError):
-    """The file has Tico's tables but no version record: not a database this code made."""
-
-
-def backfill_credential_uses(conn):
-    """Once: each credential's newest use per (actor, bot), from the events log (the rule credentials.record_use
-    applies from now on: a bot's run or a computer sent it, never a person's reveal). One grouped read: a per-credential
-    loop measured 62 s cold on TIDY against 16 s for this (2 s each warm). Reads events by (target, action)."""
-    if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
-        return
-    known = {row[0] for row in conn.execute("SELECT id FROM credentials")}
-    rows = conn.execute(
-        "SELECT target, actor, COALESCE(NULLIF(CASE WHEN detail LIKE '{%' "
-        "THEN json_extract(detail,'$.bot') END,''), "
-        "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(created_at) "
-        "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
-        "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot"
-    ).fetchall()
-    # The newest event row of a pair is both its newest use and the last one logged.
-    conn.executemany(
-        "INSERT INTO credential_uses(credential_id,actor,bot,used_at,logged_at) VALUES(?,?,?,?,?) "
-        "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET used_at=MAX(used_at,excluded.used_at),logged_at=MAX(logged_at,excluded.logged_at)",
-        [(target, actor, bot or '', at, at) for target, actor, bot, at in rows if at and target in known],
-    )
-    conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
 # The task rows every task read reads, as a table: `SELECT * FROM {TASKS} tasks`. It is the table itself.
@@ -1383,323 +575,12 @@ TASKS = "tasks"
 SNOOZED = "EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=%s.id AND sz.ended_at IS NULL)"
 
 
-def add_column(conn, table, column, declaration):
-    """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
-    if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-
-
-ADD_COLUMN = re.compile(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\s+([^;]+);", re.I)
-
-
-def _statements(script):
-    """The complete statements of a script (a trigger body keeps its inner semicolons)."""
-    buffer = ""
-    for line in script.splitlines(keepends=True):
-        buffer += line
-        if sqlite3.complete_statement(buffer):
-            yield buffer.strip()
-            buffer = ""
-    if buffer.strip():
-        yield buffer.strip()
-
-
-# The logs migration 0064 moved into history_events. A numbered step that names one is skipped on a file that already
-# has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
-# missing table nor brings it back empty beside the table that replaced it.
-MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
-# A numbered step's statement on the old run tables. Migration 0072 moved them into attempts (with turn_usage_segments
-# already gone to usage_facts, migration 0053), so on a file it has reached a step that names them has nothing to do.
-OLD_RUN_TABLES = re.compile(r"(?:\bON|\bTABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(turns|turn_usage_segments)\b", re.I)
-
-
-def _runs_merged(conn):
-    """True once migration 0072 has moved the runs: no turns table, but attempts. A fresh file has neither yet, so its
-    numbered steps create turns and migration 0072 moves it."""
-    names = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('turns','attempts')")
-    }
-    return "attempts" in names and "turns" not in names
-
-
-def _apply(conn, script):
-    moved = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_events'").fetchone()
-    for statement in _statements(script):
-        if moved and MOVED_TO_HISTORY.search(statement):
-            continue
-        if OLD_RUN_TABLES.search(statement) and _runs_merged(conn):
-            continue
-        match = ADD_COLUMN.fullmatch(statement)
-        if match:
-            add_column(conn, *match.groups())
-        else:
-            conn.execute(statement)
-
-
-def _refuse_foreign(conn):
-    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if tables & {"bots", "tasks", "messages"} and "cloud_migrations" not in tables:
-        raise UnknownDatabase(
-            "This database file has Tico-like tables but no version record (user_version 0, no "
-            "cloud_migrations table), so it is not one this Tico made. Refusing to start: point "
-            "TICO_DB at an empty path or a Tico database, or restore a snapshot."
-        )
-
-
-def migrate(conn, adopt_legacy=False):
-    """Apply every migration the file has not seen, by `PRAGMA user_version`.
-
-    Each migration is one transaction with its version bump, so a failure leaves the file at
-    the version it had; every statement is also safe to run twice (IF NOT EXISTS, guarded
-    ADD COLUMN), so a file that has the change but an older version simply catches up.
-    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record.
-    A database made by Tico 0.5 (it has tasks and has not had the cut-over) is refused before anything is written."""
+def migrate(conn):
+    """Bring the file to this code's schema: the baseline on a new file, then each migration file it has not run
+    (backend/migrations). A database below the compatibility floor is refused before anything is written."""
     from . import migrations
 
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version == 0 and not adopt_legacy:
-        _refuse_foreign(conn)
-    migrations.refuse_old_tasks(conn)
-    if version < len(MIGRATIONS):
-        # A file from before the bridge (the legacy import; preflight refuses one otherwise) runs the numbered steps
-        # below on its old shape, and they name today's columns, so it takes the cleanup's column renames first. A file
-        # at the bridge gets them from their migration files (backend/migrations/0013_rails_renames_wave1.py), and a new
-        # file has no tables to rename.
-        from .migrations import renames
-
-        renames.apply_now(conn)
-    from .flight import begin
-
-    for i in range(version, len(MIGRATIONS)):
-        done = begin(conn)
-        try:
-            if i == 23:
-                migrate_task_privacy(conn)
-            elif i == 30:
-                TR.migrate(conn)
-            elif i == 39:
-                _apply(conn, MIGRATIONS[i])
-                if _runs_merged(conn):
-                    RT.backfill(conn)
-                else:
-                    RT.backfill(conn, "turns", "bot")
-            else:
-                _apply(conn, MIGRATIONS[i])
-            conn.execute(f"PRAGMA user_version={i + 1}")
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            done()
-    # The migration files (backend/migrations) run next, before every CREATE, ALTER and add_column below and in the
-    # module schema code: those name the current columns, so a rename must land first or they would add an empty
-    # column beside the old one.
     migrations.apply(conn)
-    # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
-    # Deleted tasks wait here until restored or purged (backend/task_delete.py).
-    from .task_delete import ensure as ensure_task_trash
-
-    ensure_task_trash(conn)
-    # Reconnect cards: a task waits for a person to fix a missing or refused account (backend/reconnects.py).
-    from .reconnects import ensure as ensure_reconnects
-
-    ensure_reconnects(conn)
-    # Recruiting seats: org-chart roles with no bot yet (backend/lifecycle.py).
-    from .lifecycle import ensure as ensure_seats
-
-    ensure_seats(conn)
-    # A task's lane and its place in its owner's queue. The cloud store backfills rank and lane once (its migration
-    # 29); here the columns simply exist.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
-    if "lane" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN lane TEXT NOT NULL DEFAULT 'company'")
-    if "rank" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN rank REAL")
-    if "labels" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
-    # Every task-to-task relationship; idempotent, so a database at any version catches up.
-    TR.migrate(conn)
-    # Who is on a task, by role (task_roles).
-    TRo.migrate(conn)
-    # The due-date routine occurrence a task is for, "<automation_id>:<due_on>" (backend/automation_actions.py).
-    add_column(conn, "tasks", "occurrence", "TEXT")
-    # The step of the routine that opened it: one task per occurrence per producing step (task_create).
-    add_column(conn, "tasks", "occurrence_step", "TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS tasks_occurrence_step ON tasks(occurrence, occurrence_step) "
-        "WHERE occurrence IS NOT NULL"
-    )
-    # The rule due date an occurrence's run was fired for (backend/rule_due.py marks it when the task completes).
-    add_column(conn, "tasks", "rule_due_id", "TEXT")
-    task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
-    if "private" in task_columns:
-        if "readers" in task_columns:
-            # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
-            # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
-            # with the two columns those read beyond the parties. The predicate matches both queries word for word and
-            # the index holds every column they read, so no body is read.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
-                "id, requester_id, owner_id, readers, private, status) WHERE private IS NOT 0"
-            )
-            # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
-            # answered from an index alone: the table's pages hold every body, and these reads need none of them.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
-                "rank, created_at, id, owner_id, requester_id, private, readers)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_owner_status_cover ON tasks("
-                "owner_id, status, id, requester_id, private, readers)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
-                "requester_id, status, id, owner_id, private, readers)"
-            )
-    # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
-    # The conversation row holds participants, and the primary key scan reads those pages.
-    conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
-    # Status and provenance reads stay indexed as question and task history grows.
-    conn.execute("CREATE INDEX IF NOT EXISTS messages_reply_kind ON messages(in_reply_to, kind)")
-    conn.execute("CREATE INDEX IF NOT EXISTS messages_from_kind ON messages(sender_id, kind)")
-    # A task comment its author changed or took back (task_comment_edit, task_comment_delete). Checked on
-    # every start rather than numbered, so no migration number collides with another branch's.
-    add_column(conn, "messages", "edited_at", "TEXT")
-    add_column(conn, "messages", "deleted_at", "TEXT")
-    # An old ask made moot, or moved to a question task by the asks migration (question_tasks.move_asks).
-    add_column(conn, "messages", "superseded_at", "TEXT")
-    # Where a task stood after its last completed turn (execution.complete), so a fresh session picks
-    # it up from there.
-    add_column(conn, "tasks", "checkpoint", "TEXT")
-    add_column(conn, "tasks", "checkpoint_at", "TEXT")
-    add_column(conn, "tasks", "checkpoint_by_id", "TEXT")
-    # Where the task stood by the others' changes when that checkpoint was left (wake_rules.state_of, token saving 3/9).
-    add_column(conn, "tasks", "checkpoint_state", "TEXT")
-    # Set once a turn in the task's own session took in another private task: that session may
-    # carry it from then on, so no later turn's reply becomes the checkpoint (execution.complete).
-    add_column(conn, "tasks", "checkpoint_blocked", "INTEGER NOT NULL DEFAULT 0")
-    # The Tico account a person signed in with (backend/oidc.py person): the issuer and its subject id. An install
-    # matches the account id before the email, so a changed address keeps the same person. NULL until their first
-    # sign-in with an account; one account is one person.
-    add_column(conn, "humans", "idp_issuer", "TEXT")
-    add_column(conn, "humans", "idp_sub", "TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL"
-    )
-    from .roadmaps import migrate as migrate_roadmaps
-
-    migrate_roadmaps(conn)
-    # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
-    conn.execute(UNREAD_INDEX)
-    # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
-    # nearly every privacy check: the room index read every message of the room for them, millions of times a week.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_live_meeting_input ON messages(conversation_id, created_at) "
-        "WHERE json_extract(refs,'$.live_meeting.turn_id') IS NOT NULL"
-    )
-    # The questions a comment answered, reopened when it is deleted (`task_comment_delete`, inside the write
-    # transaction): without it that lookup read every message.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_answered_by ON messages(answered_by_id) WHERE answered_by_id IS NOT NULL"
-    )
-    # The media check visits blobs often; an unindexed version lookup multiplies both histories.
-    conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)")
-    # The media poll's pending rows, a handful even when blobs number in the tens of thousands.
-    conn.execute("CREATE INDEX IF NOT EXISTS blob_media_pending ON blob_media(blob_id) WHERE media_state='pending'")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) WHERE media_state='pending'"
-    )
-    # Quiet notes (`tico note`): a line left for a bot's next run, asking nothing. `carried_by` is
-    # the attempt that took it there; a canceled note never goes.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
-        "to_actor TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, carried_by TEXT, "
-        "canceled_at TEXT, canceled_by TEXT)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created_at)")
-    # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
-    add_column(conn, "notes", "message_id", "TEXT")
-    # `settled_at`: the carrying run completed, so the note is read for good. It only narrows the waiting scan to
-    # recent notes; NOTE_WAITING_SQL still asks the carrier, so a note no path settled is merely slower, never lost.
-    # Both indexes hold unsettled rows only, so they stay small however many notes a bot has been sent.
-    add_column(conn, "notes", "settled_at", "TEXT")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS notes_waiting ON notes(to_actor, created_at, id) "
-        "WHERE canceled_at IS NULL AND settled_at IS NULL"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS notes_unsettled_carried ON notes(carried_by) "
-        "WHERE carried_by IS NOT NULL AND settled_at IS NULL"
-    )
-    # A deferred item and its deadline (backend/delivery.py). No foreign keys: a row outlives a deleted task or
-    # message and is settled `moot` by the next pass. `conversation_id` '' is the bot's next turn of any kind.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS deferrals(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, "
-        "item TEXT NOT NULL, conversation_id TEXT NOT NULL DEFAULT '', task_id TEXT, due_at TEXT, "
-        "created_at TEXT NOT NULL, fired_job TEXT, settled_at TEXT, how TEXT, attempt TEXT)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_waiting ON deferrals(bot, conversation_id) WHERE settled_at IS NULL"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_due ON deferrals(due_at) WHERE settled_at IS NULL AND due_at IS NOT NULL"
-    )
-    # The hot queries in backend/delivery.py: a claim finds its carried rows by attempt, a run's end finds the deadline
-    # runs still open by fired_job, and a stalled task checks for a deferral by item. Settled rows stay (no pruning yet),
-    # so only the attempt index is not partial to unsettled rows.
-    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_attempt ON deferrals(attempt) WHERE attempt IS NOT NULL")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_fired ON deferrals(fired_job) WHERE settled_at IS NULL AND fired_job IS NOT NULL"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_item ON deferrals(item, kind) WHERE settled_at IS NULL")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner_id, rank)")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-        "lane,(rank IS NULL),rank,created_at,id) WHERE status='open'"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
-        "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
-        "WHERE status IN ('done','closed')"
-    )
-    conn.execute("DROP INDEX IF EXISTS tasks_due_active")  # the due-date reminder pass it served is gone
-    # A task's history and the Tasks page's stats read history_events through the indexes its migration made
-    # (backend/migrations/0064_history_events.py).
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
-        conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
-    # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
-    # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
-    conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail) WHERE action='tag.attach'")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
-        "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL, "
-        "pr_sha TEXT, pr_merged_at TEXT)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS task_links_task ON task_links(task_id)")
-    # A computer's worktrees (worktrees.inventory, on every heartbeat): a seek to its rows, not a scan of every
-    # worktree link ever kept. Partial, so it holds worktree rows only.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS task_links_worktree_computer ON task_links(computer_id) WHERE kind='worktree'"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
-        "value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor, key))"
-    )
-    # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
-    from . import message_links
-    from . import threads
-
-    threads.ensure(conn)
-    threads.migrate(conn)
-    # Once: everyone's old personal chat with a bot moves into that bot's Home (backend/bot_home_merge.py).
-    from . import bot_home_merge
-
-    bot_home_merge.run_once(conn)
-    message_links.ensure(conn)
     # The pipelines every company has (General), made when missing on every start, and given their manager once that
     # bot exists (backend/pipeline_settings.py). Here, so a hub opened without the cloud store has them too.
     from . import pipeline_settings
@@ -1714,7 +595,6 @@ def migrate(conn, adopt_legacy=False):
         except BaseException:
             conn.execute("ROLLBACK")
             raise
-    return len(MIGRATIONS)
 
 
 def _row(row):
@@ -1738,6 +618,8 @@ def _one(conn, sql, args=()):
 VIA = contextvars.ContextVar("hub_via", default="")
 # When BotOps acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
 # asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
+# The Tools Owner sets it the same way for a Tools change (via "tools-owner", backend/tools_delegation.py), naming itself
+# (`by`).
 # The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 # A person's own identity used through a personal token for this request (backend/app.py request_guard): a message it
@@ -1830,9 +712,9 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
-        if VIA.get() in ("botops", "assistant") and DELEGATION.get():
+        if VIA.get() in ("botops", "assistant", "tools-owner") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
-    detail = SRC.stamp_data(detail, actor)  # what a keeper event was for (backend/sources.py), when a scope names it
+    detail = SRC.stamp_data(detail, actor)  # what a Tico event was for (backend/sources.py), when a scope names it
     row = {
         "id": new_id(),
         "created_at": now(),
@@ -1990,16 +872,6 @@ def require_person_ask(conn, actor, person, text, where):
         refuse(conn, actor, "lint", detail)
 
 
-def require_plain_question(conn, actor, person, questions, *, written=False):
-    """Refuse a bot's question to a person that breaks the asking rules (question_refusal). Like require_person_ask,
-    a `lint` refusal is fixed by rewriting and never counts toward a quarantine."""
-    if not is_bot(actor) or not is_human(person):
-        return
-    detail = question_refusal(person, questions, written=written)
-    if detail:
-        refuse(conn, actor, "lint", detail)
-
-
 def style_problems(conn, actor, problems, severity="normal"):
     """Rule 7's writing problems as warnings: returned for the write to carry, so the bot does
     better next time, and refused only when TICO_STYLE_LINT=refuse."""
@@ -2139,6 +1011,14 @@ def escape_preview(text):
     return out if len(out) <= ESCAPE_PREVIEW_MAX else out[: ESCAPE_PREVIEW_MAX - 1] + "…"
 
 
+# The bot's task and chat holds open now or released since a time, one row each (backend/migrations, holds_bot_kind).
+QUARANTINE_SCOPES_SQL = (
+    "SELECT holdable_type,holdable_id,max(released_at) AS released_at,max(released_at IS NULL) AS held FROM holds "
+    "WHERE kind='quarantine' AND holdable_type IN ('task','conversation') AND bot_id=? "
+    "AND (released_at IS NULL OR released_at>=?) GROUP BY holdable_type,holdable_id"
+)
+
+
 def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     """Rule 8: count the day's refusals, open review tasks, quarantine when it is bad enough."""
     if not is_bot(actor):
@@ -2163,14 +1043,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     from . import task_quarantine
 
     held, released = set(), {}
-    for hold in conn.execute(
-        "SELECT task_id,conversation_id,max(released_at) AS released_at, "
-        "max(released_at IS NULL) AS held FROM quarantine_holds "
-        "WHERE bot_id=? AND (released_at IS NULL OR released_at>=?) "
-        "GROUP BY task_id,conversation_id",
-        (slug, since),
-    ):
-        scope = "task:" + hold["task_id"] if hold["task_id"] else "chat:" + hold["conversation_id"]
+    for hold in conn.execute(QUARANTINE_SCOPES_SQL, (slug, since)):
+        scope = task_quarantine.scope(hold)
         if hold["held"]:
             held.add(scope)
         elif hold["released_at"]:
@@ -2251,6 +1125,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,
+            # A person reviews only BotOps (no assistant to do it), and BotOps asks them about itself.
+            why=f"{count} of my writes were turned down today.",
         )
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
@@ -2265,18 +1141,35 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
 def _review_exists(conn, title, day):
     return (
         conn.execute(
-            "SELECT 1 FROM tasks WHERE title=? AND requester_id=? AND substr(created_at,1,10)=?", (title, KEEPER, day)
+            "SELECT 1 FROM tasks WHERE title=? AND requester_id=? AND substr(created_at,1,10)=?",
+            (title, TICO_ACTOR, day),
         ).fetchone()
         is not None
     )
 
 
-def _review_task(conn, owner, title, body, origin=None):
+def _review_task(conn, owner, title, body, origin=None, why=None):
     try:
-        # lint=False: a person's review reads as written; the shape rule is for asks bots write.
-        row = task_create(conn, KEEPER, title, body, owner, lint=False)
+        if is_human(owner):
+            # A person's review is BotOps' question to them on their task (backend/person_asks.py): in their Needs
+            # you. No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
+            from . import person_asks
+
+            row = person_asks.ask(
+                conn,
+                TICO_ACTOR,
+                owner,
+                title,
+                body,
+                "Does my playbook or reach need a change?",
+                why or body.split(". ")[0].rstrip(".") + ".",
+                asker=person_asks.botops(),
+            )
+        else:
+            # lint=False: a review reads as written; the shape rule is for asks bots write.
+            row = task_create(conn, TICO_ACTOR, title, body, owner, lint=False)
         if origin and is_bot(origin):
-            event(conn, KEEPER, "task.origin", row["id"], {"bot": origin})
+            event(conn, TICO_ACTOR, "task.origin", row["id"], {"bot": origin})
     except Refused:
         pass  # a live duplicate is the once-a-day guard doing its job
 
@@ -2284,54 +1177,31 @@ def _review_task(conn, owner, title, body, origin=None):
 QUARANTINE_COOLDOWN_S = 3600
 COUNT_QUARANTINE = re.compile(r"\d+ (?:refused writes|repeated refusals|refusals) today")  # the first: before #287
 
-
-# A bot's latest quarantine event, and when it was last quarantined: the statements the readers below run, named so a
-# batch can seed them (prime_quarantines).
-QUARANTINE_DETAIL_SQL = (
-    "SELECT detail FROM events WHERE action='quarantine' AND target=? ORDER BY created_at DESC, rowid DESC LIMIT 1"
-)
-QUARANTINE_SINCE_SQL = "SELECT max(created_at) AS created_at FROM events WHERE action='quarantine' AND target=?"
+# A quarantine is a hold (backend/holds.py, kind `quarantine`): on the bot, or on one of its tasks or chats
+# (backend/task_quarantine.py). The hold keeps its reason, its cooldown (until_at) and its history; bots.state stays
+# the switch every reader checks, `quarantined` while a bot-wide hold is open (holds.put and holds.release set it).
 
 
-def prime_quarantines(conn, bots):
-    """The latest quarantine event and last quarantine time of every bot in `bots` (ids), in two reads for all of them
-    (per 500 bots): a loop of explanations then reads none of them again. Outside a snapshot nothing is kept."""
-    from .read_cache import prime
+def quarantine_hold(conn, slug):
+    """The bot's open bot-wide quarantine hold, or None. Its reason, its details' `review` and `refusal`, and its
+    until_at: a refusal count lifts itself then, and an escape has none."""
+    from . import holds
 
-    actors = sorted({bot_actor(b) for b in bots if b})
-    for part in chunks(actors):
-        marks = ",".join("?" * len(part))
-        latest = {
-            r["target"]: r
-            for r in conn.execute(
-                "SELECT target, detail FROM (SELECT target, detail, row_number() OVER (PARTITION BY target "
-                "ORDER BY created_at DESC, rowid DESC) AS n FROM events WHERE action='quarantine' AND target IN ("
-                + marks
-                + ")) WHERE n=1",
-                part,
-            )
-        }
-        since = {
-            r["target"]: r["created_at"]
-            for r in conn.execute(
-                "SELECT target, max(created_at) AS created_at FROM events WHERE action='quarantine' AND target IN ("
-                + marks
-                + ") GROUP BY target",
-                part,
-            )
-        }
-        prime(conn, QUARANTINE_DETAIL_SQL, {(a,): latest.get(a) for a in part})
-        prime(conn, QUARANTINE_SINCE_SQL, {(a,): {"created_at": since.get(a)} for a in part})
+    return holds.get(conn, holds.QUARANTINE, "bot", actor_id(slug))
 
 
 def quarantine_reason(conn, slug):
-    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
-    return ((_json(row["detail"], {}) or {}) if row else {}).get("reason") or ""
+    return (quarantine_hold(conn, slug) or {}).get("reason") or ""
 
 
 def quarantine_is_escape(conn, slug):
-    """Anything but a refusal-count quarantine is treated as an escape: a person clears it."""
-    return not COUNT_QUARANTINE.fullmatch(quarantine_reason(conn, slug))
+    """Anything but a refusal-count quarantine is an escape: it has no cooldown, and a person clears it."""
+    return not (quarantine_hold(conn, slug) or {}).get("until_at")
+
+
+def released_how(actor):
+    """How a quarantine this actor lifted ended (holds.released_how): Tico's own cooldown, a person, or BotOps."""
+    return "expired" if actor == TICO_ACTOR else "person" if is_human(actor) else "botops"
 
 
 # A quarantine recorded before its refusal was kept: "escape: the task note reaches outside the hub: <words>".
@@ -2341,11 +1211,11 @@ LEGACY_ESCAPE = re.compile(r"escape: the (.+?) (?:payload )?reaches outside the 
 def quarantine_review(conn, slug):
     """What a person resuming an escape quarantine reads: what was being written (`what`), what the check
     matched (`found`), the refused words with credential values masked (`preview`) and the task (`task`)."""
-    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
-    detail = (_json(row["detail"], {}) or {}) if row else {}
-    if detail.get("review"):
-        return detail["review"]
-    old = LEGACY_ESCAPE.fullmatch(detail.get("reason") or "")
+    hold = quarantine_hold(conn, slug) or {}
+    review = (_json(hold.get("details"), {}) or {}).get("review")
+    if review:
+        return review
+    old = LEGACY_ESCAPE.fullmatch(hold.get("reason") or "")
     if not old:
         return None
     return {
@@ -2358,50 +1228,89 @@ def quarantine_review(conn, slug):
 
 def quarantine_resumes(conn, slug):
     """Since when a bot is quarantined, whether it lifts by itself (a refusal count), and when (`resumes_at`)."""
-    since = _one(conn, QUARANTINE_SINCE_SQL, (bot_actor(slug),))["created_at"]
-    auto = not quarantine_is_escape(conn, slug)
-    return {
-        "since": since,
-        "auto": auto,
-        "resumes_at": shift(since, seconds=QUARANTINE_COOLDOWN_S) if auto and since else None,
-    }
+    hold = quarantine_hold(conn, slug) or {}
+    until = hold.get("until_at")
+    # A cooldown's hold began its hour before it ends (its updated_at is a moment after: holds.put's own clock).
+    since = shift(until, seconds=-QUARANTINE_COOLDOWN_S) if until else hold.get("updated_at")
+    return {"since": since, "auto": bool(until), "resumes_at": until}
 
 
-def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
-    """After an hour, release refusal-count holds and bot quarantines and start their counts over.
-    Runs from the scheduler's tick. Returns the bots whose work was let out; escapes still need a person."""
+def quarantine_words(conn, slug, manages=False):
+    """Why a bot is quarantined, as Health, its page and holds.words say it. A reader who `manages` the bot also
+    reads what the safety check stopped, or the refused write."""
+    timing = quarantine_resumes(conn, slug)
+    if not timing["auto"]:
+        text = "Quarantined until a person clears it."
+        review = quarantine_review(conn, slug) if manages else None
+        if review and review.get("found"):
+            found = review["found"]
+            found = "a secrets/ path" if found == "secrets/" else f"another bot's folder ({found})"
+            what = review.get("what") or "write"
+            article = "an" if what[0].lower() in "aeiou" else "a"
+            text += f" The safety check stopped {article} {what} that named {found}. It matched text only; nothing was sent or changed."
+        return text
+    # The date too, so a cooldown crossing midnight has an unambiguous UTC deadline.
+    at = parse_ts(timing["resumes_at"])
+    text = (
+        f"Quarantined for repeated refused writes (rule 8; {quarantine_reason(conn, slug)}): resumes by itself "
+        f"{at.strftime('at %Y-%m-%d %H:%M UTC') if at else 'after its cooldown'}; a person who manages it can clear it sooner."
+    )
+    refused = (_json((quarantine_hold(conn, slug) or {}).get("details"), {}) or {}).get("refusal") or {}
+    if manages and refused.get("rule") and refused.get("detail"):
+        text += f" Refused write ({escape_preview(refused['rule'])}): {escape_preview(refused['detail'])}"
+    return text
+
+
+def builder_notice(timing):
+    """A quarantined builder on its task's card (`quarantine_resumes` timing): never the refused words."""
+    if not timing["auto"]:
+        return "Builder quarantined: until a person clears it"
+    at, since = parse_ts(timing["resumes_at"]), parse_ts(timing.get("since"))
+    if not at:
+        return "Builder quarantined: resumes after its cooldown"
+    # An overnight cooldown must not look like an earlier time on the same day.
+    dated = since is not None and since.date() != at.date()
+    return "Builder quarantined: resumes " + at.strftime(("%Y-%m-%d " if dated else "") + "%H:%M UTC")
+
+
+# The bots whose own quarantine's cooldown is over, with their state now (an archived bot's hold just ends).
+COOLED_BOTS_SQL = (
+    "SELECT h.holdable_id,b.state FROM holds h JOIN bots b ON b.id=h.holdable_id WHERE h.kind='quarantine' "
+    "AND h.holdable_type='bot' AND h.released_at IS NULL AND h.until_at<=?"
+)
+
+
+def lift_cooled_quarantines(conn):
+    """Release every quarantine whose cooldown (its hold's until_at) is over and start its count over: a task's or
+    chat's with a notice there, a bot's as the cooldown lifting it (status_set). Runs from the scheduler's tick.
+    Returns the bots whose work was let out; an escape has no cooldown and still needs a person."""
+    from . import holds
     from . import task_quarantine
 
-    cutoff = shift(now(), seconds=-cooldown)
-    lifted = task_quarantine.release(conn, KEEPER, cutoff=cutoff)
-    for row in _rows(conn.execute("SELECT id FROM bots WHERE state='quarantined'")):
-        with isolated(conn, "lift_cooled_quarantines", row["id"]):
-            slug = row["id"]
-            since = _one(
-                conn,
-                "SELECT max(created_at) AS created_at FROM events WHERE action='quarantine' AND target=?",
-                (bot_actor(slug),),
-            )
-            if quarantine_is_escape(conn, slug) or not since or not since["created_at"] or since["created_at"] > cutoff:
+    lifted = task_quarantine.release(conn, TICO_ACTOR, due=True)
+    for row in _rows(conn.execute(COOLED_BOTS_SQL, (now(),))):
+        slug = row["holdable_id"]
+        with isolated(conn, "lift_cooled_quarantines", slug):
+            if row["state"] != "quarantined":  # archived meanwhile: its hold ends, and it stays as it is
+                holds.release(conn, holds.QUARANTINE, "bot", slug, actor=TICO_ACTOR, how="expired")
                 continue
-            status_set(conn, KEEPER, slug, state="active", reason="Cooldown over: the refusal count starts again.")
+            status_set(conn, TICO_ACTOR, slug, state="active", reason="Cooldown over: the refusal count starts again.")
             if slug not in lifted:
                 lifted.append(slug)
     return lifted
 
 
 def quarantine(conn, slug, reason, context=None, refusal=None):
-    """Rule 8's stop: the bot writes nothing more until a human sets it active again. `context` is the
-    refusal that stopped it, for the person who reviews it (`quarantine_review`); `refusal` ({rule, detail})
-    is the last refused write of a refusal-count quarantine, for the bot when it is back."""
-    conn.execute("UPDATE bots SET state='quarantined' WHERE id=?", (slug,))
-    event(
-        conn,
-        KEEPER,
-        "quarantine",
-        bot_actor(slug),
-        {"reason": reason, **({"review": context} if context else {}), **({"refusal": refusal} if refusal else {})},
-    )
+    """Rule 8's stop: the bot writes nothing more until its hold is released (the cooldown of a refusal count, else a
+    human). `context` is the refusal that stopped it, for the person who reviews it (`quarantine_review`); `refusal`
+    ({rule, detail}) is the last refused write of a refusal-count quarantine, for the bot when it is back."""
+    from . import holds
+
+    details = {**({"review": context} if context else {}), **({"refusal": refusal} if refusal else {})}
+    cools = COUNT_QUARANTINE.fullmatch(reason)
+    until = shift(now(), seconds=QUARANTINE_COOLDOWN_S) if cools else None
+    holds.put(conn, holds.QUARANTINE, "bot", slug, actor=TICO_ACTOR, reason=reason, details=details, until_at=until)
+    event(conn, TICO_ACTOR, "quarantine", bot_actor(slug), {"reason": reason, **details})
     # The status line people read says what the check matched, not the rule's own words.
     focus = (
         f"Paused for review: the safety check stopped a {context['what']} naming {context['found']}"
@@ -2409,7 +1318,7 @@ def quarantine(conn, slug, reason, context=None, refusal=None):
         else reason
     )
     try:
-        status_set(conn, KEEPER, slug, state="quarantined", focus=focus, reason=reason)
+        status_set(conn, TICO_ACTOR, slug, state="quarantined", focus=focus, reason=reason)
     except Refused:
         pass
     return bot(conn, slug)
@@ -2421,9 +1330,9 @@ QUARANTINE_LIFTED = "Do not retry this action; leave a note for a person if you 
 def quarantine_lifted_note(conn, slug):
     """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
     run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
-    back from a cooldown retried the same refused write."""
-    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
-    detail = (_json(row["detail"], {}) or {}) if row else {}
+    back from a cooldown retried the same refused write. Read before its hold is released."""
+    hold = quarantine_hold(conn, slug) or {}
+    detail = _json(hold.get("details"), {}) or {}
     review, refused = quarantine_review(conn, slug) or {}, detail.get("refusal") or {}
     if review.get("what"):
         what = f"the safety check stopped a {review['what']}" + (
@@ -2432,20 +1341,20 @@ def quarantine_lifted_note(conn, slug):
     elif refused.get("detail"):
         what = f"{refused['detail']} ({refused.get('rule')})"
     else:
-        what = detail.get("reason") or "a refused write"
+        what = hold.get("reason") or "a refused write"
     body = f"You were quarantined and are back. The refusal that stopped you: {what}. {QUARANTINE_LIFTED}"
     ident = new_id()
     conn.execute(
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-        (ident, KEEPER, bot_actor(slug), body[:NOTE_MAX], now()),
+        (ident, TICO_ACTOR, bot_actor(slug), body[:NOTE_MAX], now()),
     )
-    event(conn, KEEPER, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
+    event(conn, TICO_ACTOR, "note.create", ident, {"to": bot_actor(slug), "quarantine": True})
 
 
 # ----------------------------------------------------------------------------- identity
 def _actor_exists(conn, actor):
     kind = actor_kind(actor)
-    if kind == KEEPER:
+    if kind == TICO_ACTOR:
         return True
     if kind == "bot":
         return bot(conn, actor_id(actor)) is not None
@@ -2497,7 +1406,7 @@ def resolve_actor(conn: object, value: object) -> "str | None":
     A bare name no bot or person answers to is the one live bot built from that template (`growth-manager`), if there is
     exactly one and no open seat is set up from that template (`_template_owner`).
 
-    None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
+    None is what rule 2 refuses on: an address that is not a bot, a human or Tico.
     """
     raw = str(value or "").strip()
     if not raw:
@@ -2741,7 +1650,7 @@ def _learner(conn, actor):
         )
 
 
-# The retired Health Monitor's slug (archived by backend/migrations/0096_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+# The retired Health Monitor's slug (a migration archived it). Its id is its slug, so its actor is bot:health-monitor.
 HEALTH_MONITOR = "health-monitor"
 
 
@@ -2834,7 +1743,7 @@ def sync_registry(conn, employees, people):
                 "WHERE id=:id",
                 row,
             )
-    event(conn, KEEPER, "registry.sync", "", {"bots": len(employees or {}), "humans": len(doc.get("people") or [])})
+    event(conn, TICO_ACTOR, "registry.sync", "", {"bots": len(employees or {}), "humans": len(doc.get("people") or [])})
     return {"bots": bots(conn), "humans": humans(conn)}
 
 
@@ -2963,12 +1872,12 @@ def _opener(conn, conversation_id):
     """Who started this conversation: the first message's sender, else whoever opened it, which may be
     the person even when only notices are in the room.
 
-    The keeper's notices do not count: a "New task" notice can land first in a person's chat with a
+    Tico's notices do not count: a "New task" notice can land first in a person's chat with a
     bot, and the person's own message after it is what the bot answers."""
     first = _one(
         conn,
         "SELECT sender_id FROM messages WHERE conversation_id=? AND sender_id<>? ORDER BY created_at LIMIT 1",
-        (conversation_id, KEEPER),
+        (conversation_id, TICO_ACTOR),
     )
     if first:
         return first["sender_id"]
@@ -2987,12 +1896,14 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
-    if refs and ("key_grant" in refs or refs.get("card") == "key_grant"):
+    if refs and any(card in refs or refs.get("card") == card for card in ("key_grant", "access_request")):
         from . import key_grants
         from .store import Problem
 
-        if not key_grants.MINTING.get():  # only the Tools owner's proposal route builds a key grant card
-            raise Problem("forbidden", "A key grant card is built from the Tools owner's proposal", 403)
+        # Only the Tools owner's proposal route builds a key grant card, and only an access request its card
+        # (backend/access_requests.py).
+        if not key_grants.MINTING.get():
+            raise Problem("forbidden", "A key grant or access request card is built by the server alone", 403)
 
 
 def say(
@@ -3261,7 +2172,7 @@ def _write_message(
         refs = {**(refs or {}), "via": VIA.get() or "token"}
     from . import wake_rules
 
-    if actor == KEEPER and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
+    if actor == TICO_ACTOR and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
         # Tico's notice of a person's own act keeps who acted: the request's cause ends with it, and the reply
         # rule at the turn's end (execution.quiet_recheck) must still see that a person is owed the answer.
         refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
@@ -3311,7 +2222,7 @@ def _write_message(
     if check_cap and is_bot(actor) and is_bot(target) and threads.POSTING.get() is None:
         since = shift(now(), hours=-1)
         # The cap stops two bots talking in circles, so it counts bot-to-bot messages only: the
-        # keeper's notices (a routine's "new task", "finished") and a person's messages are not a
+        # Tico's notices (a routine's "new task", "finished") and a person's messages are not a
         # loop. A bot's private room with its owner, with a sweep every 30 minutes, could hit
         # the cap on messages of which many were notices or the owner's.
         n = conn.execute(
@@ -3329,6 +2240,13 @@ def _write_message(
         ":restricted, :legacy_audience)",
         row,
     )
+    if is_human(actor):
+        from . import question_marks
+
+        room = conv or {}
+        # Their reply clears each ❓ for them in this chat, and resumes each task one of those was on.
+        for cleared_task in question_marks.replied(conn, row, room, row["refs"]):
+            question_marks.after_reply(conn, cleared_task, actor)
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -3336,7 +2254,10 @@ def _write_message(
     from .enqueue import enqueue
 
     enqueue(conn, row)  # the job it starts, in this transaction (backend/enqueue.py)
-    conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
+    if not run_notice(actor, target):  # Tico's word to a bot is its run's, not news in the room
+        conn.execute(
+            "UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], row["conversation_id"])
+        )
     # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
     mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
@@ -3349,19 +2270,13 @@ def _write_message(
 def feed(conn, target, body, conv, refs=None):
     """Context the system hands a bot to read: a Slack channel digest (backend/slack_gateway.py).
 
-    Written by the keeper, not by a bot or a person: nobody said it. It is a turn for the bot
+    Written by Tico, not by a bot or a person: nobody said it. It is a turn for the bot
     (enqueue queues its job, as for any message to a bot), but it is quoted Slack text, so the
     escape and lint rules a bot's own words go through do not apply; what it quotes was said
     in a channel the bot is in. Rule 2 still holds: the bot must be active.
     """
-    resolved = _reach(conn, KEEPER, target)
-    return _write_message(conn, KEEPER, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
-
-
-def has_pick_options(msg):
-    """Questions offering only free text keep the ordinary answer protocol."""
-    refs = _json(msg.get("refs"), {}) or {}
-    return any(q.get("options") for q in refs.get("questions", []))
+    resolved = _reach(conn, TICO_ACTOR, target)
+    return _write_message(conn, TICO_ACTOR, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
 
 
 def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):
@@ -3382,7 +2297,7 @@ def _secondary_recipient(conn, message_id, recipient):
 
 
 def mark_delivered(conn, actor, message_id, recipient=None):
-    """The keeper sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
+    """Tico sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
     delivery row follows the message row (a trigger, backend/threads.py); another recipient's is set here."""
     if _secondary_recipient(conn, message_id, recipient):
         conn.execute(
@@ -3483,9 +2398,14 @@ def task_private_readable(conn, actor, row):
 
     if row['id'] in participant_tasks(conn, actor):
         return True
+    task_id = row["id"]
     if "readers" not in row:
-        row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (row["id"],)) or {}
-    return task_reader(conn, actor, row)
+        row = _one(conn, "SELECT readers FROM tasks WHERE id=?", (task_id,)) or {}
+    if task_reader(conn, actor, row):
+        return True
+    from . import call_follow_ups
+
+    return call_follow_ups.thread_reader(conn, actor, task_id)
 
 
 def stage_read_held(conn, actor, row):
@@ -3628,7 +2548,7 @@ def may_change_readers(conn, actor, row, mover=None):
     delegates, a party above it, or a task mover."""
     if mover is None:
         mover = is_human(actor) and can_move(conn, actor)
-    return actor == KEEPER or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
+    return actor == TICO_ACTOR or _task_party(conn, actor, row) or bool(task_mover(conn, actor, row, mover))
 
 
 def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, mover=None, check=None):
@@ -3678,6 +2598,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     for reader in wanted:
         if reader not in before:
             _task_event(conn, task_id, actor, "reader", None, reader, "")
+    from . import question_marks
+
+    question_marks.clear_gone(conn, task_id)  # a ❓ for someone who can no longer read the task's chat goes nowhere
     return wanted
 
 
@@ -3759,8 +2682,8 @@ def task_reach(conn, actor, row, person):
 
 
 def _task_private_writer(conn, actor, row):
-    # The keeper performs internal maintenance; it is never an authenticated task reader.
-    if actor != KEEPER and not task_private_readable(conn, actor, row):
+    # Tico performs internal maintenance; it is never an authenticated task reader.
+    if actor != TICO_ACTOR and not task_private_readable(conn, actor, row):
         refuse(conn, actor, "not-found", "Task not found")
 
 
@@ -3785,6 +2708,8 @@ PRIVATE_BY_TEMPLATE = ("general-counsel", "rules-owner")
 RULES_OWNER = "rules-owner"
 # The built-in Design Owner's slug (docs/onboarding.md): it owns design and keeps the brand book.
 DESIGN_OWNER = "design-owner"
+# The built-in Tools Owner's slug: it owns the Tools page, its chat and its key cards (backend/page_owners.py).
+TOOLS_OWNER = "tools-owner"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
@@ -3806,6 +2731,7 @@ PRODUCT_BOT_SLUGS = frozenset(
         "cpo",
         "updates-owner",
         "automations-owner",
+        TOOLS_OWNER,
     }
 )
 
@@ -3908,83 +2834,6 @@ def bot_repository_name(conn, ref):
     return repo if re.fullmatch(r"[A-Za-z0-9._-]+", repo or "") else str(declared["folder"])
 
 
-def migrate_task_privacy(conn):
-    """Classify pre-privacy rows from stored roster/config identities; keep ambiguity private."""
-    had_privacy = 'private' in {row[1] for row in conn.execute('PRAGMA table_info(tasks)')}
-    _apply(conn, TASK_PRIVACY_SCHEMA)
-    if not had_privacy:
-        humans = {row[0] for row in conn.execute('SELECT id FROM humans')}
-        bots = {row[0] for row in conn.execute('SELECT slug FROM bots')}
-        # Numbered step 23 runs on a file from before migration 0070 (the declaration still in bot_config.config);
-        # the store's cloud step 57 runs after the migrations (the declaration in bot_settings).
-        if not _has_table(conn, 'bot_config'):
-            configs = {}
-        elif 'config' in {row[1] for row in conn.execute('PRAGMA table_info(bot_config)')}:
-            configs = {row[0]: _json(row[1]) for row in conn.execute('SELECT bot,config FROM bot_config')}
-        else:
-            configs = {
-                row[0]: _json(row[1])
-                for row in conn.execute(f'SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}')
-            }
-
-        def sensitive_or_unknown(actor):
-            if actor == KEEPER:
-                return False
-            if is_human(actor):
-                return actor_id(actor) not in humans
-            if not is_bot(actor) or actor_id(actor) not in bots:
-                return True
-            slug, seen = actor_id(actor), set()
-            while slug not in seen:
-                seen.add(slug)
-                config = configs.get(slug)
-                if not isinstance(config, dict):
-                    return True
-                if config.get('shared_from'):
-                    slug = str(config['shared_from'])
-                    continue
-                setting = config.get('private_tasks_default')
-                if 'private_tasks_default' in config and not isinstance(setting, bool):
-                    return True
-                return setting if setting is not None else config.get('template') == 'general-counsel'
-            return True
-
-        rows = _rows(
-            conn.execute(
-                'SELECT id,requester_id,owner_id,'
-                + (
-                    'parent_id'
-                    if 'parent_id' in {r[1] for r in conn.execute('PRAGMA table_info(tasks)')}
-                    else TR.parent_sql() + ' AS parent_id'
-                )
-                + ' FROM tasks'
-            )
-        )
-        private = {
-            row['id']
-            for row in rows
-            if sensitive_or_unknown(row['requester_id']) or sensitive_or_unknown(row['owner_id'])
-        }
-        ids = {row['id'] for row in rows}
-        children = {}
-        for row in rows:
-            children.setdefault(row['parent_id'], []).append(row['id'])
-            if row['parent_id'] and row['parent_id'] not in ids:
-                private.add(row['id'])
-        pending = list(private)
-        while pending:
-            for child in children.get(pending.pop(), []):
-                if child not in private:
-                    private.add(child)
-                    pending.append(child)
-        conn.executemany(
-            'UPDATE tasks SET private=? WHERE id=?', [(int(row['id'] in private), row['id']) for row in rows]
-        )
-    add_column(conn, 'conversations', 'scope', "TEXT NOT NULL DEFAULT 'direct'")
-    for row in _rows(conn.execute('SELECT * FROM tasks WHERE private IS NULL OR private<>0')):
-        isolate_private_task(conn, row)
-
-
 def isolate_private_task(conn, row):
     """Move tracked task messages intact out of broader rooms and revoke former thread members."""
     if not task_private(conn, row):
@@ -4041,9 +2890,44 @@ def _next_number(conn, actor, task_id, pipeline_id, note=""):
         ).rowcount
     ):
         number = _one(conn, "SELECT number FROM tasks WHERE id=?", (task_id,))["number"]
-        _task_event(conn, task_id, actor, "number", None, number, note)
+        # Tico gives the number, not whoever filed the task: its history line is the system's (a number a mover gives,
+        # `_number_free`, stays theirs).
+        _task_event(conn, task_id, TICO_ACTOR, "number", None, number, note)
     elif numbered and _one(conn, "SELECT 1 FROM tasks WHERE id=? AND number IS NULL", (task_id,)):
         refuse(conn, actor, "number", "The team's task numbers have reached 999999999")
+
+
+def number_task(conn, actor, task_id, pipeline_id, note=""):
+    """Give a task with no number one in a pipeline that numbers its tasks, its label's letters with it: a task made
+    while its pipeline had no prefix keeps none ('' or NULL), so it takes the pipeline's now (`ticket_refs`)."""
+    found = _one(conn, "SELECT prefix FROM pipelines WHERE id=?", (pipeline_id,))
+    prefix = (found or {}).get("prefix")
+    if not prefix:
+        return
+    conn.execute(
+        "UPDATE tasks SET prefix=? WHERE id=? AND number IS NULL AND COALESCE(prefix, '')=''", (prefix, task_id)
+    )
+    _next_number(conn, actor, task_id, pipeline_id, note)
+
+
+def number_pipeline(conn, actor, pipeline_id, note=""):
+    """Number every task of a pipeline that has a prefix and no number yet (open, done and closed), oldest first, after
+    the team's highest number: a pipeline that gets its prefix late numbers the tasks it already holds. A number
+    already given never changes. Each numbered task has one history row; nobody is woken. Returns how many it
+    numbered."""
+    if not _one(conn, "SELECT 1 FROM pipelines WHERE id=? AND prefix IS NOT NULL AND prefix<>''", (pipeline_id,)):
+        return 0
+    ids = [
+        row["id"]
+        for row in _rows(
+            conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id=? AND number IS NULL ORDER BY created_at, id", (pipeline_id,)
+            )
+        )
+    ]
+    for task_id in ids:
+        number_task(conn, actor, task_id, pipeline_id, note)
+    return len(ids)
 
 
 def _labels(labels):
@@ -4067,8 +2951,13 @@ def tag_by_key(conn, key):
     return _tag_view(row) if row else None
 
 
+# A tag's kind is set when it is made and never changes: '' for a plain tag, 'risk' for a risk (backend/risk.py).
+TAG_KINDS = ("", "risk")
+
+
 def _tag_view(row):
     value = dict(row)
+    value["kind"] = value.get("kind") or ""
     value["metadata"] = _json(value.pop("metadata"), {}) or {}
     value["is_template"] = bool(value["is_template"])
     value["bot_writers"] = _json(value.get("bot_writers"), []) or []
@@ -4083,7 +2972,7 @@ def tags(conn, is_template=None):
 
 def tag_can_edit(conn, actor, row, mover=None):
     if mover is None:
-        mover = actor == KEEPER or can_move(conn, actor)
+        mover = actor == TICO_ACTOR or can_move(conn, actor)
     return bool(mover or row.get("owner") == actor)
 
 
@@ -4098,8 +2987,11 @@ def tag_create(
     template_id=None,
     owner=None,
     mover=None,
+    kind="",
 ):
     _writer(conn, actor)
+    if kind not in TAG_KINDS:
+        refuse(conn, actor, "kind", f"a tag's kind is one of {', '.join(repr(k) for k in TAG_KINDS)}")
     keys = _labels([key])
     if not keys:
         refuse(conn, actor, "kind", "give the tag a key")
@@ -4120,8 +3012,8 @@ def tag_create(
         refuse(conn, actor, "kind", "give the tag a label")
     ts, ident = now(), new_id()
     conn.execute(
-        "INSERT INTO tags(id,key,label,metadata,markdown,is_template,template_id,owner,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tags(id,key,label,metadata,markdown,is_template,template_id,owner,kind,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             ident,
             key,
@@ -4131,11 +3023,18 @@ def tag_create(
             int(is_template),
             template["id"] if template else None,
             owner,
+            kind,
             ts,
             ts,
         ),
     )
-    event(conn, actor, "tag.create", ident, {"key": key, "template_id": template["id"] if template else None})
+    event(
+        conn,
+        actor,
+        "tag.create",
+        ident,
+        {"key": key, "template_id": template["id"] if template else None, "kind": kind},
+    )
     return tag(conn, ident)
 
 
@@ -4185,7 +3084,7 @@ def _tag_bot_writers(conn, actor, row, writers, mover=None):
     tasks a bot manages, so only a task mover sets it: the tag's owner, a bot among them, cannot grant itself. A label
     Tico acts on (WORKFLOW_LABELS) is never granted. An empty list revokes every grant."""
     if mover is None:
-        mover = actor == KEEPER or can_move(conn, actor)
+        mover = actor == TICO_ACTOR or can_move(conn, actor)
     if not mover:
         teams = ", ".join(MOVER_TEAMS)
         refuse(conn, actor, "identity", f"the bots that may set a tag are chosen by a person on the {teams} teams")
@@ -4700,6 +3599,28 @@ def session_root(conn, bot, task_id, config=None):
     return root
 
 
+SESSION_ROOT_ROW_SQL = "SELECT id,owner_id,requester_id,private FROM tasks WHERE id=?"
+
+
+def prime_session_roots(conn, task_ids):
+    """What session_root reads for these tasks and every ancestor it can reach, one query a level for all of them (their
+    parents by prime_ancestry, their rows here), so each job's walk in this snapshot reads none of them again. Without a
+    read snapshot it reads nothing: the walk then reads for itself."""
+    from .read_cache import cache, prime
+
+    if cache(conn) is None:
+        return
+    met = TR.prime_ancestry(conn, task_ids)
+    rows = {}
+    for part in chunks(sorted(met)):
+        for row in conn.execute(
+            "SELECT id,owner_id,requester_id,private FROM tasks WHERE id IN (%s)" % ",".join("?" * len(part)),
+            part,
+        ):
+            rows[row["id"]] = row
+    prime(conn, SESSION_ROOT_ROW_SQL, {(tid,): rows.get(tid) for tid in met})
+
+
 def _same_readers(conn, one, other):
     """Whether two tasks may share a session: both public, or both private with every party of each able to
     read the other, so nothing one session turn says reaches a reader of either task who could not read both."""
@@ -4744,7 +3665,7 @@ def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
         conn.execute(
             "INSERT INTO task_links (id, task_id, kind, url, title, added_by, created_at, detail, updated_at) "
             "VALUES (?,?,'session',?,?,?,?,?,?)",
-            (target["id"], task_id, url, bot, KEEPER, now(), detail, now()),
+            (target["id"], task_id, url, bot, TICO_ACTOR, now(), detail, now()),
         )
     # At most one primary: every other session on the task is an alternate now.
     for link in links:
@@ -4760,7 +3681,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
     if is_human(actor) and kind != "worktree":
         return
     if mover is None:
-        mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+        mover = actor == TICO_ACTOR or is_human(actor) and can_move(conn, actor)
     delegated = _one(
         conn,
         "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
@@ -4924,8 +3845,10 @@ def pr_state(links):
 
 
 def ticket_refs(conn, ids):
-    """Each task's label (its pipeline's prefix and its number) and its stage's name, for many ids in one query:
-    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    """Each task's label (the prefix it was made with and its number) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that. The
+    prefix is the task's own (`tasks.prefix`, kept when it moves to another pipeline); one made before it was kept
+    reads its pipeline's."""
     ids = list(ids)
     refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "stage": None} for ident in ids}
     if not ids:
@@ -4933,7 +3856,7 @@ def ticket_refs(conn, ids):
     marks = ",".join("?" * len(ids))
     for row in _rows(
         conn.execute(
-            "SELECT k.id, k.number, p.prefix, s.name AS stage FROM tasks k "
+            "SELECT k.id, k.number, COALESCE(k.prefix, p.prefix) AS prefix, s.name AS stage FROM tasks k "
             "LEFT JOIN pipelines p ON p.id = k.pipeline_id LEFT JOIN stages s ON s.id = k.stage_id "
             f"WHERE k.id IN ({marks})",
             ids,
@@ -5052,6 +3975,7 @@ def task_comment(
     reach=None,
     people_notified=False,
     to=None,
+    checked=True,
 ):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
     any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
@@ -5062,13 +3986,16 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge). A question to a person is an ask on the task
-    (task_ask), never a comment."""
-    _writer(conn, actor, task_id=task_id)
+    bot it is written to besides (a relayed answer). A bot's question to a person is a ❓ on its comment
+    (question_marks.ask). `checked` False: words Tico's own feature wrote for a bot (question_marks.ask), so the bot's
+    standing to write here (a quarantine, reading a private task) is not asked."""
+    if checked:
+        _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_private_writer(conn, actor, row)
+    if checked:
+        _task_private_writer(conn, actor, row)
     text = str(text or "").strip()
     if not text:
         refuse(conn, actor, "lint", "write the comment")
@@ -5096,7 +4023,7 @@ def task_comment(
     to = to or (
         owner
         if (
-            (actor == KEEPER or not task_followers.thread_id(conn, row))
+            (actor == TICO_ACTOR or not task_followers.thread_id(conn, row))
             and is_bot(owner)
             and owner != actor
             and task_private_readable(conn, owner, row)
@@ -5121,7 +4048,7 @@ def task_comment(
         actor,
         revision=msg["id"],
     )
-    if actor != KEEPER:
+    if actor != TICO_ACTOR:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
@@ -5139,6 +4066,60 @@ def task_comment(
     return msg
 
 
+# The mark on a task's first message: the request it was made with (task_create, the description migration).
+REQUEST_REF = "request"
+
+
+def first_message(conn, actor, task_id, conversation_id, text, title=""):
+    """A new task's request: its first chat message, from `actor`, who wrote it. A quiet post (Defer never): the task
+    is assigned through its stage, which wakes and tells whoever has it, so the message reaches the owner bot in that
+    run and notifies nobody besides. None when there is nothing to say (empty, or only the title again)."""
+    text = str(text or "").strip()
+    if not text or text == str(title or "").strip():
+        return None
+    from . import threads
+
+    refs = {"task": task_id, "comment": True, REQUEST_REF: True, **comment_way_refs("defer", "never")}
+    return threads.post(conn, actor, conversation_id, text, refs=refs)
+
+
+def task_request(conn, task_id):
+    """A task's request, its first message (`first_message`): {id, from, text, at}, or None when it was made with
+    none. Its chat may say more since; this is what was asked."""
+    found = conn.execute(
+        "SELECT id, sender_id, body, created_at FROM messages WHERE json_extract(refs, '$.task')=? "
+        f"AND json_extract(refs, '$.{REQUEST_REF}')=1 AND deleted_at IS NULL ORDER BY created_at, rowid LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if not found:
+        return None
+    return {"id": found[0], "from": found[1], "text": str(found[2] or ""), "at": found[3]}
+
+
+def task_request_text(conn, task_id):
+    """The words of a task's request, "" when it has none (`task_request`)."""
+    found = task_request(conn, task_id)
+    return found["text"] if found else ""
+
+
+def task_words(conn, task_id):
+    """Everything a task was asked with: its request and the instructions Tico gave its bot (task_wakes.instructions),
+    "" when neither. What reading its description used to give."""
+    from . import task_wakes
+
+    return "\n\n".join(filter(None, (task_request_text(conn, task_id), task_wakes.instructions(conn, task_id))))
+
+
+# A task whose request or Tico's instructions say `?` (instr): what reading its body for a mark used to do. The
+# messages are found by their task (messages_refs_task). `+tasks.id` drops the column's TEXT affinity, without which
+# SQLite cannot search that expression index from a correlated subquery and scans every message instead.
+TASK_SAYS_SQL = (
+    "EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task')=+tasks.id AND m.deleted_at IS NULL "
+    f"AND (json_extract(m.refs, '$.{REQUEST_REF}')=1 OR (m.sender_id='keeper' "
+    "AND json_extract(m.refs, '$.instructions') IN (1, 'all'))) AND instr(m.body, ?)>0)"
+)
+
+
 def comment_way_refs(way, defer_for=None):
     """The marks a comment's way leaves on it (threads.WAY_KEYS, as the thread routes write them): Steer leaves
     none."""
@@ -5152,13 +4133,16 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
-    until = shift(now(), hours=24)
     for recipient, mid in _woken_bots(conn, msg):
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
+        delegate(conn, task_id, recipient, person, mid)
+
+
+def delegate(conn, task_id, bot, person, message_id):
+    """`bot` acts on the task with party rights for 24 hours, lent by `person`'s message that woke it."""
+    conn.execute(
+        "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
+        (task_id, bot, person, message_id, shift(now(), hours=24)),
+    )
 
 
 def _woken_bots(conn, msg):
@@ -5387,12 +4371,7 @@ def _refresh_comment_replies(conn, msg):
         return value
 
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
-    rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
-    if rows is None:  # not indexed yet: an older file, or before its first start's backfill finished
-        rows = conn.execute(
-            "SELECT rowid,response FROM idempotency WHERE binding IS NULL AND instr(response,?)>0", (msg["id"],)
-        ).fetchall()
-    for row in rows:
+    for row in idempotency_messages.quoting(conn, msg["id"]):
         conn.execute(
             "UPDATE idempotency SET response=? WHERE rowid=?",
             (_dump(refresh(_json(row["response"], {}))), row["rowid"]),
@@ -5501,9 +4480,9 @@ PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r
 def review_finding_route(conn, actor, task_id, target):
     """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
     task's own pull request goes back to whoever builds that task (its feature owner, or a Builder on Engineering of the
-    pair Product replaced) through its review (docs/pipelines-v3.md, "Product"),
+    pair Product replaced) through its review (docs/dev/pipelines-v3.md, "Product"),
     and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
-    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    links, or one its title or request (its first message) names by URL. Refused as `review_route`, naming the task it belongs on."""
     if not is_bot(actor) or not is_human(target):
         return
     row = task(conn, task_id)
@@ -5517,7 +4496,7 @@ def review_finding_route(conn, actor, task_id, target):
             (task_id,),
         )
     }
-    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    words = f"{row.get('title') or ''}\n{task_request_text(conn, task_id)}"
     prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
     for repo, number in sorted(prs):
         own = conn.execute(
@@ -5590,6 +4569,7 @@ def task_create(
     public_title=None,
     public_summary=None,
     wake_refs=None,
+    reconcile_related=True,
     trigger=None,
     trigger_source=None,
     from_private=False,
@@ -5604,8 +4584,11 @@ def task_create(
     readers_check=None,
     unassigned=False,
     human_id=None,
+    asks=None,
+    instructions=None,
 ):
-    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
+    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7), and so is
+    a bot's own task that asks a person (`asks`: the person its question is for, backend/person_asks.py).
 
     The task is made and put into the first stage of its pipeline in one step (`task_engine.enter`): `pipeline` is a
     pipeline's id, General when none is given. `owner` is who the task is given to (its assignee); the stage says who
@@ -5629,10 +4612,17 @@ def task_create(
     occurrence per producing step: a retry of a run whose step already opened it gets that task back
     (`_reuse_occurrence`), never a second one.
     `wake_refs`, `trigger` and `trigger_source` go on the owner bot's wake: what the run it starts is for.
+    `reconcile_related` lets a task whose result is shared with another audience keep unrelated work out of that wake.
     `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
     `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
+
+    A task is a title and a chat: it has no description. `body` is its first message, the request, posted in its chat
+    as its author's (`first_message`), and none when it is empty or only repeats the title. `instructions` are a
+    routine's or a setup's working instructions for the bot that owns it: they reach that bot through its run (the
+    wake it starts from, task_engine.enter), never the chat. What Tico itself files for a bot is the same:
+    Tico tells a bot things in its run, so its words are the bot's instructions, not a chat message.
     """
     _writer(conn, actor)
     human_id = task_human(conn, actor, human_id) if human_id else None
@@ -5659,9 +4649,8 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    from . import private_pipelines, task_engine, visual_specs
+    from . import private_pipelines, task_engine
 
-    body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
@@ -5714,25 +4703,25 @@ def task_create(
             conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private'
         )
     if requester_actor is not None:
-        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work, or
+        # Tico may attribute server-filed work to a person; a bot may attribute only its own verified work, or
         # a person's own ask, checked against the message they sent (`requester_said`: app.filed_for).
         if (
             not is_human(requester_actor)
-            or (actor != KEEPER and target != actor and not requester_said)
+            or (actor != TICO_ACTOR and target != actor and not requester_said)
             or not human(conn, requester_actor)
         ):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
     title = str(title or "").strip()
     body = str(body or "")
-    severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
+    instructions = str(instructions or "").strip()
+    if actor == TICO_ACTOR and is_bot(target) and body.strip():
+        instructions = "\n\n".join(filter(None, (body.strip(), instructions)))
+        body = ""
+    severity = classify(f"{title}\n{body}\n{instructions}", to_actor=target, actor=actor, conn=conn)
     path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     lane = _lane_for(conn, lane, target, actor)
-    if (
-        not pipe
-        or pipe.get("retired_at")
-        or not any(s["kind"] == "work" for s in task_engine.stages(conn, pipeline_id))
-    ):
+    if not pipe or pipe.get("retired_at") or not task_engine.main_work(task_engine.stages(conn, pipeline_id)):
         refuse(conn, actor, "task_no_such_stage", "No such pipeline")
     if parent and task_engine.depth(conn, parent["id"]) >= task_engine.MAX_DEPTH:
         refuse(conn, actor, "task_too_deep", f"Sub-tasks nest at most {task_engine.MAX_DEPTH} deep")
@@ -5741,13 +4730,12 @@ def task_create(
     # pipeline writes them, not as an ask.
     if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
-    if is_bot(actor) and is_human(target) and lint and general:
+    asked = target if is_human(target) else asks if is_human(asks) else None
+    if is_bot(actor) and asked and lint and general:
         # A bot giving a person work opens the body with the ask: their card leads with it (lint_person_ask).
-        require_person_ask(conn, actor, target, person_ask_of_body(body, title), "assign")
+        require_person_ask(conn, actor, asked, person_ask_of_body(body, title), "assign")
     warnings = (
-        style_problems(conn, actor, lint_human_item(body, title=title), severity)
-        if is_human(target) and lint and general
-        else []
+        style_problems(conn, actor, lint_human_item(body, title=title), severity) if asked and lint and general else []
     )
     # A task in another pipeline keeps that pipeline's own references ("#18945", "(B/F)") in its title.
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []
@@ -5758,7 +4746,7 @@ def task_create(
     if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
         labels.insert(0, "incident")
     if labels and is_bot(actor) and not mover:
-        _create_labels(conn, actor, labels)  # people, movers and the keeper as before
+        _create_labels(conn, actor, labels)  # people, movers and Tico as before
     # An automation's turn is the same work as another only when its wake names the same run, step and record: two
     # finds' items (or two runs) may share a title, and the title is never what makes a turn a duplicate.
     turn = _turn_identity(wake_refs)
@@ -5788,7 +4776,11 @@ def task_create(
             title,
             keep=same,
         )
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
+    if (
+        dup
+        and task_private_readable(conn, actor, task(conn, dup["id"]))
+        and (turn or deduplicate or actor != TICO_ACTOR)
+    ):
         detail = (
             "An existing task already asks for this work"
             if VIA.get() and task_private(conn, task(conn, dup["id"]))
@@ -5796,7 +4788,7 @@ def task_create(
         )
         refuse(conn, actor, "duplicate", detail)
     if number is not None:
-        if not (actor == KEEPER or mover or mover is None and can_move(conn, actor)):
+        if not (actor == TICO_ACTOR or mover or mover is None and can_move(conn, actor)):
             refuse(
                 conn,
                 actor,
@@ -5810,6 +4802,7 @@ def task_create(
     from . import task_trigger_rules
 
     # One step: if anything below is refused, the task's thread, its row and the triggers it queued go with it.
+    told_readers: str | None = None
     with ExitStack() as undo:
         if conn.in_transaction:
             undo.enter_context(task_trigger_rules.savepoint(conn))
@@ -5846,7 +4839,7 @@ def task_create(
         row = {
             "id": new_id(),
             "title": title,
-            "body": body,
+            "body": "",
             "requester_id": requester,
             "owner_id": target,
             "status": "open",
@@ -5925,12 +4918,12 @@ def task_create(
             _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
-            _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
+            _task_event(conn, row["id"], TICO_ACTOR, "lint", None, "; ".join(plain), "")
             event(conn, actor, "task.lint", row["id"], {"problems": plain})
         # Give a bot the rest of this relationship's active work with the new task. The runner puts current-message refs
         # in its prompt, so the bot can reuse or reconcile overlapping work without merging distinct deliverables.
         related = []
-        if is_bot(target):
+        if reconcile_related and is_bot(target):
             marks = ",".join("?" * len(ACTIVE_STATUSES))
             related = _rows(
                 conn.execute(
@@ -5971,7 +4964,10 @@ def task_create(
             **({"filed_in": filed_in} if filed_in else {}),
             "news": "assignment",
             **(wake_refs or {}),
+            **({"instructions": instructions} if instructions else {}),
         }
+        # The request comes before anything the move into its first stage writes.
+        first_message(conn, actor, row["id"], conv["id"], body, title)
         # Into the first stage of its pipeline: the engine sets the stage and the owner, opens the visit and wakes a bot
         # that owns it, with `wake` on that wake.
         entered = task_engine.enter(
@@ -5988,6 +4984,10 @@ def task_create(
             start=stage,
         )
         _next_number(conn, actor, row["id"], pipeline_id)
+        # A private task's filer is told who else reads it as it moves (Product #449); never a refusal.
+        from . import private_readers
+
+        told_readers = private_readers.told(conn, row["id"], actor)
         event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
         _building(conn, None)
         if dedicated:
@@ -6023,7 +5023,8 @@ def task_create(
             task_followers.follow_on_create(conn, made, actor)
         recount(conn, [target, actor, made.get("owner_id")])
     made = task(conn, row["id"])
-    return {**made, "warnings": plain} if plain else made
+    extra = {**({"warnings": plain} if plain else {}), **({"private_readers": told_readers} if told_readers else {})}
+    return {**made, **extra} if extra else made
 
 
 def title_key(title):
@@ -6120,7 +5121,6 @@ def task_update(
     note=None,
     owner=None,
     due=None,
-    body=None,
     lane=None,
     labels=None,
     rank=None,
@@ -6142,7 +5142,7 @@ def task_update(
     seen_version=None,
     human_id=None,
 ):
-    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
+    """Edit a task's fields: title, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
     Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
     at: an edit against an older one is refused.
 
@@ -6155,7 +5155,8 @@ def task_update(
     is). `rank` is the position in the owner's queue. `goal_id` names the goal the task serves; "" takes it off.
     `number` gives a task that has none its number; it never changes. `title` renames it, checked as a new task's
     title would be (`_retitle`). `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
-    `human_id` names the task's Human (`task_human`); "" takes them off.
+    `human_id` names the task's Human (`task_human`); "" takes them off. A task has no description to edit: what it
+    asks is said on its chat.
     """
     if status is not None and status not in ("open", "done", "closed"):
         raise ValueError(f"a task is open, done or closed, not {status!r}: move it with task_move")
@@ -6195,7 +5196,6 @@ def task_update(
                 ("rank", rank),
                 ("number", number),
                 ("title", title),
-                ("body", body),
                 ("due", due),
                 ("goal", goal_id),
                 ("private", private),
@@ -6217,7 +5217,7 @@ def task_update(
                 f"The General Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
             )
     if mover is None:
-        mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+        mover = actor == TICO_ACTOR or is_human(actor) and can_move(conn, actor)
     mover = task_mover(conn, actor, row, mover)
     labels_only = (
         labels is not None
@@ -6229,7 +5229,6 @@ def task_update(
                 note,
                 owner,
                 due,
-                body,
                 lane,
                 rank,
                 goal_id,
@@ -6255,7 +5254,7 @@ def task_update(
     if not mine and labels_only and is_bot(actor):
         changed = set(_labels(labels)) ^ set(task_labels(row))
         mine = bool(changed) and changed <= _granted_labels(conn, actor, row, changed)
-    if not mine and not mover and actor != KEEPER:
+    if not mine and not mover and actor != TICO_ACTOR:
         refuse(
             conn,
             actor,
@@ -6327,10 +5326,10 @@ def task_update(
             sets.append("readers=NULL")
             for reader in task_readers(row):
                 _task_event(conn, task_id, actor, "reader", reader, None, "")
-    for field, value in (("title", title), ("note", note), ("due", due), ("body", body), ("lane", lane)):
+    for field, value in (("title", title), ("note", note), ("due", due), ("lane", lane)):
         if value is None:
             continue
-        if field in ("title", "body"):
+        if field == "title":
             path_mentioned(conn, actor, f"task {field}", str(value), task_id)
         column = "due_at" if field == "due" else field  # the event's field keeps its name
         if value == row.get(column):
@@ -6364,7 +5363,7 @@ def task_update(
     after = row
     if edited:
         # A bot's result rewritten: that run's outcome.
-        if title is not None or body is not None and body != row.get("body"):
+        if title is not None:
             RT.turn_result(conn, actor, row, "edited", event)
         args["id"] = task_id
         args["updated_at"] = ts
@@ -6407,7 +5406,7 @@ def task_update(
             conn.execute('UPDATE tasks SET size=?,updated_at=? WHERE id=?', (size, now(), task_id))
             _task_event(conn, task_id, actor, 'size', row.get('size'), size, '')
         if plain:
-            _task_event(conn, task_id, KEEPER, "lint", None, "; ".join(plain), "")
+            _task_event(conn, task_id, TICO_ACTOR, "lint", None, "; ".join(plain), "")
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
         after = isolate_private_task(conn, task(conn, task_id) or row)
@@ -6456,8 +5455,8 @@ def person_name(conn, person):
 def actor_name(conn, actor):
     """What a person reads for an actor: a bot's display name (else its slug), or a person's name. A bot made since ids
     has a UUID id, which means nothing to a person, so it is never written into text a person reads."""
-    if actor == KEEPER:
-        return "Tico"  # Tico itself (hubdb_core.KEEPER): never shown as the id it is stored under
+    if actor == TICO_ACTOR:
+        return "Tico"  # Tico itself (hubdb_core.TICO_ACTOR): never shown as the id it is stored under
     key = actor_id(actor)
     if not str(actor).startswith("human:"):
         row = bot(conn, key)
@@ -6533,7 +5532,7 @@ def stop_ended_work(conn, actor, task_id, status):
 
 
 # ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/0064_history_events.py):
+# What happened to each thing, one row per change, in `history_events` (backend/migrations/baseline.sql):
 # a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
 # (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
 # way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
@@ -6685,7 +5684,7 @@ MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_
 
 def in_person_name_sql(alias="m"):
     """SQL (in_person_name over a row): the message `alias` is in a person's name, typed by them or written for them,
-    or the keeper's carrier of one."""
+    or Tico's carrier of one."""
     return (
         f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
         f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))"
@@ -6728,7 +5727,7 @@ def _mirror_task_note(conn, actor, task_row, note):
 
 # ----------------------------------------------------------------------------- task rooms
 # A bot's task has a room of its own (kind "task"), so its traffic stays out of the chat its main
-# session reads. The main chat gets a quiet keeper line about it, `refs.task_started`, when the task is filed from
+# session reads. The main chat gets a quiet Tico line about it, `refs.task_started`, when the task is filed from
 # that chat. It is written with `quiet`, so it queues no run; the main session reads it in its history the next time
 # something real wakes it (execution.lane_history).
 
@@ -6756,7 +5755,7 @@ def _task_started(conn, row, room):
         return None
     msg = _write_message(
         conn,
-        KEEPER,
+        TICO_ACTOR,
         _room_person(conn, room, row),
         f"Started task: {row['title']}",
         room,
@@ -6765,7 +5764,7 @@ def _task_started(conn, row, room):
         None,
         None,
     )
-    event(conn, KEEPER, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
+    event(conn, TICO_ACTOR, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
     return msg
 
 
@@ -6776,7 +5775,7 @@ def task_from_chat(conn, task_id):
         _one(
             conn,
             "SELECT 1 FROM events WHERE actor=? AND action IN ('task.started_in','task.room') AND target=? LIMIT 1",
-            (KEEPER, task_id),
+            (TICO_ACTOR, task_id),
         )
     )
 
@@ -6809,7 +5808,7 @@ def give_task_room(conn, row):
     name = (bot(conn, row["owner_id"]) or {}).get("display_name") or actor_id(row["owner_id"])
     _write_message(
         conn,
-        KEEPER,
+        TICO_ACTOR,
         row["owner_id"],
         f"Earlier messages are in {name} chat.",
         room,
@@ -6818,7 +5817,7 @@ def give_task_room(conn, row):
         None,
         None,
     )
-    event(conn, KEEPER, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
+    event(conn, TICO_ACTOR, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
     return task(conn, row["id"])
 
 
@@ -6924,7 +5923,7 @@ def setup_finished(conn, slug, archived=False):
         attempt(
             conn,
             task_done,
-            KEEPER,
+            TICO_ACTOR,
             found["id"],
             f"{name} was archived." if archived else f"{name} finished onboarding; its work starts now.",
         )
@@ -6936,22 +5935,24 @@ HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted run
 # The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
 # bot's slug too and the stall guard reads that first.
 HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
-# A keeper-filed task about one bot says which in its body by the id, the one name a rename leaves as it is: its title is
+# A Tico-filed task about one bot says which in its words (task_words) by the id, the one name a rename leaves as it is: its title is
 # for people and carries a slug or a display name (bot_review_tasks).
 BOT_REVIEW_ID = "Bot id: {id}."
 _BOT_REVIEW_ID = re.compile(r"^Bot id: (\S+)\.$", re.M)
 
 
 def bot_review_tasks(conn, bot_id, owner, title):
-    """The tasks `owner` holds about this bot, the ones still open first and then newest first: those whose body names
-    its id, and one filed before bodies did under the title the bot has now, unless its body names another bot."""
+    """The tasks `owner` holds about this bot, the ones still open first and then newest first: those whose words
+    (`task_words`, given as `body`) name its id, and one filed before they did under the title the bot has now, unless
+    its words name another bot."""
     rows = conn.execute(
-        "SELECT id,body,status FROM tasks WHERE owner_id=? AND "
-        "(title=? OR (requester_id=? AND instr(body,?)>0)) "
+        "SELECT id,status FROM tasks WHERE owner_id=? AND "
+        f"(title=? OR (requester_id=? AND {TASK_SAYS_SQL})) "
         "ORDER BY (status='open') DESC,created_at DESC",
-        (owner, title, KEEPER, BOT_REVIEW_ID.format(id=bot_id)),
+        (owner, title, TICO_ACTOR, BOT_REVIEW_ID.format(id=bot_id)),
     ).fetchall()
-    named = ((row, _BOT_REVIEW_ID.search(str(row["body"] or ""))) for row in rows)
+    found = [{**dict(row), "body": task_words(conn, row["id"])} for row in rows]
+    named = ((row, _BOT_REVIEW_ID.search(row["body"])) for row in found)
     return [row for row, mark in named if not mark or mark.group(1) == bot_id]
 
 
@@ -7085,7 +6086,7 @@ def note_cancel(conn, actor, note_id, human=False):
 def notes_waiting(conn, bot, limit=50, *, unheld=False):
     """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
     (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, the keeper too.
+    message (`message_id`) is the message, in the order messages arrived, whoever sent it, Tico too.
     `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
     from . import task_quarantine
 
@@ -7094,7 +6095,7 @@ def notes_waiting(conn, bot, limit=50, *, unheld=False):
         conn.execute(
             f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
             f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-            ("bot:" + bot, KEEPER, limit),
+            ("bot:" + bot, TICO_ACTOR, limit),
         )
     )
 
@@ -7104,7 +6105,7 @@ def notes_settle(conn, attempt_id):
     conn.execute("UPDATE notes SET settled_at=? WHERE carried_by=? AND settled_at IS NULL", (now(), attempt_id))
 
 
-def notes_settle_catch_up(conn, limit=500):
+def notes_settle_catch_up(conn, limit: int | None = 500):
     """Settle up to `limit` notes whose carrier completed but no path marked them (None settles them all: the
     migration's one pass). Reads the small unsettled-carried index, so it is cheap on every scheduler tick, and
     a note it leaves for the next pass stays correct, since waiting is still decided by the carrier. Returns the count."""
@@ -7179,7 +6180,15 @@ def _wake(
         body, refs = reconnects_fold(conn, task_row, body, refs)
     message_refs = RT.stamp({"task": task_row["id"], **(refs or {})}, trigger, source)
     return _write_message(
-        conn, KEEPER, target, body, conversation(conn, task_row["conversation_id"]), "notice", message_refs, None, None
+        conn,
+        TICO_ACTOR,
+        target,
+        body,
+        conversation(conn, task_row["conversation_id"]),
+        "notice",
+        message_refs,
+        None,
+        None,
     )
 
 
@@ -7188,7 +6197,8 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     """One active row per bot; the old one moves to `bot_status_history` with `until`.
 
     `state="active"` is how a human clears a quarantine (deviation 4): it sets `bots.state`
-    and leaves the live status `idle`.
+    and leaves the live status `idle`. On a quarantined bot it lifts the quarantine alone: a pause the bot
+    had before stays, and the bot is `paused` until someone resumes it. On any other bot it is a resume.
     """
     _writer(conn, actor, task_id=task_id)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
@@ -7203,18 +6213,26 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     if quarantined and state == "active" and not is_human(actor):
         # A quarantine for too many refusals lifts without a person (the cooldown,
         # or BotOps); only an escape (secrets, another bot's repo, reaching outside) waits for one.
-        lifter = actor in (KEEPER, bot_actor(FLEET_MAINTAINER)) and actor != bot_actor(slug)
+        lifter = actor in (TICO_ACTOR, bot_actor(FLEET_MAINTAINER)) and actor != bot_actor(slug)
         if not lifter or quarantine_is_escape(conn, slug):
             refuse(conn, actor, "quarantined", f"only a person takes {slug} out of this quarantine")
     if quarantined and state == "active":
+        from . import holds
+
         event(conn, actor, "quarantine.lifted", bot_actor(slug), {"reason": reason})
         quarantine_lifted_note(conn, slug)
+        holds.release(conn, holds.QUARANTINE, "bot", slug, actor=actor, how=released_how(actor))
     if state == "active" and (quarantined or is_human(actor) or lifting and actor != bot_actor(slug)):
         from . import task_quarantine
 
         task_quarantine.release(conn, actor, bot=slug)
+    if state == "quarantined" and not quarantine_hold(conn, slug):
+        from . import holds
+
+        # Set by hand (the status API): a hold like any other quarantine, which waits for a person.
+        holds.put(conn, holds.QUARANTINE, "bot", slug, actor=actor, reason=reason or focus or "")
     if quarantined and state not in ("active", "quarantined"):
-        # Lease expiry and completion are routine keeper updates. Neither can clear or mask
+        # Lease expiry and completion are routine Tico updates. Neither can clear or mask
         # the human review required by quarantine.
         state = "quarantined"
         focus = None
@@ -7228,10 +6246,24 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
             (new_id(), slug, old["state"], old["focus"], old["task_id"], old["changed_at"], ts, reason, actor),
         )
     live = state
-    if state == "active":
-        conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
-        live = "idle"
-    elif state in ("paused", "quarantined"):
+    if state in ("active", "paused"):
+        from . import company_pause  # a bot's own pause is a hold (backend/holds.py), kept with bots.state
+
+        if state == "paused":
+            company_pause.pause_bot(conn, actor, slug, reason or "")
+        elif quarantined:  # the quarantine lifts (its hold was released above), not the bot's own pause
+            from . import holds
+
+            paused = bool(holds.get(conn, holds.PAUSED, "bot", slug))
+            conn.execute(
+                "UPDATE bots SET state=? WHERE id=? AND state='quarantined'", ("paused" if paused else "active", slug)
+            )
+            live = "paused" if paused else "idle"
+        else:
+            company_pause.resume_bot(conn, actor, slug)
+            conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
+            live = "idle"
+    elif state == "quarantined":
         conn.execute("UPDATE bots SET state=? WHERE id=?", (state, slug))
     row = {
         "bot": slug,
@@ -7258,7 +6290,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
 
 
 def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, next_due=None):
-    """The keeper's side of a status row: what came out of the last turn, and when the next is."""
+    """Tico's side of a status row: what came out of the last turn, and when the next is."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if not status(conn, slug):
@@ -7293,7 +6325,13 @@ def status_counts(conn, actor):
         "AND a.answer NOT IN ('give', 'again'))",
         (actor,),
     ).fetchone()[0]
-    return open_tasks, waits + asks
+    # And each open ❓ of the bot's (backend/question_marks.py): on an open task's chat, or in a direct chat.
+    marked = conn.execute(
+        "SELECT COUNT(*) FROM question_marks q LEFT JOIN tasks t ON t.id = q.task_id "
+        "WHERE q.bot_id=? AND q.cleared_at IS NULL AND (q.task_id = '' OR t.status = 'open')",
+        (actor,),
+    ).fetchone()[0]
+    return open_tasks, waits + asks + marked
 
 
 def _recount(conn, actor):
@@ -7813,7 +6851,7 @@ def messages(conn, conversation_id, since=None, limit=200):
 
 
 def undelivered(conn, to_actor=None, limit=200):
-    """What the keeper's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
+    """What Tico's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
     deliveries (message_deliveries: the messages addressed to it and those that reach it otherwise)."""
     if to_actor:
         out = _rows(
@@ -7834,12 +6872,6 @@ def undelivered(conn, to_actor=None, limit=200):
     return out
 
 
-# A message still waiting for its recipient: not yet delivered, or not yet read. The partial index repeats these terms
-# word for word, or SQLite does not use it (`inbox_pages`).
-UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
-UNREAD_INDEX = (
-    "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(recipient_id, created_at) WHERE " + UNREAD_TERMS
-)
 # The inbox reads deliveries (backend/threads.py): a message addressed to the reader, or reaching them another way (a
 # mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
 # partial index message_deliveries_waiting word for word, or SQLite does not use it.
@@ -8006,6 +7038,7 @@ def tasks(
     match=(),
     after=None,
     keys_only=False,
+    per_stage=False,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `updated_since` is a stored timestamp.
@@ -8015,7 +7048,9 @@ def tasks(
     `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match. `match` is more WHERE fragments
     over the task's own columns, each with its arguments (backend/task_match.py, the Tasks page's filters). `after` is
     a keyset start: the sort key of the last row a page gave (`task_sort_key`), so the page holds the rows after it.
-    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python."""
+    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python.
+    `per_stage` answers {stage_id: count} of every match instead (None for tasks in no stage), in one grouped read
+    that loads no row: the same selection whatever the page, its order or its keyset start."""
     sql, args, where = "SELECT * FROM tasks", [], []
     for fragment, values in match:
         where.append("(" + fragment + ")")
@@ -8082,6 +7117,12 @@ def tasks(
         ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
     else:
         raise ValueError("task order is queue or finished")
+    if per_stage:
+        # Before the keyset start: a count is of the whole selection, not of the pages after one row.
+        clause = " WHERE " + " AND ".join(where) if where else ""
+        return {
+            r[0]: r[1] for r in conn.execute(f"SELECT stage_id, COUNT(*) FROM tasks{clause} GROUP BY stage_id", args)
+        }
     if after is not None:
         # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
         where.append(KEYSET_SQL[order])
@@ -8313,24 +7354,25 @@ def prime_task_origins(conn, ids):
         for row in conn.execute(
             "SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
             "AND target IN (%s) ORDER BY created_at DESC" % ",".join("?" * len(part)),
-            (KEEPER, *part),
+            (TICO_ACTOR, *part),
         ):
             found.setdefault(row["target"], {"detail": row["detail"]})
-        prime(conn, TASK_ORIGIN_SQL, {(KEEPER, tid): found.get(tid) for tid in part})
+        prime(conn, TASK_ORIGIN_SQL, {(TICO_ACTOR, tid): found.get(tid) for tid in part})
 
 
 def task_origin(conn, row):
-    """Trusted origin for a keeper review, including pre-metadata records; never parse titles."""
-    explicit = _one(conn, TASK_ORIGIN_SQL, (KEEPER, row["id"]))
+    """Trusted origin for a Tico review, including pre-metadata records; never parse titles."""
+    explicit = _one(conn, TASK_ORIGIN_SQL, (TICO_ACTOR, row["id"]))
     if explicit:
         origin = (_json(explicit["detail"], {}) or {}).get("bot")
         return origin if is_bot(origin) else None
-    if row.get("requester_id") != KEEPER or row.get("owner_id") != human_actor(default_human(conn)):
+    if row.get("requester_id") != TICO_ACTOR or row.get("owner_id") != human_actor(default_human(conn)):
         return None
     # Legacy _escalate wrote no foreign key. Require its exact canonical body and a
     # unique sensitive refusal immediately preceding creation. The actor comes from
     # the trusted refusal record, not a bot name supplied in the title/body.
     origins, candidates = set(), set()
+    said = row.get("body") or task_request_text(conn, row["id"])  # moved to its first message
     for refusal in _rows(
         conn.execute(
             "SELECT actor,detail FROM refusals WHERE severity IN ('sensitive','escape') "
@@ -8348,7 +7390,7 @@ def task_origin(conn, row):
             f"turned down: {_clip(detail)}. Tell me whether that is a mistake to fix or a "
             f"limit to keep."
         )
-        if row.get("body") == body:
+        if said == body:
             origins.add(actor)
     return next(iter(origins)) if len(origins) == 1 and len(candidates) == 1 else None
 
@@ -8367,12 +7409,12 @@ from .task_calls import (
     task_give as task_give,
     task_let_see as task_let_see,
     task_move as task_move,
+    task_move_to as task_move_to,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
     task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
-    task_thumbs as task_thumbs,
     task_try_again as task_try_again,
     task_unsnooze as task_unsnooze,
     task_view as task_view,

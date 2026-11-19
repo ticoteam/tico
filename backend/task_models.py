@@ -222,10 +222,17 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     can = readiness(c, bot, choice, runner_id)
     if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
-    login = login_holds.canonical(c, runner_id, "", choice["runtime"])
-    held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)
+    from .gateway_connection import is_tico
+
+    # A Tico model signs in with the company's one Gateway login wherever it runs.
+    login, runtime = (
+        (login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+        if is_tico(choice["model"])
+        else (login_holds.canonical(c, runner_id, "", choice["runtime"]), choice["runtime"])
+    )
+    held = login_holds.holding(c, runner_id, login, runtime, job_id)
     if held:
-        until = str(login_holds.get(c, runner_id, login, choice["runtime"]).get("until") or "")
+        until = str(login_holds.get(c, runner_id, login, runtime).get("until") or "")
         return (
             f"{choice['runtime']} is at its usage limit until {until[:10]} {until[11:16]} UTC"
             if held == "held" and until
@@ -293,12 +300,12 @@ def _named(model):
     return text[:1].upper() + text[1:]
 
 
-def warning(c, settings, bot, config, choice):
+def warning(c, settings, bot, config, choice, record=None):
     """The plain-words warning for a task model below the minimum on a high-stakes bot, or "". It never refuses: the
-    task model saves and its tasks run on it."""
+    task model saves and its tasks run on it. `record`: providers.load(c, settings), when the caller has read it."""
     if not choice:  # most bots: no lookups at all, so the bot list does not grow with them
         return ""
-    own = providers.bot_choice(c, settings, config)[1]
+    own = providers.bot_choice(c, settings, config, record)[1]
     if not below_minimum(own, choice):
         return ""
     found = stakes(c, settings, bot)
@@ -497,7 +504,7 @@ def handed(c, attempt_id, task_id, record):
         H._task_event(
             c,
             task_id,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "task_model",
             label(record["asked"]),
             record.get("ran") or label(record["asked"]),

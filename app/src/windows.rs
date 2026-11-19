@@ -95,11 +95,93 @@ fn remote_of(hub: &url::Url) -> Value {
     serde_json::json!({"urls": [format!("{}://{host}:{port}/*", hub.scheme())]})
 }
 
+/// WebKit reports an omitted port as zero. Remote hubs must use HTTPS.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn matches_capture_origin(
+    hub: &url::Url,
+    scheme: &str,
+    host: &str,
+    port: isize,
+) -> bool {
+    let default_port = match scheme {
+        "https" => 443,
+        "http" if matches!(host, "localhost" | "127.0.0.1") => 80,
+        _ => return false,
+    };
+    let port = if port == 0 { default_port } else { port };
+    hub.scheme() == scheme
+        && hub.host_str().is_some_and(|expected| {
+            expected == host
+                || expected.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some(host)
+        })
+        && u16::try_from(port).is_ok_and(|port| Some(port) == hub.port_or_known_default())
+}
+
 #[cfg(test)]
 mod capability_tests {
     use super::*;
 
     const ORG: &str = "o_7f3a0001";
+
+    #[test]
+    fn microphone_matches_the_exact_secure_hub_origin() {
+        let hub = url::Url::parse("https://team.example.com/tico/").unwrap();
+        assert!(matches_capture_origin(&hub, "https", "team.example.com", 0));
+        assert!(matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com",
+            443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com",
+            8443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "https",
+            "team.example.com.evil.example",
+            443
+        ));
+        assert!(!matches_capture_origin(
+            &hub,
+            "http",
+            "team.example.com",
+            443
+        ));
+
+        let hub = url::Url::parse("http://localhost:8765/").unwrap();
+        assert!(matches_capture_origin(&hub, "http", "localhost", 8765));
+        assert!(!matches_capture_origin(&hub, "https", "localhost", 8765));
+        let insecure = url::Url::parse("http://team.example.com/").unwrap();
+        assert!(!matches_capture_origin(
+            &insecure,
+            "http",
+            "team.example.com",
+            80
+        ));
+    }
+
+    #[test]
+    fn macos_bundle_allows_microphone_capture() {
+        let info =
+            plist::Value::from_reader_xml(include_bytes!("../Info.plist").as_slice()).unwrap();
+        let usage = info.as_dictionary().unwrap()["NSMicrophoneUsageDescription"]
+            .as_string()
+            .unwrap();
+        assert!(!usage.trim().is_empty());
+
+        let entitlements =
+            plist::Value::from_reader_xml(include_bytes!("../entitlements.plist").as_slice())
+                .unwrap();
+        assert_eq!(
+            entitlements.as_dictionary().unwrap()["com.apple.security.device.audio-input"]
+                .as_boolean(),
+            Some(true)
+        );
+    }
 
     #[test]
     fn ipc_is_confined_to_selected_origin_and_its_own_webview() {
@@ -683,6 +765,7 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
         });
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
@@ -697,6 +780,8 @@ fn open_org_webview(app: &App, org: &Org, on_screen: bool) -> tauri::Result<bool
     }
     let frame = page_bounds(app, on_screen);
     let webview = window.add_child(builder, frame.position, frame.size)?;
+    #[cfg(target_os = "macos")]
+    crate::media::install(&webview, home.hub.clone());
     if !on_screen {
         let _ = webview.hide();
     }
@@ -2829,6 +2914,7 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
         .on_page_load(move |_, payload| page(payload));
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
@@ -2865,8 +2951,10 @@ fn open_hub_window(app: &App, url: url::Url, home: &Home) {
             true
         });
     }
-    if builder.build().is_ok() {
-        owned_by(app, &label, &home.id);
+    if let Ok(window) = builder.build() {
+        #[cfg(target_os = "macos")]
+        crate::media::install(window.as_ref(), home.hub.clone());
+        owned_by(app, window.label(), &home.id);
     }
 }
 
@@ -3241,16 +3329,173 @@ mod new_window_tests {
         assert!(!same("https://team.example.com/api/v2/files/f2?v=2"));
         assert!(!same("blob:https://team.example.com/0b1c"));
     }
+
+    #[test]
+    fn a_call_window_is_no_org_page_and_names_only_a_plain_id() {
+        assert_eq!(org_of("call-o_aaaaaaaa-c1"), None);
+        assert_eq!(org_of("meeting-o_aaaaaaaa-m1"), None);
+        assert!(window_id_ok("c1-2b"));
+        assert!(!window_id_ok(""));
+        assert!(!window_id_ok("c1/../x"));
+        assert!(!window_id_ok(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn only_a_call_s_own_window_may_size_it() {
+        assert_eq!(
+            call_window_org("call-o_aaaaaaaa-c1", "c1"),
+            Some("o_aaaaaaaa")
+        );
+        assert_eq!(call_window_org("call-o_aaaaaaaa-c1", "c2"), None);
+        assert_eq!(call_window_org("call-o_aaaaaaaa-xc1", "c1"), None);
+        assert_eq!(call_window_org("meeting-o_aaaaaaaa-c1", "c1"), None);
+        assert_eq!(call_window_org("org-o_aaaaaaaa-c1", "c1"), None);
+        assert_eq!(call_window_org("call--c1", "c1"), None);
+        assert_eq!(call_window_org("call-o_a-b-c1", "c1"), None);
+        assert_eq!(call_window_org("call-o_aaaaaaaa-c1/x", "c1/x"), None);
+        let hub = url::Url::parse("https://team.example.com/tico/").unwrap();
+        let capability = call_capability(&hub, "o_aaaaaaaa");
+        assert_eq!(
+            capability["webviews"],
+            serde_json::json!(["call-o_aaaaaaaa-*"])
+        );
+        assert_eq!(
+            capability["permissions"],
+            serde_json::json!(["allow-bridge"])
+        );
+        assert_eq!(
+            capability["remote"]["urls"],
+            serde_json::json!(["https://team.example.com:443/*"])
+        );
+    }
+
+    #[test]
+    fn a_call_window_grows_for_a_shared_screen_and_goes_back_after() {
+        let small = (400.0, 640.0);
+        assert_eq!(
+            call_size(true, small, None),
+            (Some((1100.0, 720.0)), Some(small))
+        );
+        // Asked again while wide: nothing moves, the first size stays kept.
+        assert_eq!(
+            call_size(true, (1100.0, 720.0), Some(small)),
+            (None, Some(small))
+        );
+        assert_eq!(
+            call_size(false, (1100.0, 720.0), Some(small)),
+            (Some(small), None)
+        );
+        // A window someone made big already is left alone, both ways.
+        assert_eq!(call_size(true, (1200.0, 800.0), None), (None, None));
+        assert_eq!(call_size(false, (1200.0, 800.0), None), (None, None));
+    }
 }
 
 /// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking again for the same
 /// one brings it to the front. It belongs to the org that asked: it follows that org's address and data store.
 pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
-    if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    let fragment = format!("/meetings?meeting={id}&window=1");
+    open_page_window(
+        app,
+        home,
+        "meeting",
+        id,
+        &fragment,
+        "Meeting",
+        (1100.0, 820.0),
+    );
+}
+
+/// A call's meeting window (`#/call/<id>`, ui/app/call-window.ts): small, the size of a phone, until someone shares
+/// their screen and the page asks to grow (`callWindowSize`). One per call, like a
+/// meeting's. `join`: it joins the call as it opens (`?join=1`); a plain open shows Join.
+pub(crate) fn open_call_window(app: &App, home: &Home, id: &str, join: bool) {
+    let fragment = format!("/call/{id}{}", if join { "?join=1" } else { "" });
+    if grant(app, call_capability(&home.hub, &home.id)).is_err() {
         return;
     }
-    let label = format!("meeting-{}-{id}", home.id);
+    open_page_window(app, home, "call", id, &fragment, "Call", (400.0, 640.0));
+}
+
+/// The bridge for org `id`'s call windows (`call-<org>-<call>`), at the org's origin. Each message is checked against
+/// the call's own window again in bridge.rs.
+pub(crate) fn call_capability(hub: &url::Url, id: &str) -> Value {
+    serde_json::json!({
+        "identifier": format!("call-{id}"),
+        "windows": [],
+        "webviews": [format!("call-{}", &page_pattern(id)["org-".len()..])],
+        "permissions": ["allow-bridge"],
+        "remote": remote_of(hub),
+        "local": false,
+    })
+}
+
+/// The org a call window's label names when it is call `id`'s own window: `call-<org>-<id>`. Org ids hold no `-`.
+pub(crate) fn call_window_org<'a>(label: &'a str, id: &str) -> Option<&'a str> {
+    if !window_id_ok(id) {
+        return None;
+    }
+    let org = label
+        .strip_prefix("call-")?
+        .strip_suffix(id)?
+        .strip_suffix('-')?;
+    (!org.is_empty() && !org.contains('-')).then_some(org)
+}
+
+/// What each call window measured before it grew for a shared screen, by label.
+static CALL_SIZES: std::sync::Mutex<Vec<(String, Size)>> = std::sync::Mutex::new(Vec::new());
+
+/// A window's inner size, logical: width and height.
+type Size = (f64, f64);
+
+/// A call window's next size, and what to keep: wide grows a small window to 1100x720 and keeps the size it had;
+/// back from wide, the kept size returns. A window already big enough is left as it is.
+fn call_size(wide: bool, now: Size, kept: Option<Size>) -> (Option<Size>, Option<Size>) {
+    match (wide, kept) {
+        (true, None) if now.0 < 760.0 => (Some((1100.0, 720.0)), Some(now)),
+        (true, kept) => (None, kept),
+        (false, Some(was)) => (Some(was), None),
+        (false, None) => (None, None),
+    }
+}
+
+/// Grows (or restores) call window `label` as its page asks (bridge.rs `callWindowSize`).
+pub(crate) fn resize_call_window(app: &App, label: &str, wide: bool) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    let (Ok(scale), Ok(size)) = (window.scale_factor(), window.inner_size()) else {
+        return;
+    };
+    let now = size.to_logical::<f64>(scale);
+    let set = {
+        let mut sizes = CALL_SIZES.lock().unwrap();
+        let at = sizes.iter().position(|(l, _)| l == label);
+        let kept = at.map(|i| sizes.remove(i).1);
+        let (set, keep) = call_size(wide, (now.width, now.height), kept);
+        if let Some(keep) = keep {
+            sizes.push((label.to_string(), keep));
+        }
+        set
+    };
+    if let Some((width, height)) = set {
+        let _ = window.set_size(LogicalSize::new(width, height));
+    }
+}
+
+fn open_page_window(
+    app: &App,
+    home: &Home,
+    kind: &str,
+    id: &str,
+    fragment: &str,
+    title: &str,
+    size: Size,
+) {
+    if !window_id_ok(id) {
+        return;
+    }
+    let label = format!("{kind}-{}-{id}", home.id);
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.unminimize();
         let _ = window.show();
@@ -3258,12 +3503,12 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
         return;
     }
     let mut url = home.hub.clone();
-    url.set_fragment(Some(&format!("/meetings?meeting={id}&window=1")));
+    url.set_fragment(Some(fragment));
     let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title("Meeting")
-        .inner_size(1100.0, 820.0)
+        .title(title)
+        .inner_size(size.0, size.1)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .resizable(true)
         .user_agent(USER_AGENT)
@@ -3271,57 +3516,27 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
         .on_new_window(new_window_handler(app, home.clone(), None))
         .on_navigation(navigate)
         .on_page_load(move |_, payload| page(payload));
+    // The call window uses its own bridge; a meeting window has none.
+    if kind == "call" {
+        builder = builder.initialization_script(crate::bridge::CALL_WINDOW_SCRIPT);
+    }
     #[cfg(target_os = "macos")]
     {
+        builder = builder.initialization_script(crate::media::NO_SCREEN_CAPTURE_SCRIPT);
         if let Some(store) = home.store {
             builder = builder.data_store_identifier(*store.as_bytes());
         }
     }
-    if builder.build().is_ok() {
-        owned_by(app, &label, &home.id);
+    if let Ok(window) = builder.build() {
+        #[cfg(target_os = "macos")]
+        crate::media::install(window.as_ref(), home.hub.clone());
+        owned_by(app, window.label(), &home.id);
     }
 }
 
-/// A small window, above the main window, showing the approval page Tico Recorder asked for (`recorder::open_link`)
-/// on org `home`'s data store, so it has that org's Tico session; the org's own page is left as it is. Tico's answer
-/// to the Recorder, a redirect to the Recorder's loopback, is handed over by `recorder::deliver` instead of loaded.
-pub(crate) fn open_approval_window(app: &App, home: &Home, label: &str, url: url::Url) -> bool {
-    let (navigate, page) = sign_in_hooks(app, Some(home.hub.clone()), None);
-    let (opener, own) = (app.clone(), label.to_string());
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
-        .title("Tico Recorder")
-        .inner_size(520.0, 680.0)
-        .resizable(true)
-        .center()
-        .focused(true)
-        .user_agent(USER_AGENT)
-        .disable_drag_drop_handler()
-        .on_new_window(new_window_handler(app, home.clone(), None))
-        .on_navigation(move |url| !crate::recorder::deliver(&opener, &own, url) && navigate(url))
-        .on_page_load(move |_, payload| page(payload));
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(store) = home.store {
-            builder = builder.data_store_identifier(*store.as_bytes());
-        }
-        if let Some(parent) = main_window(app)
-            .filter(|main| main.is_visible().unwrap_or(false))
-            .and_then(|main| main.ns_window().ok())
-        {
-            builder = builder.parent_raw(parent);
-        }
-    }
-    match builder.build() {
-        Ok(_) => {
-            owned_by(app, label, &home.id);
-            true
-        }
-        Err(e) => {
-            log::warn!("could not open Tico's approval page: {e}");
-            false
-        }
-    }
+/// A meeting's or call's id as a window may name it: short, letters, digits and dashes.
+fn window_id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// The main window: the rail and the open org's page.

@@ -28,29 +28,17 @@ from .auth import validate_identity
 from . import outbound_tls
 from .models import Contract
 from .store import H, Problem, encode
+from .api_contract import KEYLESS, api_v2, error
 
 TRANSPORT = None  # tests' fake HQ, never a live company database
 RETENTION = 90 * 86400  # bodies and codes; metadata stays
 PURGE_EVERY = 600  # reads refuse expired content before the next purge
 CONNECTION_TIMEOUT = 15  # includes headers and a slow-drip response, not just each socket read
-now = time.time  # tests' controlled clock
-SCHEMA = '''
-CREATE TABLE IF NOT EXISTS inbound_inboxes(
- inbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL,
- state TEXT NOT NULL, created_by TEXT NOT NULL, period_end REAL, cancel_pending INTEGER NOT NULL DEFAULT 0,
- used_for TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT 'company', group_id TEXT);
-CREATE TABLE IF NOT EXISTS inbound_messages(
- seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE, inbox_id TEXT NOT NULL,
- kind TEXT NOT NULL, received_at REAL NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
- preview TEXT NOT NULL, body TEXT, code TEXT, spam INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0,
- retention_removed INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS inbound_messages_inbox ON inbound_messages(inbox_id,seq);
-CREATE INDEX IF NOT EXISTS inbound_messages_retention ON inbound_messages(retention_removed,received_at);
-CREATE TABLE IF NOT EXISTS inbound_sync(
- singleton INTEGER PRIMARY KEY CHECK(singleton=1), cursor INTEGER NOT NULL DEFAULT 0,
- last_synced_at REAL, error TEXT NOT NULL DEFAULT '', gaps TEXT NOT NULL DEFAULT '[]');
-INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
-'''
+
+
+def now():
+    """Epoch seconds: the tests' controlled clock. A test replaces this, not time.time for the whole process."""
+    return time.time()
 
 
 AUDIENCES = ('company', 'team')
@@ -822,6 +810,37 @@ class Inbound:
                 pass
 
 
+COMPANY_CONNECTION_BODY = {
+    'required': True,
+    'content': {
+        'application/json': {
+            'schema': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['action', 'code'],
+                'properties': {
+                    'action': {'type': 'string', 'enum': ['preview', 'connect']},
+                    'code': {
+                        'type': 'string',
+                        'minLength': 43,
+                        'maxLength': 43,
+                        'pattern': '^[A-Za-z0-9_-]{43}$',
+                        'writeOnly': True,
+                    },
+                },
+            }
+        }
+    },
+}
+COMPANY_CONNECTION_DESCRIPTION = (
+    'Direct signed-in human owner/admin only; no personal tokens, support or delegated agents. '
+    'Preview shows the target company before explicit consent to share Inbox in both directions. '
+    'The server supplies its private key and existing reported installation identity; neither belongs in this body. '
+    'Requests are limited to 2 KiB; code validation errors never echo supplied values. '
+    'Disconnect in the portal stops future access, preserving merged history and existing local copies.'
+)
+
+
 def install(app, store, settings, auth):
     service = Inbound(store, settings, auth)
     service.judge = lambda: getattr(app.state, 'judge', None)
@@ -830,7 +849,26 @@ def install(app, store, settings, auth):
     service.files = lambda: getattr(app.state, 'files', None)
     app.state.inbound = service
 
-    @app.post('/api/v2/inbound/company-connection')
+    @app.post(
+        '/api/v2/inbound/company-connection',
+        **api_v2(
+            "Inbound",
+            "connectInboundCompany",
+            "A direct human owner or admin previews and connects Inbox to a portal company",
+            "InboundCompanyConnection",
+            description=COMPANY_CONNECTION_DESCRIPTION,
+            request_body=COMPANY_CONNECTION_BODY,
+            responses={
+                code: error(detail)
+                for code, detail in [
+                    ('403', 'Direct human management or portal authorization required'),
+                    ('409', 'Missing saved identity, expired code or conflicting connection'),
+                    ('503', 'Inbox connection unavailable; reconcile the same code in its original lifetime'),
+                ]
+            },
+            idempotency='Optional. Retry the same action and code; HQ rechecks the current grant, role, session and original expiry without readoption.',
+        ),
+    )
     async def company_connection(request: Request):
         # Authenticate before parsing; ordinary validation errors can reveal supplied secrets.
         who = request.state.identity
@@ -848,57 +886,109 @@ def install(app, store, settings, auth):
             raise Problem('inbox_connection_invalid', 'Enter the connection code from the portal.', 422) from None
         return await service.company_connection(who, body)
 
-    @app.get('/api/v2/inbound/inboxes')
+    @app.get(
+        '/api/v2/inbound/inboxes',
+        **api_v2("Inbound", "listInboundInboxes", "Company email and phone inboxes", "InboundInboxes"),
+    )
     def inboxes(
         request: Request, after: str = Query(default='', max_length=64), limit: int = Query(default=100, ge=1, le=100)
     ):
         return service.list_inboxes(request.state.identity, after, limit)
 
-    @app.post('/api/v2/inbound/inboxes')
+    @app.post(
+        '/api/v2/inbound/inboxes',
+        **api_v2(
+            "Inbound", "createInboundInbox", "Create a free email inbox; SMS creation requires a phone approval request"
+        ),
+    )
     def create(request: Request, body: Create):
         return service.create(request.state.identity, body, request.headers.get('Idempotency-Key'))
 
-    @app.patch('/api/v2/inbound/inboxes/{ident}')
+    @app.patch(
+        '/api/v2/inbound/inboxes/{ident}',
+        **api_v2(
+            "Inbound", "editInboundInbox", "Rename an inbox across connected interfaces and save local dependencies"
+        ),
+    )
     def edit(request: Request, ident: str, body: Edit):
         return service.edit(request.state.identity, ident, body)
 
-    @app.put('/api/v2/inbound/inboxes/{ident}/audience')
+    @app.put(
+        '/api/v2/inbound/inboxes/{ident}/audience',
+        **api_v2(
+            "Inbound",
+            "setInboundInboxAudience",
+            "An owner or admin sets who reads an inbox: company, or team with group_id (that group and the groups under it)",
+            "InboundInbox",
+            idempotency=KEYLESS,
+        ),
+    )
     def audience(request: Request, ident: str, body: InboxAudience):
         """Who reads the inbox: `company` (everyone) or `team` with `group_id` (that group and the groups under it).
         The owner and admins always read it. Owner and admins only."""
         return service.set_audience(request.state.identity, ident, body)
 
-    @app.post('/api/v2/inbound/inboxes/{ident}/release')
+    @app.post(
+        '/api/v2/inbound/inboxes/{ident}/release',
+        **api_v2("Inbound", "releaseInboundInbox", "An admin retires email or cancels phone renewal"),
+    )
     def release(request: Request, ident: str, body: Release):
         return service.release(request.state.identity, ident, body.confirm)
 
-    @app.get('/api/v2/inbound/phone-quote')
+    @app.get(
+        '/api/v2/inbound/phone-quote',
+        **api_v2("Inbound", "quoteInboundPhone", "A current monthly US mobile rental quote"),
+    )
     def quote(request: Request):
         with store.read_transaction() as c:
             permit(c, request.state.identity, admin=True, auth=auth)
         return service.remote('GET', 'phone-quote')
 
-    @app.get('/api/v2/inbound/phone-requests')
+    @app.get(
+        '/api/v2/inbound/phone-requests',
+        **api_v2(
+            "Inbound",
+            "listInboundPhoneRequests",
+            "An owner or admin lists phone approval requests",
+            "InboundPhoneRequests",
+        ),
+    )
     def phone_requests(
         request: Request, after: str = Query(default='', max_length=64), limit: int = Query(default=100, ge=1, le=100)
     ):
         return service.phone_requests(request.state.identity, after, limit)
 
-    @app.post('/api/v2/inbound/phone-requests')
+    @app.post(
+        '/api/v2/inbound/phone-requests',
+        **api_v2("Inbound", "requestInboundPhone", "An owner or admin requests a monthly mobile rental; no purchase"),
+    )
     def request_phone(request: Request, body: PhoneRequest):
         return service.phone_request(
             request.state.identity, name=body.name, operation=request.headers.get('Idempotency-Key')
         )
 
-    @app.post('/api/v2/inbound/phone-requests/{ident}/accept')
+    @app.post(
+        '/api/v2/inbound/phone-requests/{ident}/accept',
+        **api_v2(
+            "Inbound",
+            "acceptInboundPhoneQuote",
+            "An owner or admin accepts an exact quote for TICO review; no purchase",
+        ),
+    )
     def accept_phone(request: Request, ident: str, body: AcceptPhone):
         return service.phone_request(request.state.identity, ident=ident, action='accept', price=body.price_micros)
 
-    @app.post('/api/v2/inbound/phone-requests/{ident}/cancel')
+    @app.post(
+        '/api/v2/inbound/phone-requests/{ident}/cancel',
+        **api_v2("Inbound", "cancelInboundPhoneRequest", "An owner or admin cancels a phone approval request"),
+    )
     def cancel_phone(request: Request, ident: str):
         return service.phone_request(request.state.identity, ident=ident, action='cancel')
 
-    @app.get('/api/v2/inbound/cursor')
+    @app.get(
+        '/api/v2/inbound/cursor',
+        **api_v2("Inbound", "getInboundCursor", "Capture a cursor before requesting a code", "InboundCursor"),
+    )
     def cursor(request: Request, inbox_ids: str | None = Query(default=None, max_length=1000)):
         return {
             'cursor': service.listing(
@@ -906,7 +996,10 @@ def install(app, store, settings, auth):
             )['cursor']
         }
 
-    @app.get('/api/v2/inbound/messages')
+    @app.get(
+        '/api/v2/inbound/messages',
+        **api_v2("Inbound", "listInboundMessages", "Search one, many or all company inboxes", "InboundMessages"),
+    )
     def messages(
         request: Request,
         inbox_ids: str | None = Query(default=None, max_length=1000),
@@ -932,7 +1025,10 @@ def install(app, store, settings, auth):
             spam=spam,
         )
 
-    @app.get('/api/v2/inbound/messages/{ident}')
+    @app.get(
+        '/api/v2/inbound/messages/{ident}',
+        **api_v2("Inbound", "readInboundMessage", "Untrusted message text, up to 32 KB per page"),
+    )
     def read(
         request: Request,
         ident: str,
@@ -941,11 +1037,17 @@ def install(app, store, settings, auth):
     ):
         return service.read(request.state.identity, ident, offset, max_chars)
 
-    @app.get('/api/v2/inbound/messages/{ident}/code')
+    @app.get(
+        '/api/v2/inbound/messages/{ident}/code',
+        **api_v2("Inbound", "readInboundCode", "Extracted code for a specific message"),
+    )
     def code(request: Request, ident: str):
         return service.read(request.state.identity, ident, code=True)
 
-    @app.post('/api/v2/inbound/wait')
+    @app.post(
+        '/api/v2/inbound/wait',
+        **api_v2("Inbound", "waitInboundMessages", "Non-consuming wait after a cursor", "InboundMessages"),
+    )
     async def wait(request: Request, body: Wait):
         until = asyncio.get_running_loop().time() + body.timeout
         while True:

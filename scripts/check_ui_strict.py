@@ -16,7 +16,7 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    piece under ui/baselines/strict/<path>.json, {"count": N}, its findings today. A piece only goes down; a file at zero
    has no piece.
 3. A piece may be added for one case only: a .ts file that is a rename of a .js file at REF (same path, .js -> .ts).
-   scripts/ui_flip.py writes those. Any other new .ts file must be at zero.
+   Any other new .ts file must be at zero.
 4. Counts never rise against REF. REF may hold the pieces, or the single list from before them (ui/strict-legacy.json).
 5. Shift-left, in .ts files with no piece: a repeated cast (`x as T`), a repeated non-null assertion (`x!`), or `any`
    (`: any`, `as any`, `<any>`, `, any`). Comments and strings are not read. Each hit is a failure: a strict file is clean,
@@ -35,7 +35,7 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    types every other script sees. Page globals are file-local declarations. The Node scripts outside ui/ have their own
    gate on the same base config, scripts/check_node_types.py.
 
-Runs in a few seconds: one tsc pass over the UI and one over the worker. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
+Runs in a few seconds with the pinned TypeScript compiler installed by npm ci.
 """
 
 import argparse
@@ -55,7 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "ui/tsconfig.strict.json"
 LEGACY = "ui/strict-legacy.json"  # the single list before the pieces; read from REF, never written
 STRICT = "strict"
-TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", CONFIG, "--pretty", "false"]
+TSC = [*node_types.TSC, "-p", CONFIG, "--pretty", "false"]
 TSC_LINE = re.compile(r"^(?P<file>[^()\n]+)\((?P<line>\d+),(?P<col>\d+)\): error (?P<code>TS\d+): (?P<msg>.*)$")
 TSC_GLOBAL = re.compile(r"^error (?P<code>TS\d+): (?P<msg>.*)$")
 REQUIRED_FLAGS = (
@@ -75,17 +75,16 @@ ALLOWED_EXCLUDE = {"./vendor/**", "./assets/**", "./node_modules/**", "./observa
 WORKER_CONFIG = "ui/tsconfig.worker.json"
 WORKER_FILES = ["sw.ts"]
 WORKER_LIB = ["ES2022", "WebWorker"]
-WORKER_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", WORKER_CONFIG, "--pretty", "false"]
+WORKER_TSC = [*node_types.TSC, "-p", WORKER_CONFIG, "--pretty", "false"]
 # The one generated bundle (npm run build:observability): the only JavaScript that may sit under ui/ outside tests/.
 ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # Classic scripts that stay JavaScript, each with its reason (path: reason). None is left: every UI script is a .ts file.
-# scripts/ui_flip.py keeps any listed here as they are.
 KEPT_JS: dict[str, str] = {}
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
 # The UI test scripts: their own strict config, read by no baseline (rule 10).
 TESTS_CONFIG = "ui/tests/tsconfig.json"
-TESTS_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
+TESTS_TSC = [*node_types.TSC, "-p", TESTS_CONFIG, "--pretty", "false"]
 TESTS_REQUIRED = ("strict", "erasableSyntaxOnly", "verbatimModuleSyntax")
 TESTS_INCLUDE = "./**/*.cts"
 DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)
@@ -194,7 +193,7 @@ def base_counts(ref):
 
 
 def is_rename_of_js(ref, rel):
-    """Whether rel is a .ts file that is the .js file of the same path at REF, renamed (scripts/ui_flip.py)."""
+    """Whether rel is a .ts file that is the .js file of the same path at REF, renamed."""
     return rel.endswith(".ts") and exists_at(ref, rel[:-3] + ".js") and not exists_at(ref, rel)
 
 

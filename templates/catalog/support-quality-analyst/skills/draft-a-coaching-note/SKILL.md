@@ -1,6 +1,8 @@
 ---
 name: draft-a-coaching-note
 description: Draft a short coaching note for the support owner about a repeated miss in a person's replies, with one strength quoted, one change shown in better wording, and nothing that ranks or names the person in a shared report.
+metadata:
+  function: customers
 ---
 # Draft a coaching note
 

@@ -1,5 +1,5 @@
 """Growth and Success: Experiments (Ideas, Building, Running) and Monitoring (Watching, Slipping)
-(backend/pipeline_presets_more.py, docs/pipelines-v3.md "Growth and Success").
+(backend/pipeline_presets_more.py, docs/dev/pipelines-v3.md "Growth and Success").
 
 - An idea rests in Ideas until someone starts it: its bot owner when Building has room, or any person.
 - A person's request moves on by itself only from a stage that says so (`requests_move_on`: Product's Ideas).
@@ -85,6 +85,7 @@ def _go_live(c, row):
     """The Go-live page attached on the task's visit to Building and passed by Jev. Returns the task and the page
     requirement's id."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (BUILDING,)).fetchone()[0]
+    X.stub_document(c, row["id"], rid, "f-go-live", row["owner_id"], 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",

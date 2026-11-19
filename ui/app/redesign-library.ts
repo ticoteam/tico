@@ -61,8 +61,8 @@ function lcRows(state: LcState): LcTool[] { if (!state.rows) throw new Error('To
 
 // ----------------------------------------------------------------- the model: one item per tool or loose credential
 const lcBotName = (slug: string): string => botDisplayName(slug);
-// The tools list names a bot by its id; one named by slug (a server from before ids, or an old link) is read as its id.
-const lcBotId = (ref: string): string => botByRef(ref)?.id || ref;
+// The tools list names a bot by its id.
+const lcBotId = (ref: string): string => ref;
 const lcPerson = (id: string): {id: string; name?: string | null} => (S.people || []).find(p => p.id === id) || (VAULT?.people || []).find(p => p.id === id) || {id, name: id};
 // Variables a tool names (CLOSE_API_KEY), from its page and from the entries bots declare; words like API are not one.
 const lcEnvs = (row: LcTool): (string | undefined)[] => [...new Set([...credEnvs(row.credentials), ...(row.connections || []).map(c => c.env)].filter(e => e && e.includes('_') && !e.includes('<')))];
@@ -162,7 +162,7 @@ function lcCredHTML(cred: LcCredential): string {
   const used = cred.last_used_at ? `used ${ago(cred.last_used_at)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
-    `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
+    cred.remove_only ? '' : `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
     cred.stored && cred.can_reveal ? `<button class="linkish" type="button" data-vault-reveal="${esc(cred.id)}">Reveal</button>` : '',
   ].filter(Boolean).join('');
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
@@ -254,7 +254,7 @@ function lcDrawCredential(id: string, back: string): void {
     <div id="tool-facts">${lcIssuesHTML(item)}
     <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
       ${row('Changed', cred.updated_at && `<span title="${esc(fmt(cred.updated_at))}">${esc(ago(cred.updated_at))}</span>`)}</dl>
-      ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
+      ${(cred.can_remove ?? VAULT?.can_manage) ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;
   lcWireFacts();
 }
@@ -391,7 +391,7 @@ async function lcSlackLinks(state: LcState): Promise<void> {
   };
   const toggle = (open: boolean): void => { form.hidden = !open; openBtn.setAttribute('aria-expanded', String(open)); };
   openBtn.onclick = () => {
-    toggle(form.hidden);
+    toggle(Boolean(form.hidden));
     if (form.hidden) return;
     if (!threadsRead) void loadThreads().catch(failed);
     chanInput.focus();

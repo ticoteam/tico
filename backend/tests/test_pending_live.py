@@ -29,7 +29,7 @@ def _reader_merges_edits_and_send_applies_final_fields_once(api):
     assert len({r.json()['item']['result_ref'] for r in results}) == 1
     tid = next(r.json()['item']['result_ref'] for r in results if r.status_code == 200)
     task = get(api, 'tasks/' + tid)['task']
-    assert task['title'] == 'Final words' and 'Final details' in task['body']
+    assert task['title'] == 'Final words' and 'Final details' in task['request']['text']
     change(api, rid, item, {'text': 'Too late'}, expected=409)
     change(api, rid, item, {'detail': {'owner': 'human:cara'}}, expected=409)
     change(api, rid, item, {'status': 'dismissed'}, expected=409)
@@ -255,7 +255,8 @@ def _future_link_proposal_column_is_redacted_at_every_boundary(api):
     iid = add(api, rid, {'section': 'task', 'text': 'Follow up'})['item']['id']
     with api.app.state.store.transaction() as c:
         # The proposal migration is built separately; exercise its column when present.
-        events.H.add_column(c, 'meeting_items', 'proposed_task_id', 'TEXT')
+        if 'proposed_task_id' not in {r[1] for r in c.execute('PRAGMA table_info(meeting_items)')}:
+            c.execute('ALTER TABLE meeting_items ADD COLUMN proposed_task_id TEXT')
         c.execute('UPDATE meeting_items SET proposed_task_id=? WHERE id=?', (tid, iid))
     proposal = next(i for i in items(api, rid, 'cara-test')['sections']['task'] if i['id'] == iid)
     assert proposal['proposed_task_id'] is None
@@ -309,10 +310,10 @@ def _stale_save_and_send_return_current_without_overwriting_or_creating(api):
     assert items(api, rid)['sections']['task'][0]['detail']['body'] == 'B details'
 
 
-def _participant_grants_end_with_removal_narrowing_and_discard(api):
+def _participant_grants_end_with_removal_and_narrowing(api):
     from backend.tests.helpers.api import post
 
-    for action in ('remove', 'narrow', 'discard'):
+    for action in ('remove', 'narrow'):
         if action == 'narrow':
             rid = record(api, {'private': True, 'participants': ['ben@acme.example', 'cara@acme.example']})
             iid = add(
@@ -337,10 +338,8 @@ def _participant_grants_end_with_removal_narrowing_and_discard(api):
         watch()
         if action == 'remove':
             post(api, f'live-meetings/{mid}/access', {'remove': ['human:ben', 'human:cara']})
-        elif action == 'narrow':
-            post(api, f'meetings/{rid}/review', {'action': 'approve', 'audience': 'participants'})
         else:
-            post(api, f'live-meetings/{mid}/discard', {})
+            post(api, f'meetings/{rid}/review', {'action': 'approve', 'audience': 'participants'})
         assert api.get('/api/v2/tasks/' + tid, headers=headers('ben-test')).status_code in (403, 404)
         assert get(api, 'tasks/' + tid)['task']['id'] == tid
         assert get(api, 'tasks/' + tid, 'cara-test')['task']['id'] == tid
@@ -559,14 +558,14 @@ def _historical_participants_flag_and_edit_route_share_the_effective_audience(ap
     assert items(api, rid)['audience'] == ['human:ana']
 
 
-def _recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
+def _a_send_adopts_a_task_sent_by_another_reader_after_partial_save(api):
     rid = record(api)
     first = add(api, rid, {'section': 'task', 'text': 'A', 'detail': {'owner': 'human:ana'}})['item']
     sent = push(api, rid, first['id'], token='ben-test')['item']
     with api.app.state.store.read() as c:
         count = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
     adopted = push(
-        api, rid, first['id'], {'version': first['version'], 'text': 'Recorder A', 'detail': {'owner': 'human:cara'}}
+        api, rid, first['id'], {'version': first['version'], 'text': 'Edited A', 'detail': {'owner': 'human:cara'}}
     )
     assert adopted == {'item': sent, 'pushed': False}
     assert get(api, 'tasks/' + sent['result_ref'])['task']['title'] == 'A'
@@ -646,7 +645,7 @@ def test_a_meeting_items_edits_sends_and_replays_are_applied_once_and_redacted(a
     _reader_merges_edits_and_send_applies_final_fields_once(api)
     _stale_save_and_send_return_current_without_overwriting_or_creating(api)
     _partial_save_reconciles_an_existing_task_without_creating_another(api)
-    _recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api)
+    _a_send_adopts_a_task_sent_by_another_reader_after_partial_save(api)
     _sent_item_upload_survives_save_and_redacts_reference(api)
     _redacts_mutation_replay_listing_and_outbox(api)
     _future_link_proposal_column_is_redacted_at_every_boundary(api)
@@ -656,7 +655,7 @@ def test_a_saved_meetings_audience_decides_who_reads_its_tasks_and_every_end_of_
     _private_audience_and_participant_read_access(api)
     _task_access_invalidates_items_and_deleted_meeting_emits_one_gone(api)
     _redesign_participants_audience_change_invalidates_access(api)
-    _participant_grants_end_with_removal_narrowing_and_discard(api)
+    _participant_grants_end_with_removal_and_narrowing(api)
     _participant_queries_recheck_source_even_if_a_historical_grant_remains(api)
     _historical_grant_does_not_parse_string_participants_as_people(api)
     _sent_link_and_legacy_item_provenance_both_follow_current_access(api)

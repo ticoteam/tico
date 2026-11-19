@@ -33,3 +33,10 @@ def create(api, **kwargs):
         'credentials',
         {'name': 'PostHog', 'secret': 'phx-synthetic-private-987654', 'env': 'POSTHOG_API_KEY', **kwargs},
     )
+
+
+def explicit_only(api):
+    """Every tool so far with its "Everyone can read" switch off (backend/default_read.py): for a test of what explicit
+    grants alone give."""
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tools SET everyone_reads=0')

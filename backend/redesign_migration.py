@@ -48,20 +48,6 @@ MESSAGE_PART = (
     "\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
     "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"
 )
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, "
-    "automation TEXT, PRIMARY KEY(kind, id))",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    from .hubdb import add_column
-
-    # What became of each object (`outcome` converted | kept | failed, `why`), and when the owner was told of it.
-    for column in ("outcome", "why", "title", "migrated_at", "told"):
-        add_column(c, "redesign_migrated", column, "TEXT")
 
 
 # ---------------------------------------------------------------------------------------------------- reading
@@ -843,7 +829,7 @@ def _convert_one(c, who, mid, obj, group_done):
 # ---------------------------------------------------------------------------------------------------- cutover
 class _System:
     """Who the cutover acts as: the top of the org (owner rights, so scope rules have a person to own them), or the
-    keeper on an install with nobody yet."""
+    Tico on an install with nobody yet."""
 
     def __init__(self, actor, role):
         self.actor, self.role, self.via = actor, role, "cutover"
@@ -853,7 +839,7 @@ def system_who(c):
     from . import automations
 
     top = automations.top_person(c)
-    return _System("human:" + top, "owner") if top else _System(H.KEEPER, "keeper")
+    return _System("human:" + top, "owner") if top else _System(H.TICO_ACTOR, "keeper")
 
 
 def state(c):
@@ -894,7 +880,7 @@ def _tell_owner(c, who, mid):
             return None
         found = H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "human:" + person,
             "Routines and wake rules now run as Automations. " + summary,
             refs={"redesign_migration": mid},
@@ -921,7 +907,9 @@ def _tell_owner(c, who, mid):
         if kept
         else "Check what moved to Automations"
     )
-    task = H.task_create(c, H.KEEPER, title[:300], "\n".join(lines), "human:" + person, lint=False, deduplicate=False)
+    task = H.task_create(
+        c, H.TICO_ACTOR, title[:300], "\n".join(lines), "human:" + person, lint=False, deduplicate=False
+    )
     return task["id"]
 
 
@@ -1055,7 +1043,6 @@ def cutover(store, new=False):
     install with nobody yet, waits for `catch_up`. `new`: the database was made by this start (Store.initialize), so
     it tells no one and logs no warning (`_finish`). Returns the result, or None when it already ran."""
     with store.transaction() as c:
-        ensure(c)
         record = state(c)
         if record.get("state") == "done":
             return None
@@ -1197,7 +1184,7 @@ def _repair_inbox_prompt(c, mark, roster):
     moved_flow = {**flow, "steps": [{**steps[0], "prompt": prompt}]}
     automations._save(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         row["id"],
         automations._checked(c, moved_flow, wake_steps=False),
         flow,

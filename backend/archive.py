@@ -93,8 +93,10 @@ def install_archives(app, store):
         return who.role == "owner" or who.role == "human" and row["owner_id"] == who.actor
 
     @app.get("/api/v2/archives")
-    def listing(request: Request):
-        who = request.state.identity
+    def archives(request: Request, source: str | None = None):
+        """The archives this account may read, or with `source` that one archive's content."""
+        if source:
+            return read_archive(request, source)
         with store.read() as c:
             return {
                 "archives": [
@@ -102,12 +104,11 @@ def install_archives(app, store):
                     for row in c.execute(
                         "SELECT source,digest,imported_at,owner,kind FROM archives ORDER BY imported_at,source"
                     )
-                    if authorized(who, row)
+                    if authorized(request.state.identity, row)
                 ]
             }
 
-    @app.get("/api/v2/archive")
-    def read(request: Request, source: str):
+    def read_archive(request, source):
         with store.read() as c:
             row = c.execute("SELECT * FROM archives WHERE source=?", (source,)).fetchone()
             if not row or not authorized(request.state.identity, row):

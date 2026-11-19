@@ -289,13 +289,39 @@ pub fn wanted(attempt: &Value) -> bool {
 /// Give a turn on a Tico model its relay: the relay's URL and the turn's own token in `env`, in place of anything else
 /// by those names; the key itself only in `vault` (to scrub from what the turn says, and to stop the relay with it).
 /// `separation` is how this runner keeps the turn from the key (`separation()`): with `NoRelay` there is no relay, so a
-/// turn whose own model is a Tico model is refused, and one with only a Tico fallback runs without it.
+/// turn whose own model is a Tico model is refused, and one with only a Tico fallback runs without it. A turn calls
+/// `hand_to_turn_with`, with the answer `prefetch` asked for beside its other preparation.
+#[cfg(test)]
 pub async fn hand_to_turn(
     client: &Client,
     attempt: &Value,
     env: &mut Env,
     vault: &mut Vault,
     separation: Separation,
+) -> Result<(), String> {
+    hand_to_turn_with(client, attempt, env, vault, separation, None).await
+}
+
+/// The Gateway credentials `hand_to_turn` would ask for, asked ahead so the ask runs beside a turn's other
+/// preparation: None when it would not ask (no Gateway, or no relay on this runner).
+pub async fn prefetch(client: &Client, attempt: &Value, separation: Separation) -> Option<Pinned> {
+    if !wanted(attempt) || separation == Separation::NoRelay {
+        return None;
+    }
+    Some(credentials(client, &text_of(&attempt["id"])).await)
+}
+
+/// What `credentials` answers: the key, the Gateway's URL and its bot id, or None when the server pinned none.
+pub type Pinned = Result<Option<(String, String, Option<String>)>, String>;
+
+/// `hand_to_turn` with the answer `prefetch` got, when it asked.
+pub async fn hand_to_turn_with(
+    client: &Client,
+    attempt: &Value,
+    env: &mut Env,
+    vault: &mut Vault,
+    separation: Separation,
+    prefetched: Option<Pinned>,
 ) -> Result<(), String> {
     if !wanted(attempt) {
         return Ok(());
@@ -326,7 +352,11 @@ pub async fn hand_to_turn(
             }
         }
     };
-    let pinned = match credentials(client, &text_of(&attempt["id"])).await {
+    let asked = match prefetched {
+        Some(answer) => answer,
+        None => credentials(client, &text_of(&attempt["id"])).await,
+    };
+    let pinned = match asked {
         Ok(pinned) => pinned,
         Err(e) => {
             release(vault);

@@ -1,6 +1,8 @@
 ---
 name: check-a-deploy-for-regression
 description: Decide whether a deploy made a service slower or more error-prone, by comparing the same hours before and after against a stated threshold, and naming a code change only when one is confirmed.
+metadata:
+  function: engineering
 ---
 # Check a deploy for regression
 

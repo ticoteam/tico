@@ -462,8 +462,9 @@ def spend_lines(result):
 
 @tool(
     "tico_market_spend",
-    "The market by spend: its definition, the segment tree, each segment's size with its range, every "
-    "estimate with its arithmetic and evidence, and the players with dated figures. `tree` is the same as text.",
+    "The market by spend: its definition, the segment tree, each segment's size with its range, "
+    "every estimate with its arithmetic and evidence, and the players with dated figures. `tree` "
+    "is the same as text.",
     {
         "dimension": {
             "type": "string",

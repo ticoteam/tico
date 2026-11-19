@@ -33,37 +33,13 @@ function settingsValue(field: string, value: SettingsValue) {
   if (field === 'manages_reports') return value ? 'On' : 'Off';
   if (field === 'lifecycle') return obj.state ? `${obj.state.charAt(0).toUpperCase()}${obj.state.slice(1)}` : 'Not made';
   if (field === 'compact_at') return SETTINGS_COMPACT_AT.find(([size]) => size === value)?.[1] || String(value);
+  if (field === 'output_style' || field === 'verbosity') return value == null ? 'Default' : String(value);
   if (field === 'placement') return obj.label ? `${obj.label} · ${settingsPersonName(obj.operator)}` : 'not assigned';
   if (field === 'definition') return [obj.display_name, obj.status,
     obj.reports_to ? `reports to ${settingsBotName(obj.reports_to)}` : 'top level'].filter(Boolean).join(' · ');
   return JSON.stringify(value);
 }
 
-interface SettingsCheckpoint {
-  current_objective?: string | null;
-  next_recommended_action?: string | null;
-  open_decisions?: string[] | null;
-}
-
-interface SettingsTransition {
-  id: string;
-  bot: string;
-  kind: string;
-  state: string;
-  error?: string | null;
-  checkpoints?: { checkpoint?: SettingsCheckpoint | null }[] | null;
-  progress?: { prepared: number; total: number } | null;
-}
-
-function settingsCheckpointDetails(transition: SettingsTransition | undefined) {
-  const prepared = (transition?.checkpoints || []).filter(row => row.checkpoint);
-  if (!prepared.length) return '';
-  return `<details><summary>${prepared.length} saved conversation checkpoint${prepared.length === 1 ? '' : 's'}</summary>${prepared.map(row => {
-    const cp = row.checkpoint;
-    return `<div class="transition-progress"><strong>${esc(cp?.current_objective || 'No active objective')}</strong><p>${esc(cp?.next_recommended_action || 'No next action recorded')}</p>
-      ${cp?.open_decisions?.length ? `<p><strong>Open decisions:</strong> ${esc(cp.open_decisions.join(' · '))}</p>` : ''}</div>`;
-  }).join('')}</details>`;
-}
 // A bot's setup changing, in words: only what changed ("Setting up → active", "Now reports to Ana").
 const historyStatus = (v: string | null | undefined) => { const w = statusWord(v); return w.charAt(0).toUpperCase() + w.slice(1); };
 function settingsDefinitionChange(before: SettingsValue, after: SettingsValue) {
@@ -294,8 +270,6 @@ interface SettingsChange {
 }
 interface SettingsHistoryData {
   changes: SettingsChange[];
-  transitions: SettingsTransition[];
-  transitions_truncated?: boolean | undefined;
   next_before?: string | null | undefined;
 }
 interface SettingsHistoryPage {
@@ -304,7 +278,7 @@ interface SettingsHistoryPage {
 }
 // The label of each field in a change's line (the Changes list reads it as "Bot · field").
 const SETTINGS_FIELD_LABEL: Record<string, string> = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
-  compact_at:'compact at',profile:'profile',
+  compact_at:'compact at',output_style:'output style',verbosity:'verbosity',profile:'profile',
   turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',
   manages_reports:'manages its reports', lifecycle:'archive or restore'};
 // A page of changes older than `before` (a page's next_before): the owner's list, or one bot's card with `bot`.
@@ -316,12 +290,9 @@ function settingsHistoryOlder(before: string, bot = ''): Promise<SettingsHistory
 // on its way is dropped when a later draw replaces this one, as a fresh first page after an undo does.
 function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryData = SETTINGS_DATA.history, older: (before: string) => Promise<SettingsHistoryPage> = settingsHistoryOlder) {
   if (!el) return;
-  const changes = history?.changes || [], transitions = history?.transitions || [];
-  const pending = transitions.filter(t => ['preparing','blocked','failed','prepared'].includes(t.state));
-  const transitionById = new Map<string | null | undefined, SettingsTransition>(transitions.map((t): [string, SettingsTransition] => [t.id, t]));
-  const pendingRows = pending.map(t => `<div class="settings-history-row"><span>${avatar(t.bot, 24, stateOf(t.bot))}</span><div><strong>${esc(settingsBotName(t.bot))} · ${t.kind === 'model' ? 'model change' : 'computer move'}</strong><p>${esc(t.state === 'preparing' ? `Checkpointing ${t.progress?.prepared} of ${t.progress?.total} conversations` : t.error || t.state)}</p></div><div class="history-action"><span class="pill ${t.state === 'failed' ? 'fail' : 'waiting'}">${esc(t.state)}</span><button class="ghost" type="button" data-transition-review="${esc(t.id)}">Review</button></div></div>`).join('');
+  const changes = history?.changes || [];
   const rows = changes.map(change => {
-    const e = botRow(change.bot), transition = transitionById.get(change.transition_id);
+    const e = botRow(change.bot);
     const field = SETTINGS_FIELD_LABEL[change.field] || change.field;
     // A change too big for a page comes without its values (backend/settings_admin.py `truncated`).
     const what = change.truncated ? 'Too big to show here.'
@@ -331,27 +302,20 @@ function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryD
     const by = change.via === 'report_manager' ? `${actorLabel(change.actor)}, as its manager` : actorLabel(change.actor);
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>
       <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(agoSaid(change.undone_at))}` : ''}</p></div>
-      <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div>
-      ${settingsCheckpointDetails(transition)}</div>`;
+      <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div></div>`;
   }).join('');
   const more = history?.next_before
     ? '<button class="ghost" type="button" data-settings-older>Show older</button>' : '';
-  // The page leaves out the oldest transitions when they would not fit (backend/settings_admin.py history).
-  const late = history?.transitions_truncated
-    ? '<p class="empty">Some older in-progress changes are not listed here.</p>' : '';
-  el.innerHTML = `${pendingRows || late ? `<h3>In progress</h3>${pendingRows}${late}` : ''}`
-    + `${rows || '<div class="empty">No settings changes yet.</div>'}${more}`;
+  el.innerHTML = `${rows || '<div class="empty">No settings changes yet.</div>'}${more}`;
   const drawn = el._settingsDrawn = {};
   el.onclick = async (event: Event) => {
-    const review = eventElement(event)?.closest<HTMLElement>('[data-transition-review]');
-    if (review) { settingsWatchTransition(review.dataset.transitionReview!); return; }
     const showOlder = eventElement(event)?.closest<HTMLButtonElement>('[data-settings-older]');
     if (showOlder) {
       showOlder.disabled = true;
       try {
         const next = await older(history.next_before ?? '');
         if (el._settingsDrawn === drawn) renderSettingsHistory(el, {changes: [...changes, ...(next.changes || [])],
-          transitions, transitions_truncated: history.transitions_truncated, next_before: next.next_before}, older);
+          next_before: next.next_before}, older);
       } catch (error) { showOlder.disabled = false; toast(errorMessage(error, ''), true); }
       return;
     }

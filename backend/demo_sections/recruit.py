@@ -4,7 +4,7 @@ flight and one seat filled from a template last week."""
 from datetime import timedelta
 
 from .. import hubdb as H
-from .. import lifecycle
+from .. import lifecycle, question_marks
 from ..auth import Identity
 from ..demo_seed import version
 from ..scheduler import stamp
@@ -127,7 +127,7 @@ def seed(b):
             b.at(days=row["changed"])
             H.task_update(c, RECRUITER, task["id"], note=row["note"], seen_version=version(c, task["id"]))
             if row.get("ask"):
-                H.task_ask(c, RECRUITER, task["id"], HUMAN, row["ask"], kind="ok", seen_version=version(c, task["id"]))
+                question_marks.ask(c, RECRUITER, task["id"], HUMAN, row["ask"], checked=False)
             if row.get("snooze"):
                 why, days = row["snooze"]
                 until = stamp(b.now + timedelta(days=days))

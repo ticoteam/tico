@@ -20,6 +20,7 @@ from backend import hubdb as H
 from backend.store import Problem, encode
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
+from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.github_app import (
     EVENT_PERMISSIONS,
     FakeGitHub,
@@ -284,20 +285,18 @@ def test_what_github_reports_of_the_installation_is_kept_for_health_and_forgotte
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,)).fetchone()
 
 
-def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_write_one(api, gh):
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_a_meeting_turn_uses_the_bots_existing_repository_grants(api, gh, visibility):
     connect(api)
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
-        for rid, visibility in (("m-private", "private"), ("m-team", "team")):
-            c.execute(
-                "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at,visibility) "
-                "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)",
-                (rid, H.now(), H.now(), H.now(), visibility),
-            )
-        conv = H.open_conversation(c, H.KEEPER, ["bot:cmo"], room_key="live-meeting:m-private")
-        H.feed(
-            c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}}
+        c.execute(
+            "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at,visibility) "
+            "VALUES('m-plan','human:ana','Plan','live',30000,?,?,?,?)",
+            (H.now(), H.now(), H.now(), visibility),
         )
+        conv = H.open_conversation(c, H.TICO_ACTOR, ["bot:cmo"], room_key="live-meeting:m-plan")
+        H.feed(c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-plan", "turn_id": "t1"}})
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
@@ -306,12 +305,8 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
         )
     r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200, r.text
-    assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "read"
-    assert {t["access"] for t in r.json()["tokens"]} == {"read"}
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE live_meetings SET visibility='team' WHERE id='m-private'")
-    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
-    assert r.status_code == 200 and gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
+    assert {t["access"] for t in r.json()["tokens"]} == {"write"}
 
 
 def test_turn_token_reads_pull_request_checks_and_statuses(api, gh):
@@ -382,7 +377,7 @@ def test_per_call_token_reuses_cache_without_writes_but_turn_start_keeps_45_minu
     runner_token(api, "cpo")
     clock = [time.time()]
     gh.clock = lambda: clock[0]
-    monkeypatch.setattr(G.time, "time", lambda: clock[0])
+    monkeypatch.setattr(G, "_now", lambda: clock[0])
 
     started = turn_token(api)
     assert started.status_code == 200, started.text
@@ -453,13 +448,24 @@ def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypa
     store, writes = api.app_state.store, []
     original_transaction = store.transaction
     monkeypatch.setattr(store, "transaction", lambda: writes.append(True) or original_transaction())
-    release, answer = threading.Event(), gh.__call__
+    release, answer, inside = threading.Event(), gh.__call__, threading.Event()
 
     def slow(request):
         if request.url.path.endswith("/access_tokens"):
+            inside.set()
             release.wait(5)
         return answer(request)
 
+    # Counts the callers that reach mint (the real one runs), so the answer waits until all six are in.
+    real_mint, callers, all_callers = service.mint, [], threading.Event()
+
+    def counted_mint(*args, **kwargs):
+        callers.append(True)
+        if len(callers) == 6:
+            all_callers.set()
+        return real_mint(*args, **kwargs)
+
+    monkeypatch.setattr(service, "mint", counted_mint)
     monkeypatch.setattr(G, "TRANSPORT", httpx.MockTransport(slow))
     mints_before, tokens = len(gh.of("/access_tokens")), []
     threads = [
@@ -468,10 +474,8 @@ def test_concurrent_misses_share_one_mint_without_a_write_lock(api, gh, monkeypa
     ]
     for thread in threads:
         thread.start()
-    deadline = time.time() + 5
-    while len(gh.of("/access_tokens")) == mints_before and time.time() < deadline:
-        time.sleep(0.01)
-    time.sleep(0.1)
+    assert inside.wait(10), "no mint request reached GitHub"
+    assert all_callers.wait(10), f"only {len(callers)} of 6 callers reached mint"
     release.set()
     for thread in threads:
         thread.join(5)
@@ -961,20 +965,15 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
             "app": bytes(state.github_app.row(c)["ciphertext"]),
             "entra": bytes(c.execute("SELECT ciphertext FROM directory_credentials").fetchone()[0]),
         }
-    from backend import health, slack_app
+    from backend import health
 
-    slack_app.save(
-        state.store, state.store.settings, "human:ana", "xoxb-synthetic-0000000000", "xapp-synthetic-0000000000"
-    )
     enable_kms(api)
     with state.store.read() as c:
         state.vault.cipher.key(c)  # the vault's KMS data key, as the first save under KMS makes it
-        # Nothing is lost (github-app.key and slack.key still open them), but Health says which files are still needed.
+        # Nothing is lost (github-app.key still opens them), but Health says which files are still needed.
         check = health._sealed_secrets(c, state.store.settings, state.github_app)
         assert check["status"] == "info", check
-        assert (
-            "2 secrets still need github-app.key" in check["summary"] and "1 still needs slack.key" in check["summary"]
-        )
+        assert "2 secrets still need github-app.key" in check["summary"]
         assert "keep" in check["summary"].lower()
         assert bytes(state.github_app.row(c)["ciphertext"]) == before["app"]  # Health only looks
     caplog.set_level("INFO")
@@ -996,14 +995,6 @@ def test_secrets_sealed_before_kms_was_set_open_with_github_app_key_and_are_rese
         assert state.github_app.private_key(c, state.github_app.row(c)) == PEM
     assert not [r for r in caplog.records if "re-sealed" in r.getMessage().lower()]
     assert state.github_app.key_file().read_bytes() == legacy  # left as it was, for an older backup's rows
-    with state.store.read() as c:
-        check = health._sealed_secrets(c, state.store.settings, state.github_app)
-    assert (
-        check["status"] == "info"
-        and "github-app.key" not in check["summary"]
-        and "1 secret still needs slack.key" in check["summary"]
-    )
-    assert slack_app.load(state.store, state.store.settings, state.vault)["bot_token"] == "xoxb-synthetic-0000000000"
     with state.store.read() as c:
         assert health._sealed_secrets(c, state.store.settings, state.github_app) is None  # every one re-sealed: clear
 
@@ -1707,28 +1698,6 @@ def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     )
 
 
-def test_an_app_connected_before_account_types_is_an_organization():
-    """The migration adds the column with the organization default, to both tables, once; a fresh database gets none
-    of its own tables from it (the module code makes them after the migrations)."""
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(G.__file__).parent / "migrations" / "20261107145006_github_account_type.py"
-    spec = importlib.util.spec_from_file_location("github_account_type", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        assert c.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
-        c.execute("CREATE TABLE github_app(id TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("INSERT INTO github_app VALUES('app','Acme')")
-        migration.up(c)
-        migration.up(c)
-        assert c.execute("SELECT org,account_type FROM github_app").fetchone() == ("Acme", "Organization")
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} == {"nonce", "org", "account_type"}
-
-
 CALLBACK = "/api/v2/github/app/callback"
 FINISH = "/api/v2/github/app/finish"
 
@@ -1836,3 +1805,77 @@ def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the
     assert done.status_code == 302, done.text
     assert done.headers["location"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
     assert len(gh.of("/conversions")) == 1
+
+
+# What no answer of the connect routes carries: the App's key, client secret and webhook secret (FakeGitHub's
+# conversion), and any installation or user token.
+SECRETS = ("BEGIN", "PRIVATE KEY", "whs", '"cs"', "ghs_", "gho_", "ghr_")
+
+
+def test_the_connect_routes_answer_their_v2_shapes_and_never_a_secret(api, gh):
+    document = api.get("/api/v2/openapi.json", headers=auth()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def answer(operation, response):
+        assert response.status_code == 200, (operation, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text)
+        assert not [s for s in SECRETS if s in response.text], (operation, response.text)
+        return response.json()
+
+    owner = {**auth(), "Idempotency-Key": str(uuid.uuid4())}
+    assert answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth())) == {
+        "connected": False,
+        "app_name": "Acme Tico",
+    }
+    page = api.get("/api/v2/github/app/manifest", params={"org": "Acme", "html": "true"}, headers=auth())
+    assert page.headers["content-type"].startswith("text/html")  # the hand-off page, which posts itself to GitHub
+    assert "action='https://github.com/organizations/Acme/settings/apps/new?state=" in page.text
+    asked = answer("getGitHubAppSetup", api.get("/api/v2/github/app/manifest", params={"org": "Acme"}, headers=auth()))
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])
+    assert api.get(CALLBACK, params={"code": code, "state": asked["state"]}, headers=auth()).status_code == 302
+    assert api.get("/api/v2/github/app/installed", headers=auth()).headers["location"] == (
+        "/#/tools/github?github=connected"
+    )
+    runner_token(api, "cpo")
+    assert turn_token(api).json()["token"].startswith("ghs_")  # an installation token the server now holds
+    state = answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth()))
+    assert state["connected"] and state["installed"] and state["install_url"] == G.INSTALL_PATH
+    answer("checkGitHubAppPermissions", api.post("/api/v2/github/app/check-permissions", headers=owner))
+    assert answer("replaceGitHubAppLostKey", api.post("/api/v2/github/app/replace-lost-key", headers=owner)) == {
+        "replaced": False  # the key is there: nothing is dropped
+    }
+    answer("disconnectGitHubApp", api.post("/api/v2/github/app/disconnect", headers=owner))
+
+    # A personal account, whose return came back with no owner session: the owner finishes it, then authorizes Tico.
+    personal(gh, "ana-dev")
+    asked = answer(
+        "getGitHubAppSetup", api.get("/api/v2/github/app/manifest", params={"org": "ana-dev"}, headers=auth())
+    )
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])
+    assert api.get(CALLBACK, params={"code": code, "state": asked["state"]}).json()["parked"] is True
+    done = answer("finishGitHubApp", api.post(FINISH, json={"state": asked["state"]}, headers=owner))
+    assert done["install_url"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
+    answer("getGitHubAuthorizeLink", api.get("/api/v2/github/app/authorize-link", headers=auth()))
+    authorize(api)
+    assert gh.issued  # the owner's user token is held now
+    assert answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth()))["authorized"] is True
+
+
+def test_only_the_owner_reaches_the_connect_routes(api, gh):
+    """A signed-in person who is not the Owner is refused every connect route, and nothing changes."""
+    connect(api)
+    head = {**auth("person-test"), "Idempotency-Key": str(uuid.uuid4())}
+    for method, path, body in (
+        ("get", "/api/v2/github/app", None),
+        ("post", "/api/v2/github/app/check-permissions", None),
+        ("get", "/api/v2/github/app/manifest", None),
+        ("post", "/api/v2/github/app/replace-lost-key", None),
+        ("post", FINISH, {"state": "any"}),
+        ("get", "/api/v2/github/app/authorize-link", None),
+        ("post", "/api/v2/github/app/disconnect", None),
+    ):
+        r = api.get(path, headers=head) if method == "get" else api.post(path, json=body, headers=head)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", (path, r.text)
+    state = api.get("/api/v2/github/app", headers=auth()).json()
+    assert state["connected"] and state["slug"] == "acme-tico"  # nothing was disconnected or replaced

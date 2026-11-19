@@ -10,13 +10,14 @@ import uuid
 from typing import Literal
 
 from fastapi import Request
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import hubdb as H
 from . import read_cache
 from .auth import validate_identity
 from .store import Problem
 from . import bot_settings as BS
+from .api_contract import KEYLESS, api_v2
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -89,31 +90,6 @@ def release_cleared_overrides(c):
         "UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
         "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''"
     )
-
-
-def migrate(c):
-    if metadata(c, 'repositories-access-migrated').get('done'):
-        return
-    for bot, repos in metadata(c, 'github-extra-repos').items():
-        if not repos:
-            continue
-        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        if row:
-            config = json.loads(row[0] or '{}')
-            config['repo_access_mode'] = 'chosen'
-            BS.write(c, bot, config)
-        for repo in repos:
-            c.execute(
-                'INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
-                'ON CONFLICT(full_name) DO UPDATE SET enabled=1',
-                (uuid.uuid4().hex, repo, H.now()),
-            )
-            c.execute(
-                "INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
-                (bot, repo),
-            )
-
-    save_metadata(c, 'repositories-access-migrated', {'done': True})
 
 
 def unreachable(c):
@@ -207,16 +183,34 @@ def note_asked(c, repository):
         save_metadata(c, ASKED, asked)
 
 
+def _owner(c, default_owner=''):
+    """The owner a bare bot repo name is under: the App's organization, else the configured one."""
+    try:
+        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    return (row['org'] if row else '') or default_owner
+
+
 def note_chosen(c, repo, default_owner=''):
     """A person pointed a bot at `repo` (a stored bot repo: name, owner/name or URL): Tico uses it from now on,
     even if someone else made it (home)."""
     from .github_app import repo_of
 
-    try:
-        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    note_repository(c, CHOSEN, repo_of(repo, (row['org'] if row else '') or default_owner))
+    note_repository(c, CHOSEN, repo_of(repo, _owner(c, default_owner)))
+
+
+def note_named(c, repo, defaults, default_owner=''):
+    """A bot is made with `repo`. When it is not one of the names Tico gives a bot unasked (`defaults`, such as
+    `bot-<slug>`, which a form fills in by itself), someone named it, so it is chosen, as Settings > Bots records a
+    repository a person sets there. A default name is not: one GitHub had before the bot may be another company's
+    (Homes)."""
+    from .github_app import repo_of
+
+    owner = _owner(c, default_owner)
+    name = str(repo_of(repo, owner) or '').lower()
+    if '/' in name and name not in {str(repo_of(d, owner) or '').lower() for d in defaults if d}:
+        note_repository(c, CHOSEN, name)
 
 
 def made_here(c, repository):
@@ -276,6 +270,124 @@ class Homes:
 def bot_home(c, bot, repository):
     """Homes.why for one bot (id) whose own repository `repository` is: the bot's age is its own."""
     return Homes(c).why(bot, repository)
+
+
+# A bot that moved here from another server is a new bot with an old repository: GitHub made `emp-<slug>` months
+# before the bot existed here, so Homes reads it as another company's and the bot commits on its computer only (TIDY,
+# Nov 13-18). A move names its old server (`moved_from` on POST /api/v2/bots), which records the repository as chosen;
+# `heal` gives the bots moved before that their repositories back, and `claim` is a person's one tap for the rest.
+CLAIMED = 'bot.repository_claimed'  # the audit row of either, with the repository and who or what claimed it
+BOT_REPOSITORIES = (
+    "SELECT b.id, b.slug, b.state, b.created_at, bc.repo, s.folder FROM bots b JOIN bot_config bc ON bc.bot=b.id "
+    "LEFT JOIN bot_settings s ON s.bot_id=b.id WHERE b.state<>'archived' AND coalesce(s.shared_from,'')='' "
+    "AND trim(coalesce(bc.repo,''))<>'' ORDER BY b.id"
+)
+
+
+def own_repositories(c, org):
+    """{owner/name lowercased: [bot row, ...]}: each repository a bot here has as its own. A branch is left out (its
+    row repeats its original's repository); two bots on one name is a list of two."""
+    from .github_app import repo_of
+
+    out = {}
+    for row in c.execute(BOT_REPOSITORIES):
+        name = str(repo_of(row['repo'], org) or '').lower()
+        if name:
+            out.setdefault(name, []).append(row)
+    return out
+
+
+def _names_of(c, bots):
+    """{bot id: names Tico gives its repository unasked}: `bot-`/`emp-` with its slug, its id or a slug it was renamed
+    from (as the backfill 20261117210532 reads them), and its checkout's folder."""
+    renamed = {}
+    if bots:
+        marks = ','.join('?' * len(bots))
+        for target, was in c.execute(
+            "SELECT target, json_extract(detail,'$.from') FROM events WHERE action='bot.renamed' "
+            f"AND target IN ({marks}) AND json_valid(detail)",
+            [b['id'] for b in bots],
+        ):
+            if was:
+                renamed.setdefault(target, set()).add(str(was))
+    out = {}
+    for b in bots:
+        names = {str(b['slug'] or ''), str(b['id'])} | renamed.get(b['id'], set())
+        out[b['id']] = {(prefix + n).lower() for n in names if n for prefix in ('bot-', 'emp-')} | (
+            {str(b['folder']).lower()} if b['folder'] else set()
+        )
+    return out
+
+
+def _claimed(c, actor, bot, name, how):
+    note_repository(c, CHOSEN, name)
+    H.event(c, actor, CLAIMED, bot, {'repository': name, 'how': how})
+
+
+def heal(c, org, listed):
+    """Give a moved bot back its repository, from what the repository listing (`listed`: {owner/name lowercased:
+    GitHub's row}) and this company's own records say, without a person. A repository Homes leaves out as another
+    company's (NOT_OURS) is recorded as chosen when every one of these holds:
+
+    - it is in the App's organization and the App reaches it (it is listed);
+    - its name is one Tico gives this bot unasked (`bot-`/`emp-` with its slug, id or a former slug, or its folder),
+      never a product repository's;
+    - the bot's own record names it in full (`owner/name` or a GitHub URL), which Tico never writes by itself: the Add
+      bot form fills in a bare `bot-<slug>`, creation a bare folder. A person or their agent set this bot up with that
+      repository (a move recreates bots this way);
+    - no other bot here has it as its own;
+    - the bot is on here (a paused or planned copy may be the stand-in for one still running somewhere else);
+    - GitHub has had no push to it since the bot was made here. Tico gave this bot no token for it, so a later push
+      came from somewhere else: an old copy may still be running, and two copies must never push to one repository.
+
+    Anything else waits for a person's claim (`claim`). [(bot, owner/name)] it claimed."""
+    owners = own_repositories(c, org)
+    homes = Homes(c)
+    candidates = [
+        (name, rows[0])
+        for name, rows in owners.items()
+        if len(rows) == 1
+        and rows[0]['state'] == 'active'
+        and '/' in str(rows[0]['repo'])
+        and name in listed
+        and name.split('/')[0] == org.lower()
+        and homes.why(rows[0]['id'], name) == NOT_OURS
+    ]
+    if not candidates:
+        return []
+    names = _names_of(c, [row for _, row in candidates])
+    out = []
+    for name, row in candidates:
+        if name.split('/', 1)[1] not in names[row['id']]:
+            continue
+        born, pushed = H.parse_ts(row['created_at']), H.parse_ts(listed[name].get('pushed_at'))
+        if not born or not pushed or (pushed - born).total_seconds() > MADE_BEFORE_SLACK:
+            continue
+        _claimed(c, H.TICO_ACTOR, row['id'], name, 'moved')
+        out.append((row['id'], name))
+    return out
+
+
+def claim(c, org, actor, bots=None):
+    """A person says the repositories Homes leaves out as another company's are this company's (Health's Bot history
+    line, `tico repo claim`): each becomes chosen, as pointing the bot at it in Settings > Bots would. `bots` (ids)
+    limits it to those. A repository two bots here have as their own is left alone (both would push to it): point one
+    elsewhere first. {"claimed": [{bot, repository}], "left": [{bot, repository, why}]}."""
+    homes = Homes(c)
+    claimed, left = [], []
+    for name, rows in sorted(own_repositories(c, org).items()):
+        for row in rows:
+            if bots is not None and row['id'] not in bots:
+                continue
+            why = homes.why(row['id'], name)
+            if why == NOT_OURS and len(rows) > 1:
+                why = 'shared'
+            if why == NOT_OURS:
+                _claimed(c, actor, row['id'], name, 'person')
+                claimed.append({'bot': row['slug'] or row['id'], 'repository': name})
+            elif why == 'shared' or (why and bots is not None):
+                left.append({'bot': row['slug'] or row['id'], 'repository': name, 'why': why})
+    return {'claimed': claimed, 'left': left}
 
 
 def _botops():
@@ -605,6 +717,10 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     lost = stopped(before, after)
     detail = {'before': before, 'after': after, **lost, **({'default': True} if default else {})}
     H.event(c, actor, 'bot.repos_changed', bot, detail)
+    # An access request for a repository this bot reaches now closes itself (backend/access_requests.py).
+    from . import access_requests
+
+    access_requests.settled(c, subject='bot:' + bot, resource_type='repository', actor=actor)
     return {**after, **lost}
 
 
@@ -815,7 +931,7 @@ def card_words(c, settings, auth, who, bot, body):
 
 def plain_change(name, before, result):
     """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
-    Engineer: read-only on tico (was write). Loses access to tico-pages and tico-recorder.` `before` is
+    Engineer: read-only on tico (was write). Loses access to tico-pages and tico-docs.` `before` is
     `access()` before the change, `result` what `set_access` returned."""
     was = {r['full_name'].lower(): r for r in before['effective']}
     now = {r['full_name'].lower(): r for r in result['effective']}
@@ -1034,6 +1150,7 @@ def _sync(service):
             c, CREATED_ON_GITHUB, {r['full_name'].lower(): r['created_at'] for r in repos if r.get('created_at')}
         )
         save_selection(c, chosen)
+        heal(c, row['org'], {r['full_name'].lower(): r for r in repos})
         save_metadata(c, 'repositories-synced', {'day': H.now()[:10]})
     repository_health(service)
     return 'synced'
@@ -1263,6 +1380,11 @@ class RepoSettings(Contract):
     new_bot_default: Literal['own', 'all']
 
 
+class RepoClaim(Contract):
+    # Slugs or ids; left out, every bot whose repository Tico leaves alone as made by someone else.
+    bots: list[str] | None = Field(default=None, max_length=500)
+
+
 def install(app, store, service):
     def human(request, change=False):
         who = request.state.identity
@@ -1300,18 +1422,54 @@ def install(app, store, service):
                 'github_installed': bool(github_row and github_row['installation_id']),
             }
 
-    @app.get('/api/v2/repositories')
+    @app.get(
+        '/api/v2/repositories', **api_v2("Repositories", "listRepositories", "Team repositories", "RepositoryList")
+    )
     def repo_list(request: Request):
         human(request)
         return listing()
 
-    @app.post('/api/v2/repositories/refresh')
+    @app.post(
+        '/api/v2/repositories/refresh',
+        **api_v2("Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
+    )
     def refresh(request: Request):
         human(request, True)
         sync(service)
         return listing()
 
-    @app.put('/api/v2/repositories/settings')
+    @app.post(
+        '/api/v2/repositories/claim',
+        **api_v2(
+            "Repositories",
+            "claimBotRepositories",
+            "Claim bot repositories made elsewhere",
+            "RepositoryClaim",
+            description="The Owner or an admin says the bot repositories Tico leaves alone as made by someone else "
+            "(Health's Bot history line) are this company's: each is used from now on, as pointing the bot at it in "
+            "Settings > Bots would. `bots` limits it to those bots. A repository two bots have as their own is left "
+            "(`why: shared`).",
+            idempotency=KEYLESS,
+        ),
+    )
+    def claim_repositories(request: Request, body: RepoClaim):
+        who = human(request, True)
+        with store.transaction() as c:
+            row = service.row(c)
+            wanted = None
+            if body.bots is not None:
+                wanted = set()
+                for ref in body.bots:
+                    found = H.resolve_bot(c, ref)
+                    if not found:
+                        raise Problem('not_found', f'No bot {ref}', 404)
+                    wanted.add(found['id'])
+            return claim(c, row['org'] if row else store.settings.github_owner, who.actor, wanted)
+
+    @app.put(
+        '/api/v2/repositories/settings',
+        **api_v2("Repositories", "setRepositoryDefaults", "New bot repository default", idempotency=KEYLESS),
+    )
     def settings(request: Request, body: RepoSettings):
         who = human(request, True)
         with store.transaction() as c:
@@ -1320,7 +1478,10 @@ def install(app, store, service):
             H.event(c, who.actor, 'repositories.changed', 'settings', {'before': before, 'after': body.model_dump()})
         return body.model_dump()
 
-    @app.put('/api/v2/repositories/{owner}/{repo}')
+    @app.put(
+        '/api/v2/repositories/{owner}/{repo}',
+        **api_v2("Repositories", "updateRepository", "Tick or edit a repository", idempotency=KEYLESS),
+    )
     def update(request: Request, owner: str, repo: str, body: RepoUpdate):
         who = human(request, True)
         name = owner + '/' + repo
@@ -1340,6 +1501,10 @@ def install(app, store, service):
             c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
+            if body.enabled:  # bots on All ticked repos reach it now
+                from . import access_requests
+
+                access_requests.settled(c, who, resource_type='repository', resource_id=after['full_name'])
         return after
 
     def botops(request, bot):
@@ -1356,7 +1521,10 @@ def install(app, store, service):
             validate_identity(c, who)
         return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
 
-    @app.get('/api/v2/bots/{bot}/repositories')
+    @app.get(
+        '/api/v2/bots/{bot}/repositories',
+        **api_v2("Repositories", "getBotRepositories", "Bot repository access", "BotRepositories"),
+    )
     def bot_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
@@ -1367,7 +1535,12 @@ def install(app, store, service):
             row = service.row(c)
             return access(c, bot, row['org'] if row else store.settings.github_owner)
 
-    @app.put('/api/v2/bots/{bot}/repositories')
+    @app.put(
+        '/api/v2/bots/{bot}/repositories',
+        **api_v2(
+            "Repositories", "setBotRepositories", "Set bot repository access", "BotRepositories", idempotency=KEYLESS
+        ),
+    )
     def bot_set(request: Request, bot: str, body: RepoAccessUpdate):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)

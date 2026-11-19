@@ -1,5 +1,5 @@
 /* ui/app/task-props.ts — A task's facts in its Details, Linear style: one click-to-edit line each (Stage, Owner, Part of,
-   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/pipelines-v3.md S4, S5).
+   Human, Asked by, Due, Tags, Goal…), their menus and pickers, and the task's ⋯ menu (docs/dev/pipelines-v3.md S4, S5).
    Used by the task's window (#task-modal); each change saves at once with the task's version.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -32,29 +32,7 @@ interface TaskDialog extends HTMLDialogElement {
 }
 // The rights a signed-in person has on one task (taskPropRights).
 interface PropRights { mover: boolean; party: boolean; live: boolean; edit: boolean; links: boolean; reopen: boolean; snooze: boolean; }
-// The one menu every row opens: its own element, with the anchor and the Enter handler it was given.
-interface PropPop extends HTMLDivElement { anchor?: HTMLElement | null; onEntry?: ((v: string) => void) | null; }
-interface PropMenuItem {
-  value?: string;
-  text: string;
-  html?: string;
-  checked?: boolean;
-  danger?: boolean;
-  actor?: string;
-  /** A thin line above this item: the menu's last group (Delete, after a separator). */
-  sep?: boolean;
-}
-interface PropMenuOptions<T extends PropMenuItem> {
-  label: string;
-  items?: T[];
-  find?: string;
-  entry?: string;
-  none?: string;
-  onPick?: (it: T) => unknown;
-  onEntry?: (v: string) => unknown;
-  /** The items for what is typed in the find box, from the server, in place of filtering the ones shown. */
-  search?: (q: string) => Promise<T[]>;
-}
+// The one menu every row opens (propMenu, PropPop, PropMenuItem, PropMenuOptions) is in prop-menu.ts.
 // A "…" menu entry: a label and what it does.
 /** `read`: the item only moves, copies or shows, so a bot's read-only view (view-only.ts) keeps it; the rest are left out there. */
 interface PropMenuAction { text: string; danger?: boolean; run: () => unknown; icon?: string; sep?: boolean; checked?: boolean; read?: boolean; }
@@ -73,15 +51,17 @@ function snoozeItems(): {value: string; text: string; html: string}[] {
   return ([['Tomorrow', day(1)], ['Next week', day(monday)], ['In two weeks', day(14)], ['In a month', day(30)]] satisfies [string, Date][]).map(([text, at]) =>
     ({value: at.toISOString(), text, html: `<span>${esc(text)}</span><span class="tl-mi-sub">${esc(at.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</span>`}));
 }
-function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
-  propMenu(d, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
-    onPick: it => void save('snooze', {snooze: it.value}),
+/** Snooze until: the choices, or a typed date; `run` takes the time picked. A task's Snooze, and a stage's Snooze all…. */
+function snoozePick(host: HTMLElement, anchor: HTMLElement, run: (until: string) => unknown): void {
+  propMenu(host, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
+    onPick: it => run(it.value),
     onEntry: v => {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim()), at = m && new Date(+m[1]!, +m[2]! - 1, +m[3]!);
       if (!at || at.getDate() !== +m![3]! || at <= new Date()) { toast('Pick a date in the future, like 2026-11-02', true); return; }
-      void save('snooze', {snooze: at.toISOString()});
+      run(at.toISOString());
     }});
 }
+const snoozeMenu = (d: TaskDialog, anchor: HTMLElement, save: TaskSave): void => snoozePick(d, anchor, until => void save('snooze', {snooze: until}));
 // The task window (task-modal.ts) as its tabs and sections read it: the same dialog, typed with what that file keeps on it.
 const taskModalOf = (d: TaskDialog) => d as ModalDialog;
 // What the window passes in that this file does not draw: the Runs on row (task-modal.ts) and the goal's id.
@@ -102,11 +82,23 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   const rows: string[] = [];
   // Stage: the pipeline and the stage it is in (Done or Closed once finished); its menu moves it back or on.
   const stageName = taskStatusLabel(t), pipeName = t.pipeline?.name || '';
-  rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
+  // In a side stage: "↳ Rejected · from Bot QA · 2h", and Send back, a plain move to the stage it came from.
+  const from = t.status === 'open' ? taskCameFrom(t) : null;
+  if (from) {
+    const said = [`from ${from.name}`, ageShort(taskStageSince(t))].filter(Boolean).join(' · ');
+    rows.push(row('stage', 'Stage', `${SIDE_MARK}${txt(stageName)}<span class="prop-txt prop-from">· ${esc(said)}</span>`,
+      {edit: r.edit && !!t.pipeline_id, words: `Side stage ${stageName} · ${said}`,
+        extra: r.edit ? `<button type="button" class="ghost small prop-back" data-prop-send-back="${esc(from.id)}">Send back</button>` : ''}));
+  } else rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
     {edit: r.edit && !!t.pipeline_id, words: stageName}));
   // Owner. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
+  const developer = t.assignee_id;
+  if (developer && developer !== t.owner_id) {
+    const name = actorLabel(developer);
+    rows.push(row('developer', 'Developer', actorFace(developer, 16) + txt(name), {words: name}));
+  }
   // Code: its worktrees and pull requests, one line each (task-code.ts taskRailPaint fills it from the full task).
   rows.push('<div class="prop prop-code" data-prop-row="code" hidden><span class="prop-k" aria-hidden="true">Code</span><div class="prop-vwrap" data-task-code aria-label="Code"></div></div>');
   // From: the task it was filed from, by its short name (P213, #304) when it has one, else its title; a link to it, its
@@ -164,6 +156,10 @@ function taskPropsHTML(t: PropTask, more: PropMore = {}): string {
   }
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
+// When a task entered its stage: its own read's (stage_since), else its row's on the Tasks page while that row is in the
+// same stage.
+const taskStageSince = (t: PropTask): string | null =>
+  t.stage_since || TASKS_ST?.tasks.find(x => x.id === t.id && x.stage_id === t.stage_id)?.stage_since || null;
 // The goal row's title, read once per goal (tasks.ts keeps them in GOAL_TITLES).
 async function taskGoalRowFill(root: ParentNode): Promise<void> {
   const a = root.querySelector<HTMLAnchorElement>('[data-goal-row]'); if (!a) return;
@@ -300,86 +296,11 @@ function taskPropsMsgPaint(d: TaskDialog): void {
   box.append(' ', anyway);
 }
 
-// ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
-function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
-  let pop: PropPop | null = $('.prop-pop', d);
-  if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
-  if (pop?.anchor && pop.anchor !== anchor) pop.anchor.setAttribute('aria-expanded', 'false');   // only one menu, only one expanded
-  if (!pop) {
-    const el = document.createElement('div') as PropPop;
-    pop = el;
-    el.className = 'tl-pop prop-pop'; el.popover = 'auto';
-    el.addEventListener('toggle', ev => {
-      if (ev.newState !== 'closed') return;
-      const a = el.anchor;
-      if (a?.isConnected && (el.contains(document.activeElement) || document.activeElement === document.body)) a.focus();
-      el.dispatchEvent(new Event('menuclosed'));
-    });
-    el.addEventListener('keydown', ev => {
-      const list = [...el.querySelectorAll<HTMLElement>('.tl-mi')].filter(b => !b.hidden);
-      const input = $('.tl-menu-q', el) as HTMLInputElement | null;
-      const at = list.indexOf(document.activeElement as HTMLElement);
-      const go = (i: number): void => { ev.preventDefault(); ev.stopPropagation(); list[Math.max(0, Math.min(list.length - 1, i))]?.focus(); };
-      if (ev.key === 'ArrowDown') return go(at < 0 ? 0 : at + 1);
-      if (ev.key === 'ArrowUp') { if (at <= 0 && input) { ev.preventDefault(); ev.stopPropagation(); input.focus(); return; } return go(at - 1); }
-      if (ev.key === 'Home' && at >= 0) return go(0);
-      if (ev.key === 'End' && at >= 0) return go(list.length - 1);
-      if (ev.key === 'Enter' && input && document.activeElement === input) {
-        ev.preventDefault(); ev.stopPropagation();
-        if (el.onEntry && input.value.trim()) el.onEntry(input.value.trim());
-        else list[0]?.click();
-      }
-      if (['j', 'k', 'x', 'c', '/'].includes(ev.key)) ev.stopPropagation();   // the list's keys wait until the menu closes
-    });
-    d.append(el);
-  }
-  pop.anchor = anchor;
-  pop.onEntry = onEntry ? v => { pop.hidePopover(); onEntry(v); } : null;
-  // A menu with a find box is a group of plain buttons (a role=menu holds only menu items); either way ↑/↓ move.
-  const menu = !(find || entry);
-  const state = (it: PropMenuItem): string => it.checked == null ? '' : menu ? ` aria-checked="${it.checked ? 'true' : 'false'}"` : it.checked ? ' aria-current="true"' : '';
-  const list = (rows: T[]) => `<div class="tl-menu-list">${rows.map((it, i) => `${it.sep ? '<div class="tl-menu-sep" role="separator"></div>' : ''}<button type="button"${menu ? ` role="${it.checked != null ? 'menuitemradio' : 'menuitem'}"` : ''}${state(it)} class="tl-mi${it.danger ? ' danger' : ''}" data-pick="${i}"${it.value != null ? ` data-prop-pick="${esc(it.value)}"` : ''} data-label="${esc(String(it.text || '').toLowerCase())}">${it.html || esc(it.text)}${it.checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>
-    ${rows.length || !none ? '' : `<div class="tl-menu-none">${esc(none)}</div>`}`;
-  pop.innerHTML = `<div class="tl-menu" role="${menu ? 'menu' : 'group'}" aria-label="${esc(label)}"><div class="tl-menu-h" aria-hidden="true">${esc(label)}</div>
-    ${find || entry ? `<input type="${entry ? 'text' : 'search'}" class="tl-menu-q" placeholder="${esc(entry || find)}" aria-label="${esc(entry || find)}" autocomplete="off" spellcheck="false">` : ''}
-    <div class="tl-menu-rows">${list(items)}</div></div>`;
-  const input = $('.tl-menu-q', pop) as HTMLInputElement | null, first = items;
-  let asked = 0, timer = 0;
-  if (input) input.oninput = () => {
-    const q = input.value.trim().toLowerCase();
-    if (search) {
-      // The server finds them (it holds more than the menu shows); the last thing typed wins.
-      clearTimeout(timer);
-      const n = ++asked, show = (rows: T[]) => { if (n !== asked || !pop.isConnected) return; items = rows; $('.tl-menu-rows', pop)!.innerHTML = list(rows); };
-      if (!q) { show(first); return; }
-      timer = window.setTimeout(() => void search(input.value.trim()).then(show, () => show([])), 200);
-      return;
-    }
-    for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !!q && !b.dataset.label!.includes(q);
-  };
-  pop.onclick = ev => {
-    const b = eventElement(ev)?.closest<HTMLElement>('[data-pick]'); if (!b) return;
-    const it = items[Number(b.dataset.pick)]!;
-    pop.hidePopover();
-    onPick?.(it);
-  };
-  pop.showPopover();
-  if (!matchMedia('(max-width:760px)').matches) {
-    const a = anchor.getBoundingClientRect();
-    const below = a.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
-    pop.style.top = `${Math.max(8, below ? a.bottom + 4 : a.top - pop.offsetHeight - 4)}px`;
-    pop.style.left = `${Math.max(8, Math.min(a.left, innerWidth - pop.offsetWidth - 8))}px`;
-  } else pop.style.top = pop.style.left = '';
-  (input || pop.querySelector<HTMLElement>('.tl-mi[aria-checked="true"], .tl-mi[aria-current="true"]') || pop.querySelector<HTMLElement>('.tl-mi'))?.focus();
-  anchor.setAttribute('aria-expanded', 'true');
-  pop.addEventListener('menuclosed', () => anchor.setAttribute('aria-expanded', 'false'), {once: true});
-  return pop;
-}
 // A redraw replaces the dialog's content; one that lands while a menu is open waits for it to close.
-// What a redraw must not pull away: a row's menu, the Runs on form (task-modal.ts) or the Pages search (pages.ts). Each
+// What a redraw must not pull away: a row's menu, the Runs on panel (settings-bots-choice.ts) or the Pages search (pages.ts). Each
 // says `menuclosed` when it closes.
 function taskMenuOpen(d: TaskDialog): HTMLElement | null {
-  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, [data-run-model-pop]')].find(p => p.matches(':popover-open'));
+  const pop = [...d.querySelectorAll<HTMLElement>('.prop-pop, #sb-choice-pop')].find(p => p.matches(':popover-open'));
   return pop || d.querySelector<HTMLElement>('[data-task-pages] .tp-picker:not([hidden])');
 }
 function taskMenuSettled(d: TaskDialog) {
@@ -448,6 +369,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       void save('people', cur => ({roles: {[role]: ((cur.roles || {})[role] || []).filter(a => a !== gone)}}));
       return;
     }
+    const back = eventElement(ev)?.closest<HTMLElement>('[data-prop-send-back]');
+    if (back) { void save('stage', {move: back.dataset.propSendBack ?? ''}); return; }
     const clear = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear]');
     if (clear) {
       const field = clear.dataset.propClear ?? '';
@@ -473,21 +396,27 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
         }});
     } else if (key === 'visible') {
       const now = taskVisibleNow(task);
-      const items = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k))
-        .map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now, html: `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
-      propMenu(d, b, {label: 'Visible to', items, onPick: it => {
-        const to = it.value as TaskVisible;
-        if (to === now) return;
-        if (to === 'private') {
-          // Private opens the people picker once it is saved.
-          void Promise.resolve(save('visible', {private: true})).then(ok => {
-            if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
-          });
-        } else if (now === 'private') {
-          void save('visible', {private: false});
-          if (to === 'public') void save('visible', {visibility: 'public'});
-        } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
-      }});
+      const offered = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k));
+      // In a pipeline, Private says who still reads it as it moves (Product #449); the menu opens without it on a miss.
+      const note = offered.includes('private') && now !== 'private' && task.pipeline_id
+        ? pipelinePrivateReaders(task.pipeline_id, {task: String(task.id)}).then(r => r.line, () => null) : Promise.resolve(null);
+      void note.then(line => {
+        const items = offered.map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now,
+          html: k === 'private' && line ? `<span class="prop-vis"><span>${esc(VISIBLE_WORDS[k])}</span><span class="prop-vis-note">${esc(line)}</span></span>` : `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
+        propMenu(d, b, {label: 'Visible to', items, onPick: it => {
+          const to = it.value as TaskVisible;
+          if (to === now) return;
+          if (to === 'private') {
+            // Private opens the people picker once it is saved.
+            void Promise.resolve(save('visible', {private: true})).then(ok => {
+              if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
+            });
+          } else if (now === 'private') {
+            void save('visible', {private: false});
+            if (to === 'public') void save('visible', {visibility: 'public'});
+          } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
+        }});
+      });
     } else if (key === 'readers') {
       const have = new Set([...(task.readers || []), task.owner_id, task.requester_id]);
       const items = threadAddable().filter(it => !have.has(it.actor)).map(it => ({value: it.actor, text: it.label ?? '',
@@ -542,6 +471,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (more) more.onclick = () => {
     const r = taskPropRights(task), items: PropMenuAction[] = [], cur = (d.liveTask || task) as PropTask;
     const phone = matchMedia('(max-width:600px)').matches;
+    // A phone's head with document tabs holds only the title, the tabs, ⋯ and ✕ (task-code.css): Details, Done and
+    // Archive are here, first, and press the head's own.
+    for (const [sel, text, icon] of [['[data-task-tab="details"]', 'Details', 'fact_check'], ['[data-task-finish="done"]', 'Done', 'task_alt'],
+      ['[data-task-finish="close"]', 'Archive', 'archive']] as const) {
+      const b = $(`.tw-head ${sel}`, d) as HTMLElement | null;
+      if (phone && b && !b.offsetParent) items.push({text, icon, ...(b.hasAttribute('aria-pressed') ? {checked: b.getAttribute('aria-pressed') === 'true', read: true} : {}), run: () => b.click()});
+    }
     // The owning bot's screen (computer-screen.ts), where its session can be watched.
     const screen = !taskFinished(task) ? botScreenComputer(actorSlug(task.owner_id)) : '';
     if (screen) items.push({text: 'Watch the session', icon: 'computer', read: true, run: () => { location.hash = screenHref(screen); }});
@@ -558,6 +494,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', icon: 'schedule', run: () => save('snooze', {unsnooze: true})}
       : {text: 'Snooze…', icon: 'schedule', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     if (r.edit && task.pipeline_id) items.push({text: 'Move to a stage…', icon: 'arrow_forward', run: () => setTimeout(() => void taskStageMenu(d, more, task, save))});
+    // Another pipeline: anyone who reads the task may re-file it there (docs/pipelines-v3.md, "Who may move").
+    if (task.pipeline_id) items.push({text: 'Move to…', icon: 'swap_horiz', run: () => setTimeout(() => void taskMoveToMenu(d, more, {
+      pipeline: task.pipeline_id ?? null, stage: task.stage_id ?? null,
+      run: (p, st, why) => void save('stage', {move: String(st.id), pipeline: p.id, where: `${p.name} › ${st.name}`, ...(why ? {why} : {})})}))});
+    // Ask someone: To leave's +, whose section shows nothing while the stage has nothing to leave by (task-code.css).
+    const ask = $('.task-requirements.tsec-empty [data-req-ask]', d) as HTMLElement | null;
+    if (ask) items.push({text: 'Ask someone…', icon: 'person_search', run: () => { taskTabShow(taskModalOf(d), 'details'); ask.click(); }});
     if (r.edit) items.push({text: 'Reassign…', icon: 'person', run: () => setTimeout(() => { taskTabShow(taskModalOf(d), 'details'); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // Empty facts wait hidden in Details (a passed wake time counts as no due date); these show one and open its editor.
     const waiting = (key: string) => !!$(`[data-prop-row="${key}"][hidden]`, d);
@@ -565,11 +508,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.edit && waiting('due')) items.push({text: 'Set a due date…', icon: 'today', run: () => setTimeout(() => taskPropShow(d, 'due'))});
     if (r.links && waiting('tags')) items.push({text: 'Add a tag…', icon: 'label', run: () => setTimeout(() => taskPropShow(d, 'tags'))});
     if (r.links && !$('[data-sub-add]', d)) items.push({text: 'Add subtask', icon: 'add', run: () => { taskTabShow(taskModalOf(d), 'details'); taskRailAdd(d, task); }});
-    // Add a file: the Files section's picker (task-files.ts), for whoever may add files; it shows the section, which
-    // hides while the task has none.
-    const files = $('[data-task-files]', d) as HTMLElement | null, fileInput = files && $('[data-tf-input]', files) as HTMLInputElement | null;
-    if (fileInput && !$('[data-tf-add][hidden]', files)) items.push({text: 'Add a file…', icon: 'draft', run: () => {
-      taskTabShow(taskModalOf(d), 'details'); files.classList.add('tf-shown'); fileInput.click();
+    const modal = taskModalOf(d), fileInput = d.querySelector<HTMLInputElement>('[data-tf-input]');
+    if (fileInput && modal.canComment !== false) items.push({text: 'Add a file…', icon: 'draft', run: () => {
+      taskTabShow(modal, TASK_FILES_TAB); fileInput.click();
     }});
     // Make page: the Pages section's Describe box (pages.ts), when the reader may add pages here.
     if (taskModalOf(d).tpEl?.tpCanLink) items.push({text: 'Make a page…', icon: 'description', run: () => { taskTabShow(taskModalOf(d), 'details'); taskPageMakeOpen(d); }});
@@ -585,7 +526,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       const b = $(`.tw-head [data-fb-rate="${rate}"]`, d) as HTMLElement | null;
       if (b) items.push({text, icon, sep: rate === 'up', checked: b.getAttribute('aria-pressed') === 'true', run: () => b.click()});
     }
-    // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
+    // A reopen says why (docs/dev/pipelines-v3.md C24): the menu takes the note, and Enter reopens it. The head's way back
     // does the same; this keeps it where it always was.
     if (!r.live && r.reopen) items.push({text: 'Reopen…', icon: 'unarchive', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it?',
       none: '', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});
@@ -612,6 +553,31 @@ async function taskStageMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask,
   propMenu(d, anchor, {label: only === 'back' ? 'Move back to' : 'Move to', items, none: 'No earlier stage', onPick: it => {
     if (it.value === 'next') taskMoveOn(d, anchor, save);
     else void save('stage', {move: it.value});
+  }});
+}
+/** Move to… (docs/pipelines-v3.md S5): every pipeline's work stages as "Backlog › On ice", the pipeline's first stage
+    first; typing filters by each word. The stage the task is in is left out. Then the why, which a person may leave
+    empty, and Move; `confirm` is the line above it for many tasks ("Move 217 tasks to Backlog › On ice?"). `done`: the
+    task's own pipeline comes first, its stages by name alone, then Done (`st.id` 'done'); then the other pipelines. */
+async function taskMoveToMenu(host: HTMLElement, anchor: HTMLElement, opts: {pipeline: string | null; stage: string | null; done?: boolean;
+  confirm?: (where: string) => string; run: (p: PipelineRec, st: Pick<PipelineStageRec, 'id' | 'name'>, why: string) => unknown}): Promise<void> {
+  if (!TASK_PIPELINES) await tasksPipelinesRead().catch(() => []);
+  if (!anchor.isConnected) return;
+  type Spot = PropMenuItem & {p: PipelineRec; st: Pick<PipelineStageRec, 'id' | 'name'>};
+  const live = (TASK_PIPELINES || []).filter(p => !p.retired_at);
+  const own = opts.done ? live.filter(p => p.id === opts.pipeline) : [];
+  const spots: Spot[] = [...own, ...live.filter(p => !own.includes(p))].flatMap(p => [...p.stages, ...(own.includes(p) ? [{id: 'done', name: 'Done'}] : [])]
+    .filter(st => st.id && st.id !== opts.stage)
+    .map(st => ({p, st, value: `${p.id}/${st.id}`, text: own.includes(p) ? st.name : `${p.name} › ${st.name}`,
+      html: own.includes(p) ? `<span>${esc(st.name)}</span>` : `<span>${esc(p.name)}</span><span class="muted"> › </span><span>${esc(st.name)}</span>`})));
+  propMenu(host, anchor, {label: 'Move to', items: spots, find: 'Pipeline or stage', none: 'Nothing found', onPick: spot => {
+    const where = own.includes(spot.p) ? spot.st.name : `${spot.p.name} › ${spot.st.name}`;
+    setTimeout(() => {
+      let pop: PropPop | undefined;
+      const typed = (): string => pop?.querySelector<HTMLInputElement>('.tl-menu-q')?.value.trim() ?? '';
+      pop = propMenu(host, anchor, {label: opts.confirm ? opts.confirm(where) : where, entry: 'Why (optional)',
+        items: [{text: 'Move'}], onEntry: why => opts.run(spot.p, spot.st, why), onPick: () => opts.run(spot.p, spot.st, typed())});
+    });
   }});
 }
 // Move on: when the engine refuses for what is missing, the menu names it and takes a why to move on anyway.

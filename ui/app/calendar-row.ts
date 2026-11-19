@@ -44,7 +44,6 @@ interface CalEventsAnswer {
   from: string; to: string; calendars: CalView[]; occurrences: CalOccurrence[];
   month_counts?: CalMonthCount[]; errors?: {ref: string; reason: string}[];
 }
-interface CalSettings { time_zone?: string | null; work_starts?: string | null; work_ends?: string | null; work_days?: string | null; record_on_join?: boolean; }
 
 const CAL_ROUTE = '#/calendar';
 const CAL_API = '/v2/calendar';
@@ -71,25 +70,9 @@ const calClock = (d: Date) => CAL_H12 ? `${d.getHours() % 12 || 12}:${calPad(d.g
 const calRange = (o: CalOccurrence) => o.all_day ? '' : `${calClock(calWhen(o.start))}–${calClock(calWhen(o.end))}`;
 
 // ----------------------------------------------------------------- Join
-// Joining opens the call in a new tab and, on a Mac, Tico Recorder on it (decision 15), unless the person turned that off
-// in the page's ⋯ menu. A browser follows the Recorder's link without leaving the page; with no Recorder installed nothing
-// happens and the call is open anyway. The link is opened as a Meet call's is (ui/app/thread-call.ts recorderLinkOpen).
-const CAL_RECORD_KEY = 'tico.calendar.record';
-function calRecordOn(): boolean { try { return localStorage.getItem(CAL_RECORD_KEY) !== 'off'; } catch { return true; } }
-function calRecordSet(on: boolean): void { try { localStorage.setItem(CAL_RECORD_KEY, on ? 'on' : 'off'); } catch { /* not kept */ } }
-function calRecorder(o: CalOccurrence): void {
-  if (!calRecordOn() || !recorderMac()) return;
-  // The desktop app opens the Recorder itself (`recordEvent`, app/src/bridge.rs, on the page's own org): a page's hidden
-  // frame cannot follow the link there. An app without `recordEvent` opens nothing, as it does for a call (thread-call.ts).
-  if (window.ticoNative) {
-    if (nativeHas('recordEvent')) try { void Promise.resolve(nativeHandler('recordEvent')?.postMessage({event: o.occurrence_id, title: o.title})).catch(() => {}); } catch {}
-    return;
-  }
-  recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&title=${encodeURIComponent(o.title)}&event=${encodeURIComponent(o.occurrence_id)}`, 'cal-recorder-link');
-}
-// A Join link: the call itself, so a new tab opens it as any link would; the click also starts the Recorder.
+// A Join link: the call itself, so a new tab opens it as any link would.
 const calJoinAttrs = (o: CalOccurrence) => o.meeting_url
-  ? `href="${esc(o.meeting_url)}" target="_blank" rel="noopener noreferrer" data-cal-join="${esc(o.occurrence_id)}"`
+  ? `href="${esc(o.meeting_url)}" target="_blank" rel="noopener noreferrer"`
   : `href="${esc(calOpenHref(o))}"`;
 // The page, on the event's day with its card open.
 const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.start))}&open=${encodeURIComponent(o.occurrence_id)}`;
@@ -97,16 +80,16 @@ const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.
 // ----------------------------------------------------------------- the row
 // One line: "Calendar", then the viewer's next event as plain text ("Sales call · in 3 min"), its name opening the event on
 // the page. › steps to the event after it and ‹ back; a new page resets it to the very next. Nothing in the next week
-// reads "n/a" (named "Nothing scheduled"). The line is always subdued. Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
+// (no calendar connected, or an empty one) leaves the row just "Calendar". The line is always subdued. Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
 // At the sidebar's default width a name is cut with "…" (the agreed fit); hovering it shows the whole line.
-interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; failed: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
-const CAL_ROW: CalRowState = {list: [], at: 0, off: false, failed: false, loading: false, pick: null, live: null};
+interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
+const CAL_ROW: CalRowState = {list: [], at: 0, off: false, loading: false, pick: null, live: null};
 const CAL_ROW_EVERY = 3 * 60 * 1000;
 const CAL_ROW_DAYS = 7;
 const calRowEl = () => document.getElementById('nav-calendar');
 
 async function calRowLoad(): Promise<void> {
-  if (CAL_ROW.off || CAL_ROW.loading || !S.me || SESSION.out) return;
+  if (CAL_ROW.loading || !S.me || SESSION.out) return;
   CAL_ROW.loading = true;
   const from = calMidnight(new Date()), to = calAddDays(from, CAL_ROW_DAYS + 1);
   try {
@@ -115,19 +98,16 @@ async function calRowLoad(): Promise<void> {
     if (!a || !Array.isArray(a.occurrences)) return;     // not a calendar answer: the row stays just "Calendar"
     CAL_ROW.list = a.occurrences.filter(o => o.kind === 'event' && !o.all_day && o.response !== 'declined')
       .sort((x, y) => calWhen(x.start).getTime() - calWhen(y.start).getTime());
-    // A calendar that would not answer is not an empty week: say nothing rather than "n/a".
-    CAL_ROW.failed = !!a.errors?.length;
     CAL_ROW.at = Date.now();
-    // Calendar writes arrive live once the server has shown it serves calendars (an older one refuses the topic).
+    // Calendar writes arrive live: the topic joins once a read has answered.
     if (!CAL_ROW.live) {
       const soon = () => liveSoon('cal-row', () => void calRowLoad(), 500);
       const offs = [liveOn('calendar', soon), liveOn('reset', soon)];
       CAL_ROW.live = () => { for (const off of offs) off(); };
       liveTopicAdd('calendar');
     }
-  } catch (e) {
-    // A server without calendars (404): the row is just "Calendar", and nothing asks again.
-    if ((e as {status?: number}).status === 404) { CAL_ROW.off = true; CAL_ROW.list = []; }
+  } catch {
+    // A failed read keeps the row as it was.
   } finally {
     CAL_ROW.loading = false;
   }
@@ -163,10 +143,10 @@ function calRowDraw(dir = 0): void {
   const row = calRowEl(); if (!row) return;
   const next = row.querySelector<HTMLElement>('[data-cal-next]');
   if (!next) return;
-  if (CAL_ROW.off || !CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
+  if (!CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
   row.classList.add('cal-on');
   const now = new Date(), up = calRowUpcoming(now);
-  if (!up.length) { CAL_ROW.pick = null; next.innerHTML = CAL_ROW.failed ? '' : '<span class="cal-nx cal-none" title="Nothing scheduled"><span aria-hidden="true">n/a</span><span class="sr-only">Nothing scheduled</span></span>'; return; }
+  if (!up.length) { CAL_ROW.pick = null; next.innerHTML = ''; return; }
   let i = CAL_ROW.pick ? up.findIndex(o => o.occurrence_id === CAL_ROW.pick) : 0;
   if (i < 0) { i = 0; CAL_ROW.pick = null; }
   const o = up[i]!, when = calRowWhen(o, now);

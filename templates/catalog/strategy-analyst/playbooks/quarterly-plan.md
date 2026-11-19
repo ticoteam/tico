@@ -24,8 +24,8 @@ Otherwise write the check-in (step 6). If the task names one, do that.
     tico update list --kind weekly --limit 12
     tico meeting search --since <quarter start>
 
-The strategy first: the published version's active bets are what the quarter serves, and each goal's `bet_id`
-says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. Nothing published: plan
+The strategy first: the live version's active bets are what the quarter serves, and each goal's `bet_id`
+says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. No strategy: plan
 against the setup answer in `knowledge/rhythm.md`, marked unconfirmed. Then `knowledge/scorecard.md` and last quarter's
 report. A source you cannot read is named in the closing line.
 
@@ -35,7 +35,7 @@ Follow `playbooks/grade-a-quarter.md`. Write the result into the report and `kno
 
 ## 4. Draft next quarter
 
-Use `skills/draft-an-objective-from-a-bet/SKILL.md` for each objective and `skills/write-a-measurable-key-result/SKILL.md`
+Use `skills/draft-an-objective-from-a-bet/SKILL.md` for each objective and `.claude/skills/run-the-operating-cadence/SKILL.md` (step 13)
 for each key result.
 
 1. Pick the one focus: the single outcome that would make the quarter a success, from the strategy's active

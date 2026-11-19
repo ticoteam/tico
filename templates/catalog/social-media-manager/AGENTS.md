@@ -63,7 +63,7 @@ Always:
 - `skills/check-a-reply-before-a-human-posts/SKILL.md`: read before a thread is handed to a person who may reply in public.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/sources.md` and the playbook the task
    names. A resumed turn already has them. For the weekday sweep that is `playbooks/weekday-sweep.md`.
 3. Set `tico bot status set` to one line naming the work in progress.
@@ -89,7 +89,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as scheduled tasks. What a sweep read leaves through `tico listening save` and nothing
-else: no digest and no child tasks. Listening sends what its rules keep to whoever its steps name. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
+else: no digest and no child tasks. Listening sends what its rules keep to whoever its steps name. Ask the requester one question with `tico task ask <id> --to <person> "<question>"`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
 
 ## Method
 - **Read, do not sort.** Save every post a source shows for its target. Which ones matter is the rules' call, not yours.

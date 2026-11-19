@@ -8,6 +8,7 @@ from pydantic import Field, StrictBool
 from . import media, meetings, models as M
 from .store import H, Problem, encode
 from .views import human_only
+from .api_contract import api_v2
 
 
 class Review(M.Contract):
@@ -16,7 +17,7 @@ class Review(M.Contract):
     # A bot to hand the meeting to once it is shared, as Send does ("auto" routes it).
     send_to: str | None = Field(default=None, min_length=1, max_length=200)
     # Who may read it once shared: the Team, or only its participants. Older Ticos refuse
-    # the field, so a recorder asking for participants only never shares it wider by mistake.
+    # the field, so a client asking for participants only never shares it wider by mistake.
     audience: Literal['team', 'participants', 'private'] | None = None
 
 
@@ -110,9 +111,9 @@ def install_meeting_review(app, store, auth, mutate):
             meta['review_send_to'] = send_to
         target = {'approve': 'live', 'dismiss': 'dismissed', 'restore': 'pending'}[action]
         if meta['review_state'] == target:
-            # Approving again with another audience (the Recorder retrying a Save) re-files it for that audience.
+            # Approving again with another audience (a client retrying a Save) re-files it for that audience.
             current = media.effective_audience(meta)
-            # Without an audience (an older Recorder), private:false means the Team; private:true only narrows a
+            # Without an audience, private:false means the Team; private:true only narrows a
             # Team meeting, so it never undoes Participants only.
             wanted = audience or ('team' if private is False else 'private' if private and current == 'team' else None)
             if action == 'approve' and wanted and wanted != current:
@@ -152,14 +153,30 @@ def install_meeting_review(app, store, auth, mutate):
         H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action})
         return media.view(c, who, rid, auth=auth)
 
-    @app.get('/api/v2/meetings/settings')
+    @app.get(
+        '/api/v2/meetings/settings',
+        **api_v2(
+            "Meetings",
+            "getMeetingReviewSettings",
+            "Your meeting review preference and Team default",
+            "MeetingReviewPreferences",
+        ),
+    )
     def settings(request: Request):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             return meetings.review_settings(c, who)
 
-    @app.post('/api/v2/meetings/settings')
+    @app.post(
+        '/api/v2/meetings/settings',
+        **api_v2(
+            "Meetings",
+            "setMeetingReviewSettings",
+            "Set auto-share; only the owner sets the Team default",
+            "MeetingReviewPreferences",
+        ),
+    )
     def set_settings(request: Request, body: ReviewSettings):
         who = request.state.identity
         human_only(who)
@@ -186,28 +203,55 @@ def install_meeting_review(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/meetings')
-    def listing(request: Request, review: Literal['pending', 'live', 'dismissed'] = 'live', q: str = ''):
+    @app.get(
+        '/api/v2/meetings',
+        **api_v2(
+            "Meetings",
+            "listMeetings",
+            "Meetings; review=pending reads your own queue, review=shared the meetings others shared with you",
+            "MeetingReviewList",
+            parameters={
+                "review": "live (default): every shared meeting you may read; pending or dismissed: your own queue; "
+                "shared: the shared meetings someone else filed that are shared with you (the Team, its participants "
+                "or its attendees), never one you read only as the owner",
+            },
+        ),
+    )
+    def listing(request: Request, review: Literal['pending', 'live', 'dismissed', 'shared'] = 'live', q: str = ''):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             rows = []
-            for row in c.execute(
-                'SELECT id FROM meetings WHERE review_state=? '
-                'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
-                (review, review, who.email),
-            ):
+            if review == 'shared':
+                found = c.execute(
+                    "SELECT id FROM meetings WHERE review_state='live' AND owner<>? COLLATE NOCASE "
+                    'ORDER BY created_at DESC',
+                    (who.email or '',),
+                )
+            else:
+                found = c.execute(
+                    'SELECT id FROM meetings WHERE review_state=? '
+                    'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
+                    (review, review, who.email),
+                )
+            for row in found:
                 try:
                     item = media.view(c, who, row[0], auth=auth)
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
                     continue
+                # Shared with this reader by its filer, not readable through the owner's own right to every source.
+                if review == 'shared' and not media.shared_meeting({'review_state': 'live', 'metadata': item}, who):
+                    continue
                 if not q or q.casefold() in encode(item).casefold():
                     rows.append(item)
             return {'meetings': rows, 'count': len(rows), 'pending_count': meetings.pending_count(c, who)}
 
-    @app.post('/api/v2/meetings/review')
+    @app.post(
+        '/api/v2/meetings/review',
+        **api_v2("Meetings", "reviewMeetings", "Share or dismiss your Pending meetings", "MeetingReviewList"),
+    )
     def review_many(request: Request, body: ReviewMany):
         who = request.state.identity
         human_only(who)
@@ -234,7 +278,10 @@ def install_meeting_review(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/meetings/{id}/review')
+    @app.post(
+        '/api/v2/meetings/{id}/review',
+        **api_v2("Meetings", "reviewMeeting", "Approve, dismiss or restore your own meeting", "ReviewedMeeting"),
+    )
     def review_one(request: Request, id: str, body: Review):
         return mutate(
             request,
@@ -242,7 +289,10 @@ def install_meeting_review(app, store, auth, mutate):
             lambda c: apply(c, request.state.identity, id, body.action, body.private, body.send_to, body.audience),
         )
 
-    @app.get('/api/v2/meetings/{id}')
+    @app.get(
+        '/api/v2/meetings/{id}',
+        **api_v2("Meetings", "getMeeting", "Read a meeting with its notes and transcripts", "ReviewedMeeting"),
+    )
     def detail(request: Request, id: str):
         with store.read() as c:
             return media.view(c, request.state.identity, id, include_transcripts=True, auth=auth)

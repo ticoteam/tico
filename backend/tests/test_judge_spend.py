@@ -121,7 +121,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     spend(api, 19.7, actor="human:ben")  # every actor's calls count: the cap is the team's
     post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})  # its most (~$0.21) fits
     assert len(engine.calls) == 1
-    shown = get(api, "judge")
+    shown = get(api, "decisions")
     assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.7, abs=0.001)
 
     spend(api, 0.2)  # under the cap, but a call's most no longer fits
@@ -129,9 +129,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap"
     assert len(engine.calls) == 1, "Jev is not asked at the cap"
 
-    # The callers that ask through the hub (mail triage, "already covered?") carry on as if Decide were off.
-    from connectors.mail import judge as MJ
-
+    # A caller that asks through the hub ("already covered?") is told why, so it carries on as if Decide were off.
     from clients.tico import APIError
 
     class Client:
@@ -143,10 +141,9 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
             return response.json()
 
     chosen = J.load_set("mail-triage")
-    judged = MJ.judge_message(
-        {"id": "m1", "subject": "Invoice", "from": "a@b.example"}, chosen, J.through_hub(Client())
-    )
-    assert judged["error"] == "spend_cap"
+    with pytest.raises(J.JudgeError) as refused:
+        J.through_hub(Client())({"id": "m1", "subject": "Invoice", "from": "a@b.example"}, chosen["questions"])
+    assert refused.value.code == "spend_cap"
 
     # A cap of 0 is no cap.
     api.app.state.store.settings.decisions_monthly_usd = 0
@@ -571,7 +568,7 @@ def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
     with api.app.state.store.transaction() as c:
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "judge.call",
             "rule-check@1",
             {
@@ -585,7 +582,7 @@ def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "rules.spend",
             "rule-check@1",
             {"label": "rule-check@1", "model": "tico-decide-medium-1.0", "cost_usd": 0.00875},

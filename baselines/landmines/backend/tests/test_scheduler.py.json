@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_scheduler.py": {
+    "timing-assert": 1
+  }
+}

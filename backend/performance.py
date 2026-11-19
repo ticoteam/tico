@@ -20,25 +20,6 @@ from fastapi import Request
 from .runs import state as run_state
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, created_at INTEGER NOT NULL,
-  sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
-  swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,created_at)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
-  at_start TEXT, at_end TEXT) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
-  mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
-  disk_total INTEGER, active INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, span, created_at)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  kind TEXT NOT NULL, key TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
-  n INTEGER NOT NULL, cpu REAL NOT NULL, cpu_max REAL NOT NULL, mem INTEGER NOT NULL, mem_max INTEGER NOT NULL,
-  PRIMARY KEY(runner_id, span, created_at, kind, key)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL, ended_at INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
-  runs_max INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]', procs TEXT NOT NULL DEFAULT '[]');
-CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started_at);
-"""
 MODES = ("on", "off")
 MINUTE, TEN = 60, 600
 MINUTE_HOURS = 48  # one-minute points, then ten-minute ones
@@ -402,6 +383,41 @@ def attempt_snapshots(c, attempt_id):
     }
 
 
+def note_timings(c, attempt_id, rule_check_ms, arrived):
+    """The server's part of a run's `timings` (models.RunTimings), added when the runner sent its own: the person's
+    message to the claim (`send_to_claim_ms`, both on this server's clock), the claim to the result's arrival
+    (`received_ms`, the runner's clock against this one's) and the completion's org rule check (`rule_check_ms`)."""
+    row = c.execute(
+        "SELECT a.result,a.created_at,m.created_at AS sent_at FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+        "LEFT JOIN messages m ON m.id=coalesce(a.message_id,j.message_id) WHERE a.id=?",
+        (attempt_id,),
+    ).fetchone()
+    try:
+        timings = json.loads(row["result"] or "{}").get("timings") if row else None
+    except (ValueError, TypeError, AttributeError):
+        timings = None
+    if not isinstance(timings, dict):
+        return
+    timings["rule_check_ms"] = rule_check_ms
+    claimed, sent = H.parse_ts(row["created_at"]), H.parse_ts(row["sent_at"])
+    if claimed and sent:
+        timings["send_to_claim_ms"] = max(0, round((claimed - sent).total_seconds() * 1000))
+    if isinstance(timings.get("claimed_at"), (int, float)):
+        timings["received_ms"] = round((arrived - timings["claimed_at"]) * 1000)
+    c.execute(
+        "UPDATE attempts SET result=json_set(result,'$.timings',json(?)) WHERE id=?", (json.dumps(timings), attempt_id)
+    )
+
+
+def run_timings(result):
+    """A run's `timings` from its attempt's result: what the runner and the completion recorded, or None."""
+    try:
+        timings = json.loads(result or "{}").get("timings")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return timings if isinstance(timings, dict) else None
+
+
 # ------------------------------------------------------------------------------------------------ overloads
 def reasons(point):
     """What made a point very loaded: any of cpu, memory, swap, disk."""
@@ -731,6 +747,22 @@ def summary(overloads, days, label=lambda b: b):
     return text + ("; each time " + " and ".join(common) if common else "; no single cause ran every time") + "."
 
 
+def advice(overloads, bots):
+    """What to do about repeated overloads on a computer several bots share: {"text", "bots"} naming the bots (two at
+    most, busiest first in the newest, by the names in `overloads`) that ran in every one of 2 or more overloads, to give their own Large machine
+    rather than a bigger one; None when there are fewer overloads, no bot in all of them, or no other bot ran here in
+    the window (`bots`, Busiest bots), since a machine of its own is what such a bot has already."""
+    if len(overloads) < 2:
+        return None
+    common = set.intersection(*[{b["bot"] for b in o["bots"] if b["bot"]} for o in overloads])
+    every = [b["bot"] for b in overloads[-1]["bots"] if b["bot"] in common][:2]  # the newest one's busiest first
+    if not every or not {b["bot"] for b in bots if b["bot"]} - set(every):
+        return None
+    if len(every) == 1:
+        return {"text": f"Give {every[0]} its own Large machine.", "bots": every}
+    return {"text": f"Give {every[0]} and {every[1]} their own Large machine.", "bots": every}
+
+
 # ------------------------------------------------------------------------------------------------ reading
 def _window(c, runner_id, since, span):
     """Points from both resolutions at `since` or later, folded into `span`-second buckets."""
@@ -863,6 +895,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         "busiest": {"bots": bots, "processes": procs},
         "overloads": overloads,
         "summary": summary(overloads, hours / 24, lambda b: b or "another bot"),
+        "advice": advice(overloads, bots),
     }
 
 
@@ -1031,7 +1064,7 @@ def install(app, store, auth, mutate, execution):
 
         return store.write(who, work)  # a poll: no idempotency record
 
-    @app.post("/api/v2/runners/{rid}/performance")
+    @app.post("/api/v2/computers/{rid}/performance")
     def performance_mode(request: Request, rid: str, body: M.PerformanceMode):
         """Turn performance diagnostics off (or back on) for this computer; they are on by default. Its operator or an
         admin. Off stops sampling; what was recorded stays until it ages out (14 days) or is deleted."""
@@ -1059,7 +1092,7 @@ def install(app, store, auth, mutate, execution):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/runners/{rid}/performance")
+    @app.delete("/api/v2/computers/{rid}/performance")
     def performance_erase(request: Request, rid: str):
         """Delete this computer's recorded performance history now. Its operator or an admin."""
         who = request.state.identity
@@ -1095,7 +1128,7 @@ def install(app, store, auth, mutate, execution):
             )
         return hit[0]
 
-    @app.get("/api/v2/runners/{rid}/performance")
+    @app.get("/api/v2/computers/{rid}/performance")
     def performance_view(request: Request, rid: str, hours: int = 24):
         """The computer's performance over the last `hours` (1 to 336): CPU, memory, load, swap and disk points, the
         turns that ran, the bots with the most turns and the busiest processes, overloads and a summary. Every person

@@ -58,6 +58,7 @@ def test_safe_disposition(mime, inline):
     'name,original',
     [
         ('report.json', b'{\n  "owner": "human:ana",\n  "text": "\\u00e9"\n}\n'),
+        ('page.html', b'<p>Write to ana@example.com</p>\n'),
     ],
 )
 def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, original):
@@ -86,13 +87,16 @@ def test_attachment_bytes_and_digests_across_versions_and_legacy_ids(api, name, 
         assert hashlib.sha256(full.content).hexdigest() == full.headers['x-content-sha256'] == digest
         assert full.headers['etag'] == '"' + digest + '"'
         assert full.headers['content-length'] == str(len(data))
+        # Cloudflare rewrites an HTML body (email obfuscation) unless the response says no-transform.
+        assert full.headers['cache-control'] == 'private, no-store, no-transform'
         partial = api.get(url, headers={**h, 'Range': 'bytes=2-9'})
         assert partial.status_code == 206 and partial.content == data[2:10], url
         assert partial.headers['x-content-sha256'] == digest  # digest identifies the whole stored file
         assert partial.headers['content-range'] == f'bytes 2-9/{len(data)}'
+        assert partial.headers['cache-control'] == full.headers['cache-control']
         head = api.head(url, headers=h)
         assert head.status_code == 200 and head.content == b'', url
-        for key in ('content-length', 'content-type', 'x-content-sha256', 'etag'):
+        for key in ('content-length', 'content-type', 'x-content-sha256', 'etag', 'cache-control'):
             assert head.headers[key] == full.headers[key], (url, key)
 
 
@@ -147,7 +151,7 @@ def test_multipart_range_cache_etag_limits_and_legacy(api):
     url = '/api/v2/files/' + bid
     h = headers('ana-test')
     full = api.get(url, headers=h)
-    assert full.content == b'0123456789' and full.headers['cache-control'] == 'private, no-store'
+    assert full.content == b'0123456789' and full.headers['cache-control'] == 'private, no-store, no-transform'
     assert full.headers['content-type'].startswith('text/plain')
     assert full.headers['content-disposition'].startswith('inline')
     assert full.headers['x-content-type-options'] == 'nosniff'
@@ -370,26 +374,21 @@ def test_pdf_page_one_poster(api):
     assert max(meta["width"], meta["height"]) <= 640
 
 
-def test_storage_migration_preserves_old_version_and_reapplies():
-    from backend.files import SCHEMA
-    from backend.storage_schema import SCHEMA as STORAGE_SCHEMA
-    from backend.store import H
+def test_a_file_version_takes_its_media_columns_and_never_changes_its_bytes():
+    from backend import migrations
 
-    c = sqlite3.connect(':memory:')
+    c = sqlite3.connect(':memory:', isolation_level=None)
     c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
-    c.execute('CREATE TABLE blobs(id TEXT PRIMARY KEY)')
-    c.execute("INSERT INTO blobs VALUES('blob')")
+    migrations.apply(c)
     c.execute(
         "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
         "VALUES('file','bot','task:task','old','Old report','document','tico_blob','then','then')"
     )
-    old = ('file', 1, 'blob', 'digest', None, 10, 'report.txt', 'text/plain', None, None, None, 'bot:bot', 'then')
-    c.execute('INSERT INTO bot_file_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', old)
-    H._apply(c, STORAGE_SCHEMA)
-    H._apply(c, STORAGE_SCHEMA)  # hub 20 and cloud 53 both use the idempotent apply helper
-    version = c.execute('SELECT * FROM bot_file_versions').fetchone()
-    assert tuple(version)[:13] == old and version['media_state'] == 'none'
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES('file',1,'blob','digest',10,'report.txt','text/plain','bot:bot','then')"
+    )
+    assert c.execute('SELECT media_state FROM bot_file_versions').fetchone()[0] == 'none'
     c.execute('UPDATE bot_file_versions SET width=10,height=5')
     with pytest.raises(sqlite3.IntegrityError):
         c.execute("UPDATE bot_file_versions SET blob_id='different'")

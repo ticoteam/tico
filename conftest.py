@@ -58,26 +58,6 @@ def pytest_addoption(parser):
         action="store_true",
         help="Build API fixture databases from empty paths (migration checks and benchmarks)",
     )
-    _flake_quarantine().addoption(parser)
-
-
-def _flake_quarantine():
-    """scripts/flake_quarantine.py, loaded by path like scripts/heavy_slot.py (scripts/ is not on every sys.path)."""
-    import importlib.util
-
-    name = "tico_flake_quarantine"
-    if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / "scripts/flake_quarantine.py")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[name]
-
-
-def pytest_collection_modifyitems(config, items):
-    """PR checks and the merge queue pass --quarantine (scripts/pr_checks.py run --quarantine): each test listed in
-    ci/quarantine/ runs as a non-strict xfail. Release validation never passes it."""
-    _flake_quarantine().modify(config, items)
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):
@@ -138,8 +118,8 @@ def pytest_configure(config):
     app_build.install()  # every app after a worker's first builds in half the time
     if hasattr(config, "workerinput") or config.option.pyargs:
         return  # --pyargs names modules, not paths
-    # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
-    # (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
+    # The server serves the UI as scripts/build-ui.cjs builds it to build/ui: built here once when it is stale and this
+    # checkout can (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
     from backend import ui_build
 
     try:
@@ -219,6 +199,33 @@ def store_pools_close(pooled_connections_closed):
     connection_guard.close_stores()
 
 
+@pytest.fixture(autouse=True)
+def no_cached_google_tokens():
+    """The Google token caches are process-wide (backend/google_workspace.py and backend/google_tokens.py), and one
+    worker runs many tests in one process. Tests reuse ids (the Workspace key is always `wsk-1` at revision 1), so a
+    token one test minted answered the next test's request from memory and its fake Google saw no call. Each test starts
+    and ends with both caches empty. The import stays in the body, as the `api` fixture's does."""
+    from backend import google_tokens, google_workspace
+
+    google_workspace.forget_tokens()
+    google_tokens.forget()
+    yield
+    google_workspace.forget_tokens()
+    google_tokens.forget()
+
+
+@pytest.fixture(autouse=True)
+def no_cached_calendar_reads():
+    """The calendar read cache is process-wide too (backend/connectors.py `_LIVE`): one calendar's live read is reused for a
+    minute, and tests reuse addresses, so one test's read would answer the next test's. Empty at the start and the end of
+    each test. The import stays in the body, as no_cached_google_tokens' does."""
+    from backend import connectors
+
+    connectors.forget_live()
+    yield
+    connectors.forget_live()
+
+
 def pytest_runtest_logreport(report):
     """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
     if report.when == "teardown":
@@ -293,7 +300,7 @@ def api_database(tmp_path_factory, request):
             for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")
             if "_fts" not in row[0]
         ]
-        # initialize writes system rows (markers, clocks, built-in types and rules, keeper events) that every
+        # initialize writes system rows (markers, clocks, built-in types and rules, Tico events) that every
         # fresh test database has too. What must never be shared between tests: a person, bot, credential,
         # session, key or computer, and this worker's temporary path.
         identity = re.compile(

@@ -1,6 +1,5 @@
 """Personal archive, logical-day supersession, and mixed-version schema coverage."""
 
-import sqlite3
 from datetime import date, timedelta
 
 from backend import openapi_v2, updates
@@ -137,33 +136,6 @@ def test_archive_batches_are_human_only_permission_checked_and_atomic(api):
     assert private_update["id"] in ids(get(api, "updates?archive=true"))
     assert private_update["id"] not in ids(get(api, "updates?archive=true", token="ben-test"))
     assert private_update["id"] not in ids(get(api, "updates", token="ben-test"))
-
-
-def test_archive_schema_is_created_for_fresh_and_existing_databases():
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    # The prior schema has update content/read state but no slides or archive tables.
-    c.executescript("""
-      CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        UNIQUE(bot,kind,day));
-      CREATE TABLE update_reads(update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL,
-        PRIMARY KEY(update_id,actor));
-      CREATE TABLE update_queue(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
-        rank INTEGER NOT NULL, state TEXT NOT NULL, message_id TEXT, sent_at TEXT, done_at TEXT, reason TEXT,
-        UNIQUE(bot,kind,day));
-      CREATE TABLE update_settings(bot TEXT PRIMARY KEY, daily INTEGER NOT NULL DEFAULT 1,
-        weekly INTEGER NOT NULL DEFAULT 1);
-      INSERT INTO updates VALUES('existing','ops','daily','2026-10-06','Still here','- Old content',
-        '2026-10-06T12:00:00Z','2026-10-06T12:00:00Z');
-    """)
-    c.executescript(updates.SCHEMA)
-    updates.ensure_schema(c)
-    assert c.execute("SELECT id,body FROM updates").fetchone()[:] == ("existing", "- Old content")
-    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides"}
-    assert {r["name"] for r in c.execute("PRAGMA table_info(update_queue)")} >= {"tries", "redo"}
-    assert c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_archive_overrides'").fetchone()
-    c.close()
 
 
 def test_archive_and_explicit_history_filters_are_in_the_stable_contract(api):

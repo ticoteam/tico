@@ -178,6 +178,49 @@ def test_the_transactions_cursor_pages_without_gaps_or_repeats(books):
             FR.transactions(c, OWNER, cursor="not-a-cursor", at=AT)
 
 
+def _pages(c, viewer, **kw):
+    """Every row through the cursor, a row at a time; no page is empty short of the end."""
+    rows, cursor = [], None
+    for _ in range(50):
+        page = FR.transactions(c, viewer, cursor=cursor, limit=1, at=AT, **kw)
+        assert page["rows"] or page["next"] is None, page
+        rows += [r["amount"] for r in page["rows"]]
+        cursor = page["next"]
+        if not cursor:
+            return rows
+    raise AssertionError("the cursor never ended")
+
+
+def test_a_page_is_empty_only_at_the_end_when_few_of_many_feed_rows_show(books, monkeypatch):
+    monkeypatch.setattr(TB, "SCAN", 4)
+    with books.transaction() as c:
+        ids = _bank(c)
+        for i in range(30):  # newer bank rows than the card spend, none on a P&L line or a team
+            SK.insert(
+                c,
+                "fin_feed_txns",
+                {
+                    "money_account_id": ids["bank"],
+                    "provider_id": f"made-up-{i}",
+                    "txn_date": f"2026-10-{12 + i % 15:02d}",
+                    "amount": -10 - i,
+                    "currency": "USD",
+                    "status": "new",
+                    "counterparty": "Example Fee",
+                    "created_at": AT,
+                    "created_by": "system:finance",
+                },
+            )
+        read: list[int] = []
+        page = SK.feed_page
+        monkeypatch.setattr(SK, "feed_page", lambda *a, **kw: [read.append(r["amount"]) or r for r in page(*a, **kw)])
+        six_nine = account(c, "6900")
+        assert _pages(c, OWNER, source="feed", account_id=six_nine) == [-3_400, -1_200]
+        assert _pages(c, "human:cara", source="feed") == [-1_200]  # eve's card only
+        assert set(read) == {-3_400, -1_200}  # the line and the viewer's cards are read in SQL, not dropped after
+        assert _pages(c, OWNER, source="feed", teams=["web"]) == [-1_200]  # cut after the read
+
+
 def test_pnl_days_weeks_and_the_expenses_view_by_team_and_teammate(books):
     with books.transaction() as c:
         spend(c, "6100", 1_000, team="web", teammate="human:eve", day="2026-10-02")

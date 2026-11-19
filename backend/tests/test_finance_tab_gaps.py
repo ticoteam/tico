@@ -347,7 +347,7 @@ def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
         assert (amount(), amount("2026-12-15"), amount("2026-11-15")) == (1_000, 3_000, 1_000)
 
 
-def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
+def test_view_as_reaches_lines_and_budgets_and_only_for_the_owner(api):
     store = api.app.state.store
     with store.transaction() as c:
         from backend.finance import actions as FA
@@ -355,7 +355,7 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
         assert FA.ensure_setup(c, store.settings.owner_email)
         open_views(c)  # ben sees his own expenses, so viewing as him reads something
         line = account(c, "6100")
-    for path in (f"finance/lines/{line}", "finance/expenses", "finance/budgets"):
+    for path in (f"finance/lines/{line}", "finance/budgets"):
         get(api, f"{path}?view_as=human:ben")
         get(api, f"{path}?view_as=human:ana", token="ben-test", expected=403)
     assert get(api, "finance/budgets?at=2026-12-15")["on"] == "2026-12-15"
@@ -747,7 +747,6 @@ def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(ap
         ("GET", "/api/v2/finance/search?kind=entry"),
         ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
         ("GET", "/api/v2/finance/close/2026-10"),
-        ("GET", "/api/v2/finance/webhook-deliveries"),
         ("GET", f"/api/v2/finance/actions/{done.action_id}"),
         ("POST", "/api/v2/finance/actions"),
     ):
@@ -793,7 +792,7 @@ def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once
         assert grant.status == "committed", grant
         gid = str(grant.result["grant_id"])
         assert "human:eve" in SA.grant(c, gid).members
-    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    r = api.post("/api/v2/humans/eve", json={"left": True}, headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     with store.read() as c:
         assert "human:eve" not in SA.grant(c, gid).members
@@ -829,7 +828,7 @@ def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial
         raise RuntimeError("forced: the revalidation fails after a partial change")
 
     monkeypatch.setattr(handlers, "suspend_unstanding", half_done)
-    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    r = api.post("/api/v2/humans/eve", json={"left": True}, headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     assert calls == [gid]
     with store.read() as c:

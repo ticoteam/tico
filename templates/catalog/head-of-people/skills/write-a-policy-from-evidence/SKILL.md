@@ -1,6 +1,8 @@
 ---
 name: write-a-policy-from-evidence
 description: Draft a policy from what the team does and what its handbook says, keeping the decisions apart from the legal points, so the owner and counsel each check the right things.
+metadata:
+  function: people
 ---
 # Write a policy from evidence
 

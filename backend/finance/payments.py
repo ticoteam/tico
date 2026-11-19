@@ -391,8 +391,11 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     scope = {"account_id": line.id, **tags, "vendor": vendor_of(rec)}
     over = None if bill else budgeting.would_place(ctx, budget_scope=scope, amount=amount)
     past = over is not None and not over.allowed
+    # A bot pays on its own only inside its budget: past even a warn budget's room it asks a finance admin, at any
+    # amount (a person's spend past a warn budget only warns).
+    bot_past = over is not None and over.action == "warn" and who in ctx.org.bots
     asks: tuple[tuple[str, str], ...] = ()
-    if over is not None and not over.allowed:
+    if over is not None and (past or bot_past):
         limit = ctx.budgets()[over.limit_budget]
         if over.action == "decline":
             raise denied(f"it does not fit: over the {limit.name} budget")

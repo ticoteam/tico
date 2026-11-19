@@ -60,13 +60,13 @@ Always:
 - Never reply to anyone on `knowledge/do-not-contact.md`. A stop from a lead goes on that list in the run that reads it.
 
 ## Skills
-- `skills/qualify-an-inbound-lead/SKILL.md`: read before you sort any lead.
-- `skills/write-a-reply-for-review/SKILL.md`: read before you draft any reply.
+- `.claude/skills/run-a-sales-deal/SKILL.md`: read before you sort any lead or write any reply (qualifying is its
+  step 5, the reply its step 3).
 - `skills/read-why-an-inbound-lead-was-lost/SKILL.md`: read before you count a lost reason in the read-out.
 - `knowledge/inbound-method.md` holds the standing rules and definitions these depend on.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/inbound-method.md`,
    `knowledge/voice.md`, `knowledge/do-not-contact.md` and the playbook the task names. A resumed turn already has them.
 3. Read the last ten lines of `knowledge/lead-log.md`, so you know which leads are open and which wait on a person.
@@ -88,12 +88,12 @@ stop, and their end wakes you.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `tico strategy show`.
-Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. At the start of each run, read your channel with `tico growth channel show <slug>`: its KPI against target, what changed and what lines up with it, its tests and how fresh its sources are. A task labelled `growth:alert` means your channel crossed a line the team set: read the channel, act, and close the task when it is dealt with.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
 `tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
 contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`, and link its KPI with `--input-kpi <id>`.
 Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
@@ -101,8 +101,8 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks, or from the sweep. Read with `tico task show <id>` and `tico task list`. To see what a lead said
 on a call, run `tico meeting search "<lead>"`, then `tico meeting read <id>`. `tico calendar list` shows the bookings on the
 company calendar: offer two times that fit the seller's working hours and do not clash with a booking. A decision for a
-person is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked call goes to
-whoever takes calls as `tico task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. Keep
+person is `tico task ask <id> --to <person> "<question>"`, one open question per task. A booked call goes to
+whoever takes calls as `tico task create --owner <who takes calls> --title "<lead> call booked" --message-file <note>`. Keep
 `tico bot status set` to one factual line. Finish every task, quiet sweep or not.
 
 ## Quality standards

@@ -22,6 +22,7 @@ import re
 import secrets
 
 from . import hubdb as H
+from .api_contract import api_v2
 
 ID = "_tico"  # the built-in trigger, its event is `webhook._tico`; the underscore is not a valid
 # trigger id (triggers.ID), so nobody can make one that collides
@@ -52,7 +53,7 @@ def ensure(c, owner=None):
     c.execute(
         "INSERT OR IGNORE INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,type_from,unheard) "
         "VALUES(?,?,?,?,?,?,?,?,?,?)",
-        (ID, NAME, "webhook", secrets.token_hex(32), H.KEEPER, now, now, "none", "/kind", "log"),
+        (ID, NAME, "webhook", secrets.token_hex(32), H.TICO_ACTOR, now, now, "none", "/kind", "log"),
     )
     c.execute("UPDATE triggers SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL", (ID,))
     if not owner:
@@ -84,7 +85,7 @@ def ensure(c, owner=None):
 def complete(c, owner):
     """Whether `ensure` has nothing left to do: a cheap read for the pull loop."""
     if not c.execute(
-        "SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.KEEPER)
+        "SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.TICO_ACTOR)
     ).fetchone():
         return False
     if not owner:
@@ -160,7 +161,7 @@ def record_relay(c, relay_id):
     c.execute(
         "INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
         "VALUES(?,?,?,?,?,NULL,0)",
-        (relay_id, ID, "", H.KEEPER, H.now()),
+        (relay_id, ID, "", H.TICO_ACTOR, H.now()),
     )
     return True
 
@@ -290,7 +291,15 @@ def install(app, store):
     from fastapi import Request
     from .store import Problem
 
-    @app.get("/api/v2/notices")
+    @app.get(
+        "/api/v2/notices",
+        **api_v2(
+            "Notices",
+            "listNotices",
+            "Notices from Tico Team, newest first, each once (any signed-in person)",
+            "NoticeList",
+        ),
+    )
     def notice_list(request: Request):
         """Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release
         check, newest first, each once."""

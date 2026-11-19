@@ -46,14 +46,14 @@ def purge(c, root_id, ids, days):
         message = H.message(c, message_id)
         if not message:
             continue
-        threads._revise(c, message, H.KEEPER, deleted=True, purge=True)
+        threads._revise(c, message, H.TICO_ACTOR, deleted=True, purge=True)
         origin = (message.get("refs") or {}).get("origin")
         c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
-        file_library.release_message_files(c, H.KEEPER, message_id)
+        file_library.release_message_files(c, H.TICO_ACTOR, message_id)
         gone += 1
     if gone:
-        threads._event(c, H.KEEPER, "thread.purged", root_id, {"messages": gone})
-        threads._audit(c, H.KEEPER, "thread:" + root_id, None, {"purged": gone, "retention_days": int(days)})
+        threads._event(c, H.TICO_ACTOR, "thread.purged", root_id, {"messages": gone})
+        threads._audit(c, H.TICO_ACTOR, "thread:" + root_id, None, {"purged": gone, "retention_days": int(days)})
     return gone
 
 

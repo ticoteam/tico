@@ -210,6 +210,8 @@ def argument_value(action, command):
         return "smoke@acme.example"
     if dest == "name":
         return "acme-smoke"  # a slug in most commands (`tico market page <slug>`)
+    if dest == "title" and list(command) == ["task", "child"]:
+        return SMOKE + " subtask"  # `task file` later files SMOKE under the same parent and owner: not its duplicate
     if dest in ("text", "title", "body", "note", "subject", "reason", "description", "question"):
         return SMOKE
     if dest in ("url",):
@@ -463,7 +465,7 @@ APPLY_COMMAND = re.compile(r'tico task (?:file|create) [^\n`]*"Apply: [^\n`]*')
 def test_every_apply_command_the_packs_teach_files_as_written_for_a_bot(api, live, workspace, tmp_path):
     """Initech, Nov 11: the SEO Owner's `Apply:` task, written as the playbook showed it (`--body "<exactly what to
     change, where, and why>"`), was refused (99 words in the ask) and its title was flagged ("start the title with a
-    verb"). Each taught command, filled the way a bot fills it, files the task: the title passes and the body's first
+    verb"). Each taught command, filled the way a bot fills it, files the task: the title passes and the message's first
     paragraph is the ask."""
     import shlex
 
@@ -474,14 +476,14 @@ def test_every_apply_command_the_packs_teach_files_as_written_for_a_bot(api, liv
         for path in sorted(TEMPLATES.rglob("*.md"))
         for m in APPLY_COMMAND.finditer(path.read_text())
     ]
-    assert len(taught) >= 6 * 3, taught  # run-and-measure, fix-a-slip and watch in every channel pack
+    assert len(taught) >= 3, taught  # run-and-measure, fix-a-slip and watch, one copy for every channel pack (_shared)
     token = as_bot(api, "ops")
     parent = post(api, "tasks", {"owner": "ops", "title": "Acme smoke bet", "body": "The bet the change is for."})
     body = tmp_path / "apply-body.md"
     body.write_text(APPLY_BODY)
     problems, ran = [], set()
     for where, command in taught:
-        filled = command.replace("<id>", parent["id"]).replace("<body file>", str(body))
+        filled = command.replace("<id>", parent["id"]).replace("<message file>", str(body))
         for hole, value in APPLY_FILL.items():
             filled = filled.replace(hole, value)
         left = re.findall(r"<[^<>]+>", filled)

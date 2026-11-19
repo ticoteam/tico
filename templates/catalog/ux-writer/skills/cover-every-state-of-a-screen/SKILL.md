@@ -1,6 +1,8 @@
 ---
 name: cover-every-state-of-a-screen
 description: List every state a screen can be in, from the spec and the states that are missing from it, and write one row per state with its line, its next step and its error, so no state is left for an engineer to invent.
+metadata:
+  function: product
 ---
 # Cover every state of a screen
 

@@ -893,6 +893,72 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050
 
 
+def test_a_cut_history_reads_from_history_from_and_opens_at_the_balance_less_the_rows_taken_in(books):
+    """history_from cuts the backfill (Mercury's `start`): a row before it is never read, the balance holds it. The
+    opening is the balance less the rows taken in, dated the day before the first of them (not the day before
+    history_from)."""
+    fake = FakeMercury()  # checking holds 125,250.50 today
+    fake.txns["txn-old"] = _txn("txn-old", "acct-chk", -1000.0, "wireFee", day="2026-09-03")
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])  # -15.00 on Oct 12
+    made = connect(books, fake, history_from="2026-09-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        settings = json.loads(
+            c.execute("SELECT settings FROM fin_connections WHERE id=?", (made["connection_id"],)).fetchone()[0]
+        )
+        assert settings["history_from"] == "2026-09-10"
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id='txn-old'").fetchone()[0] == 0
+        assert _opening(c) == [("2026-10-11", "1000", 12_526_550), ("2026-10-11", "3900", -12_526_550)]
+
+
+def test_a_cut_history_keeps_mercurys_rows_by_their_posting_day(books, monkeypatch):
+    """Mercury's `start` filters the day a row was made, the books date it by its posting day: the backfill reads from
+    30 days before history_from and keeps the rows posted from that day on. A row made before it and posted on or
+    after it is taken in, one posted before it is not, and the opening (the balance less the rows taken in) uses that
+    cut."""
+    fake = FakeMercury()  # checking holds 125,250.50 today
+    fake.txns["made-before"] = _txn("made-before", "acct-chk", -10.0, "wireFee", day="2026-09-08")
+    fake.txns["made-before"]["postedAt"] = "2026-09-11T10:00:00Z"
+    fake.txns["posted-before"] = _txn("posted-before", "acct-chk", -20.0, "wireFee", day="2026-09-05")
+    fake.txns["posted-before"]["postedAt"] = "2026-09-09T10:00:00Z"
+    starts: list[object] = []
+    listed = fake.transactions
+
+    def spy(start_after, limit=500, start=None):
+        starts.append(start)
+        return listed(start_after, limit, start)
+
+    monkeypatch.setattr(fake, "transactions", spy)
+    connect(books, fake, history_from="2026-09-10")
+    sync_once(books, fake)
+    assert starts and set(starts) == {"2026-08-11"}
+    with books.read() as c:
+        kept = {r[0] for r in c.execute("SELECT provider_id FROM fin_feed_txns WHERE provider_id LIKE '%-before'")}
+        assert kept == {"made-before"}
+        assert _opening(c) == [("2026-09-10", "1000", 12_526_050), ("2026-09-10", "3900", -12_526_050)]
+        assert _bank_line(c) == 12_525_050
+
+
+def test_a_cut_history_with_no_rows_opens_the_day_before_history_from(books):
+    fake = FakeMercury()
+    connect(books, fake, history_from="2026-09-10")
+    sync_once(books, fake)
+    with books.read() as c:
+        assert _opening(c) == [("2026-09-09", "1000", 12_525_050), ("2026-09-09", "3900", -12_525_050)]
+
+
+def test_a_new_mercury_connection_reads_from_jan_1_and_a_company_with_no_io_card_connects(books):
+    fake = FakeMercury()
+    fake.queue["credit"] = [{"accounts": []}]  # no Mercury IO credit account
+    made = connect(books, fake)
+    with books.transaction() as c:
+        settings = json.loads(
+            c.execute("SELECT settings FROM fin_connections WHERE id=?", (made["connection_id"],)).fetchone()[0]
+        )
+        assert settings["history_from"] == "2026-01-01"
+        assert c.execute("SELECT count(*) FROM fin_money_accounts WHERE kind='card'").fetchone()[0] == 0
+
+
 def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatch):
     """A first backfill that needs more steps is due again at once and rings the worker, so the books do not sit a
     poll (15 minutes) with part of the history and no opening; once it ends the next pass is a poll away."""
@@ -900,7 +966,7 @@ def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatc
     for i in range(3):
         fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
     paged = fake.transactions
-    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500: paged(start_after, 1))
+    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500, start=None: paged(start_after, 1))
     monkeypatch.setattr(sync, "BACKFILL_PAGES", 1)
     connect(books, fake)
 
@@ -932,7 +998,7 @@ def test_a_backfill_ends_when_mercury_keeps_naming_a_next_page(books):
     rows = list(fake.txns.values())
     asked = []
 
-    def endless(start_after, limit=500):
+    def endless(start_after, limit=500, start=None):
         asked.append(start_after)
         ids = [str(t["id"]) for t in rows]
         start = ids.index(start_after) + 1 if start_after in ids else 0
@@ -962,7 +1028,7 @@ def test_a_backfill_cut_off_before_its_cursor_was_kept_goes_on_past_the_page_it_
     for i in range(4):
         fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
     paged = fake.transactions
-    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500: paged(start_after, 2))
+    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500, start=None: paged(start_after, 2))
     connect(books, fake)
     with books.read() as c:
         cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
@@ -1407,7 +1473,7 @@ def test_history_arriving_late_and_out_of_order_through_events_still_meets_the_b
     with books.read() as c:
         assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id LIKE 'old-%'").fetchone()[0] == 3
         assert _bank_line(c) == 12_525_050
-        assert _opening(c)[0][0] == "2026-08-31"
+        assert _opening(c)[0][0] == "2025-12-31"  # an empty history cut at Jan 1 opens the day before it
 
 
 def test_an_account_with_no_balance_when_the_backfill_ended_gets_its_opening_once_later(books):
@@ -1467,7 +1533,9 @@ def test_late_history_keeps_moving_an_opening_it_brought_to_zero(books):
             "SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE provider_id LIKE 'old-%'"
         ).fetchone()[0]
         assert rows == 5_000  # both taken in (one may wait for review before it posts)
-        assert _opening(c) == [("2026-08-31", "1000", 5_000), ("2026-08-31", "3900", -5_000)]
+        # Mercury's balance held both (posted before it read it): both net into the opening, which stays the day before
+        # history_from (Jan 1) in either order the rows arrive.
+        assert _opening(c) == [("2025-12-31", "1000", 5_000), ("2025-12-31", "3900", -5_000)]
 
 
 def test_an_older_connection_whose_opening_went_to_zero_gets_it_back_from_the_balance_once(books):

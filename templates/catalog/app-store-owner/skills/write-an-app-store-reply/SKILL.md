@@ -1,6 +1,8 @@
 ---
 name: write-an-app-store-reply
 description: Write a short public reply to one App Store or Google Play review that answers the specific point, names one route to the team without private detail, never argues, and is checked against the store's current reply rules before a person posts it.
+metadata:
+  function: marketing
 ---
 # Write an app store reply
 

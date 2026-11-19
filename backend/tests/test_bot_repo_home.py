@@ -126,3 +126,162 @@ def test_a_repository_github_made_before_the_bot_is_someone_elses_until_a_person
         R.note_chosen(c, "emp-cpo")  # what Settings > Bots and `manage set-repo` record
     assert _repository(api, "cpo") == "Acme/emp-cpo"
     assert turn_token(api, "cpo").json()["repository"] == "Acme/emp-cpo"
+
+
+def _old(api, bot="cpo", days=30):
+    with api.app_state.store.read() as c:
+        born = H.parse_ts(c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()[0])
+    return (born - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_bot_made_with_a_repository_github_already_had_clones_it_and_a_filled_in_default_name_does_not(api, gh):
+    """TIDY, Nov 17: video-producer was made with TIDYAPP/emp-video-producer, which already existed. Creation stored it
+    but never recorded the choice, so its computer was sent no repository and every turn failed."""
+    _ready(api, gh)
+    old = _old(api)
+    _sync(api, gh, **{"emp-video-producer": {"created_at": old}, "bot-scout": {"created_at": old}})
+    body = {"description": "Makes videos", "status": "planned"}
+    made = api.post(
+        "/api/v2/bots",
+        json={**body, "slug": "video-producer", "display_name": "Video Producer", "repo": "Acme/emp-video-producer"},
+        headers={**auth(), "Idempotency-Key": "vp"},
+    )
+    assert made.status_code == 200, made.text
+    # The name the Add bot form fills in by itself is not a choice: GitHub had it first, so it may be someone else's.
+    scout = api.post(
+        "/api/v2/bots",
+        json={**body, "slug": "scout", "display_name": "Scout", "repo": "bot-scout"},
+        headers={**auth(), "Idempotency-Key": "scout"},
+    )
+    assert scout.status_code == 200, scout.text
+    with api.app_state.store.read() as c:
+        producer, scout = H.resolve_bot(c, "video-producer")["id"], H.resolve_bot(c, "scout")["id"]
+    assert _repository(api, producer) == "Acme/emp-video-producer"
+    assert _repository(api, scout) == ""
+
+
+def test_the_backfill_records_named_repositories_of_bots_made_before_and_running_it_again_changes_nothing(api, gh):
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261117210532_named_bot_repositories_chosen")
+    _ready(api, gh)
+    old = _old(api)
+    _sync(api, gh, **{"marketing-site": {"created_at": old}, "emp-cpo": {"created_at": old}})
+    with api.app_state.store.transaction() as c:  # as create_bot stored it before it recorded the choice
+        c.execute("UPDATE bot_config SET repo='Acme/marketing-site' WHERE bot='cmo'")
+        R.note_repository(c, R.TAKEN, "Acme/marketing-site")
+    assert _repository(api, "cmo") == "" and _repository(api, "cpo") == ""
+    with api.app_state.store.transaction() as c:
+        migration.up(c)
+    assert _repository(api, "cmo") == "Acme/marketing-site"
+    # cpo's emp-cpo is the name Tico gives it unasked: GitHub had it first, so it stays someone else's.
+    assert _repository(api, "cpo") == ""
+    with api.app_state.store.read() as c:
+        assert "acme/marketing-site" not in R.metadata(c, R.TAKEN)
+        before = c.execute("SELECT key, value FROM registry_metadata WHERE key LIKE 'bot-repositories-%'").fetchall()
+    with api.app_state.store.transaction() as c:
+        migration.up(c)
+    with api.app_state.store.read() as c:
+        after = c.execute("SELECT key, value FROM registry_metadata WHERE key LIKE 'bot-repositories-%'").fetchall()
+    assert [tuple(r) for r in after] == [tuple(r) for r in before]
+
+
+def _at(api, bot="cpo", **delta):
+    with api.app_state.store.read() as c:
+        born = H.parse_ts(c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()[0])
+    return (born + timedelta(**delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _claims(api):
+    with api.app_state.store.read() as c:
+        return {
+            (r[0], r[1], r[2])
+            for r in c.execute(
+                "SELECT actor, target, json_extract(detail,'$.how') FROM events WHERE action='bot.repository_claimed'"
+            )
+        }
+
+
+def test_the_sync_gives_a_moved_bot_its_repository_back_only_when_nothing_says_it_is_someone_elses(api, gh):
+    """TIDY, Nov 13-18: its bots were recreated on a new server with their September `TIDYAPP/emp-<slug>`
+    repositories. GitHub made those before the bots existed here, so each committed on its computer only."""
+    _ready(api, gh)
+    with api.app_state.store.transaction() as c:
+        # cmo was `marketing` there: its URL names the repository it had under that slug. cpo and newbie are named in
+        # full too, cfo bare (as Tico's own forms write it).
+        c.execute("UPDATE bot_config SET repo='https://github.com/Acme/emp-marketing' WHERE bot='cmo'")
+        H.event(c, "human:ana", "bot.renamed", "cmo", {"from": "marketing", "to": "cmo"})
+        c.execute("UPDATE bot_config SET repo='Acme/emp-cpo' WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET repo='emp-cfo' WHERE bot='cfo'")
+        c.execute("UPDATE bot_config SET repo='Acme/emp-newbie' WHERE bot='newbie'")
+    old, quiet = _at(api, days=-60), _at(api, days=-3)
+    _sync(
+        api,
+        gh,
+        **{
+            "emp-marketing": {"created_at": old, "pushed_at": quiet},
+            # Pushed since cpo was made here, while Tico gave it no token: an old copy may still be running.
+            "emp-cpo": {"created_at": old, "pushed_at": _at(api, hours=5)},
+            "emp-cfo": {"created_at": old, "pushed_at": quiet},
+            "emp-newbie": {"created_at": old, "pushed_at": quiet},  # planned here: not running here yet
+        },
+    )
+    assert _repository(api, "cmo") == "Acme/emp-marketing"
+    assert [_repository(api, bot) for bot in ("cpo", "cfo", "newbie")] == ["", "", ""]
+    assert _claims(api) == {(H.TICO_ACTOR, "cmo", "moved")}
+    # The next sync claims nothing new and records nothing twice.
+    _sync(api, gh, **{"emp-marketing": {"created_at": old, "pushed_at": quiet}})
+    assert len(_claims(api)) == 1
+
+
+def test_a_person_claims_the_rest_from_health_and_a_repository_two_bots_share_is_left(api, gh):
+    _ready(api, gh)
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='Acme/emp-cmo' WHERE bot='cfo'")  # cmo's too
+    old, since = _at(api, days=-60), _at(api, hours=5)
+    _sync(api, gh, **{name: {"created_at": old, "pushed_at": since} for name in ("emp-cpo", "emp-cmo")})
+    assert [_repository(api, bot) for bot in ("cpo", "cmo", "cfo")] == ["", "", ""]
+    [line] = _history_checks(api)
+    assert line["fixes"] == [{"label": "Claim", "href": "", "tab": "", "click": "", "claim": True}]
+    member = api.post("/api/v2/repositories/claim", json={}, headers=auth("person-test"))
+    assert member.status_code == 403, member.text
+    got = api.post("/api/v2/repositories/claim", json={}, headers=auth())
+    assert got.status_code == 200, got.text
+    assert got.json() == {
+        "claimed": [{"bot": "cpo", "repository": "acme/emp-cpo"}],
+        "left": [
+            {"bot": "cfo", "repository": "acme/emp-cmo", "why": "shared"},
+            {"bot": "cmo", "repository": "acme/emp-cmo", "why": "shared"},
+        ],
+    }
+    assert _repository(api, "cpo") == "Acme/emp-cpo"
+    assert _claims(api) == {("human:ana", "cpo", "person")}
+    # One named bot: cfo points elsewhere now, so cmo's is its alone and is claimed; an unknown bot is a 404.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET repo='Acme/emp-cfo' WHERE bot='cfo'")
+    assert api.post("/api/v2/repositories/claim", json={"bots": ["nobody"]}, headers=auth()).status_code == 404
+    one = api.post("/api/v2/repositories/claim", json={"bots": ["cmo"]}, headers=auth()).json()
+    assert one == {"claimed": [{"bot": "cmo", "repository": "acme/emp-cmo"}], "left": []}
+    assert _repository(api, "cmo") == "Acme/emp-cmo"
+
+
+def test_a_bot_moved_from_another_server_keeps_its_repository_whatever_its_name(api, gh):
+    _ready(api, gh)
+    _sync(api, gh, **{"bot-funnel": {"created_at": _old(api), "pushed_at": _old(api, days=1)}})
+    made = api.post(
+        "/api/v2/bots",
+        json={
+            "slug": "funnel",
+            "display_name": "Funnel",
+            "status": "planned",
+            "repo": "bot-funnel",  # the name Tico would give it anyway: chosen only because it moved
+            "moved_from": "https://old.acme.example",
+        },
+        headers={**auth(), "Idempotency-Key": "funnel"},
+    )
+    assert made.status_code == 200, made.text
+    with api.app_state.store.read() as c:
+        bot = H.resolve_bot(c, "funnel")["id"]
+        moved = c.execute("SELECT json_extract(detail,'$.from') FROM events WHERE action='bot.moved_in'").fetchone()
+    assert _repository(api, bot) == "Acme/bot-funnel"
+    assert moved[0] == "https://old.acme.example"

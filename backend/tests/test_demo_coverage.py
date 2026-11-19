@@ -18,7 +18,11 @@ def page(path, key=None, **query):
 
 # Nav page -> (list endpoint, key of the list in the body or None when the body is the list, query).
 PAGES = {
+    # Company (#/home), the reader's own cards (person:me), the Floor first.
     "overview": page("places/person%3Ame", "pins"),
+    # Company's Floor card (ui/app/company-floor.ts): stacks in the Growth, Success and Product halls
+    # (demo_sections/floor.py).
+    "floor": page("company/floor", "factories"),
     "updates": page("updates", "updates"),
     "tasks": page("tasks", "tasks"),
     "docs": page("docs", "docs"),
@@ -37,8 +41,18 @@ PAGES = {
     # The sidebar's Inbox header opens the Threads page on its Inbox view: the same threads.
     "inbox": page("threads", "threads"),
     "strategy": page("strategy", "bets"),
-    "growth": page("growth/numbers", "months", months=24),
+    # Company › Products (ui/app/products.ts): what Acme Lights sells (backend/demo_sections/products.py).
+    "products": page("products", "products"),
+    # The Growth page is one read (backend/growth_core.py): its channels, and its retention grid from the demo's
+    # customers (backend/demo_sections/growth.py).
+    "growth": page("growth/read", "channels"),
+    "growth-retention": page("growth/read", "retention", detail="retention"),
     "finance": page("finance/transactions", "rows"),
+    # Company › Risk (ui/app/risk.ts): its risks, and the open disputes under them (backend/demo_sections/risk.py).
+    "risk": page("risks", "risks"),
+    "risk-disputes": page("matters", "matters", kind="dispute", open="true"),
+    # Risk › Obligations: the dates under the risks' standing rules (backend/demo_sections/risk.py DATES).
+    "risk-obligations": page("risk/obligations", "obligations"),
     "rules": page("rules", "rules"),
     # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).
     "rules-internal": page("rules", "rules", kind="internal"),

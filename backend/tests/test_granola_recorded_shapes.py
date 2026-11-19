@@ -568,7 +568,7 @@ def live_granola(notes="get_meetings", throttle=None, public=None):
 @pytest.fixture
 def live(monkeypatch):
     sleeps = []
-    monkeypatch.setattr(granola_live_check, "SLEEP", sleeps.append)
+    monkeypatch.setattr(granola_live_check, "_sleep", sleeps.append)
     monkeypatch.delenv("GRANOLA_API_KEY", raising=False)
     monkeypatch.setenv("GRANOLA_MCP_TOKEN", "fake-access-sensitive")
     return sleeps

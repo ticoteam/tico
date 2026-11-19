@@ -146,6 +146,11 @@ def write_answer(words, state, mutate, argv, ids):
         if mutate:
             state.setdefault("answers", {})[req] = words[4]
         return {"ok": True, "task_id": tid, "requirement_id": req, "answer": words[4]}
+    if noun == "task" and verb == "comment" and tid:
+        # A reply in the task's chat clears the person's ❓ on it from Needs you.
+        if mutate:
+            state.setdefault("replied", []).append(tid)
+        return {"ok": True, "id": "c_" + tid[:8], "task_id": tid}
     if noun == "task" and verb == "reassign" and tid and len(words) > 3:
         if mutate:
             record(state, "task", tid, {"owner": words[3]})
@@ -270,10 +275,11 @@ def propose_count(out, argv):
 
 def needs_left(out, state):
     """`needs-you show` after this run's writes: an ask that was answered, and every item of a task that was closed or
-    done, leave the list, and the counts follow."""
+    done, and a ❓ replied to in its task's chat, leave the list, and the counts follow."""
     answered, ended = state.get("answers", {}), {k for k, v in state["tasks"].items() if v in ("closed", "done")}
+    replied = state.get("replied", [])
     items = out.get("items")
-    if not isinstance(items, list) or not (answered or ended):
+    if not isinstance(items, list) or not (answered or ended or replied):
         return out
 
     def named(full, keys):
@@ -283,7 +289,11 @@ def needs_left(out, state):
     def gone(item):
         if not isinstance(item, dict):
             return False
-        return named(item.get("task_id"), ended) or (item.get("kind") == "ask" and named(item.get("requirement_id"), answered))
+        return (
+            named(item.get("task_id"), ended)
+            or (item.get("kind") == "ask" and named(item.get("requirement_id"), answered))
+            or (item.get("kind") == "question" and named(item.get("task_id"), replied))
+        )
 
     kept = [i for i in items if not gone(i)]
     if len(kept) == len(items):
@@ -659,8 +669,8 @@ def opening(background=False):
         "turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose "
         "an arbitrary answer-length or list-length cap.",
         "A task owner marks work done; its requester or an authorized human closes it.",
-        "Ask a person with tico task question, ask a bot with tico message send and --needs-action, answer a question task in "
-        "Tico, and preserve durable knowledge in your repository's memory/ or "
+        "Ask a person with tico task ask, ask a bot with tico message send and --needs-action, answer a person's ❓ with a "
+        "reply in its chat (tico task comment), and preserve durable knowledge in your repository's memory/ or "
         "knowledge/; end each such commit message with the line `Tico-Run: this run`.",
         "Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Save a working rule "
         "you are given or settle on at the top of memory/learnings.md, one short line each in that section; add each other "
@@ -773,9 +783,6 @@ def run_sample(case, sample, args, outdir):
     logf = work / "hub.log"
     logf.write_text("")
     (work / "hubdir/scripts").mkdir(parents=True)
-    mail = work / "hubdir/scripts/mail.sh"
-    mail.write_text("#!/bin/sh\necho '[]'\n")
-    mail.chmod(0o755)
     # Inherited HUB_* and TICO_* (credentials, tokens, hub addresses) never reach the child: the run has its own.
     inherited = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     env = {

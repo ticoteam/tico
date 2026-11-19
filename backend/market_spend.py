@@ -1198,26 +1198,83 @@ def _free_title(conn, actor):
     return f"{SIZE_TASK} (40)"
 
 
+def _sentence(text):
+    return " ".join(str(text or "").split())
+
+
+def sizing(conn, auth, who):
+    """The open Size the market task as the Market page shows it, or None when none is open or the reader may not open
+    it: its id and `version`, whose turn it is (`turn`: `person` while it waits on a person, else `working`), and `ask`,
+    what it waits on the reader for (requirement id, kind, line): a ❓ (kind `question`, its `mark_id`) is answered by a
+    comment on the task; any other ask (an OK) on the task itself."""
+    from . import question_marks
+    from . import waiting_on as W
+
+    task_id = _open_task(conn)
+    if not task_id:
+        return None
+    try:
+        row = auth.task(conn, who, task_id, tags=False)
+    except Problem:
+        return None
+    waits = W.waiting_on(conn, task_id)
+    out = {
+        "id": task_id,
+        "version": row["version"],
+        "turn": "person" if waits and waits[0].state == W.PERSON else "working",
+        "ask": None,
+    }
+    mine = next((w for w in waits if w.state == W.PERSON and w.ask and w.who == who.actor and w.requirement_id), None)
+    if mine and question_marks.mark_id(mine.requirement_id):
+        # A ❓ on the task's chat: the reader's reply there is the answer (POST /api/v2/tasks/{id}/comments).
+        out["ask"] = {
+            "requirement_id": None,
+            "mark_id": question_marks.mark_id(mine.requirement_id),
+            "kind": "question",
+            "line": mine.line or "",
+        }
+    elif mine:
+        # Any other ask (an OK): its line, and the task to answer it on.
+        found = conn.execute("SELECT kind, line FROM requirements WHERE id=?", (mine.requirement_id,)).fetchone()
+        out["turn"] = "person"
+        out["ask"] = {
+            "requirement_id": mine.requirement_id,
+            "kind": found["kind"] if found else "ok",
+            "line": mine.line or (found["line"] if found else ""),
+        }
+    return out
+
+
 def research(conn, auth, who, description):
     """The owner asks the Librarian to define and size the market. One task at a time: asking again while it is open
-    returns the same task."""
+    returns the same task. A sentence that differs from the saved description changes the definition, and an open task
+    gets it as the owner's comment, so the Librarian redoes the work for the market as it is now."""
     from . import getting_started as GS
     from . import rooms
 
     if who.role != "owner":
         raise Problem("forbidden", "Only the owner asks for the market to be sized", 403)
+    description = _sentence(description)
+    if not description:
+        raise Problem("validation", "Describe the market in a sentence", 422)
+    saved = _sentence((definition(conn) or {}).get("description"))
+    changed = description != saved
+    safe = MK._for_task(description)
     found = _open_task(conn)
     if found:
+        if changed:
+            set_definition(conn, who.actor, {"description": description})
+            H.task_comment(
+                conn,
+                who.actor,
+                found,
+                f"The market is now: {safe}\n\nDefine and size this market instead. Follow {PLAYBOOK}.",
+            )
         return {"task_id": found}
     if not GS._active(conn, GS.LIBRARIAN):
         raise Problem("librarian", "The Librarian is not running yet. It starts once a computer hosts it.", 409)
-    description = str(description or "").strip()
-    if not description:
-        raise Problem("validation", "Describe the market in a sentence", 422)
-    defn = definition(conn)
-    if not (defn or {}).get("description"):
+    if changed:
         set_definition(conn, who.actor, {"description": description})
-    safe = MK._for_task(description)
     from . import onboarding
 
     serves = onboarding.regions(conn)  # the sizes are for the places the company serves
@@ -1234,8 +1291,9 @@ def research(conn, auth, who, description):
         conn,
         who.actor,
         _free_title(conn, who.actor),
-        text,
+        description,  # the owner's own words are the request; the steps reach the Librarian through its run
         "bot:librarian",
+        instructions=text,
         allow_planned=True,
         conversation_id=rooms.task_conversation_id(conn, auth, "bot:librarian", who.actor),
     )
@@ -1336,9 +1394,10 @@ def install(app, store, auth, mutate):
         basis: Literal["product", "platform"] = "product",
         year: int | None = Query(None, ge=1990, le=2100),
     ):
-        reader(request.state.identity)
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return spend(c, dimension, basis, year)
+            return {**spend(c, dimension, basis, year), "sizing": sizing(c, auth, who)}
 
     @app.put("/api/v2/market/definition")
     def definition_put(request: Request, body: MarketDefinitionPatch):
@@ -1441,7 +1500,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             auth.domain(who)
-            return research(c, auth, who, body.description)
+            return {**research(c, auth, who, body.description), "sizing": sizing(c, auth, who)}
 
         return mutate(request, body, work)
 

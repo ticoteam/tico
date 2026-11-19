@@ -18,7 +18,6 @@
 :is(.strat-actions,#strat-actions) .rd-help{margin-left:0}
 :is(.strat-actions,#strat-actions) .rd-help-pop{left:auto;right:-4px;bottom:auto;top:calc(100% + 6px);transform:none}
 .strat-meta{margin:0 0 10px;color:var(--muted);font-size:var(--t-sm)}
-.strat-status{color:var(--ink)}
 .strat-none{margin:8px 0 12px;color:var(--muted);font-size:var(--t-md)}
 .strat-publish{display:flex;gap:8px;align-items:center;max-width:760px;margin:0 0 12px}
 .strat-publish input{flex:1 1 auto;min-width:0}
@@ -83,8 +82,10 @@
 .strat-card-head .strat-mini{margin-left:auto}
 .strat-row{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
 @media (min-width:1100px){.strat-row{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}}
-.strat-secs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
-.strat-secs:empty{display:none}
+.strat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px}
+/* The Brand card (until the brand is set up) and the sections fill one grid. */
+.strat-grid>.strat-setup,.strat-grid>.strat-secs{display:contents}
+.strat-grid:not(:has(.strat-sec)){display:none}
 .strat-add-sec:empty{display:none}
 .strat-none-s{margin:0;color:var(--muted);font-size:var(--t-base)}
 .strat-cap{margin:0;color:var(--muted);font-size:var(--t-sm)}
@@ -144,13 +145,22 @@
 .strat-tm.next{background:var(--surface);border:2px dashed var(--accent);color:var(--accent)}
 .strat-tm.next b{color:var(--accent)}
 .strat-tm-group{z-index:1;border:1.5px solid var(--g5);border-radius:6px;pointer-events:none}
-.strat-tm.pick{cursor:pointer;padding-right:22px}
+.strat-tm.pick{cursor:pointer;padding-right:40px}
 .strat-tm.pick:hover{border-color:var(--g5)}
 .strat-tm.pick:focus-visible{outline:var(--focus-ring);outline-offset:-2px}
 .strat-tm .strat-x{position:absolute;top:2px;right:2px;width:18px;height:18px;color:inherit}
+/* Rename, beside ×, where a pointer hovers; a touch screen keeps the corner for × alone. */
+.strat-pen{position:absolute;top:2px;right:20px;display:grid;place-items:center;width:18px;height:18px;min-height:0;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.strat-pen svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
+.strat-pen:hover{background:var(--surface2)}
+.strat-pen:focus-visible,.strat-tm:hover .strat-pen{opacity:1}
+.strat-tm-rename input{box-sizing:border-box;width:100%;min-width:0;height:auto;padding:1px 4px;font:inherit;font-weight:600}
+.strat-addseg{flex-wrap:wrap}
+.strat-addseg input{flex:1 1 140px}
+.strat-addseg select{flex:0 1 auto;min-width:0;max-width:100%;height:var(--ctl);border-radius:999px;font-size:var(--t-base)}
 .strat-tm-plain{display:flex;flex-wrap:wrap;gap:4px}
 .strat-tm-plain .strat-tm{position:relative;border:1px solid var(--line);padding:5px 8px;max-width:100%}
-.strat-tm-plain .strat-tm.pick{padding-right:24px}
+.strat-tm-plain .strat-tm.pick{padding-right:42px}
 .strat-tm-plain .strat-tm.ours{border-color:var(--accent)}
 .strat-tm-plain .strat-tm.next{border:1px dashed var(--accent)}
 /* On a touch screen every tile's × shows, so removing a segment never goes through a tap on the tile (which retargets
@@ -158,6 +168,7 @@
    only into that empty corner. The tile clips it (overflow:hidden), so it never covers a neighbouring tile. */
 @media (hover:none){
   .strat-tm.pick,.strat-tm-plain .strat-tm.pick{padding-right:46px}
+  .strat-pen{display:none}
   .strat-tm-plain .strat-tm.pick{min-height:44px}
   .strat-tm .strat-x{top:0;right:0;width:32px;height:32px}
   :is(.strat-map,.strat-tm-plain) .strat-tm .strat-x::before{content:"";position:absolute;top:0;right:0;bottom:auto;left:auto;width:44px;height:44px}

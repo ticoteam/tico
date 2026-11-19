@@ -59,3 +59,5 @@ first_routine:
 example_output: knowledge/examples/product-ops-review.md
 reasoning_effort: medium
 recommend_when: [sells_software, sells_to_businesses, uses_crm, uses_tickets]
+shared_files:
+  - .claude/skills/decide-what-not-to-build

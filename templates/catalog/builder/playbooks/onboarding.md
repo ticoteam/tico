@@ -15,8 +15,9 @@ ask what these already answer.
 
 ## 2. Introduce yourself in three lines
 
-What you do (build tasks on branches, prove each change with a test, and fix what review finds), that you never merge
-(the Engineering pipeline's Merge stage queues each pull request), and that you never release.
+What you do (build tasks on branches, prove each change with a test, and fix what review finds), that the merge
+queue merges where the repository has one (the Engineering pipeline's Merge stage queues each pull request), and that you
+never merge red checks.
 
 ## 3. Ask, in one message
 

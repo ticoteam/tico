@@ -4,6 +4,8 @@ said on. Asked by a bot it has only that bot's rights, so where the bot may not 
 version a person turns on. Ana owns the company, Cara is a member (the base fixture).
 """
 
+import json
+
 from backend import botops_act
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (fixture)
@@ -150,3 +152,80 @@ def test_a_bot_asks_and_botops_proposes_where_that_bot_may_not_change(api, botop
     assert on["enabled"] is True and on["version"] == 1
     assert get(api, f"automations/{proposed['id']}/versions?status=pending")["versions"] == []
     assert [r["actor"] for r in audit_rows(api, proposed["id"])] == ["human:ana"]
+
+
+def test_a_delete_card_names_the_automation_the_work_and_why(api, botops):
+    """The card says which automation, whose, that it is already off, the work BotOps was on and why it waits for
+    this person: from the database, never only "Make a change in Tico (automations)"."""
+    aid = post(api, "automations", flow(enabled=False), "cara-test")["id"]
+    attempt = turn(api, botops, person="cara-test", text="Delete my receipts automation")
+    err, card = mcp(api, "tico_automation_delete", {"id": aid}, attempt["token"])
+    assert not err and card["needs_confirm"], card
+    title = card["action"]["description"]
+    assert title.startswith("Delete the automation “Receipts” of Cara (already switched off). "), title
+    assert "BotOps asked in your chat with it." in title and "always needs your own OK" in title, title
+    assert "Make a change in Tico" not in title
+
+
+def test_a_card_on_a_task_names_the_task_and_who_asked(api, botops):
+    """BotOps working on a task a person asked for names that task and its requester; a task the person may not
+    read is named only by who asked for it."""
+    aid = post(api, "automations", flow(enabled=True), "cara-test")["id"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:cara", "Tidy my automations", "Delete the old ones.", "bot:botops", lint=False)
+    attempt = claim(api, botops, "botops")
+    err, card = mcp(api, "tico_automation_delete", {"id": aid}, attempt["token"])
+    assert not err and card["needs_confirm"], card
+    title = card["action"]["description"]
+    assert "(already switched off)" not in title, title
+    assert "BotOps asked while working on “Tidy my automations”, which you asked for." in title, (title, task)
+
+
+def test_a_card_never_shows_a_task_the_person_may_not_read_or_fails_on_a_gone_automation(api, botops):
+    """A task the person may not read is named only by who asked for it, and an automation that is gone is named by
+    its id, so the card is still made."""
+    from backend import assistant
+
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Ana's private plan", "", "bot:botops", lint=False, private=True)
+        c.execute(
+            "INSERT INTO attempts(id, bot_id, task_id, state, created_at) VALUES('a-x', 'botops', ?, 'running', ?)",
+            (task["id"], H.now()),
+        )
+        cara = api.app.state.auth.identity_for_actor(c, "human:cara")
+        why = botops_act.card_why(c, api.app.state.auth, cara, "a-x", "DELETE", "/api/v2/automations/gone")
+        said = assistant.describe(c, "DELETE", "/api/v2/automations/gone", {})[0]
+    assert why.startswith("BotOps asked while working for Ana."), why
+    assert "Ana's private plan" not in why
+    assert said == "Delete the automation gone", said
+
+
+def test_a_delete_of_a_gone_automation_is_refused_with_no_card(api, botops):
+    """Spec AC-4 as corrected: deleting an automation already gone is refused at once, through the same path that
+    makes cards, and leaves no card behind for the person to confirm."""
+    attempt = turn(api, botops, person="cara-test", text="Delete my receipts automation")
+    with api.app.state.store.transaction() as c:
+        before = c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0]
+    err, said = mcp(api, "tico_automation_delete", {"id": "gone"}, attempt["token"])
+    assert err and "No such automation" in json.dumps(said), said
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == before
+
+
+def test_a_card_says_why_by_its_rule_and_never_calls_a_gone_task_a_chat(api, botops):
+    """Two protected changes give their own reasons; a run whose task is gone names that task's id instead of
+    claiming the person asked in the chat."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id, bot_id, task_id, state, created_at) VALUES('a-gone', 'botops', 'gone-task', "
+            "'running', ?)",
+            (H.now(),),
+        )
+        cara = api.app.state.auth.identity_for_actor(c, "human:cara")
+        why = lambda method, path: botops_act.card_why(c, api.app.state.auth, cara, "a-gone", method, path)
+        repo = why("PUT", "/api/v2/bots/ops/repositories")
+        key = why("POST", "/api/v2/credentials/k1/grants")
+        other = why("POST", "/api/v2/somewhere/new")
+    assert repo.startswith("BotOps asked while working on task gone-task, which is no longer there. "), repo
+    assert "repositories" in repo and "stored credential" in key and repo != key != other
+    assert "chat" not in repo

@@ -6,7 +6,8 @@ its owner: `company` is a company goal, `human:x` a person's, `bot:x` a bot's. A
 optional. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
-Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
+Manager, or from its owner's check-ins and its tasks when it has none (tasks can only warn: finished
+tasks never make a goal green, they leave it gray, "No measure yet"). A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
 back, and the Strategy Owner may only *suggest* a different one. Every colour is stored with who set
 it (`status_by`) and how (`status_source`, auto or person), in `goals` and in its history rows.
@@ -35,11 +36,12 @@ SIGNALS = ("on_track", "at_risk", "off_track")
 SIGNAL_COLOUR = {"on_track": "green", "at_risk": "yellow", "off_track": "red"}
 CHECKIN_DAYS = 21  # a check-in colours a goal for three weeks
 TASK_DAYS = 14  # no task done for two weeks, on a goal at least that old: yellow
+NO_MEASURE = "No measure yet"  # a goal with work done but no KPI on target or check-in to judge it by
 SOURCES = ("measured", "estimate")  # legacy names of a reading's quality; a connector name is a source
 # goal_why: the Strategy Owner's one line tying a goal to the company's vision (backend/company.py). recovery: the
 # Strategy Owner's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
-# strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
+# strategy_realign: the goals of bets a strategy save retired or rewrote, filed by Tico for the owner (backend/strategy.py).
 # brand_draft: sections for the brand draft from any bot, an admin's to confirm (backend/brand.py).
 PROPOSALS = (
     "goal_wording",
@@ -675,15 +677,17 @@ def arm_pass(conn):
         return False
     if conn.execute("SELECT 1 FROM events WHERE action='goal_manager.armed'").fetchone():
         return False
-    routines.update(conn, H.KEEPER, sid, {"enabled": True})
-    H.event(conn, H.KEEPER, "goal_manager.armed", sid, {})
+    routines.update(conn, H.TICO_ACTOR, sid, {"enabled": True})
+    H.event(conn, H.TICO_ACTOR, "goal_manager.armed", sid, {})
     return True
 
 
 # ----------------------------------------------------------------------------- the colour, worked out
 def _age(then, at):
+    """How long ago, as a person says it: "today" or "3d ago"."""
     days = (at - H.parse_ts(then).astimezone(timezone.utc)).total_seconds() / 86400 if H.parse_ts(then) else 0
-    return K.age_words(days)
+    words = K.age_words(days)
+    return words if words == "today" else f"{words} ago"
 
 
 def _from_owner(conn, row, at):
@@ -699,7 +703,7 @@ def _from_owner(conn, row, at):
         return {
             "status": SIGNAL_COLOUR[said["signal"]],
             "basis": "checkin",
-            "reason": f"Check-in {_age(said['created_at'], at)} ago: {said['signal'].replace('_', ' ')}",
+            "reason": f"Check-in {_age(said['created_at'], at)}: {said['signal'].replace('_', ' ')}",
         }
     # A closed task was dropped, not finished: it earns no credit and is not counted. Done is finished.
     tasks = conn.execute(
@@ -711,14 +715,16 @@ def _from_owner(conn, row, at):
         return None
     finished = [t["done_at"] for t in tasks if t["status"] == "done"]
     waiting = [t for t in tasks if t["status"] != "done"]
+    # Finished tasks show effort, not that the goal is being met: they never make a goal green. Only a KPI on
+    # target or an on-track check-in does. Stalled tasks can still warn (yellow, red) below.
     if not waiting:
-        return {"status": "green", "basis": "tasks", "reason": f"All {len(tasks)} tasks done"}
+        return {"status": "gray", "basis": "tasks", "reason": f"{NO_MEASURE}: all {len(tasks)} tasks done"}
     latest = max(finished, default=None)
     if latest and (at - H.parse_ts(latest).astimezone(timezone.utc)).days < TASK_DAYS:
         return {
-            "status": "green",
+            "status": "gray",
             "basis": "tasks",
-            "reason": f"{len(finished)} of {len(tasks)} tasks done, latest {_age(latest, at)} ago",
+            "reason": f"{NO_MEASURE}: {len(finished)} of {len(tasks)} tasks done, latest {_age(latest, at)}",
         }
     created = H.parse_ts(row["created_at"])
     if created and (at - created.astimezone(timezone.utc)).days >= TASK_DAYS:
@@ -749,8 +755,8 @@ def score(conn, row, at=None):
             "reason": worst["reason"] + (f" (+{others} more)" if others and worst["status"] != "green" else ""),
         }
     fallback = _from_owner(conn, row, at)
-    if fallback:
-        return fallback
+    if fallback and not (fallback["status"] == "gray" and views):
+        return fallback  # a measure with no reading yet says so, rather than "No measure yet"
     if views:
         return {"status": "gray", "basis": "kpis", "reason": views[0]["reason"]}
     measures = K.goal_views(conn, [row["id"]], at, include_archived=True)[row["id"]]
@@ -785,8 +791,8 @@ def apply_auto(conn, goal_id, at=None):
             )
             return {"goal": goal_id, "suggested": suggest[0], "reason": suggest[1]} if suggest[0] else None
         return None
-    if row["status"] is None and result["status"] == "gray":
-        return None  # nothing to say yet: it stays unscored
+    if row["status"] is None and result["status"] == "gray" and result["basis"] != "tasks":
+        return None  # nothing to say yet: it stays unscored; finished work is said, as "No measure yet"
     changed = result["status"] != row["status"]
     if not changed and result["reason"] == row["status_note"] and row["status_by_id"] == AUTO_ACTOR:
         return None
@@ -1007,7 +1013,7 @@ CARD_FIELDS = {
 def card(conn, p, hidden, editor):
     """What the card tells this reader. `hidden`: owners whose goals and KPIs the reader may not read
     (backend/goal_routes.py hidden_owners); nothing of theirs is read in, not a reused measure's unit either.
-    `editor`: the reader edits the strategy, so reads unpublished bets; anyone else reads the published ones."""
+    `editor`: the reader edits the strategy, so reads every bet; anyone else reads the live version's."""
     pl, kind = p.get("payload") or {}, p["kind"]
     seen = lambda record: record if record and record["owner_id"] not in hidden else None
     row = seen(goal(conn, p["goal_id"]) if p.get("goal_id") else None)
@@ -1257,7 +1263,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             again = strategy_suggest.follow_up(conn, row, applied["left"])
             result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
         elif row["kind"] == "strategy_draft":
-            # A bot's proposed strategy, written to the draft and its bets as the owner. Never published.
+            # A bot's proposed strategy, written to the strategy and its bets as the owner, live at once.
             from . import strategy
 
             result = strategy.apply_proposal(conn, actor, payload)
@@ -1376,23 +1382,23 @@ def seed(conn, document, resolve):
                 str(entry.get("body") or ""),
                 stated,
                 str(entry.get("status_note") or ""),
-                H.KEEPER if stated else None,
+                H.TICO_ACTOR if stated else None,
                 ts if stated else None,
                 "person" if stated else None,
                 _next_rank(conn, owner),
                 ts,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 ts,
             ),
         )
-        _event(conn, gid, H.KEEPER, "created", None, entry.get("title"), "registry/goals.yaml")
+        _event(conn, gid, H.TICO_ACTOR, "created", None, entry.get("title"), "registry/goals.yaml")
         for measure in entry.get("kpis") or []:
             kid = str(measure.get("id") or "").strip() or None
             if kid and kpi(conn, kid):
                 continue
             made = K.create(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 owner,
                 {
                     "name": measure.get("name") or kid or "KPI",
@@ -1408,7 +1414,7 @@ def seed(conn, document, resolve):
                 target = {"kind": "improve", "target": measure["target"], "deadline": measure.get("deadline")}
             K.set_link(
                 conn,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 gid,
                 made["id"],
                 {
@@ -1425,7 +1431,7 @@ def seed(conn, document, resolve):
                 try:
                     K.add_reading(
                         conn,
-                        resolve(reading.get("by")) or H.KEEPER,
+                        resolve(reading.get("by")) or H.TICO_ACTOR,
                         made,
                         float(reading.get("value")),
                         period_end=reading.get("at"),

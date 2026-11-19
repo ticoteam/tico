@@ -6,7 +6,6 @@ from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: 
 from backend.tests.helpers.login_holds import at, limit
 from backend.tests.helpers.model_logout import report
 from backend.tests.helpers.subscriptions import set_runtime
-from backend import bot_settings as BS
 
 
 def heartbeat(api, machine, *, current, signed=True):
@@ -48,14 +47,6 @@ def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, 
     rid = machine['runner_id']
     # This hold predates the handshake: do not discard it or alias it to another account.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','engineering',NULL,NULL)")
-        before = c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
-        H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
-        assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
-        assert (
-            c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
-            == before
-        )
         login_holds.record(c, rid, 'work', 'codex', H.now(), bot='finance')
     assert get(api, 'config', machine['token'])['computer_logins_v1'] is True
     heartbeat(api, machine, current=True)
@@ -94,8 +85,8 @@ def test_a_legacy_named_login_waits_for_acknowledgement_and_sign_out_is_reversib
     task(api, 'finance', 'Keep the legacy account until upgrade')
     assert claim(api, machine, 'finance') is None
     assert 'Update Test Mac' in get(api, 'bots/finance/subscription')['problem']
-    get(api, f'runners/{rid}/logouts/bots?runtime=codex', expected=409)
-    refused = post(api, f'runners/{rid}/logouts', {'runtime': 'codex'}, expected=409)
+    get(api, f'computers/{rid}/logouts/bots?runtime=codex', expected=409)
+    refused = post(api, f'computers/{rid}/logouts', {'runtime': 'codex'}, expected=409)
     assert refused['error']['code'] == 'runner_version'
     with api.app.state.store.read() as c:
         assert execution.bot_refusal(c, api.app.state.store.settings, rid, 'finance') == 'login_upgrade'
@@ -106,13 +97,13 @@ def test_a_legacy_named_login_waits_for_acknowledgement_and_sign_out_is_reversib
     set_runtime(api, 'codex', bot='product-design')
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='product-design'")
-    assert [b['bot'] for b in get(api, f'runners/{rid}/logouts/bots?runtime=codex')['bots']] == ['finance']
-    assert [b['bot'] for b in get(api, f'runners/{rid}/logouts/bots?runtime=claude')['bots']] == ['ops']
-    logout = post(api, f'runners/{rid}/logouts', {'runtime': 'codex'})
+    assert [b['bot'] for b in get(api, f'computers/{rid}/logouts/bots?runtime=codex')['bots']] == ['finance']
+    assert [b['bot'] for b in get(api, f'computers/{rid}/logouts/bots?runtime=claude')['bots']] == ['ops']
+    logout = post(api, f'computers/{rid}/logouts', {'runtime': 'codex'})
     report(api, machine, logout['id'], state='signed_out')
     heartbeat(api, machine, current=True, signed=False)
     assert claim(api, machine, 'finance') is None
-    login = post(api, f'runners/{rid}/logins', {'runtime': 'codex'})
+    login = post(api, f'computers/{rid}/logins', {'runtime': 'codex'})
     report(api, machine, login['id'], state='signed_in')
     heartbeat(api, machine, current=True)
     assert claim(api, machine, 'finance')

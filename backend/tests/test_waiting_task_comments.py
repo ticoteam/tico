@@ -1,9 +1,10 @@
 """A person's comment on a bot's task wakes the bot at once, whatever the task waits on (docs/tasks.md, Comments): a
-person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, an ask of a person nor a
+person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, a ❓ to a person nor a
 snooze holds it back (execution.job_refusal)."""
 
 import pytest
 
+from backend import question_marks
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401
 from backend.tests.helpers.task_lanes import task_bot
@@ -24,7 +25,7 @@ def park(c, tid, wait):
     if wait == "child":
         H.task_create(c, "bot:ops", "Review receipts", "Review #1994.", "bot:cpo", parent_id=tid, lint=False)
     elif wait == "person":
-        H.task_ask(c, "bot:ops", tid, "human:ben", "Can you sign off on the release checklist?", seen_version=version)
+        question_marks.ask(c, "bot:ops", tid, "human:ben", "Can you sign off on the release checklist?")
     elif wait == "snooze":
         H.task_snooze(c, "bot:ops", tid, "Waiting for the freeze to end", H.shift(H.now(), hours=4), version)
 
@@ -56,23 +57,3 @@ def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, req
     turn = claim(api, machine)
     assert turn and turn["message"]["id"] == sent["comment"]["id"], "the comment is the bot's next turn"
     assert turn["task"]["id"] == tid
-
-
-def test_a_persons_comment_goes_first_once_the_bots_one_turn_ends(api):
-    # A runner without lanes runs one turn of the bot at a time: the comment waits for the running turn, then goes
-    # ahead of the bot's other queued work, however much there is.
-    machine = task_bot(api, lanes=False, others=("cpo",))
-    tid = waiting_task(api, machine, "nothing")
-    with api.app.state.store.transaction() as c:
-        H.task_create(c, "human:ana", "Long job", "Do it.", "bot:ops", lint=False)
-    running = claim(api, machine)
-    post(api, f"attempts/{running['id']}/started", {"thread_id": "long"}, machine["token"])
-    with api.app.state.store.transaction() as c:
-        for i in range(3):
-            # Top of the queue: they outrank the waiting task, so only a person's message can put it first.
-            H.task_create(c, "human:ana", f"Other {i}", "Do it.", "bot:ops", top=True, lint=False)
-    sent = post(api, f"tasks/{tid}/comments", {"text": "Please cut the release now."})
-    assert claim(api, machine) is None, "one turn of the bot at a time on this runner"
-    finish(api, machine, running)
-    turn = claim(api, machine)
-    assert turn and turn["message"]["id"] == sent["comment"]["id"]

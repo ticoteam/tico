@@ -295,14 +295,14 @@ def test_the_engines_tables_log_their_task_and_the_needs_of_its_people(api):
     found = logged(
         lambda: asked.append(
             api.post(
-                f"/api/v2/tasks/{task['id']}/asks", json={"to": "ben", "line": "Which day?"}, headers=headers()
+                f"/api/v2/tasks/{task['id']}/asks",
+                json={"to": "ben", "line": "OK Monday", "kind": "ok"},
+                headers=headers(),
             ).json()["requirement_id"]
         )
     )
     assert ("tasks", "ask", task["id"]) in found and ("needs", "ask", "human:ben") in found
-    found = logged(
-        lambda: post(api, f"tasks/{task['id']}/asks/{asked[0]}/answer", {"value": "Monday"}, token="ben-test")
-    )
+    found = logged(lambda: post(api, f"tasks/{task['id']}/asks/{asked[0]}/answer", {"value": "ok"}, token="ben-test"))
     assert ("tasks", "answer", task["id"]) in found and ("needs", "ask", "human:ben") in found
     found = logged(lambda: post(api, f"tasks/{task['id']}/snooze", {"until": "2099-01-05", "why": "Later"}))
     assert ("tasks", "snooze", task["id"]) in found and ("needs", "task", "human:ana") in found
@@ -382,7 +382,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
 
 
 def test_a_ring_after_a_quiet_window_is_read_at_once_and_a_burst_still_once_a_window(monkeypatch):
-    monkeypatch.setattr(E.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(E, "_monotonic", lambda: 100.0)
     assert E.gathered(0.25, read_at=0.0) == E.LEAD_SECONDS  # quiet: read almost at once
     assert abs(E.gathered(0.25, read_at=99.9) - 0.15) < 1e-9  # just read: only the rest of the window
 

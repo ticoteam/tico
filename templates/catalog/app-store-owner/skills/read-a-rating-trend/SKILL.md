@@ -1,6 +1,8 @@
 ---
 name: read-a-rating-trend
 description: Read an app's rating on each store as a trend, naming which rating (current version or all versions) and how many ratings sit under it, and say up, down or about the same only when the number is larger than its noise.
+metadata:
+  function: marketing
 ---
 # Read a rating trend
 

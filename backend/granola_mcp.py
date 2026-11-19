@@ -16,13 +16,18 @@ import weakref
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
+from typing import Any
 
 import httpx
 from fastapi import Request
 
+from clients import transcript_formats as TF
+
+from . import mcp_client, oauth_refresh
 from .auth import Identity, validate_identity
 from .imports import MeetingImport, segments_of
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 MCP = "https://mcp.granola.ai/mcp"
 AUTH = "https://mcp-auth.granola.ai"
@@ -36,6 +41,8 @@ GET_MEETINGS_RETRIES = (20, 60)  # spaced waits for a get_meetings throttle with
 FIRST_GET_MEETINGS_GAP = 10  # the first get_meetings waits this long after the sync's previous MCP call
 HOLD_MAX = 3  # syncs a checkpoint is held for untried notes before they are given up
 REVISIT = 24 * 3600  # an imported note is re-read for a late summary only while its meeting is this recent
+# Granola's stand-in for a summary it has not written yet (lower-cased; matched by its start).
+NO_SUMMARY = "no ai summary has been generated"
 DEBOUNCE = 120
 GET_MEETINGS_INTERVAL = 6
 SIGNALS = (
@@ -108,12 +115,7 @@ class GranolaMCP:
             if meeting_meta is not None:
                 meeting_meta["next_meetings_call"] = self.clock() + GET_MEETINGS_INTERVAL
 
-    @staticmethod
-    def seconds(value, default):
-        try:
-            return max(1, int(value))
-        except (ValueError, TypeError, OverflowError):
-            return default
+    seconds = staticmethod(mcp_client.seconds)
 
     @staticmethod
     def verification(url):
@@ -157,6 +159,13 @@ class GranolaMCP:
             if not row:
                 return None
             return dict(row), json.loads(row["metadata"]), json.loads(self.app.state.vault.cipher.decrypt(c, row))
+
+    def save_meta(self, row, meta):
+        with self.store.transaction() as c:
+            c.execute(
+                "UPDATE granola_connections SET metadata=? WHERE actor=? AND id=?",
+                (encode(meta), row["actor"], row["id"]),
+            )
 
     def save(self, row, meta, secret):
         with self.store.transaction() as c:
@@ -220,23 +229,20 @@ class GranolaMCP:
             row = await asyncio.to_thread(read_client)
             if row and not rejected:
                 return json.loads(row[0])["client_id"]
-            response = await self.http(
-                "POST",
-                AUTH + "/oauth2/register",
-                json={
-                    "client_name": "Tico",
-                    "token_endpoint_auth_method": "none",
-                    "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-                    # Granola rejects a registration without redirect_uris, even for a device-code client that never
-                    # redirects ("redirect_uris must be an array"); a loopback address is never used.
-                    "redirect_uris": ["http://127.0.0.1/callback"],
-                },
+            body = mcp_client.registration(
+                # Granola rejects a registration without redirect_uris, even for a device-code client that never
+                # redirects ("redirect_uris must be an array"); a loopback address is never used.
+                ["http://127.0.0.1/callback"],
+                ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
             )
+            body.pop("response_types")  # a device-code client asks for no authorization code
+            response = await self.http("POST", AUTH + "/oauth2/register", json=body)
             if response.status_code >= 400:
                 raise GranolaError()
-            client_id = self.payload(response).get("client_id")
-            if not isinstance(client_id, str) or not client_id:
-                raise GranolaError("bad_response")
+            try:
+                client_id, _secret = mcp_client.registered(self.payload(response))
+            except mcp_client.AnswerError:
+                raise GranolaError("bad_response") from None
 
             def save_client():
                 with self.store.transaction() as c:
@@ -463,7 +469,46 @@ class GranolaMCP:
                 await asyncio.to_thread(self.save, row, meta, secret)
             return {"state": meta["state"], **await asyncio.to_thread(self.status, who)}
 
+    def claim_refresh(self, actor, sign_in, sent) -> tuple[str, Any]:
+        """Inside a transaction of its own: ("claimed", holder) when this call takes the sign-in's refresh, ("changed",
+        the stored tokens) when another refresh has stored a refresh token other than `sent`, or ("busy", None) while
+        another holder's refresh lasts."""
+        with self.store.transaction() as c:
+            saved = c.execute("SELECT * FROM granola_connections WHERE actor=?", (actor,)).fetchone()
+            stored = json.loads(self.app.state.vault.cipher.decrypt(c, saved)) if saved else {}
+            if stored.get("refresh_token") != sent:
+                return "changed", stored
+            holder = oauth_refresh.take(c, sign_in)
+            return ("claimed", holder) if holder else ("busy", None)
+
     async def refresh(self, row, meta, secret):
+        """The access token refreshed once across processes (backend/oauth_refresh.py): Granola rotates its refresh
+        token, so two refreshes of one connection would spend it twice. The claim is taken with the refresh token
+        read; when another refresh stored a newer one meanwhile, its tokens are taken instead of refreshing."""
+        sign_in = "granola:" + row["actor"]
+        deadline = time.monotonic() + oauth_refresh.WAIT_SECONDS
+        while True:
+            state, found = await asyncio.to_thread(
+                self.claim_refresh, row["actor"], sign_in, secret.get("refresh_token")
+            )
+            if state == "claimed":
+                holder = found
+                break
+            if state == "changed":
+                if not found.get("refresh_token"):
+                    raise GranolaError("needs_signin")
+                secret.clear()
+                secret.update(found)
+                return
+            if time.monotonic() > deadline:
+                raise GranolaError("unreachable")
+            await asyncio.sleep(oauth_refresh.POLL_SECONDS)
+        try:
+            await self.send_refresh(row, meta, secret)
+        finally:
+            await asyncio.to_thread(oauth_refresh.release, self.store, sign_in, holder)
+
+    async def send_refresh(self, row, meta, secret):
         for attempt in range(2):
             response = await self.http(
                 "POST",
@@ -582,9 +627,7 @@ class GranolaMCP:
             }
             if session.get("id"):
                 headers["Mcp-Session-Id"] = session["id"]
-            body = {"jsonrpc": "2.0", "method": method, "params": params or {}}
-            if not notification:
-                body["id"] = uuid.uuid4().hex
+            body = mcp_client.rpc(method, params, notification)
             meetings = method == "tools/call" and (params or {}).get("name") == "get_meetings"
             response = await self.http("POST", MCP, headers=headers, json=body, meeting_meta=meta if meetings else None)
             session["last_call"] = self.clock()
@@ -614,22 +657,13 @@ class GranolaMCP:
                 session["id"] = response.headers["Mcp-Session-Id"]
             if notification:
                 return {}
-            if "text/event-stream" in response.headers.get("content-type", ""):
-                value = None
-                for event in response.text.replace("\r\n", "\n").split("\n\n"):
-                    data = "\n".join(line[5:].lstrip() for line in event.splitlines() if line.startswith("data:"))
-                    if data:
-                        try:
-                            candidate = json.loads(data)
-                            if candidate.get("id") == body["id"]:
-                                value = candidate
-                                break
-                        except (ValueError, AttributeError):
-                            pass
-                if not isinstance(value, dict):
-                    raise GranolaError("bad_response", http_status=status)
-            else:
-                value = self.payload(response)
+            try:
+                value = mcp_client.message(response.text, response.headers.get("content-type", ""), body["id"])
+            except mcp_client.AnswerError:
+                raise GranolaError(
+                    "bad_response",
+                    http_status=status if "text/event-stream" in response.headers.get("content-type", "") else None,
+                ) from None
             if value.get("error"):
                 error = value["error"]
                 code = error.get("code") if isinstance(error, dict) else None
@@ -944,6 +978,9 @@ class GranolaMCP:
         notes = note.get("notes")
         if not summary and isinstance(notes, dict):
             summary = notes.get("summary") or notes.get("ai_summary") or ""
+        summary = str(summary or "").strip()
+        if summary.casefold().startswith(NO_SUMMARY):
+            summary = ""
         external_id = note.get("note_id") or note.get("id") or note.get("meeting_id")
         if not external_id:
             raise GranolaError("bad_response")
@@ -962,13 +999,31 @@ class GranolaMCP:
                 title=text(note.get("title"), 300) or "Granola meeting",
                 started_at=started.isoformat() if started else None,
                 participants=participants,
-                notes=str(summary).strip()[:200_000],
+                notes=summary[:200_000],
                 transcript=transcript,
                 media_url=https_url(note.get("web_url")),
             )
             if summary or transcript
             else None
         )
+
+    @staticmethod
+    def named_turns(transcript, me):
+        """Granola labels the note-taker's microphone and the other side's audio; Tico files them as people."""
+        turns = TF.parse(transcript)
+        for turn in turns:
+            label = turn["speaker"].casefold()
+            if label == "microphone":
+                turn["speaker"] = me
+            elif label in ("speaker", "system"):
+                turn["speaker"] = "Others"
+        return turns
+
+    def note_taker(self, who):
+        """The name Granola's microphone is filed under: the person's own name, else a neutral label."""
+        with self.store.read() as c:
+            row = c.execute("SELECT name FROM humans WHERE id=?", (who.actor.removeprefix("human:"),)).fetchone()
+        return (row[0] if row else "") or "Note-taker"
 
     def imported_ids(self, actor, ids):
         """Which of these Granola notes this person already has as a meeting: {id: whether it has a transcript}."""
@@ -1010,7 +1065,7 @@ class GranolaMCP:
                 return
             who = Identity(actor, "human", row["email"])
             meta.update(last_attempt=self.clock(), skipped=0, skip_reasons={})
-            await asyncio.to_thread(self.save, row, meta, secret)
+            await asyncio.to_thread(self.save_meta, row, meta)
             step = "initialize"
             skipped_error = skipped_detail = None
 
@@ -1022,6 +1077,7 @@ class GranolaMCP:
                 return reason
 
             try:
+                me = await asyncio.to_thread(self.note_taker, who)
                 meta["transcripts_unavailable"] = False
                 meta["plan_hint"] = (
                     "paid" if meta.get("transcript_succeeded") else meta.get("account_plan_hint", "free")
@@ -1274,6 +1330,7 @@ class GranolaMCP:
                                 )
                                 if not segments_of(MeetingImport(transcript=transcript)):
                                     raise GranolaError("bad_response")
+                                transcript = self.named_turns(transcript, me)
                                 transcript_errors = 0
                                 meta.update(transcript_succeeded=True, plan_hint="paid")
                             except Exception as exc:
@@ -1296,11 +1353,15 @@ class GranolaMCP:
                         step = "import_meeting"
                         try:
                             item = self.item(note, transcript)
-                            if item:
+                            # A note already filed that Granola now has no summary for gives its stored summary back.
+                            if item or str(nid) in imported:
 
-                                def file_item():
+                                def file_item(item=item, external_id=str(nid)):
                                     with self.store.transaction() as c:
                                         validate_identity(c, who)
+                                        if not item:
+                                            self.app.state.clear_import_notes(c, who, "granola", external_id)
+                                            return
                                         result = self.app.state.import_meeting(c, who, item, [], fill_empty=True)
                                         if not result["existing"]:
                                             meta["imported_count"] = meta.get("imported_count", 0) + 1
@@ -1314,7 +1375,7 @@ class GranolaMCP:
                                     raise
                         except Exception:
                             skipped_error = skip("bad_response: import_meeting")
-                        await asyncio.to_thread(self.save, row, meta, secret)
+                        await asyncio.to_thread(self.save_meta, row, meta)
                     # New notes go first, so the checkpoint is the last note in list-date order with every
                     # earlier one processed: it never passes an imported note not yet revisited.
                     # Ids left untried stay out of `done`, so the checkpoint stops before them and a later sync lists them again.
@@ -1325,7 +1386,7 @@ class GranolaMCP:
                     checkpoint = dates[by_date[position - 1]] if position else None
                     if checkpoint and (not meta.get("cursor") or checkpoint > datetime.fromisoformat(meta["cursor"])):
                         meta["cursor"] = checkpoint.isoformat()
-                    await asyncio.to_thread(self.save, row, meta, secret)
+                    await asyncio.to_thread(self.save_meta, row, meta)
                 if meta.get("state") == "needs_signin":
                     return
                 meta["failures"] = 0
@@ -1365,7 +1426,7 @@ class GranolaMCP:
                 meta["last_error"] = "sync_error: " + step
                 meta["last_error_detail"] = GranolaError().detail(step)
                 log.warning("%s", meta["last_error"])
-            await asyncio.to_thread(self.save, row, meta, secret)
+            await asyncio.to_thread(self.save_meta, row, meta)
 
     async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
@@ -1477,6 +1538,10 @@ class GranolaMCP:
         await asyncio.gather(*list(self.jobs.values()), *list(self.revocations), return_exceptions=True)
 
 
+# What the Idempotency-Key header does on a Granola write: nothing.
+GRANOLA_KEY = "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
+
+
 def install_granola(app):
     service = app.state.granola = GranolaMCP(app)
 
@@ -1492,23 +1557,55 @@ def install_granola(app):
         except GranolaError as exc:
             raise Problem("granola_unavailable", "Granola: " + exc.code, 503) from None
 
-    @app.get("/api/v2/meetings/granola")
+    @app.get(
+        "/api/v2/meetings/granola", **api_v2("Meetings", "getGranolaStatus", "Your Granola connection", "GranolaStatus")
+    )
     def status(request: Request):
         return service.status(person(request))
 
-    @app.post("/api/v2/meetings/granola/connect")
+    @app.post(
+        "/api/v2/meetings/granola/connect",
+        **api_v2(
+            "Meetings",
+            "connectGranola",
+            "Start personal Granola browser sign-in",
+            "GranolaDevice",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def connect(request: Request):
         return await safe(service.connect(person(request)))
 
-    @app.get("/api/v2/meetings/granola/connect/status")
+    @app.get(
+        "/api/v2/meetings/granola/connect/status",
+        **api_v2("Meetings", "pollGranolaSignIn", "Poll personal sign-in at the provider interval", "GranolaSignIn"),
+    )
     async def poll(request: Request):
         return await safe(service.poll(person(request)))
 
-    @app.delete("/api/v2/meetings/granola/connect")
+    @app.delete(
+        "/api/v2/meetings/granola/connect",
+        **api_v2(
+            "Meetings",
+            "disconnectGranola",
+            "Delete your encrypted Granola tokens",
+            "GranolaDisconnect",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def disconnect(request: Request):
         return await safe(service.disconnect(person(request)))
 
-    @app.post("/api/v2/meetings/granola/sync")
+    @app.post(
+        "/api/v2/meetings/granola/sync",
+        **api_v2(
+            "Meetings",
+            "syncGranola",
+            "Start a background sync; reuse the last two minutes",
+            "GranolaSync",
+            idempotency=GRANOLA_KEY,
+        ),
+    )
     async def sync(request: Request, now: bool = False):
         """`now`: the person pressed Sync now, so a backoff yields after five minutes since the last attempt."""
         return await service.trigger(person(request), now=now)

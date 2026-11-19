@@ -31,7 +31,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::oneshot::{base_env, int_of, Thread, Turn, Wire};
-use super::{event, failed, hub_mcp_server, is_limit, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server_by_name, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of, truthy};
 
@@ -308,14 +308,8 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
         })
         .collect();
     servers.extend(crate::mcp::pi_config(&settings.mcp_servers));
-    if let Some(hub) = hub_mcp_server(env) {
-        let vars: serde_json::Map<String, Value> = hub["env"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
-            .collect();
-        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "deferred", "description": HUB_DESCRIPTION}));
+    if let Some(hub) = hub_mcp_server_by_name(env) {
+        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": hub["env"], "exposure": "deferred", "description": HUB_DESCRIPTION}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
     // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
@@ -412,6 +406,8 @@ pub fn gateway_code(text: &str) -> Option<&'static str> {
                 .contains("gateway cap reached")
                 .then_some("cap_reached")
         })
+        // Its Cloudflare edge answering in its place (a 502 page): the Gateway is unavailable.
+        .or_else(|| crate::hosts::is_edge_outage(text).then_some("upstream_unavailable"))
 }
 
 /// The Gateway's own message in a refusal pi printed as `<status>: {"code": .., "message": ..}`, if it has one.
@@ -449,7 +445,10 @@ pub fn plain_error(text: &str) -> String {
         }
         "unknown_model" => "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)".into(),
         "no_route" => "Tico AI Gateway: no Tico route for this request (no_route)".into(),
-        "upstream_unavailable" => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
+        "upstream_unavailable" => match crate::hosts::edge_summary(text) {
+            Some(edge) => format!("Tico AI Gateway is unavailable, try again: {edge} (upstream_unavailable)"),
+            None => "Tico AI Gateway is unavailable, try again (upstream_unavailable)".into(),
+        },
         _ => {
             let said = gateway_said(text).unwrap_or_else(|| "the request can't be sent as it is".into());
             format!("Tico AI Gateway refused the request as sent: {said} ({code})")
@@ -1627,11 +1626,7 @@ impl PiHost {
         let ask = uuid::Uuid::new_v4().to_string();
         *proc.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(self.0.tx.clone());
         live.queued.clear();
-        let state = Turn {
-            bot: self.0.bot.clone(),
-            cmd: self.0.cmd.clone(),
-            ..Default::default()
-        };
+        let state = Turn::default();
         live.run = Some(Run {
             host: self.clone(),
             thread: thread_id.into(),
@@ -2371,6 +2366,14 @@ mod tests {
             plain_error("429 rate limit: slow down"),
             "429 rate limit: slow down"
         );
+        // Its Cloudflare edge's 502 page: the Gateway unavailable, with the ray id kept, and no limit.
+        let edge = plain_error(crate::hosts::tests::CLOUDFLARE_502);
+        assert_eq!(
+            edge,
+            "Tico AI Gateway is unavailable, try again: 502 Bad gateway from updates.tico.team \
+             (Cloudflare ray a5c90c403eed9ea1) (upstream_unavailable)"
+        );
+        assert!(!is_limit(&edge) && !is_auth_rejected(&edge));
         assert_eq!(
             gateway_models_json("")["providers"]["tico"]["baseUrl"],
             GATEWAY_DEFAULT_URL

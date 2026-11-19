@@ -100,6 +100,7 @@ def test_only_work_the_rater_reads_and_did_not_make_takes_feedback_and_only_from
     give(api, mine["id"], subject_type="task", expected=422)  # a task you filed yourself
     rated = give(api, filed["id"], subject_type="task", reason="Wrong venue")
     assert rated["bot_id"] == "bot:cpo"
+    give(api, filed["id"], subject_type="ask", expected=422)  # asks lost their thumbs: no longer a subject
     assert rows(api, "SELECT subject_revision FROM feedbacks WHERE id=?", rated["id"])[0]["subject_revision"] == 1
 
 
@@ -273,7 +274,7 @@ def test_a_persons_message_and_task_take_a_rating_and_a_reason_and_nothing_tells
         "/api/v2/feedback", params={"subject_type": "message", "subject_ids": words}, headers=headers("ben-test")
     ).json()
     assert answer["items"] == [] and answer["counts"] == [{"subject_id": words, "up": 1, "down": 1}]
-    # Work with no bot or person behind it (the keeper's) still takes none.
+    # Work with no bot or person behind it (Tico's) still takes none.
     with api.app.state.store.transaction() as c:
-        keepers = H.task_create(c, "keeper", "Nightly check", "", "bot:ops")
-    assert give(api, keepers["id"], subject_type="task", expected=422)["error"]["code"] == "not_rateable"
+        tico_task = H.task_create(c, "keeper", "Nightly check", "", "bot:ops")
+    assert give(api, tico_task["id"], subject_type="task", expected=422)["error"]["code"] == "not_rateable"

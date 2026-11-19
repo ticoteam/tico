@@ -75,12 +75,14 @@ pub async fn fast_forward(path: &Path, turn: &Env) -> (&'static str, String) {
         {
             return Ok(("skipped", "no upstream"));
         }
+        let began = std::time::Instant::now();
         if !git(path, &env, &["fetch", "--quiet", "--no-tags"], 60)
             .await?
             .0
         {
             return Ok(("kept", "could not reach GitHub"));
         }
+        crate::fetch_fresh::note(path, &env, began).await;
         if git(
             path,
             &env,
@@ -143,6 +145,8 @@ pub async fn catch_up(bot: &str, generation: &Value, path: &Path, env: &Env) {
     {
         return;
     }
+    // A chat turn here never starts on a fetch from the bot's last placement (crate::fetch_fresh).
+    crate::fetch_fresh::forget(path, &crate::safegit::environment(env)).await;
     let (state, detail) = fast_forward(path, env).await;
     let mut p = placements().lock().unwrap();
     if detail != "could not reach GitHub" {

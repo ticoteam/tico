@@ -1,6 +1,8 @@
 ---
 name: check-a-keyword-before-using-it
 description: Check a keyword against each app store's own search results, dated, and against the export's installs, before it goes into a title, subtitle, keyword field or description, so only keywords the listing can actually reach are used.
+metadata:
+  function: marketing
 ---
 # Check a keyword before using it
 

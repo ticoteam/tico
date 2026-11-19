@@ -11,7 +11,8 @@ anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never t
 the product part (the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
 a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
-incremental, of a commit main still contains) supersedes it.
+incremental, of a commit main still contains) supersedes it. A red that only its infrastructure failed (a Spot VM taken, a registry pull refused or rate limited, a
+runner lost: infrastructure_red) has its failed jobs run again once instead, whatever its diff selects.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
 diff and selection from Checkout below, so the unit tests and the replay run the same code.
@@ -34,6 +35,13 @@ ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
 PRODUCT, DESKTOP = "product", "desktop"
 DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
+# What the product part runs besides the images: the Docker isolation suite and its fakes, and the journey. A change to
+# one selects the product part, so a fix to a red isolation or journey check wakes the train (v0.6.83 waited on #4413).
+PRODUCT_INPUTS = (
+    "runner_support/tests/isolation/",
+    "runner_support/tests/test_isolation_docker.py",
+    "scripts/journey-test.sh",
+)
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
@@ -70,7 +78,72 @@ def failed_tokens(jobs):
     return tokens
 
 
-def anchor_of(records, now, contained, named):
+# What GitHub and RunsOn say when a validation's machine or registry failed it, not its code (in a failed job's
+# annotations): a red whose every failed part says one of these, or failed only because an image build did, has its
+# failed jobs run again once (release_train.plan_step). The causes are what the train's log and issue count.
+INFRASTRUCTURE = (
+    ("Spot interrupted", re.compile(r"AWS interrupted the EC2 Spot instance", re.I)),
+    ("registry rate limited", re.compile(r"toomanyrequests|reached your (?:unauthenticated )?pull rate limit", re.I)),
+    ("registry pull denied", re.compile(r"pull access denied for \S+", re.I)),
+    (
+        "runner lost",
+        re.compile(
+            r"runner: .{1,80} lost communication with the server|The runner has received a shutdown signal", re.I
+        ),
+    ),
+)
+# A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
+CONSEQUENCE = re.compile(r"An image build did not succeed")
+GATE_JOB = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
+
+
+def infrastructure_cause(messages):
+    """(cause, the message that says it) for the first of a job's annotation messages that names an infrastructure
+    failure, or None."""
+    for message in messages:
+        for cause, pattern in INFRASTRUCTURE:
+            if pattern.search(message or ""):
+                return cause, " ".join((message or "").split())[:200]
+    return None
+
+
+def gate_answered(receipt):
+    """Whether a gate part's receipt (hosted_release_check.py's run.json) shows its gate ran to a failing answer, or
+    crashed: a real failure, whatever went wrong with the machine afterwards. {} is a report without a receipt (the gate
+    never started); None, a report that could not be read."""
+    if not receipt:
+        return False
+    return "error" in receipt or (receipt.get("gate_state") == "finished" and receipt.get("gate_exit") != 0)
+
+
+def infrastructure_red(parts):
+    """Whether a red validation failed on its infrastructure alone, from (job name, annotation messages, receipt) for
+    its failed parts (fail fast's cancellations left out, as failed_tokens reads them). The receipt is a gate part's
+    run.json from its report: {} when the report has none (the gate never started), None when the report cannot be read.
+    Returns [(job, cause, message)] for the parts infrastructure failed, or None when any part failed some other way,
+    or none on infrastructure: a test failure is never run again (CLAUDE.md). A gate part counts only when its receipt
+    shows the gate did not run to a failing answer, because a runner lost after a test failed says "lost" too; with
+    no readable receipt it does not count. Product failing because an image build did comes back with it."""
+    found, consequences = [], 0
+    for name, messages, receipt in parts:
+        if name in IGNORED_JOBS:
+            continue
+        gate = GATE_JOB.fullmatch(name) is not None
+        if gate and gate_answered(receipt):
+            return None
+        cause = infrastructure_cause(messages)
+        if cause and (not gate or receipt is not None):
+            found.append((name, *cause))
+        elif name == PRODUCT and receipt is not None and any(CONSEQUENCE.search(m or "") for m in messages):
+            consequences += 1
+        else:
+            return None
+    if not found or (consequences and not any(name.startswith("images") for name, _, _ in found)):
+        return None
+    return found
+
+
+def anchor_of(records, now, contained, named, complete=lambda record: True):
     """The anchor: the newest validation, full or incremental, that finished within the last 24 hours (by finish time),
     whose commit main still contains, and that ran the suite to an answer: green, or red naming its failures. A green
     incremental validation covers its own diff from its anchor, so the chain of incrementals anchors the next one.
@@ -78,7 +151,9 @@ def anchor_of(records, now, contained, named):
     failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
     dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
     every release's validations (validation_record in release_train): the anchor may have validated an earlier
-    release."""
+    release. `complete(record)` is False for a red run that fail fast cut short (ci.yml's gate cancels an incremental
+    validation's other parts at its first failure): it ran only part of its suite, so it is no anchor either; the next
+    validation selects from the anchor before it, which still covers its diff."""
     candidates = [
         record
         for record in records
@@ -92,7 +167,7 @@ def anchor_of(records, now, contained, named):
             continue
         if record["conclusion"] == "success":
             return {**record, "failed": set()}
-        if record["conclusion"] in FAILED:
+        if record["conclusion"] in FAILED and complete(record):
             failed = named(record)
             if failed is not None:
                 return {**record, "failed": failed}
@@ -197,7 +272,7 @@ def selection_tokens(selected, changed):
         tokens |= set(pr_checks.CONTRACT_TESTS)
     if selected.get("conformance"):
         tokens.add(pr_checks.CONFORMANCE)
-    if selected.get("caddy"):
+    if selected.get("caddy") or any(name.startswith(PRODUCT_INPUTS) for name in changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
@@ -254,6 +329,13 @@ def slow_marks(path):
     return has, all_slow
 
 
+def native_test_files(files, root):
+    """The files of `files` that run the release's native binaries, read in `root` (pr_checks holds the rule
+    release_checks uses for the full gate's shards, so both pick the same files; CI checks this module out with only
+    pr_checks.py beside it)."""
+    return pr_checks.native_test_files(files, root)
+
+
 def has_slow_tests(path):
     """Whether a python test file marks a test slow: its slow tests run in the contracts lane (-m slow)."""
     return slow_marks(path)[0]
@@ -280,13 +362,15 @@ def plan_for(
     tables,
     has_slow=lambda path: False,
     previous_changed=False,
+    native=None,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
     tree (a deleted test is not run). Returns the plan; `jobs` lists the gate's VMs in the shape ci.yml's matrix takes.
     `has_slow(path)` tells whether a test file marks slow tests: a carried file that does runs them in the contracts lane.
     `previous_changed`: the candidate's previous release is not the anchor's, so the product part runs (its upgrade
-    journey starts from the previous release)."""
+    journey starts from the previous release). `native(files)` gives the files of `files` that run the release's native
+    binaries (release_checks.native_test_files); None: unknown, so every python VM waits for the binaries."""
     carried = set(carried or ())
     slow_only = tables["slow_only"]
     python = set(selected["python"])
@@ -317,10 +401,23 @@ def plan_for(
     )
     python = [name for name in python if name not in slow_only]
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
-    product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
+    product = (
+        bool(selected.get("caddy"))
+        or any(name.startswith(PRODUCT_INPUTS) for name in changed)
+        or PRODUCT in carried
+        or bool(previous_changed)
+    )
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     jobs = build_jobs(
-        python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
+        python,
+        browser,
+        contract_files,
+        conformance,
+        selected.get("rust") or [],
+        product,
+        desktop,
+        tables,
+        native=native,
     )
     return {
         "python": python,
@@ -347,16 +444,30 @@ def warn(lines):
         print(line, file=sys.stderr)
 
 
-def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables):
-    """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them."""
+def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables, native=None):
+    """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them.
+
+    Only a VM holding a file that runs the native binaries (`native(files)`, release_checks.native_test_files) waits
+    for the native-linux build and places them; the others say binaries "no" and start their tests at once, as the
+    full matrix's python shards 3+ do. The python lane packs its native files on their own VMs, so one native file
+    does not hold a whole VM of other tests; `native` None (unknown) keeps every python VM waiting."""
+    native_files = (set(python) | set(contract_files)) if native is None else set(native([*python, *contract_files]))
+
+    def binaries(files):
+        return {} if native_files.intersection(files) else {"binaries": "no"}
+
     jobs = []
     if python:
-        split, loads = pr_checks.groups(Counter(dict.fromkeys(python, 1)), tables["seconds"])
-        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "Python"))
+        packed = []
+        for lane in ([f for f in python if f in native_files], [f for f in python if f not in native_files]):
+            if not lane:
+                continue
+            split, loads = pr_checks.groups(Counter(dict.fromkeys(lane, 1)), tables["seconds"])
+            warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "Python"))
+            packed += [(files, load) for files, load in zip(split, loads, strict=True) if files]
         jobs += [
-            job(f"python-{i}", "python", files, seconds=load)
-            for i, (files, load) in enumerate(zip(split, loads, strict=True), 1)
-            if files
+            job(f"python-{i}", "python", files, seconds=load, **binaries(files))
+            for i, (files, load) in enumerate(packed, 1)
         ]
     if browser:
         split, loads = pr_checks.groups(
@@ -379,7 +490,10 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
         warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "contracts"))
         packed = [(files, load) for files, load in zip(split, loads, strict=True) if files]
         names = ["contracts"] if len(packed) == 1 else [f"contracts-{i}" for i in range(1, len(packed) + 1)]
-        jobs += [job(name, "python", files, seconds=load) for name, (files, load) in zip(names, packed, strict=True)]
+        jobs += [
+            job(name, "python", files, seconds=load, **binaries(files))
+            for name, (files, load) in zip(names, packed, strict=True)
+        ]
     if product:
         # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
         jobs.append(job("product", "product", workers="2"))
@@ -470,7 +584,9 @@ class Checkout:
         changed = pr_checks.changed_files(base, head, root=self.root)
         added = pr_checks.changed_files(base, head, root=self.root, only="A")
         changed = sorted(set(changed) | set(pr_checks.script_changes(base, head, changed, root=self.root)))
-        if self._graph is None:
+        if self._graph is None and any(
+            not pr_checks.unread(path) and not pr_checks.owned_data(path) for path in changed
+        ):
             self._graph = pr_checks.DependencyMap(self.root)
         selected = pr_checks.selection(
             changed, "merge_group", root=self.root, graph=self._graph, base=base, added=added
@@ -501,6 +617,7 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
+            native=lambda files: native_test_files(files, self.root),
         )
         return plan_json(plan)
 

@@ -11,7 +11,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, runner
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
 
-CAPS = [MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY, ML.CONNECT_CAPABILITY]
+CAPS = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"]
 
 
 def computer(api, caps=CAPS, label="Test Mac", operator="ana", claude=True, bot=None):
@@ -66,7 +66,7 @@ def test_connect_signs_a_plan_in_on_a_computer_and_seals_the_result_without_the_
     m = computer(api)
     body = get(api, "model-subscriptions")
     assert body["connect"] == ["claude_token", "codex_login"]
-    assert [k["connect"] for k in body["kinds"]] == [True, True, False, False]
+    assert [k["connect"] for k in body["kinds"]] == [True, True, False, False, False, False]
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Company Max"})
     assert login["kind"] == "connect" and login["state"] == "requested" and login["runner_id"] == m["runner_id"]
     assert login["runtime"] == "claude" and login["computer"] == "Test Mac"
@@ -79,14 +79,14 @@ def test_connect_signs_a_plan_in_on_a_computer_and_seals_the_result_without_the_
         {"state": "waiting", "url": "https://claude.example/authorize", "lines": ["Paste code here"]},
         m["token"],
     )
-    seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
+    seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
     assert seen["url"] == "https://claude.example/authorize" and seen["accepts_code"] and seen["lines"] == []
-    post(api, f"runners/{m['runner_id']}/logins/{login['id']}/code", {"code": "abc123#state"})
+    post(api, f"computers/{m['runner_id']}/logins/{login['id']}/code", {"code": "abc123#state"})
     assert asked(api, m)[0]["code"] == "abc123#state"
     # The computer's word that it is done is not enough: only the value ends it.
     post(api, f"runner-logins/{login['id']}/report", {"state": "done"}, m["token"], expected=422)
     assert send(api, m, login) == {"state": "done", "message": ""}
-    seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
+    seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "done" and not seen["url"] and TOKEN not in json.dumps(seen)
     assert asked(api, m) == []
     saved = get(api, "model-subscriptions")["subscriptions"]
@@ -147,13 +147,12 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     post(api, "model-subscriptions/connect", {"subscription": "nope"}, expected=404)
 
 
-def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api):
+def test_connect_needs_a_computer_that_is_online_and_has_the_tool(api):
     setup(api)
     company(api)
     assert get(api, "model-subscriptions")["connect"] == []
     start = {"kind": "claude_token", "name": "Max"}
     assert post(api, "model-subscriptions/connect", start, expected=409)["error"]["code"] == "offline"
-    computer(api, caps=[MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY], label="Old")  # an older runner
     computer(api, claude=False, label="No Claude")  # no Claude Code on it
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
     post(api, "model-subscriptions/connect", start, expected=409)
@@ -230,7 +229,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     m, other = (m, other) if login["runner_id"] == m["runner_id"] else (other, m)
     send(api, other, login, expected=404)  # not the computer it was asked of
     post(api, f"runner-logins/{login['id']}/subscription", {"value": TOKEN}, "ana-test", expected=403)  # not a computer
-    post(api, f"runners/{m['runner_id']}/logins/{login['id']}/cancel", {})
+    post(api, f"computers/{m['runner_id']}/logins/{login['id']}/cancel", {})
     send(api, m, login, expected=409)
     assert get(api, "model-subscriptions")["subscriptions"] == []
 
@@ -243,7 +242,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
     reply = send(api, m, login, "not-a-token")
     assert reply["state"] == "failed" and "not-a-token" not in reply["message"] and "sk-ant-" in reply["message"]
-    seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
+    seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"]
     assert get(api, "model-subscriptions")["subscriptions"] == []
     with api.app.state.store.read() as c:
@@ -262,7 +261,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         {"state": "failed", "message": "It stopped", "lines": [f"Your token {TOKEN[:12]}"]},
         m["token"],
     )
-    seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
+    seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"] == "It stopped" and seen["lines"] == []
     # Why it failed is kept with the audit row: the phases, the category and the last screen, scrubbed here again
     # whatever the computer sent (a token-shaped string, a link, the code still waiting, a made-up phase).
@@ -273,7 +272,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         {"state": "waiting", "url": "https://claude.example/authorize"},
         m["token"],
     )
-    post(api, f"runners/{m['runner_id']}/logins/{login['id']}/code", {"code": "typedcode#state"})
+    post(api, f"computers/{m['runner_id']}/logins/{login['id']}/code", {"code": "typedcode#state"})
     phases = [
         {"phase": "cli_started", "elapsed_ms": 4, "exit_code": None},
         {"phase": "cli_exited", "elapsed_ms": 9100, "exit_code": 0},
@@ -358,7 +357,8 @@ def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the
     second = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
     assert second["name"] == "Claude 2"
     assert send(api, m, second, OTHER)["state"] == "done"
-    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == "ChatGPT"
+    # A ChatGPT sign-in has no name yet: it takes its account email once saved.
+    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == ""
     # A pasted key with no name gets its provider's; one given is kept.
     key = post(api, "model-subscriptions", {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "k" * 40})
     named = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": " Team Max "})

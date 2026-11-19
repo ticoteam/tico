@@ -101,7 +101,8 @@ Track **reach** owns: `reach_settings.book TEXT` (null = inherit; 'anyone' | 'ne
 - `absences(c, human_ids, start_date, end_date) -> list[dict]` (kind away), `add_absence(c, human_id, starts_on,
   ends_on, note, actor) -> dict`.
 - `purge_cancelled(c, now) -> int` (cancelled rows older than 90 days; called from the hourly Maintenance job).
-- Every write: `audit_log` row + `H.event(c, actor, 'calendar.event.created|changed|cancelled', event_id, {...})`.
+- Every write: `audit_log` row + `calendar_events.emit(c, actor, 'created|changed|cancelled', event_id, {...})`: the
+  `calendar.event.*` event row, heard by `event` automations (backend/calendar_events.py).
 
 `backend/gcal_live.py` (google): the Google home, nothing stored but the token cache; modelled on gmail_live.py.
 - `gcal_call(url, *, token, method='GET', data=None) -> (status, dict)`: tests replace this.
@@ -120,8 +121,16 @@ Track **reach** owns: `reach_settings.book TEXT` (null = inherit; 'anyone' | 'ne
 - `connected(c, address) -> bool`: the company key is configured and delegated for calendar for that address
   (google_workspace authority), i.e. this person's home is Google.
 - Errors: `Problem` codes `gcal_refused` 403, `not_found` 404, `gcal_unavailable` 502/503 retryable, like gmail_live.
-- Personal connections (no company key) keep the computer path: widen the computer's snapshot from 24 h to the start
-  of today + 14 days (connectors/mail/calendar.py `upcoming`, the targets payload, the ≤200 cap → ≤500).
+- Every token comes from `google_tokens.token(c, mailbox, 'calendar', write=...)`, the server's one token door.
+- `changes_page(c, as_mailbox, calendar_id, sync_token, page_token=None) -> (items, next_page, next_sync)`: one
+  page of the sync-token read the watcher uses (raises `SyncExpired` on 410, `PageExpired` for a refused page token).
+
+`backend/gcal_watch.py` (google): the watcher, a drain worker. Every ~90 s per calendar whose home is Google it asks
+Google what changed (sync token) and emits `calendar.event.created|changed|cancelled` for changes made in Google
+itself, the same events and shape (`{calendar_id: 'google:<id>', home, occurrence_id}`, subject = the event or its
+series) Tico's own Google writes emit. Deduped on calendar, event (an instance by its own id) and sequence; a 410
+re-lists and diffs; Tico's own writes are recorded at the version Google gave them (`own_write`), so only another
+version is news. A listing saves its page each write and goes on from it in the next pass.
 
 `backend/calendar_derived.py` (derived): read-only, from existing tables.
 - `runs(c, bot_ids, start_utc, end_utc, now) -> list[dict]`: one occurrence per `attempts` row overlapping the window
@@ -175,9 +184,10 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - `POST /absences` body `{human?: id, starts_on, ends_on, note}` (self, or owner/admin for anyone).
 - Live: a new `calendar` topic in backend/events.py TOPICS; every Tico calendar write publishes `{calendar_id,
   occurrence_id?, event_id}` to it. The page refetches Google calendars on open, focus, and every 3 min while visible.
-- Links: a live meeting started with `calendar_event: <occurrence_id>` (the Recorder sends it) records a
+- Links: a live meeting started with `calendar_event: <occurrence_id>` records a
   `calendar_event_links` row (`meeting`); `links.meeting` is then filled on reads.
-- Old routes (`/calendar/appointments`, `/calendar/upcoming`, actions) stay as they are.
+- Old routes (`/calendar/appointments`, `/calendar/upcoming`, actions) keep their shapes: a Google calendar is read
+  live (60 s cache) and a booking is made on Google in the request, its `calendar_actions` row the receipt.
 
 ## Access (spec §13)
 
@@ -207,17 +217,12 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|3day|week|month|list&date=YYYY-MM-DD&q=…`),
   `ui/app/calendar-row.ts` (sidebar row), `ui/styles/calendar.css`; registered in `ui/app/router.ts` and
   `ui/index.html`. Spec §12.
-- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Company (Strategy,
-  Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Tools, Meetings), Pipelines pins, Team.
-  Directory leaves Library: an icon on the Team header opens `#/library/directory`. The Rules folder becomes one
+- Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Meetings, Company
+  (Strategy, Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Contacts, Tools), Pipelines pins, Team.
+  Meetings is a top-level place of its own (calls and meetings), not a Library page.
+  Directory is Contacts, a Library row (`#/library/contacts`; the old `#/library/directory` still opens it). The Rules folder becomes one
   Rules row under Company (its Internal/External/Due/Suggested pages stay reachable from the Rules page).
-- Join (row, bubble, page, card): opens `meeting_url` in a new tab and, on a Mac desktop browser or the Tico desktop
-  app, `tico-recorder://record?server=<origin>&title=<title>&event=<occurrence_id>` (Recorder on by default; a
-  per-person "Record calls I join" toggle in the page's ⋯ menu, stored in localStorage + `/calendar/settings`
-  field `record_on_join` default true).
-  The Recorder records only an occurrence `GET /events/{occurrence_id}` shows with `can.join`, from 15 min before
-  its start to its end, under that title; signed in already it starts at once, after a sign-in it asks "Record
-  <title>?" once, as for a Tico call (meet-calls contract).
+- Join (row, bubble, page, card): opens `meeting_url` in a new tab.
 - Who bots may book: one control on Rules > reach (track reach).
 
 ## Rules for every track

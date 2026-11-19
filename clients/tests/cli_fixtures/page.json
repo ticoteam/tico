@@ -17,7 +17,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico page: error: argument sub: invalid choice: 'nope' (choose from publish, card, list, show, access, archive) Did you mean: tico page show, tico page access?",
+  "stderr": "tico page: error: argument sub: invalid choice: 'nope' (choose from publish, link, unlink, card, list, show, access, archive) Did you mean: tico page show, tico page link?",
   "exit": 64
  },
  {
@@ -28,7 +28,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico page publish <path>\ntico page publish: error: the following arguments are required: path",
+  "stderr": "Example: tico page publish <path>\npath: The .html file's path in this checkout\ntico page publish: error: the following arguments are required: path",
   "exit": 64
  },
  {
@@ -145,7 +145,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico page show <id>\ntico page show: error: the following arguments are required: id",
+  "stderr": "Example: tico page show <id>\nid: Page id\ntico page show: error: the following arguments are required: id",
   "exit": 64
  },
  {
@@ -182,7 +182,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico page access <id>\ntico page access: error: the following arguments are required: id",
+  "stderr": "Example: tico page access <id>\nid: Page id\ntico page access: error: the following arguments are required: id",
   "exit": 64
  },
  {
@@ -308,7 +308,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico page archive <id>\ntico page archive: error: the following arguments are required: id",
+  "stderr": "Example: tico page archive <id>\nid: Page id\ntico page archive: error: the following arguments are required: id",
   "exit": 64
  },
  {
@@ -705,7 +705,23 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico page card\ntico page card: error: the following arguments are required: --page, --for, --rows",
+  "stderr": "Example: tico page card\n--page: The page the person wrote from\n--for: The person the card is for: human:<id>\n--rows: One per goal: [{\"title\": \"...\", \"owner\": \"<person or bot, default the person>\", \"parent_id\": \"<goal it serves>\"}]\ntico page card: error: the following arguments are required: --page, --for, --rows",
   "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "specs/1.html",
+   "--task",
+   "1",
+   "--as",
+   "Spec"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"specs/1.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

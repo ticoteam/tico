@@ -1,32 +1,17 @@
 """Helpers that other tests share, moved out of test_email_sending.py so they import no test file."""
 
 import base64
-import json
 from email.message import EmailMessage
 import pytest
 from backend import email_sending as S, mailbox_access as MA
 from backend.store import H
-from backend.tests.helpers.api import give_ok, headers, post as api_post
+from backend.tests.helpers.api import give_ok, headers
 
 
 BOX = "ana@acme.example"
 
 
 CONTACT = "contact@vendor.example"
-
-
-def post(api, path, body, **kwargs):
-    if (
-        path.startswith("connectors/email/sends/")
-        and not path.endswith("/claim")
-        and isinstance(body, dict)
-        and "lease_id" not in body
-    ):
-        with api.app.state.store.read() as c:
-            row = c.execute("SELECT lease_id FROM email_sends WHERE id=?", (path.split("/")[-2],)).fetchone()
-        if row:
-            body = {**body, "lease_id": row["lease_id"]}
-    return api_post(api, path, body, **kwargs)
 
 
 def mime(body="Thanks for the update.", to=None, files=False, subject="Update", **headers):
@@ -41,7 +26,10 @@ def mime(body="Thanks for the update.", to=None, files=False, subject="Update", 
 
 
 @pytest.fixture
-def inbox(api):
+def inbox(api, fake_gmail, monkeypatch):
+    from backend import gmail_watch
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)  # the server reads its Gmail (fake_gmail)
     with api.app.state.store.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
         MA.grant(c, "human:ana", row["id"], "bot", "ops", "read_write")
@@ -50,25 +38,19 @@ def inbox(api):
 
 
 def incoming(c, *, facts=None, sender=CONTACT, mid="inbound"):
-    c.execute(
-        "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
-        "snippet,labels,body,attachments,updated_at,send_facts) VALUES(?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            BOX,
-            mid,
-            "thread",
-            H.now(),
-            sender,
-            json.dumps([BOX]),
-            "[]",
-            "Update",
-            "Hello",
-            "[]",
-            "Hello",
-            "[]",
-            H.now(),
-            json.dumps({"message-id": "<" + mid + "@vendor.example>", **(facts or {})}),
-        ),
+    """A message from `sender` in the inbox's Gmail (the fake_gmail fixture's), with these header facts."""
+    from backend.tests.helpers.fake_gmail import CURRENT
+
+    CURRENT["fake"].add(
+        BOX,
+        mid,
+        thread="thread",
+        sender=sender,
+        to=[BOX],
+        subject="Update",
+        body="Hello",
+        message_id="<" + mid + "@vendor.example>",
+        headers={key.title(): value for key, value in (facts or {}).items()},
     )
 
 
@@ -119,8 +101,13 @@ def queue(api, *, raw=None, actor="human:ana", **values):
         )
 
 
-def claim(api, token):
-    return post(api, "connectors/email/sends/claim", {"mailbox": BOX}, token=token)["send"]
+def dispatch(api):
+    """One pass of the server's own sends (email_sending.drain) to the fake Gmail: the MIME of each email it sent."""
+    from backend.tests.helpers.fake_gmail import CURRENT
+
+    before = len(CURRENT["fake"].sent)
+    S.drain(api.app.state.store, api.app.state.auth)
+    return [mime for _, mime, _ in CURRENT["fake"].sent[before:]]
 
 
 def approved(api, queued, token="ana-test"):

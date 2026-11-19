@@ -38,6 +38,7 @@ import http.client
 import json
 import math
 import os
+import re
 import socket
 import stat
 import threading
@@ -53,16 +54,23 @@ URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
 # The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. Low is `tico-decide-low`, the tier's current
-# version (Jev); a choice question (`tico_classify`'s spam check) is a Decide question like any other.
+# version; a choice question (`tico_classify`'s spam check) is a Decide question like any other.
 GATEWAY_PROVIDER = "Tico AI Gateway"
 GATEWAY_MODEL = "tico-decide-low"
-# How hard the Gateway thinks on a decision: Low is Jev, as it was before levels; Medium and High are language models and
+# How hard the Gateway thinks on a decision: Low uses a typed decision model. Medium and High use language models and
 # take longer (the lineup's `tico-decide-{level}-1.0`, backend/gateway_tiers.py).
 DECIDE_LEVELS = ("low", "medium", "high")
-# The ids the Gateway may answer as: every Decide tier, auto and pinned.
+# A Decide tier can add versions independently of the Tico server.
+_GATEWAY_DECISION_ID = re.compile(r"tico-decide-(?:low|medium|high)(?:-[0-9]+\.[0-9]+)?")
 GATEWAY_MODELS = ("tico-decide-low-1.1",) + tuple(
     name for level in DECIDE_LEVELS for name in (f"tico-decide-{level}", f"tico-decide-{level}-1.0")
 )
+
+
+def is_gateway_decision_model(model):
+    return isinstance(model, str) and _GATEWAY_DECISION_ID.fullmatch(model) is not None
+
+
 GATEWAY_PATH = "/v1/gateway/decisions"
 GATEWAY_TIMEOUT = 8
 GATEWAY_SLOW_TIMEOUT = 30
@@ -88,7 +96,7 @@ def decide_model(level):
 
 
 def decide_timeout(level):
-    """The most one Gateway try takes at `level`: Jev's 8 seconds, or 30 for the language models."""
+    """The most one Gateway try takes at `level`: 8 seconds for Low, or 30 for the language models."""
     return GATEWAY_TIMEOUT if normalize_level(level) == "low" else GATEWAY_SLOW_TIMEOUT
 
 
@@ -175,7 +183,13 @@ def _paid(exc, model, usage):
 
 # A chain of providers (backend/judge.py `ordered`) asks each under one deadline, so a slow one leaves the next only
 # what is left, and the whole chain answers before its callers stop waiting. `clock` is the seam the tests use.
-clock = time.monotonic
+
+
+def clock():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 _DEADLINE = contextvars.ContextVar("tico_judge_deadline", default=None)
 MIN_ATTEMPT = 1.0  # seconds: with less left, a provider is not asked at all
 
@@ -685,7 +699,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
 
     def engine(state, questions, label=None, evidence=False):
         """`evidence` asks a language-model level for its evidence beside the answers: the result then keeps it (checked),
-        and a level that answers none (Jev's Low) keeps no `evidence` key."""
+        and a level that answers none (Decide Low) keeps no `evidence` key."""
         validate(state, questions, label)
         if not safe_gateway_url(url):  # checked at use, so the next provider is asked instead
             raise JudgeError("unconfigured", "the Tico AI Gateway URL is neither https nor this computer")
@@ -726,7 +740,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
         ms = round((time.monotonic() - started) * 1000)
         if not isinstance(payload, dict):
             raise JudgeError("shape", "the Tico AI Gateway answered with something other than an object")
-        answered = payload.get("model") if payload.get("model") in GATEWAY_MODELS else model
+        answered = payload.get("model") if is_gateway_decision_model(payload.get("model")) else model
         usage = clean_usage(payload.get("usage"))
         wants_evidence = bool(evidence) and model in DECIDE_LLM_MODELS
         try:
@@ -747,7 +761,7 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
     return engine
 
 
-# The company's own model providers, for writing (`llm_writer`); decisions are Jev's alone. Keys are the providers' usual
+# The company's own model providers, for writing (`llm_writer`); decisions use their own providers. Keys are the providers' usual
 # environment variables.
 LLM_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -988,6 +1002,12 @@ def _registry_error(revision):
     return error
 
 
+def _open(part, flags, dir_fd):
+    """Every registry open goes through here, so a test can swap a file between its check and its open, and not
+    replace os.open for the whole process."""
+    return os.open(part, flags, dir_fd=dir_fd)
+
+
 def _registry_text(registry, name):
     """Read only regular files through anchored, no-follow registry directory handles.
 
@@ -1023,7 +1043,7 @@ def _registry_text(registry, name):
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
             if directory:
                 flags |= os.O_DIRECTORY
-            descriptor = os.open(part, flags, dir_fd=parent)
+            descriptor = _open(part, flags, parent)
             descriptors.append(descriptor)
             opened = os.fstat(descriptor)
             if not expected(opened.st_mode):

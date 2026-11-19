@@ -37,12 +37,12 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the requested work and granted Tools.
 
 ## Skills
-- `skills/reconcile-an-account/SKILL.md`: read before you say an account ties, or does not, to its statement.
+- `.claude/skills/close-the-month/SKILL.md`: read before you say an account ties, or does not, to its statement.
 - `skills/review-the-books-for-unusual-entries/SKILL.md`: read before you say a period is ready to call closed.
-- `skills/explain-a-variance/SKILL.md`: read before you report a balance or category that moved beyond the review limit.
+- `.claude/skills/build-the-pnl/SKILL.md`: read before you report a balance or category that moved beyond the review limit.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, the `knowledge/` files above and the playbook. A
    resumed turn already has them.
 
@@ -61,7 +61,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>"`. When a result is ready,
 `tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards

@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 from . import scheduler as S
 from . import system_routines as SR
 from .store import H, Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     import sqlite3
@@ -242,6 +243,17 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def call_prep(ctx: Context) -> tuple[str, bool]:
+    # Scheduled calls (backend/call_prep.py): their bots' prep tasks 30 minutes before, the calendar's moves and
+    # cancellations, and the ones nobody joined.
+    app: Any = ctx.app
+    done = cast("dict[str, int]", app.state.call_prep.sweep())
+    acted = {k: n for k, n in done.items() if k != "waiting"}
+    if not acted:
+        return "Done", True
+    return ", ".join(f"{n} {k}" for k, n in sorted(acted.items())), False
+
+
 def _engine_github(ctx: Context) -> Any:
     """The engine's GitHub (backend/github.py `AppGitHub`) through the company's GitHub App, or None without one."""
     app: Any = ctx.github_app
@@ -284,7 +296,7 @@ def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
     given = page_verdicts.run(ctx.store, at)
     if not given:
         return None, True
-    return f"Jev gave {given} verdicts", False
+    return f"Decision model gave {given} verdicts", False
 
 
 def idea_checks(ctx: Context) -> tuple[str | None, bool]:
@@ -296,7 +308,7 @@ def idea_checks(ctx: Context) -> tuple[str | None, bool]:
     checked = IC.run(ctx.store, at)
     if not checked:
         return None, True
-    return f"Jev checked {checked} ideas", False
+    return f"Decision model checked {checked} ideas", False
 
 
 def related_input(ctx: Context) -> tuple[str | None, bool]:
@@ -403,6 +415,7 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
+    Step("call_prep", "Scheduled calls", "due", MINUTE, call_prep, loop=True),
     Step(
         "item_metadata",
         "PR and release metadata",
@@ -423,8 +436,24 @@ STEPS = [
         capture="scheduler",
         outside=True,
     ),
-    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
-    Step("idea_checks", "Jev's idea check", "due", None, idea_checks, failure="idea_checks", capture="scheduler"),
+    Step(
+        "jev_verdicts",
+        "Decision model's page verdicts",
+        "due",
+        None,
+        jev_verdicts,
+        failure="jev_verdicts",
+        capture="scheduler",
+    ),
+    Step(
+        "idea_checks",
+        "Decision model's idea check",
+        "due",
+        None,
+        idea_checks,
+        failure="idea_checks",
+        capture="scheduler",
+    ),
     Step("related_input", "Related input", "due", None, related_input, failure="related_input", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
@@ -1262,7 +1291,15 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
 
     from . import models as M
 
-    @app.get("/api/v2/heartbeat")
+    @app.get(
+        "/api/v2/heartbeat",
+        **api_v2(
+            "Health",
+            "getHeartbeat",
+            "The Heartbeat: seconds between beats, the last beat, beats in the last day and quiet beats, each step in order with its kind, cadence, switch and day counts, and the beats that did something, newest first (pass `next` back as `before`)",
+            "HeartbeatView",
+        ),
+    )
     def heartbeat(request: Request, limit: int = PAGE, before: str | None = None):
         """The Heartbeat: its interval, the last beat, beats in the last day and quiet beats, each step in order with
         its kind, cadence, switch and numbers, and the beats that did something, newest first (`next` is `before` for
@@ -1272,7 +1309,12 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
         with store.read() as c:
             return listing(c, auth, who, limit, before, store=store)
 
-    @app.put("/api/v2/heartbeat")
+    @app.put(
+        "/api/v2/heartbeat",
+        **api_v2(
+            "Health", "saveHeartbeat", "The owner or an admin: set the seconds between beats, 5 to 60", "HeartbeatView"
+        ),
+    )
     def heartbeat_save(request: Request, body: M.HeartbeatUpdate):
         """Set the seconds between beats (5 to 60). An owner or an admin."""
         who = request.state.identity

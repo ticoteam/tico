@@ -1,13 +1,15 @@
 ---
 name: sort-a-message-with-the-decision-set
 description: Sort each untriaged message by its decision word from questions/mail-triage.json (needs-owner, reply, route, archive or read), let the always-reaches list and stranger checks override the word, and give each message one reason that points at it.
+metadata:
+  function: tico
 ---
 # Sort a message with the decision set
 
-When to use: when the untriaged list comes back from `mail.sh inbox --untriaged --format brief --decisions`, before you act on any message.
+When to use: when you have read what the inbox's Message automation did with new mail (`tico automation recent-runs --trigger message --range 24h`) and what is still in the inbox (`tico email inbox <address>`), before you act on any message.
 
 Steps:
-1. Read the line for the message: id, date, sender, subject, labels, snippet and the `decision:` word. Do not open the body yet.
+1. Read the line for the message: id, date, sender, subject, labels, snippet, and the decision word the automation's decide step gave it. Do not open the body yet.
 2. Check the always-reaches list in `playbooks/inbox-preferences.md`. A message from someone on it is needs-owner whatever the word says.
    Money, legal or regulator language with an ask is needs-owner too.
 3. For a sender outside the team, run the stranger check in AGENTS.md. A `spam` verdict is one count in the brief and nothing more.
@@ -17,9 +19,9 @@ Steps:
    - `reply`: draft it with `skills/draft-a-reply-that-leaves-gaps/SKILL.md`.
    - `route`: create a task for the owner named under "Routed to someone else", with `--parent <id>`. Do not flag it as needing the human.
    - `archive`: list it as "would file". Archive only when Filing is on and the preferences allow it.
-   - `read`, or unsure: open the thread with `mail.sh thread <id> --format md` and decide.
+   - `read`, or unsure: open the thread with `tico email thread <address> <thread-id>` and decide.
 5. Write one reason per message that points at it: the ask, the deadline, the sender. A reason you cannot point at is not a flag.
-6. When you override a word, say so in the brief with the reason. If the same override would repeat, put a proposed rule on the task.
+6. When you override a word, say so in the brief with the reason. If the same override would repeat, propose a change to the inbox's Message automation (`tico automation update <id> --file <json> --summary "..."`); the human accepts it.
 
 Checks before you finish:
 - Every message has one decision in the brief, and every needs-owner has a reason that points at the message.

@@ -68,7 +68,75 @@ fn variants(value: &str) -> BTreeSet<String> {
         forms.insert(text.trim_end_matches('=').to_string());
         forms.insert(text);
     }
+    forms.extend(json_forms(value));
+    forms.extend(utf16_forms(value));
     forms
+}
+
+/// The value as a JSON string's inside: `/` as is or as `\/`, non-ASCII as is or as `\uXXXX` (lower or upper hex,
+/// as encoders write it), and every character as `\uXXXX`. A value only partly `\u`-escaped is not one of them (spec
+/// Out: a value split inside itself). Kept step for step with redact.py json_forms.
+fn json_forms(value: &str) -> BTreeSet<String> {
+    let mut forms = BTreeSet::new();
+    for slash in [false, true] {
+        for ascii in [false, true] {
+            for upper in [false, true] {
+                let mut out = String::new();
+                for ch in value.chars() {
+                    match ch {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '/' if slash => out.push_str("\\/"),
+                        '\u{8}' => out.push_str("\\b"),
+                        '\u{c}' => out.push_str("\\f"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        c if (c as u32) < 0x20 || (ascii && (c as u32) > 0x7f) => {
+                            out.push_str(&unicode_escape(c, upper))
+                        }
+                        c => out.push(c),
+                    }
+                }
+                forms.insert(out);
+            }
+        }
+    }
+    for upper in [false, true] {
+        forms.insert(value.chars().map(|c| unicode_escape(c, upper)).collect());
+    }
+    forms
+}
+
+/// `\uXXXX` for one character: two for one past the Basic Multilingual Plane, as JSON writes it (UTF-16 units).
+fn unicode_escape(c: char, upper: bool) -> String {
+    let mut units = [0u16; 2];
+    c.encode_utf16(&mut units)
+        .iter()
+        .map(|u| {
+            if upper {
+                format!("\\u{u:04X}")
+            } else {
+                format!("\\u{u:04x}")
+            }
+        })
+        .collect()
+}
+
+/// The value's UTF-16 LE and BE bytes, each byte read as one latin-1 character, the way `holds` reads a file: a UTF-16
+/// file, or UTF-16 text in a log line or an event, holding the value matches it. Kept step for step with redact.py
+/// utf16_forms.
+fn utf16_forms(value: &str) -> BTreeSet<String> {
+    let mut le = String::new();
+    let mut be = String::new();
+    for unit in value.encode_utf16() {
+        let [lo, hi] = unit.to_le_bytes();
+        le.push(lo as char);
+        le.push(hi as char);
+        be.push(hi as char);
+        be.push(lo as char);
+    }
+    BTreeSet::from([le, be])
 }
 
 fn worth(value: &str) -> bool {
@@ -98,6 +166,19 @@ fn values(secrets: &[String]) -> BTreeSet<String> {
 struct Built {
     values: Vec<String>,
     matcher: Option<AhoCorasick>,
+    /// The values' UTF-16 LE and BE bytes as raw bytes. `matcher` holds them as latin-1 text, which only `holds` reads
+    /// that way; raw bytes need these: a UTF-16 file is left out whatever its first 8000 bytes hold (`file_outcome`),
+    /// and a non-ASCII value in UTF-16 is masked in bytes before anything decodes them (`scrub_bytes`).
+    wide: Option<AhoCorasick>,
+}
+
+/// `utf16_forms` as raw bytes: each latin-1 character back to the one byte it stands for.
+fn utf16_bytes(value: &str) -> [Vec<u8>; 2] {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    [
+        units.iter().flat_map(|u| u.to_le_bytes()).collect(),
+        units.iter().flat_map(|u| u.to_be_bytes()).collect(),
+    ]
 }
 
 /// Login values the browser types: masked down to `LOGIN_MIN_LENGTH` characters, shorter than other secrets, because
@@ -134,9 +215,23 @@ fn build_values(chosen: BTreeSet<String>) -> Built {
             .build(forms.iter())
             .ok()
     };
+    let wide_forms: BTreeSet<Vec<u8>> = vals
+        .iter()
+        .flat_map(|v| utf16_bytes(v))
+        .filter(|f| !f.is_empty())
+        .collect();
+    let wide = if wide_forms.is_empty() {
+        None
+    } else {
+        AhoCorasickBuilder::new()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(wide_forms.iter())
+            .ok()
+    };
     Built {
         values: vals,
         matcher,
+        wide,
     }
 }
 
@@ -283,10 +378,19 @@ impl Redactor {
     }
 
     /// Bytes scrubbed as they are: bytes that are not UTF-8 are kept, not replaced (Python's surrogateescape).
+    /// A value in UTF-16 is masked as raw bytes first: a non-ASCII one is not valid UTF-8, so decoding before this
+    /// (run_diagnostics' stderr lines) would replace it and leave it unmatched.
     pub fn scrub_bytes(&self, data: &[u8]) -> Vec<u8> {
-        let out = match &self.inner.read().unwrap().matcher {
-            Some(m) => m.replace_all_bytes(data, &vec![MASK.as_bytes(); m.patterns_len()]),
-            None => data.to_vec(),
+        let inner = self.inner.read().unwrap();
+        let data: Cow<[u8]> = match &inner.wide {
+            Some(w) if w.is_match(data) => {
+                Cow::Owned(w.replace_all_bytes(data, &vec![MASK.as_bytes(); w.patterns_len()]))
+            }
+            _ => Cow::Borrowed(data),
+        };
+        let out = match &inner.matcher {
+            Some(m) => m.replace_all_bytes(&data, &vec![MASK.as_bytes(); m.patterns_len()]),
+            None => data.into_owned(),
         };
         mask_codes(&out, &self.codes.read().unwrap()).unwrap_or(out)
     }
@@ -322,6 +426,37 @@ impl Redactor {
             }
             None => false,
         }
+    }
+
+    /// What one changed file's bytes become (redact.py file_outcome): Clean when no form of a secret is in them;
+    /// LeftOut when a UTF-16 form of one is in them (wherever it is: a UTF-16 file whose first NUL comes after 8000
+    /// bytes is not rewritten, criterion 9), git would treat them as binary (a NUL in the first 8000 bytes, which every
+    /// UTF-16 text with ASCII in it has), they start with a UTF-16 byte order mark, are past TEXT_LIMIT, or still hold
+    /// a form once masked; else the masked bytes. A file left out is not committed and is named in the reply.
+    pub fn file_outcome(&self, data: &[u8]) -> FileScrub {
+        if !self.holds(data) {
+            return FileScrub::Clean;
+        }
+        let wide = self
+            .inner
+            .read()
+            .unwrap()
+            .wide
+            .as_ref()
+            .is_some_and(|w| w.is_match(data));
+        if wide
+            || data.iter().take(8000).any(|&b| b == 0)
+            || data.starts_with(&[0xff, 0xfe])
+            || data.starts_with(&[0xfe, 0xff])
+            || data.len() as u64 > TEXT_LIMIT
+        {
+            return FileScrub::LeftOut;
+        }
+        let masked = self.scrub_bytes(data);
+        if self.holds(&masked) {
+            return FileScrub::LeftOut;
+        }
+        FileScrub::Masked(masked)
     }
 
     /// Scrub what a turn changed in the checkout at `root`: rewrite changed text files holding a secret,
@@ -522,12 +657,11 @@ impl Redactor {
             .take(TEXT_LIMIT + 1)
             .read_to_end(&mut data)?;
         drop(stream);
-        if !self.holds(&data) {
-            return Ok(Scrubbed::Clean);
-        }
-        if data.iter().take(8000).any(|&b| b == 0) || data.len() as u64 > TEXT_LIMIT {
-            return Ok(Scrubbed::LeftOut);
-        }
+        let masked = match self.file_outcome(&data) {
+            FileScrub::Clean => return Ok(Scrubbed::Clean),
+            FileScrub::LeftOut => return Ok(Scrubbed::LeftOut),
+            FileScrub::Masked(masked) => masked,
+        };
         use std::os::unix::fs::MetadataExt;
         let mode = (info.mode() & 0o7777) as libc::mode_t;
         let temporary = cstr(format!(".tico-scrub-{}", uuid::Uuid::new_v4().simple()).as_bytes())?;
@@ -547,7 +681,7 @@ impl Redactor {
             if unsafe { libc::fchmod(fd, mode) } != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            out.write_all(&self.scrub_bytes(&data))?;
+            out.write_all(&masked)?;
             out.sync_all()?;
             let current = stat_at(&dir, &leaf)?;
             if (current.st_dev as u64, current.st_ino as u64) != (info.dev(), info.ino()) {
@@ -567,6 +701,13 @@ impl Redactor {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum FileScrub {
+    Clean,
+    LeftOut,
+    Masked(Vec<u8>),
+}
+
 #[derive(Default, Debug)]
 pub struct Tree {
     pub rewritten: Vec<PathBuf>,
@@ -576,14 +717,14 @@ pub struct Tree {
 }
 
 /// Credentials that can turn up in git's or the hub's words whoever's they are: a URL's user part, GitHub's
-/// token formats, Authorization headers and `name=value` credential pairs (redact.py _CREDENTIAL_SHAPES).
+/// token formats (a stateless installation token is `ghs_<app id>_<JWT>`, with dots and dashes), Authorization headers and `name=value` credential pairs (redact.py _CREDENTIAL_SHAPES).
 fn credential_shapes() -> &'static [(regex::Regex, &'static str)] {
     static SHAPES: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
     SHAPES.get_or_init(|| {
         [
             (r#"(?i)([a-z][a-z0-9+.-]*://)[^/\s@'"]+@"#, "${1}••••@"),
             (
-                r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})",
+                r"\b(?:gh[pousr]_[A-Za-z0-9._-]{16,}|github_pat_[A-Za-z0-9_]{16,})",
                 "••••",
             ),
             (
@@ -891,6 +1032,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn both_github_token_formats_are_masked_in_gits_words() {
+        // A stateless installation token (`ghs_<app id>_<JWT>`, the default since Oct 2026) and a classic one, synthetic.
+        let stateless = format!(
+            "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9.{}",
+            "S1g-n_aTuRe".repeat(40)
+        );
+        let classic = format!("ghs_{}", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8");
+        let said = format!("error: {stateless} and {classic} were refused");
+        let scrubbed = scrub_credentials(&said, &[]);
+        assert!(!scrubbed.contains("ghs_"), "{scrubbed}");
+        assert!(!scrubbed.contains("S1g-n_aTuRe"), "{scrubbed}");
+        let failure = git_failure(&format!("fatal: {stateless} refused"), &[], 300);
+        assert!(
+            !failure.contains("eyJ") && !failure.contains("S1g-n"),
+            "{failure}"
+        );
+    }
+
+    #[test]
     fn browser_values_include_codes_without_changing_their_text_matching() {
         let redactor = Redactor::new(&[]);
         let login: String = std::iter::repeat_n('x', LOGIN_MIN_LENGTH).collect();
@@ -1045,6 +1205,112 @@ mod tests {
         sh("checkout -q --detach");
         assert!(r.scrub_tree(&root, &since).committed);
         let _ = std::fs::remove_dir_all(&top);
+    }
+
+    /// A UTF-16 file with no byte order mark whose first NUL comes after git's 8000-byte binary window (text in a script
+    /// whose UTF-16 units have no zero byte, then the secret): left out and named, never rewritten (criterion 9, Review
+    /// on c4b9a23). `left_out` is what the reply names: "left out of the commit: <name> (contains a secret)".
+    #[test]
+    fn a_utf16_file_whose_first_nul_is_late_is_left_out_in_both_byte_orders() {
+        let secret = "granted-wide-secret-value";
+        let r = Redactor::new(&[secret.to_string()]);
+        let text = format!("{}{secret}\n", "漢字".repeat(2100));
+        let le: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        let be: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        for data in [&le, &be] {
+            assert!(!data.iter().take(8000).any(|&b| b == 0) && !data.starts_with(&[0xff, 0xfe]));
+            assert!(
+                matches!(r.file_outcome(data), FileScrub::LeftOut),
+                "{:?}",
+                r.file_outcome(data)
+            );
+        }
+        let root =
+            std::env::temp_dir().join(format!("tico-scrub-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("sh")
+            .arg("-c")
+            .arg("git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init")
+            .current_dir(&root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        std::fs::write(root.join("notes-le.txt"), &le).unwrap();
+        std::fs::write(root.join("notes-be.txt"), &be).unwrap();
+        let tree = r.scrub_tree(&root, "");
+        let mut named: Vec<String> = tree
+            .left_out
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        named.sort();
+        assert_eq!(named, ["notes-be.txt", "notes-le.txt"], "{tree:?}");
+        assert!(tree.rewritten.is_empty(), "{tree:?}");
+        assert_eq!(
+            std::fs::read(root.join("notes-le.txt")).unwrap(),
+            le,
+            "left as it was"
+        );
+        assert_eq!(
+            std::fs::read(root.join("notes-be.txt")).unwrap(),
+            be,
+            "left as it was"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A non-ASCII secret in UTF-16 is not valid UTF-8: bytes are masked before anything decodes them.
+    #[test]
+    fn a_non_ascii_secret_in_utf16_bytes_is_masked_before_decoding() {
+        let secret = "granted-wïde-sécret";
+        let r = Redactor::new(&[secret.to_string()]);
+        for wide in utf16_bytes(secret) {
+            let mut line = b"failed: ".to_vec();
+            line.extend(&wide);
+            let out = r.scrub_bytes(&line);
+            assert_eq!(out, [b"failed: ".as_slice(), MASK.as_bytes()].concat());
+        }
+    }
+
+    /// Cases A-E (spec E-607), from the file runner_support/tests/test_redact.py reads too, so both scrubs agree.
+    #[test]
+    fn each_shared_encoded_case_is_masked_or_left_out_and_logs_show_the_mark() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let doc: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                repo.join("runner_support/tests/fixtures/redact_encoded_cases.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let r = Redactor::new(&[doc["secret"].as_str().unwrap().to_string()]);
+        for case in doc["files"].as_array().unwrap() {
+            let hex = case["hex"].as_str().unwrap();
+            let data: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            let id = case["id"].as_str().unwrap();
+            match (r.file_outcome(&data), case["expect"].as_str().unwrap()) {
+                (FileScrub::Clean, "clean") | (FileScrub::LeftOut, "left_out") => {}
+                (FileScrub::Masked(out), "masked") => assert_eq!(
+                    String::from_utf8(out).unwrap(),
+                    case["masked"].as_str().unwrap(),
+                    "{id}"
+                ),
+                (got, want) => panic!("{id}: {got:?}, want {want}"),
+            }
+        }
+        for case in doc["logs"].as_array().unwrap() {
+            assert_eq!(
+                r.scrub_text(case["line"].as_str().unwrap()),
+                case["masked"].as_str().unwrap(),
+                "{}",
+                case["id"]
+            );
+        }
     }
 
     #[test]

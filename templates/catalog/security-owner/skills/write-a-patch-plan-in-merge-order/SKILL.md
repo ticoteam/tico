@@ -1,6 +1,8 @@
 ---
 name: write-a-patch-plan-in-merge-order
 description: Turn the ranked advisories into a patch plan an engineer can merge in one sitting, grouping the upgrades that share a lockfile change, ordering by tier and effort, flagging major bumps and naming the check and the rollback for each step.
+metadata:
+  function: security
 ---
 # Write a patch plan in merge order
 

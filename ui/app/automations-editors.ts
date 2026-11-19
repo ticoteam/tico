@@ -65,8 +65,6 @@ type AuSet = Omit<import('../types/api').QuestionSets['sets'][number], 'question
 interface AuJudge {
   probabilities?: Record<string, number>; score?: number | null; max?: number; noul?: unknown; confidence?: number; choice?: string;
 }
-/** A row of GET /v2/models as task-modal.ts keeps it in TASK_RUN_ROWS (the task picker's catalog): its ModalModelRow. */
-type TaskRunRow = ModalModelRow;
 
 // The editor open in the side panel (AU.ed), by kind.
 /** A step's editor; a new step (automations-flow.ts auInsert) has insert, where it joins the flow on Save. */
@@ -125,7 +123,6 @@ function auEdOpen(ed: AuEd) {
   if (ed.kind === 'versions') void auVersionsLoad(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide') void auLastRun(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide' && AU.sets === null) void auSetsLoad(ed);
-  if (ed.kind === 'step' && ed.step.type === 'bot_turn' && !TASK_RUN_ROWS) void auModelsLoad(ed);
   // A phone would open its keyboard over the sheet; a computer starts in the first field.
   if (!auPhone()) AU.root.querySelector<HTMLElement>('.au-ed .au-edb :is(input,textarea,select):not([disabled])')?.focus({preventScroll: true});
   AU.root.querySelector('.au-ed .au-rb.focus')?.scrollIntoView({block: 'nearest'});
@@ -319,26 +316,26 @@ function auFindFields(s: AuStep) {
 }
 function auBotFields(s: AuStep) {
   const bot = s.bot ? 'bot:' + String(s.bot).replace(/^bot:/, '') : '';
-  return auFld('Bot', auSel('step.bot', auWithCur(auBots(), bot, auActorName(bot)), bot, 'data-slug'))
-    + auFld('Prompt', auTa('step.prompt', s.prompt)) + auBotRunsFields(s);
+  // Another bot draws Runs on again: Same as bot is that bot's task model.
+  return auFld('Bot', auSel('step.bot', auWithCur(auBots(), bot, auActorName(bot)), bot, 'data-slug data-redraw'))
+    + auFld('Prompt', auTa('step.prompt', s.prompt)) + auBox('Runs on', '<div class="task-run-pick" data-run-picker></div>');
 }
-// Runs on: the model the turn's task runs on, stamped on the task its run opens (backend/task_run_models.py). Blank is the
-// bot's task model; the harness and effort follow the model picked, and a blank one is left out of the step. Compact is
-// where that task's runs compact: "Same as bot" (left out of the step) or a size the model holds.
-function auBotRunsFields(s: AuStep) {
-  const rows: TaskRunRow[] = TASK_RUN_ROWS || [], model = s.model || '', row = rows.find(m => m.id === model);
-  const models = auWithCur([['', "The bot's task model"], ...rows.map(m => [m.id, m.label || m.id])], model, model);
-  const rowHarnesses = row?.harnesses || [];
-  const harnesses = rowHarnesses.length > 1 ? rowHarnesses.map(h => [h, harnessWords(h) || h]) : [];
-  return auFld('Runs on', auSel('step.model', models, model, 'data-blank data-redraw'))
-    + (harnesses.length ? auFld('Harness', auSel('step.harness', harnesses, s.harness || rowHarnesses[0], 'data-blank')) : '')
-    + (row?.efforts?.length ? auFld('Effort', auSel('step.effort', [['', 'Default'], ...row.efforts.map(e => [e, e])], s.effort || '', 'data-blank')) : '')
-    + (compactsOn(s.harness || rowHarnesses[0]) ? auFld('Compact', `<select data-b="step.compact_at" data-num${auDis()}>${compactOptions(s.compact_at, row?.context_tokens)}</select>`) : '');
-}
-// The models the Runs on field lists (the task picker's catalog, read once); the editor draws again when they arrive.
-async function auModelsLoad(ed: AuEd) {
-  await taskRunCatalog();
-  if (auPage().ed === ed) auDrawSide();
+// Runs on: the model the turn's task runs on, stamped on the task its run opens (backend/task_run_models.py), in the shared
+// model picker (settings-bots-choice.ts), drawn after each drawing of the side panel, for the step's bot. "Same as bot" is
+// the bot's task model and is left out of the step. Apply sets the step's model, harness, effort and window (each left
+// out when it has none); Save writes the step as for any field.
+function auRunPickerMount(root: HTMLElement) {
+  const host = root.querySelector<HTMLElement>('[data-run-picker]'), ed = AU?.ed;
+  if (!host || ed?.kind !== 'step') return;
+  const s = ed.step;
+  void settingsRunPickerMount(host, {bot: String(s.bot || ''), name: 'Runs on', readonly: auRO(),
+    run: {model: s.model || '', harness: s.harness || '', effort: s.effort || '', compact_at: s.compact_at || null},
+    onPick: pick => {
+      if (AU?.ed !== ed) return;
+      auPathSet(ed, 'step.model', pick.model || undefined); auPathSet(ed, 'step.harness', pick.harness || undefined);
+      auPathSet(ed, 'step.effort', pick.effort || undefined); auPathSet(ed, 'step.compact_at', pick.compact_at || undefined);
+      auDrawSide();
+    }});
 }
 function auActionFields(s: AuStep) {
   const a = s.args || {};
@@ -421,14 +418,6 @@ function auEdWire(box: HTMLElement) {
     // goes to the next step); a rule that doesn't goes by stop alone.
     const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[Number(stopAt[1])];   // C: the same index
     if (sr && 'next' in sr) sr.next = v ? 'end' : sr.next === 'end' ? 'step' : sr.next;
-    // Another model has its own harnesses and efforts: the ones kept for the last model do not carry over.
-    if (b === 'step.model') {
-      auPathSet(ed, 'step.harness', undefined); auPathSet(ed, 'step.effort', undefined);
-      // Its window stays, lowered to the largest size the new model holds (spec scope 8).
-      const window = (TASK_RUN_ROWS || []).find(m => m.id === v)?.context_tokens || 0;
-      const compact = auPathGet<number>(ed, 'step.compact_at');
-      if (compact && window && compact > window) auPathSet(ed, 'step.compact_at', COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0]);
-    }
     if (t.hasAttribute('data-redraw') && e.type === 'change') { if (b === 'step.do') { auEdIs(ed, 'step'); ed.step.args = {}; } auDrawSide(); }
   };
   box.addEventListener('input', onField);

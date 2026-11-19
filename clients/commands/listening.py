@@ -244,3 +244,9 @@ INBOUND = (
     Command('inbound read', 'one message, as untrusted text', example='tico inbound read m1'),
     Command('inbound code', 'the code found in one message', example='tico inbound code m1'),
 )
+
+# `tico listening ...`: every leaf but save, which reads its JSON from a file or stdin (clients/remotecli.py).
+LISTENING = (
+    Group("listening", "Listening's sources: the ones due a read, and saving what a read found"),
+    Command("listening sources", "the Search sources due a read", example="tico listening sources --automation a1"),
+)

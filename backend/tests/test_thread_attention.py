@@ -4,7 +4,7 @@ reaches its person, and a paused thread is listed only to the people who can man
 engine's list plus a person's @s (docs/dev/pipelines-v3-cutover.md, "Needs you"): those @s page and stay cheap there."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import threads
+from backend import question_marks, threads
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
@@ -44,7 +44,7 @@ def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_co
 
     tid = members_thread(api)
     mention = say(api, tid, "@ana please check.")
-    ask = old_question(api, tid, "Which lease?")
+    second = say(api, tid, "@ana and the lease?")
     paused = members_thread(api, title="Paused")
     with api.app.state.store.transaction() as c:
         now = H.now()
@@ -57,22 +57,22 @@ def test_attention_variants_share_one_snapshot_but_keep_their_filters_and_own_co
     with api.app.state.store.read_transaction() as c:
         c.set_trace_callback(seen.append)
         try:
-            first = TA.items(c, None, ana_viewer(api), skip=[ask["id"]])
+            first = TA.items(c, None, ana_viewer(api), skip=[second["id"]])
             original = next(it["title"] for it in first if it["id"] == mention["id"])
             next(it for it in first if it["id"] == mention["id"])["title"] = "Changed by a caller"
-            second = TA.items(c, api.app.state.auth, ana_viewer(api), with_capped=False)
+            second_items = TA.items(c, api.app.state.auth, ana_viewer(api), with_capped=False)
             third = TA.items(c, None, ana_viewer(api), skip=[mention["id"]])
         finally:
             c.set_trace_callback(None)
     assert {it["id"] for it in first} == {mention["id"], paused}
-    assert {it["id"] for it in second} == {mention["id"], ask["id"]}
-    assert next(it["title"] for it in second if it["id"] == mention["id"]) == original
-    assert {it["id"] for it in third} == {ask["id"], paused}
-    addressed = [q for q in seen if "SELECT m.id, m.conversation_id, m.sender_id" in q]
-    assert len(addressed) == 1, addressed
+    assert {it["id"] for it in second_items} == {mention["id"], second["id"]}
+    assert next(it["title"] for it in second_items if it["id"] == mention["id"]) == original
+    assert {it["id"] for it in third} == {second["id"], paused}
+    mentions = [q for q in seen if "FROM message_deliveries d INDEXED BY message_deliveries_addressed" in q]
+    assert len(mentions) == 1, mentions
     # A returned connection must not lend its attention list to the next request.
     with api.app.state.store.read_transaction() as c:
-        assert {it["id"] for it in TA.items(c, None, ana_viewer(api))} == {mention["id"], ask["id"], paused}
+        assert {it["id"] for it in TA.items(c, None, ana_viewer(api))} == {mention["id"], second["id"], paused}
 
 
 def test_attention_rechecks_after_a_write_and_for_another_identity_in_the_same_snapshot(api):
@@ -88,20 +88,26 @@ def test_attention_rechecks_after_a_write_and_for_another_identity_in_the_same_s
         assert TA.items(c, None, ana_viewer(api)) == []
 
 
-def test_a_message_to_the_person_is_listed_until_they_reply(api):
+def test_an_at_of_the_person_is_listed_until_they_reply(api):
     tid = members_thread(api)
-    say(api, tid, "Can you look at the lease?", to_actor="human:ana")
+    say(api, tid, "@ana can you look at the lease?")
     listed = needs(api, "thread_mention")
     assert [i["conversation_id"] for i in listed] == [tid]
     say(api, tid, "On it.", actor="human:ana")
     assert needs(api, "thread_mention") == []
 
 
-def test_a_question_is_listed_until_the_person_answers_in_the_thread(api):
+def test_a_message_addressed_to_the_person_without_an_at_is_not_attention(api):
+    """Needs you's rule (open_mentions): only an @ of a person lists a thread. An addressed message stays unread."""
     tid = members_thread(api)
-    old_question(api, tid, "Which lease, the Main St one?")  # a person's: listed as any message to her is
-    assert [i["conversation_id"] for i in needs(api, "thread_mention")] == [tid]
-    say(api, tid, "The Main St one.", actor="human:ana")
+    say(api, tid, "Can you look at the lease?", to_actor="human:ana")
+    assert needs(api, "thread_mention") == []
+    assert needs_you(api, "mention") == []
+
+
+def test_an_old_question_without_an_at_is_history_not_attention(api):
+    tid = members_thread(api)
+    old_question(api, tid, "Which lease, the Main St one?")
     assert needs(api, "thread_mention") == []
 
 
@@ -154,13 +160,13 @@ def test_a_held_message_outside_a_thread_write_is_not_listed(api):
     assert needs(api, "thread_held") == []
 
 
-def test_a_bots_mention_of_the_person_is_listed_and_its_plain_post_is_not(api):
+def test_a_bots_at_of_the_person_is_not_attention_and_neither_is_its_plain_post(api):
+    """A bot's @ marks its thread unread; a bot that needs a person asks through a requirement (C28, open_mentions)."""
     setup_attempt(api, "finance")
     tid = members_thread(api)
     say(api, tid, "Numbers are ready.", actor="bot:finance")
-    assert needs(api, "thread_mention") == []
     say(api, tid, "@ana the Q3 numbers are ready.", actor="bot:finance")
-    assert [i["conversation_id"] for i in needs(api, "thread_mention")] == [tid]
+    assert needs(api, "thread_mention") == []
 
 
 def test_an_unread_dm_shows_only_the_message_the_person_can_read(api):
@@ -263,17 +269,10 @@ def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, "human:ana", "Close Q3", "Book what Q3 needs.", "bot:finance", lint=False)
-        H.task_ask(
-            c,
-            "bot:finance",
-            work["id"],
-            "human:ana",
-            "Book the Q3 accrual?",
-            seen_version=H.task(c, work["id"])["version"],
-        )
-    # Its question is an ask on a task in Needs you (answered there, which a plain reply is not), so the DM stays out of
-    # Inbox.
-    assert len(needs_you(api, "ask")) == 1
+        question_marks.ask(c, "bot:finance", work["id"], "human:ana", "Book the Q3 accrual?")
+    # Its question is a ❓ on the task's chat in Needs you (cleared by a reply there, which a reply in the DM is not), so
+    # the DM stays out of Inbox.
+    assert len(needs_you(api, "question")) == 1
     assert get(api, "threads", token="ana-test")["attention"] == []
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)

@@ -314,12 +314,13 @@ def _fin_paged(api, path, query, key, budget):
 
 @tool(
     "tico_finance_search",
-    "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
-    "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
-    "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
-    "recurring charge by vendor name, with status, monthly cost and next charge. receipt: by file name or vendor "
-    "(status: unread, suggested, unmatched, attached, rejected). Name a kind to page with cursor; otherwise the first "
-    "few of each kind, except accounts, vendors, campaigns, subscriptions and receipts (name one).",
+    "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, "
+    "cards (each with the vendors it is saved on). account: chart lines by code or name, with "
+    "ids, for categorize, bill_create and rule_create. campaign: ad campaigns (owner, spend, "
+    "clicks, conversions). subscription: recurring charges with monthly cost, next charge and "
+    "status. receipt: by file or vendor (status: unread, suggested, unmatched, attached, "
+    "rejected). Name a kind to page with cursor; otherwise the first few of each kind, except "
+    "accounts, vendors, campaigns, subscriptions and receipts.",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
@@ -388,10 +389,11 @@ def finance_search(api, args):
 
 @tool(
     "tico_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, "
-    "campaigns (owner, spend, clicks, conversions), subscriptions (monthly total, renewals in 30 days) or close (a "
-    "month's checklist). Rows past top_n fold into \"Other · n\". sales_tax and 1099 are a year's tax workpapers: "
-    "whole, and only for someone who sees everything.",
+    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual (your own budgets always), ap_aging, "
+    "ar_aging, spend_by, campaigns (owner, spend, clicks, conversions), subscriptions (monthly "
+    "total, renewals in 30 days) or close (a month's checklist). Rows past top_n fold into \"Other "
+    "· n\". sales_tax and 1099 are a year's tax workpapers: whole, and only for someone who sees "
+    "everything.",
     {
         "kind": _s("The report", enum=FINANCE_REPORTS),
         "start": FIN_DAY,
@@ -444,10 +446,11 @@ def finance_report(api, args):
 
 @tool(
     "tico_finance_metric",
-    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, spend, "
-    "budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, "
-    "ad_spend (your campaigns' spend over start..end; default this month), per_conversion (ad spend over conversions, "
-    "null if none), subscriptions_monthly (monthly cost of active subscriptions, with count).",
+    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
+    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
+    "unreconciled_days, unattributed, ad_spend (your campaigns' spend over start..end; default "
+    "this month), per_conversion (ad spend over conversions; null if no conversions), "
+    "subscriptions_monthly (active subscriptions, with count).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),
@@ -478,8 +481,9 @@ def finance_brief(api, args):
 
 @tool(
     "tico_finance_act",
-    "One Finance action: committed, sent for approval, denied or failed. kind=help lists kinds; kind=help with payload "
-    "{'kind': k} gives k's fields. Requires operation_id, the action's key: a retry never acts twice.",
+    "One Finance action: committed, sent for approval, denied or failed. kind=help lists kinds; "
+    "kind=help with payload {'kind': k} gives k's fields. Requires operation_id, the action's "
+    "key: a retry never acts twice.",
     {
         "kind": _s("The action kind, or help"),
         "payload": {"type": "object", "description": "The kind's fields"},
@@ -514,9 +518,10 @@ def finance_action(api, args):
 
 @tool(
     "tico_finance_inbox",
-    "Your Finance work queue, with counts per kind: uncategorized rows, bills to enter, receipts, bills due, overdue "
-    "invoices, budgets near limit, failed syncs, months ready to close, unreconciled (not reconciled for over a month), "
-    "bill_email (emailed bills Finance did not take). Name a kind to page through it alone, past its first 200.",
+    "Your Finance work queue, with counts per kind: uncategorized rows, bills to enter, receipts, "
+    "bills due, overdue invoices, budgets near limit, failed syncs, months ready to close, "
+    "unreconciled (over a month), bill_email (emailed bills Finance did not take). Name a kind to "
+    "page through it past its first 200.",
     {
         "kind": _s("Only this kind, paged with cursor", enum=FINANCE_INBOX),
         "cursor": _s("next_cursor from the last page (same kind)"),

@@ -27,6 +27,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 DEFAULT_BASE = "https://updates.tico.team/v1/gateway"
 DECISIONS = "/decisions"
@@ -202,50 +203,58 @@ class LettersError(Exception):
         super().__init__(code)
 
 
+LETTER_CODES = frozenset(
+    {
+        "unconfigured",
+        "cannot_cancel",
+        "quote_changed",
+        "quote_expired",
+        "idempotency_conflict",
+        "quote_already_used",
+        "invalid",
+        "provider_rejected",
+        "provider_error",
+        "address_pending",
+        "out_of_credit",
+        "cap_reached",
+        "billing_required",
+        "rate_limited",
+        "not_found",
+        "revoked_key",
+        "unknown_key",
+        "idempotency_key_abandoned",
+    }
+)
+
+
 def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
-    """The install Letters API through the same key, safe URL and branded transport as other Gateway calls."""
-    headers = {"Authorization": "Bearer " + key, "Accept": "application/pdf" if pdf else "application/json"}
+    """The install Letters API through the same key, safe URL and branded transport as other Gateway calls (no
+    `_send` proxy rule: the Letters calls keep urllib's own proxy handling)."""
+    headers = {"Authorization": "Bearer " + key}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(
-        safe_base(base) + "/letters" + path,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers=headers,
-    )
     cap = 8 * 1024 * 1024 if pdf else 128 * 1024
+    status, answer, code = _exchange(
+        "POST" if body is not None else "GET",
+        safe_base(base) + "/letters" + path,
+        json.dumps(body).encode() if body is not None else None,
+        "application/pdf" if pdf else "application/json",
+        cap,
+        headers=headers,
+        timeout=60,
+        opener=branded_opener(_Unredirected()).open,
+    )
+    if code == "too_large":
+        raise LettersError(502, "response_too_large")
+    if code:
+        if not status:
+            raise LettersError(502, "gateway_unavailable")
+        raise LettersError(status, code if code in LETTER_CODES else "gateway_error")
+    if pdf:
+        return answer
     try:
-        with branded_opener(_Unredirected()).open(request, timeout=60) as response:
-            data = response.read(cap + 1)
-            if len(data) > cap:
-                raise LettersError(502, "response_too_large")
-            return data if pdf else json.loads(data)
-    except urllib.error.HTTPError as exc:
-        with exc:
-            code = _code(exc.read(4096))
-            allowed = {
-                "unconfigured",
-                "cannot_cancel",
-                "quote_changed",
-                "quote_expired",
-                "idempotency_conflict",
-                "quote_already_used",
-                "invalid",
-                "provider_rejected",
-                "provider_error",
-                "address_pending",
-                "out_of_credit",
-                "cap_reached",
-                "billing_required",
-                "rate_limited",
-                "not_found",
-                "revoked_key",
-                "unknown_key",
-                "idempotency_key_abandoned",
-            }
-            raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
-    except (OSError, ValueError, urllib.error.URLError):
+        return json.loads(answer)
+    except ValueError:
         raise LettersError(502, "gateway_unavailable") from None
 
 
@@ -289,32 +298,32 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
         base = safe_base(url)
     except ValueError:
         return {"state": "bad_url", "working": False, "message": describe("bad_url"), "used": None}
-    opener = opener or _send
-    request = urllib.request.Request(
-        base + "/key", method="GET", headers={"Authorization": "Bearer " + key, "Accept": "application/json"}
+    status, answer, code = _exchange(
+        "GET",
+        base + "/key",
+        None,
+        "application/json",
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
     )
-    amounts = {}
-    try:
-        with opener(request, timeout=timeout) as response:
-            payload = json.load(response)
-        state, used = state_of(payload)
-        amounts = {
-            k: round(float(payload[k]), 2)
-            for k in ("spent_usd", "cap_usd")
-            if isinstance(payload, dict)
-            and isinstance(payload.get(k), (int, float))
-            and not isinstance(payload.get(k), bool)
-            and payload[k] >= 0
-        }
-    except urllib.error.HTTPError as exc:
-        with exc:
-            try:
-                code = _code(exc.read())
-            except (OSError, http.client.HTTPException, ValueError):
-                code = ""
-            state, used = state_of_error(exc.code, code), None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        state, used = "unreachable", None
+    state, used, amounts = "unreachable", None, {}
+    if status and not code:
+        try:
+            payload = json.loads(answer)
+            state, used = state_of(payload)
+            amounts = {
+                k: round(float(payload[k]), 2)
+                for k in ("spent_usd", "cap_usd")
+                if isinstance(payload, dict)
+                and isinstance(payload.get(k), (int, float))
+                and not isinstance(payload.get(k), bool)
+                and payload[k] >= 0
+            }
+        except ValueError:
+            state, used, amounts = "unreachable", None, {}
+    elif status:
+        state = state_of_error(status, code)
     return {
         "state": state,
         "working": state not in REFUSED,
@@ -342,15 +351,54 @@ def out_of_credit(text):
     return re.search(r'[("]' + OUT_OF_CREDIT + r'[")]', str(text or "")) is not None
 
 
+# A Cloudflare error page in place of the service's own answer (the Gateway at updates.tico.team, or a provider's API):
+# `{"title": "Error 502: Bad gateway", "cloudflare_error": true, "ray_id": ..}`, or its HTML page. Its boilerplate says
+# "the origin is overloaded or misconfigured" for every 502, and that word is not a busy model: on Tico Team (Nov 18)
+# it read as model capacity, so a check on a Tico model retried every two minutes as "usage_limited".
+_EDGE_RE = re.compile(
+    r'"cloudflare_error"\s*:\s*true|/cloudflare-5xx-errors/|\berror code 5\d\d\b[\s\S]*\bcloudflare\b', re.I
+)
+_EDGE_STATUS_RE = re.compile(r'"status"\s*:\s*(5\d\d)\b|\b(5\d\d)\b')
+_EDGE_TITLE_RE = re.compile(r'"title"\s*:\s*"(?:Error )?(?:5\d\d:\s*)?([^"]{1,60})"')
+_EDGE_RAY_RE = re.compile(r'"ray_id"\s*:\s*"([0-9a-f]{8,32})"|\bray id:?\s*(?:<[^>]*>\s*)*([0-9a-f]{8,32})\b', re.I)
+_EDGE_ZONE_RE = re.compile(r'"zone"\s*:\s*"([a-z0-9.-]{1,100})"', re.I)
+
+
+def edge_outage(text):
+    """Whether a model error is a Cloudflare 5xx page: the service behind it is down, not a login's limit."""
+    return _EDGE_RE.search(str(text or "")) is not None
+
+
+def edge_summary(text):
+    """A Cloudflare 5xx page in one line for Runs and logs, keeping its status, host and ray id (what Cloudflare and
+    Tico support look a failure up by), or '' when `text` is not one."""
+    text = str(text or "")
+    if not edge_outage(text):
+        return ""
+    found = _EDGE_STATUS_RE.search(text)
+    status = (found[1] or found[2]) if found else ""
+    title = _EDGE_TITLE_RE.search(text)
+    ray = _EDGE_RAY_RE.search(text)
+    zone = _EDGE_ZONE_RE.search(text)
+    words = (title[1].strip() if title else "") or "server error"
+    out = " ".join(p for p in (status, words) if p) + " from " + (zone[1] if zone else "Cloudflare")
+    ray_id = (ray[1] or ray[2]) if ray else ""
+    return out + (f" (Cloudflare ray {ray_id})" if ray_id else " (Cloudflare)")
+
+
 def run_code(text):
     """The Gateway's code a bot's model error ends with, `not_found` for a 404 from it, or ''. Only read for runs on a
-    Tico model."""
+    Tico model. A Cloudflare 5xx page (`edge_outage`) is the Gateway unavailable: an older runner sent it as it came."""
     text = str(text or "")
     named = [code for code in CODES if f"({code})" in text or f": {code})" in text]
     if named:
         return named[0]
     bare = [code for code in CODES if code in text]
-    return bare[0] if bare else NOT_FOUND if not_served(text) else ""
+    if bare:
+        return bare[0]
+    if edge_outage(text):
+        return UNAVAILABLE
+    return NOT_FOUND if not_served(text) else ""
 
 
 def run_status(code, text=""):
@@ -398,28 +446,34 @@ def bot_id(secret, slug):
     return "gb_" + hmac.new(secret.encode(), str(slug).encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def _post(url, body, headers, timeout, opener):
-    """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. An unreachable
-    Gateway is status 0."""
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={**headers, "Content-Type": "application/json", "Accept": "application/json"},
-    )
+REASON_CHARS = 300
+
+
+def _refusal(body):
+    """{"detail": the Gateway's reason, trimmed to REASON_CHARS} for an error answer that gave one (HQ's `detail` on a
+    refused request), else {}."""
     try:
-        with (opener or _send)(request, timeout=timeout) as response:
-            payload = json.load(response)
-        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
-    except urllib.error.HTTPError as exc:
-        with exc:
-            try:
-                code = _code(exc.read())
-            except (OSError, http.client.HTTPException, ValueError):
-                code = ""
-            return exc.code, {}, code or str(exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return {}
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    detail = detail.strip()[:REASON_CHARS] if isinstance(detail, str) else ""
+    return {"detail": detail} if detail else {}
+
+
+def _post(url, body, headers, timeout, opener, *, reason=False):
+    """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. With `reason`, an
+    error's payload is its `_refusal`. An unreachable Gateway is status 0."""
+    status, answer, code = _exchange(
+        "POST", url, json.dumps(body).encode(), "application/json", headers=headers, timeout=timeout, opener=opener
+    )
+    if code:
+        return status, (_refusal(answer) if reason else {}), code
+    try:
+        payload = json.loads(answer)
+    except ValueError:
         return 0, {}, "unreachable"
+    return status, payload if isinstance(payload, dict) else {}, ""
 
 
 def enroll(url, install, secret, invite="", version="", timeout=TIMEOUT, opener=None):
@@ -543,13 +597,18 @@ def job_path(job_id):
 
 def video_submit(url, key, body, headers=None, timeout=TIMEOUT, opener=None):
     """Tico HQ's video maker (`POST <base>/videos`, the gateway key): (202, {id, status}, "") for a queued job, or
-    (status, {}, error code). `body` is the request as the door takes it (model, prompt, seconds, resolution, aspect,
-    audio and the frames that are given)."""
+    (status, {}, error code). A refused request says why: (status, {"detail": reason}, code). `body` is the request as
+    the door takes it (model, prompt, seconds, resolution, aspect, audio and the frames that are given)."""
     status, payload, code = _post(
-        safe_base(url) + "/videos", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+        safe_base(url) + "/videos",
+        body,
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+        reason=True,
     )
     if status != 202:
-        return status, {}, code
+        return status, (payload if code else {}), code
     if not _JOB.fullmatch(str(payload.get("id") or "")):
         return 502, {}, "unreadable"
     return 202, {"id": str(payload["id"]), "status": str(payload.get("status") or "queued")[:20]}, ""
@@ -589,40 +648,65 @@ def video_content(url, key, job_id, headers=None, timeout=VIDEO_TIMEOUT, opener=
 
 def _get(url, headers, timeout, opener):
     """(status, payload, code) for a GET to the Gateway, as `_post` answers a POST."""
-    status, body, code = _exchange(url, headers, "application/json", timeout, opener, None)
+    status, answer, code = _exchange(
+        "GET", url, None, "application/json", headers=headers, timeout=timeout, opener=opener
+    )
     if status != 200:
         return status, {}, code
     try:
-        payload = json.loads(body or b"{}")
+        payload = json.loads(answer or b"{}")
     except ValueError:
         return 0, {}, "unreadable"
     return 200, payload if isinstance(payload, dict) else {}, ""
 
 
 def _get_bytes(url, headers, timeout, opener, limit):
-    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes."""
-    return _exchange(url, headers, "video/mp4", timeout, opener, limit)
+    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes. An error answer keeps no body (the
+    transport returns its error body, which is not a video), and a video over `limit` is (200, b"", "too_large")."""
+    status, answer, code = _exchange(
+        "GET", url, None, "video/mp4", limit, headers=headers, timeout=timeout, opener=opener
+    )
+    if code == "too_large":
+        return 200, b"", code
+    if code:
+        return status, b"", code
+    return status, answer, ""
 
 
-def _exchange(url, headers, accept, timeout, opener, limit):
-    """(status, body, code) for one GET: the body of a 2xx answer (at most `limit` bytes, when given), else the Gateway's
-    error code. An unreachable Gateway is status 0."""
-    request = urllib.request.Request(url, method="GET", headers={**headers, "Accept": accept})
+def _exchange(
+    method, url, body=None, accept="application/json", limit=None, *, headers=None, timeout=TIMEOUT, opener=None
+):
+    """(status, body, code): the one transport every Gateway call goes through. A 2xx answer gives its body; over
+    `limit` bytes (when given) it gives the first `limit` bytes with code `too_large`. An error answer gives its status
+    and the Gateway's code (its status as text when it names none), with its body kept to `limit` bytes (4 KB without
+    one). An unreachable Gateway is status 0 and code `unreachable`."""
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            **(headers or {}),
+            "Accept": accept,
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+    )
     try:
         with (opener or _send)(request, timeout=timeout) as response:
-            body = response.read(limit + 1) if limit else response.read()
-        if limit and len(body) > limit:
-            return 200, b"", "too_large"
-        return getattr(response, "status", 200), body, ""
+            status = getattr(response, "status", 200)
+            answer = response.read(limit + 1) if limit else response.read()
     except urllib.error.HTTPError as exc:
         with exc:
             try:
-                code = _code(exc.read())
-            except (OSError, ValueError, AttributeError):
-                code = ""
-            return exc.code, b"", code or str(exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                answer = exc.read(limit or 4096)
+            except (OSError, http.client.HTTPException, ValueError, AttributeError):
+                answer = b""
+            return exc.code, answer, _code(answer) or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
+        # IncompleteRead (a connection closed part way through the answer) is an HTTPException, not an OSError.
         return 0, b"", "unreachable"
+    if limit and len(answer) > limit:
+        return status, answer[:limit], "too_large"
+    return status, answer, ""
 
 
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
@@ -686,36 +770,28 @@ def digest(url, key, items, focus=None, style="brief", headers=None, timeout=130
     )
 
 
-def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None):
+def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None) -> tuple[int, Any, str]:
     """(status, payload, error code) for a call to the Gateway that is not a POST: a GET, or a DELETE that answers no
     body (its payload is {}). An unreachable Gateway is status 0, and an answer too large to keep is `too_large`."""
-    request = urllib.request.Request(
+    status, answer, code = _exchange(
+        method,
         url,
-        data=json.dumps(body).encode() if body is not None else None,
-        method=method,
-        headers={
-            **(headers or {}),
-            "Accept": "application/json",
-            **({"Content-Type": "application/json"} if body is not None else {}),
-        },
+        None if body is None else json.dumps(body).encode(),
+        "application/json",
+        4 * 1024 * 1024,
+        headers=headers,
+        timeout=timeout,
+        opener=opener,
     )
-    cap = 4 * 1024 * 1024
+    if code == "too_large":
+        return 0, {}, code
+    if code:
+        return status, {}, code
     try:
-        with (opener or _send)(request, timeout=timeout) as response:
-            raw = response.read(cap + 1)
-            if len(raw) > cap:
-                return 0, {}, "too_large"
-            payload = json.loads(raw) if raw else {}
-        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
-    except urllib.error.HTTPError as exc:
-        with exc:
-            try:
-                code = _code(exc.read(4096))
-            except (OSError, http.client.HTTPException, ValueError):
-                code = ""
-            return exc.code, {}, code or str(exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        payload = json.loads(answer) if answer else {}
+    except ValueError:
         return 0, {}, "unreachable"
+    return status, payload if isinstance(payload, dict) else {}, ""
 
 
 def signals_watches(base, key, timeout=TIMEOUT, opener=None):
@@ -768,33 +844,54 @@ def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None
     )
 
 
-# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+# The most an answer a speech relay call passes on may be: a transcript of a clip, never a whole file.
 RELAY_LIMIT = 30 * 1024 * 1024
 
 
 def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
-    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    """(status, body bytes) for a speech relay call, the Gateway's answer kept as it is. An
     error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
     `safe_base` allows it, and never through a redirect."""
     try:
         safe_base(url)
-        request = urllib.request.Request(
-            url,
-            data=body,
-            method=method,
-            headers={
-                **(headers or {}),
-                "Accept": "application/json",
-                **({"Content-Type": "application/json"} if body is not None else {}),
-            },
-        )
+    except ValueError:
+        return 0, b""
+    status, answer, _code_ = _exchange(
+        method, url, body, "application/json", RELAY_LIMIT, headers=headers, timeout=timeout
+    )
+    return status, answer
+
+
+SPEECH_RATE = 24000  # the sample rate of the Gateway's speech when it names none
+
+
+def relay_speech(url, body, headers=None, timeout=TIMEOUT):
+    """(status, pcm bytes, sample rate) for a text-to-speech relay call (`POST /audio/speech` with response_format pcm):
+    raw 16-bit little-endian mono PCM at the rate the `X-Audio-Sample-Rate` header names. An error answer keeps its
+    status and body; status 0 means the Gateway could not be reached. The key goes only where `safe_base` allows it,
+    and never through a redirect."""
+    try:
+        safe_base(url)
+    except ValueError:
+        return 0, b"", SPEECH_RATE
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={**(headers or {}), "Accept": "audio/pcm", "Content-Type": "application/json"},
+    )
+    try:
         with _send(request, timeout=timeout) as response:
-            return response.status, response.read(RELAY_LIMIT)
+            answer = response.read(RELAY_LIMIT + 1)
+            named = response.headers.get("X-Audio-Sample-Rate") or ""
+            status = getattr(response, "status", 200)
     except urllib.error.HTTPError as exc:
         with exc:
             try:
-                return exc.code, exc.read(RELAY_LIMIT)
-            except OSError:
-                return exc.code, b""
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        return 0, b""
+                return exc.code, exc.read(4096), SPEECH_RATE
+            except (OSError, http.client.HTTPException, ValueError, AttributeError):
+                return exc.code, b"", SPEECH_RATE
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
+        return 0, b"", SPEECH_RATE
+    rate = int(named) if named.strip().isdigit() and 8000 <= int(named) <= 96000 else SPEECH_RATE
+    return status, answer[:RELAY_LIMIT], rate

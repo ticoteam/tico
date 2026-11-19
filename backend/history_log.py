@@ -49,6 +49,7 @@ MOVES = {
     "closed": "closed",
     "reopen": "reopened",
     "restored": "restored",
+    "moved": "moved to another pipeline",
 }
 REVEALS = {"credential.revealed": "revealed", "credential.sent_to_computer": "sent to its computer"}
 # What each permission event changed, in words.
@@ -325,7 +326,7 @@ def install(app, store, auth):
                 return bots.get(ident) or ident
             if str(actor).startswith("human:"):
                 return people.get(ident) or ident
-            return "Tico" if actor in (H.KEEPER, "system") else str(actor or "")
+            return "Tico" if actor in (H.TICO_ACTOR, "system") else str(actor or "")
 
         out = []
         for r in rows:

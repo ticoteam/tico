@@ -24,7 +24,7 @@ was wrong), 2 when the server refused. Writes send an Idempotency-Key, so a retr
 
 **What a token cannot do.** A personal token is you, except that it cannot give an OK on an *OK* requirement (one a
 stage keeps for a person's own word: "An OK is the person's own, in Tico"); give that one in Tico. It can approve or
-send back a page sign-off, answer a question, and send back an OK.
+send back a page sign-off, answer a bot's ❓ with a reply in its chat, and send back an OK.
 
 ## Read the company
 
@@ -45,7 +45,7 @@ tico needs-you show               # everything that waits on you, in one list
    stage. Note the `id` and `version` it prints.
 
    ```sh
-   tico task request product "Add a negate(x) function" --body "Why, and what done looks like"
+   tico task request product "Add a negate(x) function" --message "Why, and what done looks like"
    ```
 
    A stage held by "whoever the task is for" (General's To do) needs `--owner <bot or person>`.
@@ -63,8 +63,8 @@ tico needs-you show               # everything that waits on you, in one list
    tico task wait <id> --needs-me --timeout 2h
    ```
 
-   The last line says what waits on you under `yours`. Read the task and its page with `tico task show <id>` (To leave
-   lists each requirement, met or not, and the page attached).
+   The last line says what waits on you under `yours`. Read the task's chat and its page with
+   `tico task show <id>` (To leave lists each requirement, met or not, and the page attached).
 
 4. **Approve it or send it back.** `approve` finds the one requirement waiting for your OK and gives it for the page
    version attached now; with more than one, add `--requirement <id>`.
@@ -74,7 +74,7 @@ tico needs-you show               # everything that waits on you, in one list
    tico task send-back <id> -m "Say what negate(-0) returns"
    ```
 
-   A question on a task is answered with `tico task answer <id> <requirement> "<answer>" --version <version>`.
+   An OK is answered with `tico task answer <id> <requirement> ok|no --version <version>`. A bot's question (❓) is answered by a reply in its chat.
 
 5. **Wait for the merge.** Product files the work into Engineering; `--tree` follows the tasks a task files. A task
    that reached a stage or went past it meets `--stage`, so this ends once the Engineering task leaves Merge:
@@ -96,10 +96,10 @@ refused, never overwritten (add `--version N` to pin the version you read yourse
 ```sh
 tico pipeline create support --name Support --manager success-manager --stage Triage --stage "Doing:success-manager"
 tico pipeline update product --goal "Specs a builder can build from" --manager product-manager
-tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2
+tico stage add engineering "Security review" --after engineering-review-1 --holder reviewer-2
 tico stage update product-ideas --no-by-hand --purpose "Ideas worth a spec"
 tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new --no-owns-task
-tico stage move engineering-review-2 --after engineering-review-1
+tico stage move engineering-fixes-1 --after engineering-review-1
 tico requirement list product-spec
 tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me
 tico requirement update <requirement id> --who-oks people_only
@@ -118,7 +118,7 @@ Removing takes the exact name of what goes, typed again; nothing is removed with
 open tasks are in the way:
 
 ```sh
-tico stage remove engineering-fixes-2 --confirm "Fixes 2"
+tico stage remove engineering-qa --confirm QA
 tico requirement remove <requirement id> --confirm "Spec page"   # its line, or its kind when it has none
 tico pipeline remove support --confirm Support                    # retired: its ended tasks stay
 ```

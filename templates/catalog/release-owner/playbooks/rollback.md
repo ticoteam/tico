@@ -1,8 +1,8 @@
-# Draft a rollback request
+# Roll back, or draft a rollback request
 
 Used when the deploy record shows a bad release reached users and no good release has followed, or when a person asks for a
-rollback on a task. Budget 20 minutes. The outcome is one drafted request, on a task, for the person who runs deploys. This
-bot never runs a rollback on its own.
+rollback on a task. Budget 20 minutes. The outcome is the previous version restored, when step 2 allows you to do it
+alone, or one drafted request, on a task, for the person who runs deploys.
 
 ---
 
@@ -17,8 +17,15 @@ If the logs are past retention or the runs cannot be read, say so. An unknown is
 
 ## 2. Judge whether it can roll back
 
-Read `skills/judge-whether-a-release-can-roll-back/SKILL.md`. State whether the earlier version can be restored as it is, and
-whether data the new version wrote still works on the old one. If it cannot be restored cleanly, say what would be needed.
+Read `.claude/skills/ship-a-release/SKILL.md` (steps 3 and 4, `references/rollback-thresholds.md`). State whether the
+earlier version can be restored as it is, and whether data the new version wrote still works on the old one. If it
+cannot be restored cleanly, say what would be needed.
+
+**Roll back alone** only when both are true: the release was marked "can roll back: yes" before its rollout, and a red
+threshold written for that rollout was seen in two checks in a row. Then release the previous version the way the
+rollout went out (`playbooks/rollout.md`), check that the install reports it and its workflow run finished green, say on
+the task what you did and why, and go to step 5. Any other case (the answer was "no" or "unknown", the threshold showed
+once, or a person asked) is a drafted request: step 3.
 
 ## 3. Draft the request
 
@@ -32,9 +39,9 @@ with, in this order:
 
 ## 4. Stop there
 
-Never run the rollback, and never run a rollout of an earlier version on your own. If the owner approves the earlier version on the
-task, it is a rollout of that version under `playbooks/rollout.md`, with its own approval naming the version and commit. Otherwise it
-stays a drafted request.
+Outside the case in step 2, never run the rollback, and never run a rollout of an earlier version on your own. If the owner
+approves the earlier version on the task, it is a rollout of that version under `playbooks/rollout.md`, with its own approval
+naming the version and commit. Otherwise it stays a drafted request.
 
 ## 5. Record it
 

@@ -1,6 +1,8 @@
 ---
 name: map-the-risk-in-a-diff
 description: List which risky surfaces a pull request touches (sign-in and permissions, money, personal data, deletion and migrations, public interfaces, configuration, concurrency, new dependencies, CI and secrets), and the one check each surface needs before the review can say anything about it.
+metadata:
+  function: engineering
 ---
 # Map the risk in a diff
 

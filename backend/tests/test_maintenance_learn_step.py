@@ -17,6 +17,7 @@ from backend.store import H
 from backend.tests.helpers.api import claim, headers, post
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_contact import bot
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
 
@@ -342,7 +343,38 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
-def test_only_what_the_company_may_read_reaches_the_company_update(api):
+def test_a_nights_sent_mail_is_read_from_gmail_and_a_silent_mailbox_is_passed_over(api, fake_gmail):
+    from backend import mailbox_access as MA
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        for person in ("ana", "ben"):
+            MA.ensure_mailbox(c, person + "@acme.example", person_id=person, created_by="human:ana")
+    window = (1_783_000_000, 1_783_100_000)
+    put_mail(api, "ana@acme.example", msg_id="sent", from_addr="ana@acme.example", labels=["SENT"], epoch=1_783_050_000)
+    put_mail(
+        api, "ana@acme.example", msg_id="older", from_addr="ana@acme.example", labels=["SENT"], epoch=1_782_000_000
+    )
+    put_mail(api, "ana@acme.example", msg_id="received", labels=["INBOX"], epoch=1_783_050_000)
+    put_mail(
+        api, "ben@acme.example", msg_id="ben-sent", from_addr="ben@acme.example", labels=["SENT"], epoch=1_783_050_000
+    )
+    fake_gmail.down.add("ben@acme.example")
+    people = {"ana@acme.example": {"id": "ana", "name": "Ana"}, "ben@acme.example": {"id": "ben", "name": "Ben"}}
+    since, now = (learnings.utc(datetime_of(t)) for t in window)
+    with store.read() as c:
+        items = learnings._sent_mail(c, people, since, now)
+    assert [(i["key"], i["author"]) for i in items] == [("mail:ana@acme.example:sent", "human:ana")]
+    assert "How does pricing work?" in items[0]["text"]
+
+
+def datetime_of(epoch):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, timezone.utc)
+
+
+def test_only_what_the_company_may_read_reaches_the_company_update(api, fake_gmail):
     """One install, each source in turn (public and private Slack channels, personal sent mail, task comments, a direct
     chat that references a public task, the bot's home with restricted history), the learning rows cleared between."""
     store = api.app.state.store
@@ -769,154 +801,3 @@ def test_learnings_night_counts_one_item_in_the_singular(api):
         updates.send_request(c, queue(c), delivery=True)
     assert status(old) == "1 item expired"
     assert status(fresh) == "1 item sent in Update"
-
-
-def learn_migration():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010100_learn_beta.py"
-    spec = importlib.util.spec_from_file_location("learn_beta", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    return migration
-
-
-def test_learn_migration_is_idempotent_and_keeps_old_rows_and_indexes():
-    migration = learn_migration()
-    with sqlite3.connect(":memory:") as c:
-        c.execute(
-            "CREATE TABLE learning_deliveries(run_id TEXT NOT NULL,recipient TEXT NOT NULL,task_id TEXT NOT NULL, "
-            "item_keys TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(run_id,recipient))"
-        )
-        c.execute(
-            "CREATE TABLE learning_runs(id TEXT PRIMARY KEY,night TEXT NOT NULL UNIQUE,status TEXT NOT NULL, "
-            "started_at TEXT NOT NULL,finished_at TEXT,read_count INTEGER NOT NULL DEFAULT 0, "
-            "routed_count INTEGER NOT NULL DEFAULT 0,detail TEXT NOT NULL DEFAULT '{}')"
-        )
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('old','same-day','done','then')")
-        c.execute("CREATE INDEX old_learning_tasks ON learning_deliveries(task_id)")
-        c.execute("CREATE VIEW old_packets AS SELECT task_id FROM learning_deliveries")
-        c.execute("INSERT INTO learning_deliveries VALUES('old','ops','packet-task','[\"item\"]','then')")
-        migration.up(c)
-        migration.up(c)
-        row = c.execute(
-            "SELECT task_id,item_keys,update_batch_id,message_id,expired_at FROM learning_deliveries WHERE run_id='old'"
-        ).fetchone()
-        assert row == ("packet-task", '["item"]', None, None, None)
-        assert c.execute("SELECT night FROM learning_runs WHERE id='old'").fetchone()[0] == "same-day"
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('again','same-day','quiet','now')")
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='old_learning_tasks'").fetchone()
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='learning_deliveries_expiry'").fetchone()
-        assert c.execute("SELECT task_id FROM old_packets WHERE task_id IS NOT NULL").fetchone()[0] == "packet-task"
-        c.execute(
-            "INSERT INTO learning_deliveries(run_id,recipient,item_keys,created_at) VALUES('new','ops','[]','now')"
-        )
-        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        migration.up(c)
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('one','same-day','done','now')")
-        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('two','same-day','done','now')")
-
-
-@pytest.mark.parametrize(
-    "saved,seed,expected",
-    [
-        ({}, 0, 0),
-        ({"learnings": {"at": "04:00"}}, 0, 0),
-        ({"learnings": {"on": False}}, 1, 0),
-        ({"learnings": {"on": True}}, 0, 1),
-    ],
-)
-def test_learn_cutover_takes_the_latest_saved_switch_once(saved, seed, expected):
-    migration = learn_migration()
-    with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
-        c.execute(
-            "CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)"
-        )
-        c.execute("INSERT INTO maintenance_steps VALUES('learn',?,'seed','migration')", (seed,))
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('system_routines',?)",
-            (json.dumps({"kpi_asks": {"on": False}, **saved}),),
-        )
-        migration.up(c)
-        assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='learn'").fetchone()[0] == expected
-        assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {"kpi_asks": {"on": False}}
-        changes = c.total_changes
-        migration.up(c)
-        assert c.total_changes == changes
-        c.execute(
-            "UPDATE maintenance_steps SET enabled=?,updated_at='later',updated_by_id='human:ana' WHERE key='learn'",
-            (1 - expected,),
-        )
-        migration.up(c)
-        assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
-            1 - expected,
-            "later",
-            "human:ana",
-        )
-
-
-def test_learn_cutover_preserves_a_maintenance_choice_made_before_its_first_execution():
-    migration = learn_migration()
-    with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY,value TEXT)")
-        c.execute(
-            "CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY,enabled INTEGER,updated_at TEXT,updated_by_id TEXT)"
-        )
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('system_routines',?)", (json.dumps({"learnings": {"on": True}}),)
-        )
-        c.execute("INSERT INTO maintenance_steps VALUES('learn',1,'foundation','migration')")
-        c.execute(
-            "UPDATE maintenance_steps SET enabled=0,updated_at='human-choice',updated_by_id='human:ana' WHERE key='learn'"
-        )
-        migration.up(c)
-        assert c.execute("SELECT enabled,updated_at,updated_by_id FROM maintenance_steps").fetchone() == (
-            0,
-            "human-choice",
-            "human:ana",
-        )
-        assert json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0]) == {}
-
-
-@pytest.mark.parametrize("with_runs", [False, True])
-def test_learn_cutover_retires_only_readonly_builtin_mirrors_and_skips_unfinished_runs(with_runs):
-    migration = learn_migration()
-    with sqlite3.connect(":memory:") as c:
-        c.execute(
-            "CREATE TABLE automations(id TEXT PRIMARY KEY,builtin INTEGER,enabled INTEGER,flow TEXT,"
-            "deleted_at TEXT,updated_at TEXT)"
-        )
-        for key, builtin, readonly, trigger, deleted in (
-            ("mirror", 1, True, "learnings", None),
-            ("deleted", 1, True, "learnings", "before"),
-            ("editable", 1, False, "learnings", None),
-            ("custom", 0, True, "learnings", None),
-            ("other", 1, True, "kpi_asks", None),
-        ):
-            flow = {"readonly": readonly, "trigger": {"name": "tico.builtin.job." + trigger}}
-            c.execute("INSERT INTO automations VALUES(?,?,1,?,?, 'before')", (key, builtin, json.dumps(flow), deleted))
-        untouched = c.execute("SELECT * FROM automations WHERE id<>'mirror' ORDER BY id").fetchall()
-        if with_runs:
-            c.execute(
-                "CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,status TEXT,finished_at TEXT)"
-            )
-            for status in ("queued", "waiting", "running", "done", "failed", "skipped"):
-                c.execute(
-                    "INSERT INTO automation_runs VALUES(?,'mirror',?,?)",
-                    (status, status, None if status in ("queued", "waiting", "running") else "before"),
-                )
-            for key in ("deleted", "editable", "custom", "other"):
-                c.execute("INSERT INTO automation_runs VALUES(?,?,'queued',NULL)", (key, key))
-        migration.up(c)
-        mirror = c.execute("SELECT enabled,deleted_at,updated_at FROM automations WHERE id='mirror'").fetchone()
-        assert mirror[0] == 0 and mirror[1] and mirror[1] == mirror[2]
-        assert c.execute("SELECT * FROM automations WHERE id<>'mirror' ORDER BY id").fetchall() == untouched
-        if with_runs:
-            runs = {row[0]: row[1:] for row in c.execute("SELECT id,status,finished_at FROM automation_runs")}
-            assert all(runs[key] == ("skipped", mirror[1]) for key in ("queued", "waiting", "running", "deleted"))
-            assert all(runs[key] == (key, "before") for key in ("done", "failed", "skipped"))
-            assert all(runs[key] == ("queued", None) for key in ("editable", "custom", "other"))
-        before, changes = list(c.iterdump()), c.total_changes
-        migration.up(c)
-        assert list(c.iterdump()) == before and c.total_changes == changes

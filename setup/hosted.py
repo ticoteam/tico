@@ -131,9 +131,9 @@ def plan_lines(s: Settings) -> list[str]:
             f"{s.hosted}, under {s.hosted_zone}"
         ]
     if s.preset:
-        team = "the selected company file" if s.company_file_data else "the sample company"
+        team = "the selected company file, " if s.company_file_data else ""
         out.append(
-            f"Recommended setup: {team}, your Claude and ChatGPT subscriptions plus Tico Gateway, "
+            f"Recommended setup: {team}your Claude and ChatGPT subscriptions plus Tico Gateway, "
             f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
             + (
                 "The Gateway invite is in the environment; it connects on the first start."

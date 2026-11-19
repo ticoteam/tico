@@ -60,3 +60,7 @@ first_routine:
 example_output: knowledge/examples/support-queue.md
 reasoning_effort: medium
 recommend_when: [has_support_inbox, uses_tickets, sells_to_consumers, uses_email]
+shared_files:
+  - .claude/skills/answer-a-customer
+  - .claude/skills/recover-a-bad-experience
+  - .claude/skills/answer-a-demand-or-complaint

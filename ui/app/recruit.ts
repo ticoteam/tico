@@ -508,13 +508,7 @@ function recruitApplicant(main: HTMLElement, found: RecruitFound, c: RecruitCand
 async function recruitHireModel(form: HTMLFormElement, c: RecruitCandidate, model: string | undefined) {
   const host = form.querySelector<HTMLElement>('[data-hire-model]');
   if (!host) return;
-  try {
-    if (!SETTINGS_DATA.models.length) {
-      const catalog = await get('/v2/models');
-      if (!SETTINGS_DATA.models.length) Object.assign(SETTINGS_DATA, {models: catalog.models || [], harnesses: catalog.harnesses || [],
-        enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '', gateway: null});
-    }
-  } catch { return; }
+  try { await settingsChoiceCatalog(); } catch { return; }
   if (!form.isConnected) return;
   const start = settingsAllChoices().find(row => row.model === model)?.value || '';
   host.insertAdjacentHTML('beforeend', settingsChoiceBox({kind: 'hire', name: 'Model', current: start, mode: 'bot', none: `Suggested: ${c.model_name || 'the team default'}`}));
@@ -623,6 +617,6 @@ async function recruitClose(seat: RecruitSeatRow, button: HTMLButtonElement) {
     delete RECRUIT.found[seat.id]; delete RECRUIT.counts[seat.id];
     await refresh(true);
     toast(`${seat.title} closed.`);
-    location.hash = seat.team ? TEAM_PAGE + encodeURIComponent(seat.team) : OVERVIEW;
+    location.hash = seat.team ? TEAM_PAGE + encodeURIComponent(seat.team) : HOME;
   } catch (e) { button.disabled = false; toast(errorMessage(e, ''), true); }
 }

@@ -32,6 +32,7 @@ from . import directory_sources as Sources
 from . import hubdb as H
 from . import people as P
 from . import people_photos, personal_tokens
+from .api_contract import api_v2, error
 from .models import Contract
 from .store import Problem
 
@@ -646,29 +647,105 @@ def install_directory(app, settings, store, mutate):
         with store.read() as c:
             app.state.auth.sync_access(c)
 
-    @app.get("/api/v2/directory")
+    @app.get(
+        "/api/v2/directory",
+        **api_v2(
+            "Team",
+            "getDirectorySync",
+            "Directory sync: the source, filter, schedule, last sync and SCIM address; the owner only",
+            "DirectoryView",
+            description="Saved credentials are never read back: `credentials` says only whether each source has one "
+            "and what it is for. The Assistant never reaches directory sync.",
+            responses={"403": error("forbidden: only the company's owner manages directory sync")},
+        ),
+    )
     def directory_view(request: Request):
         owner(request, "manages directory sync")
         with store.read() as c:
             return service.view(c)
 
-    @app.put("/api/v2/directory")
+    @app.put(
+        "/api/v2/directory",
+        **api_v2(
+            "Team",
+            "saveDirectorySync",
+            "Save directory sync: source, filter, schedule and the mass-leave limit, and credentials (write-only)",
+            "DirectorySaved",
+            description="The owner only. Send `expected_revision` from the read. Credentials go in and never come "
+            "back out; leave them out to keep the saved ones. A changed source or filter needs a new first-sync "
+            "confirmation.",
+            responses={
+                "403": error("forbidden: only the company's owner manages directory sync"),
+                "409": error("conflict: directory sync changed since it was read; reload and try again"),
+            },
+        ),
+    )
     def directory_save(request: Request, body: DirectoryUpdate):
         who = owner(request, "manages directory sync")
         return mutate(request, body, lambda c: {"revision": service.configure(c, who.actor, body)})
 
-    @app.post("/api/v2/directory/scim-token")
+    @app.post(
+        "/api/v2/directory/scim-token",
+        **api_v2(
+            "Team",
+            "createDirectoryScimToken",
+            "Make a new SCIM token, replacing the old one; shown once, in this answer",
+            "DirectoryScimToken",
+            description="The owner only, signed in themselves: a personal API token cannot make it. The token is "
+            "shown in this answer only; a retry with the same Idempotency-Key replays it, and no read returns it. "
+            "Audited as `directory.scim_token_created`.",
+            responses={
+                "403": error("forbidden: only the company's owner, and not from an API token, makes a SCIM token")
+            },
+        ),
+    )
     def directory_scim_token(request: Request, body: Empty):
         who = owner(request, "manages directory sync")
         personal_tokens.no_minting(who, "Make a SCIM token")
         return mutate(request, body, lambda c: {"token": service.new_scim_token(c, who.actor)})
 
-    @app.post("/api/v2/directory/preview")
+    @app.post(
+        "/api/v2/directory/preview",
+        **api_v2(
+            "Team",
+            "previewDirectorySync",
+            "What a sync would do now: who it adds, updates, restores and marks left, and what needs confirming",
+            "DirectoryPlan",
+            description="The owner only. Reads Google Workspace or Microsoft Entra ID and changes nothing.",
+            responses={
+                "403": error("forbidden: only the company's owner manages directory sync"),
+                "409": error(
+                    "source: choose Google Workspace or Microsoft Entra ID first; credentials: save them first"
+                ),
+                "503": error("directory_unavailable: the saved credentials could not be opened"),
+            },
+            idempotency="Not needed: a preview changes nothing.",
+        ),
+    )
     def directory_preview(request: Request, body: Empty):
         owner(request, "manages directory sync")
         return service.preview()
 
-    @app.post("/api/v2/directory/sync")
+    @app.post(
+        "/api/v2/directory/sync",
+        **api_v2(
+            "Team",
+            "runDirectorySync",
+            "Sync the directory now; a first sync or one marking many people left waits for the owner's confirmation",
+            "DirectorySyncResult",
+            description="The owner only. Held (`applied` false) until confirmed with `confirm` and the preview's "
+            "`plan_hash`; `stale` when the confirmed plan has changed since. Audited as `directory.synced`.",
+            responses={
+                "403": error("forbidden: only the company's owner manages directory sync"),
+                "409": error(
+                    "source: choose Google Workspace or Microsoft Entra ID first; credentials: save them first"
+                ),
+                "503": error("directory_unavailable: the saved credentials could not be opened"),
+            },
+            idempotency="Not needed: each call syncs the directory as it is then; a repeat finds nothing left to do "
+            "unless the directory changed.",
+        ),
+    )
     def directory_sync(request: Request, body: SyncRequest):
         who = owner(request, "manages directory sync")
         out = service.run(who.actor, confirm=body.confirm, plan_hash=body.plan_hash)

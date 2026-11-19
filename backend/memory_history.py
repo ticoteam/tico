@@ -25,21 +25,6 @@ from .shared_bots import copies, declared, source_of
 from .store import H, Problem, repo_url
 from .views import human_only
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_memory_updates(
- bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed_at TEXT NOT NULL,
- files TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
- attempt_id TEXT NOT NULL DEFAULT '', shared INTEGER NOT NULL DEFAULT 0, runner_id TEXT NOT NULL,
- reported_at TEXT NOT NULL, PRIMARY KEY(bot, sha));
-CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed_at);
-CREATE TABLE IF NOT EXISTS bot_memory_documents(
- bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(bot, path));
-CREATE TABLE IF NOT EXISTS bot_memory_oversized(
- bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
-CREATE TABLE IF NOT EXISTS bot_memory_seen(
- actor TEXT NOT NULL, bot TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY(actor, bot));
-"""
-
 FOLDERS = ("memory/", "knowledge/")
 DOCUMENTS = ("memory/learnings.md", "memory/decisions.md")
 MAX_DOCUMENT_BYTES = 4_000_000

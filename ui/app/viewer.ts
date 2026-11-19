@@ -124,7 +124,15 @@ function rowsView(rows: string[][], max = CSV_ROWS) {
 // network, so pictures embedded in the file show and remote ones do not. A link opens in a new tab.
 const HTML_VIEW_LIMIT = 10_000_000;
 const HTML_VIEW_POLICY = "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline' data:; font-src data:";
-function htmlPreviewDoc(raw: unknown): string {
+// What a page or HTML file with no styles of its own is drawn with, instead of the browser's defaults: an h1 of 2em
+// (32 px, several lines in a phone's column), 8 px margins, no text-size-adjust (a phone may enlarge the text). Each rule
+// is :where(), of no weight, so any rule of the page's own wins.
+const HTML_VIEW_BASE = ':where(html){-webkit-text-size-adjust:100%;text-size-adjust:100%}'
+  + ':where(body){margin:0;padding:16px;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-wrap:break-word}'
+  + ':where(h1){font-size:1.5em;line-height:1.25}:where(h2){font-size:1.25em;line-height:1.3}:where(h3){font-size:1.1em}'
+  + ':where(img,video){max-width:100%;height:auto}:where(pre){overflow-x:auto}';
+/** `look`: more base styles after HTML_VIEW_BASE (a task's document takes the app's colours, task-docs.ts docLook). */
+function htmlPreviewDoc(raw: unknown, look = ''): string {
   // DOMParser builds an inert document: nothing in it runs or loads while it is rewritten.
   const doc = new DOMParser().parseFromString(String(raw), 'text/html');
   for (const m of doc.querySelectorAll('meta[http-equiv]')) if (/^\s*refresh\s*$/i.test(m.getAttribute('http-equiv') ?? '')) m.remove();
@@ -139,18 +147,79 @@ function htmlPreviewDoc(raw: unknown): string {
   newTab(doc);
   const policy = doc.createElement('meta');
   policy.httpEquiv = 'Content-Security-Policy'; policy.content = HTML_VIEW_POLICY;
-  doc.head.prepend(policy);
+  // Base styles first, so the page's own CSS wins wherever it says anything (HTML_VIEW_BASE).
+  const base = doc.createElement('style');
+  base.textContent = HTML_VIEW_BASE + look;
+  doc.head.prepend(policy, base);
   return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
 }
-function htmlPreviewFrame(raw: string, title?: string) {
+function htmlPreviewFrame(raw: string, title?: string, look = '') {
   const frame = document.createElement('iframe');
   frame.className = 'html-view';
   // Set before the frame joins the page, so its first document already runs sandboxed.
   frame.setAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
   frame.referrerPolicy = 'no-referrer';
   frame.title = title || 'HTML preview';
-  frame.srcdoc = htmlPreviewDoc(raw);
+  frame.srcdoc = htmlPreviewDoc(raw, look);
   return frame;
+}
+// A Word file (.docx), drawn in the browser by the vendored docx-preview (ui/vendor, NOTICE): no server converter. The
+// viewer, a task's Files, Flow and the review view all draw it with docxPreviewFrame, so it looks the same in each.
+// It draws into this page's document, so what it draws is copied out, stripped (no scripts, frames, forms, handlers,
+// only http(s), mailto and in-page links, only pictures from inside the file) and shown in the same sandboxed frame as
+// an HTML file (htmlPreviewFrame): no scripts, its own origin, nothing fetched from the network.
+const DOCX_VIEW_LIMIT = 25_000_000;
+let DOCX_LOAD: Promise<void> | null = null;
+function docxScript(src: string): Promise<void> {
+  return new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = () => ok(); s.onerror = () => { s.remove(); fail(new Error('Could not load the Word viewer')); };
+    document.head.append(s);
+  });
+}
+function docxLib(): Promise<void> {
+  if (window.docx && window.JSZip) return Promise.resolve();
+  DOCX_LOAD ||= (window.JSZip ? Promise.resolve() : docxScript('/vendor/jszip.min.js'))
+    .then(() => window.docx ? undefined : docxScript('/vendor/docx-preview.min.js'))
+    .catch(e => { DOCX_LOAD = null; throw e; });
+  return DOCX_LOAD;
+}
+const DOCX_DROP = 'script, noscript, iframe, frame, frameset, object, embed, applet, form, input, button, textarea, select, link, meta, base, portal, template, foreignObject';
+const DOCX_URL_ATTRS = new Set(['srcset', 'action', 'formaction', 'poster', 'background', 'data', 'ping', 'lowsrc', 'longdesc', 'srcdoc', 'xlink:href']);
+/** Strips what a drawn Word file must never carry into the preview (in place). */
+function docxSafe(root: ParentNode): void {
+  for (const el of root.querySelectorAll(DOCX_DROP)) el.remove();
+  for (const el of root.querySelectorAll('*')) {
+    for (const a of [...el.attributes]) {
+      const name = a.name.toLowerCase(), v = a.value.trim();
+      // A picture from inside the file: docx-preview gives it as a data: address (typed by the file's own name, or
+      // application/octet-stream), shown only as an image.
+      const picture = (el.localName === 'img' || el.localName === 'image')
+        && /^data:(image\/(png|jpe?g|gif|webp|bmp|svg\+xml|x-emf|x-wmf|tiff)|application\/octet-stream)[;,]/i.test(v);
+      if (name.startsWith('on') || DOCX_URL_ATTRS.has(name)) el.removeAttribute(a.name);
+      else if (name === 'src' && !picture) el.removeAttribute(a.name);
+      else if (name === 'href' && !(el.localName === 'image' ? picture : el.localName === 'a' && /^(https?:|mailto:|#)/i.test(v))) el.removeAttribute(a.name);
+    }
+  }
+}
+const DOCX_FRAME_CSS = 'html,body{margin:0}body{background:#f3f3f3}.docx-wrapper{min-height:100vh;box-sizing:border-box}'
+  + '@media (max-width:760px){.docx-wrapper{padding:8px!important;align-items:stretch!important}'
+  + '.docx-wrapper>section.docx{width:auto!important;min-width:0;min-height:0!important;padding:20px 16px!important;overflow-x:auto!important}}';
+async function docxPreviewFrame(blob: Blob, name: string): Promise<HTMLIFrameElement> {
+  await docxLib();
+  const lib = window.docx;
+  if (!lib) throw new Error('Could not load the Word viewer');
+  // Drawn detached, never in the page: its styles never reach the app, and it is copied out before anything shows.
+  const work = document.createElement('div'), body = document.createElement('div'), style = document.createElement('div');
+  work.append(style, body);
+  try {
+    await lib.renderAsync(blob, body, style, {useBase64URL: true, renderAltChunks: false, renderComments: false, renderChanges: false,
+      experimental: false, inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: true, renderHeaders: true, renderFooters: true,
+      renderFootnotes: true, renderEndnotes: true});
+    docxSafe(work);
+    const css = [...style.querySelectorAll('style')].map(s => s.textContent || '').join('\n').replace(/<\/style/gi, '<\\/style');
+    return htmlPreviewFrame(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>${DOCX_FRAME_CSS}</style><style>${css}</style></head><body>${body.innerHTML}</body></html>`, name);
+  } finally { work.replaceChildren(); }
 }
 // Files fetched to be shown here (a chat picture, a file in the viewer) are kept for the visit up to a byte budget per
 // cache: past it the longest unused go, and their blob: URLs are revoked once nothing on the page shows them. Thirty
@@ -294,21 +363,27 @@ async function viewerShow() {
   try { file = await viewFile(item.fileId, item.name, item.version); }
   catch (e) { if (VIEW === state) { d.close(); toast(errorMessage(e, 'Could not open the file.'), true); } return; }
   const fileId = item.fileId;
-  // A Word file shows in the review view, which draws it (file-review.ts); the viewer has no Word kind of its own.
-  if (!file.kind && frvKindOf(file.name, file.blob.type) === 'docx') {
-    d.close();
-    fileReviewOpen(fileId, {name: file.name, version: item.version});
-    return;
-  }
   const extra = '<button class="ghost" type="button" data-doc-download>Download</button>'
     + '<button class="ghost" type="button" data-doc-review aria-label="Open full screen" title="Open full screen"><span class="nav-icon" aria-hidden="true">open_in_full</span></button>';
-  if (!file.kind || ((file.kind === 'markdown' || file.kind === 'text') && file.blob.size > DOC_VIEW_LIMIT) || (file.kind === 'csv' && file.blob.size > CSV_LIMIT)
-      || (file.kind === 'html' && file.blob.size > HTML_VIEW_LIMIT)) {
+  const word = !file.kind && frvKindOf(file.name, file.blob.type) === 'docx' && file.blob.size <= DOCX_VIEW_LIMIT;
+  if (!word && (!file.kind || ((file.kind === 'markdown' || file.kind === 'text') && file.blob.size > DOC_VIEW_LIMIT) || (file.kind === 'csv' && file.blob.size > CSV_LIMIT)
+      || (file.kind === 'html' && file.blob.size > HTML_VIEW_LIMIT))) {
     if (VIEW === state && state.items.length === 1) d.close();
     saveBlob(file.blob, file.name);                 // not something to show here: downloads as before
     return;
   }
-  if (file.kind === 'csv') {
+  if (word) {
+    // Drawn in the same sandboxed frame as an HTML file; a file docx-preview cannot read downloads as before.
+    let frame: HTMLIFrameElement;
+    try { frame = await docxPreviewFrame(file.blob, file.name); } catch {
+      if (VIEW !== state || state.items[state.index] !== item) return;     // moved on while it was drawn
+      if (state.items.length === 1) d.close();
+      saveBlob(file.blob, file.name);
+      return;
+    }
+    paint(file.name, 'html', '<div data-html-view></div>', extra);
+    d.querySelector('[data-html-view]')?.replaceWith(frame);
+  } else if (file.kind === 'csv') {
     const text = await file.blob.text();
     paint(file.name, 'csv', '<div data-csv></div>', extra);
     d.querySelector('[data-csv]')?.replaceWith(csvView(text));

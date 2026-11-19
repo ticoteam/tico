@@ -1,6 +1,8 @@
 ---
 name: choose-a-bidding-strategy-from-volume
 description: Count a campaign's primary conversions over the last 30 days, compare the count with the minimum its bidding strategy needs, and set or keep the strategy and target the volume can support, with the decision and the date it is checked again.
+metadata:
+  function: marketing
 ---
 # Choose a bidding strategy from volume
 

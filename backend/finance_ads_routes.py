@@ -11,6 +11,7 @@ from .finance import actions as finance
 from .finance import campaigns as finance_campaigns
 from .finance_routes import problem
 from .models import Contract
+from .api_contract import api_v2
 
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -33,7 +34,8 @@ class FinanceAdRunRequest(Contract):
 
 
 class FinanceAdAccountPatch(Contract):
-    """The bot an ad account's spend counts for; null when no bot."""
+    """The bot an ad account's spend counts for, by its slug or id (it is kept and answered as the id); null when no
+    bot."""
 
     bot_slug: str | None = Field(..., max_length=120)
 
@@ -50,7 +52,15 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    @app.get("/api/v2/finance/ad-accounts")
+    @app.get(
+        "/api/v2/finance/ad-accounts",
+        **api_v2(
+            "Finance",
+            "listFinanceAdAccounts",
+            "A Google Ads or Meta Ads tool's ad spend (finance admins): whether Finance imports it every 4 hours and from which day, the books line it books as, which stored keys hold each value (names only), the last import's result, and each ad account with the bot it counts for and its spend this month in cents",
+            "FinanceAdAccounts",
+        ),
+    )
     def finance_ad_accounts(request: Request, tool_id: str = Query(..., min_length=1, max_length=120)):
         """A Google Ads or Meta Ads tool's ad spend: the import's settings and last result, the keys it can use, and
         each ad account with the bot it counts for and its spend this month."""
@@ -62,7 +72,15 @@ def install(app, store, auth, mutate):
 
         return guarded(read)
 
-    @app.get("/api/v2/finance/campaigns")
+    @app.get(
+        "/api/v2/finance/campaigns",
+        **api_v2(
+            "Finance",
+            "listFinanceCampaigns",
+            "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+            "FinanceCampaigns",
+        ),
+    )
     def finance_campaigns_month(request: Request, month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")):
         """The ad campaigns the viewer sees for a month (YYYY-MM), each with its owner, its spend, clicks, conversions
         and cost per conversion, by spend; the totals over them. Cut to the viewer like every read."""
@@ -74,7 +92,15 @@ def install(app, store, auth, mutate):
 
         return guarded(read)
 
-    @app.post("/api/v2/finance/ad-imports")
+    @app.post(
+        "/api/v2/finance/ad-imports",
+        **api_v2(
+            "Finance",
+            "saveFinanceAdImport",
+            "Save a tool's ad spend import (finance admins): on or off, history_from, the books line and {slot: credential id}. One enabled import per platform (409 otherwise); switching on asks for a run at once",
+            "FinanceAdAccounts",
+        ),
+    )
     def finance_ad_import_save(request: Request, body: FinanceAdImportRequest):
         """Save a tool's ad spend import. Switching it on asks for a run at once."""
         who = viewer(request)
@@ -97,7 +123,15 @@ def install(app, store, auth, mutate):
             ad_import.ring()
         return saved
 
-    @app.post("/api/v2/finance/ad-imports/run")
+    @app.post(
+        "/api/v2/finance/ad-imports/run",
+        **api_v2(
+            "Finance",
+            "runFinanceAdImport",
+            "Import an enabled tool's ad spend now instead of at the next 4-hourly run (finance admins)",
+            "FinanceAdAccounts",
+        ),
+    )
     def finance_ad_import_run(request: Request, body: FinanceAdRunRequest):
         """Import a tool's ad spend now."""
         who = viewer(request)
@@ -105,7 +139,15 @@ def install(app, store, auth, mutate):
         ad_import.ring()
         return saved
 
-    @app.patch("/api/v2/finance/ad-accounts/{ad_account_id}")
+    @app.patch(
+        "/api/v2/finance/ad-accounts/{ad_account_id}",
+        **api_v2(
+            "Finance",
+            "updateFinanceAdAccount",
+            "Pick the bot an ad account's spend counts for, or null for none (finance admins)",
+            "FinanceAdAccount",
+        ),
+    )
     def finance_ad_account_patch(
         request: Request, body: FinanceAdAccountPatch, ad_account_id: str = Path(..., min_length=1, max_length=120)
     ):

@@ -58,3 +58,6 @@ first_routine:
 example_output: knowledge/examples/onboarding-tracker.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_slack, small_team]
+shared_files:
+  - .claude/skills/run-payroll
+  - .claude/skills/fill-a-role

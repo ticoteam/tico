@@ -1,6 +1,8 @@
 ---
 name: run-a-pay-equity-check
 description: Compare pay between groups of people with like-for-like controls, report only aggregated results for groups of five or more, name the factors that explain a gap, and hand the unexplained remainder to a human as a question rather than a finding.
+metadata:
+  function: people
 ---
 # Run a pay equity check
 

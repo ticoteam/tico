@@ -15,7 +15,7 @@ In order:
 | Step | What it does | How often |
 | --- | --- | --- |
 | Collect | Records which bots did work in the window: a settled turn that wrote something. Messages and memory commits do not count. Always on. | Every run |
-| Clean up | Prunes old rows: events, mail, retry keys, recorder data, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
+| Clean up | Prunes old rows: events, mail, retry keys, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
 | Check health | Plain-code health checks: urgent findings file at once, noisy ones on their second run. Setup problems become BotOps tasks; Tico bugs follow the support report path. | Every run |
 | Learn (beta) | Scores activity with Tico Decide and keeps up to 15 items per bot for its next Update turn. Off by default. The nightly timer and System routines control are retired; both legacy Run now endpoints run this step. | Once a day |
 | Suggest | Makes company skills' Remove and Ask to submit suggestions from this install's own data for the Skills page ([Skills](skills.md#suggestions)). With Privacy consent, also fetches suggestions from Tico Gateway with count-only stats, at most once every 24 hours, and keeps them for each bot's next Update. | Once a day |

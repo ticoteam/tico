@@ -14,9 +14,15 @@ Tico bot's work is its task, never issues (next section).
 A Tico bot working a task on this repository follows these where the rest of this file differs:
 - The task is the work queue. Never file, pick or close GitHub issues, and never use the tico-tickets skill.
 - Run `scripts/dev_setup.sh` once in each clone or worktree, and again after a pull that changes a lock file.
-- Test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`. Never the
-  whole suite, `scripts/pr_checks.py local` or `scripts/remote.py` (bots have no access to it); PR checks run the rest.
-  Mark the PR ready with `gh pr ready`.
+- While you work, test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`.
+  Never the whole suite by hand.
+- Check before CI does: push the draft (a draft runs no CI), then run `python3 scripts/pr_checks.py local --ready` at
+  that head. It runs the tests the PR checks would select for the diff in the computer's shared slots
+  (`scripts/heavy.sh`; prefix `TICO_HEAVY_REMOTE=1` to run them on a RunsOn VM, which takes a Tico permit) and marks the
+  PR ready only after they pass. Never mark it ready with `gh pr ready` before a pass. Before each later push to a ready
+  PR, commit and run `python3 scripts/pr_checks.py local` first, and push only after it passes. Put its last line (the
+  receipt) in your reply on the task. A red result is fixed before the push, never left for CI to find; a check it could
+  not run is "not checked", with the reason.
 - Never skip the pre-push hook. If it cannot run, say on the task what is missing.
 - Never enqueue or merge: Tico queues the PR when the task reaches Merge. Never tag, and never cut or change a release.
 - Never edit `.github/workflows/`: the push is refused. Say so on the task; a person lands that part.
@@ -33,17 +39,18 @@ else Playwright's Chromium): runner images ship no dev tools. The browser script
 On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
-checks only. PR checks and the queue run a test listed in `ci/quarantine/` (it failed and passed on one commit) without failing on it; release validation still fails on it (`scripts/flake_quarantine.py`, `.github/workflows/flaky-tests.yml`). The fix for a quarantined test deletes its entry file. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
-dependency map (imports, plus files run or read by path) says use the change within two levels (not through a hub such as `backend/app.py`), capped at nineteen VMs, with the smoke set when that drops any; release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
-it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+checks only. A flaky test is never quarantined, skipped or retried away: a test that failed and passed on one commit is fixed at its root cause the same day, or deleted (`scripts/flake_detect.py` lists them daily in `.github/workflows/flaky-tests.yml`, which goes red on one). The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
+dependency map (imports, plus files run or read by path) says use the change within two levels. The queue stops at hubs such as `backend/app.py` and follows the input–hub pairs in `QUEUE_HUB_INPUTS` to their direct tests up to level three. The plan is capped at nineteen VMs and includes the smoke set when it drops tests. Release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
+it, the Rust and desktop checks when they changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
 and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
 ready. The PR checks and the queue fail a change when fewer than 80% of the Python statements it adds to backend/ and
 clients/ run under its selected tests (`scripts/diff_coverage.py`); a line opts out only with `# pragma: no cover - <reason>`
-on that line. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
+on that line. A run of up to about 100 Python tests, or one to three browser scripts, may run locally under `nice -n 19`
+with `-n 2` at most and never `-m slow`; anything bigger goes to RunsOn (`scripts/remote.py`) or PR checks. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
 queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
@@ -70,7 +77,10 @@ against a dev install with a real model, on demand only; `backend/tests/test_bot
 hold customer text and never enter this repository.
 
 Tests stay at zero failures. An intermittent test is fixed quickly or deleted; never rerun it until it passes, and
-never ship around a known failure. If a test may fail, it shouldn't exist.
+never ship around a known failure. If a test may fail, it shouldn't exist. A test that passes only on a rerun is flaky,
+not green. Fewer strong tests beat many weak ones: a low-value test is deleted, with its reason in the commit body.
+`skills/honest-code/SKILL.md` has the steps; `scripts/landmines.py` (run by `scripts/lint.sh`) holds fixed sleeps and
+waits, retries, raised timeouts and `unittest.mock` to counts that only go down.
 
 ## Before you push
 Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
@@ -82,11 +92,11 @@ when the branch would not merge into origin/main and names the files. A person m
 Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
 (`gh pr create --draft`) and push freely; when done, a person runs `python3 scripts/pr_checks.py local --ready`, which runs the
 tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
-marks the PR ready after a pass. A Tico bot never runs that script: it marks its PR ready with `gh pr ready` after its own tests (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+marks the PR ready after a pass. A Tico bot runs it too (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
-Release Owner (docs/pipelines-v3.md).
+Release Owner (docs/dev/pipelines-v3.md).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
@@ -126,7 +136,7 @@ flight file, not the database.
 
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
-  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep existing `NNNN_` files and applied checksums unchanged. Each migration
+  `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep applied files and checksums unchanged; never edit `baseline.sql`. Each migration
   stands alone and must not depend on another unmerged migration's schema; pending files run even below applied ones.
 - Format the Python files you change with `uvx ruff@0.15.9 format <files>` before committing; `scripts/lint.sh` fails on unformatted code. Branches older than the format commit: `scripts/format_rebase.sh`.
 - The Python lint and type baselines are per source file: `baselines/ruff/<path>.json` and `baselines/pyright/<path>.json`. After fixing findings, run `python3 scripts/lint_baseline.py --write` (types: `scripts/check_types.sh --writebaseline`). Never commit `ruff-baseline.toml` or `.basedpyright/baseline.json`: they are generated and git-ignored. A bare `uvx ruff@0.15.9 check` reads `ruff.toml` alone and reports every finding, baselined or not; `scripts/lint.sh` is the gate that counts them against the baseline (`ruff-baseline.toml` extends `ruff.toml`, never the other way round).
@@ -134,13 +144,17 @@ flight file, not the database.
   the fictional team Acme (`acme.example`).
 - The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
   UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
-  compiles it to `build/ui/` (`npm run watch:ui` while editing; tests and `backend.server` build it when they can), and the
-  server refuses a missing or stale build (ui/README.md).
+  builds the page and its bundle into `build/ui/`, the only UI files the server serves (`npm run watch:ui` while editing,
+  then reload; tests and `backend.server` build it when they can), and the server refuses to start on a missing or
+  stale build (ui/README.md).
 - Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh`, and the API spec is generated by
   `python3 -m backend.openapi_v2` (served at `GET /api/v2/openapi.json`). Neither is committed, so never edit or hand-merge
-  them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved.
+  them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved. A route joins the stable API on its
+  own decorator, `@app.get(path, **api_v2(tag, operationId, summary, answer))` (backend/api_contract.py), which also
+  takes what FastAPI cannot see in the handler (a body read by hand, extra errors, no sign-in, an optional key).
 - Every UI script is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a `.js` under `ui/` fails unless it is
   vendor code, a Node test, or in the `KEPT_JS` list (the classic scripts that stay JavaScript, each with its reason).
   Each `.ts` must pass `ui/tsconfig.strict.json`; one with findings has a piece under `ui/baselines/strict/` that only
   shrinks, and a new `.ts` must be at zero (a renamed `.js` may keep its count).
-- Comments say why in the present tense; they do not name who asked or when.
+- Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
+  change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.

@@ -91,9 +91,6 @@ def test_health_flags_an_unusable_fallback_before_work_is_queued_and_ignores_ina
         config = BS.read(c, 'ops')
         config['fallback'] = {'harness': 'codex', 'model': 'gpt-5-codex'}
         BS.write(c, 'ops', config)
-        c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','old-plan',NULL,NULL)")
-        H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
-        assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
     beat(api, machine, codex='failed')
     issue = checks(api)['computer_logins']
     assert issue['status'] == 'bad' and 'Codex' in issue['summary'] and 'unavailable' in issue['summary']

@@ -146,7 +146,7 @@ pub fn main(args: &[String]) -> i32 {
             claude = Some(code(raw));
             CHILD.store(0, Ordering::SeqCst);
             if !KEEPING.load(Ordering::SeqCst) {
-                break; // what Claude leaves behind goes on as it would without this parent
+                break; // what Claude leaves behind the runner stops once the turn is over (crate::turn_sweep)
             }
         }
     }

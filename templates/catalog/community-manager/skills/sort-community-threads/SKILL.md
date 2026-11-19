@@ -1,6 +1,8 @@
 ---
 name: sort-community-threads
 description: Decide what a community thread is (how-to, account problem, bug, feature request, policy question or conduct report) and where its next step goes, before any reply is drafted.
+metadata:
+  function: marketing
 ---
 # Sort community threads
 

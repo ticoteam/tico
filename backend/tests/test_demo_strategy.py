@@ -1,5 +1,5 @@
-"""Demo mode's Strategy section: a published strategy with an earlier version to compare, three bets linked to goals, the
-Strategy Owner's one proposal already accepted into the draft, and this week's briefing, the market map, listening news and the brand book.
+"""Demo mode's Strategy section: a live strategy with earlier versions to compare, three bets linked to goals, the
+Strategy Owner's one proposal already accepted and live, and this week's briefing, the market map, listening news and the brand book.
 Read as the owner, the way the page reads them."""
 
 import os
@@ -39,11 +39,11 @@ def signed_in(settings):
     return client
 
 
-def _the_published_strategy_has_three_active_bets_and_its_sections(built):
+def _the_live_strategy_has_three_active_bets_and_its_sections(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
     version = strategy["current"]
-    assert version["n"] == 2
+    assert version["n"] == 3
     assert version["guide"] == "default"
     assert version["vision"]
     assert all(version["sections"][key].strip() for key in FIXED_SECTIONS)
@@ -59,7 +59,7 @@ def _an_earlier_version_and_a_diff_show_the_change(built):
     with signed_in(built) as api:
         versions = api.get("/api/v2/strategy/versions").json()
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
-    assert [v["n"] for v in versions] == [2, 1]
+    assert [v["n"] for v in versions] == [3, 2, 1] and all(v["note"] for v in versions[1:])
     assert [field["key"] for field in diff["fields"]] == [
         "summary",
         "sections.serve",
@@ -83,13 +83,13 @@ def _bets_serve_the_goals_the_core_seed_made(built):
         assert all(goals[row["id"]]["bet_id"] == bet_id for row in rows)
 
 
-def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
-    """The briefing's bet was proposed by the Strategy Owner and Ana said yes on her card: it sits in the draft as a
-    proposed bet, unpublished, and nothing waits on Goals."""
+def _the_strategy_bot_proposal_is_accepted_and_live(built):
+    """The briefing's bet was proposed by the Strategy Owner and Ana said yes on her card: it is live as a proposed
+    bet, and nothing waits on Goals."""
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
-        pending = api.get("/api/v2/goal-proposals?status=pending").json()["proposals"]
-        decided = api.get("/api/v2/goal-proposals?status=confirmed").json()["proposals"]
+        pending = api.get("/api/v2/proposals?status=pending").json()["proposals"]
+        decided = api.get("/api/v2/proposals?status=confirmed").json()["proposals"]
         needs = api.get("/api/v2/goals/needs-you").json()
     assert pending == []
     [proposal] = [p for p in decided if p["kind"] == "strategy_draft"]
@@ -99,7 +99,7 @@ def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     [bet] = [b for b in strategy["bets"] if b["statement"] == statement]
     assert bet["status"] == "proposed"
     assert bet["wrong_if"]["kind"] == "text" and bet["wrong_if"]["check_by"] > NOW.date().isoformat()
-    assert statement not in str(strategy["current"])  # in the draft, not published
+    assert statement in str(strategy["current"])
     assert not [item for item in needs["items"] if item["kind"] == "proposal"]
 
 
@@ -143,13 +143,16 @@ def _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_
         row = db.execute(
             "SELECT t.owner_id, t.status, t.created_at, p.proposed_at, p.decided_at FROM goal_proposals p "
             "JOIN tasks t ON t.title = 'Decide a suggested change to your strategy' "
-            "AND t.body LIKE '%from this week''s market briefing%' "
+            # What it was filed with is on its chat now (its request, or Tico's instructions to its bot).
+            "AND EXISTS (SELECT 1 FROM messages m WHERE json_extract(m.refs, '$.task') = t.id "
+            "AND m.body LIKE '%from this week''s market briefing%') "
             "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'"
         ).fetchone()
         assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()
     assert row is not None
     owner, status, created, proposed, decided = row
-    assert owner == "human:ana" and status != "open"
+    # The Strategy Owner's card, with its question to Ana (backend/person_asks.py), settled by her yes.
+    assert owner == "bot:strategy-owner" and status != "open"
     assert parse(proposed) <= parse(created) < parse(proposed) + timedelta(minutes=1)
     assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 
@@ -191,10 +194,10 @@ def _the_brand_book_is_published_by_the_owner(built):
 def test_the_demo_strategy_tells_its_story(built, subtests):
     """Every check reads the one demo build, in file order, each as its own subtest."""
     for check in (
-        _the_published_strategy_has_three_active_bets_and_its_sections,
+        _the_live_strategy_has_three_active_bets_and_its_sections,
         _an_earlier_version_and_a_diff_show_the_change,
         _bets_serve_the_goals_the_core_seed_made,
-        _the_strategy_bot_proposal_is_accepted_into_the_draft,
+        _the_strategy_bot_proposal_is_accepted_and_live,
         _this_weeks_briefing_is_posted_by_the_librarian,
         _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes,
         _where_we_play_has_a_market_with_us_next_and_sized_segments,

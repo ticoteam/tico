@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import threading
 import time
 from contextlib import nullcontext
 
@@ -355,17 +356,21 @@ def test_a_late_401_never_removes_a_newer_connection(api, hq):
 
 
 def test_a_slow_answer_is_cut_off_at_the_deadline(api, hq, monkeypatch):
+    released = threading.Event()  # the read holds until the test lets it finish, so only the deadline can end it
+
     class Drip(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield b"{"
-            await asyncio.sleep(30)  # a read that never finishes on its own
+            await asyncio.to_thread(released.wait, 10)
             yield b"}"
 
     monkeypatch.setattr(CS, "WAIT_S", 0.5)
     hq.answers[("POST", "/v1/portal/server-connection")] = lambda request: httpx.Response(200, stream=Drip())
-    began = time.monotonic()
-    r = api.post(PATH, headers=headers(), json={"code": CODE, "preview": True})
-    assert r.status_code == 503 and time.monotonic() - began < 5
+    try:
+        r = api.post(PATH, headers=headers(), json={"code": CODE, "preview": True})
+    finally:
+        released.set()
+    assert r.status_code == 503
 
 
 GATEWAY_KEY = "tgw_synthetic_company_gateway_key_0123456789ab"

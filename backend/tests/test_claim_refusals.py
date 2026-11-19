@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import check_models, diagnostics, execution, health, maintenance_health
+from backend import check_models, diagnostics, execution, health, maintenance_health, runner_online
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
@@ -46,7 +46,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
         post(api, "bots/ops/control", {**body, "expected_revision": get(api, "bots/ops")["revision"]})
 
     task, other = new_task(api, "the check"), new_task(api, "unrelated")
-    child = post(
+    post(
         api,
         "tasks",
         {
@@ -61,10 +61,11 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     assert claim(api, machine) is None  # the scope never lifts a pause
     control(action="resume")
     post(api, "chat/ops", {"text": "Anything new?"})  # new work outside the task arrives during the check
-    # The task waits on the sub-task it filed (docs/pipelines-v3.md): its own wake is let go, and inside the limit
+    # The task waits on the sub-task it filed (docs/dev/pipelines-v3.md): its own wake is let go, and inside the limit
     # only the sub-task runs.
     taken = [(claim(api, machine) or {}).get("lane") for _ in range(3)]
-    assert [lane for lane in taken if lane] == ["task:" + child["id"]], taken
+    # A sub-task runs in its session root's lane (session_roots_v1), so the sub-task's lane is the parent's.
+    assert [lane for lane in taken if lane] == ["task:" + task["id"]], taken
     with api.app.state.store.read() as c:  # Health reads the same rule
         assert execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], "ops") == "scoped"
     control(action="pause")
@@ -80,7 +81,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
         ] == ["bot.scope", "bot.unscope"]
     control(action="resume")
     lanes = {claim(api, machine)["lane"] for _ in range(3)}
-    assert lanes == {"task:" + t["id"] for t in (child, other)} | {"main"}, "the task still waits on its sub-task"
+    assert lanes == {"task:" + task["id"], "task:" + other["id"], "main"}, "the task still waits on its sub-task"
     assert claim(api, machine) is None
 
 
@@ -133,23 +134,6 @@ def test_a_limited_bots_turn_carries_no_waiting_notes_until_released(api, monkey
     assert [n["id"] for n in released["notes"]] == [note["id"]] and backlog == ["ops"]
 
 
-def test_claim_limit_migration_upgrades_a_database_at_62_without_lifting_a_drain(api):
-    store = api.app.state.store
-    task_bot(api, lanes=True)
-    with store.transaction() as c:  # a database from before the limit existed
-        c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1) ON CONFLICT(bot) DO UPDATE SET draining=1")
-        c.execute("ALTER TABLE bot_control DROP COLUMN claim_task")
-        c.execute("DELETE FROM cloud_migrations WHERE version=63")
-    store.initialize()
-    store.initialize()  # a repeated start takes the same additive path
-    with store.read() as c:
-        assert [dict(r) for r in c.execute("SELECT * FROM bot_control WHERE bot='ops'")] == [
-            {"bot": "ops", "draining": 1, "claim_task": None}
-        ]
-        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=63").fetchone()[0] == 1
-        assert execution.claim_scope(c, "ops") is None
-
-
 def test_a_bot_whose_worktrees_the_runner_is_maintaining(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
@@ -187,21 +171,20 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
 
 
 def test_a_bot_cooling_off_after_a_usage_limit(api):
+    from backend import login_holds
+
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
-            "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at",
-            (H.now(), H.now()),
-        )
+        # The login's hold decides, not the bot's status: a usage limit met on the login it signs in with.
+        login_holds.record(c, machine["runner_id"], "", "fake", H.now(), error="Usage limit")
     says(api, machine, "cooling_off")
 
 
 def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_first(api):
     """prime_claimables and the machines page prime bot_config rows whose first column is the slug, not the JSON;
     the limit issue reads the configuration by name, so it does not parse the slug as JSON."""
-    machine = task_bot(api, lanes=True)
+    task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -325,7 +308,7 @@ def ops_rows(api):
     """Health's Stuck rows for ops and the Health Monitor's findings, as the jobs stand."""
     store = api.app.state.store
     with store.read() as c:
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
     return rows, found
@@ -348,7 +331,7 @@ def queued_at(api, task, minutes):
 def test_an_old_held_check_beside_a_young_free_job_is_neither_held_nor_slow(api):
     """Health ages the job the claim would take: an old check held by its model's usage limit says nothing while a
     young job waits normally, and its own reason once nothing else is queued."""
-    machine = task_bot(api, lanes=True)
+    task_bot(api, lanes=True)
     check = new_task(api, "the check")
     with api.app.state.store.transaction() as c:
         check_models.record(

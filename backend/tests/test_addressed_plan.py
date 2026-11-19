@@ -1,10 +1,12 @@
-"""Needs you's messages to answer (thread_attention._addressed) plan from the person's deliveries whatever sqlite_stat1
-says. TIDY's stale stats (messages analysed when small) once put messages first: a scan of every message a call,
+"""Needs you's open @s (backend/open_mentions.py, read by Needs attention too) plan from the person's deliveries whatever
+sqlite_stat1 says. TIDY's stale stats (messages analysed when small) once put messages first: a scan of every message a call,
 which grew to minutes and queued every other request behind it (v0.5.56, Nov 3)."""
 
 import sqlite3
 
-from backend import thread_attention as TA
+import pytest
+
+from backend import open_mentions
 from backend import threads
 from backend.auth import Identity
 from backend.config import Settings
@@ -18,13 +20,26 @@ STALE = [
 ]
 
 
-def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_path):
+# Stats under which the planner picks message_deliveries_recipient (every delivery of the person) over the partial index,
+# found by a grid of stale stats on SQLite 3.54.1: the INDEXED BY pin must hold against them too.
+RECIPIENT_STALE = [
+    ("messages", None, "2"),
+    ("messages", "sqlite_autoindex_messages_1", "1 1"),
+    ("message_deliveries", None, "10"),
+    ("message_deliveries", "message_deliveries_addressed", "5000000 5000000"),
+    ("conversations", None, "10"),
+    ("conversations", "sqlite_autoindex_conversations_1", "1 1"),
+]
+
+
+@pytest.mark.parametrize("stats", [STALE, RECIPIENT_STALE], ids=["stale", "recipient-index"])
+def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_path, stats):
     path = tmp_path / "hub.sqlite"
     Store(Settings(db_path=path)).initialize(seed_market=False)
     c = sqlite3.connect(path)
     c.execute("ANALYZE")
     c.execute("DELETE FROM sqlite_stat1")
-    c.executemany("INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?,?,?)", STALE)
+    c.executemany("INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?,?,?)", stats)
     c.commit()
     c.close()
     c = sqlite3.connect(path)  # a fresh connection loads the stale stats
@@ -32,7 +47,7 @@ def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_
     seen = []
     c.set_trace_callback(seen.append)
     try:
-        assert TA._addressed(c, "human:ana") == []
+        assert open_mentions.rows(c, "human:ana") == []
     finally:
         c.set_trace_callback(None)
     [sql] = [s for s in seen if "FROM message_deliveries d" in s]

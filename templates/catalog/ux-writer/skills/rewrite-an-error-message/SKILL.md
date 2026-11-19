@@ -1,6 +1,8 @@
 ---
 name: rewrite-an-error-message
 description: Rewrite an error message so it names what happened, gives the fix or the next step in plain words, avoids blame and generic phrases, and suggests a correction when one is known.
+metadata:
+  function: product
 ---
 # Rewrite an error message
 

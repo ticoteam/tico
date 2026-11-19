@@ -14,6 +14,11 @@ from typing import Callable, Protocol
 from . import contract
 
 
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
 @dataclass
 class Result:
     returncode: int
@@ -59,9 +64,9 @@ class SSMShell:
     def run(self, cmd: str, input: bytes | None = None, *, ready_timeout: int = 0) -> Result:
         if input is not None:
             raise ValueError("SSMShell does not pass stdin")
-        deadline = time.monotonic() + ready_timeout
+        deadline = _monotonic() + ready_timeout
         while True:
-            if ready_timeout and time.monotonic() >= deadline:
+            if ready_timeout and _monotonic() >= deadline:
                 return Result(124, "", "timed out waiting for Systems Manager")
             try:
                 online = not ready_timeout or any(
@@ -86,7 +91,7 @@ class SSMShell:
                     or getattr(exc, "response", {}).get("Error", {}).get("Code") != "InvalidInstanceId"
                 ):
                     raise
-            self.sleep(min(5, max(0, deadline - time.monotonic())))
+            self.sleep(min(5, max(0, deadline - _monotonic())))
         cid = sent["Command"]["CommandId"]
         for _ in range(450):
             self.sleep(2)

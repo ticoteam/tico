@@ -412,7 +412,7 @@ def task_dry_run(c, auth, who, body):
     target = who.actor if unassigned else H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
-    if not target or target == H.KEEPER:
+    if not target or target == H.TICO_ACTOR:
         problems.append(f"{body.owner} is not a bot or a person on the roster")
     else:
         from . import reach
@@ -496,7 +496,9 @@ def task_dry_run(c, auth, who, body):
             probe = H.CLOSE_PROBE.set(True)
             try:
                 parties = {"owner_id": target, "requester_id": who.actor, "readers": None}
-                privacy.require_readers(c, who, None, H.new_readers(c, who.actor, parties, body.readers), parent_id)
+                privacy.require_readers(
+                    c, who, None, H.new_readers(c, who.actor, parties, body.readers), parent_id, owner=target
+                )
             except (Problem, H.Refused) as exc:
                 problems.append(exc.detail)
             finally:
@@ -511,9 +513,29 @@ def task_dry_run(c, auth, who, body):
             problems.append(str(exc))
     if not pipeline or pipeline.get("retired_at"):
         problems.append(f"No pipeline {pipeline_id}")
+    told = _private_readers_preview(c, auth, who, body, target, pipeline_id) if pipeline and target else None
     return {
         "ok": not problems,
         "owner": None if unassigned else target,
         "problems": problems,
         **({"warnings": warnings} if warnings else {}),
+        **({"private_readers": told} if told else {}),
     }
+
+
+def _private_readers_preview(c, auth, who, body, target, pipeline_id):
+    """What the create would tell its filer about who else reads the task (backend/private_readers.py), or None when it
+    would not be private or nobody else reads it. A parent the caller cannot read counts as none."""
+    from . import hubdb as H, private_readers as PR
+
+    parent = None
+    if getattr(body, "parent", None):
+        try:
+            parent = H.task(c, auth.resolve_task(c, who, body.parent))
+        except Problem:
+            parent = None
+    if not PR.will_be_private(c, who.actor, target, body.private, parent, pipeline_id):
+        return None
+    named = [H.resolve_actor(c, r) or r for r in body.readers or []]
+    found = PR.readers(c, pipeline_id, [who.actor, *named])
+    return found["line"] if found else None

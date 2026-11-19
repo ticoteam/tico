@@ -2,18 +2,21 @@
 //  - the bot editor has a Task model row, "Same as bot" until set; Save applies a pick (POST /v2/bots/{bot}/task-model,
 //    with expected_revision) before the definition, and never the bot's own model;
 //  - the bots table shows a subtle Tasks mark beside each bot's model, marked when its tasks run on another model;
-//    it opens a row under that bot with the Task model picker (Harness, Model and Compact; Task effort stands beside
-//    it); Apply sets the task model only, and clearing it to "Same as bot" sends null;
+//    it opens a row under that bot with the Task model picker (Harness, Model, Effort and Compact, as every picker);
+//    Apply sets the task model only, and clearing it to "Same as bot" sends null;
 //  - a cheaper pick on a high-stakes bot saves and shows the server's plain-words warning under the row;
-//  - Task effort beside it and the task's window in the picker's Compact, "Same as bot" until set: each saves on its own
-//    and carries the other parts forward (a model "" record is the bot's own model, shown as Same as bot); only all
-//    three Same as bot sends null. The editor holds them until Save bot and sends one task-model save.
+//  - model picker part 7 (task 0666d55e): the task's effort is the picker's Effort row, also on Same as bot (the bot's
+//    model at an effort of its own, "Same as bot HIGH"; Default is the bot's own effort), and its window the Compact
+//    row; Apply saves model, effort and window in one task-model save (a model "" record is the bot's own model, shown
+//    as Same as bot); only all three Same as bot sends null. No separate Task effort select remains. The editor holds
+//    the pick until Save bot and sends one task-model save. Clearing a task model to Same as bot at an effort only the
+//    bot's model takes keeps that effort.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
-const {openPicker, choose, offered, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
+const {openPicker, choose, chosen, offered, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 type Page = import('playwright').Page;
 type TaskModel = {harness: string; model: string; reasoning_effort: string; runtime: string; compact_at: number | null};
 // The bot as the test serves and edits it (the fields it reads or writes).
@@ -42,7 +45,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     const model = (id: string, harness: string, provider: string) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
-      models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
+      models: [{...model('claude-sonnet-5-5', 'claude', 'anthropic'), efforts: ['low', 'high', 'xhigh']}, model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex', capabilities: {compaction: true}}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
@@ -96,7 +99,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -106,14 +109,17 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       await target.screenshot({path: require('node:path').join(process.env.TICO_UI_RECEIPT_DIR, name + '.png'), animations: 'disabled'});
     };
     type Locator = import('playwright').Locator;
-    // Pick in a Task model picker and Apply: harness '' is Same as bot; compact '' is the bot's window.
-    const pickTask = async (box: Locator, harness: string | null, model?: string, compact?: string) => {
+    // Pick in a Task model picker and Apply: harness '' is Same as bot; compact '' is the bot's window; effort '' is
+    // Default (the model's own, or on Same as bot the bot's).
+    const pickTask = async (box: Locator, harness: string | null, model?: string, compact?: string, effort?: string) => {
       const panel = await openPicker(box);
       if (harness !== null) await choose(panel, 'harness', harness);
       if (model) await choose(panel, 'model', model);
+      if (effort !== undefined) await choose(panel, 'effort', effort);
       if (compact !== undefined) await panel.locator('[data-choice-compact]').selectOption(compact);
       await applyPicker(panel);
     };
+    const efforts = async (panel: Locator) => (await offered(panel, 'effort')).map(t => t.trim());
     // What a Task model picker holds now: its model ('' for Same as bot) and window (null for the bot's).
     const held = (box: Locator) => box.evaluate(b => { const picker = (b as HTMLElement & {picker: {value(): string; compact(): number | null}}).picker;
       return {model: settingsChoiceFromValue(picker.value()).model, compact: picker.compact()}; });
@@ -173,30 +179,44 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     assert.equal((await held(pickers)).model, 'gpt-6-luna');
     {
       const panel = await openPicker(pickers);
-      assert.equal(await panel.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort row');
+      assert.equal(await panel.locator('[data-choice-effort]').isVisible(), true, 'the Task model panel has its Effort row');
+      assert.deepEqual(await efforts(panel), ['Default', 'low'], "the task model's efforts, its own default first as Default");
+      assert.equal(await chosen(panel, 'effort'), 'high');
       assert.deepEqual((await panel.locator('[data-choice-compact] option').allInnerTexts()).map(t => t.replace(' (default)', '')),
         ['Same as bot', '100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '700K', '800K', '900K', '1M'], 'the Compact choices');
       await panel.locator('[data-choice-cancel]').click();
     }
-    const effortPick = row.locator('[data-task-effort]');
+    assert.equal(await page.locator('[data-task-effort]').count(), 0, 'no separate Task effort select: it is the picker\'s Effort');
     assert.equal(await row.locator('[data-task-context]').count(), 0, 'no separate Task context length: it is the picker\'s Compact');
-    assert.equal(await effortPick.inputValue(), 'high');
-    // Same as bot for the model keeps the task effort: tasks still differ, so the mark stays on.
+    // Same as bot with an effort of its own: the bot's model at that effort, one save; the mark stays on.
     calls = [];
-    await pickTask(pickers, '');
+    {
+      const panel = await openPicker(pickers);
+      await choose(panel, 'harness', '');
+      assert.equal(await panel.locator('[data-choice-effort]').isVisible(), true, 'Effort shows on Same as bot');
+      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high', 'xhigh'], "Default (the bot's own effort), then the bot's model's efforts");
+      assert.equal(await chosen(panel, 'effort'), '', 'it starts on Default');
+      await choose(panel, 'effort', 'high');
+      await applyPicker(panel);
+    }
     await loaded(7);
     assert.deepEqual(calls, [{what: 'task-model', body: {task_model: {model: null, effort: 'high', compact_at: null}, expected_revision: 6}}]);
     assert.equal(await row.count(), 1, 'the row stays open after Apply');
-    assert.equal(await closedText(pickers), 'Same as bot', 'model "" shows Same as bot');
-    assert.equal(await effortPick.inputValue(), 'high');
+    assert.equal(await closedText(pickers), 'Same as bot HIGH', 'model "" with an effort shows Same as bot HIGH');
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true);
-    // Only all three Same as bot clears it.
+    // Default effort on Same as bot: all three Same as bot clears it.
     calls = [];
-    await effortPick.selectOption('');
+    {
+      const panel = await openPicker(pickers);
+      assert.equal(await chosen(panel, 'harness'), '', 'reopens on Same as bot');
+      assert.equal(await chosen(panel, 'effort'), 'high', 'with its effort');
+      await choose(panel, 'effort', '');
+      await applyPicker(panel);
+    }
     await loaded(8);
     assert.deepEqual(calls, [{what: 'task-model', body: {task_model: null, expected_revision: 7}}]);
     await page.waitForFunction(() => !document.querySelector('[data-task-open=helper]')?.classList.contains('on'));
-    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.taskEffort), 'helper', 'the keyboard stays on Task effort');
+    assert.equal(await closedText(pickers), 'Same as bot');
 
     // 4/4. A cheaper pick on a high-stakes bot saves, and the row shows the warning in plain words.
     calls = [];
@@ -207,10 +227,11 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     assert.equal(await row.locator('[data-task-warning]').innerText(), WARNING);
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'it saved');
     // The window only, then effort only: each carries the other parts. The mark names the window.
-    const savePart = async (select: Locator | 'compact', value: string) => {
+    const savePart = async (part: 'compact' | 'effort' | 'same', value: string) => {
       const before = helper.revision; calls = [];
-      if (select === 'compact') await pickTask(pickers, null, undefined, value);
-      else await select.selectOption(value);
+      if (part === 'compact') await pickTask(pickers, null, undefined, value);
+      else if (part === 'effort') await pickTask(pickers, null, undefined, undefined, value);
+      else await pickTask(pickers, value);
       await loaded(before + 1);
       assert.equal(calls.length, 1, 'one save per change');
       return calls[0]!.body.task_model;
@@ -218,20 +239,40 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     assert.deepEqual(await savePart('compact', '600000'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 600000});
     assert.equal(await mark.innerText(), 'Tasks: Haiku 5.5 600K', 'a task model shows by name, with its window');
     await capture('desktop-task-row', page.locator('#settings-bots-list'));
-    assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['low', 'high'], "the task model's efforts; no Same as bot while it runs them");
-    assert.deepEqual(await savePart(effortPick, 'low'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000});
-    // Same as bot for the model keeps the effort and context length; then each clears on its own.
-    calls = []; const was = helper.revision;
-    await pickTask(pickers, '');
-    await loaded(was + 1);
-    assert.deepEqual(calls.map(c => c.body.task_model), [{model: null, effort: 'low', compact_at: 600000}]);
+    // An effort of the task model's own, in the same panel: model, effort and window go in one save.
+    assert.deepEqual(await savePart('effort', 'low'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000});
+    assert.equal(await closedText(pickers), 'Haiku 5.5 LOW 600K');
+    // Review 1 of #3780: Same as bot at an effort only the bot's model takes (xhigh; Haiku has low and high) keeps it on
+    // Apply, judged against the bot's model, not the task model being cleared.
+    {
+      const before = helper.revision; calls = [];
+      const panel = await openPicker(pickers);
+      await choose(panel, 'harness', '');
+      await choose(panel, 'effort', 'xhigh');
+      await applyPicker(panel);
+      await loaded(before + 1);
+      assert.deepEqual(calls.map(c => c.body.task_model), [{model: null, effort: 'xhigh', compact_at: 600000}], "the bot's model's effort is kept");
+    }
+    {
+      const before = helper.revision; calls = [];
+      await pickTask(pickers, 'claude', 'claude-haiku-5-5', undefined, 'low');
+      await loaded(before + 1);
+      assert.deepEqual(calls.map(c => c.body.task_model), [{harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000}]);
+    }
+    // Same as bot for the model starts on Default effort and keeps the window; an effort of its own then saves with it.
+    assert.deepEqual(await savePart('same', ''), {model: null, effort: null, compact_at: 600000});
     assert.equal(await closedText(pickers), 'Same as bot 600K', 'Same as bot, with the task window');
-    assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high'], "the bot's own model's efforts");
-    assert.equal(await mark.innerText(), 'Tasks · 600k');
-    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low$/, 'the run line names no compaction length');
-    assert.deepEqual(await savePart(effortPick, ''), {model: null, effort: null, compact_at: 600000});
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'context only still differs');
-    assert.equal(await savePart('compact', ''), null, 'all three Same as bot');
+    assert.deepEqual(await savePart('effort', 'low'), {model: null, effort: 'low', compact_at: 600000});
+    assert.equal(await closedText(pickers), 'Same as bot LOW 600K');
+    assert.equal(await mark.innerText(), 'Tasks · LOW · 600k');
+    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low$/, 'the run line names no compaction length');
+    {
+      const before = helper.revision; calls = [];
+      await pickTask(pickers, null, undefined, '', '');
+      await loaded(before + 1);
+      assert.deepEqual(calls.map(c => c.body.task_model), [null], 'all three Same as bot, in one Apply');
+    }
     assert.equal(await mark.innerText(), 'Tasks: same');
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), false);
 
@@ -241,7 +282,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     await page.evaluate(() => loadSettings());
     await openEditor();
     assert.equal(await editor.locator('[data-task-warning]').innerText(), WARNING, 'the editor shows the warning under Task model');
-    const editorEffort = editor.locator('[data-task-effort]');
+    assert.equal(await editor.locator('[data-task-effort]').count(), 0, 'no separate Task effort select in the editor');
     assert.equal(await editor.locator('[data-task-context]').count(), 0, 'no separate Task context length');
     await pickTask(task, null, undefined, '1000000');
     await page.waitForTimeout(50);
@@ -252,28 +293,31 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     await loaded(before + 2);
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition']);
     assert.deepEqual(calls[0]!.body.task_model, {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 1000000}, 'context saved, model and effort kept');
-    // A new task model: Task effort lists its efforts and keeps the one held; one save carries all three.
+    // A new task model at an effort of its own; one save carries all three.
     await openEditor();
     assert.equal((await held(task)).compact, 1000000);
-    await editorEffort.selectOption('low');
-    await pickTask(task, 'codex', 'gpt-6-luna');
-    assert.equal(await editorEffort.inputValue(), 'low');
+    await pickTask(task, 'codex', 'gpt-6-luna', undefined, 'low');
+    assert.equal(await closedText(task), 'GPT 6 Luna LOW 1M');
     before = helper.revision;
     await editor.locator('button[type=submit]:not([data-choice-apply])').click();
     await loaded(before + 2);
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition'], 'one task-model save');
     assert.deepEqual(calls[0]!.body.task_model, {harness: 'codex', model: 'gpt-6-luna', effort: 'low', compact_at: 1000000});
-    // Same as bot for the model in the editor keeps the effort and context; it reopens as Same as bot.
+    // Same as bot in the editor, at an effort of its own; it keeps the window and reopens as Same as bot LOW 1M.
     await openEditor();
-    await pickTask(task, '');
-    assert.deepEqual(await editorEffort.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high']);
+    {
+      const panel = await openPicker(task);
+      await choose(panel, 'harness', '');
+      assert.deepEqual(await efforts(panel), ['Default', 'low', 'high', 'xhigh'], "the bot's model's efforts");
+      await choose(panel, 'effort', 'low');
+      await applyPicker(panel);
+    }
     before = helper.revision;
     await editor.locator('button[type=submit]:not([data-choice-apply])').click();
     await loaded(before + 2);
     assert.deepEqual(calls[0]!.body.task_model, {model: null, effort: 'low', compact_at: 1000000});
     await openEditor();
-    assert.equal(await closedText(task), 'Same as bot 1M', 'model "" shows Same as bot, with its window');
-    assert.equal(await editorEffort.inputValue(), 'low');
+    assert.equal(await closedText(task), 'Same as bot LOW 1M', 'model "" shows Same as bot, with its effort and window');
     assert.equal((await held(task)).compact, 1000000);
     await editor.locator('[data-bot-choice][data-kind=task]').evaluate(n => n.scrollIntoView({block: 'center'}));
     await capture('desktop-task-editor', page);
@@ -292,7 +336,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     const width = await row.evaluate(tr => tr.getBoundingClientRect().width);
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
     const parts = await row.locator('.sb-task-part').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return [r.left, r.right] as const; }));
-    assert.ok(parts.length === 3 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task model, Task effort and Fallback fit the phone: ${JSON.stringify(parts)}`);
+    assert.ok(parts.length === 2 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task model and Fallback fit the phone: ${JSON.stringify(parts)}`);
     await capture('phone-task-row', row);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
 

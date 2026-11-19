@@ -46,12 +46,12 @@ def test_with_no_team_default_a_bot_without_a_model_takes_the_gateway_default(ap
 def test_with_a_team_default_a_bot_without_a_model_takes_the_team_default(api):
     r = api.put(
         "/api/v2/providers",
-        json={"enabled": ["openai"], "model": "gpt-6.1-sol", "expected_revision": 0},
+        json={"enabled": ["openai"], "model": "gpt-6.2-sol", "expected_revision": 0},
         headers=headers("ana-test"),
     )
     assert r.status_code == 200, r.text
     create(api, "team-model")
-    assert model_of(api, "team-model") == "gpt-6.1-sol"
+    assert model_of(api, "team-model") == "gpt-6.2-sol"
 
 
 def test_a_named_model_that_does_not_exist_is_still_refused(api):

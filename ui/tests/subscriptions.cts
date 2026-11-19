@@ -28,7 +28,7 @@ type Page = import('playwright').Page;
 type Browser = import('playwright').Browser;
 type Route = import('playwright').Route;
 type Kind = {kind: string; label: string; runtime: string; secret_label: string; help: string; connect?: boolean; owned?: boolean};
-type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; version: string; platform: string; bots: string[];
+type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; online: boolean; version: string; platform: string; bots: string[];
   accepts_member_bots: boolean; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>};
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]}; turn_summary: string;
   release?: string; cloud_machine?: {state: string}; gateway_fallback?: boolean;
@@ -66,7 +66,7 @@ const PLAN_NAMES: Record<string, string> = {claude_token: 'Claude', codex_login:
 function fixtures(): Data {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id: string, label: string, operator: string, bots: string[] = [], runtimes: Machine['readiness']['runtimes'] = {codex: ready, claude: ready}, extra: Partial<Machine> = {}): Machine => ({id, label, owner_id: operator, last_seen_at: now,
+  const machine = (id: string, label: string, operator: string, bots: string[] = [], runtimes: Machine['readiness']['runtimes'] = {codex: ready, claude: ready}, extra: Partial<Machine> = {}): Machine => ({id, label, owner_id: operator, last_seen_at: now, online: true,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -76,7 +76,7 @@ function fixtures(): Data {
           turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
       machine('r3', 'Cloud · Video Owner', 'ana', ['video'], {claude: missing, codex: missing},
-        {cloud_machine: {state: 'stopped'}, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
+        {cloud_machine: {state: 'stopped'}, online: false, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
         turn_counts: {running: 0, starting: 0, waiting: 3, queued: 0, waits: []},
         update: {state: 'needs_update', label: 'Needs update', release: '0.4.2', commit: 'c0ffee'.padEnd(40, '0'), outdated: true, server_release: '0.5.14', error: ''}}),
@@ -146,7 +146,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: data.machines.map(m => ({...m, bot_connections: []})), services: [], agents: []});
     if (p === '/api/v2/models') return json({models: data.models, harnesses, enabled_providers: data.providers.enabled, default: data.providers.default});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
@@ -226,7 +226,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
     }
-    const fallback = p.match(/^\/api\/v2\/runners\/([^/]+)\/gateway-fallback$/);
+    const fallback = p.match(/^\/api\/v2\/computers\/([^/]+)\/gateway-fallback$/);
     if (fallback && method === 'POST') {
       const body = req.postDataJSON() as Body & {on?: boolean}; writes.push({p, method, body});
       data.machines.find(m => m.id === fallback[1])!.gateway_fallback = Boolean(body.on);
@@ -305,14 +305,14 @@ async function modelsTab(browser: Browser) {
     ['Claude Max (Ana)', 'Claude', '3', '5h 38% left'],
     ['Claude Max (Sam)', 'Claude', '0', 'Sign in again'],
     ['Claude Max (Dee)', 'Claude', '1', 'No reading yet'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 111h'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 4d 15h'],
     ['ChatGPT Team (Cy)', 'ChatGPT', '1', 'week 100% left'],
     ['OpenAI key (company)', 'OpenAI API key', '0', '$41.20 this month']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
   assert.doesNotMatch(await pane.locator('#set-subs').innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
-  // The hours until the window resets sit after the share left; the tooltip names the window and the reset time.
-  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 111h\)$/);
+  // The time until the window resets sits after the share left; the tooltip names the window and the reset time.
+  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 4d 15h\)$/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
   // The bar is the share left: a fresh plan's is full.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:100%');
@@ -808,7 +808,7 @@ async function personGroups(browser: Browser) {
   assert.deepEqual(rows.slice(2).map(r => r[1]), ['Claude Max (Ana)', 'Plan 1']);
   assert.equal(rows[3]![2], '');
   assert.equal(await ana.locator('[data-subs-row=p2] .subs-mark').getAttribute('title'), 'In use on Tico Team box');
-  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 24h$/);
+  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 1d$/);
   assert.equal(await ana.locator('[data-subs-row=p1] .subs-bar').getAttribute('class'), 'subs-bar bad');
   assert.equal(await ana.locator('[data-subs-row=p2]').getAttribute('class'), 'subs-in-use');
   await shot(page, 'models-groups');
@@ -855,7 +855,7 @@ async function plansRunOut(browser: Browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/r2/gateway-fallback', method: 'POST', body: {on: true}});
   assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
   assert.deepEqual(errors, []);
   await page.close();
@@ -1012,7 +1012,7 @@ async function phoneReasons(browser: Browser) {
     mutate: d => { d.subs.push(extra('s7', 'Claude Max (Eve)', 'working', []), extra('s8', 'Claude Max (Flo)', 'failing', ['r1'])); }});
   await modelsReady(page);
   const width = 390;
-  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 111h$/], ['s4', /Sign-in expired\s*Sign in again/],
+  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 4d 15h$/], ['s4', /Sign-in expired\s*Sign in again/],
     ['s6', /^No reading yet$/], ['s7', /^No reading yet$/], ['s8', /^No reading yet$/]] as [string, RegExp][]) {
     const row = page.locator(`[data-subs-row=${id}]`);
     await row.scrollIntoViewIfNeeded();
@@ -1064,17 +1064,17 @@ async function usageLeft(browser: Browser) {
     await modelsReady(page);
     const pane = page.locator('#set-subs');
     const use = (id: string) => pane.locator(`[data-subs-row=${id}] .subs-use`);
-    // AC-1: a green bar 62% full, "62% left · resets in 98h", nothing else.
-    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 98h$/);
+    // AC-1: a green bar 62% full, "62% left · resets in 4d 2h", nothing else.
+    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 4d 2h$/);
     assert.equal(await use('w').locator('.subs-bar').getAttribute('class'), 'subs-bar');
     assert.equal(await use('w').locator('.subs-bar b').getAttribute('style'), 'width:62%');
-    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 98h\)$/);
+    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 4d 2h\)$/);
     // AC-2: the tighter window alone, its reset in hours; amber when 6-20% is left, red at 5% or less.
-    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h$/);
+    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h (10|9)m$/);
     assert.equal(await use('f').locator('.subs-bar').getAttribute('class'), 'subs-bar warn');
-    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 60h$/);
+    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 2d 12h$/);
     // AC-3: at its limit, 0% left and an empty red bar; "Held until" nowhere.
-    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 30h$/);
+    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 1d 6h$/);
     assert.equal(await use('h').locator('.subs-bar').getAttribute('class'), 'subs-bar bad');
     assert.equal(await use('h').locator('.subs-bar b').getAttribute('style'), 'width:0%');
     const edge = (id: string) => use(id).locator('.subs-bar').evaluate(e => getComputedStyle(e).boxShadow);

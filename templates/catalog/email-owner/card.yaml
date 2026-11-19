@@ -62,3 +62,11 @@ first_routine:
 example_output: knowledge/examples/go-live-page.md
 reasoning_effort: medium
 recommend_when: [sells_to_consumers, publishes_content, uses_email]
+# Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
+shared_files:
+  - playbooks/watch.md
+  - playbooks/find-ideas.md
+  - playbooks/build-a-bet.md
+  - playbooks/run-and-measure.md
+  - playbooks/fix-a-slip.md
+  - .claude/skills/run-lifecycle-and-paid

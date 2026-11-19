@@ -30,7 +30,7 @@ def set_up(environment, card=True):
         with_brand(api)
     machine(api)
     draft(api)
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api, done.json()
 
@@ -147,7 +147,7 @@ def test_the_updates_and_automations_owners_are_built_in_like_the_brand_owner(en
         shutil.copytree(TEMPLATE.parent / slug, Path(api.app.state.store.settings.catalog_dir) / slug)
     machine(api)
     draft(api)
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     for slug in ("updates-owner", "automations-owner"):
         assert api.app.state.auth.system_bot(slug), slug
         with api.app.state.store.read() as c:

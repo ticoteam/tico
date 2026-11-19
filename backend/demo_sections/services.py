@@ -258,7 +258,7 @@ def mail_access(b):
 
 def _email_sending(b):
     from .. import email_sending, mailbox_access
-    from connectors.mail import compose
+    from ..mail_lib import compose
 
     b.at(hours=0.1)
 
@@ -520,7 +520,6 @@ def _connectors(b):
     b.at(days=6.0)
     slack_app.save(
         b.store,
-        b.settings,
         CONTENT["owner"]["id"],
         "xoxb-" + _derived("slack-bot"),
         "xapp-" + _derived("slack-app"),
@@ -537,7 +536,7 @@ def _runners(b):
     b.at(days=5.9)
     tools = CONTENT["tools"]
     bots = {}
-    for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]:
+    for slug in [*(slug for slug, _, _ in D.BOTS), *D.READY_BUILT_INS]:
         entry = {
             "ready": True,
             "runtime": "claude",

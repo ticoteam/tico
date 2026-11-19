@@ -64,26 +64,13 @@ EXCERPT_MAX = 1_200  # of the diff kept as the evidence's quote
 LINES_MAX = 3_000  # lines compared; a longer page is cut before the diff
 STATUSES = ("ok", "error", "blocked")
 DAY_KEY = "market.watch.checked"
-ACTOR = H.KEEPER  # who writes what a check finds
+ACTOR = H.TICO_ACTOR  # who writes what a check finds
 GITHUB = re.compile(r"github:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})")
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS entity_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
-    "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked_at TEXT, changed_at TEXT, "
-    "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT, signal_watch_id TEXT)",
-    "CREATE INDEX IF NOT EXISTS entity_watches_active ON entity_watches(active, checked_at)",
-    "CREATE INDEX IF NOT EXISTS entity_watches_entity ON entity_watches(entity_id)",
-)
 
 # Test seams: the name resolver and socket the fetch uses, and how the check thread is started.
 RESOLVER = None
 OPENER = None
 _RUNNING = threading.Lock()
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def spawn(work):

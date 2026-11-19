@@ -1,5 +1,10 @@
 """Task list routes: task filters, notes, labels."""
 
+from . import teammate_access
+from . import sources as SRC
+from . import task_relations as TR
+from . import task_roles as TRo
+
 import base64
 import json
 import re
@@ -16,6 +21,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 from . import reach
 from . import views
+from .api_contract import api_v2
 
 
 # The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
@@ -54,12 +60,11 @@ LIST_FILTERS = frozenset(
         "due",
         "late",
         "after",
+        "counts",
     }
 )
-# Passed through and ignored. `type`: the Recorder's task picker sends `type=<task type>` from 0.5.181 (Nov 5, 2026)
-# until the build that stopped (recorder/src/task_links.rs `search_tasks`); installed copies keep sending it, so it is
-# accepted rather than refused. The list has no type filter, so it never narrowed the answer.
-_LIST_PASSED = frozenset({"on_behalf_of", "type"})
+# `on_behalf_of`, read by the BotOps middleware (above).
+_LIST_PASSED = frozenset({"on_behalf_of"})
 _FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
 
 
@@ -76,7 +81,19 @@ def unknown_filters(names):
 
 
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
-    @app.get("/api/v2/tasks")
+    @app.get(
+        "/api/v2/tasks",
+        **api_v2(
+            "Tasks",
+            "listTasks",
+            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=). counts=stage also answers `counts`: how many tasks the same filters select in each stage, across every page",
+            "TaskList",
+            parameters={
+                "counts": "stage: also answer `counts`, the number of tasks these filters select in each stage across "
+                "every page (the rows a reader may not read are never counted). Not with changed_after",
+            },
+        ),
+    )
     def tasks(
         request: Request,
         response: Response,
@@ -110,6 +127,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         due: str | None = None,
         late: bool | None = None,
         after: str | None = None,
+        counts: str | None = None,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -117,7 +135,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         a requirement (false, the rest). `search`, `owners`, `stages`, `requesters`, `labels`, `turn`, `due` and
         `late` are the Tasks page's search and filters, with its meaning (backend/task_match.py). Every page answers
         `next_after` when there is more: pass it back as `after` for the next page (a keyset page, which a task added
-        or removed meanwhile does not shift); `next_offset` stays for offset paging."""
+        or removed meanwhile does not shift); `next_offset` stays for offset paging. `counts=stage` adds how many tasks
+        the filters select in each stage, all pages together, so a board shows a stage's count with one page loaded."""
         from . import task_match
         from . import task_reads as reads
         from . import teammate_access
@@ -132,6 +151,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("offset", "offset is zero or greater", 422)
             if sort not in ("queue", "finished"):
                 raise Problem("sort", "sort is queue or finished", 422)
+            if counts not in (None, "stage"):
+                raise Problem("counts", "counts is stage", 422)
+            if counts and changed_after is not None:
+                raise Problem("counts", "counts is a full read's: not with changed_after", 422)
             owner, requester, filters = task_filters(
                 c,
                 owner=owner,
@@ -176,9 +199,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 filters["after"] = keyset_start(after, sort)
 
             def matched(restrict=None):
-                """The search's and Waiting on's ids among the rows the other filters leave (all of the view's, or
+                """The search's, Late's and Waiting on's ids among the rows the other filters leave (all of the view's, or
                 `restrict`'s); None when neither is set."""
-                if not (match.words or match.turn is not None):
+                if not (match.words or match.turn is not None or match.late):
                     return None
                 kw = {k: v for k, v in filters.items() if k not in ("visible_sql", "narrow", "order", "after")}
                 if restrict is not None:
@@ -213,7 +236,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id"):
+                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id", "came_from"):
                             if row.get(field) is None:
                                 row.pop(field, None)
 
@@ -258,9 +281,22 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 next_offset = offset + limit if last is not None else None
                 next_after = keyset_token(last) if last is not None else None
                 brief_rows(rows)
+                # The same call as the rows' with the same filters, grouped: the counts and the list cannot select
+                # differently. A task in no stage counts in the total only.
+                per_stage = visible_tasks(c, who, owner, requester, per_stage=True, **filters) if counts else None
+                tallies = (
+                    {
+                        "total": sum(per_stage.values()),
+                        "stage": dict(sorted((stage_id, n) for stage_id, n in per_stage.items() if stage_id)),
+                    }
+                    if per_stage is not None
+                    else None
+                )
                 # The validator is the answer itself and the reader's access. A change this reader cannot read (a
                 # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
-                tag = reads.etag("tasks", rows, next_offset, next_after, *reader)
+                tag = reads.etag(
+                    "tasks", rows, next_offset, next_after, *reader, *([tallies] if tallies is not None else [])
+                )
                 if reads.fresh(request, tag):
                     return reads.not_modified(tag)
                 response.headers["ETag"] = tag
@@ -270,6 +306,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     "next_after": next_after,
                     "cursor": reads.cursor(c, visible_sql),
                 }
+                if tallies is not None:
+                    result["counts"] = tallies
                 if typed is not None:
                     # What was asked for and is not here: unknown, ambiguous, outside the filters or not readable.
                     returned = {row["id"] for row in rows}
@@ -478,7 +516,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/tasks/labels")
+    @app.get(
+        "/api/v2/tasks/labels",
+        **api_v2("Tasks", "listTaskLabels", "Labels in use (ETag: If-None-Match answers 304 when unchanged)"),
+    )
     def task_labels(request: Request, response: Response):
         from . import task_reads as reads
 
@@ -495,3 +536,269 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 return reads.not_modified(tag)
             response.headers["ETag"] = tag
             return {"labels": keys, "tags": tags}
+
+
+def readers(auth):
+
+    # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
+    # (hubdb.ticket_refs); a list of 500 rows carries no copy of it. `body` is the description tasks no longer have:
+    # what was asked is the first message on the task's chat.
+    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix", "body")
+
+    def plain_view(row, c=None):
+        """A task's plain fields, as every view of it starts: the row, without the server's own columns."""
+        value = {
+            "id": row["id"],
+            "short_id": row["id"][:8],
+            **{k: v for k, v in row.items() if k not in SERVER_COLUMNS},
+            "acceptance_criteria": json.loads(row.get("acceptance") or "[]"),
+            "labels": H.task_labels(row),
+            "lane": row.get("lane") or "company",
+            "came_from": row.get("came_from"),
+            "private": H.task_private(c, row),
+            "cover": None,
+        }
+        value.pop("acceptance", None)
+        value["readers"] = H.task_readers(row) if value["private"] else []
+        if not value.get("occurrence"):
+            value.pop("occurrence", None)  # only a due-date routine's task has one: a board of 500 carries none
+        return value
+
+    def task_view(row, c=None, visible_sql="1", who=None):
+        """The task as JSON, full (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): its plain fields with the
+        engine's (H.task_view: where it is, whose turn it is, what it takes to leave its stage, for this reader) laid
+        over them. Without a connection, the plain fields alone."""
+        if c is not None:
+            H.hydrate_task_tags(c, [row])
+        value = plain_view(row, c)
+        if c is None:
+            return value
+        viewer = (who.task_actor or who.actor) if who is not None else None
+        # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
+        rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
+        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {"stage_since": None})
+        # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
+        parent = TR.parent_of(c, row["id"])
+        value["parent_id"] = (
+            parent
+            if parent and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({rule})", (parent,)).fetchone()
+            else None
+        )
+        value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
+        value["roles"] = TRo.roles_of(c, row["id"])
+        from .roadmaps import stats, EMPTY_STATS
+
+        value.update({**EMPTY_STATS, **stats(c, [row["id"]]).get(row["id"], {})})
+        routine = c.execute("SELECT schedule_id FROM schedule_occurrences WHERE task_id=?", (row["id"],)).fetchone()
+        if routine:
+            value.update(routine_id=routine["schedule_id"])
+        value["origin_actor"] = H.task_origin(c, row)
+        value["request"] = H.task_request(c, row["id"])
+        if filed := SRC.filers(c, [row["id"]]).get(row["id"]):
+            value["filer"] = filed
+        if who is not None and visible_sql != "1":
+            value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
+        from . import task_reads
+
+        value["cover"] = task_reads.covers(c, [row["id"]]).get(row["id"])
+        from .blobs import brief
+
+        value["attachments"] = [
+            brief(r)
+            for r in c.execute(
+                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],)
+            )
+        ]
+        value["links"] = H.task_links(c, row["id"])
+        value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
+        value["pr_state"] = H.pr_state(value["links"])
+        counts = c.execute(
+            "SELECT COUNT(*), SUM(status IN ('done','closed')) FROM tasks WHERE id IN ("
+            + TR.CHILD_IDS
+            + ") AND ("
+            + visible_sql
+            + ")",
+            (row["id"],),
+        ).fetchone()
+        value["parts"] = {"total": counts[0] or 0, "done": counts[1] or 0}
+        from . import risk
+
+        matter = risk.matter_of(c, who, row["id"])  # its facts as a matter, when it carries a risk's
+        if matter:
+            value["matter"] = matter
+        if who is not None:
+            from .files import readable_earlier, readable_page_refs
+
+            # An OK's page from an earlier stage may live on another task: the file's own read check decides it.
+            for entry in value.get("to_leave") or []:
+                readable_earlier(c, auth, who, entry)
+            value = readable_page_refs(c, auth, who, value)
+            value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
+        return value
+
+    def task_views(rows, c, who, visible_sql="1"):
+        """One task-list page, brief (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): each row's plain fields
+        and the engine's brief ones (turn, late, snoozed), with a fixed number of reads for the whole page. `rows`
+        were read on `c` under `visible_sql`, the reader's rule, as every list does."""
+        if not rows:
+            return []
+        H.hydrate_task_tags(c, rows)
+        ids = [row["id"] for row in rows]
+        from . import task_engine
+        from .roadmaps import stats, EMPTY_STATS
+
+        task_engine.prime_places(c, rows)  # each row's stage and pipeline, read together for the waits below
+
+        requester_stats = stats(c, ids)
+        for row in rows:
+            row.update({**EMPTY_STATS, **requester_stats.get(row["id"], {})})
+        marks = ",".join("?" * len(ids))
+        from . import task_reads
+
+        covers = task_reads.covers(c, ids)
+        # From the page's ids, with visibility checked per child: an `IN (SELECT id FROM tasks WHERE ...)`
+        # list made SQLite probe every visible task against the page (1.5 s at 30k tasks).
+        parts = {
+            row["parent_id"]: {"total": row["total"] or 0, "done": row["done"] or 0}
+            for row in c.execute(
+                f"SELECT r.to_task parent_id,COUNT(*) total,SUM(t.status IN ('done','closed')) done "
+                f"FROM task_relations r INDEXED BY task_relations_to JOIN tasks t ON t.id=r.from_task "
+                f"WHERE r.to_task IN ({marks}) AND r.kind='parent' "
+                f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.from_task AND ({visible_sql})) "
+                f"GROUP BY r.to_task",
+                ids,
+            )
+        }
+        # The task above each row, by id only where this reader reads it (the rows' own rule).
+        parents = {
+            r[0]: r[1]
+            for r in c.execute(
+                f"SELECT r.from_task, r.to_task FROM task_relations r WHERE r.kind='parent' AND r.from_task IN ({marks}) "
+                f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))",
+                ids,
+            )
+        }
+        relations = TR.grouped(c, ids, visible_sql)
+        roles = TRo.grouped(c, ids)
+        routines_by_task = {
+            row["task_id"]: row["schedule_id"]
+            for row in c.execute(
+                f"SELECT task_id,schedule_id FROM schedule_occurrences WHERE task_id IN ({marks})", ids
+            )
+        }
+
+        links = {tid: [] for tid in ids}
+        for link in c.execute(
+            f"SELECT id,task_id,kind,url,title,state,added_by,created_at,pr_sha,pr_merged_at,repo,number,branch,"
+            f"computer_id,path,checks,mergeable,review_state,pending_comments,updated_at "
+            f"FROM task_links WHERE task_id IN ({marks}) ORDER BY created_at",
+            ids,
+        ):
+            # Not a link's record, its empty columns or its own write time (a computer's heartbeat rewrites that every
+            # minute): the task's read and its /links have them, and every open tab gets each list change.
+            links[link["task_id"]].append(
+                {k: v for k, v in dict(link).items() if v is not None and k not in ("detail", "pr_sha", "updated_at")}
+            )
+
+        attachments = {tid: [] for tid in ids}
+        from .blobs import brief
+
+        for asset in c.execute(
+            f"SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id WHERE a.task_id IN ({marks})", ids
+        ):
+            attachments[asset["task_id"]].append(brief(asset))
+
+        origins = {}
+        for event in c.execute(
+            f"SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
+            f"AND target IN ({marks}) ORDER BY target,created_at DESC",
+            (H.TICO_ACTOR, *ids),
+        ):
+            if event["target"] in origins:
+                continue
+            origin = (H._json(event["detail"], {}) or {}).get("bot")
+            origins[event["target"]] = origin if H.is_bot(origin) else None
+
+        filed = SRC.filers(c, ids)
+        summaries = H.children_summaries(c, ids, visible_sql)
+        # The rows each row's from_person reads, read for the whole page first; each row is still decided one at a
+        # time by the same code below.
+        views.prime_list_origins(c, visible_sql, rows)
+        task_reads.brief(c, rows, visible_sql)
+        result = []
+        for row in rows:
+            value = plain_view(row, c)
+            value.pop("checkpoint", None)  # up to a page of text per task; the full task view carries it
+            value.update(
+                {
+                    "parent_id": parents.get(row["id"]),
+                    "relations": relations[row["id"]],
+                    "roles": roles[row["id"]],
+                    "parts": parts.get(row["id"], {"total": 0, "done": 0}),
+                    "links": links[row["id"]],
+                    "children_summary": summaries[row["id"]],
+                    "pr_state": H.pr_state(links[row["id"]]),
+                    "attachments": attachments[row["id"]],
+                    "cover": covers.get(row["id"]),
+                    "origin_actor": origins.get(row["id"]),
+                    "from_person": views.person_origin(c, row, visible_sql, who.actor),
+                }
+            )
+            if row["id"] in routines_by_task:
+                value["routine_id"] = routines_by_task[row["id"]]
+            if row["id"] in filed:
+                value["filer"] = filed[row["id"]]
+            result.append(value)
+        from .files import readable_page_refs
+
+        result = readable_page_refs(c, auth, who, result)
+        return teammate_access.Known(c, who, auth).tasks(result)  # people the reader may not see
+
+    def mover(c, who):
+        """Whether this person may move any task: the owner, or a person on a mover team."""
+        return who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
+
+    def visible_tasks(
+        c,
+        who,
+        owner=None,
+        requester=None,
+        status=None,
+        lane=None,
+        label=None,
+        limit=500,
+        offset=0,
+        order="queue",
+        visible_sql=None,
+        narrow=None,
+        keyset=False,
+        per_stage=False,
+        **more,
+    ):
+        """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
+        list's pipeline, stage or pushed-past filter, task_list_routes.narrowing): it picks the rows only, while the
+        rows are still read with the reader's own visibility. With `keyset`, the second value is the last row's sort
+        key when there is more (the next page's `after`), not an offset. With `per_stage`, the answer is instead
+        {stage_id: count} of every task the same filters select, across all pages, from one grouped read
+        (H.tasks per_stage): a list's counts go through here so they never select differently from its rows."""
+        auth.domain(who)
+        visible_sql = visible_sql or auth.task_sql(c, who)
+        selection: dict[str, Any] = dict(
+            owner=owner,
+            requester=requester,
+            status=status,
+            lane=lane,
+            label=label,
+            order=order,
+            visible=f"({visible_sql}) AND ({narrow})" if narrow else visible_sql,
+            **more,
+        )
+        if per_stage:
+            return H.tasks(c, per_stage=True, **selection)
+        rows = H.tasks(c, limit=limit + 1, offset=offset, **selection)
+        page, has_more = rows[:limit], len(rows) > limit
+        if keyset:
+            return task_views(page, c, who, visible_sql), H.task_sort_key(page[-1], order) if has_more else None
+        return task_views(page, c, who, visible_sql), offset + limit if has_more else None
+
+    return mover, task_view, task_views, visible_tasks

@@ -50,7 +50,7 @@ def test_an_ok_with_no_task_files_one_for_whoever_asked_and_waits_on_the_person_
 
 
 def test_the_engine_asking_files_the_task_for_the_person(c):
-    asked = _ask(c, by=H.KEEPER, title="Pay the March invoices")
+    asked = _ask(c, by=H.TICO_ACTOR, title="Pay the March invoices")
     task = H.task(c, asked["task_id"])
     assert (task["owner_id"], task["title"]) == (ANA, "Pay the March invoices")
 
@@ -152,6 +152,31 @@ def test_an_ok_taken_back_or_sent_back_is_not_one(c):
         K.use(c, rid, SUBJECT, EMAIL, SENDER)
     K.settle(c, rid, "Sent back: Say the amount.")
     assert H.task(c, asked["task_id"])["status"] == "closed"
+
+
+def test_a_diversion_into_a_side_stage_invalidates_a_bound_ok_from_an_earlier_visit(c):
+    pipe = X.pipeline(
+        c,
+        "email",
+        "Email",
+        (
+            {"name": "Draft", "owner": SENDER, "by_hand": True},
+            {"name": "Send", "owner": SENDER},
+            {"name": "Hold", "owner": SENDER, "by_hand": True},
+        ),
+    )
+    c.execute("UPDATE stages SET side=1 WHERE id=?", (pipe["stages"]["Hold"],))
+    task_id = X.new_task(c, ANA, "Send the invoice", "email", assignee=SENDER)["id"]
+    asked = _ask(c, task_id=task_id)
+    rid = asked["requirement_id"]
+    _ok(c, asked)
+    assert H.task_move(c, ANA, task_id, H.TASK_NEXT)["stage"]["name"] == "Send"
+    assert K.standing(c, rid) == K.OK
+
+    assert H.task_move(c, ANA, task_id, "Hold")["stage"]["name"] == "Hold"
+    assert K.standing(c, rid) == K.WITHDRAWN
+    with _refused("task_ok_missing"):
+        K.use(c, rid, SUBJECT, EMAIL, SENDER)
 
 
 def test_asking_again_with_other_content_withdraws_the_old_ok_even_one_that_was_given(c):

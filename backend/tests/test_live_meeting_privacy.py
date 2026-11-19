@@ -6,14 +6,16 @@ import pytest
 from starlette.requests import Request
 
 from backend import live_meetings as meetings
-from backend import task_privacy
+from backend import task_privacy, thread_retention
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # noqa: F401
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
+from backend.tests.helpers.org_rule_check import Judge, color_rule
 from backend.tests.helpers.sql import query
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 
 def private(api, token="ana-test"):
@@ -206,7 +208,7 @@ def test_direct_attempt_keeps_moved_meeting_sources_and_fresh_membership(live, d
         message = H.say(c, "human:ana", "human:ben", "Synthetic public input", conversation_id=room["id"])
         c.execute("UPDATE jobs SET message_id=? WHERE id=?", (message["id"], attempt["job_id"]))
         detail = {"message_id": attempt["message"]["id"]} if source == "message" else {"live_meetings": [mid]}
-        H.event(c, H.KEEPER, task_privacy.INPUT_MOVED, aid, detail)
+        H.event(c, H.TICO_ACTOR, task_privacy.INPUT_MOVED, aid, detail)
 
     def allowed():
         with store.read() as c:
@@ -277,15 +279,7 @@ def publication_responses(api, token):
         {"owner": "ops", "title": "Review synthetic team plan", "body": "Check the synthetic plan.", "private": False},
     )
     writes = {
-        "human": (
-            f"tasks/{team_task['id']}/asks",
-            {
-                "to": "ana",
-                "line": "Synthetic meeting summary?",
-                "version": team_task["version"],
-                "why": "It is shared.",
-            },
-        ),
+        "human": (f"tasks/{team_task['id']}/questions", {"to": "ana", "text": "Synthetic meeting summary?"}),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
         "task": (
             "tasks",
@@ -353,17 +347,6 @@ def file_metadata_responses(api, token):
     return responses, existing["id"]
 
 
-def test_private_meeting_execution_cannot_publish_unversioned_file_metadata(live, derived):
-    _mid, attempt = derived
-    responses, fid = file_metadata_responses(live, attempt["token"])
-    assert {name: r.status_code for name, r in responses.items()} == {"link": 403, "edit": 403, "upload": 403}, {
-        name: (r.status_code, r.text) for name, r in responses.items()
-    }
-    public = get(live, "bots/ops/files")["files"]
-    assert next(row for row in public if row["id"] == fid)["title"] == "Public synthetic reference"
-    assert not any(row["title"] == "Synthetic meeting context" for row in public)
-
-
 def test_runner_control_write_guard_does_not_scan_execution_provenance(live, derived):
     _mid, attempt = derived
     statements = []
@@ -377,19 +360,8 @@ def test_runner_control_write_guard_does_not_scan_execution_provenance(live, der
     assert not statements, f"runner control guard performed {len(statements)} provenance queries"
 
 
-def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(live, derived):
+def test_private_meeting_reply_and_room_file_remain_readable_to_members(live, derived):
     mid, attempt = derived
-    responses = publication_responses(live, attempt["token"])
-    assert {name: r.status_code for name, r in responses.items()} == dict.fromkeys(responses, 403), {
-        name: (r.status_code, r.text) for name, r in responses.items()
-    }
-    with live.app.state.store.read() as c:
-        who = Identity("bot:ops", "bot", attempt_id=attempt["id"])
-        assert task_privacy.private_execution(c, who)
-        for recipient in ("human:ana", "bot:finance"):
-            with pytest.raises(Problem) as refused:
-                task_privacy.require_destination(c, who, recipient, None, {})
-            assert refused.value.code == "privacy"
     turn = attempt["message"]["refs"]["live_meeting"]["turn_id"]
     reply = post(
         live,
@@ -407,26 +379,89 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
     get(live, f"files/{fid}", expected=404)
 
 
-def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
+def test_a_message_linked_to_a_private_meeting_run_keeps_its_audience(live, derived):
+    _mid, attempt = derived
+    refused = post(
+        live,
+        "messages",
+        {"to": "finance", "text": "See the source run.", "refs": {"turn_id": attempt["id"]}},
+        token=attempt["token"],
+        expected=403,
+    )
+    assert refused["error"]["code"] == "privacy"
+
+
+def test_a_rule_hold_checks_the_destination_and_keeps_the_current_meeting_audience(live, derived):
     mid, attempt = derived
-    writes = {
-        "docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."},
-        "pages": {},
-        "tasks": {"owner": "ops", "title": "Embargo"},
-        "messages": {"to": "finance", "text": "Embargo Nov 17"},
-    }
-    for path, body in writes.items():
-        r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
-        assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (
-            path,
-            r.text,
+    live.app.state.judge = Judge(live.app.state.store)
+    color_rule(live, reviewer="ana")
+    body = {"text": "The favorite color is gold.", "refs": {"turn_id": attempt["id"]}}
+    refused = post(live, "messages", {**body, "to": "ana"}, token=attempt["token"], expected=403)
+    assert refused["error"]["code"] == "privacy"
+    assert get(live, "rule-holds")["holds"] == []
+
+    to_member = {**body, "to": "ben"}
+    held = post(live, "messages", to_member, token="ops-live", key="held-meeting-message")["held"]
+    path = f"rule-holds/{held['id']}"
+    get(live, path, expected=404)
+    post(live, f"live-meetings/{mid}/access", {"add": ["ana"]}, token="ben-test")
+    view = get(live, path)
+    assert view["text"] == "The favorite color is gold."
+    post(live, f"live-meetings/{mid}/access", {"remove": ["ana"]}, token="ben-test")
+    get(live, path, expected=404)
+    post(live, f"{path}/send", {"nonce": view["nonce"]}, expected=404)
+    removed = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={}, headers=headers("ben-test"))
+    assert removed.status_code == 200, removed.text
+    post(live, "messages", to_member, token="ops-live", key="held-meeting-message", expected=404)
+
+
+def test_shared_thread_replies_inherit_a_parents_meeting_run_audience(live, derived):
+    mid, attempt = derived
+    post(live, f"live-meetings/{mid}/access", {"add": ["cara"]}, token="ben-test")
+    thread = post(live, "threads", {"title": "Shared planning", "audience": "company"}, token="ben-test")
+    path = f"threads/{thread['id']}/messages"
+    parent = post(live, path, {"text": "Meeting reference", "refs": {"turn_id": attempt["id"]}}, token="ben-test")
+    reply = post(live, path, {"text": "The quoted meeting decision", "in_reply_to": parent["id"]}, token="cara-test")
+    nested = post(live, path, {"text": "A follow-up on that decision", "in_reply_to": reply["id"]}, token="ben-test")
+    with live.app.state.store.transaction() as c:
+        # Replies already stored by an older hub have no retained meeting IDs.
+        c.execute(
+            "UPDATE messages SET refs=json_remove(refs,'$.live_meetings') WHERE id IN (?,?)",
+            (reply["id"], nested["id"]),
         )
-    assert get(live, f"live-meetings/{mid}", token=attempt["token"])["id"] == mid
-    assert "files" in get(live, "bots/ops/files", token=attempt["token"])
+
+    for message, body in (
+        (parent, "Meeting reference"),
+        (reply, "The quoted meeting decision"),
+        (nested, "A follow-up on that decision"),
+    ):
+        mid_path = f"messages/{message['id']}"
+        get(live, mid_path, expected=404)
+        assert get(live, mid_path, token="ben-test")["body"] == body
+        sql = "SELECT body FROM messages WHERE id=?"
+        assert query(live, sql, params=[message["id"]])["rows"] == []
+        assert query(live, sql, params=[message["id"]], token="ben-test")["rows"] == [[body]]
+    # An older hub could settle these replies while overlooking the original message's run.
+    with live.app.state.store.transaction() as c:
+        for message in (reply, nested):
+            key = "m:" + message["id"]
+            c.execute("INSERT OR IGNORE INTO read_index VALUES(?)", (key,))
+            c.execute("INSERT OR IGNORE INTO read_deps VALUES(?,?)", ("m:" + parent["id"], key))
+    assert query(live, "SELECT id FROM messages WHERE id IN (?,?)", params=[reply["id"], nested["id"]])["rows"] == []
+    post(live, f"live-meetings/{mid}/access", {"remove": ["cara"]}, token="ben-test")
+    get(live, f"messages/{reply['id']}", token="cara-test", expected=404)
+
+    retained = post(live, path, {"text": "Follow the meeting decision", "in_reply_to": nested["id"]}, token="ben-test")
+    with live.app.state.store.transaction() as c:
+        assert thread_retention.purge(c, thread["id"], [parent["id"]], days=7) == 1
+    get(live, f"messages/{retained['id']}", expected=404)
+    assert get(live, f"messages/{retained['id']}", token="ben-test")["body"] == "Follow the meeting decision"
+    assert query(live, "SELECT id FROM messages WHERE id=?", params=[retained["id"]])["rows"] == []
 
 
-def test_team_meeting_execution_keeps_ordinary_publication(live):
-    mid = post(live, "live-meetings", {"title": "Synthetic team plan"}, token="ben-test")["id"]
+@pytest.mark.parametrize("visibility", ["private", "team"])
+def test_meeting_execution_can_use_its_normal_write_permissions(live, visibility):
+    mid = post(live, "live-meetings", {"title": "Synthetic plan", "visibility": visibility}, token="ben-test")["id"]
     attach(live, mid, "ops", token="ben-test")
     chunk(live, mid, 1, 0, 1000, "Ops, review this synthetic team plan", token="ben-test")
     machine = runner(live)
@@ -434,6 +469,13 @@ def test_team_meeting_execution_keeps_ordinary_publication(live):
     ready(live, machine, ["ops"])
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
     assert attempt["message"]["refs"]["live_meeting"]["meeting_id"] == mid
+    doc = post(
+        live,
+        "docs",
+        {"title": "Synthetic review", "body": "Schedule a reliability review."},
+        token=attempt["token"],
+    )["doc"]
+    assert get(live, f"docs/{doc['id']}")["doc"]["body"] == "Schedule a reliability review."
     responses = publication_responses(live, attempt["token"])
     assert {name: r.status_code for name, r in responses.items()} == dict.fromkeys(responses, 200), {
         name: (r.status_code, r.text) for name, r in responses.items()
@@ -461,7 +503,9 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
         ).fetchone()
         cid, source_id = source["conversation_id"], source["id"]
         before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
-    assert get(live, f"conversations/{cid}/messages", token="ben-test")[0]["id"] == source_id
+    # Ben reads the room; the turn Tico wrote ops is ops's run input, in no person's read of it.
+    seen = [m["id"] for m in get(live, f"conversations/{cid}/messages", token="ben-test")]
+    assert source_id not in seen
 
     requests = [
         ("messages", {"to": "ops", "text": "Synthetic ordinary write", "conversation_id": cid}),
@@ -472,41 +516,7 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
     assert [r.status_code for r in responses] == [403] * len(requests), [(r.status_code, r.text) for r in responses]
     with live.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
-    assert get(live, f"conversations/{cid}/messages", token="ben-test")[0]["id"] == source_id
-
-
-@pytest.mark.parametrize("surface", ["comment", "file_link"])
-def test_meeting_visibility_is_rechecked_under_the_write_lock(live, monkeypatch, surface):
-    mid = post(live, "live-meetings", {"title": "Synthetic transition during request"}, token="ben-test")["id"]
-    attach(live, mid, "ops", token="ben-test")
-    chunk(live, mid, 1, 0, 1000, "Ops, review this synthetic plan", token="ben-test")
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"])
-    attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
-    task = post(
-        live,
-        "tasks",
-        {"owner": "ops", "title": "Review synthetic team plan", "body": "Check the synthetic plan.", "private": False},
-    )
-    store = live.app.state.store
-    write = store.mutate
-    path = f"/api/v2/tasks/{task['id']}/comments" if surface == "comment" else "/api/v2/files/links"
-    body = (
-        {"text": "Synthetic scoped context"}
-        if surface == "comment"
-        else {"url": "https://acme.example/synthetic-context", "title": "Synthetic scoped context", "task": task["id"]}
-    )
-
-    def narrowed_before_write(identity, operation, key, body, fn, check=None):
-        if operation == path:
-            with store.transaction() as c:
-                c.execute("UPDATE live_meetings SET visibility='private' WHERE id=?", (mid,))
-        return write(identity, operation, key, body, fn, check=check)
-
-    monkeypatch.setattr(store, "mutate", narrowed_before_write)
-    response = live.post(path, json=body, headers=headers(attempt["token"]))
-    assert response.status_code == 403, response.text
+    assert [m["id"] for m in get(live, f"conversations/{cid}/messages", token="ben-test")] == seen
 
 
 def delegated_connect(api, attempt, body, key):
@@ -762,7 +772,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
     with store.transaction() as c:
         c.execute(
             "UPDATE messages SET sender_id=?,recipient_id='bot:finance' WHERE id=?",
-            (H.KEEPER, attempt["message"]["id"]),
+            (H.TICO_ACTOR, attempt["message"]["id"]),
         )
     assert source() == set()
     with store.transaction() as c:
@@ -773,7 +783,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
     assert source() == {"missing-meeting"}
 
 
-def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatch):
+def test_ordinary_api_reads_do_not_scan_unrelated_tico_history(api, monkeypatch):
     task = post(
         api,
         "tasks",
@@ -797,10 +807,10 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         c = take()
 
         def statement(sql):
-            in_provenance[0] = "JOIN live_meeting_turns" in sql
+            in_provenance[0] = belongs(work) and "JOIN live_meeting_turns" in sql
 
         def progress():
-            if in_provenance[0]:
+            if in_provenance[0] and belongs(work):
                 work[0] += 100
             return 0
 
@@ -815,7 +825,8 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         result = []
         for path in paths:
             work[0] = 0
-            get(api, path)
+            with measuring(work):
+                get(api, path)
             result.append(work[0])
         return result
 
@@ -854,7 +865,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
         # As task_privacy.record_moved_input writes it before any meeting provenance exists.
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             task_privacy.INPUT_MOVED,
             aid,
             {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []},
@@ -911,7 +922,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
 
 
 def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, derived):
-    """A turn makes a legacy room a meeting room through the keeper input naming it: adding the turn unsettles the rows
+    """A turn makes a legacy room a meeting room through Tico input naming it: adding the turn unsettles the rows
     that read that room, here a reply elsewhere to a message in it (refused to non-members before any new sweep), and
     nothing else; a claim, reply or skip unsettles nothing."""
     from backend import read_deps
@@ -924,12 +935,12 @@ def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, deriv
         "conversation_id"
     ]
     with store.transaction() as c:
-        # The run's keeper input stays in a room with no stored meeting binding: only the turn row makes it one.
+        # The run's Tico input stays in a room with no stored meeting binding: only the turn row makes it one.
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (attempt["message"]["conversation_id"],))
         turn = dict(c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=?", (mid,)).fetchone())
         c.execute("DELETE FROM live_meeting_turns WHERE id=?", (turn["id"],))
         unrelated = H.say(c, "human:ana", "human:ben", "Synthetic unrelated request", conversation_id=root_room)
-        # The keeper input names the meeting itself; a plain message beside it reads the meeting only through its room.
+        # Tico input names the meeting itself; a plain message beside it reads the meeting only through its room.
         beside = H.say(
             c, "bot:ops", "human:ana", "Synthetic plain note", conversation_id=attempt["message"]["conversation_id"]
         )

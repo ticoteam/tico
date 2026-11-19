@@ -1,4 +1,4 @@
-"""A PR that conflicts with its base branch is never put in the merge queue (docs/pipelines-v3.md, Merge): the queue
+"""A PR that conflicts with its base branch is never put in the merge queue (docs/dev/pipelines-v3.md, Merge): the queue
 reads GitHub's `mergeable` first, a queue-again is refused while the PR's link says it conflicts, and every refusal sends
 the task back to QA for the Builder to rebase."""
 

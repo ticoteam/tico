@@ -56,6 +56,15 @@ export interface StrategyDb {
   groups: Group[];
   needs: Json[];
   goals: Goal[];
+  // Market: whether the spend is sized (a test flips it to stand for the sizes arriving), and whether the owner has a
+  // setup in progress (the questions Market asks before it is set up).
+  market: {sized: boolean; setup: boolean; sizing?: Json | null};
+  // Brand: the draft body, empty until the owner saves a section into it (PUT /api/v2/brand/draft merges it in).
+  brand: {draft: Json | null; revision: number};
+  // Setup areas filled outside what this fake models (backend/setup_gaps.py); Market and Strategy follow `market` and
+  // the brand draft. A direct chat's messages by its conversation id (a setup ping's ❓ lands in one).
+  filled: Set<string>;
+  chats: Record<string, Json[]>;
 }
 
 export interface OpenStrategyOptions {
@@ -65,6 +74,8 @@ export interface OpenStrategyOptions {
   briefing?: boolean;
   listening?: number;
   market?: boolean;
+  sized?: boolean;
+  setup?: boolean;
 }
 
 export interface StrategyPage {
@@ -119,8 +130,9 @@ function listeningStats(now = new Date()) {
 // One page on the fake hub. viewer: who is signed in (ana owns Acme; ben leads Sales and so Outbound below it; cara
 // is in Engineering).
 // briefing: false answers {briefing: null}. listening: 403 answers the stats with that status. market: false is a
-// market with nothing in it yet.
-async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true}: OpenStrategyOptions = {}): Promise<StrategyPage> {
+// market with nothing in it yet. sized: false answers the spend with no sizes (Market asks to size it). setup: true
+// answers the owner's Market setup in progress (its first question).
+async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true, sized = true, setup = false}: OpenStrategyOptions = {}): Promise<StrategyPage> {
   const mk = fixture<MarketFixture>('redesign-market.json');
   const fx = fixture<OrgFixture>('redesign-org.json');
   const person = fx.people.find(p => p.id === viewer);
@@ -133,8 +145,33 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
     {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
-  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
+  const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals, market: {sized, setup}, brand: {draft: null, revision: 0},
+    filled: new Set(['goals', 'org', 'tools', 'budget']), chats: {}};
+  // GET /api/v2/setup/gaps: Market waits while the market is empty, Strategy while the brand is; only the owner is waited on.
+  const SETUP_BOTS: Record<string, [string, string]> = {market: ['librarian', 'Librarian'], strategy: ['strategy-owner', 'Strategy Owner'],
+    goals: ['strategy-owner', 'Strategy Owner'], org: ['botops', 'BotOps'], tools: ['botops', 'BotOps'], budget: ['botops', 'BotOps']};
+  const gapOpen = (area: string) => !db.filled.has(area) && (area === 'market' ? !market : area === 'strategy' ? !db.brand.draft : true);
+  const gaps = () => Object.entries(SETUP_BOTS).map(([area, [slug, name]]) => ({area, needs: me.role === 'owner' && gapOpen(area),
+    bot: {id: 'bot:' + slug, slug, name}, href: '#/strategy'}));
+  // A setup ping (POST /api/v2/flow/ping, scope setup): the area's bot asks its first ❓ in its direct chat with the person.
+  const SETUP_ASK: Record<string, string> = {strategy: 'Who is Acme for, in one line?', market: 'What do you sell, and who buys it?'};
+  const setupPing = (area: string) => {
+    const [slug] = SETUP_BOTS[area]!, cid = 'c-dm-' + slug, line = SETUP_ASK[area] || 'What should I set up first?';
+    const at = new Date().toISOString(), mark = 'q-' + area;
+    db.chats[cid] = [{id: 'm-' + mark, kind: 'say', sender_id: 'bot:' + slug, body: line, created_at: at, refs: {question: {id: mark, to: 'human:' + me.id}}}];
+    db.needs.push({kind: 'question', id: 'qmark:' + mark, mark_id: mark, task_id: null, message_id: 'm-' + mark, conversation_id: cid,
+      root_id: cid, from_id: 'bot:' + slug, requirement_id: null, line, since: at, task: null});
+    return {pinged: [{id: slug, name: SETUP_BOTS[area]![1]}], recent: []};
+  };
   const writes: StrategyWrite[] = [];
+  // The Brand document as the owner reads it: an empty brand until a section is saved into its draft.
+  const brandDoc = (): Json => ({may_edit: me.role === 'owner', published: null, versions: [],
+    draft: db.brand.draft ? {body: db.brand.draft, changed: Object.keys(db.brand.draft), revision: db.brand.revision} : null});
+  // The spend as a sized market reads it, or with its sizes taken off (what a market is before anyone sizes it).
+  const spendOf = (dimension: string): Json => {
+    const spend = mk.spend[dimension] as Json;
+    return db.market.sized ? spend : {...spend, segments: ((spend.segments || []) as Json[]).map(seg => ({...seg, size: null, rolled_usd: null, estimates: []}))};
+  };
   // A teammate joins a group and leaves the one it was in (backend/groups.py); `remove` leaves it in no group.
   const move = (kind: 'people' | 'bots', id: string, to: string) => {
     for (const g of db.groups) g[kind] = g[kind].filter(x => x !== id);
@@ -165,6 +202,11 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/needs-you') return json({items: db.needs, version: 'v' + writes.length, count: db.needs.length, next: null});
+    if (p === '/api/v2/setup/gaps') return json({areas: gaps()});
+    if (p === '/api/v2/flow/ping' && method === 'POST') return json(b.scope === 'setup' && typeof b.id === 'string' ? setupPing(b.id) : {pinged: [], recent: []});
+    const chat = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/), chatId = decodeURIComponent(chat?.[1] ?? '');
+    if (chat && db.chats[chatId]) return json({thread: {id: chatId, root_id: chatId, title: '', task_id: null, me: {can_post: true}, kind: 'dm',
+      dm_with: [{actor: String(db.chats[chatId]![0]!.sender_id)}]}, messages: db.chats[chatId]!.map((m, i) => ({seq: i + 1, conversation_id: chatId, ...m})), next_cursor: null});
 
     // Groups (CONTRACT §3): a bare list. The owner changes any group; a lead only adds a teammate whose group and the
     // target are both ones it leads or below them (backend/groups.py _lead_move); anyone else gets 403.
@@ -192,12 +234,31 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
     if (p.startsWith('/api/v2/market/entities/')) return json(mk.note);
-    if (p === '/api/v2/market/spend') return json(market ? mk.spend[url.searchParams.get('dimension') || 'offering'] : {segments: [], total: {spend_usd: 0}});
+    // The open Size the market task rides on the spend read, as market_spend.py sizing serves it.
+    if (p === '/api/v2/market/spend') return json({...(market ? spendOf(url.searchParams.get('dimension') || 'offering') : {segments: [], total: {spend_usd: 0}}), sizing: db.market.sizing || null});
+    if (p === '/api/v2/market/spend/research' && method === 'POST') {
+      db.market.sizing = {id: 'task-sizing', version: 1, turn: 'working', ask: null};
+      return json({task_id: 'task-sizing', sizing: db.market.sizing});
+    }
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
-    if (p === '/api/v2/librarian/setup') return json({market: null});
+    if (p === '/api/v2/librarian/setup') return json({market: db.market.setup ? {answers: {}, can_answer: true, skipped: false, step: 0, task: null} : null});
+    // The Brand: a section saved into the draft (grDocSave) comes back as the document.
+    if (p === '/api/v2/brand' && method === 'GET') return json(brandDoc());
+    if (p === '/api/v2/brand/draft' && method === 'PUT') {
+      db.brand.draft = {...(db.brand.draft || {}), ...((b.sections || {}) as Json)};
+      db.brand.revision += 1;
+      return json(brandDoc());
+    }
     // The Strategy Owner beside the tabs, and Goals.
-    if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
+    // The strategy: the owner has a draft to edit and no published version yet; a member reads the published one.
+    if (p === '/api/v2/strategy') {
+      const doc = {summary: 'Acme cleans homes in Austin at half the price.', vision: '', sections: {serve: 'Busy households.', extra: {}}, bets: [], note: '', guide: 'default'};
+      const view = {bets: [], label: 'Bets', label_one: 'Bet', goals_by_bet: {}, live_by_bet: {}, health_by_bet: {}};
+      return me.role === 'owner'
+        ? json({...view, draft: {...doc, id: 'v-d', n: null, status: 'draft', revision: 1}, current: null, may_edit: true})
+        : json({...view, current: {...doc, id: 'v-1', n: 1, status: 'published', revision: 1}, may_edit: false});
+    }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});

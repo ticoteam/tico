@@ -10,6 +10,7 @@ from backend.task_calls import SYSTEM
 from backend.tests.helpers.roadmaps import public_setup as roadmap_public_setup  # noqa: F401
 from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
 from backend.tests.helpers.tasks_board import bot_token as board_bot_token  # noqa: F401
+from backend.tests.helpers.task_quarantine import OPEN_SQL
 
 
 def public_setup(api):
@@ -144,6 +145,9 @@ def _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
         assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
     other = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x"})
+    with api.app.state.store.transaction() as c:  # a task with no number yet: a mover may give it one
+        c.execute("UPDATE tasks SET number=NULL WHERE id=?", (other["id"],))
+    other = get(api, "tasks/" + other["id"])["task"]
     moved = post(
         api,
         "tasks/" + other["id"],
@@ -169,9 +173,7 @@ def _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_sti
         assert r.status_code == 403, r.text
     assert state(api, "cpo") == "active"
     with api.app.state.store.read() as c:
-        hold = c.execute(
-            "SELECT task_id,conversation_id,reason FROM quarantine_holds WHERE released_at IS NULL"
-        ).fetchone()
+        hold = c.execute(OPEN_SQL).fetchone()
         assert hold["task_id"] is None and hold["conversation_id"]
         assert hold["reason"] == f"{H.QUARANTINE_AT} repeated refusals today"
 
@@ -323,7 +325,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     assert r.status_code == 404, r.text
 
 
-def _a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
+def _a_mover_and_the_tico_create_a_task_with_any_label_as_before(api):
     public_setup(api)
     made = post(
         api,
@@ -333,7 +335,7 @@ def _a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
     )
     assert made["labels"] == ["goal:on", "roadmap"]
     with api.app.state.store.transaction() as c:
-        kept = H.task_create(c, H.KEEPER, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
+        kept = H.task_create(c, H.TICO_ACTOR, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
     assert get(api, "tasks/" + kept["id"])["task"]["labels"] == ["goal:off"]
 
 
@@ -344,7 +346,7 @@ def _fresh(api):
     pipelines(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM refusals")
-        c.execute("UPDATE quarantine_holds SET released_at=? WHERE released_at IS NULL", (H.now(),))
+        c.execute("UPDATE holds SET released_at=? WHERE kind='quarantine' AND released_at IS NULL", (H.now(),))
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('ops','cpo','cmo')")
         for (tid,) in c.execute("SELECT id FROM tasks WHERE status='open'").fetchall():
             H.task_close(c, SYSTEM, tid, "A fresh start for the next check.")
@@ -365,7 +367,7 @@ def test_who_changes_a_tasks_labels(subtests, api):
         _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged,
         _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat,
         _label_refusals_on_different_tasks_each_count,
-        _a_mover_and_the_keeper_create_a_task_with_any_label_as_before,
+        _a_mover_and_the_tico_create_a_task_with_any_label_as_before,
         _a_mover_grants_a_bot_one_tag_and_it_sets_that_tag_and_nothing_else,
     )
     for check in checks:

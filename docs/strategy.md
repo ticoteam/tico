@@ -3,8 +3,8 @@
 **Strategy** (`#/strategy`) is where a team writes down the few bets it is making, keeps them honest against the
 market and the numbers, and makes the org chart and the goals follow from them. The page has one fixed shape: a
 summary every bot reads on every run, three to five **bets**, where the team plays in its market, its competitors,
-related news, and its sections. The owner writes and
-publishes it; the [Strategy Owner](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
+related news, and its sections. The owner writes it, and
+each save is live; the [Strategy Owner](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
 **The Market page.** The Market tab is one page that reads top to bottom. Under the market's name are three tiles:
@@ -38,7 +38,7 @@ Three activities make one loop:
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
 
-This page is the shape, lenses, who may do what, setup, publishing, the fit check, what bots see, and the API.
+This page is the shape, lenses, who may do what, setup, versions, the fit check, what bots see, and the API.
 
 ## The page
 
@@ -59,7 +59,7 @@ removes a thing.
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
   summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Owner or `tico strategy draft
-  --vision`, is kept and published as before.
+  --vision`, is kept as before.
 - **Bets.** Three to five recommended, at most seven active. The page shows each bet's statement, edited in place,
   with its goals and health. **+ Bet** adds one, active while fewer than seven are (else proposed); × retires one
   (with Undo), and **Retired** lists them with **Restore**. A proposed bet's **Proposed** pill makes it active. The
@@ -101,13 +101,13 @@ removes a thing.
      (self-serve, sales-led, partner, marketplace, local, community or e-commerce) and the playbooks behind it. Who
      buys is Where we play. Bots read it with `tico strategy show`; it is not put into every run. A bot proposes a
      change the way it proposes any strategy change, and the owner confirms it.
-  7. **What we won't do** (`not`): required before publishing. A strategy with no trade-offs is a description.
+  7. **What we won't do** (`not`): the one section every strategy needs. A strategy with no trade-offs is a description.
 
-  Only *What we won't do* is required. A version published before *How we know they want it* and *Why now* existed
+  A version saved before *How we know they want it* and *Why now* existed
   reads them as empty.
 - **Extra sections.** The owner can add any heading (brand, channels, capabilities). They are stored by key and never
   dropped.
-- **Versions.** Publishing makes a numbered version with a note. Older versions stay readable. The page lists them and
+- **Versions.** Every save is live at once as the next numbered version ([Versions](#versions)). Older versions stay readable. The page lists them and
   opens one; the API also has a diff (which fields changed, which bets were added, retired or rewritten).
 
 ### An example
@@ -136,9 +136,9 @@ pricing page" says nothing about whether a pricing bet is right. Linking a goal 
 
 ## Lenses
 
-A **lens** is a set of questions from a known framework, run once against the published strategy (or your draft, if
+A **lens** is a set of questions from a known framework, run once against the live strategy (or your draft, if
 you are the owner) or the market. The result is a summary, sections, a chart, findings about your bets and changes you
-may add to the draft one at a time; nothing is published or written by itself. The listed lenses are Playing to Win,
+may add to the strategy one at a time; nothing is written by itself. The listed lenses are Playing to Win,
 Blue Ocean, Scenarios, Seven Powers, Good Strategy, Startup idea check, Pre-mortem and Positioning for the strategy, and Where to Play and
 Five Forces for the market. They are in [Lenses](lenses.md).
 
@@ -152,23 +152,23 @@ became lenses; `GET /api/v2/strategy/guides` is deprecated and lists the Default
 
 ## Who may do what
 
-| | Read | Write the draft and bets | Publish |
-|---|---|---|---|
-| The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet` | yes, with a note |
-| Any human on the team | the published versions | no | no |
-| The Strategy Owner | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms. The one exception is the vision the owner sends on its "What is this team for?" question, saved in their words while there is none (`tico strategy vision`, [Goals and KPIs](goals-and-kpis.md)) | never |
-| Every other bot, and an external agent over MCP | the published versions (`tico strategy show`, `tico strategy summary`) | no | never |
+| | Read | Write the strategy and bets |
+|---|---|---|
+| The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet`; each save is live |
+| Any human on the team | the live version and every older one | no |
+| The Strategy Owner | the draft and every version | only the owner's words: what they told it on a task of its own (their answer to its question or their comment; never a task's first message, which a bot can write), into the sections and bets those words are about, naming that task (`tico strategy draft --task <id>`, `tico strategy bet add\|update --task <id>`). From its own reading it proposes, at every level, with one `strategy_draft` proposal the owner confirms. The vision the owner sends on its "What is this team for?" question is saved in their words while there is none (`tico strategy vision`, [Goals and KPIs](goals-and-kpis.md)) |
+| Every other bot, and an external agent over MCP | the live version and every older one (`tico strategy show`, `tico strategy summary`) | no |
 
-**The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
-bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
+**The draft is the owner's.** `GET /strategy` returns `draft` to the owner (`may_edit`) and to the Strategy Owner, which
+writes it on their words; everyone else, every other bot included, sees the live version, which each save makes. When the Strategy Owner writes
+on the owner's words, the draft's history keeps whose words and which task, and the version it makes says so in its note ("From Ana's words on ..."). The draft carries a
 `revision`, so two editors get a conflict (`409`), not a silent overwrite.
 
 If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
 A failed bet move also reloads the list; check the order before trying again.
 
 The Strategy Owner proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
-any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
-published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
+any of the summary, the vision, sections and bets. Confirming it writes those as the owner, live at once as one version. The
 owner's level choice for the Strategy Owner is on [Your Strategy Owner](strategy-bot.md#the-three-levels).
 
 ## What the Strategy Owner does with it
@@ -182,14 +182,14 @@ Strategy is the Strategy Owner's first job ([Your Strategy Owner](strategy-bot.m
   service. Keep, edit or strike." At most eight claims a run. It proposes three to five bets, each with a statement,
   why, rules out and wrong if (a KPI with a threshold if it can, else a market id, else a sentence with a check-by
   date), fills the sections, and files one `strategy_draft` proposal. It never invents a number: a figure or a
-  threshold appears only when a source or the owner states it. It ends by asking the owner to confirm and publish.
+  threshold appears only when a source or the owner states it. It ends by asking the owner to confirm.
 - **Keep proof current** (`keep-proof-current.md`): fills *How we know they want it* from the evidence Tico already
   holds: Growth numbers and KPIs, customer-facing bots' tasks, team meetings, Listening, and what those bots learned.
   Each line names its source and period; it never invents a number, and bad news stays in. It files one
   `strategy_draft` proposal. The Monday note adds one line when the section is empty or `proof_since` is more than 30
   days old.
 - **Bet tripped** (`bet-tripped.md`): see [the fit check](#the-fit-check).
-- **Goals from the bets**: when the owner asks for goals, or after a version is published, it suggests one or two per
+- **Goals from the bets**: when the owner asks for goals, or after the bets change, it suggests one or two per
   active bet, each with `bet_id` set and a KPI that could serve as the bet's wrong-if. The Monday note names each
   active bet with no KPI-backed goal and each bet whose health is gray.
 
@@ -212,11 +212,10 @@ Setup starts with **What are you building** and **Your bets** ([Onboarding](onbo
    **Keep** makes a bet active; what it rules out and its wrong-if are optional, and shown only when set. To leave
    the step: one active bet and one line under *What we won't do*. Without a
    model provider, or when the research failed, it is the same fields as a plain form; when the research gave up it
-   lists what it found, each with **Add**. The step saves the **draft**; nothing is published.
+   lists what it found, each with **Add**. Each save is live.
 3. **Org.** Recruit proposes groups and bots from the bets and names the bet each serves.
-4. Computer, agent and review as before. The screen after Create says **Strategy: a draft. Publish your strategy**
-   (a link here) until a version is published, which ticks Getting started's `strategy` step; a published version
-   is when the Strategy Owner suggests goals per bet. With a website, Create files the Librarian's market task.
+4. Computer, agent and review as before. Getting started's `strategy` step, **Write your strategy** (a link here), is ticked
+   once there is a version; that is when the Strategy Owner suggests goals per bet. With a website, Create files the Librarian's market task.
 
 The wizard saves the website as `names.website` and the one line as `answers.building`
 ([Onboarding](onboarding.md#the-answers)), and `POST /api/v2/strategy/draft-from {url?, text?}` (owner only) starts
@@ -243,7 +242,7 @@ team's own provider key); no runner or agent turn is involved. Its prompt and an
 the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
 The summary and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
-due in 90 days. Nothing is published. There is no `tico` or MCP verb for it: it is a browser setup step.
+due in 90 days. It is live at once as one version. There is no `tico` or MCP verb for it: it is a browser setup step.
 
 Finishing setup links each group it makes to the bet it clearly serves (`bet_id`), and with a website files the
 Librarian's market task ([Onboarding](onboarding.md#what-create-does)).
@@ -252,18 +251,13 @@ An install set up before these steps starts the Strategy page from what the Goal
 strategy gets a draft with that vision and the description as *What we sell*, for the owner to take from there. The
 Market tab's own first run (the Librarian's four questions) is unchanged ([Librarian](librarian.md#first-run-setup)).
 
-## Publishing
+## Versions
 
-The owner edits the draft and publishes with a note. **Publish** refuses, and the button says why, until:
-
-- at least one bet is active (what it rules out and its wrong-if are optional), and
-- *What we won't do* is not empty.
-
-Changes only to a bet's market citations or the guide also enable **Publish** when these conditions hold.
-Saving the summary while a bet editor or publish form is open does not prevent you from submitting that form.
-
-Publishing snapshots every bet that is not retired, with its status, as version *n*, and opens a fresh draft copied
-from it. Then:
+Every save is live at once: the owner's click, a confirmed proposal, or the Strategy Owner writing on the owner's
+words. A save that changes something snapshots the strategy and every bet that is not retired, with its status, as the
+next numbered version *n*. A batch (a confirmed proposal, setup's research, a company import) is one version; a save
+that changes nothing makes none. The versions list shows who saved each one and, for the Strategy Owner, whose words.
+A draft an older release left waiting for a Publish click is live at the next start, as the next version. Then:
 
 - **Every bot** gets the new summary and active bets in its run context from its next run, under **Team strategy**
   ([Agent context](agent-context.md)). There is no note to each bot.
@@ -277,7 +271,7 @@ from it. Then:
 
 The server watches each active bet's wrong-if: a KPI reading crossing its threshold (from the KPI status pass), a
 change to a cited market entity or page (from market events), or a sentence bet's check-by date passing. When one
-trips, once per bet per version, it files a task for the Strategy Owner, "Bet N: may be wrong", with the evidence.
+trips, once per bet per wrong-if, it files a task for the Strategy Owner, "Bet N: may be wrong", with the evidence.
 
 The Strategy Owner's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `tico market show <id>`, and the
 goals linked to the bet, and writes **one proposal** for the owner to decide: a `strategy_draft` that retires the bet,
@@ -291,22 +285,21 @@ Librarian applies it to the entity.
 
 ## What bots see
 
-- **In context**, every turn once a version is published: `GET /strategy/summary` under **Team strategy**, about 500
-  characters: the summary, one line per active bet with its wrong-if, then "version N". Nothing while no version is
-  published.
-- **On request**: `tico strategy show` (the published page with bets, `goals_by_bet` and `health_by_bet`) and
+- **In context**, every turn once there is a version: `GET /strategy/summary` under **Team strategy**, about 500
+  characters: the summary, one line per active bet with its wrong-if, then "version N". Nothing while there is no
+  version.
+- **On request**: `tico strategy show` (the live page with bets, `goals_by_bet` and `health_by_bet`) and
   `tico strategy summary`.
 - Never the draft.
 
 ## `tico` and the API
 
 ```
-tico strategy show                       the published version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)
+tico strategy show                       the live version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)
 tico strategy summary                    the text every bot gets in context
 tico strategy draft [--summary S] [--vision V] [--section KEY=TEXT ...] [--extra KEY --title T --body B]
-                                        owner only; KEY is serve, sell, proof, now, know, how or not; "" clears a key
-tico strategy publish --note "<why>"     owner only
-tico strategy versions                   n, note, who published, when
+                                        owner only, live at once; KEY is serve, sell, proof, now, know, how or not; "" clears a key
+tico strategy versions                   n, note, who saved it, when
 tico strategy diff <from> <to>           fields changed; bets added, retired, changed
 tico strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID --wrong-if-direction above|below
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
@@ -321,12 +314,12 @@ Every command has an MCP tool of the same name and arguments (`tico_strategy_sho
 
 | Route | Who | What it does |
 |---|---|---|
-| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, live_by_bet, health_by_bet, proof_since}`; `draft` only when `may_edit`; `proof_since` is when the published *How we know they want it* last changed (null when it is empty or nothing is published); `goals_by_bet` lists only goals the caller may read, at most 20 per bet; `live_by_bet` counts every one of those not done or dropped; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
-| `PUT /strategy/draft` | the owner only | partial merge of `{summary?, vision?, sections?}`; `""` clears a key; needs `revision`, answers `409` on a mismatch; summary and vision at most 400 characters |
-| `POST /strategy/publish` | the owner only | `{note, revision}`; refuses unless the [preconditions](#publishing) hold; answers the new version |
+| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, live_by_bet, health_by_bet, proof_since}`; `draft` only when `may_edit`; `proof_since` is when the live *How we know they want it* last changed (null when it is empty or there is no version); `goals_by_bet` lists only goals the caller may read, at most 20 per bet; `live_by_bet` counts every one of those not done or dropped; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
+| `PUT /strategy/draft` | the owner only | partial merge of `{summary?, vision?, sections?}`, live at once; `""` clears a key; needs `revision`, answers `409` on a mismatch; summary and vision at most 400 characters |
+| `POST /strategy/publish` | the owner only | kept for older clients: every save is live already, so it answers the live version |
 | `GET /strategy/versions`, `/strategy/versions/{n}` | any reader | the list, newest first; one version |
 | `GET /strategy/diff?from=&to=` | any reader | `{fields: [{key, from, to}], bets: {added, retired, changed}}`, keyed by bet id and status |
-| `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active, at most 30 not retired; `rules_out` and `wrong_if` optional |
+| `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; live at once; at most seven active, at most 30 not retired; `rules_out` and `wrong_if` optional |
 | `POST /market/segments/target` | the owner (a bot, the Librarian too, gets 403) | `{id, target: ours\|next\|none}`: the segment becomes Us, Next or neither, other segments unchanged; answers `{id, ours, next}` |
 | `POST /market/segments/remove` | the owner or the Librarian | `{id}`: retires the segment (its Next cleared) and moves its sub-segments up to its parent; not the root |
 | `GET /market/competitors` | any reader | `{competitors: [{id, name, url}]}`, by name |

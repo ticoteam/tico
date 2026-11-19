@@ -9,7 +9,7 @@ every worker still has short tests to take and none of them runs alone at the en
 average. The order changes which tests share a worker, never which tests run.
 
 The controller collects nothing itself, so a module is recognised by its source: a fixture with a wider scope in the
-file, or an import from a helper module that defines one (backend/tests/helpers/sample_company.py and others)."""
+file, or an import from a helper module that defines one (backend/tests/helpers/fresh_install.py and others)."""
 
 import json
 import re
@@ -25,7 +25,7 @@ AVERAGE = 0.5  # seconds per test of a file with no record (the recorded median 
 
 
 def wide_fixture_helpers(root):
-    """Helper module names (sample_company) with a module fixture: a test module importing one shares it."""
+    """Helper module names (fresh_install) with a module fixture: a test module importing one shares it."""
     names = set()
     for path in (root / HELPERS).glob("*.py"):
         try:

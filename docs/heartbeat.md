@@ -34,6 +34,7 @@ A beat runs these steps in this order. A step runs only when it is due. If one s
 | Repository and setup waits | Outside polls | Every 10 seconds, GitHub worker |
 | Contacts links | Recovery | Every beat |
 | Calls and live meetings | Recovery | Every 10 seconds |
+| Scheduled calls | Due times | Every minute |
 | PR and release metadata | Outside polls | Every minute, GitHub worker |
 | Merge queue | Due times | Every beat, GitHub worker |
 | Jev's page verdicts | Due times | Every beat |
@@ -71,4 +72,4 @@ The screen reads the Heartbeat again once a minute while it is open and the page
 
 API: `GET /api/v2/heartbeat` (with `limit` and `before` to page the log) and `PUT /api/v2/heartbeat` with `{"interval_s": 15}`.
 
-<!-- Sources checked 2026-11-13 (P07, the GitHub worker): backend/heartbeat.py (Outside); backend/scheduler.py. Checked 2026-11-06 on feat/heartbeat: backend/heartbeat.py; backend/app.py (schedule_loop); backend/views.py (status); backend/operations.py (health); backend/migrations/20261106094503_heartbeat.py; ui/app/automations-heartbeat.ts. -->
+<!-- Sources checked 2026-11-13 (P07, the GitHub worker): backend/heartbeat.py (Outside); backend/scheduler.py. Checked 2026-11-06 on feat/heartbeat: backend/heartbeat.py; backend/app.py (schedule_loop); backend/views.py (status); backend/operations.py (health); backend/migrations/baseline.sql; ui/app/automations-heartbeat.ts. -->

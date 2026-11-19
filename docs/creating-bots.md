@@ -139,7 +139,7 @@ New tasks and DMs addressed to the original go to your active branch while branc
 People without an active branch reach the original. Selecting another person's branch addresses it directly, with the usual access checks.
 Existing task threads keep their participants and history.
 
-A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status and its **Profile**;
+A branch follows the original's model, harness, runtime, effort, Compact at, output style, verbosity, session mode and fallback. Its editor changes only its status and its **Profile**;
 change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`tico bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#sub-tasks)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
@@ -185,7 +185,7 @@ repository (BotOps gets a short-lived token for it only as a person who may read
 A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. BotOps copies one to other bots when you ask
 ("give the support bot the triage skill the scribe has"), or run `tico skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
 each target's repository, for bots whose source you may read and whose repositories you manage. To offer a skill to the whole company,
-`tico skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)). A target that already has a different
+`tico skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)); `tico skill list --function legal` finds one by job function. A target that already has a different
 skill of that name is left alone unless you say to replace it. Nothing stays linked (`playbooks/copy-a-skill.md`).
 
 ## Message bots
@@ -206,9 +206,10 @@ calendar tools instead allow a bot only the team owner's and its operator's cale
 ([calendar paths](mail.md#calendar)). After the first message bot, pick
 another human to create another (`<id>-inbox`).
 
-A brief runs `mail rules run`, then `mail inbox --untriaged --format brief --decisions`, and sorts
-each message by the answer of the `mail-triage` decision set. What still needs a human is labelled
-`hub/needs-owner` once filing is on. Nothing is sent. See [Message bots](mail.md) and [Routines](routines.md).
+The person's inbox has a Message automation on the server that files and sorts each new message as it arrives (its
+rules, then its decide step). A brief reads what it did (`tico automation recent-runs --trigger message`) and what is
+still in the inbox (`tico email inbox <address>`). What still needs a human is labelled `hub/needs-owner` once filing
+is on. Nothing is sent. See [Message bots](mail.md) and [Routines](routines.md).
 
 ## 1. What a bot is here
 
@@ -240,7 +241,7 @@ hold next month too.
 
 A template produces this layout already; `templates/employee-repo/` is the generic version
 of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENTS.md`,
-`playbooks/`, `skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
+`playbooks/`, `skills/`, `.claude/skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
 which is kept and named in the refresh's event ([Bots follow their template](updates.md#bots-follow-their-template)). Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
 name (lowercase, hyphenated, with -2, -3 when it is taken); nobody is asked for one. Slugs are stable: the slug appears in the repository name, in `bot.yaml` and in the bot's
 own paths, so renaming later is real work.
@@ -319,16 +320,16 @@ Then, in this order:
 
 Every run is the same shape, and `AGENTS.md` should say so plainly:
 
-1. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
-   the thread is the context, and the task's notes say where the last run stopped.
+1. **Read the task's chat** through the run's `tico` CLI. The task's first message is the instruction;
+   the rest of the chat is the context, and the task's notes say where the last run stopped.
 2. **Check `memory/learnings.md` and the playbook the task names** when the session is new or was compacted. A
    resumed turn already has them in context: reading them again on every run costs a full context of tokens each time.
 3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 4. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENTS.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-5. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
+5. **When it needs a person, ask them** (`tico task ask`: a ❓ in the task's chat, or an OK with `--kind ok`), having read the record first, since most
    questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
-   the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
+   the person has to read. A bot has one open question per chat and one open OK per task; asking again replaces it. Internal routing, task closure,
    branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
    an uncertain action; granted Tools and the outbound send switch govern access.
 6. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never
@@ -396,7 +397,7 @@ See the shared approvals policy. In addition:
 - Never invent a number. A figure you did not read in a dated source stays out.
 
 ## Starting a run
-1. Read the task and its conversation.
+1. Read the task's chat.
 2. In a new session or after a compaction, read `memory/learnings.md`, the playbook the task names and
    `knowledge/README.md`. A resumed turn already has them.
 
@@ -511,9 +512,11 @@ wakes up to a message the bot sent. Turn sends on per bot, later, deliberately.
 
 ## 6. Access and credentials
 
-`tools:` in `bot.yaml` declares what the bot may touch. **Not listed means not allowed.** It
-is shown on the bot's page, it is what the shared tools check, and it is what preflight
-resolves against the computer before a bot goes active.
+**A grant is what a bot can use.** A tool, key, MCP server or website account granted to the bot in Tools reaches its
+runs and shows on its page with nothing in `bot.yaml`. `tools:` in `bot.yaml` is optional notes on a tool: who the bot
+acts as, its scope, what was agreed, an MCP server Tools does not hold, a database's limits. An entry and a grant for
+the same service are one row on the bot's page, with the entry's notes. Preflight resolves the entries' variables
+against the computer before a bot goes active.
 
 ```yaml
 tools:
@@ -537,9 +540,13 @@ tools:
 - `vault: hub` documents vault delivery. All run Credentials now require a grant to this bot.
 - `mcp:` makes the tool a remote MCP server (`{url, transport: http|sse, headers}`): Tico's runner passes it to the bot's
   harness next to Tico's own tools. The `headers` may use `${VAR}` for this entry's `env` variable, filled only from a
-  credential granted to this bot. See [connect-tools.md](connect-tools.md) for Jira, Confluence, Linear, PostHog, Sentry and GitHub (and Tico's OAuth renewal limitation).
+  credential granted to this bot. See [connect-tools.md](connect-tools.md) for Jira, Confluence, Linear, PostHog, Sentry and GitHub (and which sign-ins Tico renews).
 - `note:` records who authorized it and what is excluded; human and bot readers rely on it. A
   browser-based access also names `sites:`, so the tool can refuse everything else.
+
+**Changing what a bot declares.** Optional entries stay commented out until the service is connected. Changing an
+entry is the owner's decision, not an edit the bot makes to its own file: a bot or a person who needs one asks through
+Tools (below), and BotOps writes it into `bot.yaml`, commits and pushes.
 
 **Where the values live.** Store the value in Credentials or its thread card and grant it to the bot.
 Tico delivers it for one run as an environment variable or a mode-0600 temporary file removed afterwards.
@@ -550,15 +557,15 @@ Existing installs automatically migrate each existing bot's own file, every key 
 Legacy files remain available for administrator import, but runs do not load them as a fallback. Revoking a
 grant removes delivery even when an old file still exists. See [credential-vault.md](credential-vault.md).
 
-Declaring access does not provision anything. A Credential administrator grants the value to the bot;
-preflight then reports whether every declared Credential actually
+Declaring access does not provision anything, and a grant needs no declaration. A Credential administrator grants
+the value to the bot; preflight then reports whether every declared Credential actually
 resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
 every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
-Tico holds. A bot that needs a service it has not declared stops and says so on the task; it never
-borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in a DM, which moves the value
+Tico holds. A bot that needs a service it holds no grant for stops and says so on the task; it never
+borrows another bot's credential. To let it use one, the owner grants it (Tools, under the Keys filter), or asks BotOps in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
-A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
+A run's MCP servers are `hub`, its granted MCP tools, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
 Nor does a run read the operator's own instructions or settings: a Claude Code turn loads only the repository's
 (`--setting-sources project,local`), never `~/.claude/CLAUDE.md`, user settings or hooks, even on the computer's own login.
 Packet-only turns use an empty settings-source list and also disable repository instructions, hooks and built-in tools.
@@ -572,7 +579,9 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
 
 - **Where it comes from.** The list starts with the model and harness the bot runs on (for example
   "Codex · openai/gpt-6-luna"; the icons beside the name skip it, since the harness mark says it),
-  then its GitHub repository when it has an address, and then the `tools:` entries above, one each. The runner reads `bot.yaml` from the bot's
+  then its GitHub repository when it has an address, then the `tools:` entries above, one each, and then every tool it
+  can use through a grant in Tools that no entry names (an API or MCP tool's key at its level, a key on no tool, a
+  website account), marked with a key. An entry and a grant for the same service are one row. The runner reads `bot.yaml` from the bot's
   checkout and reports the entries on its heartbeat, so an edit shows up once it is in the checkout
   on the computer. A computer running an older runner shows the model and repository only.
 - **An MCP server** shows as `mcp` with its host. The runner makes one cheap request to it (an MCP `initialize`, a few
@@ -587,7 +596,7 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
   or more GitHub repositories share one line, "GitHub · N repositories" with their access added up, which
   opens to a short line each. Opening a line gives the tool's details: the service's name, the identity it acts as
   (`identity:`), what it may do (`can:`), its scope (`database:`, `channels:`, `project:`,
-  `mailbox:`, `sites:`, `repo:` and a few like them), the `note:`, the name of the environment
+  `mailbox:`, `sites:`, `repo:`, `page:` or any other short lowercase name), the `note:`, the name of the environment
   variable, and a status: ready, or the problem, such as "Credential missing on Test Mac".
 - **What never appears.** No credential value. The runner sends the service, identity, verbs, the scope
   fields above, the note and the variable's *name*, plus whether that variable is set on its
@@ -601,8 +610,11 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
 The same list is `GET /api/v2/bots/{bot}/tools` ([custom-frontend.md](custom-frontend.md)), for a
 team's own frontend.
 
-**Registering a tool.** Someone who manages a bot (the owner, a bot administrator who owns it,
-or a human above it on the team chart) can add or remove a tool without opening its repository:
+**Adding an entry.** A tool granted in Tools needs none: an entry that only names a tool the bot already holds (no
+identity, scope, note or MCP server) is answered with the grant, and no task is opened. For an entry with notes, the bot
+itself (its own entries), BotOps, the Tools Owner, a credential admin, or someone who
+manages the bot (the owner, a bot administrator who owns it, or a human above it on the team chart) can add or remove a
+tool without opening its repository (one rule decides every Tools change: `backend/tool_access.py`); the Assistant and the Tools Owner do it for a person who asks them:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
 `tico_tool_add`, `tico_tool_list`, `tico_tool_update` and `tico_tool_remove` (`tico tool add <bot> posthog --can read
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds
@@ -625,7 +637,7 @@ Instructions and code. Narrowing GitHub access means a declared `github` Tool fo
 
 **Credentials are never part of it.** `env` is the variable's *name*. A value is refused, and so is
 anything that looks like a key, a token, a password or a URL with one in it; the check is a guard
-against pasting one by mistake, not a substitute for care. Store the value in **Tools → Credentials**
+against pasting one by mistake, not a substitute for care. Store the value as a key in **Tools → Add → Key**
 or its thread card, set its Bot variable name and grant it to the bot
 ([Credentials](credential-vault.md)). Until it is
 there the tool shows "Credential missing on <computer>".
@@ -637,7 +649,7 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Harness**: which CLI performs the run (`openai` / Codex, `claude`, `gemini`, `antigravity`,
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
-  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
+  Claude Opus 5.5, Claude Fable 5.2). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
   also offers **Tico AI Gateway**: instead of a model list it shows Level, Fast and Version,
   with the model underneath and its price on one line. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
@@ -649,9 +661,9 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Models** (docs/how-it-works.md).
-- **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context
-  length for task sessions, each **Same as bot** until set. Set them in the editor and press **Save bot**, or click
-  **Tasks** beside the model in the bots list. A task effort and a task context length work without a task model.
+- **Task model**: a separate harness, model, effort and compact window for task sessions, all in one picker and
+  **Same as bot** until set. Set it in the editor and press **Save bot**, or click **Tasks** beside the model in the
+  bots list. An effort and a window work without a task model of their own (**Same as bot HIGH**).
   Chat keeps the bot's own.
   See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
@@ -665,6 +677,12 @@ Levers set in **Settings → Bots**, not in the repository:
   compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
   compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
   length (**Task model**, **Task context length**).
+- **More** under the model picker holds **Compact** and, on Claude Code, **Output style** (Default, Concise,
+  Explanatory, Learning or Proactive: Claude Code's built-in `outputStyle`) or, on Codex, **Verbosity** (Default, low,
+  medium or high: Codex's `model_verbosity`). Each is kept on any harness and used on every turn of the bot on its own
+  harness, its tasks' included (there is no per-task one); changing one keeps the session. Agents set them with
+  `tico bot model <bot> --output-style <name>` and `--verbosity <level>` (`default` clears either;
+  `POST /api/v2/bots/{bot}/output-style` and `/verbosity`).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and
@@ -679,7 +697,9 @@ Levers set in **Settings → Bots**, not in the repository:
   Compact at alone. The line under the picker shows what the bot runs on. Each run in a task's **Runs** says what woke it.
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
-- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope. A template's
+  `bot.yaml` may carry the same number: keep it equal to the value in Settings → Bots, or leave it out. The server
+  holds the value a run is held to, and no check compares the file with it.
 - **`gateway:`** (optional, in a template's `bot.yaml`): `level: xlow | low | medium | high | xhigh` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
   template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It

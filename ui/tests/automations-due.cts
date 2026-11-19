@@ -34,7 +34,7 @@ const BOT = 'builder-claude';
 async function openDetails(page: Page, id: string): Promise<void> {
   const tab = page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`);
   await tab.waitFor({state: 'attached', timeout: t(10000)});
-  await tab.click();
+  if (await tab.getAttribute('aria-pressed') !== 'true') await tab.click();   // pressed again, Details would close
 }
 
 // Screenshots in both themes, with animations stopped (a loading dot never finishes).

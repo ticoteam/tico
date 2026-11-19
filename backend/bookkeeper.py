@@ -8,8 +8,9 @@ rules), recorded by one `bookkeeper.rights_granted` event so a later revoke stic
 a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). It sees the books
 by default: one Finance view grant of Everything in the owner's name, made once per install (`grant_view`, one
 `bookkeeper.view_granted` event, one notice to the owner), so revoking it in Finance → Access sticks and a change of
-owner pauses it. Before it, one editable gate rule makes any bot's payment ask a finance admin, seeded once per install
-(`seed_bot_payment_rule`, one `bookkeeper.bot_payment_rule` event, so an owner's edit or delete sticks). Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
+owner pauses it. Before it, one editable gate rule lets a bot pay on its own up to $1,000 a payment and asks a finance
+admin above that, seeded once per install (`seed_bot_payment_rule`, one `bookkeeper.bot_payment_rule` event, so an
+owner's edit or delete sticks; an untouched rule from before the limit is moved to it once). Payroll's private lines stay private: an Everything grant gives no full detail on a private line. An install from before gets the grant at its next start, unless an Everything grant to
 the Finance Owner was ever revoked, and its open "Let the Finance Owner see the books" task is closed for the owner.
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
@@ -79,16 +80,11 @@ HINTS = {
     "unreconciled": "a money account not reconciled for over a month: match rows and reconcile its statement",
     "budget_near_limit": "a budget near its limit: tell its owner once",
     "invoice_email": (
-        "an invoice email waits to send: read its exact text from the invoice search, mail draft it "
-        "exactly, then mail send with --approval set to its send approval, and report invoice_delivery"
+        "an invoice email waits to send: read its exact text from the invoice search; one with an approval_id "
+        "waits for that OK (mail draft it exactly, then mail send with --approval set to it); one with only a send_id "
+        "is already in the send queue. Report invoice_delivery once it goes"
     ),
 }
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bookkeeper_seen(
- key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
- task_id TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (task_id, key));
-"""
 
 
 def built(c):
@@ -132,13 +128,13 @@ def grant_defaults(c):
         return []
     if not _has_event(c, "bookkeeper.rights_granted"):
         added = FA.grant_defaults(c, ACTOR)
-        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
-        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
     if not _has_event(c, "bookkeeper.rights_version"):
         added = FA.grant_defaults(c, ACTOR, [FA.RIGHT_RULES])
-        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
-        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
     return []
 
@@ -151,35 +147,58 @@ VIEW_NOTICE = (
 
 BOT_PAYMENT_RULE = "rule:bot-payment"
 BOT_PAYMENT_EVENT = "bookkeeper.bot_payment_rule"
+BOT_PAYMENT_LIMIT_EVENT = "bookkeeper.bot_payment_limit"  # the rule is (or was checked to be) the limit version
+BOT_PAYMENT_LIMIT = (
+    100_000  # cents: a bot pays on its own up to $1,000 a payment (the same line as rule:payment-over-1000)
+)
 BOT_PAYMENT = (
-    "Bot payments",
-    "A bot's payment asks a finance admin.",
-    {"kind": "payment_create", "actor.kind": "bot"},
+    "Bot payments over $1,000",
+    "A bot pays on its own up to $1,000 a payment; above that it asks a finance admin.",
+    {"kind": "payment_create", "actor.kind": "bot", "amount": {"gt": BOT_PAYMENT_LIMIT}},
     {"outcome": "needs_approval", "who": "finance_admin"},
     [
-        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 5000}, "expect": "needs_approval"},
-        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 5000}, "expect": "allow"},
+        # Far from any sensible limit ($20 and $50,000), so changing only the amount still passes the examples.
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 5_000_000}, "expect": "needs_approval"},
+        {"input": {"kind": "payment_create", "actor.kind": "bot", "amount": 2_000}, "expect": "allow"},
+        {"input": {"kind": "payment_create", "actor.kind": "human", "amount": 5_000_000}, "expect": "allow"},
     ],
+)
+# The rule as installs before the limit got it: every bot payment, any amount, asked a finance admin. A row still
+# exactly like this, never edited or turned off (updated_at is NULL), is moved to BOT_PAYMENT once.
+OLD_BOT_PAYMENT = (
+    "Bot payments",
+    {"kind": "payment_create", "actor.kind": "bot"},
+    {"outcome": "needs_approval", "who": "finance_admin"},
+)
+BOT_PAYMENT_NOTICE = (
+    "Bots now pay on their own up to $1,000 a payment, inside their budget. Above that, a new payee or changed bank "
+    "details still ask a finance admin. Change the limit on the rule \"Bot payments over $1,000\" in Finance."
 )
 
 
 def seed_bot_payment_rule(c, at: str | None = None) -> bool:
-    """The Security Owner's condition for the default view (grant_view): with Everything in view and finance.pay, the
-    Finance Owner could pay any known vendor up to the $1,000 rule, against any line, with nobody asked. So one gate
-    rule, "a bot's payment asks a finance admin" (any amount, any recipient, any bot), is seeded once per install and
-    recorded by one `bookkeeper.bot_payment_rule` event: the owner may edit it, turn it off or delete it in Finance and
-    no later start restores it (unlike gates.DEFAULTS, which setup re-inserts by id). It does not wait for the view
-    grant or an active Finance Owner: an install that got the view before this rule existed gets it at its next start.
-    A bot's rule change already asks a finance admin (gating._gate), so the Finance Owner cannot turn it off itself.
-    Whether it was seeded now."""
+    """One gate rule for bots' payments, seeded once per install and recorded by one `bookkeeper.bot_payment_rule`
+    event: a bot pays on its own up to BOT_PAYMENT_LIMIT a payment, and above it asks a finance admin. The owner may
+    edit it, turn it off or delete it in Finance and no later start restores it (unlike gates.DEFAULTS, which setup
+    re-inserts by id). The other money gates still hold for bots: a new payee or changed bank details ask a finance
+    admin (rule:new-recipient, payments.RECIPIENT_RULE), spend past a budget's limit asks (payments.payment_create),
+    and the company-wide rule:payment-over-1000 asks the owner while it is on (the higher approver wins). A bot's rule
+    change asks a finance admin (gating._gate), so a bot cannot loosen this rule itself.
+
+    Installs from before the limit got "a bot's payment asks a finance admin" (any amount). That row is moved to the
+    limit once (`_move_to_limit`), only while it is exactly as seeded: one the owner edited, turned off or deleted
+    stays as they left it. It does not wait for the view grant or an active Finance Owner. Whether it was seeded now."""
     from .finance import reads as FR
     from .finance.context import owner as finance_owner
     from .finance.store import banking as SK
 
-    if not FR.is_set_up(c) or _has_event(c, BOT_PAYMENT_EVENT):
+    if not FR.is_set_up(c):
+        return False
+    if _has_event(c, BOT_PAYMENT_EVENT):
+        _move_to_limit(c, at or H.now())
         return False
     name, words, when, outcome, examples = BOT_PAYMENT
-    by = finance_owner(c) or H.KEEPER
+    by = finance_owner(c) or H.TICO_ACTOR
     made = SK.seed_rule(
         c,
         rule_id=BOT_PAYMENT_RULE,
@@ -191,8 +210,52 @@ def seed_bot_payment_rule(c, at: str | None = None) -> bool:
         by=by,
         at=at or H.now(),
     )
-    H.event(c, H.KEEPER, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "made": made})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_LIMIT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "moved": False})
     return made
+
+
+def _move_to_limit(c, at: str) -> bool:
+    """Once per install: the old "a bot's payment asks a finance admin" row, still exactly as seeded (same name,
+    condition and outcome, on, never edited: updated_at NULL), becomes BOT_PAYMENT, but only while the new-recipient
+    rule (a first payment or changed bank details asks) is there and on: without it the old rule is the only check on a
+    bot paying a new payee, so it stays. Recorded by one `bookkeeper.bot_payment_limit` event whether or not it moved,
+    so a rule the owner later sets back is never touched again. The owner gets one notice when it moved. Whether it
+    moved."""
+    from .finance.context import owner as finance_owner
+    from .finance.payments import NEW_RECIPIENT_RULE
+    from .finance.store import banking as SK
+
+    if _has_event(c, BOT_PAYMENT_LIMIT_EVENT):
+        return False
+    old_name, old_when, old_outcome = OLD_BOT_PAYMENT
+    row = c.execute(
+        "SELECT name, condition, outcome, active, updated_at FROM fin_rules WHERE id=? AND kind='gate'",
+        (BOT_PAYMENT_RULE,),
+    ).fetchone()
+    moved = bool(
+        row is not None
+        and row["updated_at"] is None
+        and int(row["active"]) == 1
+        and str(row["name"]) == old_name
+        and SK.loads(row["condition"]) == old_when
+        and SK.loads(row["outcome"]) == old_outcome
+        and c.execute(
+            "SELECT 1 FROM fin_rules WHERE id=? AND kind='gate' AND active=1", (NEW_RECIPIENT_RULE,)
+        ).fetchone()
+        is not None
+    )
+    if moved:
+        name, words, when, outcome, examples = BOT_PAYMENT
+        c.execute(
+            "UPDATE fin_rules SET name=?, words=?, condition=?, outcome=?, examples=? WHERE id=?",
+            (name, words, SK.dump(when), SK.dump(outcome), SK.dump(list(examples)), BOT_PAYMENT_RULE),
+        )
+        owner = finance_owner(c)
+        if owner and H.is_human(owner):
+            H.notice(c, H.TICO_ACTOR, owner, BOT_PAYMENT_NOTICE, refs={"finance_rule": BOT_PAYMENT_RULE})
+    H.event(c, H.TICO_ACTOR, BOT_PAYMENT_LIMIT_EVENT, SLUG, {"rule_id": BOT_PAYMENT_RULE, "moved": moved, "at": at})
+    return moved
 
 
 def grant_view(c, owner: str, at: str | None = None):
@@ -235,13 +298,15 @@ def grant_view(c, owner: str, at: str | None = None):
         made = grant.id
         SA.insert_grant(c, grant, owner, when)
         SA.bump_view(c, f"grant {made}", when)
-    H.event(c, H.KEEPER, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything", "by": owner})
+    H.event(
+        c, H.TICO_ACTOR, "bookkeeper.view_granted", SLUG, {"grant_id": made or "", "what": "everything", "by": owner}
+    )
     if made:
-        H.notice(c, H.KEEPER, owner, VIEW_NOTICE, refs={"finance_view_grant": made})
+        H.notice(c, H.TICO_ACTOR, owner, VIEW_NOTICE, refs={"finance_view_grant": made})
     for row in c.execute(
-        f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.KEEPER)
+        f"SELECT id FROM {H.TASKS} tasks WHERE title=? AND requester_id=? AND status='open'", (VIEW_TITLE, H.TICO_ACTOR)
     ).fetchall():
-        H.task_close(c, H.KEEPER, row["id"], VIEW_CLOSED_NOTE)
+        H.task_close(c, H.TICO_ACTOR, row["id"], VIEW_CLOSED_NOTE)
     return made
 
 
@@ -255,7 +320,7 @@ def ensure(c, onboarding, auth):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
-    seed_bot_payment_rule(c)  # before the view: Everything plus finance.pay asks a finance admin from the start
+    seed_bot_payment_rule(c)  # before the view: a bot's payment over the limit asks a finance admin from the start
     grant_view(c, _owner(c, auth))
     from .finance import tax as FT
 
@@ -284,7 +349,7 @@ def filing(c, owner):
     if not found:
         return None, None
     last = c.execute(
-        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND side=0 AND retired_at IS NULL "
         "ORDER BY position DESC LIMIT 1",
         (found[0],),
     ).fetchone()
@@ -408,7 +473,7 @@ def _open_check(c, name=TITLE):
         c,
         f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
         "AND status='open' ORDER BY created_at DESC LIMIT 1",
-        (ACTOR, H.KEEPER, name + " (%"),
+        (ACTOR, H.TICO_ACTOR, name + " (%"),
     )
 
 
@@ -417,15 +482,18 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     title = f"{name} ({count})"
     open_task = _open_check(c, name)
     if open_task:
-        if open_task["body"] == body:
+        from . import task_wakes
+
+        if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
+        H.task_update(c, H.TICO_ACTOR, open_task["id"], title=title)
+        # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
         H._wake(
             c,
             H.task(c, open_task["id"]),
             ACTOR,
-            f"The books changed: {title}",
-            {"wake": event},
+            task_wakes.with_instructions(f"The books changed: {title}", body.strip()),
+            {"wake": event, **task_wakes.replace_refs(body)},
             trigger="schedule",
             source=event,
         )
@@ -433,7 +501,7 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title,
         body,
         ACTOR,
@@ -488,7 +556,7 @@ def _own_private_work(c, task_id: str) -> bool:
     return bool(
         row
         and row["owner_id"] == ACTOR
-        and row["requester_id"] == H.KEEPER
+        and row["requester_id"] == H.TICO_ACTOR
         and H.task_private(c, row)
         and row["title"].startswith((TITLE + " (", WATCH_TITLE + " ("))
     )
@@ -603,7 +671,7 @@ def watch(c, auth, at: str) -> dict[str, Any]:
         if shown:
             task_id, state = deliver(c, body, len(shown), name=WATCH_TITLE, event=WATCH_EVENT)
             _set_listed(c, task_id, [item["key"] for item in shown])
-            H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
+            H.event(c, H.TICO_ACTOR, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
             left_out = {item["key"] for item in pool} - {item["key"] for item in shown}
         else:
             left_out = {item["key"] for item in pool}
@@ -626,8 +694,8 @@ def _reach_owner(c, auth, task_id: str) -> None:
     reads for them and the Finance Owner, never for the rest of the team."""
     owner = _owner(c, auth)
     row = H.task(c, task_id)
-    if owner and row is not None and H.task_reach_refusal(c, H.KEEPER, row, owner) is None:
-        H.task_reach(c, H.KEEPER, row, owner)
+    if owner and row is not None and H.task_reach_refusal(c, H.TICO_ACTOR, row, owner) is None:
+        H.task_reach(c, H.TICO_ACTOR, row, owner)
 
 
 def rules_digest(c, auth, at: str) -> dict[str, Any]:
@@ -648,7 +716,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
     into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         f"{DIGEST_TITLE} ({len(rules)})",
         body,
         ACTOR,
@@ -662,7 +730,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         trigger_source=DIGEST_EVENT,
     )
     _reach_owner(c, auth, made["id"])
-    H.event(c, H.KEEPER, "bookkeeper.rules_digest", SLUG, {"rules": len(rules)})
+    H.event(c, H.TICO_ACTOR, "bookkeeper.rules_digest", SLUG, {"rules": len(rules)})
     return {
         "items": len(rules),
         "words": f"{len(rules)} new posting rule{'' if len(rules) == 1 else 's'}",
@@ -695,7 +763,7 @@ def check(c, auth, at):
                 "stamp=excluded.stamp, seen_at=excluded.seen_at",
                 (item["key"], item["stamp"], at),
             )
-        H.event(c, H.KEEPER, "bookkeeper.check", SLUG, {"items": len(items), "new": len(fresh), "state": state})
+        H.event(c, H.TICO_ACTOR, "bookkeeper.check", SLUG, {"items": len(items), "new": len(fresh), "state": state})
     c.execute("DELETE FROM bookkeeper_seen WHERE seen_at<?", (H.shift(at, days=-KEEP_DAYS),))
     words = f"{len(fresh)} new, {len(items)} in the queue" if fresh else "Nothing new"
     return {"items": len(fresh), "words": words, "task": task_id, "state": state}

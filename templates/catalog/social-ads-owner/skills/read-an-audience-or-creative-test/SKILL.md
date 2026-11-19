@@ -1,6 +1,8 @@
 ---
 name: read-an-audience-or-creative-test
 description: Write a paid social audience or creative test before it starts (one question, its variants, the primary conversion, the count it needs and the earliest read date), then read it on that conversion and say when a winner cannot yet be called.
+metadata:
+  function: marketing
 ---
 # Read an audience or creative test
 

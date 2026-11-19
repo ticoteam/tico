@@ -1,6 +1,8 @@
 ---
 name: "check-a-query-before-trusting-it"
 description: "Check a Listening source's search before the team relies on it: test each exclusion by flipping it to AND, read a fixed sample of hits, measure the share that fit the search's job, and state the error for the sample size before reporting a rate."
+metadata:
+  function: marketing
 ---
 # Check a query before trusting it
 

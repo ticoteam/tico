@@ -1,6 +1,8 @@
 ---
 name: check-campaign-tagging
 description: Check a traffic-by-source export against the team's tagging convention, find each tagging error with its campaign and owner, and say which traffic cannot be read.
+metadata:
+  function: marketing
 ---
 # Check campaign tagging
 

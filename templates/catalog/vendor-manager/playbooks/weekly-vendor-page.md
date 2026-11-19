@@ -27,7 +27,7 @@ invoice <date>" and no owner.
 
 ## 2. Compute notice dates
 
-Use `skills/calculate-a-notice-deadline/SKILL.md` for each contract. Sort by notice deadline, not end date. Mark each:
+Use `.claude/skills/count-a-notice-deadline/SKILL.md` for each contract. Sort by notice deadline, not end date. Mark each:
 **open now** (inside the window, default 90 days), **urgent** (inside 30 days), or **passed** (the contract has renewed;
 say so, with the new end date if the contract gives it).
 

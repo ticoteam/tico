@@ -18,8 +18,13 @@ from clients import gateway as G
 from backend import demo, demo_billing, gateway_tiers, github_app
 from backend.app import create_app
 from backend.demo_sections.finance import CONTENT as FINANCE
+from backend.demo_sections.services import CONTENT as SERVICES
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+# The demo's inboxes and messages as its own definitions list them (a message is (inbox, hours ago, ...)).
+SMS_INBOXES = {row["id"] for row in SERVICES["inboxes"] if row["kind"] == "sms"}
+SMS_MESSAGES = sum(1 for message in SERVICES["messages"] if message[0] in SMS_INBOXES)
+EMAIL_MESSAGES = len(SERVICES["messages"]) - SMS_MESSAGES
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -49,15 +54,16 @@ def _company_inboxes_and_phone_line_hold_their_messages(built):
         assert phone["period_end"] > NOW.timestamp()
         assert "support" in phone["used_for"]
         sms = api.get("/api/v2/inbound/messages", params={"kind": "sms"}).json()["messages"]
-        assert len(sms) == 4 and {row["inbox_id"] for row in sms} == {"inbox-phone"}
+        assert len(sms) == SMS_MESSAGES and {row["inbox_id"] for row in sms} == {"inbox-phone"}
         email = api.get("/api/v2/inbound/messages", params={"kind": "email"}).json()["messages"]
-        assert len(email) == 7
+        assert len(email) == EMAIL_MESSAGES
 
 
 def _email_and_phone_page_reads_configured_in_the_demo_and_still_refuses_writes(built):
     with as_ana(built) as api:
         listed = api.get("/api/v2/inbound/inboxes").json()
-        assert listed["configured"] is True and len(listed["inboxes"]) == 4
+        assert listed["configured"] is True
+        assert {row["inbox_id"] for row in listed["inboxes"]} == {row["id"] for row in SERVICES["inboxes"]}
         assert listed["last_synced_at"] is not None
         assert api.get("/api/v2/inbound/messages").json()["messages"]
         refused = api.post(

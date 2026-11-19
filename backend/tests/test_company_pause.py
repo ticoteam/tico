@@ -1,4 +1,4 @@
-"""The company-wide pause: one Hub record, who may pause and resume, and a refusal that changes nothing.
+"""The company-wide pause: one open hold, who may pause and resume, and a refusal that changes nothing.
 
 Synthetic fixture team only (backend/tests/helpers/api_app.py): ana is the owner, ben an admin, cara a member.
 """
@@ -14,7 +14,9 @@ from backend.tests.helpers.api import get, post  # noqa: F401
 
 def _record_rows(api):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT COUNT(*) FROM registry_metadata WHERE key='company_pause'").fetchone()[0]
+        return c.execute(
+            "SELECT COUNT(*) FROM holds WHERE kind='paused' AND holdable_type='company' AND released_at IS NULL"
+        ).fetchone()[0]
 
 
 def _bot_state(api, bot):
@@ -30,7 +32,7 @@ def _set_bot_state(api, bot, state):
 def _status_state(api, bot, token="ana-test"):
     """The bot's status row as the pages read it (GET /api/v2/status?bot=)."""
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, bot, state="idle")
+        H.status_set(c, H.TICO_ACTOR, bot, state="idle")
     return get(api, "status?bot=" + bot, token)["status"]["state"]
 
 
@@ -141,7 +143,7 @@ def test_bots_service_keys_and_support_sessions_are_refused_and_change_nothing(a
 
 def test_a_running_bot_row_is_not_changed_by_the_pause(api):
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "ops", state="running")
+        H.status_set(c, H.TICO_ACTOR, "ops", state="running")
     post(api, "company/pause", {})
     try:
         assert get(api, "status?bot=ops")["status"]["state"] == "running"

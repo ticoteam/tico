@@ -137,7 +137,7 @@ def test_leaving_revokes_a_persons_api_tokens(api):
             "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
             "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')"
         )
-    post(api, "people/cara", {"left": True})
+    post(api, "humans/cara", {"left": True})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revoked_at FROM human_tokens WHERE id='t1'").fetchone()[0]
 
@@ -187,7 +187,7 @@ def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resume
     from backend import hubdb as H
     from backend.tests.helpers.api import assign, ready, runner
 
-    computer = runner(api)  # placed on a computer, not the keeper
+    computer = runner(api)  # placed on a computer, not Tico
     assign(api, computer, "ops")
     ready(api, computer, ["ops"])
     with api.app.state.store.transaction() as c:

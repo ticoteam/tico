@@ -1,0 +1,5 @@
+{
+  "ui/tests/settings-task-model.cts": {
+    "no-fixed-wait-ui": 3
+  }
+}

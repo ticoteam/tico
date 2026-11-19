@@ -1,6 +1,8 @@
 ---
 name: check-a-partner-claim
 description: Check a claim in partner or referral copy against its cleared wording and scope before the copy goes to a partner, a referrer or the public.
+metadata:
+  function: sales
 ---
 # Check a partner claim
 

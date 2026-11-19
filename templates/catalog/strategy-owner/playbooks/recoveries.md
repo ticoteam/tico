@@ -1,9 +1,9 @@
-# Recoveries and merged asks (the Strategy Owner, level 2)
+# Recoveries (the Strategy Owner, level 2)
 
-Only where `tico goal strategy-bot` says `on` and `level` 2 or 3. Below that, the server refuses both; at level 1 a red
+Only where `tico goal strategy-bot` says `on` and `level` 2 or 3. Below that, the server refuses them; at level 1 a red
 goal
 gets a check-in (`playbooks/check-ins.md`) and nothing more. At level 3 a red or stalled goal gets a decision you
-make yourself (`playbooks/acts-on-its-own.md`) in place of a recovery; merging asks is the same at both levels.
+make yourself (`playbooks/acts-on-its-own.md`) in place of a recovery.
 
 Inputs: the red or stalled goal (`tico goal show <id>`), its KPI readings, its check-ins, its tasks (`tico task list`), and `tico proposal list --goal <id>`.
 
@@ -25,13 +25,4 @@ in their Needs you as one item, in place of "check why it is off track".
    tells you what was done. A part it could not do (a bot paused, a task finished meanwhile) comes back to them as a
    new recovery saying why; don't file it again yourself.
 
-## Merging the same question
-When several bots ask one person the same thing (an open question on a task, a task waiting on them, a task filed for
-them), make it one item: `tico goal strategy-bot-merge <person> "<title>" "<the one question>" <task-id> <task-id>...`
-(2 to 10 tasks). Their tasks leave the person's Needs you while it is open; their one answer goes to every bot that
-asked, and the item is done. If it ends unanswered, the originals come back as they were.
-- Only questions that one answer settles for every asker. Similar but different is not the same.
-- Never your own asks, and never a task already merged.
-- A merged item counts toward the 5 a day; read `asked_today` first.
-
-**Done when:** each red or stalled goal has one pending recovery (never a second), and each merge is sent with its one question, or the reason it was not merged is on the task.
+**Done when:** each red or stalled goal has one pending recovery (never a second).

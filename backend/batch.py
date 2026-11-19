@@ -7,10 +7,10 @@ the person's chat with it: what was decided, and the questions, instructions and
 reply, split per item, comes back on those items the next time that bot comes up. Any front end runs the same loop:
 the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
 
-The list is Needs you (`waiting_on.needs`): every OK and question a bot asked of the person
+The list is Needs you (`waiting_on.needs`): every OK a bot asked of the person
 (`ask:<visit>:<requirement>`) and every task a bot filed for them (`task:<task>`); a batch holds only what bots are
 waiting on. A decision is what the
-Needs-you buttons do: OK, Send back (with notes), an answer, Done or Close (`_apply_decide`, through the task calls).
+Needs-you buttons do: OK, Send back (with notes), Done or Close (`_apply_decide`, through the task calls).
 An OK that is bound to what it lets go (send, spend, publish: backend/task_asks.py) is never given on a walk: it is
 the person's own click on its preview in Tico. The person's Assistant may walk the list for them, as them; it never
 OKs. It is the whole list, or one bot's part of it (`scope`). "Who needs me" starts the bot that most needs the
@@ -27,13 +27,13 @@ from .store import Problem
 from . import task_privacy as privacy
 
 KINDS = ("decide", "needs_info", "instruct", "rule", "skip", "later")
-DECISIONS = ("ok", "send_back", "done", "close", "answer")
+DECISIONS = ("ok", "send_back", "done", "close")
 VERDICTS = ("decide", "skip", "later")
 LATER_DAYS = 1
 REPORT_DAYS = 14  # how far back a bot's reply to a batch still comes back on its items
 MARKER = re.compile(r"^\s*\[item (\d+)\]", re.M)
 NEXT = "next"  # the scope that means "whichever bot most needs the person"
-ORDER = {"ok": 0, "answer": 1, "task": 2}  # an OK first, then a question, then a task filed for them
+ORDER = {"ok": 0, "task": 1}  # an OK first, then a task filed for them
 
 
 def _clip(text, n):
@@ -81,8 +81,6 @@ def _row(c, entry):
             "task": entry["task_id"],
             "task_title": _clip(task.get("title"), 160),
         }
-        if requirement.get("choices"):
-            row["choices"] = requirement["choices"]
         if requirement.get("shows"):
             row["shows"] = requirement["shows"]
             row["source"] = requirement["shows"]  # its words come from those pages (files.readable_page_refs)
@@ -92,8 +90,8 @@ def _row(c, entry):
     elif entry["kind"] == "task":
         frm = task.get("requester_id")
         row = {"key": "task:" + entry["task_id"], "kind": "task", "title": _clip(task.get("title"), 160)}
-        if task.get("body"):
-            row["body"] = _clip(task["body"], 800)
+        if asked := H.task_request_text(c, task["id"]):  # what it asks: its first message
+            row["body"] = _clip(asked, 800)
         if entry.get("missing"):
             row["missing"] = entry["missing"]
     else:
@@ -125,7 +123,7 @@ def alerts(snapshot):
 
 def relevant(c, actor, reader=None):
     """What bots are waiting on the person for, from Needs you: what they deferred dropped, each task the reader may read
-    once, an OK above a question above a task, oldest first."""
+    once, an OK above a task, oldest first."""
     from . import waiting_on
 
     snoozed = _snoozed(c, actor)
@@ -155,7 +153,7 @@ def _name(c, actor):
 
 
 def _rank(row):
-    """An OK first, then a question, then a task filed for the person; a due date sooner, then the oldest."""
+    """An OK first, then a task filed for the person; a due date sooner, then the oldest."""
     return (ORDER.get(row["kind"], 3), row.get("due_at") or "~", row.get("created_at") or "")
 
 
@@ -450,7 +448,6 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
             raise Problem("decision", f"A decision is {'|'.join(DECISIONS)}, not {decision}", 422)
         allowed = {
             "ok": ("ok", "send_back"),
-            "answer": ("answer",),
             "task": ("done", "close"),
         }.get(item["kind"], ())
         if item["kind"] == "report":
@@ -459,8 +456,8 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
             raise Problem("decision", f"{item['title']}: {' or '.join(allowed) or 'nothing to decide'}", 422)
         if decision == "ok" and item.get("preview_only"):
             raise Problem("decision", f"{item['title']}: {task_asks.FROM_PREVIEW}", 422)
-        if decision in ("answer", "send_back") and not text:
-            raise Problem("decision", "Say the answer" if decision == "answer" else "Say what to change", 422)
+        if decision == "send_back" and not text:
+            raise Problem("decision", "Say what to change", 422)
         response["decision"] = decision
     elif kind in ("needs_info", "instruct", "rule") and not text:
         raise Problem("text", f"A {kind.replace('_', ' ')} response needs the text", 422)
@@ -480,6 +477,18 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
         "responded": len(responses),
         "total": len(items),
     }
+
+
+def item_task(c, actor, batch_id, n=None):
+    """The id of the task a response to an item (the current one unless `n` names another) goes on: its words are
+    then task text (backend/task_text_keys.py). None for an item with no task, or one `respond` refuses anyway."""
+    batch = _load(c, actor, batch_id)
+    items = _items(batch)
+    idx = (int(n) - 1) if n else int(batch["cursor"] or 0)
+    if not 0 <= idx < len(items):
+        return None
+    task = _task_of_key(c, items[idx]["key"])
+    return task["id"] if task else None
 
 
 def summary(batch):
@@ -527,11 +536,8 @@ def _apply_decide(c, who, item, r):
                 raise Problem("ok_not_yours", refused, 403)
             H.task_answer(c, who.actor, task_id, ident, "ok", text or None, own_click=task_asks.own_click(who))
             return f"OK'd: {item['title']}"
-        if decision == "send_back":
-            H.task_answer(c, who.actor, task_id, ident, "no", text)
-            return f"Sent back: {item['title']}"
-        H.task_answer(c, who.actor, task_id, ident, text)
-        return f"Answered \"{item['title']}\""
+        H.task_answer(c, who.actor, task_id, ident, "no", text)
+        return f"Sent back: {item['title']}"
     if decision == "done":
         H.task_done(c, who.actor, ident, text)
         return f"Done: {item['title']}"
@@ -674,8 +680,6 @@ def _deliver(c, who, batch_id, outbox, record, send):
 def _record_line(item, r, line):
     """What the bot's record says about one applied response, with the person's own words."""
     text = r.get("text") or ""
-    if r["kind"] == "decide" and r.get("decision") == "answer":
-        return f"- Answered \"{item['title']}\": {text}"
     return f"- {line}" + (f": \"{text}\"" if text and r["kind"] == "decide" else "")
 
 
@@ -683,7 +687,6 @@ def _record_line(item, r, line):
 SAID = {
     "ok": "task_ask_answer",
     "send_back": "task_ask_answer",
-    "answer": "task_ask_answer",
     "done": "task_done",
     "close": "task_move",
 }
@@ -691,7 +694,7 @@ SAID = {
 
 def said(c, who, batch_id):
     """Each response with words of the person's own, for the rule check before commit: ((key, i), task id or None,
-    the bot it reaches, operation, text). The words reach the bot (a decision's note, an answer, an instruction or a
+    the bot it reaches, operation, text). The words reach the bot (a decision's note, an instruction or a
     rule, by message or as a comment on the task) and the task's people."""
     batch = _load(c, who.actor, batch_id)
     out = []

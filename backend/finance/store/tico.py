@@ -39,11 +39,16 @@ def _metadata(c: sqlite3.Connection, key: str) -> Any:
         return None
 
 
+def _owner_email(c: sqlite3.Connection) -> str:
+    """The stored owner record's email, in lower case."""
+    stored = _metadata(c, "owner")
+    return str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+
+
 def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     """The install owner as `human:<id>`: the stored owner record's person, else `fallback` (the person Finance was
     set up for). Admins are not owners."""
-    stored = _metadata(c, "owner")
-    email = str(cast(dict[str, Any], stored).get("email") or "").strip().lower() if isinstance(stored, dict) else ""
+    email = _owner_email(c)
     if email:
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
         if row:
@@ -145,6 +150,25 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     )
 
 
+def bot_id(c: sqlite3.Connection, ref: str) -> str:
+    """The id of the bot `ref` names by its id or by its slug ("" when none). A slug may differ from its id (a custom
+    bot, a renamed one); no slug can name another bot's id, so at most one bot matches."""
+    row = c.execute("SELECT id FROM bots WHERE id=? OR slug=? LIMIT 1", (ref, ref)).fetchone()
+    return str(row[0]) if row is not None else ""
+
+
+def teammate(c: sqlite3.Connection, ref: str) -> str:
+    """The teammate a person or client named, as the org chart keys it: `bot:<slug>` becomes `bot:<id>` (a custom or
+    renamed bot's slug is not its id); a bot id, a person, or a name no bot has stays as given. Every Finance input
+    that names a teammate goes through this before it is checked against the org chart."""
+    ref = str(ref or "").strip()
+    if ref.startswith("bot:"):
+        found = bot_id(c, ref[4:])
+        if found:
+            return "bot:" + found
+    return ref
+
+
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
     """The `events` row every Finance write leaves, in the same transaction."""
     _H.event(c, actor, action, target, dict(detail))
@@ -200,12 +224,17 @@ def queue_email(
     text: str,
     ref: str,
     metadata: dict[str, str],
+    held: bool = True,
 ) -> str:
-    """Freeze Finance's email through the same gate as a connector, on this install's transaction."""
+    """Freeze Finance's email through the same gate as a connector, on this install's transaction. Held: it always
+    waits for a person's OK of this exact send (the classification leaves it unclassified, which the policy asks
+    about), and the OK's id is returned. Not held: Tico's fixed reminder text, decided by the sending policy as a money
+    email (its lint and second review apply to a bot's request as to any of its email); the OK's id when the policy
+    asks, else "send:" and the queued send's id."""
     from pathlib import Path
     from ...auth import Auth
     from ... import email_sending
-    from connectors.mail import compose
+    from ...mail_lib import compose
     from ...store import Problem
 
     sending: Any = email_sending
@@ -228,7 +257,11 @@ def queue_email(
                 auth,
                 requester,
                 sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
-                {"legal_or_money": None, "status": "finance_preview_required"},
+                # A held email stays unclassified, which the policy always asks about. An early reminder is a payment
+                # demand: classified as money, so a company that asks about money emails is asked about it.
+                {"legal_or_money": None, "status": "finance_preview_required"}
+                if held
+                else {"legal_or_money": True, "status": "finance_fixed_text"},
                 via="finance",
             ),
         )
@@ -237,10 +270,12 @@ def queue_email(
     except Problem as exc:
         raise Refused(str(exc)) from exc
     # The send's OK (task_asks, `email_send:<id>`): the queue claims it before the provider is called, and nothing
-    # sends a Finance email without one.
-    if not queued.get("approval_id"):
+    # sends a held Finance email without one.
+    if queued.get("approval_id"):
+        return str(queued["approval_id"])
+    if held:
         raise Refused("Finance's email was not held for a person's OK")
-    return str(queued["approval_id"])
+    return "send:" + str(queued["id"])
 
 
 def is_person(actor: str) -> bool:
@@ -249,7 +284,7 @@ def is_person(actor: str) -> bool:
 
 
 def known_actor(c: sqlite3.Connection, actor: str) -> bool:
-    """Whether hubdb would accept `actor` as a writer (a roster person, a bot, or the keeper)."""
+    """Whether hubdb would accept `actor` as a writer (a roster person, a bot, or Tico)."""
     kind, _, ident = actor.partition(":")
     if actor == "keeper":
         return True
@@ -433,27 +468,41 @@ def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
 
 # ------------------------------------------------------------------------------------------------ telling people
 def notice(c: sqlite3.Connection, person: str, text: str) -> None:
-    """A keeper notice to one person, the kind usage limits send."""
-    _H.say(c, _H.KEEPER, person, text, kind="notice")
+    """A Tico notice to one person, the kind usage limits send."""
+    _H.say(c, _H.TICO_ACTOR, person, text, kind="notice")
 
 
 def bot_note(c: sqlite3.Connection, bot: str, text: str) -> str:
-    """A keeper note for a bot's next run: the line it is given when its next turn starts. Its id."""
+    """A Tico note for a bot's next run: the line it is given when its next turn starts. Its id."""
     ident = str(_H.new_id())
     c.execute(
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
-        (ident, _H.KEEPER, bot, text[: int(_H.NOTE_MAX)], str(_H.now())),
+        (ident, _H.TICO_ACTOR, bot, text[: int(_H.NOTE_MAX)], str(_H.now())),
     )
-    _H.event(c, _H.KEEPER, "note.create", ident, {"to": bot, "finance": True})
+    _H.event(c, _H.TICO_ACTOR, "note.create", ident, {"to": bot, "finance": True})
     return ident
 
 
 def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, private: bool | None = None) -> str | None:
-    """One Needs-you item (a keeper task the person owns); an open one with the same title is reused. None when the
+    """One Needs-you item (a Tico task the person owns); an open one with the same title is reused. None when the
     person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
     requester; left None, Tico's default applies."""
     try:
-        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True, private=private)
+        from ... import person_asks
+
+        # BotOps' question to the person on their task (person_asks), so the item is in their Needs you.
+        made: Any = person_asks.task_for(
+            c,
+            _H.TICO_ACTOR,
+            title[:200],
+            body,
+            person,
+            question=title[:200],
+            why=person_asks.first_sentence(body) or "Finance needs a person to act on this.",
+            deduplicate=True,
+            private=private,
+            lint=True,
+        )
     except _H.Refused:
         return None
     task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}
@@ -470,7 +519,7 @@ def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, obje
     R.judge_event(
         c, name, {"subject": subject, "type": subject, "delivery": str(facts.get("event_id") or subject), "data": facts}
     )
-    _H.hook(c, name, subject, lambda: facts, _H.KEEPER)
+    _H.hook(c, name, subject, lambda: facts, _H.TICO_ACTOR)
 
 
 def person_by_email(c: sqlite3.Connection, email: str) -> str:
@@ -514,8 +563,9 @@ def _bound(fingerprint: object, base: object) -> str:
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
     """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
-    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only.
-    if row is None or row["ciphertext"] is None or vault is None or row["kind"] == "login":
+    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only. Nor is a
+    # secret the server itself uses (the Slack app's tokens): the vault never opens one by an id it was handed.
+    if row is None or row["ciphertext"] is None or vault is None or row["kind"] in ("login", "service"):
         return ""
     return str(cast(Any, vault).cipher.decrypt(c, row) or "")
 
@@ -575,6 +625,50 @@ def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
         (credential_id, SEALED_SOURCE),
     )
     c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
+
+
+def _identity(c: sqlite3.Connection, actor: str) -> Any:
+    """The vault's view of `actor` (backend/auth.py `Identity`), with no more rights than they hold: a bot as itself,
+    a person rebuilt the way deferred work rebuilds them (`Auth.identity_for_actor`). None for anyone else, or a
+    person who has left or whose sign-in is off."""
+    from ... import access, auth
+
+    A: Any = auth
+    if actor.startswith("bot:"):
+        try:  # as bot auth resolves it: an archived or paused bot, or one with no current credential, is no one
+            return A.bot_identity(c, actor)
+        except A.Problem:
+            return None
+    if not actor.startswith("human:"):
+        return None
+    signed: Any = getattr(_VAULT[0], "auth", None)
+    if signed is not None:
+        try:
+            return signed.identity_for_actor(c, actor)
+        except A.Problem:
+            return None
+    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, the owner in force by email
+    # as Auth.identity_for_actor does (backend/access.py load_owner, which follows a transfer).
+    if A.standing(c, actor.partition(":")[2]):
+        return None
+    email = person_email(c, actor)
+    owner = str(cast(Any, access).load_owner(c, _VAULT[0].store.settings)["email"])
+    return A.Identity(actor, "owner" if email and email == owner else "human", email=email)
+
+
+def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) -> bool:
+    """Whether `actor` may put this stored credential to use: the vault's rule (backend/credentials.py `usable`), with
+    the actor's own rights. A Finance connection reads only a credential its creator may use, so a finance admin can
+    never send a key they could not use themselves to a provider. False with no vault registered."""
+    from ... import credentials
+
+    if not _VAULT:
+        return False
+    who = _identity(c, actor)
+    if who is None:
+        return False
+    vault: Any = _VAULT[0]
+    return bool(cast(Any, credentials).usable(c, who, credential_id, vault.admins_now(c)))
 
 
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:

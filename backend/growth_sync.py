@@ -396,7 +396,7 @@ def _same(a: Any, b: Any) -> bool:
     return a is not None and b is not None and abs(float(a) - float(b)) < 1e-9
 
 
-def _settle_quality(c: Any, cohort: dict[str, Any]) -> None:
+def settle_quality(c: Any, cohort: dict[str, Any]) -> None:
     """The row's quality after a run: estimate while any number it holds is still an estimate. A number with no origin
     row (typed before origins were kept) has the row's own quality."""
     fresh = cast(dict[str, Any], H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cohort["id"],)))
@@ -475,7 +475,7 @@ def _write(
                 [*changed.values(), actor, at, cohort["id"]],
             )
             written += len(changed)
-        _settle_quality(c, cohort)
+        settle_quality(c, cohort)
     return written, held
 
 
@@ -507,7 +507,7 @@ def forget_customers(c: Any, actor: str, source: dict[str, Any]) -> None:
 def _notify(c: Any, source: dict[str, Any], text: str) -> None:
     owner = source.get("owner_ref")
     if owner:
-        H.notice(c, H.KEEPER, owner, text, refs={"growth_source": source["id"]})
+        H.notice(c, H.TICO_ACTOR, owner, text, refs={"growth_source": source["id"]})
 
 
 def run(
@@ -601,6 +601,10 @@ def run(
         source["id"],
         {k: result[k] for k in ("run", "ok", "error", "written", "held", "not_written_count")},
     )
+    # A channel whose source this is may have started or stopped failing (backend/growth_brief.py).
+    from . import growth_brief
+
+    growth_brief.safely(growth_brief.check_source, c, source["id"], actor)
     return result
 
 

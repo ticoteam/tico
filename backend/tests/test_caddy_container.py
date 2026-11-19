@@ -116,7 +116,7 @@ class Containers:
         self.passed = False
         self.output.mkdir(parents=True)
         self.vendor = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["caddy"]["image"]
-        assert re.fullmatch(r"caddy:2-alpine@sha256:[0-9a-f]{64}", self.vendor)
+        assert re.fullmatch(r"caddy:2(?:\.\d+\.\d+)?-alpine@sha256:[0-9a-f]{64}", self.vendor)
 
     def redact(self, value):
         return (

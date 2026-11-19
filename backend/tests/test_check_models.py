@@ -6,9 +6,10 @@ import json
 import pytest
 
 from backend import check_models
-from backend.store import H
+from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import GROK, company, finish, heartbeat, parent_turn
+from backend.tests.usage_rows import segment
 
 
 def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_the_parent(api):
@@ -55,7 +56,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     back = claim(api, machine)
     assert back["task"]["id"] == parent["id"]
     assert back["config"]["runtime"] == "claude" and "check" not in back["task"]
-    # The engine wakes the parent's owner once with how the sub-task ended (docs/pipelines-v3.md "A task waits a day on
+    # The engine wakes the parent's owner once with how the sub-task ended (docs/dev/pipelines-v3.md "A task waits a day on
     # a sub-task"); the review's note is on the sub-task itself. v3 has no verdict fields.
     assert "The tasks this one filed have ended: Review PR 700 with another model: Done" in back["message"]["body"]
     with api.app.state.store.read() as c:
@@ -210,7 +211,9 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     )
     with api.app.state.store.read() as c:
         status = H.status(c, "ops")
-        assert status["state"] != "limited" and not cooling_off(c, "ops"), "Grok's limit is not the bot's"
+        assert status["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops"), (
+            "Grok's limit is not the bot's"
+        )
         assert "grok usage limit on a check" in status["focus"] and "claude" not in status["focus"]
         assert limit_streak(c, "ops") == 0 and last_limit(c, "ops") is None, "a check's limits are not the bot's"
     person = post(
@@ -282,7 +285,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, "ops")
+        assert H.status(c, "ops")["state"] != "limited" and not cooling_off(c, api.app.state.store.settings, "ops")
         assert "grok usage limit on a check" in H.status(c, "ops")["focus"]
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key LIKE 'check-attempt:%'").fetchone()
 
@@ -391,6 +394,37 @@ def test_with_no_other_provider_left_the_check_moves_to_the_authors_own(api, mon
     out_of_quota(api, machine, again)
     moved = claim(api, machine)
     assert moved["task"]["id"] == sub["id"], "another provider is preferred, not required: the review still runs"
+    assert moved["config"]["runtime"] == "claude"
+
+
+def test_a_moved_review_skips_the_builders_maker_not_the_reviewers(api, monkeypatch):
+    """#633: the reviewer (ops, Claude) has runs on work another bot (cpo) built on GPT. Out of Codex quota, the review
+    moves to Claude, the one maker that did not build it, not to Grok as if both makers had."""
+    machine, sub, check = codex_check(api)
+    parent = get(api, "tasks/" + sub["id"])["task"]["parent_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES('built','cpo',"
+            "'2026-01-01T00:00:00Z','2026-01-01T00:05:00Z',?)",
+            (parent,),
+        )
+        segment(
+            c,
+            "built",
+            input_tokens=10,
+            output_tokens=10,
+            model="gpt-6.2-sol",
+            provider="openai",
+            runtime="codex",
+            harness="codex",
+        )
+    start = H.now()
+    out_of_quota(api, machine, check)
+    later(api, monkeypatch, machine, H.shift(start, minutes=31))
+    again = claim(api, machine)
+    out_of_quota(api, machine, again)
+    moved = claim(api, machine)
+    assert moved["task"]["id"] == sub["id"]
     assert moved["config"]["runtime"] == "claude"
 
 
@@ -585,7 +619,7 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
 def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_gets_past_it(api, monkeypatch):
     machine, sub, check = limited_check(api)
     # An older notice the claim has not handed out yet waits beside the job that keeps stopping.
-    queue_on(api, sub, H.KEEPER, hours=20)
+    queue_on(api, sub, H.TICO_ACTOR, hours=20)
     assert check_held(api, check, hours=11) == []
     [found] = check_held(api, check, hours=13)
     with api.app.state.store.read() as c:
@@ -693,3 +727,47 @@ def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, mo
     with api.app.state.store.read() as c:
         assert maintenance_health.out_of_quota_logins(c, api.app.state.store.settings) == []
         assert "temporary model capacity on a check" in H.status(c, "ops")["focus"]
+
+
+def test_a_check_saved_on_the_gateway_runs_on_the_bots_own_model_once_the_company_keeps_to_subscriptions(
+    api, monkeypatch
+):
+    # Tico Team, Nov 18: reviews filed or moved onto pi:tico-medium-1.0 kept spending the Gateway after the
+    # company chose subscriptions only. A saved Gateway check is ignored then, and a new one is refused.
+    from backend import gateway_connection
+
+    machine, sub, check = codex_check(api)
+    monkeypatch.setattr(gateway_connection, "connected", lambda c, settings=None: True)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE task_check_models SET runtime='pi',model='tico-medium-1.0',harness='pi' WHERE task_id=?",
+            (sub["id"],),
+        )
+
+    def choice(preset, listed=()):
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "UPDATE registry_metadata SET value=? WHERE key='providers'",
+                (
+                    encode(
+                        {
+                            "revision": 2,
+                            "enabled": ["anthropic", "openai", "tico"],
+                            "runtime": "claude",
+                            "model": "claude-sonnet-5-5",
+                            "preset": preset,
+                            "check_models": list(listed),
+                        }
+                    ),
+                ),
+            )
+        with api.app.state.store.read() as c:
+            return check_models.of(c, sub["id"], "ops")
+
+    assert choice("gateway")["model"] == "tico-medium-1.0"
+    assert choice("subscriptions") is None
+    assert choice("own-keys") is None
+    assert choice("subscriptions", ["pi:tico-medium-1.0"])["model"] == "tico-medium-1.0", "the owner listed it"
+    choice("subscriptions")
+    with api.app.state.store.transaction() as c, pytest.raises(check_models.CheckModelError, match="Gateway"):
+        check_models.choose(c, api.app.state.store.settings, "ops", "pi:tico-medium-1.0", "review")

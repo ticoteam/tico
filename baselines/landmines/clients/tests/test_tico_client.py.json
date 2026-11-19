@@ -1,0 +1,5 @@
+{
+  "clients/tests/test_tico_client.py": {
+    "no-unittest-mock": 3
+  }
+}

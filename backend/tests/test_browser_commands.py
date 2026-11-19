@@ -16,6 +16,7 @@ from backend import browser_commands as bc
 from backend import website_tools as real_tools
 from backend.store import Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
+from backend.tests.helpers.wait import wait_for
 
 PASSWORD = "canary-pw-7Q2x"
 CODE = "424242"
@@ -102,7 +103,7 @@ def setup(api, tools):
         {"version": "test", "platform": "test", "capabilities": ["browser_v1"]},
         token=host["token"],
     )
-    post(api, f"runners/{host['runner_id']}/browser-host", {"on": True})
+    post(api, f"computers/{host['runner_id']}/browser-host", {"on": True})
     own = runner(api, label="Own Mac")
     assign(api, own, "ops")
     assign(api, own, "finance")
@@ -341,21 +342,46 @@ def test_needs_you_asks_a_person_and_their_answer_wakes_the_bot(setup, tools):
         token=s.ops["token"],
     )
     rid = asked["requirement_id"]
-    assert rid
+    assert rid.startswith("qmark:")  # a ❓ on the bot's message on its task
     assert task["id"] in {str(i.get("task_id") or i["id"]) for i in get(s.api, "needs-you")["items"]}
     with s.api.app.state.store.read() as c:
-        shows = c.execute("SELECT shows FROM requirements WHERE id=?", (rid,)).fetchone()[0]
-        before = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (task["id"] + ":%",)).fetchone()[0]
-    assert "browser:tool1/acct1" in shows
+        mark = c.execute(
+            "SELECT q.task_id, q.person_id, m.refs FROM question_marks q JOIN messages m ON m.id=q.message_id "
+            "WHERE q.id=?",
+            (rid.removeprefix("qmark:"),),
+        ).fetchone()
+    assert (mark["task_id"], mark["person_id"]) == (task["id"], "human:ana")
+    assert "browser:tool1/acct1" in mark["refs"]  # the message shows the live browser
     assert bc.session_view("acct1")["state"] == "needs_you"
     assert tools.logs[-1][:2] == ("bot:ops", "needs_you")
-    post(s.api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "Done"})
+    reply = post(s.api, f"tasks/{task['id']}/comments", {"text": "Done"})["comment"]
     with s.api.app.state.store.read() as c:
-        after = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (task["id"] + ":%",)).fetchone()[0]
-    assert after > before
+        assert not bc.open_ask(c, requirement_id=rid)  # her reply clears the ❓
+        reached = c.execute(
+            "SELECT 1 FROM messages m WHERE m.id=? AND (m.recipient_id='bot:ops' OR EXISTS (SELECT 1 FROM "
+            "message_deliveries d WHERE d.message_id=m.id AND d.recipient='bot:ops'))",
+            (reply["id"],),
+        ).fetchone()
+    assert reached  # and goes to the bot
     # A person's own call is refused: needs-you is a bot's, on its task.
     r = s.api.post("/api/v2/browser/needs-you", json={"site": "acme.example", "line": "Help."}, headers=headers())
     assert r.status_code == 403
+
+
+def test_needs_you_takes_a_named_task_by_its_short_id(setup, tools):
+    s = setup
+    task = s.tasks["ops"]
+    asked = post(
+        s.api,
+        "browser/needs-you",
+        {"site": "acme.example", "line": "Please sign in to Acme.", "task": task["id"][:8]},
+        token=s.ops["token"],
+    )
+    with s.api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT task_id FROM question_marks WHERE id=?", (asked["requirement_id"].removeprefix("qmark:"),)
+        ).fetchone()
+    assert row["task_id"] == task["id"]
 
 
 def test_the_frame_takes_at_most_one_screenshot_a_second(setup, tools):
@@ -368,7 +394,7 @@ def test_the_frame_takes_at_most_one_screenshot_a_second(setup, tools):
     watchers = [threading.Thread(target=watch) for _ in range(3)]
     for w in watchers:
         w.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.watchers.get("acct1") == 3, "all three watchers waiting on the picture")
     cmds = collect(s, s.host)
     assert [c["verb"] for c in cmds] == ["screenshot"]
     import base64
@@ -398,11 +424,11 @@ def test_a_computer_that_is_neither_the_host_nor_running_the_turn_gets_nothing(s
         token=other["token"],
     )
     thread, box = call(s, s.ops, "read")
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.queued(s.host["runner_id"]), "the read queued for the host")
     assert collect(s, other, wait=0) == []
     assert collect(s, s.own, wait=0) == []
     # The host stops being the host before it collects: it gets nothing and the bot is told.
-    post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": False})
+    post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": False})
     assert all(cmd["verb"] == "close" for cmd in collect(s, s.host, wait=0))
     r = done(thread, box)
     assert r.status_code == 409 and r.json()["error"]["code"] == "browser_host_offline"
@@ -427,10 +453,10 @@ def test_the_browser_host_takes_no_other_bots(setup, tools):
         bc.check_placement(c, "ops", s.own["runner_id"])
     assert refused.value.code == "browser_host"
     # A computer with bots on it is not made the host.
-    r = s.api.post(f"/api/v2/runners/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers())
+    r = s.api.post(f"/api/v2/computers/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers())
     assert r.status_code == 409 and r.json()["error"]["code"] == "browser_host"
     r = s.api.post(
-        f"/api/v2/runners/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers("cara-test")
+        f"/api/v2/computers/{s.own['runner_id']}/browser-host", json={"on": True}, headers=headers("cara-test")
     )
     assert r.status_code == 403
 
@@ -514,9 +540,9 @@ def test_needs_you_clears_on_done_on_giving_back_and_on_the_bots_next_command(se
         with s.api.app.state.store.read() as c:
             return bc.session_view("acct1", c)["state"]
 
-    rid = ask()["requirement_id"]
+    ask()
     assert state() == "needs_you"
-    post(s.api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "Done"})
+    post(s.api, f"tasks/{task['id']}/comments", {"text": "Done"})  # her reply clears the ❓
     assert state() == "unknown"
     ask()
     assert state() == "needs_you"
@@ -552,11 +578,13 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
     monkeypatch.setattr(bc, "GONE_CHECK", 0.05)
 
     class Caller:
-        def __init__(self, gone):
+        def __init__(self, gone, asked=None):
             self.state = types.SimpleNamespace()
-            self.gone = gone
+            self.gone, self.asked = gone, asked
 
         async def is_disconnected(self):
+            if self.asked is not None:
+                self.asked.set()
             return self.gone
 
     async def go():
@@ -564,8 +592,12 @@ def test_a_caller_that_goes_away_leaves_nothing_queued(setup, tools, monkeypatch
         spot = bc.Place(s.host["runner_id"], "Host Mac", True)
         cancelled = bc._new(loop, spot, tools._picked(), "read", {})
         bc.MAILBOX.enqueue(cancelled)
-        waiting = asyncio.create_task(bc.wait_reply(Caller(False), cancelled, 30))
-        await asyncio.sleep(0.1)
+        asked = asyncio.Event()
+        waiting = asyncio.create_task(bc.wait_reply(Caller(False, asked), cancelled, 30))
+        try:
+            await asyncio.wait_for(asked.wait(), 10)  # the request is waiting, and has checked on its caller
+        except TimeoutError:
+            raise AssertionError("the waiting request never checked on its caller") from None
         waiting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiting
@@ -620,8 +652,9 @@ def test_a_poll_left_open_by_a_stopped_runner_never_takes_the_restarted_runners_
     s = setup
     old = {}
     first = threading.Thread(target=lambda: old.update(cmds=collect(s, s.host, wait=10)))
+    polls_before = bc.MAILBOX.polls.get(s.host["runner_id"], 0)
     first.start()
-    time.sleep(0.3)
+    wait_for(lambda: bc.MAILBOX.polls.get(s.host["runner_id"], 0) == polls_before + 1, "the first poll is open")
     new = {}
     second = threading.Thread(target=lambda: new.update(cmds=collect(s, s.host, wait=10)))
     second.start()
@@ -643,3 +676,42 @@ def test_scrub_report_also_covers_a_short_current_fill_value():
         "account", bc.BrowserReport(ok=True, text=value, title=value, url=value, error=value), value
     )
     assert all(value not in str(getattr(report, field)) for field in ("text", "title", "url", "error"))
+
+
+def test_a_typed_secret_reaches_activity_as_the_verb_and_page_path_only(setup, tools, monkeypatch):
+    # E-607: a bot that types a secret into a website leaves the verb and page path in Activity, never the text. The
+    # real Activity logger writes the row (Review on c4b9a23: a fake logger hid that it refused the verb, after the
+    # site was already typed into).
+    s = setup
+
+    def real_log(conn, picked, who, verb, page, where, result="use"):
+        tools.logs.append((who.actor, verb, page, where, result))
+        real_tools.log(conn, picked, who, verb, page, where, result)
+
+    monkeypatch.setattr(tools, "log", real_log)
+    with s.api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,kind,sites,created_by,created_at,updated_at) "
+            "VALUES('tool1','Acme','website','[\"acme.example\"]','human:ana',?,?)",
+            (real_tools.H.now(), real_tools.H.now()),
+        )
+    typed = "acme-typed-" + PASSWORD
+    thread, box = call(s, s.ops, "type", {"ref": "e3", "text": typed})
+    [cmd] = collect(s, s.host)
+    report(s, s.host, cmd)
+    assert done(thread, box).status_code == 200, box["r"].text
+    assert tools.logs == [("bot:ops", "type", "acme.example/home", "central", "use")]
+    with s.api.app.state.store.read() as c:
+        [row] = c.execute("SELECT method, path, detail FROM tool_calls WHERE tool_id='tool1'").fetchall()
+        assert tuple(row) == ("type", "acme.example/home", "central")
+        for table in ("events", "tool_calls"):
+            rows = c.execute(f"SELECT * FROM {table}").fetchall()
+            assert typed not in repr([tuple(r) for r in rows]), table
+
+
+def test_every_logged_browser_verb_is_one_activity_knows():
+    # Each verb the browser commands log is one the Activity logger, its API schema and its page take.
+    from backend.api_schemas.tools import WEBSITE_ACTIVITY_ROW
+
+    enum = WEBSITE_ACTIVITY_ROW["properties"]["verb"]["enum"]
+    assert set(bc.LOGGED) <= set(real_tools.VERBS) and set(real_tools.VERBS) == set(enum)

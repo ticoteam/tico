@@ -19,19 +19,23 @@ TASK_IDS = re.compile("(?=(" + TASK_ID.pattern + "))")
 
 
 class ReadIndex:
-    def __init__(self, c, who, rooms=False):
+    def __init__(self, c, who, rooms=False, denials=True):
+        """`denials=False` skips working out which private tasks `who` may not read (one check per private task, most
+        of the cost here): for a caller that sets `private` and `denied` itself (read_deps.Walk, under the write lock)."""
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
         self.meetings = MeetingSources(c)
-        # Read private rows by their partial index. Ordinary task identifiers and
-        # room references load lazily, without task bodies or room participants.
-        self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
-        # Meeting participant grants belong to one task, even when its parties match another task's.
-        self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
-        from . import counsel
+        self.private, self.denied = {}, set()
+        if denials:
+            # Read private rows by their partial index. Ordinary task identifiers and
+            # room references load lazily, without task bodies or room participants.
+            self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
+            # Meeting participant grants belong to one task, even when its parties match another task's.
+            self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+            from . import counsel
 
-        self.denied.update(counsel.denied_page_copies(c, who))
+            self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
@@ -62,7 +66,7 @@ class ReadIndex:
             }
             self.meeting_rooms = set(self.bound_rooms)
             if c.execute("SELECT 1 FROM live_meeting_turns LIMIT 1").fetchone():
-                # The legacy keeper inputs live_privacy.Sources reads room by room, for every room at once.
+                # The legacy Tico inputs live_privacy.Sources reads room by room, for every room at once.
                 self.meeting_rooms.update(
                     row[0]
                     for row in c.execute(
@@ -70,7 +74,7 @@ class ReadIndex:
                         "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                         "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                         "WHERE m.sender_id=? AND m.recipient_id='bot:'||t.bot",
-                        (H.KEEPER,),
+                        (H.TICO_ACTOR,),
                     )
                 )
 
@@ -427,14 +431,15 @@ class ReadIndex:
 
     def _direct_parent(self, mid):
         # A single non-inherited parent has at most two visited messages. Longer
-        # chains keep the existing cycle/depth-aware traversal. Parent run refs
-        # are not inherited (the recursive path uses include_run=False too).
+        # chains keep the existing cycle/depth-aware traversal. A reply inherits
+        # the parent's meeting audience, even when it comes from a run reference.
         msg = self.target_message(mid)
         if not msg:
             return True
         if msg.get("in_reply_to"):
             return None
-        return self._direct_message(msg.get("conversation_id"), msg.get("refs"), include_run=False)
+        direct = self._direct_message(msg.get("conversation_id"), msg.get("refs"), include_run=False)
+        return self.meetings.message_readable(self.principals, msg) if direct else direct
 
     def _plain_room(self, cid):
         tid = H._task_ref(self.conversation_tasks.get(cid))

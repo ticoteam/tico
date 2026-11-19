@@ -14,7 +14,7 @@ The route is an upsert of the work as the other system sees it now. The pair (se
 system's own `key` for the work) names one task, so a call never depends on an earlier one: the
 first call for a pair files the task, a later call changes what differs, `close` closes it, a call
 without `close` reopens a closed one, and a close for work that never had a task files nothing.
-Tasks are filed by Tico itself (the keeper, as routines file theirs), with every rule a create
+Tasks are filed by Tico itself, as routines file theirs, with every rule a create
 has, and their description ends with a line naming the key's label, which is what a person sees.
 """
 
@@ -25,6 +25,7 @@ from fastapi import Request
 from . import models as M
 from . import rooms
 from .store import H, Problem, digest
+from .api_contract import api_v2
 
 PREFIX = "tico_sk_"
 INBOUND_PATH = "/api/v2/inbound/tasks"
@@ -166,23 +167,21 @@ def upsert(c, auth, who, body):
         # The pair is what makes it one task, so two pieces of work may share a title and an owner.
         row = H.task_create(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             body.title,
-            body.body,
+            body.body + footer,  # the other system's words, and the line that names it: Tico's
             owner,
             body.due,
             deduplicate=False,
-            conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
+            conversation_id=rooms.task_conversation_id(c, auth, owner, H.TICO_ACTOR),
             labels=body.labels or [],
         )
-        # Rule 7 above read the other system's own words; the line naming it is Tico's.
-        c.execute("UPDATE tasks SET body=? WHERE id=?", (body.body + footer, row["id"]))
         c.execute(
             "INSERT INTO service_key_tasks(key_id,external_key,task_id,created_at) VALUES(?,?,?,?)",
             (key_id, body.key, row["id"], H.now()),
         )
         for url in dict.fromkeys(body.links):
-            H.task_link(c, H.KEEPER, row["id"], url)
+            H.task_link(c, H.TICO_ACTOR, row["id"], url)
         created = changed = True
     elif row and not (body.close and row["status"] == "closed"):  # closed, and to stay closed: as it is
         changed = _apply(c, body, row, footer, who.token_label)
@@ -203,41 +202,57 @@ def _apply(c, body, row, footer, label):
     task opens again, then goes to its new owner, then takes the new fields."""
     task_id, changed = row["id"], False
     if row["status"] == "closed" and not body.close:  # no `close`: the work is open again over there
-        H.task_move(c, H.KEEPER, task_id, H.TASK_REOPEN, f"Open again in {label}.")
+        H.task_move(c, H.TICO_ACTOR, task_id, H.TASK_REOPEN, f"Open again in {label}.")
         changed = True
     owner = _owner(c, body.owner) if body.owner else None
     if owner and owner != (H.task(c, task_id) or {}).get("owner_id"):
-        H.task_reassign(c, H.KEEPER, task_id, owner, f"Given to them in {label}.")
+        H.task_reassign(c, H.TICO_ACTOR, task_id, owner, f"Given to them in {label}.")
         changed = True
     row = H.task(c, task_id)
     if not row:
         raise Problem("not_found", "No such task", 404)
-    current = {"body": row["body"], "labels": H.task_labels(row), "due": row["due_at"]}
+    current = {"labels": H.task_labels(row), "due": row["due_at"]}
     wanted = {
-        "body": body.body + footer if body.body is not None else None,
         "labels": H._labels(body.labels) if body.labels is not None else None,
         "due": body.due,
     }
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
     if fields:
-        H.task_update(c, H.KEEPER, task_id, **fields)
+        H.task_update(c, H.TICO_ACTOR, task_id, **fields)
+    # New words from the other system: said on the task (a task has no description to rewrite), once each.
+    said = body.body + footer if body.body is not None else None
+    if said is not None and said.strip() not in H.task_words(c, task_id):
+        from . import task_engine, task_wakes
+
+        task_wakes.tell(c, task_engine.task(c, task_id) or row, said)
+        fields["body"] = said
     have = {link["url"] for link in H.task_links(c, task_id)}
     links = [url for url in dict.fromkeys(body.links) if url not in have]
     for url in links:
-        H.task_link(c, H.KEEPER, task_id, url)
+        H.task_link(c, H.TICO_ACTOR, task_id, url)
     closing = body.close and (H.task(c, task_id) or {}).get("status") != "closed"
     if closing:
-        H.task_close(c, H.KEEPER, task_id, body.note or "")
+        H.task_close(c, H.TICO_ACTOR, task_id, body.note or "")
     return bool(changed or fields or links or closing)
 
 
 def install_service_keys(app, store, auth, mutate):
-    @app.get("/api/v2/service-keys")
+    @app.get(
+        "/api/v2/service-keys",
+        **api_v2("Session", "listServiceKeys", "Service keys, never the secret (owner and admins)"),
+    )
     def list_service_keys(request: Request):
         with store.read() as c:
             return {"keys": listing(c, auth, request.state.identity)}
 
-    @app.post("/api/v2/service-keys")
+    @app.post(
+        "/api/v2/service-keys",
+        **api_v2(
+            "Session",
+            "createServiceKey",
+            "Make a key another system uses to file, update and close tasks (scope tasks), or to update this install (scope update, owner only), and nothing else; shown once (owner and admins; a key made with a personal token ends with it)",
+        ),
+    )
     def create_service_key(request: Request, body: M.ServiceKeyCreate):
         who = request.state.identity
         _admin(auth, who)
@@ -252,11 +267,21 @@ def install_service_keys(app, store, auth, mutate):
         made = mutate(request, body, work)
         return {**made, "key": secret[0]} if secret else made
 
-    @app.post("/api/v2/service-keys/{key_id}/revoke")
+    @app.post("/api/v2/service-keys/{key_id}/revoke", **api_v2("Session", "revokeServiceKey", "Revoke a service key"))
     def revoke_service_key(request: Request, key_id: str, body: M.Empty):
         return mutate(request, body, lambda c: revoke(c, auth, request.state.identity, key_id))
 
-    @app.post(INBOUND_PATH)
+    @app.post(
+        INBOUND_PATH,
+        **api_v2(
+            "Tasks",
+            "upsertInboundTask",
+            "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; docs/service-keys.md)",
+            "InboundTaskResult",
+            security=[{"serviceKey": []}],
+            idempotency="Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header is ignored.",
+        ),
+    )
     def inbound_task(request: Request, body: M.InboundTask):
         """No Idempotency-Key: the pair is the idempotency, and a stored answer replayed after a
         later call for the same work would undo that call."""

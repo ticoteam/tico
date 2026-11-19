@@ -17,10 +17,12 @@ left, a chat on the right, and the top bar holds the name, Download and a clock.
 take turns, switched by two marks under the top bar. Esc or ✕ returns to the page underneath as it was; a cold link
 draws that page first (the task, the bot, else Library › Files), so closing lands there.
 
-- **The file:** the same kinds the viewer shows (pictures, video, audio, PDF, Markdown, text, CSV, HTML in its
-  sandbox), plus Word files (`.docx`), drawn in the browser by the vendored docx-preview (no LibreOffice). A Google
-  Doc, Sheet, Slides or Drive file shows Google's own `/preview` (signed in as the viewer, nothing passed but the
-  address), with Open in Google beside it. Anything else is a card with Download.
+- **The file:** the kinds the viewer shows: pictures, video, audio, PDF, Markdown, text, CSV, HTML in its sandbox,
+  and Word files (`.docx`, up to 25 MB), drawn in the browser by the vendored docx-preview (no LibreOffice). The
+  viewer, a task's Files and a file's OK in Flow draw a Word file the same way; one docx-preview cannot read shows as
+  its card with Download, and a legacy `.doc` only downloads. A Google Doc, Sheet, Slides or Drive file shows Google's
+  own `/preview` (signed in as the viewer, nothing passed but the address), with Open in Google beside it. Anything
+  else is a card with Download.
 - **The chat:** from a task, the task's thread; from a bot's page, its rail or Library, the DM with the file's bot.
   Each message carries `refs.from_page` `{page: 'file', label: <title>, item: {kind: 'file', id, name: 'v<n>'}}`
   for the version on screen (the same reference the [page chat](pages.md) uses). A file no bot owns has no chat.
@@ -48,7 +50,8 @@ the row keeps its place. A new file's time is when its content was written, not 
 each file's last commit time (its modification time when uncommitted) as `modified`, and the server takes it for a new
 or changed file, never later than now. Before it uploads anything, the runner dates every file Tico may already hold
 (published before times were sent, by another computer of the bot, or new) in one request per 500 files, without the
-bytes: `POST /api/v2/files/dates` with `{bot, attempt, files: [{path, digest, modified}]}`. Only a file of that bot at
+bytes: `POST /api/v2/files/dates` with `{bot, attempt, files: [{path, digest, modified}]}` (the runner's own call, not
+part of the stable API). Only a file of that bot at
 that path whose current version has that digest moves, only back, and only while its time is still the copy's (nothing
 has happened to it since); the answer's `known` paths are not uploaded. A whole checkout copied before times were sent
 settles in one turn; only the rest is uploaded, 40 a turn. An unchanged upload with an earlier time moves a copy's time
@@ -113,6 +116,11 @@ tico file list
 
 A bot can write only its own files: the authenticated bot decides, never a parameter.
 
+To hand a file to the person it is talking to, a bot attaches it to its message in that thread (its Home, a DM, a
+task's thread): `tico thread post <thread> "..." --file <file id>@<version>` for a file already in Tico (the ids
+`tico file publish` and `tico file list` print), or `tico thread upload <thread> <path> --text "..."` from its checkout.
+Everyone who reads the message opens it ([Threads](threads.md)).
+
 **Automatically**, at the end of a completed run, the runner uploads new or changed files under
 the bot checkout's `reports/` and `artifacts/`, comparing against what it published before. Choose
 other folders (or none) per bot in `bot.yaml`:
@@ -121,6 +129,10 @@ other folders (or none) per bot in `bot.yaml`:
 files:
   publish: [reports/, artifacts/, deliverables/]   # publish: [] turns it off
 ```
+
+A task lists each content once: a report the runner published from `reports/` and the same bytes attached by name
+(`tico task attach`) show as one file, the one attached by name. A task's Markdown files also open as tabs in its
+window, beside its HTML documents.
 
 Documents, images, video, audio, csv, tsv, json, yaml, md, html, pdf and office files can be published.
 Every kind but video and audio is capped at 25 MB. `tico file publish` and `tico file import` take video and audio up to
@@ -177,9 +189,27 @@ the bot publishes a changed version.
 
 Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cursor=&q=&kind=` (ordered by last
 activity, with the visible `total`; `q` keeps files that have every word in their name, path or text, as
-[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`, `/dates` (a bot's computer, above),
+[Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`,
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
 lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
+`POST /api/v2/files/dates` is the runner's own call, not part of the stable API.
+
+Each file in these answers (the list, `/files/mentions` and `/info`) has two kinds. `kind` is the stored kind, which
+says how the file opens (`document`, `slides`, `design`, `spreadsheet`, `data`, `image`, `video`, `audio`…).
+`library_kind` is the word the `kind` filter takes, as in the Library and Search:
+
+| `library_kind` | Stored `kind` |
+|---|---|
+| `page` | any, when the file is a page |
+| `document` | `document`, `slides`, `design` |
+| `image` | `image` |
+| `data` | `spreadsheet`, `data` |
+| `media` | `video`, `audio` |
+| `other` | anything else |
+
+Filter with a file's `library_kind`: a page whose stored kind is `document` is listed under `kind=page`, not
+`kind=document`. A stored kind that is not a filter word (`kind=spreadsheet`) is refused with 422 and the word to use.
+`tico_file_list` takes the same `kind`.
 `GET /api/v2/bots/{bot}/instructions` reads the Computer's latest Instructions snapshot with the bot's Read permission.
 It returns `content`, `published`, `updated_at` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
@@ -193,15 +223,18 @@ A path or file name a bot writes in a message (`reports/2026-11-12-legal-review-
 shows: the bot's chat on its page, the Assistant, task chats and threads, Catch up and updates, in running text, lists
 and table cells alike. A page asks the server for every name it draws in one request, `GET /api/v2/bots/{bot}/files/mentions?m=…&m=…` (up to 60), which
 answers only names that are exactly one of the bot's files the viewer may see: a path by its path (or the end of it),
-a bare name only when no other file has it. A bare name after a folder in the same paragraph or list item is looked
-up in that folder first. Anything else stays text; web addresses are links as before. An answer that comes after the
-message is drawn links the names in place.
+a bare name only when no other file the viewer may see has it. A bare name after a folder in the same paragraph or
+list item is looked up in that folder first. Anything else stays text; web addresses are links as before. An answer that comes after the
+message is drawn links the names in place. The route is in the stable API (`resolveBotFileMentions`), so a custom
+frontend or an agent can call it as the [custom frontend guide](custom-frontend.md) shows; the folder-in-the-same-paragraph
+rule is the web app's, so such a caller sends the joined path itself.
 
 ## Library › Files
 
 **Library › Files** lists every file the viewer may see, across all bots and whoever added it: bots' files and
-[pages](pages.md), task and thread attachments, people's uploads, links and imports. Each row passes the same check as
-the bot's page, so a file you may not read adds no row, name or count.
+[pages](pages.md) (bot-wide, on a task or in a chat), task attachments whoever added them, files a person sends a bot in
+its chat, links and imports. A file a person attaches to a message in a shared thread stays on that message and is not
+listed here. Each row passes the same check as the bot's page, so a file you may not read adds no row, name or count.
 
 - **Filters:** kind (Pages, Documents, Images, Data, Video and audio, Other), bot, team (its bots' files and the
   files on tasks its bots and people own, nested teams included), task, date, pinned and archived. They ride in the
@@ -557,8 +590,9 @@ never approved by an older one's review, and a deleted task's verdicts stop coun
 
 `tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `tico_file_review`,
 `POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
-bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
-may use it too; Decide is the usual way.
+bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). Bots only: a
+person, or a bot acting for one (the Assistant, BotOps), gets 403. A person approves a file with their own OK of the
+version, asked on the task.
 
 Upload retries verify their idempotency receipt before writing bytes to durable storage.
 Multipart retries still parse and hash the incoming bytes to reject changed content, using

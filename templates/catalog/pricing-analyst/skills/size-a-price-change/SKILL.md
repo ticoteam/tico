@@ -1,6 +1,8 @@
 ---
 name: size-a-price-change
 description: Size a proposed price or packaging change for the owner (customers and revenue by segment if nobody leaves, break-even churn, the cost of each grandfathering or notice option, and the unknowns). No recommendation unless the task asks for one.
+metadata:
+  function: growth
 ---
 # Size a price change
 

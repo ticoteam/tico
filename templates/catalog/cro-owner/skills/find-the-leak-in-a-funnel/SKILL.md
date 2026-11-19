@@ -1,6 +1,8 @@
 ---
 name: find-the-leak-in-a-funnel
 description: Name the step that loses the most people in a conversion funnel, measured against each step's own best recent rate, and refuse to name a leak until the tracking and noise checks pass.
+metadata:
+  function: marketing
 ---
 # Find the leak in a funnel
 

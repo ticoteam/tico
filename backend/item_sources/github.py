@@ -1,5 +1,5 @@
 # pyright: strict
-"""PR and release metadata: Tico's saved copies of GitHub (docs/pipelines-v3.md "Metadata", "GitHub").
+"""PR and release metadata: Tico's saved copies of GitHub (docs/dev/pipelines-v3.md "Metadata", "GitHub").
 
 Requirements read metadata only (the conditions `pr_open`, `checks_pass`, `pr_merged`, `in_release` at the end of this
 file, `at_head` pages in task_pages). Nothing here calls GitHub while a task is moved or checked. Two ways metadata
@@ -362,6 +362,12 @@ def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
             }
         )
     return out
+
+
+def prime_prs(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
+    """Read the PRs `prs_of` reads of many tasks (their links and saved metadata) together, for the reads that follow
+    in this snapshot."""
+    IM.prime_of_task(conn, task_ids, SOURCE, PR)
 
 
 def heads(conn: "sqlite3.Connection", task_id: str) -> dict[str, str | None]:
@@ -1220,7 +1226,7 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 
 
 # ----------------------------------------------------------------------------- the merge queue (was backend/merge_queue.py)
-# The Merge stage: Tico puts a task's PRs in GitHub's merge queue and takes them out (docs/pipelines-v3.md "GitHub",
+# The Merge stage: Tico puts a task's PRs in GitHub's merge queue and takes them out (docs/dev/pipelines-v3.md "GitHub",
 # the Engineering pipeline's Merge stage). Track C owns this file.
 #
 # - Entering a stage whose `on_enter` is `{"act": "github.queue"}` (`stage_effects.enter`) owes one `queue` action
@@ -1924,7 +1930,7 @@ def _wanted_again(conn: "sqlite3.Connection", effect: Row) -> None:
         )
 
 
-MERGE_OK = "tico/merge-ok"  # the check only the server posts (docs/pipelines-v3.md "GitHub": "tico/merge-ok")
+MERGE_OK = "tico/merge-ok"  # the check only the server posts (docs/dev/pipelines-v3.md "GitHub": "tico/merge-ok")
 
 
 def merge_ok_line(effect: Row, ok: bool) -> str:

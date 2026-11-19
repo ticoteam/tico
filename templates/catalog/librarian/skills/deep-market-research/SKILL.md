@@ -1,6 +1,8 @@
 ---
 name: deep-market-research
 description: "A task titled \"Deep research: <question>\", filed by a person with the research label: research a market question over several turns, with Haiku sub-agents reading sources and checking quotes, then write the graph, the market pages and one research report, every claim tied to a quote on a page you read."
+metadata:
+  function: tico
 ---
 # Deep market research
 
@@ -72,7 +74,7 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
 
 ## 1. Start (first turn only)
 
-1. Read the task: the question, any sources the person named, any scope ("only North America", "only B2B").
+1. Read the task's chat: the question, any sources the person named, any scope ("only North America", "only B2B").
 2. Read what Tico already knows, so you don't buy it twice: `tico strategy show`, `tico market page overview`,
    `coverage-universe`, `theses`, `open-questions`, `customer-themes`, `tico market briefing latest`, and the
    graph around the question (`tico market find`, `tico market show`). Buyer posts Listening
@@ -89,8 +91,8 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
      documents, big players' job posts. What they tell investors is often the opposite of what they tell buyers.
    - **Numbers**: the sources in `playbooks/size-the-market.md` (public statistics, filings, trade groups).
    - **Channels and people**: where buyers are reached, and who shapes them.
-5. Say what you're doing in the task, once: `tico task comment <id> "Researching: <question>. First results in
-   about an hour."` Then start round 1.
+5. Say what you're doing in your reply, once ("Researching: <question>. First results in
+   about an hour."). Then start round 1.
 
 ## 2. Send a round
 

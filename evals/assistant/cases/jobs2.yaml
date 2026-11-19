@@ -3,7 +3,7 @@
 # routine time), undo of an automation change, rules, and a support report that is only a link. Each case is
 # independent; its canned rows cover every read the job makes. Owner Dana Okafor; Priya Shah is the CFO; bots are named
 # by slug. Pipelines v3: a task is open, done or closed, sits in a stage of a pipeline, and what waits on a person is an
-# ask on a task (an OK or a question), answered with `task answer`.
+# OK on a task (answered with `task answer`) or a bot's question marked ❓ (answered with a reply, `task comment`).
 
 - id: jobs2-what-needs-me
   group: jobs2
@@ -13,7 +13,7 @@
       out:
         actor: "human:dana"
         count: 8
-        by_kind: {ask: 4, task: 4}
+        by_kind: {ask: 2, question: 2, task: 4}
         items:
           - kind: ask
             id: e1a0c4d2-6100-4000-8000-0000000000a1
@@ -23,7 +23,7 @@
             missing: ["OK to publish v0.5.0 to the stable channel"]
             since: "2026-11-01T09:00:00Z"
             task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 88, title: "Release v0.5.0", status: open, version: 6, pipeline_id: releases, stage_id: publish, owner: "bot:release-manager"}
-            ask: {requirement_id: e1a0c4d2-6100-4000-8000-0000000000a1, kind: ok, line: "OK to publish v0.5.0 to the stable channel", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
+            ask: {requirement_id: e1a0c4d2-6100-4000-8000-0000000000a1, kind: ok, line: "OK to publish v0.5.0 to the stable channel", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.0"], answer: null, may: [ok, no, give]}
           - kind: ask
             id: e2b1d5e3-6100-4000-8000-0000000000a2
             task_id: 2b41f6c0-1000-4000-8000-000000000012
@@ -32,25 +32,29 @@
             missing: ["OK to merge tico PR 2041 into main"]
             since: "2026-11-02T14:00:00Z"
             task: {id: 2b41f6c0-1000-4000-8000-000000000012, number: 2041, title: "tico PR 2041: runner retry backoff", status: open, version: 3, pipeline_id: engineering, stage_id: review, owner: "bot:reviewer"}
-            ask: {requirement_id: e2b1d5e3-6100-4000-8000-0000000000a2, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
-          - kind: ask
-            id: e3c2e6f4-6100-4000-8000-0000000000a3
+            ask: {requirement_id: e2b1d5e3-6100-4000-8000-0000000000a2, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", shows: ["pr:2041"], answer: null, may: [ok, no, give]}
+          - kind: question
+            id: "qmark:e3c2e6f4-6100-4000-8000-0000000000ab"
+            mark_id: e3c2e6f4-6100-4000-8000-0000000000ab
+            message_id: e3c2e6f4-6100-4000-8000-0000000000ac
+            conversation_id: e3c2e6f4-6100-4000-8000-0000000000ad
+            root_id: e3c2e6f4-6100-4000-8000-0000000000ad
             task_id: 4c7d1e93-1000-4000-8000-000000000013
-            requirement_id: e3c2e6f4-6100-4000-8000-0000000000a3
+            from_id: "bot:engineering-manager"
             line: "Should the staging banner stay on through the holiday week?"
-            missing: ["Should the staging banner stay on through the holiday week?"]
             since: "2026-11-02T11:00:00Z"
             task: {id: 4c7d1e93-1000-4000-8000-000000000013, number: 91, title: "Staging banner over the holidays", status: open, version: 2, pipeline_id: engineering, stage_id: doing, owner: "bot:engineering-manager"}
-            ask: {requirement_id: e3c2e6f4-6100-4000-8000-0000000000a3, kind: answer, line: "Should the staging banner stay on through the holiday week?", met: false, who: "human:dana", asked_by: "bot:engineering-manager", choices: ["Keep it", "Take it down on Nov 10"], shows: [], answer: null, may: [answer, give, thumbs]}
-          - kind: ask
-            id: e4d3f7a5-6100-4000-8000-0000000000a4
+          - kind: question
+            id: "qmark:e4d3f7a5-6100-4000-8000-0000000000ab"
+            mark_id: e4d3f7a5-6100-4000-8000-0000000000ab
+            message_id: e4d3f7a5-6100-4000-8000-0000000000ac
+            conversation_id: e4d3f7a5-6100-4000-8000-0000000000ad
+            root_id: e4d3f7a5-6100-4000-8000-0000000000ad
             task_id: 9f7e3a2c-1000-4000-8000-000000000010
-            requirement_id: e4d3f7a5-6100-4000-8000-0000000000a4
+            from_id: "bot:ceo-bot"
             line: "Which goal does CEO Bot own: the hiring plan or the budget?"
-            missing: ["Which goal does CEO Bot own: the hiring plan or the budget?"]
             since: "2026-10-31T11:00:00Z"
             task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 84, title: "CEO Bot: which goals does it own?", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:ceo-bot"}
-            ask: {requirement_id: e4d3f7a5-6100-4000-8000-0000000000a4, kind: answer, line: "Which goal does CEO Bot own: the hiring plan or the budget?", met: false, who: "human:dana", asked_by: "bot:ceo-bot", choices: ["The hiring plan", "The budget"], shows: [], answer: null, may: [answer, give, thumbs]}
           - kind: task
             id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
             task_id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
@@ -109,7 +113,7 @@
     Lists what waits on Dana from the record, in a few plain lines with links to each task: the OK to publish v0.5.0
     ([Release v0.5.0](#/task/7d21c4a0-1000-4000-8000-000000000008)) and the OK to merge tico PR 2041, both her own tap; the
     Engineering Lead question about the staging banner; the CEO Bot goal question; and the pricing page task she owns. The
-    count is the tool's: 8 (4 asks, 4 tasks), quoted as the record gives it. The two Check health test pings are named as
+    count is the tool's: 8 (2 OKs, 2 questions, 4 tasks), quoted as the record gives it. The two Check health test pings are named as
     noise, not as real decisions. It gives no OK, sends nothing back, answers no question, and changes nothing.
 
 - id: jobs2-whats-open
@@ -151,7 +155,7 @@
       out:
         actor: "human:dana"
         count: 5
-        by_kind: {ask: 3, task: 2}
+        by_kind: {ask: 1, question: 2, task: 2}
         items:
           - kind: ask
             id: e1a0c4d2-6100-4000-8000-0000000000a1
@@ -161,25 +165,29 @@
             missing: ["OK to publish v0.5.0 to the stable channel"]
             since: "2026-11-01T09:00:00Z"
             task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 88, title: "Release v0.5.0", status: open, version: 6, pipeline_id: releases, stage_id: publish, owner: "bot:release-manager"}
-            ask: {requirement_id: e1a0c4d2-6100-4000-8000-0000000000a1, kind: ok, line: "OK to publish v0.5.0 to the stable channel", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
-          - kind: ask
-            id: e4d3f7a5-6100-4000-8000-0000000000a4
+            ask: {requirement_id: e1a0c4d2-6100-4000-8000-0000000000a1, kind: ok, line: "OK to publish v0.5.0 to the stable channel", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.0"], answer: null, may: [ok, no, give]}
+          - kind: question
+            id: "qmark:e4d3f7a5-6100-4000-8000-0000000000ab"
+            mark_id: e4d3f7a5-6100-4000-8000-0000000000ab
+            message_id: e4d3f7a5-6100-4000-8000-0000000000ac
+            conversation_id: e4d3f7a5-6100-4000-8000-0000000000ad
+            root_id: e4d3f7a5-6100-4000-8000-0000000000ad
             task_id: 9f7e3a2c-1000-4000-8000-000000000010
-            requirement_id: e4d3f7a5-6100-4000-8000-0000000000a4
+            from_id: "bot:ceo-bot"
             line: "Which goal does CEO Bot own: the hiring plan or the budget?"
-            missing: ["Which goal does CEO Bot own: the hiring plan or the budget?"]
             since: "2026-10-31T11:00:00Z"
             task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 84, title: "CEO Bot: which goals does it own?", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:ceo-bot"}
-            ask: {requirement_id: e4d3f7a5-6100-4000-8000-0000000000a4, kind: answer, line: "Which goal does CEO Bot own: the hiring plan or the budget?", met: false, who: "human:dana", asked_by: "bot:ceo-bot", choices: ["The hiring plan", "The budget"], shows: [], answer: null, may: [answer, give, thumbs]}
-          - kind: ask
-            id: e5e4a8b6-6100-4000-8000-0000000000a5
+          - kind: question
+            id: "qmark:e5e4a8b6-6100-4000-8000-0000000000ab"
+            mark_id: e5e4a8b6-6100-4000-8000-0000000000ab
+            message_id: e5e4a8b6-6100-4000-8000-0000000000ac
+            conversation_id: e5e4a8b6-6100-4000-8000-0000000000ad
+            root_id: e5e4a8b6-6100-4000-8000-0000000000ad
             task_id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10
-            requirement_id: e5e4a8b6-6100-4000-8000-0000000000a5
-            line: "Review launch email draft 2"
-            missing: ["Review launch email draft 2"]
+            from_id: "bot:copywriter"
+            line: "Review launch email draft 2. It cannot be scheduled until the final price line is in."
             since: "2026-10-31T11:40:00Z"
             task: {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, number: 58, title: "Spring launch: launch email", status: open, version: 7, pipeline_id: marketing, stage_id: review, owner: "bot:copywriter"}
-            ask: {requirement_id: e5e4a8b6-6100-4000-8000-0000000000a5, kind: answer, line: "Review launch email draft 2. It cannot be scheduled until the final price line is in.", met: false, who: "human:dana", asked_by: "bot:copywriter", choices: null, shows: ["file:launch-email-draft-2"], answer: null, may: [answer, give, thumbs]}
           - kind: task
             id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
             task_id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
@@ -295,7 +303,7 @@
         created: "2026-10-14T09:00:00Z"
         updated: "2026-10-14T09:00:00Z"
         turn: {state: bot, who: "bot:website", line: "Website: fix the preview deploy", since: "2026-10-14T09:00:00Z"}
-        to_leave: [{requirement_id: f1a2b3c4-6100-4000-8000-0000000000b1, kind: done, line: "Done", met: false, who: "bot:website", asked_by: null, choices: null, shows: [], answer: null, may: []}]
+        to_leave: [{requirement_id: f1a2b3c4-6100-4000-8000-0000000000b1, kind: done, line: "Done", met: false, who: "bot:website", asked_by: null, shows: [], answer: null, may: []}]
         events: []
         comments: []
     - match: '^task list'
@@ -440,7 +448,7 @@
         owner_id: "human:dana"
         requester: "human:dana"
         turn: {state: person, who: "human:dana", line: "Dana: finish the pricing page", since: "2026-10-20T10:05:00Z"}
-        to_leave: [{requirement_id: f2b3c4d5-6100-4000-8000-0000000000b2, kind: done, line: "Done", met: false, who: "human:dana", asked_by: null, choices: null, shows: [], answer: null, may: [done]}]
+        to_leave: [{requirement_id: f2b3c4d5-6100-4000-8000-0000000000b2, kind: done, line: "Done", met: false, who: "human:dana", asked_by: null, shows: [], answer: null, may: [done]}]
         comments: []
       after:
         - when: '^task (done 5b8e0d11|move 5b8e0d11\S* done)'
@@ -586,26 +594,30 @@
       out:
         actor: "human:dana"
         count: 2
-        by_kind: {ask: 2}
+        by_kind: {question: 2}
         items:
-          - kind: ask
-            id: e6f5b9c7-6100-4000-8000-0000000000a6
+          - kind: question
+            id: "qmark:e6f5b9c7-6100-4000-8000-0000000000ab"
+            mark_id: e6f5b9c7-6100-4000-8000-0000000000ab
+            message_id: e6f5b9c7-6100-4000-8000-0000000000ac
+            conversation_id: e6f5b9c7-6100-4000-8000-0000000000ad
+            root_id: e6f5b9c7-6100-4000-8000-0000000000ad
             task_id: 6d2b8e17-6100-4000-8000-000000000001
-            requirement_id: e6f5b9c7-6100-4000-8000-0000000000a6
+            from_id: "bot:botops"
             line: "Build the support inbox bot on the shared mailbox, live on Tuesday?"
-            missing: ["Build the support inbox bot on the shared mailbox, live on Tuesday?"]
             since: "2026-11-02T16:00:00Z"
             task: {id: 6d2b8e17-6100-4000-8000-000000000001, number: 97, title: "Support inbox bot", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
-            ask: {requirement_id: e6f5b9c7-6100-4000-8000-0000000000a6, kind: answer, line: "Build the support inbox bot on the shared mailbox, live on Tuesday?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give, thumbs]}
-          - kind: ask
-            id: e7a6c0d8-6100-4000-8000-0000000000a7
+          - kind: question
+            id: "qmark:e7a6c0d8-6100-4000-8000-0000000000ab"
+            mark_id: e7a6c0d8-6100-4000-8000-0000000000ab
+            message_id: e7a6c0d8-6100-4000-8000-0000000000ac
+            conversation_id: e7a6c0d8-6100-4000-8000-0000000000ad
+            root_id: e7a6c0d8-6100-4000-8000-0000000000ad
             task_id: 3f0e9a52-6100-4000-8000-000000000002
-            requirement_id: e7a6c0d8-6100-4000-8000-0000000000a7
+            from_id: "bot:health-monitor"
             line: "Pause the runner queue ping for a day?"
-            missing: ["Pause the runner queue ping for a day?"]
             since: "2026-11-02T18:05:00Z"
             task: {id: 3f0e9a52-6100-4000-8000-000000000002, number: 98, title: "Runner queue ping", status: open, version: 2, pipeline_id: general, stage_id: general-todo, owner: "bot:health-monitor"}
-            ask: {requirement_id: e7a6c0d8-6100-4000-8000-0000000000a7, kind: answer, line: "Pause the runner queue ping for a day?", met: false, who: "human:dana", asked_by: "bot:health-monitor", choices: ["Yes", "No"], shows: [], answer: null, may: [answer, give, thumbs]}
         version: "c3d4e5f6"
         next: null
     - match: '^task show 6d2b8e17\S*'
@@ -620,21 +632,21 @@
         stage: {id: general-todo, name: "To do", kind: work, by_hand: false}
         owner_id: "bot:botops"
         requester: "human:dana"
-        turn: {state: person, who: "human:dana", line: "Dana: Build the support inbox bot on the shared mailbox, live on Tuesday?", since: "2026-11-02T16:00:00Z", requirement_id: e6f5b9c7-6100-4000-8000-0000000000a6}
-        to_leave: [{requirement_id: e6f5b9c7-6100-4000-8000-0000000000a6, kind: answer, line: "Build the support inbox bot on the shared mailbox, live on Tuesday?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give, thumbs]}]
+        turn: {state: person, who: "human:dana", line: "Dana: Build the support inbox bot on the shared mailbox, live on Tuesday?", since: "2026-11-02T16:00:00Z"}
+        to_leave: []
         comments: []
     - match: '^message list'
       out: {actor: "human:dana", messages: [], more_messages: false}
   must:
-    - '^task answer 6d2b8e17\S* e6f5b9c7\S* "?yes, go ahead\b'
+    - '^task comment 6d2b8e17\S* "?yes, go ahead\b'
   must_not:
-    - '^task answer (?!6d2b8e17)'
-    - '^task answer \S+ \S+ (ok|no)\b'
+    - '^task comment (?!6d2b8e17)'
+    - '^task answer'
     - '^message send(?! -h\b| --help)'
-    - '^task (create|close|done|move|comment)(?! -h\b| --help)'
+    - '^task (create|close|done|move)(?! -h\b| --help)'
   reply: |
-    Answers BotOps's question about the support inbox bot as Dana, in her exact words ("yes, go ahead", not a shortened
-    yes), on its task, and says in one line that it is answered, with the task's link. It does not answer Health Monitor's
+    Replies to BotOps's question about the support inbox bot as Dana, in her exact words ("yes, go ahead", not a shortened
+    yes), in its task chat, and says in one line that it is answered, with the task's link. It does not reply to Health Monitor's
     question about the runner ping, which Dana did not mention, and does not message BotOps separately. (Only one BotOps
     question is open; with two, asking which would be right.)
 

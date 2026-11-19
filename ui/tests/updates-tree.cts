@@ -54,7 +54,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       seo.children = [{key: 'b:writer', author: 'writer', name: 'Writer Bot', direct: false, update: update('u-writer', 'writer', '- Drafted the checklist page', allSeen), children: []}];
     }
     const ana: Entry = {key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mine, children: [cmo]};
-    return {kind: 'daily', day: today, scope: scope || 'below', me: 'p:ana', unread: 1,
+    // The tree counts what the badge counts (backend/updates.py: count_unread of direct reports), so the badge is the
+    // same whichever of the two answers lands last.
+    return {kind: 'daily', day: today, scope: scope || 'below', me: 'p:ana', unread: unreadCount,
             roots: scope === 'all' ? [{key: 'p:boss', author: 'human:boss', name: 'Bo', direct: false, update: null, children: [ana]}] : [ana]};
   };
   const open = async (viewport: {width: number; height: number}) => {

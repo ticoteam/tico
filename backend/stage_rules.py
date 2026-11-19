@@ -21,7 +21,8 @@ and published as `stage_rule.refused` / `stage_rule.told` / `stage_rule.moved_ba
 other rule.
 
 The default rules (`DEFAULTS`) are ordinary rows: read, edit, retire. `ensure_defaults` seeds each once by id, so a
-retired one stays retired, and brings a stored default still in words it shipped with before (`EARLIER`) up to date.
+retired one stays retired, and brings a stored default still in words it shipped with before (`EARLIER`), or on a
+pipeline the company retired, up to date.
 A bot's new rule or change is `suggested` until a person accepts or skips it.
 """
 
@@ -53,9 +54,14 @@ CONDITIONS = (
     "snooze_hours_over",
     "label",
     "requester_person",
-    "sent_back",
-    "turn",
+    "sent_back",  # read by nothing yet (`UNREAD`)
+    "turn",  # 'bot' | 'person': read by timers alone (`TIMERS_ONLY`)
 )
+# A condition nothing reads would count as true, so the rule would act on every task; one only timers read would be
+# skipped on an action When. Either is refused when a rule is saved, and a rule saved before with one is listed as not
+# acting and never holds (`unread`).
+UNREAD = {"sent_back": 'Nothing reads "sent back" yet, so the rule would act on every task: remove that condition'}
+TIMERS_ONLY = {"turn": "Whose turn it is is read by timer rules only: pick a timer When, or remove that condition"}
 QUESTION_SET = "stage-rule"
 LABEL = "stage-rule@1"
 # Jev's probability the question is true at which a rule's If holds. Below it the write goes: refusing a real wait
@@ -70,7 +76,9 @@ REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
 # What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
 # person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
-BLOCKED = "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them on the task."
+BLOCKED = (
+    "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them with a ❓ on the task."
+)
 REAL_WAIT_JEV = (
     "The bot is setting the task aside for something other than looking again on a date. Its reason names a task, a "
     "pull request, a merge, a release (such as rc.23), main or checks that it waits on; a person, a reply or a "
@@ -91,12 +99,18 @@ EARLIER: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
 }
+# Where Owner on the team is made: on the first of these presets the company has live (the pipeline whose `preset` it
+# is, whatever its id), the stages there that hold the build. Product (pipeline_settings.PRODUCT) is every company's from
+# 0.6; Engineering, of the pair Product replaced (pipeline_settings.LEGACY), is a company's set up before then.
+OWNER_ON_TEAM_ON: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("features", ("product-build", "product-fixes-1", "product-fixes-2")),
+    ("engineering", ("engineering-on-deck", "engineering-build", "engineering-fixes-1", "engineering-fixes-2")),
+)
 DEFAULTS: list[dict[str, Any]] = [
     {
         "id": OWNER_ON_TEAM,
         "name": "Owner on the team",
-        "pipeline_id": "engineering",
-        "stages": ["engineering-on-deck", "engineering-build", "engineering-fixes-1", "engineering-fixes-2"],
+        "on": OWNER_ON_TEAM_ON,  # its pipeline_id and stages (`_on`)
         "event": "enters,owner_changes",
         "timer": {},
         "cond": {"owner_not_on_team": ""},
@@ -217,14 +231,35 @@ def view(row: Any) -> dict[str, Any]:
 
 
 def not_acting(rule: Any) -> str:
-    """Why a rule never acts ('' when it does): Tell or Move back on an action When, which only timers carry out."""
+    """Why a rule never acts ('' when it does): Tell or Move back on an action When, which only timers carry out, or a
+    condition nothing reads on its When (`unread`)."""
     events = [e for e in str(rule.get("event") or "").split(",") if e]
-    return NEEDS_TIMER if events and "timer" not in events and rule.get("then") != "block" else ""
+    if events and "timer" not in events and rule.get("then") != "block":
+        return NEEDS_TIMER
+    return unread(rule)
+
+
+def unread(rule: Any) -> str:
+    """Why a condition of the rule is read by nothing on its When ('' when every one is read): `UNREAD`, or a
+    `TIMERS_ONLY` one on an action When. `cond` is decoded, as `view` and `_check` hold it."""
+    cond: Any = rule.get("cond")
+    keys = [str(k) for k in cast(dict[str, Any], cond)] if isinstance(cond, dict) else []
+    timer = "timer" in str(rule.get("event") or "").split(",")
+    for key in keys:
+        if key in UNREAD:
+            return UNREAD[key]
+        if key in TIMERS_ONLY and not timer:
+            return TIMERS_ONLY[key]
+    return ""
 
 
 def cost(row: Any) -> str:
     """Free, or one Jev call per event. Timers never call a model."""
-    return "one Jev call per event" if (row.get("jev") or "").strip() and row.get("event") != "timer" else "free"
+    return (
+        "one Decision model call per event"
+        if (row.get("jev") or "").strip() and row.get("event") != "timer"
+        else "free"
+    )
 
 
 def _scope_rank(rule: Any) -> int:
@@ -347,6 +382,8 @@ def matches(conn: Any, rule: Any, task_row: Any, *, owner: Any = ..., facts: Any
     question is not asked here (`judge_snooze`)."""
     cond = rule["cond"] if isinstance(rule.get("cond"), dict) else view(rule)["cond"]
     rule = {**rule, "cond": cond}
+    if unread(rule):
+        return False, ""  # listed as not acting: a condition nothing reads never holds
     facts = facts or {}
     who = task_row.get("owner_id") if owner is ... else owner
     said: list[str] = []
@@ -469,7 +506,7 @@ def _state(task_row: Any, why: str, until: str | None) -> dict[str, Any]:
     return {
         "task": {
             "title": str(task_row.get("title") or "")[:300],
-            "body": "" if task_row.get("private") else str(task_row.get("body") or "")[:4000],
+            "body": "" if task_row.get("private") else str(task_row.get("request") or "")[:4000],
             "stage": stage.get("name") or task_row.get("stage_id") or "",
         },
         "event": {"kind": "a bot snoozes the task", "why": str(why or "")[:2000], "until": until or ""},
@@ -525,6 +562,9 @@ def snooze_rules(conn: Any, task_row: Any, by: str, why: str, until: str | None)
         if not rule["jev"]:
             return (rule, _line(rule, said)), []
         asked.append(rule)
+    if asked and task_row.get("id"):
+        # What the task asks, for the Jev question (`_state`): its first message, read here while a connection is held.
+        task_row["request"] = _h().task_request_text(conn, task_row["id"])
     return None, asked
 
 
@@ -575,25 +615,25 @@ def judge_snooze(
 # ----------------------------------------------------------------------------- defaults and the release sweep
 def ensure_defaults(conn: Any) -> list[str]:
     """Seed each default rule once, by id (a retired or edited one is left as it is; one still in words it shipped
-    with before takes today's, `_bring_up_to_date`). A default whose pipeline the company does not have is not made;
-    its stages are those the pipeline has. Returns the ids made. The first time Owner on the team is made, the release
-    sweep clears the owners it refuses on open tasks (`sweep_owners`)."""
+    with before takes today's, `_bring_up_to_date`). A default on presets (`on`) goes to the first the company has, on
+    the stages it has there, and is not made while it has none. Returns the ids made. The first time Owner on the team
+    is made or moves to another pipeline, the release sweep clears the owners it refuses on open tasks
+    (`sweep_owners`)."""
     if not has_table(conn):
         return []
     made: list[str] = []
+    moved = False
     H = _h()
     for rule in DEFAULTS:
         if conn.execute("SELECT 1 FROM stage_rules WHERE id=?", (rule["id"],)).fetchone():
-            _bring_up_to_date(conn, rule)
+            moved = _bring_up_to_date(conn, rule) or moved
             continue
-        stages = list(rule["stages"])
-        if rule["pipeline_id"]:
-            have = {r[0] for r in conn.execute("SELECT id FROM stages WHERE pipeline_id=?", (rule["pipeline_id"],))}
-            if not have:
+        pipeline_id, stages = "", list(rule.get("stages") or [])
+        if rule.get("on"):
+            found = _on(conn, rule["on"])
+            if not found:
                 continue
-            stages = [s for s in stages if s in have]
-            if rule["stages"] and not stages:
-                continue
+            pipeline_id, stages = found
         ts = H.now()
         conn.execute(
             "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, "
@@ -602,7 +642,7 @@ def ensure_defaults(conn: Any) -> list[str]:
             (
                 rule["id"],
                 rule["name"],
-                rule["pipeline_id"],
+                pipeline_id,
                 json.dumps(stages),
                 rule["event"],
                 json.dumps(rule["timer"]),
@@ -612,26 +652,61 @@ def ensure_defaults(conn: Any) -> list[str]:
                 json.dumps(rule["then_params"]),
                 rule["reason"],
                 rule["builtin"],
-                _core.KEEPER,
+                _core.TICO_ACTOR,
                 ts,
                 ts,
             ),
         )
         made.append(rule["id"])
-    if OWNER_ON_TEAM in made:
+    if OWNER_ON_TEAM in made or moved:
         sweep_owners(conn)
     return made
 
 
-def _bring_up_to_date(conn: Any, rule: dict[str, Any]) -> None:
+def _on(conn: Any, targets: Any) -> tuple[str, list[str]] | None:
+    """The first of `targets` ((preset, stage ids), ...) the company has: its live pipeline made from that preset and
+    the listed stages it has. None when it has none of them."""
+    for preset, wanted in targets:
+        row = conn.execute(
+            "SELECT id FROM pipelines WHERE preset=? AND retired_at IS NULL ORDER BY created_at, id LIMIT 1", (preset,)
+        ).fetchone()
+        if not row:
+            continue
+        have = {r[0] for r in conn.execute("SELECT id FROM stages WHERE pipeline_id=?", (row[0],))}
+        stages = [s for s in wanted if s in have]
+        if stages:
+            return str(row[0]), stages
+    return None
+
+
+def _bring_up_to_date(conn: Any, rule: dict[str, Any]) -> bool:
     """A stored default whose words are still ones it shipped with before (`EARLIER`) takes today's; words a company
-    edited are its own and stay."""
+    edited are its own and stay. One on presets (`on`) whose pipeline is retired, still on stages a target lists (as
+    it was made), moves to the first target the company has live: Owner on the team made on Engineering moves to Product
+    once Engineering is retired. A retired rule stays where it is. Returns whether it moved."""
     for column, earlier in EARLIER.get(rule["id"], {}).items():
         conn.execute(
             f"UPDATE stage_rules SET {column}=?, updated_at=?, revision=revision+1 "
             f"WHERE id=? AND {column} IN ({','.join('?' * len(earlier))})",
             (rule[column], _h().now(), rule["id"], *earlier),
         )
+    if not rule.get("on"):
+        return False
+    stored = get(conn, rule["id"])
+    if not stored or stored.get("retired_at"):
+        return False
+    if conn.execute("SELECT 1 FROM pipelines WHERE id=? AND retired_at IS NULL", (stored["pipeline_id"],)).fetchone():
+        return False
+    if not stored["stages"] or not any(set(stored["stages"]) <= set(wanted) for _, wanted in rule["on"]):
+        return False  # its stages were changed: the company's own
+    found = _on(conn, rule["on"])
+    if not found:
+        return False
+    conn.execute(
+        "UPDATE stage_rules SET pipeline_id=?, stages=?, updated_at=?, revision=revision+1 WHERE id=?",
+        (found[0], json.dumps(found[1]), _h().now(), rule["id"]),
+    )
+    return True
 
 
 def sweep_owners(conn: Any) -> list[str]:
@@ -665,7 +740,7 @@ def sweep_owners(conn: Any) -> list[str]:
         if row["stage"].get("owner") == "assignee" or _picks_owner(row["stage"]):
             fields["assignee_id"] = None
         E._write(conn, task_id, **fields)
-        record(conn, task_id, rule, line, _core.KEEPER, data={"owner": row.get("owner_id"), "sweep": True})
+        record(conn, task_id, rule, line, _core.TICO_ACTOR, data={"owner": row.get("owner_id"), "sweep": True})
         pipe: Any = row.get("pipeline") or {}
         manager = pipe.get("manager_id")
         changed.setdefault(manager or "", []).append({**row, "line": line})
@@ -734,8 +809,8 @@ def sweep_snoozes(store: Any) -> list[str]:
             row = E.task(c, task_id)
             if not row or not row.get("snooze"):
                 continue
-            E.unsnooze(c, task_id, _core.KEEPER, line)
-            record(c, task_id, rule, line, _core.KEEPER, data={"sweep": True})
+            E.unsnooze(c, task_id, _core.TICO_ACTOR, line)
+            record(c, task_id, rule, line, _core.TICO_ACTOR, data={"sweep": True})
             pipe: Any = row.get("pipeline") or {}
             told.setdefault(str(pipe.get("manager_id") or ""), []).append((row, line))
         for manager, found_rows in told.items():
@@ -767,8 +842,9 @@ def sweep_snoozes(store: Any) -> list[str]:
 
 # ----------------------------------------------------------------------------- writes (the routes are part 3's)
 def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
-    """A rule's fields, refused with a plain reason when they cannot be a rule. A bot's suggestion to retire a rule
-    copies the rule as it is, so a shape saved before `NEEDS_TIMER` is not refused there."""
+    """A rule's fields, refused with a plain reason when they cannot be a rule or would never act (`not_acting`). A
+    bot's suggestion to retire a rule copies the rule as it is, so a shape saved before such a check is not refused
+    there."""
     out = dict(fields)
     events = [e for e in str(out.get("event") or "").split(",") if e]
     if not events or any(e not in EVENTS for e in events) or ("timer" in events and len(events) > 1):
@@ -778,16 +854,17 @@ def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
         if timer.get("kind") not in TIMERS or not isinstance(timer.get("hours"), (int, float)) or timer["hours"] <= 0:
             raise _problem("validation", f"A timer is a kind ({', '.join(TIMERS)}) and a number of hours")
         if (out.get("jev") or "").strip():
-            raise _problem("validation", "A timer never asks Jev: use fixed conditions")
+            raise _problem("validation", "A timer never asks the Decision model: use fixed conditions")
     if out.get("then") not in THENS:
         raise _problem("validation", f"Then is one of {', '.join(THENS)}")
     if out["then"] == "block" and not set(events) & {"enters", "owner_changes", "bot_snoozes"}:
         raise _problem("validation", "Block needs an action to refuse: enters, owner changes or a bot snoozes")
-    if not retiring and not_acting(out):
-        raise _problem("validation", NEEDS_TIMER)
     unknown = set(out.get("cond") or {}) - set(CONDITIONS)
     if unknown:
         raise _problem("validation", f"Unknown condition: {', '.join(sorted(unknown))}")
+    idle = not_acting(out)
+    if idle and not retiring:
+        raise _problem("validation", idle)
     if not str(out.get("name") or "").strip():
         raise _problem("validation", "A rule has a name")
     return out

@@ -181,16 +181,14 @@ function teamAddHuman() {
   };
 }
 
-// The Team header's ⋯: Contacts, and the list's two switches in words (ui/app/sidebar.ts orgMineToggle,
-// orgHistoryToggle). A switch keeps the menu open; Contacts opens its page and closes it. Built like the plus menu above.
+// The Team header's ⋯: the list's two switches in words (ui/app/sidebar.ts orgMineToggle, orgHistoryToggle).
+// A switch keeps the menu open. Built like the plus menu above.
 const TEAM_MORE_MENU = document.createElement('div');
 TEAM_MORE_MENU.id = 'team-more-menu';
 TEAM_MORE_MENU.setAttribute('role', 'menu');
 TEAM_MORE_MENU.setAttribute('aria-label', 'Team options');
 TEAM_MORE_MENU.hidden = true;
-TEAM_MORE_MENU.innerHTML = `<a role="menuitem" href="#/library/contacts" data-nav="contacts"><span class="nav-icon" aria-hidden="true">contact_page</span><span>Contacts</span></a>
-  <hr class="team-menu-line" role="separator">
-  <button type="button" role="menuitemcheckbox" aria-checked="false" data-org-more="mine"><span class="nav-icon" aria-hidden="true">person</span><span>${ORG_MINE_WORDS}</span><span class="nav-icon team-menu-check" aria-hidden="true">check</span></button>
+TEAM_MORE_MENU.innerHTML = `<button type="button" role="menuitemcheckbox" aria-checked="false" data-org-more="mine"><span class="nav-icon" aria-hidden="true">person</span><span>${ORG_MINE_WORDS}</span><span class="nav-icon team-menu-check" aria-hidden="true">check</span></button>
   <button type="button" role="menuitemcheckbox" aria-checked="false" data-org-more="history"><span class="nav-icon" aria-hidden="true">history</span><span>${ORG_HISTORY_WORDS}</span><span class="nav-icon team-menu-check" aria-hidden="true">check</span></button>`;
 document.body.append(TEAM_MORE_MENU);
 orgMoreSync();
@@ -243,7 +241,6 @@ TEAM_MORE_MENU.onkeydown = event => {
 };
 TEAM_MORE_MENU.onclick = event => {
   const target = eventElement(event);
-  if (target?.closest('a[data-nav="contacts"]')) { teamMoreClose(); setDrawer(false); return; }   // the link navigates
   const which = target?.closest<HTMLElement>('[data-org-more]')?.dataset.orgMore;
   if (which === 'mine') orgMineToggle();
   else if (which === 'history') orgHistoryToggle();

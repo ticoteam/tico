@@ -14,11 +14,11 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
     tico task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>"`.
 
 ## 2. Review copy
 
-Follow `skills/review-copy-against-the-brand-book/SKILL.md`. Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
+Follow `.claude/skills/build-the-brand-guide/SKILL.md`, step 12 (Review). Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
 
 ## 3. Review a name
 
@@ -40,7 +40,7 @@ bet stays theirs: you check, you do not take the pen.
   brand card's visual rules. A page change is checked as it will look, not as a text file.
 - A video in the bet is the Video Owner's to make. File it under this sub-task:
 
-      tico task file "Video: <title>" --parent <id> --owner video-owner --body "<what the bet needs, where it runs, the deadline>"
+      tico task file "Video: <title>" --parent <id> --owner video-owner --message "<what the bet needs, where it runs, the deadline>"
 
   and give your answer once its brief and cost are on its task.
 - With no brand card published yet (`tico brand show`), there are no rules to check against. Check the facts and

@@ -1,6 +1,8 @@
 ---
 name: "define-a-metric"
 description: "Write or check one metric line for the investor update: its name, formula, source, period, inclusion rules, owner, order and the baseline month, so the number means the same thing every month."
+metadata:
+  function: finance
 ---
 # Define a metric
 

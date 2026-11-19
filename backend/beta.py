@@ -52,7 +52,7 @@ FEATURES = (
         "message_bots",
         "Message bots: mail and calendar",
         (("messaging.md", None), ("mail.md", None), ("mail-service.md", None)),
-        lambda c, s, shell: _rows(c, "SELECT 1 FROM mail_mailboxes LIMIT 1"),
+        lambda c, s, shell: _rows(c, "SELECT 1 FROM mailboxes WHERE checked_at IS NOT NULL LIMIT 1"),
         {"templates": ["inbox-manager"]},
     ),
     Feature(
@@ -70,7 +70,7 @@ FEATURES = (
     ),
     Feature(
         "live_meetings",
-        "Live Meetings API and Recorder",
+        "Live Meetings API",
         (("live-meetings-api.md", None),),
         lambda c, s, shell: _rows(c, "SELECT 1 FROM live_meetings LIMIT 1"),
     ),

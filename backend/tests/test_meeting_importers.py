@@ -5,7 +5,8 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.helpers.api import headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.openapi_v2 import conforms
 
 
 def historical_meeting(api, machine):
@@ -84,3 +85,46 @@ def test_sources_say_why_an_importer_fails_and_removing_it_drops_it(api):
     assert post(api, "meeting-importers/zoom", {"enabled": False, "runner_id": ""}) == {"ok": True}
     rows = {r["id"] for r in api.get("/api/meetings/sources", headers=headers("ben-test")).json()["sources"]}
     assert "zoom" not in rows
+
+
+def declared(api, operation):
+    document = get(api, "openapi.json")
+    op = next(o for ops in document["paths"].values() for o in ops.values() if o["operationId"] == operation)
+    return op["responses"]["200"]["content"]["application/json"]["schema"], document
+
+
+def failing_zoom(api):
+    machine = runner(api)
+    assert post(api, "meeting-importers/zoom", {"enabled": True, "runner_id": machine["runner_id"]}) == {"ok": True}
+    post(api, "imports/sources/zoom/status", {"state": "error", "error_code": "auth_failed"}, machine["token"])
+    return machine
+
+
+def test_v2_sources_answer_as_the_old_address_with_their_declared_shape_and_refuse_a_bot(api):
+    failing_zoom(api)
+    answer = get(api, "meetings/sources", "ben-test")
+    old = api.get("/api/meetings/sources", headers=headers("ben-test")).json()
+    assert answer["sources"] == old["sources"]
+    rows = {r["id"]: r for r in answer["sources"]}
+    assert list(rows) == ["import", "close", "zoom"]
+    # Each row keeps its own health: Zoom's failure is not Close's.
+    assert rows["zoom"]["error_code"] == "auth_failed" and rows["close"]["error_code"] == ""
+    assert conforms(answer, *declared(api, "listMeetingSources")) is None
+    _, _, attempt = setup_attempt(api)
+    assert get(api, "meetings/sources", attempt["token"], expected=403)["error"]["code"] == "identity"
+
+
+def test_importers_are_the_owners_alone_and_answer_their_declared_shape(api):
+    machine = failing_zoom(api)
+    for token in ("ben-test", setup_attempt(api)[2]["token"]):
+        assert get(api, "meeting-importers", token, expected=403)
+        assert post(api, "meeting-importers/zoom", {"enabled": False}, token, expected=403)
+    answer = get(api, "meeting-importers")
+    assert conforms(answer, *declared(api, "listMeetingImporters")) is None
+    zoom = next(r for r in answer["importers"] if r["source"] == "zoom")
+    assert (zoom["status"], zoom["runner_id"], zoom["error"]) == (
+        "error",
+        machine["runner_id"],
+        "The tool refused the credential.",
+    )
+    assert machine["runner_id"] in {m["id"] for m in answer["computers"]}

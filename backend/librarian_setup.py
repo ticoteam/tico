@@ -26,6 +26,7 @@ from . import librarian as L
 from . import market as MK
 from . import models as M
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 DOCS_KEY = "librarian.docs_setup"
 MARKET_KEY = "librarian.market_setup"
@@ -189,8 +190,9 @@ def setup_docs(c, auth, who, body):
         c,
         who.actor,
         title,
-        docs_text(sources, note),
+        note,  # the person's own words are the request; the steps are the Librarian's instructions, in its run
         "bot:" + L.LIBRARIAN,
+        instructions=docs_text(sources, note),
         allow_planned=True,
         labels=["docs-setup"],
         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + L.LIBRARIAN, who.actor),
@@ -250,20 +252,43 @@ def setup_market(c, auth, who, body):
 
 
 def install(app, store, auth, mutate):
-    @app.get("/api/v2/librarian/setup")
+    @app.get(
+        "/api/v2/librarian/setup",
+        **api_v2(
+            "Docs",
+            "getLibrarianSetup",
+            "The Librarian's first-run setup for the caller: whether Docs asks where the docs are, and the owner's market answers so far",
+            "LibrarianSetup",
+        ),
+    )
     def read(request: Request):
         who = L.person(request)
         auth.domain(who)
         with store.read() as c:
             return view(c, who)
 
-    @app.post("/api/v2/librarian/setup/docs")
+    @app.post(
+        "/api/v2/librarian/setup/docs",
+        **api_v2(
+            "Docs",
+            "setUpDocs",
+            "Add the places the caller's docs are as sources and file one \"Set up Docs\" task to the Librarian; `skip` hides the first-visit question for the caller only",
+        ),
+    )
     def docs(request: Request, body: DocsSetup):
         who = L.person(request)
         auth.domain(who)
         return mutate(request, body, lambda c: setup_docs(c, auth, who, body))
 
-    @app.post("/api/v2/librarian/setup/market")
+    @app.post(
+        "/api/v2/librarian/setup/market",
+        **api_v2(
+            "Docs",
+            "setUpMarket",
+            "Owner only: keep the answers to the Librarian's four market questions (`save`, `skip`), or `finish` and file \"Set up the market map\", which builds the map and sets what Market tracks",
+            "LibrarianMarketSetup",
+        ),
+    )
     def market(request: Request, body: MarketSetup):
         who = L.person(request)
         auth.domain(who)

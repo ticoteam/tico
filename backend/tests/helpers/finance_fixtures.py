@@ -45,7 +45,22 @@ GROUPS = {
 BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"), "finance-owner": ("eng", "human:ben")}
 
 
+# The provider keys tests connect with: stored credentials the owner, a credential administrator, may use. They hold no
+# value: the fake providers need none, and a sync reads a value only when one is stored.
+KEYS = ("cred-mercury", "cred-mercury-2", "cred-2", "cred-stripe", "cred-stripe-2", "cred-brex")
+
+
+def store_keys(c: sqlite3.Connection, *ids: str) -> None:
+    for cid in ids or KEYS:
+        c.execute(
+            "INSERT OR IGNORE INTO credentials(id,name,kind,created_at,updated_at,updated_by,created_by) "
+            "VALUES(?,?,'token',?,?,?,?)",
+            (cid, cid, AT, AT, OWNER, OWNER),
+        )
+
+
 def _seed(c: sqlite3.Connection) -> None:
+    store_keys(c)
     H.sync_registry(
         c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS}, {"people": PEOPLE}
     )
@@ -286,14 +301,15 @@ class FakeMercury:
     def users(self):
         return self._answer("users", None, MERCURY["users"])
 
-    def transactions(self, start_after, limit=500):
+    def transactions(self, start_after, limit=500, start=None):
         """Mercury's transaction list a page at a time: the rows after `start_after`, and page.nextPage naming the
-        last row of a page that has more after it (a list of up to `limit` rows answers in one page, as before)."""
-        rows = list(self.txns.values())
+        last row of a page that has more after it (a list of up to `limit` rows answers in one page, as before).
+        `start` (YYYY-MM-DD) keeps the rows created on or after that day, as Mercury's filter does."""
+        rows = [t for t in self.txns.values() if not start or str(t.get("createdAt") or "")[:10] >= start]
         ids = [str(t["id"]) for t in rows]
-        start = ids.index(start_after) + 1 if start_after in ids else 0
-        chunk = rows[start : start + limit]
-        more = start + limit < len(rows)
+        at = ids.index(start_after) + 1 if start_after in ids else 0
+        chunk = rows[at : at + limit]
+        more = at + limit < len(rows)
         page = {"nextPage": str(chunk[-1]["id"])} if more and chunk else {}
         return self._answer("transactions", start_after, {"transactions": chunk, "page": page})
 
@@ -455,7 +471,12 @@ class FakeMercury:
 
 
 def connect(
-    store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example", creator: str = "ana@acme.example"
+    store: Store,
+    fake: FakeMercury,
+    *,
+    approver: str = "ben@acme.example",
+    creator: str = "ana@acme.example",
+    **extra: object,
 ) -> dict[str, object]:
     """Connect Acme's Mercury (checking, savings and IO) as the owner; the connection_create result."""
     from backend.finance import sync
@@ -463,6 +484,7 @@ def connect(
     found, why = sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     with store.transaction() as c:
+        store_keys(c, "cred-mercury")  # a store not made from the template (the api fixture's) has none yet
         done = act(
             c,
             OWNER,
@@ -473,6 +495,7 @@ def connect(
                 "probe": found,
                 "approver_email": approver,
                 "token_creator_email": creator,
+                **extra,
             },
         )
     assert done.status == "committed", done

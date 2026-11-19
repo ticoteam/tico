@@ -23,6 +23,8 @@ pub struct ApiError {
     pub status: u16,
     pub retryable: bool,
     pub operation_id: Option<String>,
+    /// What the server put beside code and detail (backend/store.py Problem.extra), such as a worktree wait.
+    pub extra: serde_json::Map<String, Value>,
 }
 
 impl ApiError {
@@ -33,6 +35,7 @@ impl ApiError {
             status,
             retryable,
             operation_id: None,
+            extra: serde_json::Map::new(),
         }
     }
 }
@@ -183,6 +186,13 @@ pub fn error_from(status: u16, body: &[u8], key: &str) -> ApiError {
     let retryable = status == 429 || (500..600).contains(&status);
     let mut e = ApiError::new(code, detail, status, retryable);
     e.operation_id = Some(key.to_string());
+    if let Some(error) = error.as_object() {
+        e.extra = error
+            .iter()
+            .filter(|(k, _)| !["code", "detail", "retryable"].contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+    }
     e
 }
 
@@ -198,6 +208,26 @@ impl Client {
             timeout,
             backoff_scale: 1.0,
         })
+    }
+
+    /// The same hub over this client's connections, with another token: a turn's own asks reuse the runner's pool
+    /// instead of opening a connection each turn.
+    pub fn with_token(&self, token: &str, retries: u32) -> Client {
+        Client {
+            token: token.to_string(),
+            retries,
+            ..self.clone()
+        }
+    }
+
+    /// The same hub and token over a pool of its own whose every read may take `timeout_s`.
+    pub fn with_read_timeout(&self, timeout_s: u64) -> Client {
+        let timeout = Duration::from_secs(timeout_s);
+        Client {
+            http: http_client(Some(timeout)),
+            timeout,
+            ..self.clone()
+        }
     }
 
     /// The same hub and token over connections of its own, for a client that lives on another runtime: a pooled
@@ -442,6 +472,17 @@ pub(crate) mod tests {
             header(&seen[0], "Authorization").unwrap(),
             "Bearer runner-token"
         );
+    }
+
+    #[test]
+    fn a_refusal_keeps_what_the_server_put_beside_code_and_detail() {
+        let body = br#"{"error":{"code":"worktree_limit","detail":"No room","retryable":false,"wait":{"id":"w"}}}"#;
+        let err = error_from(409, body, "k");
+        assert_eq!(
+            err.extra,
+            *json!({"wait": {"id": "w"}}).as_object().unwrap()
+        );
+        assert!(error_from(500, b"", "k").extra.is_empty());
     }
 
     #[tokio::test]

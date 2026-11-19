@@ -27,7 +27,7 @@ def computer(api, bot="ops", signed_in=False, label="Studio Mac", bot_ready=None
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "isolated": True,
@@ -69,7 +69,7 @@ def used_up(api, sid, days=1):
 
 
 def switch(api, m, on, token="ana-test", expected=200):
-    return post(api, f"runners/{m['runner_id']}/gateway-fallback", {"on": on}, token, expected=expected)
+    return post(api, f"computers/{m['runner_id']}/gateway-fallback", {"on": on}, token, expected=expected)
 
 
 def listed(api, m):

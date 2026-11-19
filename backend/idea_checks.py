@@ -69,8 +69,8 @@ def filed_snooze(snooze: Row | None) -> bool:
 
 
 def asks_a_person(conn: "sqlite3.Connection", stage_id: object) -> bool:
-    """Whether the stage waits on a person's OK that no bot gives (Product's Pitch): a bot's idea there goes to a
-    person's Needs you, so it is never snoozed out of sight."""
+    """Whether the stage waits on a person's OK that no bot gives (a company's own Ideas stage may have one): a bot's
+    idea there goes to a person's Needs you, so it is never snoozed out of sight."""
     return (
         conn.execute(
             "SELECT 1 FROM requirements WHERE stage_id=? AND visit_id IS NULL AND withdrawn_at IS NULL AND kind='ok' "
@@ -84,7 +84,7 @@ def asks_a_person(conn: "sqlite3.Connection", stage_id: object) -> bool:
 def filed(conn: "sqlite3.Connection", row: Row, by: str, ts: str) -> None:
     """A task entered Ideas new (task_engine.enter): its duplicate check is owed, and when no person asked for it, it
     is snoozed with no end in the same write, marked `filed`; not where the stage asks a person's OK (`asks_a_person`):
-    a pitch waits for that OK in the person's list instead."""
+    the idea waits for that OK in the person's list instead."""
     H = _h()
     visit: Row = row["visit"]
     conn.execute(
@@ -195,6 +195,9 @@ def run(store: Any, now: str | None = None) -> int:
     with store.read() as c:
         owed = [str(found[0]) for found in c.execute(_OWED, (BATCH,)).fetchall()]
         rows = [E.task(c, task_id) for task_id in owed]
+        for row in rows:  # an idea's text is its first message: a task has no description
+            if row:
+                row["body"] = H.task_request_text(c, row["id"])
         ideas: list[Row] = [
             row for row in rows if row and row["status"] == "open" and is_ideas(row["stage"]) and not row.get("private")
         ]
@@ -233,7 +236,7 @@ def run(store: Any, now: str | None = None) -> int:
         if why:
             detail["error"] = why
         with store.transaction() as c:
-            call_id = str(H.event(c, H.KEEPER, "judge.call", qset["label"], detail)["id"])
+            call_id = str(H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)["id"])
     with store.transaction() as c:
         for task_id in skipped:
             _mark(c, task_id, SKIPPED, at)
@@ -303,8 +306,8 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
 
     H = _h()
     number = f"#{original['number']}" if original.get("number") is not None else "another task"
-    TR.relate(conn, H.KEEPER, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
-    E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Jev found the same idea")
+    TR.relate(conn, H.TICO_ACTOR, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
+    E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Decision model found the same idea")
     asker = dup.get("requester_id")
     if H.is_human(asker):
         from . import roadmaps
@@ -317,7 +320,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
     filed = f"#{dup['number']}" if dup.get("number") is not None else "a duplicate"
     H.task_comment(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         original["id"],
         f"Also asked by {name}: {filed}, \"{' '.join(str(dup.get('title') or '').split())[:TITLE]}\", closed as the same idea.",
         wake=False,

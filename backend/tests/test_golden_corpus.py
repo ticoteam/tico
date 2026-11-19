@@ -175,7 +175,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
                 "UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,)
             )
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
-            # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
+            # The same, last touched by Tico (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
             c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired, keeper", want, 1 if want == original else 2)
@@ -187,7 +187,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
                 "UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
                 (broken, doc_id),
             )
-            store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
+            store.snapshot(c, store.get_row(c, doc_id), H.TICO_ACTOR, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
             # A person's own page where the repairs look: the person's words, Tico's terms included.
             doc_id = legacy(path.stem, original, "_librarian/person-" + path.name)
@@ -290,23 +290,20 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         assert message["sender_name"] == "Operations"
         assert message["recipient_name"] == "Ana Example"
 
-    # The inbox through the door route_renames.py adds (v0.3.10 lost its names), and the old door, which is not a
-    # stable route: no names there, and the same words.
-    for url in ("/api/v2/messages", "/api/v2/messages?unread=1", "/api/v2/inbox"):
-        named_door = url.startswith("/api/v2/messages")
+    # The inbox (v0.3.10 lost its names): the messages door names the people and bots in its notices.
+    for url in ("/api/v2/messages", "/api/v2/messages?unread=1"):
         result = api.get(url, headers=headers())
         assert result.status_code == 200, (url, result.text)
         inbox = result.json()
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
-        if named_door:
-            assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url
-            assert shown["body"] == "New task from Operations: Brightwater handover", url
-            assert shown["body_raw"] == "New task from bot:ops: Brightwater handover", url
-        else:
-            assert shown["body"] == "New task from bot:ops: Brightwater handover", url
+        assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url
+        assert shown["body"] == "New task from Operations: Brightwater handover", url
+        assert shown["body_raw"] == "New task from bot:ops: Brightwater handover", url
 
     read = api.get("/api/v2/tasks/" + task["id"], headers=headers()).json()
-    assert read["task"]["body"] == texts[0][1]
+    assert (
+        read["task"]["request"]["text"] == texts[0][1].strip()
+    )  # the first message, as written (trimmed, as a comment is)
     assert read["task"]["owner_name"] == "Operations" and read["task"]["requester_name"] == "Ana Example"
     shown = api.get("/api/v2/docs/" + doc["id"], headers=headers()).json()["doc"]
     assert shown["body"] == _text(CORPUS / "kept" / "customer-export.json")  # byte for byte, ends included

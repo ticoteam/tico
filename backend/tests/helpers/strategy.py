@@ -30,10 +30,11 @@ def add_bet(api, statement="Small landlords pay for bots", expected=200, token="
 
 
 def publish(api, note="First", expected=200):
+    """POST /strategy/publish, kept for older callers: every save is live already, so it answers the live version."""
     return post(api, "strategy/publish", {"note": note, "revision": draft(api)["revision"]}, expected=expected)
 
 
 def ready(api, **bet):
-    """A draft that may be published: a won't-do and one active bet."""
+    """A strategy with a won't-do and one active bet: two saves, so versions 1 and 2."""
     write(api, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
     return add_bet(api, **bet)["bet"]

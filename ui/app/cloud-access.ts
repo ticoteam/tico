@@ -8,11 +8,14 @@
 // is Pay to continue, with Download your files for the owner (Settings › General's Download all files). While either
 // shows, the state is read every 30 s, so paying opens the app by itself; leaving a lock reloads the page, since what
 // was open behind it was refused while it lasted.
+// Low credit (open, under two days of spend left: `days_left`, backend/cloud_access.py) shows the same strip as a warning,
+// "Low credit · about N days left · Add credit", before anything stops.
 // The cloud company's access state as HQ sends it: access is open, frozen or locked, with the reason and the billing page.
 interface CloudAccessState {
   access?: string;
   reason?: string | null;
   billing_url?: unknown;
+  days_left?: number | null;
   [key: string]: unknown;
 }
 const CLOUD_ACCESS_WORDS = ['open', 'frozen', 'locked'];
@@ -31,7 +34,7 @@ function cloudAccessApply(cloud: unknown) {
   if (was === 'locked' && access !== 'locked') { location.reload(); return; }
   cloudAccessRender();
   clearTimeout(CLOUD_TIMER);
-  if (access !== 'open') CLOUD_TIMER = setTimeout(cloudAccessPoll, CLOUD_POLL);
+  if (access !== 'open' || cloudLowDays() !== null) CLOUD_TIMER = setTimeout(cloudAccessPoll, CLOUD_POLL);
 }
 async function cloudAccessPoll() {
   if (!document.hidden) {
@@ -59,6 +62,14 @@ document.querySelectorAll<HTMLButtonElement>('[data-cloud-refresh]').forEach(but
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }
+// Whole days of spend left while the company is open and low on credit, else null.
+function cloudLowDays(): number | null {
+  const days = CLOUD_ACCESS?.days_left;
+  return CLOUD_ACCESS?.access === 'open' && typeof days === 'number' && days >= 0 ? days : null;
+}
+function cloudLowWords(days: number): string {
+  return days < 1 ? 'Low credit · less than a day left' : days === 1 ? 'Low credit · about 1 day left' : `Low credit · about ${days} days left`;
+}
 // The strip's Add credit link, for a line elsewhere that says the company is out of credit; '' unless it is.
 function cloudCreditLinkHTML(): string {
   if (CLOUD_ACCESS?.access !== 'frozen') return '';
@@ -70,11 +81,17 @@ function cloudAccessFromStatus() {
 }
 function cloudAccessRender() {
   const access = CLOUD_ACCESS?.access || 'open', url = cloudPayUrl(CLOUD_ACCESS?.billing_url), root = document.documentElement;
+  const low = cloudLowDays();
   root.classList.toggle('cloud-frozen', access === 'frozen');
+  root.classList.toggle('cloud-low', low !== null);
   root.classList.toggle('cloud-locked', access === 'locked');
-  root.classList.toggle('strip', root.classList.contains('demo') || access === 'frozen');
+  root.classList.toggle('strip', root.classList.contains('demo') || access === 'frozen' || low !== null);
   const banner = document.getElementById('cloud-banner'), lock = document.getElementById('cloud-lock');
-  if (banner) banner.hidden = access !== 'frozen';
+  if (banner) banner.hidden = access !== 'frozen' && low === null;
+  const title = banner?.querySelector<HTMLElement>('[data-cloud-title]'), detail = banner?.querySelector<HTMLElement>('[data-cloud-detail]');
+  if (title) title.textContent = low !== null ? cloudLowWords(low) : 'Out of credit';
+  if (detail) detail.textContent = low !== null ? 'Bots and cloud machines stop when credit runs out. Add credit or a card to keep them running.'
+    : 'Tico-funded work and cloud machines are paused. Your history and settings remain available.';
   if (lock) lock.hidden = access !== 'locked';
   document.querySelectorAll<HTMLAnchorElement>('[data-cloud-pay]').forEach(a => {
     a.href = url || 'https://app.tico.dev/billing';

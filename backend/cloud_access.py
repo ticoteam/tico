@@ -23,6 +23,13 @@ for the request gate. Every answer replaces it: paying, or credit landing, opens
 (every SYNC seconds while the company is a cloud one, and whenever Settings > Billing is opened), with no restart. HQ
 not answering keeps the last word. A change of access is an audit event (`cloud.access`).
 
+Low credit: HQ's answer carries the balance but not the spend, so each answer keeps an hourly balance sample
+(`samples`, the last SPEND_WINDOW) and the spend per day is the fall across them (`spend_day_micros`). Credit landing
+(the balance rising) starts the samples again and keeps the last spend. While open with under LOW_DAYS days of spend
+left, `view` says `days_left` and every page shows "Low credit · about N days left · Add credit" (one `cloud.low_credit`
+audit event as it starts). A machine HQ refused for credit (its 402) is out of credit too, whatever `access` says
+(`shown`): HQ's billing can stop machines while its answer here still says open.
+
 Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) is asked every SYNC too, not every
 UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
 """
@@ -46,6 +53,10 @@ OPEN_PATHS = ("/api/me", "/api/v2/me", "/api/status", "/api/v2/cloud-access", "/
 OPEN_PREFIXES = ("/api/v2/billing",)
 LOCKED = "Pay to continue: this company's Tico Cloud plan is locked"
 ROUTINES_PAUSED = {"frozen": "out of credit", "locked": "Tico Cloud is locked"}
+LOW_DAYS = 2  # under this many days of spend left, every page says so
+SPEND_WINDOW = timedelta(hours=24)  # the spend per day is measured over about the last day
+SAMPLE_EVERY = timedelta(hours=1)
+SPEND_MIN = timedelta(hours=1)  # the shortest stretch a spend is read from
 _MISSING = object()
 _guard = threading.Lock()
 _busy = False  # a sync thread is running
@@ -151,23 +162,98 @@ def current(store):
     return found
 
 
-def apply(store, cloud):
-    """Keep HQ's word (`parse`d, or None for not a cloud company). Returns the state."""
+def spend(before, balance, at):
+    """(samples, spend_day_micros) after an answer with `balance` at `at` (ISO): an hourly sample is added, those older
+    than SPEND_WINDOW dropped, and the spend per day is the fall from the oldest to now once SPEND_MIN apart. A rise
+    (credit landed) starts again from this one and keeps the last spend; a fall too short to read keeps it as well."""
+    timed = []  # (sample, when) for each readable one
+    for sample in (before or {}).get("samples") or []:
+        when = H.parse_ts(sample.get("at")) if isinstance(sample, dict) else None
+        if when is not None and type(sample.get("balance_micros")) is int:
+            timed.append((sample, when))
+    rate = (before or {}).get("spend_day_micros")
+    rate = rate if type(rate) is int and rate > 0 else None
+    now = H.parse_ts(at)
+    if now is None:
+        return [sample for sample, _ in timed], rate
+    if timed and balance > timed[-1][0]["balance_micros"]:
+        timed = []
+    timed = [(sample, when) for sample, when in timed if now - when <= SPEND_WINDOW]
+    if not timed or now - timed[-1][1] >= SAMPLE_EVERY:
+        timed.append(({"balance_micros": balance, "at": at}, now))
+    oldest, since = timed[0]
+    elapsed = now - since
+    if elapsed >= SPEND_MIN:
+        fall = oldest["balance_micros"] - balance
+        rate = int(fall * (timedelta(days=1) / elapsed)) if fall > 0 else None
+    kept = [sample for sample, _ in timed]
+    return kept, rate
+
+
+def days_left(found):
+    """Whole days of spend left while open and under LOW_DAYS, else None."""
+    if not found or found.get("access") != "open":
+        return None
+    rate, balance = found.get("spend_day_micros"), found.get("balance_micros") or 0
+    if type(rate) is not int or rate <= 0 or balance >= LOW_DAYS * rate:
+        return None
+    return max(0, balance // rate)
+
+
+def recovered(before, kept):
+    """Whether HQ's new word says credit came back: open after frozen or locked, or open with a higher balance."""
+    if not kept or kept.get("access") != "open" or not before:
+        return False
+    if before.get("access") in ("frozen", "locked"):
+        return True
+    return (kept.get("balance_micros") or 0) > (before.get("balance_micros") or 0)
+
+
+def apply(store, cloud, at=None):
+    """Keep HQ's word (`parse`d, or None for not a cloud company), with the spend read from its balances (`spend`).
+    `at`: when HQ answered (ISO), now by default. Returns the state."""
+    at = at or H.now()
     with store.transaction() as c:
         before = state(c)
+        kept = None
         if cloud is None:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
         else:
+            samples, rate = spend(before, cloud.get("balance_micros") or 0, at)
+            kept = {**cloud, "checked": at, "samples": samples, "spend_day_micros": rate}
             c.execute(
                 "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (KEY, json.dumps({**cloud, "checked": H.now()})),
+                (KEY, json.dumps(kept)),
             )
         was, now = (before or {}).get("access"), (cloud or {}).get("access")
         if was != now:
             H.event(
-                c, H.KEEPER, "cloud.access", "company", {"from": was, "to": now, "reason": (cloud or {}).get("reason")}
+                c,
+                H.TICO_ACTOR,
+                "cloud.access",
+                "company",
+                {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
             )
-    store._cloud_access = {**cloud, "checked": H.now()} if cloud is not None else None
+        if recovered(before, kept):
+            # HQ took credit (its word went back to open, or the balance rose): every machine it refused for credit
+            # may start now, a stopped one with no bot wanting it included, so no page keeps saying out of credit.
+            c.execute(
+                "UPDATE cloud_machines SET problem='', problem_at=NULL, next_try_at=NULL WHERE problem='out_of_credit'"
+            )
+        low = days_left(kept)
+        if kept is not None and low is not None and days_left(before) is None:
+            H.event(
+                c,
+                H.TICO_ACTOR,
+                "cloud.low_credit",
+                "company",
+                {
+                    "days_left": low,
+                    "balance_micros": kept["balance_micros"],
+                    "spend_day_micros": kept["spend_day_micros"],
+                },
+            )
+    store._cloud_access = kept
     return store._cloud_access
 
 
@@ -232,10 +318,24 @@ def _run(store, vault, settings):
 
 
 def view(found):
-    """What every page reads (GET /api/v2/cloud-access, /api/status): access, why, and where to pay. None off cloud."""
+    """What every page reads (GET /api/v2/cloud-access, /api/status): access, why, where to pay, and the days of spend
+    left while that is under LOW_DAYS (`days_left`, else None). None off cloud."""
     if not found:
         return None
-    return {key: found.get(key) for key in ("access", "reason", "plan", "trial_days_left", "billing_url")}
+    out = {key: found.get(key) for key in ("access", "reason", "plan", "trial_days_left", "billing_url")}
+    return {**out, "days_left": days_left(found)}
+
+
+def shown(c, found):
+    """`view`, out of credit as well while HQ has refused one of the company's machines for credit (its 402), even
+    when its company-wide word is still open: the machines are stopped, so every page says so, with Add credit."""
+    from . import cloud_machines
+
+    out = view(found)
+    if (out is None or out["access"] == "open") and cloud_machines.credit_refused(c):
+        base = out or {"plan": "", "trial_days_left": None, "billing_url": None}
+        return {**base, "access": "frozen", "reason": "out_of_credit", "days_left": None}
+    return out
 
 
 def gate(store, who, path):

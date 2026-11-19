@@ -1,6 +1,8 @@
 ---
 name: tag-one-feedback-item
 description: Tag one piece of customer feedback with one primary theme, a severity, a sentiment and a segment from the shared theme list, then strip personal details before it is logged.
+metadata:
+  function: product
 ---
 # Tag one feedback item
 

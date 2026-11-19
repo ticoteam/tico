@@ -20,6 +20,7 @@ from . import audiences as A
 from . import disclosure as D
 from . import settings as S
 from . import stats as ST
+from ..api_contract import api_v2
 
 PAGE_BYTES = 256 * 1024
 PAGE_MOST = 200
@@ -180,6 +181,13 @@ def next_due(c, audiences):
     return [{**a, "next_due": due(a)} for a in audiences]
 
 
+# The logo travels as its raw bytes, not JSON, and the preview is a page of HTML.
+LOGO_CONTENT = {
+    mime: {"schema": {"type": "string", "format": "binary"}}
+    for mime in ("image/png", "image/jpeg", "image/webp")  # release.LOGO_TYPES, imported only when used
+}
+
+
 def register(app, store, auth, mutate, settings):
     seeded = {"done": False}
 
@@ -221,13 +229,23 @@ def register(app, store, auth, mutate, settings):
             "public_live": live,
         }
 
-    @app.get("/api/v2/company-page")
+    @app.get(
+        "/api/v2/company-page",
+        **api_v2("Company page", "getCompanyPage", "The page's settings, its address and whether it is live"),
+    )
     def company_page_show(request: Request):
         gate(request)
         with store.read() as c:
             return page_view(c)
 
-    @app.patch("/api/v2/company-page")
+    @app.patch(
+        "/api/v2/company-page",
+        **api_v2(
+            "Company page",
+            "updateCompanyPage",
+            "Change the page's transparency, address or accent; the owner's own tap when BotOps asks",
+        ),
+    )
     def company_page_patch(request: Request, body: PageSettings):
         fields = body.model_dump(exclude_unset=True)
         if not fields:
@@ -249,7 +267,15 @@ def register(app, store, auth, mutate, settings):
         return write(request, body, work)
 
     # The logo is the one picture the page sends out, so it is uploaded here and kept apart from the library's files.
-    @app.get("/api/v2/company-page/logo")
+    @app.get(
+        "/api/v2/company-page/logo",
+        **api_v2(
+            "Company page",
+            "getCompanyLogo",
+            "The logo's bytes, with its type",
+            answer={"description": "The logo's bytes, sent as their image type", "content": LOGO_CONTENT},
+        ),
+    )
     def company_page_logo_show(request: Request):
         gate(request)
         with store.read() as c:
@@ -266,7 +292,19 @@ def register(app, store, auth, mutate, settings):
         }
         return Response(app.state.blobs.get(row[0]), media_type=row[1], headers=headers)
 
-    @app.post("/api/v2/company-page/logo")
+    @app.post(
+        "/api/v2/company-page/logo",
+        **api_v2(
+            "Company page",
+            "setCompanyLogo",
+            "Upload the logo as the raw image body: PNG, JPEG, GIF or WebP, up to 2 MB",
+            request_body={
+                "required": True,
+                "description": "The image itself, up to 2 MB. SVG is refused.",
+                "content": LOGO_CONTENT,
+            },
+        ),
+    )
     async def company_page_logo_set(request: Request):
         data = await request.body()
 
@@ -286,7 +324,9 @@ def register(app, store, auth, mutate, settings):
 
         return await asyncio.to_thread(run)
 
-    @app.delete("/api/v2/company-page/logo")
+    @app.delete(
+        "/api/v2/company-page/logo", **api_v2("Company page", "removeCompanyLogo", "Take the logo off the page")
+    )
     def company_page_logo_remove(request: Request):
         def work(c, actor):
             S.update(c, actor, logo_file_id=None)
@@ -294,7 +334,18 @@ def register(app, store, auth, mutate, settings):
 
         return write(request, Empty(), work)
 
-    @app.get("/api/v2/company-page/preview")
+    @app.get(
+        "/api/v2/company-page/preview",
+        **api_v2(
+            "Company page",
+            "getCompanyPreview",
+            "The page as it would read for one audience, as HTML that is never kept",
+            answer={
+                "description": "The page as HTML for one audience, never kept",
+                "content": {"text/html": {"schema": {"type": "string"}}},
+            },
+        ),
+    )
     def company_page_preview(request: Request, audience: str = "", theme: str = ""):
         gate(request)
         from . import render
@@ -307,25 +358,47 @@ def register(app, store, auth, mutate, settings):
         return HTMLResponse(html, headers={"Content-Security-Policy": PREVIEW_POLICY, "Cache-Control": "no-store"})
 
     # ------------------------------------------------------------------ audiences
-    @app.get("/api/v2/audiences")
+    @app.get(
+        "/api/v2/audiences",
+        **api_v2("Company page", "listAudiences", "The audiences, paged, each with its next due date"),
+    )
     def audiences_list(request: Request, limit: int = 100, offset: int = 0):
         gate(request)
         with store.read() as c:
             found = page(A.list_all(c), "audiences", limit, offset)
             return {**found, "audiences": next_due(c, found["audiences"])}
 
-    @app.post("/api/v2/audiences")
+    @app.post(
+        "/api/v2/audiences",
+        **api_v2(
+            "Company page", "createAudience", "Add an audience (the board, investors, the public or a custom one)"
+        ),
+    )
     def audiences_create(request: Request, body: AudienceCreate):
         fields = body.model_dump(exclude_unset=True)
         name = fields.pop("name")
         return write(request, body, lambda c, actor: A.create(c, actor, name, **fields))
 
-    @app.patch("/api/v2/audiences/{audience_id}")
+    @app.patch(
+        "/api/v2/audiences/{audience_id}",
+        **api_v2(
+            "Company page",
+            "updateAudience",
+            "Change an audience's name, cadence, due rule, lag, approver or whether it is on",
+        ),
+    )
     def audiences_patch(request: Request, audience_id: str, body: AudiencePatch):
         fields = body.model_dump(exclude_unset=True)
         return write(request, body, lambda c, actor: A.update(c, actor, audience_id, **fields))
 
-    @app.delete("/api/v2/audiences/{audience_id}")
+    @app.delete(
+        "/api/v2/audiences/{audience_id}",
+        **api_v2(
+            "Company page",
+            "deleteAudience",
+            "Delete an audience and what it reaches; the owner's own tap when BotOps asks",
+        ),
+    )
     def audiences_delete(request: Request, audience_id: str):
         return write(request, Empty(), lambda c, actor: A.delete(c, actor, audience_id))
 
@@ -340,7 +413,14 @@ def register(app, store, auth, mutate, settings):
             "presets": list(D.PRESETS),
         }
 
-    @app.get("/api/v2/audiences/{audience_id}/disclosure")
+    @app.get(
+        "/api/v2/audiences/{audience_id}/disclosure",
+        **api_v2(
+            "Company page",
+            "getAudienceDisclosure",
+            "The disclosure grid for one audience: each data class, the stat it shows and how",
+        ),
+    )
     def disclosure_show(request: Request, audience_id: str):
         gate(request)
         with store.read() as c:
@@ -357,7 +437,14 @@ def register(app, store, auth, mutate, settings):
         ).fetchone()[0]
         return {"published_editions": count}
 
-    @app.put("/api/v2/audiences/{audience_id}/disclosure")
+    @app.put(
+        "/api/v2/audiences/{audience_id}/disclosure",
+        **api_v2(
+            "Company page",
+            "setAudienceDisclosure",
+            "Replace the disclosure rules for one audience; the owner's own tap when BotOps asks",
+        ),
+    )
     def disclosure_put(request: Request, audience_id: str, body: Rules):
         rules = [r.model_dump() for r in body.rules]
 
@@ -367,7 +454,10 @@ def register(app, store, auth, mutate, settings):
 
         return write(request, body, work)
 
-    @app.post("/api/v2/audiences/{audience_id}/disclosure/preset")
+    @app.post(
+        "/api/v2/audiences/{audience_id}/disclosure/preset",
+        **api_v2("Company page", "applyDisclosurePreset", "Apply a preset to one audience's disclosure grid"),
+    )
     def disclosure_preset(request: Request, audience_id: str, body: Preset):
         def work(c, actor):
             change = D.apply_preset(c, actor, audience_id, body.name)
@@ -376,43 +466,70 @@ def register(app, store, auth, mutate, settings):
         return write(request, body, work)
 
     # ------------------------------------------------------------------ sources
-    @app.get("/api/v2/audiences/{audience_id}/sources")
+    @app.get(
+        "/api/v2/audiences/{audience_id}/sources",
+        **api_v2("Company page", "listAudienceSources", "The authors whose updates feed one audience"),
+    )
     def sources_list(request: Request, audience_id: str, limit: int = 100, offset: int = 0):
         gate(request)
         with store.read() as c:
             A.need(c, audience_id)
             return page(A.sources(c, audience_id), "sources", limit, offset)
 
-    @app.post("/api/v2/audiences/{audience_id}/sources")
+    @app.post(
+        "/api/v2/audiences/{audience_id}/sources",
+        **api_v2("Company page", "addAudienceSource", "Name an author whose updates feed one audience"),
+    )
     def sources_add(request: Request, audience_id: str, body: Source):
         return write(request, body, lambda c, actor: A.add_source(c, actor, audience_id, body.author))
 
-    @app.delete("/api/v2/audiences/{audience_id}/sources/{source_id}")
+    @app.delete(
+        "/api/v2/audiences/{audience_id}/sources/{source_id}",
+        **api_v2("Company page", "removeAudienceSource", "Stop an author feeding one audience"),
+    )
     def sources_remove(request: Request, audience_id: str, source_id: str):
         return write(request, Empty(), lambda c, actor: A.remove_source(c, actor, audience_id, source_id))
 
     # ------------------------------------------------------------------ the stats board
-    @app.get("/api/v2/company-page/stats")
+    @app.get(
+        "/api/v2/company-page/stats", **api_v2("Company page", "listPageStats", "The stats the page can show, in order")
+    )
     def stats_list(request: Request, limit: int = 100, offset: int = 0):
         gate(request)
         with store.read() as c:
             return {**page(ST.list_stats(c), "stats", limit, offset), "available": ST.available(c)}
 
-    @app.post("/api/v2/company-page/stats")
+    @app.post(
+        "/api/v2/company-page/stats",
+        **api_v2("Company page", "createPageStat", "Add a stat from a Finance or KPI source"),
+    )
     def stats_create(request: Request, body: StatCreate):
         fields = body.model_dump()
         return write(request, body, lambda c, actor: ST.create_stat(c, actor, **fields))
 
-    @app.patch("/api/v2/company-page/stats/{stat_id}")
+    @app.patch(
+        "/api/v2/company-page/stats/{stat_id}",
+        **api_v2("Company page", "updatePageStat", "Change a stat's label, definition, chart or place"),
+    )
     def stats_patch(request: Request, stat_id: str, body: StatPatch):
         fields = body.model_dump(exclude_unset=True)
         return write(request, body, lambda c, actor: ST.update_stat(c, actor, stat_id, **fields))
 
-    @app.delete("/api/v2/company-page/stats/{stat_id}")
+    @app.delete(
+        "/api/v2/company-page/stats/{stat_id}",
+        **api_v2("Company page", "deletePageStat", "Remove a stat from the page"),
+    )
     def stats_delete(request: Request, stat_id: str):
         return write(request, Empty(), lambda c, actor: ST.delete_stat(c, actor, stat_id))
 
-    @app.get("/api/v2/audiences/{audience_id}/stats")
+    @app.get(
+        "/api/v2/audiences/{audience_id}/stats",
+        **api_v2(
+            "Company page",
+            "getAudienceStats",
+            "The stats one audience sees, with the values the disclosure grid lets through",
+        ),
+    )
     def audience_stats(request: Request, audience_id: str, limit: int = 100, offset: int = 0):
         """The projection for this audience, what is held and why, and what is absent."""
         gate(request)

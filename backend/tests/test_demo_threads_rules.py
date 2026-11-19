@@ -47,8 +47,17 @@ def home_id(api, actor):
 
 def _the_rules_say_who_follows_them_and_with_whom(built):
     _, settings, _rows = built
+    rules = []
     with signed_in(settings) as api:
-        rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
+        # Every page: the demo's sections together hold more active rules than one page.
+        cursor = None
+        while True:
+            params = {"status": "active", **({"cursor": cursor} if cursor else {})}
+            body = api.get("/api/v2/rules", params=params).json()
+            rules += body["rules"]
+            cursor = body.get("next_cursor")
+            if not cursor:
+                break
     texts = {rule["text"]: rule for rule in rules}
     for item in CONTENT["rules"]:
         assert item["text"] in texts, item["text"]
@@ -100,7 +109,7 @@ def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     assert [(h["id"], h["reviewer"], h["can_send"]) for h in listed] == [(hold_id, "human:ben", True)]
     assert read["text"] == held["say"] and read["nonce"]
     assert task["owner_id"] == "human:ben"
-    assert task["title"] == "Rule review"
+    assert task["title"].startswith("Held by: ")  # the review is named by its rule
 
 
 def _the_engineering_home_has_the_pause_and_its_fix_thread(built):

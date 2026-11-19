@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 from . import audit_log
 from . import store as _store_untyped
 from .store import Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from .auth import Identity
@@ -165,14 +166,28 @@ def install(app: Any, store: Any, auth: Any) -> None:
             raise Problem("not_found", "Bot not found", 404)
         return row["id"]
 
-    @app.get("/api/v2/bots/{bot}/app-view")
+    @app.get(
+        "/api/v2/bots/{bot}/app-view",
+        **api_v2(
+            "Bots",
+            "getBotAppView",
+            "Whether the bot may view the app read only, for its own screenshots, and who turned that on",
+        ),
+    )
     def app_view_setting(request: Request, bot: str) -> dict[str, Any]:
         """Whether this bot may view the app, read only, and who turned it on."""
         who: Identity = request.state.identity
         with store.read() as c:
             return setting(c, bot_id(c, who, bot))
 
-    @app.post("/api/v2/bots/{bot}/app-view")
+    @app.post(
+        "/api/v2/bots/{bot}/app-view",
+        **api_v2(
+            "Bots",
+            "setBotAppView",
+            "Turn Can view the app (read only) on or off for a bot: an owner or admin, as themselves. Off ends its open views",
+        ),
+    )
     def app_view_turn(request: Request, bot: str, body: M.BotAppView) -> dict[str, Any]:
         """Turn “Can view the app (read only)” on or off for a bot. An owner or admin only, as themselves."""
         who: Identity = request.state.identity
@@ -182,7 +197,14 @@ def install(app: Any, store: Any, auth: Any) -> None:
         with store.transaction() as c:
             return turn(c, who, bot_id(c, who, bot), body.on)
 
-    @app.post("/api/v2/app-view")
+    @app.post(
+        "/api/v2/app-view",
+        **api_v2(
+            "Bots",
+            "openAppView",
+            "A bot, from inside its run, opens a read-only view of the app: a token for 15 minutes that reads as the bot and is refused every write",
+        ),
+    )
     def app_view_open(request: Request) -> dict[str, Any]:
         """Open a read-only view of the app for this bot, from inside its run. The token is shown once."""
         who: Identity = request.state.identity

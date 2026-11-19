@@ -2,7 +2,7 @@
 
 from urllib.parse import urlencode
 from backend.tests.helpers.api import headers
-from clients import hubcli, remotecli
+from clients import cli_spec, hubcli, remotecli
 
 
 class Client:
@@ -30,6 +30,22 @@ class Client:
     def patch(self, path, body, key=None):
         return self._call("PATCH", path, body)
 
+    def request(self, method, path, body=None, key=None, raw=None, **_):
+        """A full /api/v2 path; `raw` bytes go as they are (a file upload), as clients/tico.py sends them."""
+        sent = {"content": raw, "headers": {**headers(self.token), "Content-Type": "application/octet-stream"}}
+        r = self.api.request(
+            method, path, **(sent if raw is not None else {"json": body, "headers": headers(self.token)})
+        )
+        if r.status_code != 200:
+            raise remotecli.APIError(str(r.status_code), r.text, r.status_code)
+        return r.json()
+
 
 def cli(api, token, *argv):
-    return remotecli.automation(Client(api, token), hubcli.parser().parse_args(["automation", *argv]))
+    """One `tico automation` line, dispatched as remotecli.run does: a spec'd leaf is its spec's call, the rest
+    (create, update, inbox) go to remotecli.automation."""
+    args = hubcli.parser().parse_args(["automation", *argv])
+    client = Client(api, token)
+    if (spec := cli_spec.of(args)) is not None:
+        return spec.call(client, args)
+    return remotecli.automation(client, args)

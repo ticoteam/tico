@@ -1,6 +1,6 @@
 """The tool table as a package (clients/commands/, re-exported by clients/hubtools.py) and the script that moves it there.
 
-These hold before and after the move: scripts/cleanup/split_commands.py runs this file on its moved copy (check g).
+These hold before and after the move.
 """
 
 import ast
@@ -17,7 +17,7 @@ import pytest
 
 from clients import hubtools
 
-ROOT = Path(__file__).absolute().parents[2]  # not resolve(): split_commands runs this file in a linked copy
+ROOT = Path(__file__).absolute().parents[2]  # not resolve(): ROOT is the tree the test runs in, even a linked copy
 PACKAGE = ROOT / "clients" / "commands"
 MAX_LINES = 1200
 MOVED = (PACKAGE / "__init__.py").is_file()
@@ -126,7 +126,7 @@ def test_local_files_reach_the_api_through_the_lazily_imported_helpers(tmp_path,
     attachments, local = hubtools._visuals(api, [{"path": "chart.svg", "title": "Chart"}], upload)
     assert api.calls == [
         ("multipart", "tasks/t1/files", {"file": "notes.txt"}, {"name": "notes.txt"}),
-        ("multipart", "uploads/threads/th%201/messages", {"file": "notes.txt"}, {"text": "see"}),
+        ("multipart", "uploads/threads/th%201/messages", {"files": "notes.txt"}, {"text": "see"}),
     ]
     assert attachments == [{"ref": "f0@1", "title": "Chart"}] and uploads == [("0", "chart.svg", b"<svg")]
     assert local == [{"path": "chart.svg", "unembedded": []}]

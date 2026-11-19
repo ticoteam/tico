@@ -84,8 +84,8 @@ def fake_gh(monkeypatch, replies):
 def fake_clock(monkeypatch):
     """Time stands still at 1,000,000 s, and sleep() only records how long it was asked to wait."""
     sleeps = []
-    monkeypatch.setattr(remote.time, 'time', lambda: 1_000_000)
-    monkeypatch.setattr(remote.time, 'sleep', sleeps.append)
+    monkeypatch.setattr(remote, '_now', lambda: 1_000_000)
+    monkeypatch.setattr(remote, '_sleep', sleeps.append)
     return sleeps
 
 
@@ -170,8 +170,8 @@ def fake_timeline(monkeypatch):
         sleeps.append(seconds)
         now[0] += seconds
 
-    monkeypatch.setattr(remote.time, 'monotonic', lambda: now[0])
-    monkeypatch.setattr(remote.time, 'sleep', sleep)
+    monkeypatch.setattr(remote, '_monotonic', lambda: now[0])
+    monkeypatch.setattr(remote, '_sleep', sleep)
     return sleeps
 
 
@@ -256,6 +256,10 @@ def stub_remote(
     run that was dispatched. `artifact` is the exit-code file the VM left in the log, or None when the log never came
     back. `busy` is how many remote runs the count reports as busy."""
     monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
+    # A run with no hub credential is a person's, which needs no permit. Inside a bot's task turn these three are set,
+    # and permit() would ask the live Tico with the bot's token (403, exit 3) instead of the stubbed path.
+    for name in ('HUB_API_URL', 'HUB_TOKEN', 'HUB_TASK_ID'):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(remote, 'ROOT', tmp_path)
     fake_timeline(monkeypatch)
     dispatched = {}
@@ -352,6 +356,13 @@ def test_a_bad_command_line_exits_2():
     assert exit.value.code == 2
 
 
+def test_a_run_above_8_vcpus_is_refused_before_anything_is_sent(monkeypatch):
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--cpus', '16', '--', 'true'])
+    assert exit.value.code == 2
+
+
 class _Answer:
     def __init__(self, body):
         self.body = body
@@ -390,3 +401,47 @@ def test_a_permit_with_no_live_turn_token_refuses_without_asking(monkeypatch, tm
     monkeypatch.setattr(remote.urllib.request, 'urlopen', lambda *a, **k: pytest.fail('asked Tico'))
     environ = {'HUB_API_URL': 'http://hub', 'HUB_TOKEN': f'tico-file:{tmp_path / "gone"}', 'HUB_TASK_ID': 't1'}
     assert 'no active Tico turn' in remote.permit('0123456789ab', '4', 50, environ)
+
+
+def test_a_builder_run_tico_refuses_exits_3_before_anything_is_dispatched(monkeypatch, tmp_path, capsys):
+    stub_remote(monkeypatch, tmp_path)
+    monkeypatch.setenv('HUB_API_URL', 'http://hub')
+    monkeypatch.setenv('HUB_TOKEN', 'turn-token')
+    monkeypatch.setenv('HUB_TASK_ID', 't1')
+    stubbed = remote.subprocess.run
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return stubbed(argv, **kwargs)
+
+    def urlopen(request, timeout):
+        raise remote.urllib.error.HTTPError(request.full_url, 403, 'Forbidden', {}, None)
+
+    monkeypatch.setattr(remote.subprocess, 'run', run)
+    monkeypatch.setattr(remote.urllib.request, 'urlopen', urlopen)
+    with pytest.raises(SystemExit) as exit:
+        remote.main(COMMAND)
+    assert exit.value.code == remote.REFUSED
+    assert 'Tico refused the run (HTTP 403)' in capsys.readouterr().err
+    assert not [argv for argv in calls if argv[:3] == ['gh', 'workflow', 'run'] or argv[:2] == ['gh', 'api']]
+
+
+def test_a_default_above_8_vcpus_from_the_environment_is_refused_too(monkeypatch):
+    monkeypatch.setenv('TICO_REMOTE_CPUS', '16')
+    monkeypatch.setattr(remote, 'run', lambda *a, **k: pytest.fail('a 16-vCPU run was dispatched'))
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--', 'true'])
+    assert exit.value.code == 2
+
+
+def test_the_workflow_runs_only_spot_vms_of_8_vcpus_at_most_and_no_c_family():
+    """Remote runs stay Large (8 vCPUs at most), on Spot, off the c-family pools that fell back to on-demand."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / '.github' / 'workflows' / 'remote-run.yml').read_text())
+    assert doc[True]['workflow_dispatch']['inputs']['cpus']['options'] == ['4', '8']
+    label = doc['jobs']['run']['runs-on']
+    families = label.split('/family=')[1].split('/')[0].split('+')
+    assert families and not [f for f in families if f.startswith('c')], families
+    assert 'spot=false' not in label and 'retry=false' not in label

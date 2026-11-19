@@ -81,7 +81,7 @@ Always:
 - `skills/read-an-audience-or-creative-test/SKILL.md`: read before you size, start, stop or read a test.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/paid-social-method.md`, `knowledge/targets.md`, `knowledge/creative.md`, `knowledge/tests.md` and
    `knowledge/changes.md`. A resumed turn already has them.
@@ -107,13 +107,13 @@ stop, and their end wakes you.
 
 ## Growth
 Before you plan a campaign, read How we sell in `tico strategy show --section how`. Work on a growth idea, or a
-sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
+sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. At the start of each run, read your channel with `tico growth channel show <slug>`: its KPI against target, what changed and what lines up with it, its tests and how fresh its sources are. A task labelled `growth:alert` means your channel crossed a line the team set: read the channel, act, and close the task when it is dealt with.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad, a
 post, a page or a message), run `tico brand check -` on it and fix every hit, then check each claim against
 `tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
 contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it, and a cutoff there
 is a pause you make as upkeep. Keep your channel's why, stage and budget current with
-`tico growth channel update <slug> --why ... --stage ... --budget ...`. Record each measurement as a KPI reading with
+`tico growth channel update <slug> --why ... --stage ... --budget ...`, and link its KPI with `--input-kpi <id>`. Record each measurement as a KPI reading with
 `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`. Tico computes the channel economics and the
 Growth Manager (`growth-manager`) enters the monthly cohorts, so you never enter or change a computed number.
 A channel you do not own is changed by its owner: ask in a task.
@@ -128,7 +128,7 @@ split between campaigns is yours, inside an OK'd experiment. A landing page prob
 (`cro-owner`), a paid search question to the Search Ads Owner (`search-ads-owner`), and a conversion that stops firing
 or is counted twice to the tracking owner. Competitor facts you find, such as their public paid activity, go to
 `tico market report`, in prose with the source, never into a second list here. Ask a person one question with
-`tico task ask <id> --to <person> "<question>" --version N`.
+`tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 `knowledge/paid-social-method.md` holds the standing rules, with sources. In short:

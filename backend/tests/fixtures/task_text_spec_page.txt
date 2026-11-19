@@ -1,0 +1,63 @@
+ 
+ Keep keys out of task comments and bot memory · Spec 
+ Keep keys out of task comments and bot memory · Spec v2 · 2026-11-17
+ Cause: A key pasted into a task comment is stored and shown to every reader and bot: the key detector guards only the Tools chat. The turn scrub also misses keys written as JSON escapes or UTF-16.
+ Fix: Check every task text field with the detector's rules; teach the scrub the encoded forms.
+ Decide: OK this spec, or send it back. Two choices at OK are yours (Open questions).
+ Before and after
+ Today POST /api/v2/tasks/{id}/comments
+text: "deploy key: <a GitHub token>"
+→ 200, stored as typed; every reader and
+ bot on the task sees it.
+A turn writes a granted key into memory/,
+with JSON escapes or in a UTF-16 file
+→ committed and pushed as is.
+ After the fix Same comment
+→ 422, a key was found, save it in Tools.
+ Nothing stored; an audit row, no value.
+Same turn
+→ escaped form masked before the commit;
+ UTF-16 file left out and named in the reply.
+ No screen changes but the refusal's words (UX Writer's).
+ Details
+ Goal
+ Who has it: every company, every task. No incident known; evidence from code.
+ How we will know: keys kept out of comments per week, from audit rows that hold no value. Baseline: none, no check today (2026-11-17). Target: missing, yours to set; proposed: every certain-tier key kept out. Guard: wrongful refusals from support requests, baseline 0; narrow the rules if more than 2 accounts report one. Read 14 days after release.
+ Appetite: small batch, up to 2 engineer-weeks, one engineer (Security Owner, 2026-11-17). If declined: logged with a date to look again.
+ Step 1: the check (code read, acme/tico at ef180c3a9)
+ Store Today Gap 
+ Task comments and bodies No key check; the detector ( secret_drop.py ) runs only in the Tools chat. Open: a pasted key is stored and shown. 
+ Bot memory, pushed files Changed files scrubbed of granted secrets (plain, URL, base64); binary ones left out ( redact.rs ). JSON escapes, UTF-16 missed; ungranted keys unknown. 
+ Logs, run events Scrubbed of granted values ( scrub_log ). Same encoded forms. Server logs not read (open question). 
+ Browser action log Verb and page path only. None found; a test keeps it so. 
+ Scope and non-goals
+ In: every task text write checked with the certain-tier rules before storing, from any client, person or bot: comments and their edits, title, body, note (done, update), ask text, answer values, public title and summary (criteria 1 to 7).
+ In: the turn scrub (Rust and Python alike) matches granted secrets JSON-escaped and in UTF-16 LE/BE, in files, logs and events.
+ In: one shared test set of gstack's cases (A to E below), run by both runners.
+ Droppable: the same rules over changed memory/ files.
+ Out: keys already stored; suspect-tier matches; channel messages (next brief); meeting transcripts; a value split inside itself; rotating keys.
+ Acceptance criteria
+ Given a person, when they post a comment holding a certain-tier key from the web, then it is refused, nothing stored, and the message names Tools, not the key. before release 
+ Given a bot, when it posts the same comment with tico task comment , then it is refused the same way. before release 
+ Given any other task text write listed in scope, including one inside a hand-off (done with a note, an answer), when it holds a key, then it is refused the same way and the task is left unchanged at the same version. before release 
+ Given a comment from Slack, mail or a public requester on a roadmap task holding a key, when it is stored, then the key reads as a mark and the author is told where it still is. before release 
+ Given any refusal or mark in 1 to 4, when the audit is read, then one row names the task, author and rule, with no value, hash or partial characters. before release 
+ Given a refusal to a bot, when it reads the answer, then it gets the stable code looks_like_key and one line it can act on: save it in Tools and refer to it by name. before release 
+ Given text with no key (task UUIDs, file-ids, 40-hex git hashes, PR URLs, s3:// URIs, Tico-Run lines, addresses, prose about keys), when it is posted, then it is stored unchanged; the detector's negative cases and this page's text pass. before release 
+ Case A. Given a granted secret, when a turn writes it JSON-escaped into a memory file, then it is masked before the commit. before release 
+ Case B. Given a granted secret, when a turn writes a UTF-16 file holding it, then the file is left out of the commit and named in the reply. before release 
+ Case C. Given a granted secret, when a turn writes token= and the value on the next line, in UTF-8 and UTF-16, then each is masked or left out as in 8 and 9. before release 
+ Case D. Given a granted secret, when a turn writes a file git treats as binary holding it, then the file is left out, as today. before release 
+ Case E. Given a memory file with an Authorization: line, when a turn changes only its value to a granted secret, then the new value is masked before the commit. before release 
+ Given a granted key written with JSON escapes or in UTF-16 in a turn's log or events, when the log is read, then it shows as the mark. before release 
+ Given a bot that types a secret into a website, when Activity is read, then it shows the verb and page path only. before release 
+ Given 14 days in production, when the Support Owner's digests are read, then at most 2 accounts reported a wrongful refusal. Watched by Security Owner. after launch 
+ v2 (2026-11-17): all task text paths, unchanged task on refusal, stable code, Tico id negatives, roadmap comments masked (Tasks Product Owner's input).
+ Not proved yet: how often people paste keys into comments today.
+ Open questions
+ Refuse, or store masked, for comments typed in Tico? Default refuse, as in the Tools chat. Ana, you decide at OK.
+ A one-off read-only count of existing comments holding a key (task ids only, no values)? Default no. Ana, at OK.
+ Do server logs record request bodies? Engineering, by 2026-11-24.
+ Risks: false refusals. Observed: run over a draft of this page, the certain-tier rules flagged three ordinary phrases as keys. Criterion 7 must pass before release. 
+ Ben checks this page. Ana, you OK it.
+ 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import question_marks
 from backend import totp as T
 from backend import website_tools as W
 from backend.auth import Identity
@@ -392,6 +393,23 @@ def test_accounts_are_added_replaced_shared_and_removed_and_each_answer_is_the_d
     assert PASSWORD not in tables(api, "events", "idempotency") and KEY not in tables(api, "events", "idempotency")
 
 
+def test_a_demoted_adder_can_remove_a_shared_website_account_without_access_to_its_login(api):
+    start(api)
+    tid = website(api)
+    aid = account(api, tid, token="ben-test", totp=KEY)
+    second = account(api, tid, token="ben-test", username="back-office@acme.example")
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    rows = {row["id"]: row for row in get(api, f"website-tools/{tid}", "ben-test")["accounts"]}
+    row = rows[aid]
+    assert row["can_remove"] and not row["can_manage"] and not row["can_use"]
+    assert "username" not in row and not row["has_totp"]
+    path = f"website-tools/{tid}/accounts/{aid}"
+    call(api, "DELETE", path, token="cara-test", expected=403)
+    post(api, f"credentials/{aid}/reveal", {}, "ben-test", expected=403)
+    assert call(api, "DELETE", path, token="ben-test")["deleted"]
+    assert call(api, "DELETE", f"credentials/{second}", token="ben-test")["deleted"]
+
+
 def test_the_code_route_gives_a_person_who_uses_it_the_code_logs_it_without_the_code_and_slows_down(api):
     start(api)
     tid = website(api)
@@ -641,17 +659,16 @@ def test_one_who_only_manages_a_granted_bot_reaches_the_browser_only_while_an_as
         view()
     assert hidden.value.status == 404
     task = post(api, "tasks", {"owner": "finance", "title": "Pull the statements", "body": "From the bank."})
-    with store.transaction() as c:
-        made = H.task_ask(
+    with store.transaction() as c:  # the bot's ❓ showing the browser, as browser_commands' Needs-you ask writes it
+        question_marks.ask(
             c,
             finance,
             task["id"],
             "human:cara",
             "Please sign in to the bank for me.",
-            kind="answer",
-            choices=["Done"],
-            shows=[f"browser:{tid}/{aid}"],
-            seen_version=task.get("version"),
+            checked=False,
+            let_in=False,
+            refs={"shows": [f"browser:{tid}/{aid}"]},
         )
     assert view()["account_id"] == aid
     with pytest.raises(Problem):
@@ -659,9 +676,53 @@ def test_one_who_only_manages_a_granted_bot_reaches_the_browser_only_while_an_as
     with pytest.raises(Problem):
         with store.read() as c:
             W.picked_account(c, Identity("human:eve", "human"), tid, aid)  # it waits on Cara, not on Eve
-    post(api, f"tasks/{task['id']}/asks/{made['requirement_id']}/answer", {"value": "Done"}, "cara-test")
+    post(api, f"tasks/{task['id']}/comments", {"text": "Done."}, "cara-test")  # her reply clears the ❓
     with pytest.raises(Problem):
         view()
+
+
+def test_can_open_is_the_browser_routes_rule_for_a_bots_own_account_that_needs_a_person(api):
+    """A bot's own account on a "Sign in with Google" site: the bot asks its manager to sign in. The manager and the
+    company owner see `can_open` and the browser routes let them in; a member unrelated to the bot gets neither."""
+    from backend import browser_commands as bc
+
+    start(api)
+    tid = website(api)
+    finance = bot(api, "finance")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot=?", (finance[4:],))
+    aid = account(api, tid, "cara-test", holder=finance, username="", password="")
+    task = post(api, "tasks", {"owner": "finance", "title": "Check the bookings", "body": "On the site."})
+    with store.transaction() as c:  # the bot's needs-you ask, as browser_commands' route writes it
+        marked = question_marks.ask(
+            c,
+            finance,
+            task["id"],
+            "human:cara",
+            "Sign in to the site for me.",
+            checked=False,
+            let_in=False,
+            refs={"shows": [f"browser:{tid}/{aid}"]},
+        )
+        bc.MAILBOX.needs_you(aid, question_marks.wait_id(marked), bc.who_of(c, finance))
+    try:
+        for token, person in (
+            ("cara-test", Identity("human:cara", "human")),
+            ("ana-test", Identity("human:ana", "owner")),
+        ):
+            [seen] = get(api, f"website-tools/{tid}", token)["accounts"]
+            assert seen["session"]["state"] == "needs_you" and seen["can_use"] is False
+            assert seen["can_open"] is True, token
+            with store.read() as c:
+                assert W.picked_account(c, person, tid, aid)["account_id"] == aid
+        assert get(api, f"website-tools/{tid}", "eve-test")["accounts"] == []
+        call(api, "POST", f"website-tools/{tid}/accounts/{aid}/browser", {}, token="eve-test", expected=404)
+        with store.read() as c:
+            assert W.may_view(c, Identity("human:eve", "human"), W._account(c, tid, aid)) is False
+            assert W.may_view(c, Identity(finance, "bot"), W._account(c, tid, aid)) is False  # a person's view only
+    finally:
+        bc.MAILBOX.clear_needs_you(aid)
 
 
 def test_a_bot_run_or_a_computer_never_reads_an_accounts_username(api):

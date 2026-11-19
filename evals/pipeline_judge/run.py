@@ -1,6 +1,6 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 92 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
+cases.json holds 101 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
 as text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
 unsure. 60 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
 and 32 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results
@@ -10,7 +10,10 @@ pages). The page cases are real pages from the Acme test company, built as the p
 12,000 characters, the length bots write), with `trap-*` cut from them. `nov12-*` are six pre-release pages (Fixes 2's then, QA's now) from the
 Nov 12 stress run that a person OK'd (Jev had said 0.13 to 0.70 on them), and five bad ones: one with no check output,
 one without Reviewer 2 and two reporting a failed check at the newest commit, cut from them, and a real first page that
-answered Review 2 only. `--only
+answered Review 2 only. Since task #389 a QA page also shows a verdict strip, how it works and risk and rollback: the QA
+pages above that met the four-part line are labelled not met (trap `before_qa_v2`), and `v2-*` is #329's real QA page
+rebuilt to that standard (met) with each of the three cut from it (not met). `nov14-*` are the five QA pages Builders made on
+Nov 14, before v2 (criteria table, no diagram, no rollback: not met). `--only
 acme-*,live-*,long-*,trap-*,nov12-*` runs just those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder
 page, a self-review, a pre-release page without the reviews, without the checks or with the checks of an older commit, a
 review of an older commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no
@@ -34,6 +37,7 @@ points, p95 under 30 seconds, no failed calls, and a nonempty case set. Exit 0 a
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -43,7 +47,7 @@ from backend import pipeline_judges as P
 from backend.pipeline_judges import MET_AT, NOT_MET_AT
 from clients import judge as J
 
-from . import adapter
+from . import adapter, typed
 
 HERE = Path(__file__).parent
 CASES = HERE / "cases.json"
@@ -256,9 +260,17 @@ def main(argv=None, env=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--models", default="jev")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--candidate", help="Dated, paid OpenRouter Decisions model ID")
+    parser.add_argument("--endpoint", help="OpenRouter endpoint slug for --candidate")
     parser.add_argument("--only", help="case ids, comma-separated; one ending in * is a prefix (acme-*)")
     parser.add_argument("--out", default=str(HERE / "results"))
     args = parser.parse_args(argv)
+    if bool(args.candidate) != bool(args.endpoint) or (args.candidate and args.dry_run):
+        parser.error("--candidate and --endpoint are required together for a live comparison")
+    env = os.environ if env is None else env
+    names = [m.strip() for m in args.models.split(",") if m.strip()]
+    if args.candidate and len(names) != 1:
+        parser.error("select exactly one pinned Gateway baseline with --models")
     cases = load()
     found = problems(cases)
     if found:
@@ -273,7 +285,7 @@ def main(argv=None, env=None):
         judges = fake_judges(cases)
     else:
         judges, skipped = {}, []
-        for name in [m.strip() for m in args.models.split(",") if m.strip()]:
+        for name in names:
             engine = adapter.build_engine(name, env)
             if engine is None:
                 skipped.append(name)
@@ -285,13 +297,40 @@ def main(argv=None, env=None):
         if not judges:
             print(NO_ENGINE, file=sys.stderr)
             return 2
+    comparable = {}
+    if args.candidate:
+        key = (env.get("OPENROUTER_API_KEY") or "").strip()
+        if not key:
+            print(INCOMPLETE.format(names=args.candidate), file=sys.stderr)
+            return 2
+        try:
+            candidate = adapter.openrouter(key, args.candidate, args.endpoint)
+        except ValueError as exc:
+            parser.error(str(exc))
+        gateway_key, gateway_url = adapter.gateway_settings(env)
+        pinned_baseline = adapter.JEV_PIN if names[0] == "jev" else names[0]
+        comparable[names[0]] = J.gateway(gateway_key, gateway_url, model=pinned_baseline, timeout=J.GATEWAY_TIMEOUT)
+        comparable[args.candidate] = candidate
+        engine = adapter.pipeline_engine(candidate, args.candidate)
+        judges[args.candidate] = lambda case: adapter.judge_once(engine, case)
     results = [score(name, judge, cases) for name, judge in judges.items()]
+    for result in results:
+        if result["model"] in comparable:
+            checks = typed.score(comparable[result["model"]])
+            result["typed_questions"] = checks
+            failures = [case["id"] for case in checks if not case["passed"]]
+            if failures:
+                result["bar_failures"].append("Typed question cases: " + ", ".join(failures))
+                result["passes_bar"] = False
+            print(f"{result['model']} typed questions: {len(checks) - len(failures)}/{len(checks)} passed")
     print(table(results))
     for r in results:
         for line in r["mistakes"]:
             print(f"{r['model']}: {line}")
     if not args.dry_run:
         print("written:", write(results, args.out))
+    if args.candidate and not results[-1]["passes_bar"]:
+        return 1
     return 0
 
 

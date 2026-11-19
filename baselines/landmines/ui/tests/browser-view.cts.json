@@ -1,0 +1,6 @@
+{
+  "ui/tests/browser-view.cts": {
+    "no-fixed-wait-ui": 10,
+    "no-raised-timeout": 1
+  }
+}

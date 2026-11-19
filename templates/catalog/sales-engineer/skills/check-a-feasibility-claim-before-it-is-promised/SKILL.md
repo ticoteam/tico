@@ -1,6 +1,8 @@
 ---
 name: check-a-feasibility-claim-before-it-is-promised
 description: Sort an integration or feature claim into works today, works with a workaround, not possible today, or not shipped, using a dated source, before anyone tells a buyer it works.
+metadata:
+  function: sales
 ---
 # Check a feasibility claim before it is promised
 

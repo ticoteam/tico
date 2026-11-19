@@ -1,5 +1,8 @@
 {
   "body": {
+    "actors": {
+      "bot:ops": "ops"
+    },
     "has_more": false,
     "next_cursor": "<volatile>",
     "pages": [
@@ -10,6 +13,16 @@
         "bot_name": "ops",
         "cadence": "weekly",
         "file_id": "<page>",
+        "links": [
+          {
+            "at": "<time>",
+            "by": "bot:ops",
+            "name": "ops",
+            "role": "writer",
+            "target": "bot:ops"
+          }
+        ],
+        "may_write": true,
         "replaced_by_id": null,
         "replaced_by_title": null,
         "restricted": false,
@@ -20,7 +33,16 @@
         "updated_at": "<time>",
         "updated_by": "bot:ops",
         "updated_by_name": "ops",
-        "version": 1
+        "version": 1,
+        "writers": [
+          {
+            "actor": "bot:ops",
+            "actor_name": "ops",
+            "last_at": "<time>",
+            "name": "ops",
+            "versions": 1
+          }
+        ]
       }
     ]
   },

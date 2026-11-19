@@ -16,6 +16,11 @@ derived from the vault's data key, and names the tool, the grant subject and wha
 - `g`: an external agent's standing credential (backend/agents.py); valid while it is not revoked, for TTL.
 Every call also re-reads the subject's level, so taking a level away stops the next call, not the next run.
 
+At Read with only a Read and write key, the proxy lets through GET, HEAD and OPTIONS, and a POST only as MCP calls that
+read (`MCP_READS`, and `tools/call` of a tool the server's own tools/list marked `readOnlyHint`). A bot held at Read on a
+tool whose keys go to computers is sent here too, when the tool has an API address (backend/api_tools.py
+`computer_way`).
+
 Refusals are the app's error envelope with a `detail` that names the one setting that would change it.
 """
 
@@ -43,6 +48,25 @@ TOKEN_RE = re.compile(r'tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
 SAFE = frozenset(('GET', 'HEAD', 'OPTIONS'))
 METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
+# MCP over HTTP is JSON-RPC in POST bodies. At Read with only a Read and write key these calls pass, as reads: the
+# session's own set-up and listings, and `tools/call` of a tool the server's own tools/list marked readOnlyHint.
+MCP_READS = frozenset(
+    (
+        'initialize',
+        'ping',
+        'tools/list',
+        'resources/list',
+        'resources/templates/list',
+        'resources/read',
+        'prompts/list',
+        'prompts/get',
+        'completion/complete',
+        'logging/setLevel',
+    )
+)
+READ_ONLY_TOOLS = {}  # {tool id: {MCP tool name}}: what the vendor's latest tools/list marked read-only
+MAX_LISTING = 4 * 1024 * 1024
+MAX_NAMES = 5000
 TTL = 12 * 3600  # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
 TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
 RESOLVE_BUDGET = 10.0
@@ -108,6 +132,31 @@ def mint(c, vault, tool_id, subject, *, attempt='', runner='', agent=False, now=
     return TOKEN_PREFIX + body + '.' + _b64(hmac.new(_signing_key(c, vault), body.encode(), hashlib.sha256).digest())
 
 
+def home_of(row, tool):
+    """The tool id a key's proxy address names: the tool it was on before it was grouped onto its vendor account's tool
+    (`credentials.former_tool_id`, backend/tool_templates.py), so a run's `TICO_TOOL_<ID>_URL` never changes, else its
+    own tool's."""
+    try:
+        former = row['former_tool_id']
+    except (IndexError, KeyError):
+        former = None
+    return former or tool['id']
+
+
+def tool_for(c, tool_id):
+    """The tools row a proxy address names: the tool, or the tool a grouped tool's key was moved onto from it."""
+    tool = c.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
+    if tool is not None:
+        return tool
+    try:
+        moved = c.execute(
+            'SELECT tool_id FROM credentials WHERE former_tool_id=? AND tool_id IS NOT NULL LIMIT 1', (tool_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None  # a file from before grouping
+    return c.execute('SELECT * FROM tools WHERE id=?', (moved[0],)).fetchone() if moved else None
+
+
 def proxied_tools(c):
     """{tool id: tool row} for every tool whose calls go through the proxy."""
     return {r['id']: r for r in c.execute("SELECT * FROM tools WHERE delivery='proxy'")}
@@ -117,6 +166,7 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
     """What a run is handed for a held credential of a proxied tool: a proxy token where the key would be, and the
     proxy's address in `url_env`. Never the key."""
     token = mint(c, vault, tool['id'], subject, attempt=attempt, runner=runner, agent=agent)
+    home = home_of(row, tool)
     return {
         'id': row['id'],
         'name': row['name'],
@@ -124,8 +174,10 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
         'kind': row['kind'],
         'value': token,
         'tool': tool['name'] or tool['id'],
-        'proxy_url': proxy_url(settings, tool['id']),
-        'url_env': url_env(tool['id']),
+        'proxy_url': proxy_url(settings, home),
+        'url_env': url_env(home),
+        # The vendor address the proxy forwards to: the runner sends a declared MCP server under it through the proxy.
+        'base_url': tool['base_url'] or '',
     }
 
 
@@ -174,9 +226,10 @@ def holder_live(c, claims, now=None):
     return True
 
 
-def found_token(request, scheme):
+def found_token(request, scheme, names=(), params=()):
     """The proxy token wherever the caller put it: Bearer, either half of Basic, the scheme's header or its query
-    parameter. Returns (token, where), where is 'header' when it sat in the scheme's own header."""
+    parameter, or any header or parameter a template's ways send (`names`, `params`). Returns (token, where), where is
+    'header' when it sat in the scheme's own header."""
     auth = request.headers.get('authorization', '')
     places = []
     kind, _, value = auth.partition(' ')
@@ -191,11 +244,74 @@ def found_token(request, scheme):
         places.append((request.headers.get(scheme[7:], ''), 'header'))
     if scheme.startswith('query:'):
         places.append((request.query_params.get(scheme[6:], ''), 'query'))
+    places += [(request.headers.get(n, ''), 'template') for n in names if n != 'authorization']
+    places += [(request.query_params.get(p, ''), 'query') for p in params]
     for text, where in places:
         match = TOKEN_RE.search(text or '')
         if match:
             return match.group(0), where
     return '', ''
+
+
+def rpc_calls(body):
+    """[(method or None, params)] for a JSON-RPC body, one message or a batch; None when the body is not JSON-RPC. A
+    message without a method is the client's answer to the server (None)."""
+    try:
+        data = json.loads(body or b'')
+    except ValueError:
+        return None
+    items = data if isinstance(data, list) else [data]
+    if not items or not all(isinstance(m, dict) and m.get('jsonrpc') == '2.0' for m in items):
+        return None
+    out = []
+    for m in items:
+        method = m.get('method')
+        if method is None and ('result' in m or 'error' in m):
+            out.append((None, {}))
+        elif isinstance(method, str):
+            out.append((method, m.get('params') if isinstance(m.get('params'), dict) else {}))
+        else:
+            return None
+    return out
+
+
+def mcp_write(tool_id, calls):
+    """'' when every call only reads, else the first call that may write, named for the refusal."""
+    for method, params in calls:
+        if method is None or method in MCP_READS or method.startswith('notifications/'):
+            continue
+        if method == 'tools/call':
+            name = str(params.get('name') or '')
+            if name and name in READ_ONLY_TOOLS.get(tool_id, ()):
+                continue
+            return f'the MCP tool {name or "(unnamed)"}, which its server does not mark read-only'
+        return f'the MCP call {method}'
+    return ''
+
+
+def learn_read_only(tool_id, data):
+    """Note which tools a tools/list answer (JSON, or server-sent `data:` lines) marks `readOnlyHint`; a tool listed
+    without it is taken off."""
+    messages = []
+    try:
+        messages.append(json.loads(data))
+    except ValueError:
+        for line in data.splitlines():
+            if line.startswith(b'data:'):
+                try:
+                    messages.append(json.loads(line[5:]))
+                except ValueError:
+                    continue
+    known = READ_ONLY_TOOLS.setdefault(tool_id, set())
+    for m in messages:
+        tools = ((m or {}).get('result') or {}).get('tools') if isinstance(m, dict) else None
+        for t in tools if isinstance(tools, list) else []:
+            if not isinstance(t, dict) or not isinstance(t.get('name'), str):
+                continue
+            if (t.get('annotations') or {}).get('readOnlyHint') is True and len(known) < MAX_NAMES:
+                known.add(t['name'])
+            else:
+                known.discard(t['name'])
 
 
 def logged_path(rest, query):
@@ -229,9 +345,9 @@ def pinned(url, name):
     return httpx.URL(url).copy_with(host=address), host, parts.hostname
 
 
-def secrets_of(key, username):
+def secrets_of(key, username, more=()):
     """Every spelling of the key an answer could echo: itself and each Basic encoding it was sent in."""
-    out = {key}
+    out = {key, *more}
     for pair in (f'{key}:', f'{username}:{key}'):
         out.add(base64.b64encode(pair.encode()).decode())
     return sorted((s for s in out if s), key=len, reverse=True)
@@ -267,18 +383,24 @@ class Scrubber:
         return data
 
 
-def outgoing_headers(request, tool, credential, key, where):
-    """The caller's headers minus its sign-in and what proxies added, with the vendor's auth set from the key."""
+def outgoing_headers(request, tool, credential, key, where, auth=None):
+    """The caller's headers minus its sign-in and what proxies added, with the vendor's auth set from the key, or, for
+    a tool with a template, the headers its template built from every field (`auth`)."""
     scheme = tool['auth_scheme'] or 'bearer'
-    named = scheme[7:].lower() if scheme.startswith('header:') else ''
+    named = scheme[7:].lower() if scheme.startswith('header:') and auth is None else ''
+    dropped = {k.lower() for k in auth} if auth is not None else set()
     out = []
     for name, value in request.headers.items():
         low = name.lower()
         if low in HOP or low in REQUEST_DROP or low.startswith(REQUEST_DROP_PREFIXES) or (named and low == named):
             continue
+        if low in dropped:
+            continue
         out.append((name, value))
     out.append(('Accept-Encoding', 'gzip, deflate'))
-    if scheme == 'bearer':
+    if auth is not None:
+        out += list(auth.items())
+    elif scheme == 'bearer':
         out.append(('Authorization', 'Bearer ' + key))
     elif scheme == 'basic_user':
         out.append(('Authorization', 'Basic ' + base64.b64encode(f'{key}:'.encode()).decode()))
@@ -292,18 +414,28 @@ def outgoing_headers(request, tool, credential, key, where):
     return out
 
 
-def outgoing_query(query, tool, key):
-    """The caller's query string, with the scheme's parameter (when the scheme is a query parameter) set to the key."""
-    scheme = tool['auth_scheme'] or ''
-    if not scheme.startswith('query:'):
+def outgoing_query(query, tool, key, params=None):
+    """The caller's query string, with the scheme's parameter (when the scheme is a query parameter) set to the key, or,
+    for a tool with a template, each parameter its template built (`params`) set."""
+    if params is None:
+        scheme = tool['auth_scheme'] or ''
+        if not scheme.startswith('query:'):
+            return query
+        params = {scheme[6:]: key}
+    if not params:
         return query
-    param = scheme[6:]
-    kept = [
-        part
-        for part in query.split('&')
-        if part and part.split('=', 1)[0] != quote(param, safe='') and part.split('=', 1)[0] != param
-    ]
-    return '&'.join(kept + [quote(param, safe='') + '=' + quote(key, safe='')])
+    names = set(params) | {quote(p, safe='') for p in params}
+    kept = [part for part in query.split('&') if part and part.split('=', 1)[0] not in names]
+    return '&'.join(kept + [quote(p, safe='') + '=' + quote(v, safe='') for p, v in params.items()])
+
+
+def read_only_detail(who, name, mcp=''):
+    if mcp:
+        return (
+            f"{who}'s level on {name} is Read: GET calls and MCP calls that only read, and {mcp} may write. "
+            'Add a read key or set Read and write.'
+        )
+    return f"{who}'s level on {name} is Read: only GET calls. Add a read key or set Read and write."
 
 
 def refused(status, code, detail):
@@ -341,18 +473,24 @@ def install(app, store):
             )
             if credential_id and result == 'sent':
                 from .credentials import record_use
+                from . import reconnect_tasks
 
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
+                reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
 
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
         with store.read() as c:
-            tool = c.execute('SELECT * FROM tools WHERE id=?', (tool_id,)).fetchone()
+            tool = tool_for(c, tool_id)
             if not tool:
                 return (401, 'identity', 'Invalid tool token', None), None
-            token, where = found_token(request, tool['auth_scheme'] or 'bearer')
+            from . import tool_templates
+
+            spec = tool_templates.spec_of(tool)
+            names, params = tool_templates.auth_names(spec) if spec else ((), ())
+            token, where = found_token(request, tool['auth_scheme'] or 'bearer', names, params)
             claims = claims_of(c, vault, token)
-            if not claims or claims['t'] != tool_id:
+            if not claims or claims['t'] != tool['id']:
                 return (401, 'identity', 'Invalid tool token', None), None
             subject = str(claims['s'])
             if not holder_live(c, claims):
@@ -365,31 +503,39 @@ def install(app, store):
             from . import api_tools
 
             name = tool['name'] or tool_id
+            tool_id = tool['id']
+            auth = None
             try:
                 # No level, or no stored key for it: refused with the setting that would allow it (api_tools).
-                credential, level = api_tools.key_for(c, tool_id, subject)
+                if spec and spec.get('ways'):
+                    auth = tool_templates.proxy_auth(c, vault, tool, spec, subject)
+                    credential, level = auth['credential'], auth['level']
+                else:
+                    credential, level = api_tools.key_for(c, tool_id, subject)
             except Problem as exc:
-                return (exc.status, exc.code, exc.detail, (subject, '')), None
-            log = (subject, level)
+                return (exc.status, exc.code, exc.detail, (subject, '', tool_id)), None
+            log = (subject, level, tool_id)
             problem = address_problem(tool['base_url'] or '', name)
             if problem:
                 return (403, 'tool_address', problem, log), None
-            if level == 'read' and credential['access_level'] != 'read' and method not in SAFE:
-                who = api_tools._label(c, subject)
-                return (
-                    403,
-                    'forbidden',
-                    f"{who}'s level on {name} is Read: only GET calls. Add a read key or set Read and write.",
-                    log,
-                ), None
-            key = vault.cipher.decrypt(c, credential)
+            # A sign-in (backend/mcp_connect.py) is a Read and write key too: a Read caller is held to MCP reads.
+            reads_only = auth['reads_only'] if auth else level == 'read' and credential['access_level'] != 'read'
+            who = api_tools._label(c, subject) if reads_only else ''
+            if reads_only and method not in SAFE and method != 'POST':
+                return (403, 'forbidden', read_only_detail(who, name), log), None
+            # An MCP tool's sign-in has no stored key: its access token is fetched below.
+            key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
             return None, {
+                'auth': auth,
                 'tool': dict(tool),
                 'credential': dict(credential),
                 'key': key,
                 'where': where,
                 'subject': subject,
                 'level': level,
+                'reads_only': reads_only,
+                'who': who,
+                'name': name,
             }
 
     @app.api_route(PREFIX + '{tool_id}/{path:path}', methods=METHODS, include_in_schema=False)
@@ -407,11 +553,42 @@ def install(app, store):
             status, code, detail, log = refusal
             if log:
                 await loop().run_in_executor(
-                    None, record, tool_id, None, log[0], log[1], method, shown, status, 'refused', detail, began
+                    None, record, log[2], None, log[0], log[1], method, shown, status, 'refused', detail, began
                 )
             return refused(status, code, detail)
+        assert ready is not None  # plan answers a refusal or a plan
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
-        secrets = secrets_of(key, credential.get('username') or '')
+        tool_id, auth = tool['id'], ready['auth']
+        got = ready or {}  # the plan, typed as never None past the refusal above
+        if key is None:
+            from . import mcp_connect
+
+            try:
+                key = await loop().run_in_executor(None, mcp_connect.access_token, store, vault, credential['id'])
+            except mcp_connect.Failed as exc:
+                name = tool['name'] or tool_id
+                again = isinstance(exc, mcp_connect.SignInNeeded)
+                detail = (
+                    f'{name} needs a new sign-in: Tools > {name} > Sign in.'
+                    if again
+                    else f'{name}\'s sign-in server did not answer ({exc.reason}).'
+                )
+                await loop().run_in_executor(
+                    None,
+                    record,
+                    tool_id,
+                    credential['id'],
+                    got['subject'],
+                    got['level'],
+                    method,
+                    shown,
+                    401 if again else 502,
+                    'refused' if again else 'failed',
+                    detail,
+                    began,
+                )
+                return refused(401 if again else 502, 'tool_sign_in', detail)
+        secrets = secrets_of(key, credential.get('username') or '', auth['secrets'] if auth else ())
         log = lambda status, result, detail: loop().run_in_executor(
             None,
             record,
@@ -437,8 +614,17 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
+        calls = rpc_calls(b''.join(chunks)) if method == 'POST' else None
+        if ready['reads_only'] and method == 'POST':
+            # A POST passes at Read only as MCP calls that only read.
+            write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
+            if write:
+                detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
+                await log(403, 'refused', detail)
+                return refused(403, 'forbidden', detail)
+        listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        query = outgoing_query(query, tool, key)
+        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
         url += ('?' + query) if query else ''
         if urlsplit(url).hostname != urlsplit(tool['base_url']).hostname:
             await log(None, 'refused', 'Address left the tool host')
@@ -455,23 +641,60 @@ def install(app, store):
             trust_env=False,
             verify=outbound_tls.context(trust_env=False),
         )
+        forward = lambda key: client.send(
+            client.build_request(
+                method,
+                target,
+                headers=[
+                    ('Host', host),
+                    *outgoing_headers(request, tool, credential, key, got['where'], auth['headers'] if auth else None),
+                ],
+                content=b''.join(chunks),
+                extensions={'sni_hostname': sni},
+            ),
+            stream=True,
+        )
+        from . import api_tools
+
         try:
-            upstream = await client.send(
-                client.build_request(
-                    method,
-                    target,
-                    headers=[('Host', host), *outgoing_headers(request, tool, credential, key, ready['where'])],
-                    content=b''.join(chunks),
-                    extensions={'sni_hostname': sni},
-                ),
-                stream=True,
-            )
+            upstream = await forward(key)
+            if upstream.status_code == 401 and credential['kind'] == 'oauth':
+                # The server ended the access token before its time: refreshed once, and the call sent again.
+                from . import mcp_connect
+
+                await upstream.aclose()
+                try:
+                    key = await loop().run_in_executor(
+                        None, lambda: mcp_connect.access_token(store, vault, credential['id'], force=True)
+                    )
+                except mcp_connect.Failed:
+                    key = None
+                if key is None:
+                    name = tool['name'] or tool_id
+                    await client.aclose()
+                    await log(401, 'refused', f'{name} needs a new sign-in')
+                    return refused(401, 'tool_sign_in', f'{name} needs a new sign-in: Tools > {name} > Sign in.')
+                secrets = secrets_of(key, '')
+                upstream = await forward(key)
+            # A 401's first bytes are read before its row is written, so the row can say whether the reply names a missing
+            # scope. They are relayed first, exactly as they came; nothing else is read ahead.
+            stream = upstream.aiter_bytes()
+            ahead, seen = [], 0
+            if upstream.status_code == 401:
+                async for chunk in stream:
+                    ahead.append(chunk)
+                    seen += len(chunk)
+                    if seen >= api_tools.SCOPE_READ:
+                        break
         except httpx.HTTPError as exc:
             await client.aclose()
             detail = scrub_text(f'{type(exc).__name__}: {exc}', secrets)[:200]
             await log(None, 'failed', detail)
             return refused(502, 'tool_unreachable', f"{tool['name'] or tool_id} did not answer: {detail}")
-        await log(upstream.status_code, 'sent', '')
+        scoped = upstream.status_code == 401 and api_tools.said_missing_scope(
+            upstream.headers.get('www-authenticate', ''), b''.join(ahead)
+        )
+        await log(upstream.status_code, 'sent', api_tools.MISSING_SCOPE if scoped else '')
         headers = [
             (name, scrub_text(value, secrets))
             for name, value in upstream.headers.multi_items()
@@ -480,16 +703,27 @@ def install(app, store):
             and not name.lower().startswith(RESPONSE_DROP_PREFIXES)
         ]
         scrubber = Scrubber(secrets)
+        heard = [] if listing else None
+
+        async def relayed():
+            for chunk in ahead:
+                yield chunk
+            async for chunk in stream:
+                yield chunk
 
         async def body():
             try:
-                async for chunk in upstream.aiter_bytes():
+                async for chunk in relayed():
+                    if heard is not None and sum(map(len, heard)) < MAX_LISTING:
+                        heard.append(chunk)
                     out = scrubber.feed(chunk)
                     if out:
                         yield out
                 tail = scrubber.end()
                 if tail:
                     yield tail
+                if heard:
+                    learn_read_only(tool_id, b''.join(heard))
             finally:
                 await upstream.aclose()
                 await client.aclose()

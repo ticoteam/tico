@@ -52,3 +52,6 @@ first_routine:
 example_output: knowledge/examples/docs-drift-report.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_docs]
+shared_files:
+  - .claude/skills/ship-a-release
+  - .claude/skills/get-found-and-cited

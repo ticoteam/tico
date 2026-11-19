@@ -88,6 +88,10 @@ def argument_error(value, schema, path="arguments"):
             return k == "boolean"
         return isinstance(value, types[k]) or k == "integer" and isinstance(value, float) and value.is_integer()
 
+    if "anyOf" in schema:  # the value fits at least one (contracts/screen-actions.json: a string or null)
+        misses = [argument_error(value, sub, path) for sub in schema["anyOf"]]
+        if misses and all(misses):
+            return misses[0]
     if kinds and not any(is_kind(k) for k in kinds):
         return f"{path}: expected {' or '.join(kinds)}"
     if "enum" in schema and value not in schema["enum"]:
@@ -221,7 +225,7 @@ class Protocol:
         ]
         if missing:
             return self._tool_error(
-                rid, {"error": "usage", "detail": f"{name} needs {', '.join(missing)}", "retryable": False}
+                rid, {"error": "usage", "detail": f"{name} needs {_described(missing, properties)}", "retryable": False}
             )
         if error := argument_error(args, entry["inputSchema"]):
             return self._tool_error(rid, {"error": "validation", "detail": error, "retryable": False})
@@ -260,3 +264,9 @@ class Protocol:
                 "isError": True,
             },
         }
+
+
+def _described(names, properties):
+    """`key (The finding's key: ...)`: each missing argument with its schema description, so the refusal says what to
+    give and where it is, not only its name."""
+    return ", ".join(f"{k} ({d})" if (d := properties.get(k, {}).get("description")) else k for k in names)

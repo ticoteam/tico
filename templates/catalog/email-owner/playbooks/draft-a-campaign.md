@@ -12,7 +12,7 @@ gap is named; the drafts are attached to the task.
 
 ---
 
-## 1. Read the task and the record
+## 1. Read the task's chat and the record
 
     tico task show <id>
 
@@ -33,7 +33,7 @@ the task: it is not a bet you can build.
 - **For a flow**: each email with the delay before it and the event that stops the flow (a purchase, a reply, an
   unsubscribe, a booking).
 - **For a test**: the click, reply or conversion metric, the smallest lift worth finding and the sample size, per
-  `skills/design-an-ab-test/SKILL.md`.
+  `.claude/skills/run-lifecycle-and-paid/SKILL.md`, step 11.
 
 ## 3. Read it as the recipient
 

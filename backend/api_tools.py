@@ -10,19 +10,40 @@ backend/tool_proxy.py) asks `key_for` which key a caller's call uses, and `subje
 
 A tool's `delivery` says how its key reaches a run: `proxy` (the server adds the key to each call, the key never
 leaves it) or `computer` (the value goes to the run's environment, as every key did before Tools). Tools made from the
-keys that existed before (the migration 20261105220550) are `computer` until a person moves them, and show "Key on
-computers" under Needs you.
+keys that existed before (the migration 20261105220550) are `computer` until a person moves them. How a key reaches a
+run is never a problem: it puts no tool under Needs you (Tools marks a proxied tool with a lock instead).
 
-A check is one authenticated GET to the tool's `check_path` with each stored key: 2xx is Working, 401/403 Key rejected,
-anything else (a timeout, a refused address, a 500) Check failed. A 401 is never "reachable". The scheduler checks every
-proxied tool with a check path every CHECK_EVERY on a background thread; "Check now" runs one at once. A check sends
+A tool also holds Settings, its non-secret values (a host, a region, a project id), each delivered as a variable to
+every run that holds a level on the tool (backend/tool_settings.py). Tools lists one row a vendor (`vendor` on a row,
+`tool_services.vendor_of`: the tool's `service`, which a person may set, else its name, its keys' variables or its
+address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with its
+keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
+
+A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
+tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
+path needs a scope it lacks), a 401 whose reply says the key lacks a permission for the path (`_missing_scope`) Works
+(limited) too, only any other 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
+An id stored as a key (`tool_settings.known_name`) is never sent as one, and a status never comes from a check that
+would not run today (`_checked_today`). A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
+check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since and none
+whose reply says a permission is missing (`said_missing_scope`, stored as `MISSING_SCOPE` on the call), make it
+Key rejected. The scheduler checks every API tool with a check path every CHECK_EVERY on a background thread, its keys
+on the proxy or on computers alike (the server holds every value); "Check now" runs one at once. A check sends
 the key only to the tool's own https address, pinned to the public IP it resolved to (backend/egress.py), and nothing
-about a key but its tool and id is logged or stored.
+about a key but its tool and id is logged or stored. A tool with an MCP address (`mcp_url`, backend/mcp_connect.py) is a
+remote MCP server: its check is MCP's initialize and tools/list instead, and it may sign in over OAuth rather than hold
+a pasted key.
+
+A key's end date (`expires_on`) is typed by a person, or read from the vendor on its check (`vendor_end_date`: GitHub
+and Cloudflare say it on every check that works), and then marked `expires_source` 'vendor': the vendor's date replaces
+a typed one and the next check keeps it current. From EXPIRING_DAYS before it the tool reads "Expires in N days", and
+its Renew task opens (backend/reconnect_tasks.py).
 
 Who may do what, the vault's rules: a credential administrator (`credentials.administrator`) manages every tool and
 sees every row. Anyone else reads the page of a tool they hold a grant on or added a key to, sees only their own
 access row and the grants they made, and only the calls they or a bot they may see made. A bot reads the tools it is
-granted. Key values appear in no response here; the vault's reveal stays the only door to one.
+granted. The person or bot who added a key can remove it while they can see the tool. Values are revealed through the
+vault.
 
 Who can see it (`tools.audience`, `visible`): NULL is Everyone, the rules above. A list (the audience shape pages use,
 backend/teammate_access.py: people, groups with the groups nested in them, bots) is Only listed: the tool is then seen by
@@ -52,14 +73,23 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
+from typing import NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
 
+from . import mcp_connect
 from . import tool_services as TS
-from .credentials import CredentialWrite, administrator, effective_grant, owned, require_admin
+from . import tool_settings
+from . import access_requests
+from . import tool_templates
+from . import default_read
+from . import reconnect_tasks
+from . import tool_access as TA
+from .credentials import CredentialWrite, administrator, effective_grant, may_remove, owned
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +99,8 @@ LEVEL_NAMES = {"read": "Read", "read_write": "Read and write"}
 DELIVERIES = ("proxy", "computer")
 CHECK_EVERY = timedelta(minutes=30)
 CHECK_TIMEOUT = 10.0  # seconds for one check, connect to last byte
+# Tests set this to an httpx transport: every check then goes through it, its address still checked and pinned.
+TRANSPORT = None
 CHECKS_SHOWN = 24  # the 24 squares on a tool's Check card
 RECENT = 5  # calls on a tool's Overview
 EXPIRING_DAYS = 14  # a key this close to its end date is under Needs you
@@ -78,6 +110,34 @@ INDEX_LIMIT_MAX = 500
 INDEX_BYTES_MAX = 192 * 1024
 ACTIVITY_MAX = 200
 RESULTS = ("sent", "refused", "failed", "use")
+CALLS_WINDOW = timedelta(hours=24)  # real calls this recent say whether a proxied tool works (`call_health`)
+REJECTED_AFTER = 3  # 401s in a row on real calls, none 2xx since, before a tool reads Key rejected
+LIMITED = "Works (limited)"  # a check that got 403: the vendor knows the key, this path needs a scope it lacks
+SCOPE_READ = 2048  # bytes of a 401's reply read to tell a restricted key from a bad one (`said_missing_scope`)
+# What a 401's reply (lowercased) says when the key is known and lacks a permission for the path: ElevenLabs'
+# restricted keys answer missing_permissions, and RFC 6750 bearer challenges answer insufficient_scope.
+SCOPE_SAYS = (
+    "missing_permissions",
+    "missing the permission",
+    "missing permission",
+    "insufficient_scope",
+    "insufficient scope",
+    "insufficient permission",
+    "missing_scope",
+    "missing scope",
+)
+# A vendor that says when a key ends, read on the key's check (`vendor_end_date`): GitHub sends this header on its API's
+# replies to a personal token that has an end date, and Cloudflare's token verify answers `result.expires_on`. Only the
+# day is kept (`credentials.expires_on`, `expires_source` 'vendor'); nothing else of the reply is.
+GITHUB_ENDS = "github-authentication-token-expiration"
+ENDS_READ = ("github", "cloudflare")  # services whose check reply is read for an end date
+ENDS_IN_BODY = ("cloudflare",)  # of them, those whose end date is in the reply's body, not a header
+ENDS_BODY = 64 * 1024  # bytes of a 2xx reply read for an end date in its body
+ENDS_AT = re.compile(
+    r"(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?))?\s*(UTC|GMT|Z|[+-]\d{2}:?\d{2})?", re.IGNORECASE
+)
+# A tool_calls row's detail for a real call the vendor answered 401 with a missing scope (never the reply's text).
+MISSING_SCOPE = "missing_scope"
 CHECK_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,299}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # connections.py's statuses, as the tones and words Tools shows them in.
@@ -110,14 +170,54 @@ def _keys(c, tool_id):
 
 
 def _held(c, tool_id, subject):
-    """[(key row, level)] for each of the tool's keys `subject` holds an effective grant to."""
+    """[(key row, level)] for each of the tool's keys `subject` holds an effective grant to; with none, the key a bot
+    reads the tool with by default, at Read (backend/default_read.py)."""
     out = []
-    for key in _keys(c, tool_id):
+    keys = _keys(c, tool_id)
+    for key in keys:
         grant = effective_grant(c, key["id"], subject)
         if grant is not None:
             level = "read" if key["access_level"] == "read" or grant["access_level"] == "read" else "read_write"
             out.append((key, level))
+    if not out and str(subject).startswith("bot:"):
+        default = default_read.keys_of(c, tool_id, subject)
+        out = [(key, "read") for key in keys if key["id"] in default]
     return out
+
+
+def _templated(c, tool_id):
+    """Whether the tool has a multi-secret template (backend/tool_templates.py): one key per variable per level."""
+    row = c.execute("SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone()
+    return row is not None and bool(_field(row, "auth_template"))
+
+
+def computer_way(c, row, subject):
+    """How one key of a tool whose keys go to computers reaches `subject`'s run:
+    - `key`: as it is;
+    - `skip`: held at Read, and a read key of the same tool goes instead (the read key is preferred);
+    - `proxy`: held at Read with only a Read and write key: the run gets a proxy token, and the proxy lets only reads
+      through (backend/tool_proxy.py);
+    - `unenforced`: as `key`, because nothing can hold it to reads: the tool has no API address the proxy can call.
+    A key on no tool, or held at Read and write, is `key`."""
+    if not row["tool_id"] or row["access_level"] == "read":
+        return "key"
+    held = _held(c, row["tool_id"], subject_of(c, subject))
+    mine = [level for key, level in held if key["id"] == row["id"]]
+    if not mine or mine[0] != "read":
+        return "key"
+    # A template's keys are each a variable of their own: only a read key of the same variable goes instead.
+    same = _templated(c, row["tool_id"])
+    if any(
+        key["access_level"] == "read" and key["ciphertext"] is not None and (not same or key["env"] == row["env"])
+        for key, _level in held
+    ):
+        return "skip"
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+    from .tool_proxy import address_problem
+
+    if tool is not None and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
+        return "proxy"
+    return "unenforced"
 
 
 def subject_level(c, tool_id, subject):
@@ -166,6 +266,25 @@ def key_for(c, tool_id, subject):
     return held[0][0], level
 
 
+def keys_for(c, tool_id, subject):
+    """([credential row], level) a call by `subject` through a tool with a template uses: one key per variable, at its
+    level (at Read the variable's read key when there is a stored one, else its Read and write key held at Read).
+    Raises key_for's 403s."""
+    tool_row(c, tool_id)
+    subject = subject_of(c, subject)
+    held = [(key, level) for key, level in _held(c, tool_id, subject) if key["ciphertext"] is not None]
+    if not held:
+        key_for(c, tool_id, subject)  # raises the Problem that names the setting
+        raise Problem("tool_access", "No stored key", 403)  # pragma: no cover - key_for raises first
+    level = max((level for _key, level in held), key=lambda lv: RANK[lv])
+    best = {}
+    for key, lv in held:
+        rank = (lv != level, key["access_level"] != ("read" if level == "read" else "read_write"), key["created_at"])
+        if key["env"] not in best or rank < best[key["env"]][0]:
+            best[key["env"]] = (rank, key)
+    return [pair[1] for pair in best.values()], level
+
+
 # ---- status
 
 
@@ -180,8 +299,63 @@ def _days_left(on, today):
         return None
 
 
-def _check_text(ok, status_code):
-    return "Working" if ok else "Key rejected" if status_code in (401, 403) else "Check failed"
+def _check_text(ok, status_code, service=""):
+    """A check's words: only a 401 (or what a known service answers a bad key with: tool_services.rejects) says the
+    key is rejected. Another 403 answers a key the vendor knows, without the scope for this path (a restricted key):
+    it works, limited."""
+    if ok:
+        return LIMITED if status_code == 403 else "Working"
+    return "Key rejected" if status_code is not None and TS.rejects(service, status_code) else "Check failed"
+
+
+def _limited(tool, row):
+    """A check row that found the key accepted but a scope of this path missing: a 401 whose reply said so (stored as
+    LIMITED), or a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key with 403.
+    Rows stored as failed before 403 meant this read the same."""
+    if _field(tool, "mcp_url"):
+        return False
+    if row["ok"] and row["detail"] == LIMITED:
+        return True
+    return row["status_code"] == 403 and not TS.rejects(tool["service"], 403)
+
+
+def _checked_today(tool, key):
+    """Whether a check would send this key today: never an id (`tool_settings.known_name`), and only on a tool it can
+    reach, an MCP server or an address with a check path (`check_path_of`). A check row of a key no check sends any more
+    (an id, a tool whose address or path went) says nothing about the key now."""
+    if tool_settings.known_name(key["env"]):
+        return False
+    return bool(_field(tool, "mcp_url")) or bool(tool["base_url"] and check_path_of(tool))
+
+
+def call_health(c, tool_id, now=None):
+    """What the tool's real calls through the proxy say, over the last CALLS_WINDOW: `working` when one got a 2xx,
+    `rejected` when REJECTED_AFTER calls in a row got a 401 and none got a 2xx since; else None (nothing to say).
+    A 401 whose reply says a permission is missing is the vendor knowing the key, so it is no rejection, and it ends
+    the scan as a 2xx does: an older run of 401s from before the key was right says nothing about it now."""
+    since = H.shift(now or H.now(), seconds=-int(CALLS_WINDOW.total_seconds()))
+    calls = [
+        (r[0], r[1] == MISSING_SCOPE)
+        for r in c.execute(
+            "SELECT status_code, detail FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
+            "AND created_at>=? ORDER BY created_at DESC, id DESC LIMIT 200",
+            (tool_id, since),
+        )
+    ]
+    run = 0
+    for code, scoped in calls:  # newest first, up to the newest 2xx or scoped 401
+        if 200 <= code < 300 or scoped:
+            break
+        run = run + 1 if code == 401 else 0
+        if run >= REJECTED_AFTER:
+            return "rejected"
+    return "working" if any(200 <= code < 300 for code, _ in calls) else None
+
+
+def state_of(c, tool, keys=None, now=None):
+    """`status` for a tool row from the database: its keys, last checks and real calls."""
+    keys = _keys(c, tool["id"]) if keys is None else keys
+    return status(tool, keys, latest_checks(c, tool["id"]), calls=call_health(c, tool["id"], now))
 
 
 def latest_checks(c, tool_id):
@@ -192,23 +366,34 @@ def latest_checks(c, tool_id):
     return out
 
 
-def status(tool, keys, checks, today=None):
-    """{tone, text, needs_you} for an API tool. Worst first: no stored key, a failed check, an expired key; then the
-    key still on computers and a key expiring within EXPIRING_DAYS (Needs you, not broken); then Working once every
-    stored key passed its last check, else Not checked."""
+def status(tool, keys, checks, today=None, calls=None):
+    """{tone, text, needs_you} for an API tool. Worst first: no stored key; real calls rejected (`calls`, from
+    `call_health`: REJECTED_AFTER 401s in a row); a refused sign-in; a failed check, unless a real call got a 2xx
+    within CALLS_WINDOW (a check's path may need a scope the key's calls do not); an expired key; then a key expiring
+    within EXPIRING_DAYS (Needs you, not broken); then Working once a real call worked or every stored key passed its
+    last check (Works (limited) when a check got 403), else Not checked. Only the checks that would run today count
+    (`_checked_today`): an id stored as a key, or a tool whose check path went, is never Key rejected from an old check.
+    How its key reaches runs (`delivery`) is never one of them."""
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
-        return {"tone": "fail", "text": "No key", "needs_you": True}
-    last = [checks.get(k["id"]) for k in stored]
-    failed = [r for r in last if r is not None and not r["ok"]]
-    if failed:
-        return {"tone": "fail", "text": _check_text(False, failed[0]["status_code"]), "needs_you": True}
+        # An MCP tool that signs in (backend/mcp_connect.py) is waiting for its sign-in, not for a key.
+        return {"tone": "fail", "text": "Not signed in" if _field(tool, "mcp_oauth") else "No key", "needs_you": True}
+    if calls == "rejected":
+        return {"tone": "fail", "text": "Key rejected", "needs_you": True}
+    last = [checks.get(k["id"]) for k in stored if _checked_today(tool, k)]
+    if _field(tool, "auth_template"):
+        last = [r for r in last if r is not None] or [None]  # a template's keys are checked together, on one row
+    failed = [r for r in last if r is not None and not r["ok"] and not _limited(tool, r)]
+    if any(r["detail"] == "Sign in again" for r in failed):
+        # A refused sign-in refresh is no check path's opinion: it stands, whatever calls worked before it.
+        return {"tone": "fail", "text": "Sign in again", "needs_you": True}
+    if failed and calls != "working":
+        code = failed[0]["status_code"]
+        return {"tone": "fail", "text": _check_text(False, code, tool["service"]), "needs_you": True}
     left = [d for d in (_days_left(k["expires_on"], today) for k in stored) if d is not None]
     if left and min(left) < 0:
         return {"tone": "fail", "text": "Key expired", "needs_you": True}
-    if tool["delivery"] == "computer":
-        return {"tone": "wait", "text": "Key on computers", "needs_you": True}
     if left and min(left) <= EXPIRING_DAYS:
         n = min(left)
         return {
@@ -216,8 +401,11 @@ def status(tool, keys, checks, today=None):
             "text": "Expires today" if n == 0 else f"Expires in {n} day{'s' if n != 1 else ''}",
             "needs_you": True,
         }
-    if all(r is not None for r in last):
+    if calls == "working":
         return {"tone": "ok", "text": "Working", "needs_you": False}
+    if last and all(r is not None for r in last):
+        limited = any(_limited(tool, r) for r in last)
+        return {"tone": "ok", "text": LIMITED if limited else "Working", "needs_you": False}
     return {"tone": "idle", "text": "Not checked", "needs_you": False}
 
 
@@ -228,11 +416,26 @@ def _admin(c, who, admins):
     return administrator(c, who, admins)
 
 
+def tools_reader(c, who):
+    """The Tools page's own owner bot (backend/page_owners.py, never the General Manager standing in) in its own run: it
+    reads every tool the company sees by default (Everyone), with who holds which level and its keys' names, never a
+    value or a preview, so it can propose levels, find duplicates and explain a failing check. It changes nothing: every
+    write here stays a credential administrator's."""
+    if who.support or who.role != "bot" or who.via or who.agent:
+        return False
+    from . import page_owners
+
+    return page_owners.owner(c, "tools", fallback=False) == who.actor
+
+
 def may_read(c, who, tool_id, admins):
-    """A credential administrator, anyone holding an effective grant on one of its keys, or the person who added one."""
+    """A credential administrator, anyone holding an effective grant on one of its keys, the person who added one, or the
+    Tools page's owner bot (`tools_reader`)."""
     if who.support or who.role not in ("owner", "human", "bot"):
         return False
     if who.role in ("owner", "human") and _admin(c, who, admins):
+        return True
+    if tools_reader(c, who):
         return True
     keys = [k["id"] for k in _keys(c, tool_id)]
     if any(effective_grant(c, k, who.actor) for k in keys):
@@ -372,13 +575,6 @@ def _readable(c, who, tool_id, admins, auth=None, kind="api"):
     return tool
 
 
-def may_set_audience(c, who, tool, admins, auth=None):
-    """The owner, or a credential administrator who can see the tool now."""
-    if getattr(who, "role", "") == "owner" and not getattr(who, "support", None):
-        return True
-    return _admin(c, who, admins) and visible(c, who, tool, admins, auth)
-
-
 def _initials(name):
     words = [w for w in re.split(r"[\s._@-]+", str(name or "")) if w]
     return "".join(w[0] for w in words[:2]).upper() or "?"
@@ -391,10 +587,10 @@ def _person(subject, name):
 
 def access_rows(c, who, tool_id, admins, auth=None):
     """Who can use the tool: one row per subject with an effective grant, its level and last use. Anyone but an
-    administrator sees only their own row and the grants they made."""
+    administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made."""
     from . import names
 
-    admin = _admin(c, who, admins)
+    admin = _admin(c, who, admins) or tools_reader(c, who)
     keys = {k["id"]: k for k in _keys(c, tool_id)}
     found = {}
     for key_id, key in keys.items():
@@ -426,10 +622,17 @@ def access_rows(c, who, tool_id, admins, auth=None):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if (row["at"] or "") > used.get(subject, ""):
             used[subject] = row["at"]
+    tool = c.execute("SELECT delivery FROM tools WHERE id=?", (tool_id,)).fetchone()
+    on_computers = tool is not None and tool["delivery"] != "proxy"
     out = []
     for subject, level in found.items():
         name = label.get(subject) or H.actor_id(subject)
-        out.append({"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)})
+        row = {"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)}
+        # Read on a computer tool is held to reads by the proxy; with no API address nothing can, and the row says so.
+        if on_computers and level == "read" and subject.startswith("bot:"):
+            if any(computer_way(c, k, subject) == "unenforced" for k in keys.values() if k["ciphertext"] is not None):
+                row["read_not_enforced"] = True
+        out.append(row)
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
 
@@ -567,11 +770,13 @@ def _key_view(c, who, key, admin, admins):
         "preview": key["preview"] if shown else "",
         "access_level": key["access_level"],
         "expires_on": key["expires_on"],
+        "expires_source": key["expires_source"],
         "env": key["env"],
         "username": key["username"] if shown else "",
         "stored": key["ciphertext"] is not None,
         "created_by": key["created_by"] or key["updated_by"],
         "created_at": key["created_at"],
+        "can_remove": may_remove(who, key["created_by"], manages=admin),
         **last_used(c, key["id"]),
     }
 
@@ -579,7 +784,11 @@ def _key_view(c, who, key, admin, admins):
 def _tool_view(tool):
     return {
         **{k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")},
+        "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
+        "everyone_reads": bool(_field(tool, "everyone_reads")),
+        # How its several keys and settings reach the vendor (backend/tool_templates.py); None for one key.
+        "template": tool_templates.view(tool),
     }
 
 
@@ -634,10 +843,11 @@ def detail(c, who, tool_id, admins, auth=None):
             recent.append(_call_view(row))
             if len(recent) == RECENT:
                 break
-    state = status(tool, keys, latest_checks(c, tool_id))
+    state = state_of(c, tool, keys)
     out = {
         "tool": _tool_view(tool),
         "keys": [_key_view(c, who, k, admin, admins) for k in keys],
+        "settings": tool_settings.listing(c, tool_id),
         "access": access_rows(c, who, tool_id, admins, auth) + (finance_rows(c, tool_id) if admin else []),
         "checks": checks,
         "recent": recent,
@@ -646,18 +856,31 @@ def detail(c, who, tool_id, admins, auth=None):
         "can_manage": admin,
         "private": _field(tool, "audience") is not None,
         "can_set_audience": False,
+        "mcp": mcp_connect.view(c, tool, keys) if _field(tool, "mcp_url") else None,
+        # Made from several tools of one vendor account; POST …/ungroup splits it back (backend/tool_templates.py).
+        "grouped": tool_templates.latest_group(c, tool_id) is not None,
+        # Every bot reads it with no grant while `on` and Read can be held to reads (backend/default_read.py).
+        "everyone_reads": {
+            "on": bool(_field(tool, "everyone_reads")),
+            "enforceable": default_read.enforceable(c, tool_id),
+        },
     }
-    if may_set_audience(c, who, tool, admins, auth):
+    if TA.may_change_access(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=admins, auth=auth):
         out.update(can_set_audience=True, audience=audience_of(tool), seen_by=seen_by(c, tool, auth))
     return out
 
 
-def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
+def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", since=""):
     """Calls through the proxy and, for a tool whose key goes to computers, the newest time each caller's run took a
     key (credential_uses keeps one row a caller), newest first. A proxied tool's uses are its calls, already listed, so
-    its use rows are left out. `cursor` is the last row's `<at>|<id>`."""
+    its use rows are left out. `cursor` is the last row's `<at>|<id>`; `since` (an ISO time or 24h / 7d) leaves out
+    older rows. A credential administrator and the Tools page's owner bot (`tools_reader`, which learns from how tools
+    are used) see every caller's rows; anyone else their own and those of the bots they may see."""
+    from .views import since_time
+
     proxied = _readable(c, who, tool_id, admins, auth)["delivery"] == "proxy"
-    admin = _admin(c, who, admins)
+    admin = _admin(c, who, admins) or tools_reader(c, who)
+    floor = since_time(since) if since else None
     at, _, last = str(cursor or "").partition("|")
     if cursor and not last:
         raise Problem("invalid_request", "cursor is the `next` of the page before", 422)
@@ -669,6 +892,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
         sql, args = "SELECT * FROM tool_calls WHERE tool_id=?", [tool_id]
         if result:
             sql, args = sql + " AND result=?", args + [result]
+        if floor:
+            sql, args = sql + " AND created_at>=?", args + [floor]
         if cursor:
             sql, args = sql + " AND (created_at<? OR (created_at=? AND id<?))", args + [at, at, last]
         for row in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, ACTIVITY_MAX * 2)):
@@ -681,6 +906,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
             for row in c.execute(f"SELECT * FROM credential_uses WHERE credential_id IN ({marks})", list(keys)):
                 ident = f"use:{row['credential_id']}:{row['actor']}:{row['bot']}"
                 if cursor and (row["used_at"], ident) >= (at, last):
+                    continue
+                if floor and row["used_at"] < floor:
                     continue
                 probe = {"actor": row["actor"], "bot": row["bot"]}
                 if not _call_visible(c, who, auth, admin, probe):
@@ -706,9 +933,45 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
 # ---- checks
 
 
-def send_check(url, headers, params):
-    """One GET; its status code. Tests replace it. Only to a public https address, pinned to the IP it resolved to,
-    no redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
+class Reply(NamedTuple):
+    """A check's answer: the status code, whether a 401's reply says the key lacks a permission for the path, GitHub's
+    token expiration header (GITHUB_ENDS, '' without one), and a 2xx reply's first ENDS_BODY bytes when they were asked
+    for (`read_body`)."""
+
+    status_code: int
+    missing_scope: bool = False
+    ends_header: str = ""
+    body: bytes = b""
+
+
+def said_missing_scope(challenge, body):
+    """Whether a 401 says the key is known but lacks a permission or scope for this path (SCOPE_SAYS: a restricted key,
+    not a bad one), from its WWW-Authenticate `challenge` and the first bytes of its reply `body`: only SCOPE_READ of
+    them are read, and nothing of them is kept. The tool proxy (backend/tool_proxy.py) and the checks share it."""
+    said = (challenge + " " + body[:SCOPE_READ].decode("utf-8", "replace")).lower()
+    return any(phrase in said for phrase in SCOPE_SAYS)
+
+
+def _missing_scope(response):
+    """`said_missing_scope` for a check's reply: its first chunk is read, at most SCOPE_READ bytes of it."""
+    return said_missing_scope(
+        response.headers.get("www-authenticate", ""), next(response.iter_bytes(chunk_size=SCOPE_READ), b"")
+    )
+
+
+def _first_bytes(response, limit):
+    out = b""
+    for chunk in response.iter_bytes():
+        out += chunk
+        if len(out) >= limit:
+            return out[:limit]
+    return out
+
+
+def send_check(url, headers, params, read_body=False):
+    """One GET: a `Reply`. Tests replace it. Only to a public https address, pinned to the IP it resolved to, no
+    redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds. With `read_body`, a 2xx reply's
+    first ENDS_BODY bytes come back too, for its end date (`vendor_end_date`)."""
     import httpx
     from . import egress
 
@@ -716,58 +979,159 @@ def send_check(url, headers, params):
     address = egress.address_for(parts, budget=CHECK_TIMEOUT)
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = parts.hostname + (f":{parts.port}" if parts.port else "")
-    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(timeout=CHECK_TIMEOUT, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
         with client.stream(
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:
-            return response.status_code
+            code = response.status_code
+            ends = response.headers.get(GITHUB_ENDS, "")
+            body = _first_bytes(response, ENDS_BODY) if read_body and 200 <= code < 300 else b""
+            return Reply(code, code == 401 and _missing_scope(response), ends, body)
 
 
-def _check_one(tool, key, secret):
-    """(ok, status_code, detail) for one key. An exception's text is never kept: a query-param key would be in it."""
+def _utc_day(raw):
+    """The UTC day of a vendor's end date ("2026-12-01 09:00:00 UTC", "2026-12-01T00:00:00Z", an offset), or None."""
+    found = ENDS_AT.fullmatch(str(raw).strip())
+    if not found:
+        return None
+    day, clock, zone = found.groups()
+    try:
+        at = datetime.fromisoformat(f"{day}T{clock or '00:00'}")
+    except ValueError:
+        return None
+    if zone and zone.upper() not in ("UTC", "GMT", "Z"):
+        sign = 1 if zone[0] == "+" else -1
+        at -= sign * timedelta(hours=int(zone[1:3]), minutes=int(zone[-2:]))
+    return at.date().isoformat()
+
+
+def vendor_end_date(service, reply):
+    """The key's end date its vendor sent with a check that worked: a day (YYYY-MM-DD), '' when the vendor says the key
+    has none, or None when this vendor says nothing either way or what it sent does not read as a date."""
+    if service not in ENDS_READ:
+        return None
+    raw = reply.ends_header
+    if service in ENDS_IN_BODY:
+        try:
+            answer = json.loads(reply.body or b"null")
+        except ValueError:
+            return None
+        result = answer.get("result") if isinstance(answer, dict) else None
+        if not isinstance(result, dict):
+            return None
+        raw = result.get("expires_on") or ""
+    return _utc_day(raw) if raw else ""
+
+
+def _revision(c, key_id):
+    row = c.execute("SELECT revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    return row["revision"] if row else None
+
+
+def _keep_end_date(c, key_id, ends, revision=None):
+    """A check's word on its key's end date (`vendor_end_date`): a day replaces any date and marks it the vendor's; ''
+    clears a date the vendor gave before and keeps one a person typed. Nothing changes when the key's value was
+    replaced since the check read it (`revision`): the answer was about the old value."""
+    row = c.execute("SELECT expires_on, expires_source, revision FROM credentials WHERE id=?", (key_id,)).fetchone()
+    if row is None or (revision is not None and row["revision"] != revision):
+        return
+    if ends and (row["expires_on"], row["expires_source"]) != (ends, "vendor"):
+        c.execute("UPDATE credentials SET expires_on=?, expires_source='vendor' WHERE id=?", (ends, key_id))
+    elif not ends and row["expires_source"] == "vendor":
+        c.execute("UPDATE credentials SET expires_on=NULL, expires_source=NULL WHERE id=?", (key_id,))
+
+
+def _check_one(tool, key, secret, auth=None):
+    """(ok, status_code, detail, end date) for one key, or for a template's keys together (`auth`: the headers and query
+    its template built). The end date is `vendor_end_date`'s on a check that worked, else None (nothing known). An
+    exception's text is never kept: a query-param key would be in it."""
     from . import egress
 
     service = TS.SERVICES.get(tool["service"]) or {}
     username = key["username"] or service.get("username") or ""
     try:
-        headers, params = TS.apply_auth(tool["auth_scheme"], secret, username)
+        headers, params = auth if auth is not None else TS.apply_auth(tool["auth_scheme"], secret, username)
     except ValueError:
-        return False, None, "Check failed: unknown auth scheme"
+        return False, None, "Check failed: unknown auth scheme", None
     headers = {
         "Accept": "application/json",
         **TS.check_headers(tool["service"]),
         **headers,
         "User-Agent": "Tico-tool-check",
     }
-    url = tool["base_url"].rstrip("/") + tool["check_path"]
+    url = tool["base_url"].rstrip("/") + check_path_of(tool)
     try:
-        code = send_check(url, headers, params)
+        if tool["service"] in ENDS_IN_BODY and auth is None:
+            reply = send_check(url, headers, params, read_body=True)
+        else:
+            reply = send_check(url, headers, params)
     except egress.Blocked:
-        return False, None, "Check failed: address refused"
+        return False, None, "Check failed: address refused", None
     except Exception as exc:  # noqa: BLE001 - every network failure is one answer: the check failed
-        return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer")
-    ok = 200 <= code < 300
-    return ok, code, _check_text(ok, code) if ok or code in (401, 403) else f"Check failed: {code}"
+        return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer"), None
+    code = reply.status_code
+    if code == 401 and reply.missing_scope:  # a restricted key: known to the vendor, this path needs another permission
+        return True, code, LIMITED, vendor_end_date(tool["service"], reply) if auth is None else None
+    rejected = TS.rejects(tool["service"], code)
+    ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
+    text = _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
+    # A template's keys go together: no one key's end date is known from their call.
+    ends = vendor_end_date(tool["service"], reply) if ok and auth is None else None
+    return ok, code, text, ends
 
 
 def check_tool(store, vault, tool_id):
-    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first."""
+    """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first. A tool that
+    reads Key rejected now gets its Reconnect task, and one that reads Working ends it (backend/reconnect_tasks.py)."""
+    rows = _check_tool(store, vault, tool_id)
+    reconnect_tasks.checked(store, tool_id)
+    return rows
+
+
+def _check_tool(store, vault, tool_id):
     with store.transaction() as c:  # decrypt may reseal an old value in place
         tool = tool_row(c, tool_id)
-        if not tool["base_url"] or not tool["check_path"]:
+        if _field(tool, "mcp_url"):
+            mcp = True
+        elif not tool["base_url"] or not check_path_of(tool):
             raise Problem(
                 "check",
                 f"{tool['name']} has no check. Set its address and check path in Tools > {tool['name']} > Settings",
                 409,
             )
-        stored = [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        else:
+            mcp = False
+        spec = None if mcp else tool_templates.spec_of(tool)
+        together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
+        held = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        # An id stored as a key (TWILIO_ACCOUNT_SID, POSTHOG_PROJECT_ID) is no key to the vendor, whatever its value
+        # looks like: sent as one it would read Key rejected. It is never decrypted for a check.
+        stored = (
+            []
+            if mcp or together
+            else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
+        )
+        # The revision each value was checked at, read after decrypt (which may reseal it): an end date is kept only
+        # while the key still holds that value (`_keep_end_date`), never on a value saved while the check was out.
+        stored = [({**dict(k), "revision": _revision(c, k["id"])}, secret) for k, secret in stored]
+    if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
+        return mcp_connect.check(store, vault, tool_id)
+    if together:  # a template's keys go on one call together, as the proxy sends them
+        key, headers, params = together
+        return _record_checks(store, tool_id, [(key, *_check_one(tool, key, "", (headers, params)))])
     if not stored:
+        if held:
+            raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
     stored = None  # the values leave scope before anything is written
+    return _record_checks(store, tool_id, results)
+
+
+def _record_checks(store, tool_id, results):
     rows = []
     with store.transaction() as c:
-        for key, ok, code, text in results:
+        for key, ok, code, text, ends in results:
             row = {
                 "id": H.new_id(),
                 "tool_id": tool_id,
@@ -783,6 +1147,8 @@ def check_tool(store, vault, tool_id):
                 row,
             )
             rows.append(row | {"ok": ok})
+            if ends is not None:
+                _keep_end_date(c, key["id"], ends, key.get("revision"))
     rows.sort(key=lambda r: r["ok"])
     return rows
 
@@ -790,18 +1156,35 @@ def check_tool(store, vault, tool_id):
 _checking = threading.Lock()
 
 
+def check_path_of(tool):
+    """The path a tool's check GETs: its own, else its known service's at that service's address
+    (tool_services.check_path_for)."""
+    return TS.check_path_for(tool["service"], tool["base_url"], tool["check_path"])
+
+
 def due(c, now=None):
-    """Proxied tools with an address, a check path and a stored key whose newest check is older than CHECK_EVERY."""
+    """API tools with an address, a check path (their own or their known service's) and a stored key whose newest
+    check is older than CHECK_EVERY, however their key reaches runs: the server holds every key's value, so a key on
+    computers is checked as a proxied one is (same egress rules). A tool whose every stored key is named as an id
+    (`tool_settings.known_name`) has nothing to check."""
     cutoff = H.shift(now or H.now(), seconds=-int(CHECK_EVERY.total_seconds()))
-    return [
-        r[0]
-        for r in c.execute(
-            "SELECT t.id FROM tools t WHERE t.delivery='proxy' AND t.base_url<>'' AND t.check_path<>'' "
-            "AND EXISTS(SELECT 1 FROM credentials k WHERE k.tool_id=t.id AND k.ciphertext IS NOT NULL) "
-            "AND coalesce((SELECT max(checked_at) FROM tool_checks k WHERE k.tool_id=t.id),'')<? ORDER BY t.id",
-            (cutoff,),
-        )
-    ]
+    out = []
+    for tool in c.execute(
+        "SELECT t.* FROM tools t WHERE t.kind='api' AND t.base_url<>'' "
+        "AND EXISTS(SELECT 1 FROM credentials k WHERE k.tool_id=t.id AND k.ciphertext IS NOT NULL) "
+        "AND coalesce((SELECT max(checked_at) FROM tool_checks k WHERE k.tool_id=t.id),'')<? ORDER BY t.id",
+        (cutoff,),
+    ):
+        if not (tool["mcp_url"] or check_path_of(tool)):
+            continue
+        envs = [
+            r[0]
+            for r in c.execute("SELECT env FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],))
+        ]
+        if not tool["mcp_url"] and envs and all(tool_settings.known_name(e) for e in envs):
+            continue
+        out.append(tool["id"])
+    return out
 
 
 def check_soon(store, settings=None, vault=None):
@@ -867,6 +1250,8 @@ class ToolUpdate(Contract):
     auth_scheme: str | None = Field(default=None, max_length=80)
     check_path: str | None = Field(default=None, max_length=300)
     delivery: str | None = Field(default=None, pattern=r"^(proxy|computer)$")
+    # "Everyone can read" (backend/default_read.py): every bot reads the tool with no grant while it is on.
+    everyone_reads: bool | None = None
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -916,9 +1301,18 @@ def _unique_id(c, base):
     """`base`, else `base-<random>` whenever any tool has `base`, seen or not: an id never says how many tools of that
     name exist, nor (by its shape) that a hidden one does."""
     tid = base
-    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone():
+    while c.execute("SELECT 1 FROM tools WHERE id=?", (tid,)).fetchone() or _former(c, tid):
         tid = f"{base}-{H.new_id()[:8].lower()}"
     return tid
+
+
+def _former(c, tid):
+    """Whether a grouped tool's key still names `tid` as its old tool (its run address keeps it; an ungroup brings it
+    back), so no new tool takes that id."""
+    try:
+        return c.execute("SELECT 1 FROM credentials WHERE former_tool_id=? LIMIT 1", (tid,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
 
 
 def _clean(fields):
@@ -948,7 +1342,7 @@ def _clean(fields):
 
 
 def create_tool(c, who, body, admins):
-    require_admin(c, who, admins)
+    TA.require(c, who, TA.tool(), action=TA.CREATE, admins=admins)
     fields = _clean(body.model_dump())
     service = TS.match(service=fields["service"], name=fields["name"])
     known = TS.defaults(service)
@@ -977,18 +1371,34 @@ def create_tool(c, who, body, admins):
 
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    asked = body.model_dump(exclude_none=True, exclude={"audience"})
+    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
-        require_admin(c, who, admins)
+        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=admins, auth=auth)
     tool = dict(_readable(c, who, tool_id, admins, auth))
     if audience_set:
         set_audience(c, who, tool, body.audience.model_dump() if body.audience is not None else None, admins, auth)
         tool = dict(tool_row(c, tool_id))
+    if body.everyone_reads is not None and body.everyone_reads != bool(tool["everyone_reads"]):
+        c.execute(
+            "UPDATE tools SET everyone_reads=?,updated_at=? WHERE id=?", (int(body.everyone_reads), H.now(), tool_id)
+        )
+        H.event(
+            c,
+            who.actor,
+            "tool.everyone_reads_changed",
+            tool_id,
+            {"before": not body.everyone_reads, "after": body.everyone_reads},
+        )
+        tool = dict(tool_row(c, tool_id))
+        if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
+            access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
+    if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
+        raise Problem("delivery", f"{tool['name']} signs in: its tokens stay with Tico, so it stays on the proxy", 422)
     if merged == tool:
         return _tool_view(tool_row(c, tool_id))
     c.execute(
@@ -1030,7 +1440,7 @@ def refuse_finance_key(c, key_ids):
 
 
 def _drop_key(c, who, key_id):
-    from .computer_keys import before_delete
+    from .model_subscriptions import before_delete
 
     refuse_finance_key(c, [key_id])
     key = c.execute("SELECT * FROM credentials WHERE id=?", (key_id,)).fetchone()
@@ -1060,12 +1470,7 @@ def set_audience(c, who, tool, value, admins, auth=None):
     `tool.audience_changed` with the before and after."""
     from . import teammate_access
 
-    if not may_set_audience(c, who, tool, admins, auth):
-        raise Problem(
-            "forbidden",
-            f"Only the owner, or a credential administrator who can see it, changes who can see {tool['name']}",
-            403,
-        )
+    TA.require(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=admins, auth=auth)
     stored = None
     if value is not None:
         level = teammate_access.parse_audience(c, value)
@@ -1105,20 +1510,29 @@ def forget_audience_member(c, actor, field, ident):
 def delete_tool(c, who, tool_id, admins, kind="api"):
     """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool (a website tool's
     accounts too)."""
-    require_admin(c, who, admins)
+    TA.require(c, who, TA.tool(), action=TA.DELETE, admins=admins)
     tool = _readable(c, who, tool_id, admins, kind=kind)
     keys = [k["id"] for k in _keys(c, tool_id)]
     refuse_finance_key(c, keys)  # before anything goes
     for key_id in keys:
         _drop_key(c, who, key_id)
+    tool_settings.drop_tool(c, tool_id)
     c.execute("DELETE FROM tool_calls WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
+    c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
+    reconnect_tasks.gone(c, tool_id)
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}
 
 
-def _key_at(c, tool_id, level, other_than=None):
+def _key_at(c, tool_id, level, other_than=None, env=None):
+    """The tool's other key at `level`; on a tool with a template, at that level under `env` (one key per variable)."""
+    if env is not None and _templated(c, tool_id):
+        return c.execute(
+            "SELECT * FROM credentials WHERE tool_id=? AND access_level=? AND env=? AND id<>?",
+            (tool_id, level, env, other_than or ""),
+        ).fetchone()
     return c.execute(
         "SELECT * FROM credentials WHERE tool_id=? AND access_level=? AND id<>?", (tool_id, level, other_than or "")
     ).fetchone()
@@ -1134,9 +1548,9 @@ def _taken(tool, level):
 
 def add_key(c, who, vault, tool_id, body):
     """A new key for the tool at its level, stored by the vault under the tool's variable."""
-    require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = _readable(c, who, tool_id, vault.admins)
-    if _key_at(c, tool_id, body.access_level):
+    if _key_at(c, tool_id, body.access_level, env=body.env or None):
         raise _taken(tool, body.access_level)
     _day(body.expires_on)
     sibling = c.execute("SELECT env FROM credentials WHERE tool_id=? AND env<>'' LIMIT 1", (tool_id,)).fetchone()
@@ -1156,14 +1570,15 @@ def add_key(c, who, vault, tool_id, body):
         ),
     )
     c.execute(
-        "UPDATE credentials SET tool_id=?, access_level=?, expires_on=? WHERE id=?",
-        (tool_id, body.access_level, body.expires_on or None, brief["id"]),
+        "UPDATE credentials SET tool_id=?, access_level=?, expires_on=?, expires_source=? WHERE id=?",
+        (tool_id, body.access_level, body.expires_on or None, "person" if body.expires_on else None, brief["id"]),
     )
     H.event(c, who.actor, "tool.key_added", tool_id, {"credential": brief["id"], "access_level": body.access_level})
+    access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # a Read key may make Read default
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
-def ensure_tool(c, who, credential_id, from_computer=False):
+def ensure_tool(c, who, credential_id, from_computer=False, value=None):
     """Put a key stored outside Tools (Settings' vault, a chat's credential card, a computer's file migration) on a
     tool, in the caller's transaction, so every tool key shows on Tools: the first tool of its service that has no Read
     and write key yet takes it as that key, else a new tool is made for it, on the proxy when its service's address is
@@ -1172,15 +1587,20 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     counts toward the new tool's id or name. A key Tools stored itself (`tool:` source) already has its tool; anything
     else is left alone. `from_computer`: a key a bot already
     uses from its computer's files (the file migration) stays on computers, on a computer tool, like the data
-    migration's: moving it to the proxy unasked would change a working bot. The tool id, or None."""
+    migration's: moving it to the proxy unasked would change a working bot. An id stored as a key (POSTHOG_PROJECT_ID,
+    TWILIO_ACCOUNT_SID: `tool_settings.is_setting` on its name and `value`, or its name alone when the value is not at
+    hand) never goes behind the proxy, nor on a tool with an address: it goes on a computer tool of its own with no
+    address, so its value reaches runs as it is and no check sends it as a key. The tool id, or None."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
     if not row or row["tool_id"] or str(row["source"] or "").startswith("tool:"):
         return None
     if row["source"] == "tools-chat":
         return None  # a key dropped in the Tools chat goes to the tool the person grants it to (backend/key_grants.py)
+    if row["member_stored"] and str(row["created_by"] or "").startswith("bot:"):
+        return None  # a bot's own key goes on a tool of its own (`own_tool`), never on a tool others use
     on_computers = c.execute(
-        "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM credential_grants WHERE credential_id=?"
-        " AND (subject='computers' OR subject LIKE 'computer:%')",
+        "SELECT 1 FROM model_subscriptions WHERE credential_id=? UNION SELECT 1 FROM credential_grants "
+        "WHERE credential_id=? AND (subject='computers' OR subject LIKE 'computer:%')",
         (credential_id, credential_id),
     ).fetchone()
     if not TS.is_tool_key(
@@ -1188,6 +1608,19 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     ):
         return None
     service = TS.match(env=row["env"], name=row["name"])
+    env = row["env"] or ""
+    # A vendor account's other value (TWILIO_API_SECRET beside a Twilio tool's TWILIO_API_KEY) joins its tool.
+    home = tool_templates.home_for(c, env, computer_only=from_computer)
+    if home:
+        c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (home, credential_id))
+        H.event(c, who.actor, "tool.key_added", home, {"credential": credential_id, "access_level": "read_write"})
+        return home
+    if tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env):
+        tid = TS.insert_tool(c, service, row["name"], "computer", who.actor, H.now(), tid=_unique_id(c, TS.slug(env)))
+        c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (env, tid))
+        c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
+        H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})
+        return tid
     free = (
         service
         and c.execute(
@@ -1215,6 +1648,43 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     return tid
 
 
+def own_tool(c, who, credential_id, near="", level="read_write"):
+    """Put a key a bot stored for itself (backend/credential_cards.py `store_for_bot`) on a new tool of its own, so it
+    shows on Tools like any key and never changes a tool others use: under the vendor of the tool `near` names (one
+    everybody may see) or else of its own variable and name, its keys to computers (the bot gets back the value it
+    already held), and "Everyone can read" off, so no other bot reads with it until an administrator gives it to them.
+    The tool id."""
+    row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    if not row or row["tool_id"]:
+        return row["tool_id"] if row else None
+    beside = (
+        c.execute(
+            "SELECT * FROM tools WHERE id=? AND audience IS NULL AND COALESCE(kind,'api')='api'", (str(near),)
+        ).fetchone()
+        if near
+        else None
+    )
+    service = (beside["service"] if beside is not None else "") or TS.match(env=row["env"], name=row["name"]) or ""
+    bot = H.bot(c, H.actor_id(who.actor)) or {}
+    name = (
+        f"{beside['name']} ({bot.get('display_name') or bot.get('slug') or H.actor_id(who.actor)})"
+        if beside
+        else row["name"]
+    )
+    now = H.now()
+    tid = TS.insert_tool(c, service, name, "computer", who.actor, now, tid=_unique_id(c, TS.slug(name)), first=False)
+    if beside is not None:
+        c.execute(
+            "UPDATE tools SET base_url=?, auth_scheme=?, check_path=? WHERE id=?",
+            (beside["base_url"], beside["auth_scheme"], beside["check_path"], tid),
+        )
+    c.execute("UPDATE tools SET everyone_reads=0 WHERE id=?", (tid,))
+    c.execute("UPDATE credentials SET tool_id=?, access_level=? WHERE id=?", (tid, level, credential_id))
+    H.event(c, who.actor, "tool.created", tid, {"service": service, "delivery": "computer", "own": True})
+    H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": level})
+    return tid
+
+
 def _day(value):
     if value and _days_left(value, _today()) is None:
         raise Problem("expires_on", "End date is a real day, YYYY-MM-DD", 422)
@@ -1228,13 +1698,13 @@ def _tool_key(c, tool_id, key_id):
 
 
 def update_key(c, who, vault, tool_id, key_id, body):
-    require_admin(c, who, vault.admins)
+    TA.require(c, who, TA.tool(tool_id=tool_id), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     tool = _readable(c, who, tool_id, vault.admins)
     key = _tool_key(c, tool_id, key_id)
     if (
         body.access_level
         and body.access_level != key["access_level"]
-        and _key_at(c, tool_id, body.access_level, key_id)
+        and _key_at(c, tool_id, body.access_level, key_id, env=key["env"])
     ):
         raise _taken(tool, body.access_level)
     _day(body.expires_on)
@@ -1254,8 +1724,16 @@ def update_key(c, who, vault, tool_id, key_id, body):
             key_id,
         )
     level = body.access_level or key["access_level"]
-    expires = key["expires_on"] if body.expires_on is None else (body.expires_on or None)
-    c.execute("UPDATE credentials SET access_level=?, expires_on=? WHERE id=?", (level, expires, key_id))
+    if body.expires_on is not None:  # typed by a person; the next check's vendor date, if any, still wins
+        expires, source = body.expires_on or None, "person" if body.expires_on else None
+    elif body.value is not None and key["expires_source"] == "vendor":
+        expires, source = None, None  # the old value's end date: the next check reads the new value's
+    else:
+        expires, source = key["expires_on"], key["expires_source"]
+    c.execute(
+        "UPDATE credentials SET access_level=?, expires_on=?, expires_source=? WHERE id=?",
+        (level, expires, source, key_id),
+    )
     H.event(
         c,
         who.actor,
@@ -1263,14 +1741,20 @@ def update_key(c, who, vault, tool_id, key_id, body):
         tool_id,
         {"credential": key_id, "access_level": level, "value_changed": body.value is not None},
     )
+    if body.value is not None:
+        reconnect_tasks.replaced(c, tool_id)  # its Reconnect task, if one is open, is done
+    elif body.expires_on is not None:
+        reconnect_tasks.redated(c, tool_id)  # a Renew task ends once no key's end date is near
     return _key_view(c, who, vault.row(c, key_id), True, vault.admins)
 
 
 def delete_key(c, who, vault, tool_id, key_id):
-    require_admin(c, who, vault.admins)
-    _readable(c, who, tool_id, vault.admins)
+    _readable(c, who, tool_id, vault.admins, vault.auth)
     key = _tool_key(c, tool_id, key_id)
+    if not may_remove(who, key["created_by"], manages=TA.admin(c, who, vault.admins)):
+        TA.require(c, who, TA.tool(), action=TA.EDIT, admins=vault.admins, auth=vault.auth)
     _drop_key(c, who, key["id"])
+    reconnect_tasks.redated(c, tool_id)  # the key it renewed is gone
     return {"deleted": True, "id": key_id}
 
 
@@ -1286,13 +1770,35 @@ def _revoke(c, who, key_id, subject):
 
 def set_level(c, who, vault, tool_id, subject, level):
     """Give `subject` Read, Read and write or no access: grant the one key that level uses, at that level, and take the
-    subject's grants on the tool's other keys away first (one value per variable per run)."""
-    require_admin(c, who, vault.admins)
+    subject's grants on the tool's other keys away first (one value per variable per run). One rule
+    (backend/tool_access.py): an administrator's, and through the Tools Owner never a person's own access."""
+    TA.require(
+        c,
+        who,
+        TA.tool(tool_id=tool_id),
+        subject,
+        TA.GRANT if level != "none" else TA.EDIT,
+        admins=vault.admins,
+        auth=vault.auth,
+    )
     tool = _readable(c, who, tool_id, vault.admins)
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
+    deferred = access_requests.DEFERRED.set(True)  # the grant is made, then its level set: settled once both are
+    try:
+        _set_level(c, who, vault, tool, tool_id, subject, level)
+    finally:
+        access_requests.DEFERRED.reset(deferred)
+    if subject.startswith("bot:") and level != "none":
+        access_requests.settled(c, who, subject=subject, resource_type="tool", resource_id=tool_id)
+    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_level(c, who, vault, tool, tool_id, subject, level):
     keys = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+    if _templated(c, tool_id) and level != "none":
+        return _set_template_level(c, who, vault, tool, subject, level, keys)
     target = None
     if level == "read":
         target = next((k for k in keys if k["access_level"] == "read"), None) or next(
@@ -1317,7 +1823,30 @@ def set_level(c, who, vault, tool_id, subject, level):
         grant = vault.grant(c, who, target["id"], subject)
         c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
     H.event(c, who.actor, "tool.access_set", tool_id, {"subject": subject, "level": level})
-    return {"subject": subject, "level": subject_level(c, tool_id, subject)}
+
+
+def _set_template_level(c, who, vault, tool, subject, level, keys):
+    """`set_level` on a tool with a template: each variable's key for the level (at Read its read key, else its Read
+    and write key at Read; at Read and write its Read and write key), the subject's grants on the tool's other keys
+    taken away first."""
+    targets = {}
+    for key in keys:
+        fits = key["access_level"] == "read_write" or level == "read"
+        better = key["env"] not in targets or (level == "read" and key["access_level"] == "read")
+        if fits and better:
+            targets[key["env"]] = key
+    if not targets:
+        missing = "stored key" if level == "read" else "Read and write key"
+        raise Problem("tool_access", f"{tool['name']} has no {missing}. Add one in Tools > {tool['name']} > Keys", 409)
+    chosen = {k["id"] for k in targets.values()}
+    for key in _keys(c, tool["id"]):
+        if key["id"] not in chosen:
+            _revoke(c, who, key["id"], subject)
+    for key in targets.values():
+        grant = vault.grant(c, who, key["id"], subject)
+        c.execute("UPDATE credential_grants SET access_level=? WHERE id=?", (level, grant["id"]))
+    H.event(c, who.actor, "tool.access_set", tool["id"], {"subject": subject, "level": level})
+    return {"subject": subject, "level": subject_level(c, tool["id"], subject)}
 
 
 # ---- tool-index
@@ -1353,7 +1882,7 @@ def _api_rows(c, who, admins, view):
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
             continue
         keys = _keys(c, tool["id"])
-        state = status(tool, keys, latest_checks(c, tool["id"]))
+        state = state_of(c, tool, keys)
         people = access_rows(c, who, tool["id"], admins, view.auth)
         if who.role in ("owner", "human"):
             # A bot listed is one the reader may see (the same rule every list of bots follows).
@@ -1374,6 +1903,13 @@ def _api_rows(c, who, admins, view):
                 who_total=len(people),
                 needs_you=state["needs_you"],
                 service=tool["service"],
+                vendor=TS.vendor_of(
+                    tool["service"],
+                    tool["name"],
+                    [k["env"] for k in keys if k["env"]],
+                    tool["base_url"] or _field(tool, "mcp_url") or "",
+                ),
+                delivery=tool["delivery"],
                 private=tool["audience"] is not None,
             )
         )
@@ -1585,7 +2121,38 @@ def index_rows(c, who, auth, settings, admins):
     rows += _mailbox_rows(c, who, view)
     rows += _connection_rows(view)
     rows += _declared_rows(c, who, view, covered, envs)
+    for row in rows:
+        if "vendor" not in row:
+            row["vendor"] = (
+                BUILT_IN_VENDORS.get(row["kind"], "")
+                if row["kind"] != "declared"
+                else TS.vendor_of(row.get("service", ""), row["name"])
+            )
+        if row["vendor"]:
+            row["vendor_name"] = TS.vendor_name(row["vendor"])
     return rows
+
+
+# The connections that are a vendor's: the GitHub App is GitHub's and Slack's app Slack's. Mailboxes, numbers, mailing
+# mail, meeting importers, Listening and webhooks are no vendor's: each stays its own row.
+BUILT_IN_VENDORS = {"github": "github", "slack": "slack"}
+
+
+def vendor_page(c, who, auth, settings, admins, vendor):
+    """`GET /api/v2/tool-vendors/{vendor}`: everything the reader may see of one vendor, as its Tools rows, each API
+    tool's with its keys, who can use it at which level and its settings (`detail`). A vendor with nothing the reader
+    may see is a 404, as a tool is."""
+    vendor = str(vendor or "").strip().lower()
+    rows = [r for r in index_rows(c, who, auth, settings, admins) if vendor and r.get("vendor") == vendor]
+    if not rows:
+        raise Problem("not_found", "No such vendor", 404)
+    out = []
+    for row in rows[:INDEX_LIMIT_MAX]:
+        if row["kind"] == "api":
+            page = detail(c, who, row["id"][len("api:") :], admins, auth)
+            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage")}
+        out.append(row)
+    return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 
 
 def index_page(c, who, auth, settings, admins, limit=INDEX_LIMIT_MAX, cursor=""):
@@ -1629,9 +2196,17 @@ def install(app, store, auth, settings):
         )
 
     def manager(c, w):
-        require_admin(c, w, vault().admins)
+        TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
-    @app.get("/api/v2/tool-index")
+    @app.get(
+        "/api/v2/tool-index",
+        **api_v2(
+            "Tools",
+            "listToolIndex",
+            "API tools, mailboxes, Tico addresses and numbers, mailing mail, Slack, GitHub, meeting importers, Listening, outgoing webhooks and declared tools the caller may see, with status and who can use each. Follow next with cursor",
+            "ToolIndex",
+        ),
+    )
     def tool_index(
         request: Request,
         limit: int = Query(default=INDEX_LIMIT_MAX, ge=1, le=INDEX_LIMIT_MAX),
@@ -1642,7 +2217,30 @@ def install(app, store, auth, settings):
         with store.read_transaction() as c:
             return index_page(c, request.state.identity, auth, settings, vault().admins, limit, cursor)
 
-    @app.get("/api/v2/api-tools/{tool_id}")
+    @app.get(
+        "/api/v2/tool-vendors/{vendor}",
+        **api_v2(
+            "Tools",
+            "getToolVendor",
+            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API tool's with its keys (never a value), who can use it at which level and its settings",
+            "ToolVendor",
+        ),
+    )
+    def tool_vendor(request: Request, vendor: str):
+        """One vendor's page on Tools: its website logins, MCP servers, API tools (keys, levels, settings) and the
+        connections that are its, as the reader may see them."""
+        with store.read_transaction() as c:
+            return vendor_page(c, request.state.identity, auth, settings, vault().admins, vendor)
+
+    @app.get(
+        "/api/v2/api-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "getApiTool",
+            "One API tool: its keys (never a value), who can use it at which level, its last checks and calls; to whoever may change it, who can see it and why. A tool the caller may not see is a 404",
+            "ApiTool",
+        ),
+    )
     def get_api_tool(request: Request, tool_id: str):
         with store.read_transaction() as c:
             return detail(c, request.state.identity, tool_id, vault().admins, auth)
@@ -1653,9 +2251,17 @@ def install(app, store, auth, settings):
 
     def setter(c, w):
         if w.role != "owner":  # the owner may change Who can see it (update_tool says what else)
-            require_admin(c, w, vault().admins)
+            TA.require(c, w, TA.tool(), action=TA.EDIT, admins=vault().admins, auth=auth)
 
-    @app.patch("/api/v2/api-tools/{tool_id}")
+    @app.patch(
+        "/api/v2/api-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "updateApiTool",
+            "Change a tool's settings (credential administrators) or who can see it: audience null for Everyone, or an audience for Only listed (the owner, or a credential administrator who can see it, who then stays on the list)",
+            "ApiToolSettings",
+        ),
+    )
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
         return change(
@@ -1722,13 +2328,22 @@ def install(app, store, auth, settings):
             "rows": [{k: r[k] for k in ("credential_id", "ok", "status_code", "detail", "checked_at")} for r in rows],
         }
 
-    @app.get("/api/v2/api-tools/{tool_id}/activity")
+    @app.get(
+        "/api/v2/api-tools/{tool_id}/activity",
+        **api_v2(
+            "Tools",
+            "listApiToolActivity",
+            "Calls through the proxy and uses of its keys, newest first. Follow next with cursor",
+            "ApiToolActivity",
+        ),
+    )
     def api_tool_activity(
         request: Request,
         tool_id: str,
         cursor: str = Query(default="", max_length=200),
         limit: int = Query(default=50, ge=1, le=ACTIVITY_MAX),
         result: str = Query(default="", max_length=20),
+        since: str = Query(default="", max_length=40),
     ):
         with store.read_transaction() as c:
-            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result)
+            return activity(c, request.state.identity, tool_id, vault().admins, auth, cursor, limit, result, since)

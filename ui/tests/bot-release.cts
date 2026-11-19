@@ -1,7 +1,7 @@
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
 // A bot Tico stopped (backend/bot_stops.py: five fast failed runs, or over its run budget). Guards: the server's words
-// show to everyone, Release only to those who manage the bot; one click posts the release and the button goes once the
+// show to everyone, Release only (never for a stop for credit, which shows Add credit) to those who manage the bot; one click posts the release and the button goes once the
 // status says the bot runs again; Health's stuck row for the stop carries the same Release. The run budget fields in the
 // bot's settings are held until Save bot, then save with the bot's revision; Follow team clears both. Fixtures only.
 const {chromium}: typeof import('playwright') = require('playwright');
@@ -16,9 +16,10 @@ interface Post {
   body: unknown;
 }
 
+const CREDIT = 'Its cloud machine is stopped: add credit to start it';
 const WORDS = 'Tico stopped Ops: 340 runs in the last hour. This looks like a runaway loop, not normal work. Check its last runs, then release it or raise its budget.';
 
-async function open(browser: import('playwright').Browser, role: string, hash: string) {
+async function open(browser: import('playwright').Browser, role: string, hash: string, credit = false) {
   const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   const errors: string[] = [], posts: Post[] = [];
   const manage = role === 'owner';
@@ -37,10 +38,12 @@ async function open(browser: import('playwright').Browser, role: string, hash: s
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: manage ? 'ana' : 'cara', role: manage ? 'owner' : 'human', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', host: 'keeper', can_chat: true, can_manage: manage,
       users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: state.revision}]);
-    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
+    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: [],
+      ...(credit ? {cloud_access: {access: 'frozen', reason: 'out_of_credit', plan: 'trial', trial_days_left: null, billing_url: 'https://app.tico.dev/billing', days_left: null}} : {})});
+    if (p === '/api/v2/status' && credit) return json({bots: [{bot: 'ops', state: 'paused', stopped: 'out_of_credit', focus: CREDIT}]});
     if (p === '/api/v2/status') return json({bots: [state.held ? {bot: 'ops', state: 'paused', stopped: 'budget', focus: WORDS} : {bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/health') return json({audience: manage ? 'owner' : 'human', attention: 1, checks: [], computers: [], waiting: [], slow: [], failures: [],
       checked: new Date().toISOString(), stuck: state.held ? [{bot: 'ops', name: 'Ops', reason: 'budget', queued: 1, oldest: new Date().toISOString(),
@@ -85,6 +88,20 @@ async function open(browser: import('playwright').Browser, role: string, hash: s
       await page.locator('[data-bot-release]').first().click();
       await page.waitForFunction(() => !document.querySelector('[data-bot-release]'));
       assert.deepEqual(posts, [{path: '/api/v2/bots/ops/release', body: {}}]);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // Stopped for credit: the bot says so with Add credit, and offers no Release (it would not start the machine).
+      const {page, errors} = await open(browser, 'owner', '#/bot/ops', true);
+      await page.locator('#bot-alert [data-bot-stopped="out_of_credit"]').waitFor();
+      assert.match(await page.locator('#bot-alert').innerText(), /Out of credit/);
+      await page.locator('#bot-alert [data-cloud-pay]').waitFor();
+      assert.equal(await page.locator('#bot-alert [data-bot-release]').count(), 0);
+      // The chat's notice says the same: the server's words, Add credit, and no Release.
+      await page.locator('#conv-paused [data-cloud-pay]').waitFor();
+      assert.match(await page.locator('#conv-paused').innerText(), new RegExp(CREDIT));
+      assert.equal(await page.locator('[data-bot-release]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }

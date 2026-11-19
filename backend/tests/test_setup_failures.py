@@ -28,7 +28,7 @@ HARNESS = {
 
 
 def ask(api, r):
-    return post(api, f"runners/{r['runner_id']}/harness-actions", {"harness": "codex", "action": "update"})
+    return post(api, f"computers/{r['runner_id']}/harness-actions", {"harness": "codex", "action": "update"})
 
 
 def failed(api, action=SF.ACTION):
@@ -67,7 +67,7 @@ def test_a_refused_github_return_keeps_its_category_step_and_reference_and_no_se
 def test_a_refused_write_names_the_ids_its_route_carries_and_never_the_request(api):
     r = runner(api)
     body = {"harness": "codex", "action": "update"}
-    path = f"/api/v2/runners/{r['runner_id']}/harness-actions?note={SECRET}"
+    path = f"/api/v2/computers/{r['runner_id']}/harness-actions?note={SECRET}"
     refused = api.post(path, json=body, headers={**headers("ben-test"), "X-Note": SECRET})
     assert refused.status_code == 403
     (row,) = failed(api)
@@ -96,7 +96,7 @@ def test_a_fault_in_a_setup_step_keeps_its_class_and_never_its_message(api, monk
     r = runner(api)
     try:
         answer = api.post(
-            f"/api/v2/runners/{r['runner_id']}/harness-actions",
+            f"/api/v2/computers/{r['runner_id']}/harness-actions",
             json={"harness": "codex", "action": "update"},
             headers=headers(),
         )

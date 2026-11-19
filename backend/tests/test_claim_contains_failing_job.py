@@ -2,7 +2,7 @@
 
 The claim checks each candidate job and prepares the one it hands out (backend/execution.py). An error in a job's own
 checks or start belongs to that job: its writes are rolled back, its traceback is logged once, and the job is held
-(backend/claim_holds.py) for a wait that doubles with each failed try, up to 50 minutes. An error in a bot's own check (its
+(a claim_error hold on it, bot_stops.hold_job) for a wait that doubles with each failed try, up to 50 minutes. An error in a bot's own check (its
 budget or back-off) passes that bot over for the rest of the claim and holds none of its runs; Health names the check
 until one of its runs starts. A claim holds at most CLAIM_HOLDS jobs. A team's default and a storage error fail it.
 """
@@ -14,23 +14,26 @@ import pytest
 
 from backend import (
     batch_work,
-    claim_holds,
+    bot_stops,
+    delivery,
     execution,
     gateway_connection,
     health,
+    holds,
     maintenance_health,
     providers,
     read_cache,
     read_deps,
-    run_backoff,
+    run_failures,
     task_privacy as privacy,
     turn_budgets,
     wake_presets,
 )
+from backend import runner_online
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
 from backend.tests.helpers.held_runs import task_held
-from backend.tests.helpers.run_backoff import at, complete, setup as budget_setup
+from backend.tests.helpers.run_failures import at, complete, setup as budget_setup
 
 
 @pytest.fixture(autouse=True)
@@ -39,14 +42,26 @@ def fresh_logs():
     batch_work._logged.clear()
 
 
+# A job with its claim hold, as the pages read it: `held` while its wait runs (holds.CLAIM_HELD), and the open
+# claim_error hold's reason, Needs-you item, count and wait.
+HOLD_COLUMNS = (
+    "(h.id IS NOT NULL AND h.until_at>?) AS held,h.reason AS hold_reason,h.upkeep_task_id AS hold_task_id,"
+    "coalesce(h.streak,0) AS hold_streak,h.until_at AS hold_until"
+)
+HOLD_JOIN = (
+    "LEFT JOIN holds h ON h.kind='claim_error' AND h.holdable_type='job' AND h.holdable_id=j.id "
+    "AND h.released_at IS NULL"
+)
+
+
 def jobs_of(api, bot):
     with api.app.state.store.read() as c:
         return [
             dict(r)
             for r in c.execute(
-                "SELECT id,state,held,hold_reason,hold_task_id,attempt_id FROM jobs "
-                "WHERE bot_id=? ORDER BY created_at,id",
-                (bot,),
+                f"SELECT j.id,j.state,{HOLD_COLUMNS},j.attempt_id FROM jobs j {HOLD_JOIN} "
+                "WHERE j.bot_id=? ORDER BY j.created_at,j.id",
+                (H.now(), bot),
             )
         ]
 
@@ -57,10 +72,10 @@ def task_jobs(api, task_id):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT j.id,j.state,j.held,j.hold_reason,j.hold_task_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "JOIN conversations cv ON cv.id=m.conversation_id "
+                f"SELECT j.id,j.state,{HOLD_COLUMNS} FROM jobs j JOIN messages m ON m.id=j.message_id "
+                f"JOIN conversations cv ON cv.id=m.conversation_id {HOLD_JOIN} "
                 f"WHERE j.bot_id='ops' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
-                (task_id,),
+                (H.now(), task_id),
             )
         ]
 
@@ -69,7 +84,7 @@ def hold_of(api, job_id):
     with api.app.state.store.read() as c:
         return dict(
             c.execute(
-                "SELECT state,held,hold_until,hold_reason,hold_task_id,hold_streak FROM jobs WHERE id=?", (job_id,)
+                f"SELECT j.state,{HOLD_COLUMNS} FROM jobs j {HOLD_JOIN} WHERE j.id=?", (H.now(), job_id)
             ).fetchone()
         )
 
@@ -112,7 +127,9 @@ def held_refresh(api, monkeypatch):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
-        task_id = H.task_create(c, H.KEEPER, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
+        task_id = H.task_create(c, H.TICO_ACTOR, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)[
+            "id"
+        ]
     raising_for_ops(monkeypatch)
     assert claim(api, machine) is None
     return machine, task_id
@@ -151,7 +168,7 @@ def test_a_job_whose_checks_raise_is_held_and_the_claim_hands_out_the_next_bots_
     turn = claim(api, machine)
     assert turn["bot"] == "cpo"
     [bad] = jobs_of(api, "ops")
-    assert (bad["held"], bad["hold_reason"], bad["state"]) == (1, claim_holds.REASON, "queued")
+    assert (bad["held"], bad["hold_reason"], bad["state"]) == (1, bot_stops.CLAIM_REASON, "queued")
     assert raised == [bad["id"]]
     tracebacks = [r for r in caplog.records if r.exc_info and f"claim failed for {bad['id']}" in r.getMessage()]
     assert len(tracebacks) == 1
@@ -209,8 +226,8 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'"
         ).fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], verdict, H.now()))
-        cpo_task = H.task_create(c, H.KEEPER, "Price list", "Check the list.", H.bot_actor("cpo"), lint=False)["id"]
-        H.task_comment(c, H.KEEPER, cpo_task, "The pricing numbers are in.")
+        cpo_task = H.task_create(c, H.TICO_ACTOR, "Price list", "Check the list.", H.bot_actor("cpo"), lint=False)["id"]
+        H.task_comment(c, H.TICO_ACTOR, cpo_task, "The pricing numbers are in.")
     with store.read() as conn:
         read_deps.sweep(conn)
     post(
@@ -244,7 +261,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     assert turn is not None and turn["job_id"] != attempt["job_id"]
     assert (claim(api, machine) or {}).get("bot") == "cpo"
     [held] = [j for j in jobs_of(api, "ops") if j["id"] == attempt["job_id"]]
-    assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
+    assert (held["held"], held["hold_reason"], held["state"]) == (1, bot_stops.CLAIM_REASON, "queued")
     assert held["attempt_id"] == attempt["id"]
     with store.read() as c:
         error = c.execute(
@@ -299,15 +316,67 @@ def test_a_task_gets_no_second_job_while_its_held_job_waits(api, monkeypatch):
 
 
 def test_release_frees_a_held_job_another_path_canceled_and_closes_its_item(api, monkeypatch):
-    """Archiving a bot cancels its queued jobs, held ones too. Release still frees them and closes the Needs-you item
-    they filed, so no item waits on a job that can no longer run."""
+    """Archiving a bot cancels its queued jobs, held ones too: each one's hold ends with it (the holds_job_ends trigger).
+    Release still closes the Needs-you item they filed, so no item waits on a job that can no longer run."""
     machine, task_id = held_refresh(api, monkeypatch)
     held = task_jobs(api, task_id)[0]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
-    assert post(api, "bots/ops/release", {})["released"]["claim"] == 1
+        ended = c.execute("SELECT released_how FROM holds WHERE kind='claim_error' AND holdable_id=?", (held["id"],))
+        assert [r[0] for r in ended] == ["moot"]
+    assert post(api, "bots/ops/release", {})["released"]["claim"] == 0
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
     assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
+
+
+def _cancel_by_suppress_notice(c, job_id, task_id):
+    execution.suppress_notice(c, dict(c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()), task_id, "x")
+
+
+def _cancel_by_drop_jobs(c, job_id, task_id):
+    delivery._drop_jobs(c, H, [job_id], "Its deadline passed.")
+
+
+@pytest.mark.parametrize("cancel", [_cancel_by_suppress_notice, _cancel_by_drop_jobs], ids=["suppress", "drop_jobs"])
+def test_a_held_run_canceled_as_no_longer_needed_closes_its_needs_you_item(api, monkeypatch, cancel):
+    """Each caller cancels the job before it clears the claim: the run's end released the hold already
+    (holds_job_ends), and the item still closes."""
+    machine, task_id = held_refresh(api, monkeypatch)
+    held = task_jobs(api, task_id)[0]
+    assert item_status(api, held["hold_task_id"]) == "open"
+    with api.app.state.store.transaction() as c:
+        cancel(c, held["id"], task_id)
+        ended = c.execute("SELECT released_how FROM holds WHERE kind='claim_error' AND holdable_id=?", (held["id"],))
+        assert [r[0] for r in ended] == ["moot"]
+    assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
+    assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
+
+
+def test_a_canceled_run_keeps_its_bots_item_open_while_another_held_run_names_it(api, monkeypatch):
+    machine, task_id = held_refresh(api, monkeypatch)
+    with api.app.state.store.transaction() as c:
+        other = H.task_create(c, H.TICO_ACTOR, "Refresh the log", "Refresh it.", H.bot_actor("ops"), lint=False)["id"]
+    assert claim(api, machine) is None  # its job raises too: held, naming the same item
+    first, second = task_jobs(api, task_id)[0], task_jobs(api, other)[0]
+    assert first["hold_task_id"] == second["hold_task_id"]
+    with api.app.state.store.transaction() as c:
+        _cancel_by_drop_jobs(c, first["id"], task_id)
+    assert item_status(api, first["hold_task_id"]) == "open"
+
+
+def test_a_held_run_that_starts_and_finishes_leaves_no_hold_and_its_item_closed(api, monkeypatch):
+    machine, task_id = held_refresh(api, monkeypatch)
+    [job] = task_jobs(api, task_id)
+    monkeypatch.undo()  # the job's checks work again
+    wait_ends(api, monkeypatch, job["id"])
+    attempt = claim(api, machine)
+    assert attempt["job_id"] == job["id"]
+    complete(api, machine, attempt)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "completed"
+        ended = c.execute("SELECT released_how FROM holds WHERE kind='claim_error' AND holdable_id=?", (job["id"],))
+        assert [r[0] for r in ended] == ["probe_passed"]
+    assert item_status(api, job["hold_task_id"]) not in H.ACTIVE_STATUSES
 
 
 def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
@@ -322,15 +391,15 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
             "WHERE j.bot_id='ops' AND m.sender_id LIKE 'human:%'"
         ).fetchone()[0]
     with store.transaction() as c:
-        done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        H.task_done(c, H.KEEPER, done, "Exported.")
+        done = H.task_create(c, H.TICO_ACTOR, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
+        H.task_done(c, H.TICO_ACTOR, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued' AND id<>?", (person_job,))
         conversation = H.task(c, done)["conversation_id"]
         # A claim's obsolete pass cancels a page of CLAIM_MAINTENANCE notices, so one is left queued for the retry.
         for n in range(execution.CLAIM_MAINTENANCE + 1):
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 f"PR #{n} checks passed",
                 kind="notice",
@@ -355,8 +424,9 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
     assert claim(api, machine) is None
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
-        held, reason = c.execute("SELECT held,hold_reason FROM jobs WHERE id=?", (person_job,)).fetchone()
-    assert (held, reason) == (1, claim_holds.REASON)
+        assert c.execute("SELECT 1 FROM jobs WHERE id=? AND held=0", (person_job,)).fetchone()
+    held = hold_of(api, person_job)
+    assert (held["held"], held["hold_reason"]) == (1, bot_stops.CLAIM_REASON)
 
 
 def test_a_bot_budget_refusal_holds_no_job_over_several_claims(api, monkeypatch):
@@ -380,7 +450,7 @@ def test_a_bot_check_that_raises_passes_its_bot_over_and_the_claim_hands_out_the
     if check == "budget":
         calls = bot_check_raising(monkeypatch, turn_budgets, "refusal", "ops")
     else:
-        calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+        calls = bot_check_raising(monkeypatch, run_failures, "get", "ops")
     turn = claim(api, machine)
     assert turn["bot"] == "cpo"
     assert claim(api, machine) is None
@@ -410,7 +480,7 @@ def test_a_bot_check_that_raises_is_logged_once_per_claim_and_named_in_health_un
 
     # Once the back-off has passed, the check reads again: its next run starts, and the finding clears.
     monkeypatch.undo()
-    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_FIRST + 1))
+    at(monkeypatch, api, H.shift(H.now(), seconds=holds.CLAIM_CHECK.first + 1))
     assert claim(api, machine)["bot"] == "ops"
     with store.transaction() as c:
         assert "claim_check" not in {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
@@ -543,20 +613,6 @@ def test_a_wake_preset_release_and_replan_leave_a_claim_hold_to_its_own_wait(api
     assert hold_of(api, job["id"]) == before
 
 
-def test_a_database_from_before_the_hold_count_keeps_its_held_runs_and_counts_their_tries_from_zero(api, monkeypatch):
-    machine, task_id = held_refresh(api, monkeypatch)
-    [job] = task_jobs(api, task_id)
-    store = api.app.state.store
-    with store.transaction() as c:  # a database from before the column
-        c.execute("ALTER TABLE jobs DROP COLUMN hold_streak")
-    store.initialize()
-    held = hold_of(api, job["id"])
-    assert (held["held"], held["hold_reason"], held["hold_streak"]) == (1, claim_holds.REASON, 0)
-    wait_ends(api, monkeypatch, job["id"])
-    assert claim(api, machine) is None
-    assert hold_of(api, job["id"])["hold_streak"] == 1
-
-
 @pytest.mark.parametrize("obsolete_ahead", [execution.CLAIM_PICKS - 2, execution.CLAIM_PICKS - 1])
 def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypatch, obsolete_ahead):
     """A claim cancels a page of obsolete notices, then drops the candidates it still reaches under its lock: at most
@@ -567,14 +623,14 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
     ready(api, machine, ["ops"])
     store = api.app.state.store
     with store.transaction() as c:
-        done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        H.task_done(c, H.KEEPER, done, "Exported.")
+        done = H.task_create(c, H.TICO_ACTOR, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
+        H.task_done(c, H.TICO_ACTOR, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
         conversation = H.task(c, done)["conversation_id"]
         for n in range(execution.CLAIM_MAINTENANCE + obsolete_ahead):
             H.say(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "bot:ops",
                 f"PR #{n} checks passed",
                 kind="notice",
@@ -586,7 +642,7 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
             0
         ] == (execution.CLAIM_MAINTENANCE + obsolete_ahead)
     with store.transaction() as c:
-        open_task = H.task_create(c, H.KEEPER, "Open export", "Do it.", H.bot_actor("ops"), lint=False)["id"]
+        open_task = H.task_create(c, H.TICO_ACTOR, "Open export", "Do it.", H.bot_actor("ops"), lint=False)["id"]
     [open_job] = task_jobs(api, open_task)
 
     if obsolete_ahead < execution.CLAIM_PICKS - 1:
@@ -619,7 +675,7 @@ def test_a_login_check_that_raises_for_one_job_holds_that_job_and_the_bots_other
     turn = claim(api, machine)
     assert turn is not None and turn["job_id"] == other
     held, started = jobs_of(api, "ops")
-    assert (held["held"], held["hold_reason"]) == (1, claim_holds.REASON)
+    assert (held["held"], held["hold_reason"]) == (1, bot_stops.CLAIM_REASON)
     assert (started["state"], started["held"]) == ("leased", 0)
 
 
@@ -642,7 +698,7 @@ def test_a_team_wide_provider_error_fails_the_claim_and_passes_no_bot_over(api, 
     with pytest.raises(RuntimeError):
         claim(api, machine)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM service_health WHERE service GLOB 'claim_check:*'").fetchone()[0] == 0
+        assert not c.execute("SELECT 1 FROM holds WHERE kind='claim_error' AND holdable_type='bot'").fetchone()
     assert all(not job["held"] for job in jobs_of(api, "ops") + jobs_of(api, "cpo"))
 
 
@@ -655,7 +711,7 @@ def test_a_claim_hold_on_a_running_bots_run_is_not_delivered_as_input_until_its_
     store = api.app.state.store
     with store.transaction() as c:
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (follow["id"],)).fetchone()[0]
-        claim_holds.hold(c, store.settings, job, "RuntimeError")
+        bot_stops.hold_job(c, store.settings, job, "RuntimeError")
     item = hold_of(api, job)["hold_task_id"]
 
     def delivered():
@@ -697,13 +753,13 @@ def test_a_failing_bot_check_is_not_run_again_by_polls_inside_its_back_off(api, 
     assert (len(calls), len(writes), logged()) == (1, writes_before, 1)
 
     # The back-off passes: the check runs once more, fails again, and the next wait is twice as long.
-    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_FIRST + 1))
+    at(monkeypatch, api, H.shift(H.now(), seconds=holds.CLAIM_CHECK.first + 1))
     assert claim(api, machine) is None
     assert (len(calls), logged()) == (2, 2)
     for _ in range(10):
         assert claim(api, machine) is None
     assert len(calls) == 2
-    at(monkeypatch, api, H.shift(H.now(), seconds=2 * claim_holds.CHECK_RETRY_FIRST - 1))
+    at(monkeypatch, api, H.shift(H.now(), seconds=2 * holds.CLAIM_CHECK.first - 1))
     # The other bot's run may be handed out again once its lease lapses: only the check's count is asserted.
     claim(api, machine)
     assert len(calls) == 2
@@ -728,12 +784,12 @@ def wake_notice(api, task_id, body):
 
 def batch_task(api, title):
     with api.app.state.store.transaction() as c:
-        return H.task_create(c, H.KEEPER, title, "Done.", H.bot_actor("ops"), lint=False)["id"]
+        return H.task_create(c, H.TICO_ACTOR, title, "Done.", H.bot_actor("ops"), lint=False)["id"]
 
 
 def batch_hold(api, job_id):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT hold_until,held,hold_reason FROM jobs WHERE id=?", (job_id,)).fetchone())
+        return dict(c.execute("SELECT hold_until,held FROM jobs WHERE id=?", (job_id,)).fetchone())
 
 
 def test_a_batch_planned_while_a_claim_hold_still_waits_keeps_its_own_window(api, monkeypatch):
@@ -748,7 +804,7 @@ def test_a_batch_planned_while_a_claim_hold_still_waits_keeps_its_own_window(api
     wake_tick(api, H.shift(t0, minutes=6))
     at(monkeypatch, api, H.shift(t0, minutes=6))
     with store.transaction() as c:
-        claim_holds.hold(c, store.settings, first, "RuntimeError")  # held until t0 + 7 min
+        bot_stops.hold_job(c, store.settings, first, "RuntimeError")  # held until t0 + 7 min
     at(monkeypatch, api, H.shift(t0, minutes=6, seconds=10))
     second = wake_notice(api, task, "Finished: second")
     wake_tick(api, H.shift(t0, minutes=6, seconds=20))
@@ -769,10 +825,8 @@ def test_a_batch_planned_after_a_claim_hold_was_let_go_waits_only_its_own_notice
     second = wake_notice(api, batch_task(api, "second"), "Finished: second")
     at(monkeypatch, api, H.shift(t0, minutes=44))
     with store.transaction() as c:
-        claim_holds.hold(c, store.settings, first, "RuntimeError")  # held until t0 + 45 min
+        bot_stops.hold_job(c, store.settings, first, "RuntimeError")  # held until t0 + 45 min
     at(monkeypatch, api, H.shift(t0, minutes=46))
-    with store.transaction() as c:
-        claim_holds.release_due(c)
     wake_tick(api, H.shift(t0, minutes=46))
     assert batch_hold(api, first)["held"] == 0
     assert batch_hold(api, second)["hold_until"] == H.shift(t0, minutes=45)
@@ -790,12 +844,12 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
     machine = runner(api, "ana")
     two_bots_with_chats(api, machine)
     if check == "bot":
-        bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
+        bot_check_raising(monkeypatch, run_failures, "get", "ops")
     else:
         monkeypatch.setattr(execution, "job_refusal", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")))
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
     assert "ops" not in {r["bot"] for r in stuck}

@@ -67,7 +67,7 @@ def _join_script(tmp_path):
 @pytest.mark.parametrize("shell", ["sh", "bash"])
 def test_a_failed_installer_download_fails_the_join_and_leaves_no_code(tmp_path, shell):
     if not shutil.which(shell):
-        pytest.skip(shell)
+        pytest.skip(f"no {shell} on PATH, so the install script cannot run under it")
     script, env_file = _join_script(tmp_path)
     p = subprocess.run([shell, "-c", script], env=_stub_path(tmp_path, FAILING_CURL), capture_output=True, text=True)
     assert p.returncode == 1, p.stdout + p.stderr  # was 0: `curl | sh` fed sh nothing and "succeeded"
@@ -91,7 +91,7 @@ def test_a_downloaded_installer_runs_with_the_join_arguments_and_its_exit_code_c
 @pytest.mark.parametrize("shell", ["sh", "bash"])
 def test_a_failed_docker_download_stops_the_bootstrap_and_the_ssh_step(tmp_path, shell):
     if not shutil.which(shell):
-        pytest.skip(shell)
+        pytest.skip(f"no {shell} on PATH, so the bootstrap script cannot run under it")
     env = _stub_path(tmp_path, FAILING_CURL)
     boot = "\n".join(["set -eu"] + remote.docker_install_lines("ubuntu", need_aws_cli=False) + ["echo reached the end"])
     p = subprocess.run([shell, "-c", boot], env=env, capture_output=True, text=True)
@@ -113,7 +113,7 @@ def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch,
     ec2, iam, ssm, clients = fakes.aws_clients()
     clock, polls, sends = [0.0], [], []
     phase = ['launch']
-    monkeypatch.setattr(remote.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(remote, '_monotonic', lambda: clock[0])
     original_send = ssm.send_command
 
     class NotRegistered(Exception):

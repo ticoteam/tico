@@ -14,7 +14,7 @@ else), and a person who takes control in the live view holds it until they give 
 (409 `person_in_control` for bots). A person's view is a picture refreshed at most once a second however many people
 watch (one screenshot command per FRAME_EVERY seconds), and their clicks and keys are commands too.
 
-Nothing here is persisted: the server is one process (backend/meeting_screen.py assumes the same). A restart drops
+Nothing here is persisted: the server is one process. A restart drops
 in-flight commands and holds; a caller retries. A login's value reaches only the payload a computer collects for a
 `fill` or `copy`: never a reply, an event, an Activity row or an idempotency row. The 2FA key never leaves the server:
 `code` is answered here and a `fill`/`copy` of the code carries only the current code.
@@ -42,6 +42,7 @@ from . import hubdb
 from . import auth as auth_module
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -90,7 +91,8 @@ Verb = Literal[
     "upload",
     "close",
 ]
-LOGGED = ("open", "fill", "copy", "code", "download", "upload")
+# Typing is logged too (E-607): its row holds the verb and the page path, never the text typed.
+LOGGED = ("open", "type", "fill", "copy", "code", "download", "upload")
 FIELDS = ("username", "password", "code")
 REF = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 REQUEST_ERRORS = ("not_on_site", "not_a_password_field")
@@ -277,6 +279,7 @@ class Mailbox:
         self.holds: dict[str, Hold] = {}
         self.sessions: dict[str, SessionFacts] = {}
         self.frames: dict[str, Frame] = {}
+        self.watchers: dict[str, int] = {}  # per account, the people waiting on its next picture now
         self.recent: dict[tuple[str, str], tuple[float, "asyncio.Future[Outcome | dict[str, Any]]"]] = {}
         self.sent: dict[str, list[tuple[float, str]]] = {}
 
@@ -461,6 +464,15 @@ class Mailbox:
     def queued(self, runner_id: str) -> list[Command]:
         with self.lock:
             return list(self.queues.get(runner_id, ()))
+
+    def watch(self, account_id: str, delta: int) -> None:
+        """Counts the people waiting on the account's next picture: one more when one starts to wait, one less after."""
+        with self.lock:
+            left = self.watchers.get(account_id, 0) + delta
+            if left:
+                self.watchers[account_id] = left
+            else:
+                self.watchers.pop(account_id, None)
 
     def hand_out(self, runner_id: str, ids: set[str]) -> list[Command]:
         with self.lock:
@@ -740,7 +752,7 @@ def first_url(sites: list[str]) -> str:
 
 
 def _idle(request: Request, began: float) -> None:
-    # A deliberate wait is not server processing (backend/app.py timing; backend/meeting_screen.py does the same).
+    # A deliberate wait is not server processing (backend/app.py timing).
     request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + (time.perf_counter() - began) * 1000
 
 
@@ -792,23 +804,38 @@ def session_view(account_id: str, c: sqlite3.Connection | None = None) -> Sessio
 
 
 # An ask still waiting: not withdrawn, on its task's current visit, with no standing answer (backend/task_privacy.py
-# _ASKERS reads the same).
+# _ASKERS reads the same). Asks made before ❓ marks; a browser ask now is a ❓ (`_OPEN_MARK`).
 _OPEN_ASK = (
     "SELECT 1 FROM requirements r JOIN visits v ON v.id=r.visit_id "
     "WHERE r.withdrawn_at IS NULL AND v.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM answers a "
     "WHERE a.requirement_id=r.id AND a.visit_id=v.id AND a.undone_at IS NULL AND a.answer NOT IN ('give','again'))"
 )
+# An open ❓ whose message shows a browser (refs.shows).
+_OPEN_MARK = (
+    "SELECT 1 FROM question_marks q JOIN messages m ON m.id=q.message_id WHERE q.cleared_at IS NULL "
+    "AND q.person_id=? AND EXISTS (SELECT 1 FROM json_each(m.refs, '$.shows') s WHERE s.value=?) LIMIT 1"
+)
+# What a browser ❓ says after the bot's own line.
+BROWSER_HELP = "The live browser opens from this question in Flow. Reply Done once you are through."
 
 
 def open_ask(
     c: sqlite3.Connection, show: str | None = None, *, person: str | None = None, requirement_id: str | None = None
 ) -> bool:
-    """Whether a "needs you" ask is still open: the one named by `requirement_id`, or any that shows `show`
-    (`browser:<tool>/<account>`) and is addressed to `person`."""
+    """Whether a "needs you" ask is still open: the one named by `requirement_id` (a ❓'s `qmark:<id>`, or an older
+    ask's requirement), or any that shows `show` (`browser:<tool>/<account>`) and is addressed to `person`."""
     if requirement_id is not None:
+        from . import question_marks
+
+        mark = question_marks.mark_id(requirement_id)
+        if mark:
+            found = question_marks.get(c, mark)
+            return bool(found) and not found.get("cleared_at")
         return c.execute(_OPEN_ASK + " AND r.id=? LIMIT 1", (requirement_id,)).fetchone() is not None
     if not show or not person:
         return False
+    if c.execute(_OPEN_MARK, (person, show)).fetchone():
+        return True
     return (
         c.execute(
             _OPEN_ASK + " AND r.person_id=? AND r.shows IS NOT NULL "
@@ -1325,7 +1352,8 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     @app.post("/api/v2/browser/needs-you")
     def browser_needs_you(request: Request, body: BrowserNeedsYou) -> Any:
         """A bot stuck on a website's text code, captcha or new-device check asks a person, on its task, to take over the
-        browser: an answer ask with Done that shows the live view (`browser:<tool>/<account>`)."""
+        browser: a ❓ on its message (backend/question_marks.py) that shows the live view (`browser:<tool>/<account>`,
+        the message's refs.shows); their reply ("Done") clears it."""
         who = request.state.identity
         if who.role != "bot" or not who.attempt_id or who.agent:
             raise Problem("forbidden", "Ask for browser help from a bot's live turn on a task.", 403)
@@ -1339,7 +1367,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             if task is None:
                 raise Problem(
                     "needs_a_task",
-                    "Asking a person needs a task; create a task and ask for browser help from its turn.",
+                    "Asking a person needs a task: name one of your open tasks (--task), or create one and ask from it.",
                     409,
                 )
             holder = str(picked.get("holder") or "")
@@ -1354,27 +1382,34 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                     "Nobody who can read this task can take over the browser; ask an admin to assign a person to help.",
                     409,
                 )
-            made = H.task_ask(
+            from . import ask_shape, question_marks
+
+            # The bot's own line, checked as any ❓'s words are; the rest of the message is Tico's.
+            shape = ask_shape.line_refusal(body.line)
+            if shape:
+                H.refuse(c, who.actor, "lint", shape)
+            marked = question_marks.ask(
                 c,
                 who.actor,
                 task["id"],
                 person,
-                body.line,
-                kind="answer",
-                choices=["Done"],
-                shows=[f"browser:{picked['tool_id']}/{picked['account_id']}"],
-                seen_version=task.get("version"),  # a stuck browser, not the task's text: no version to have read
+                f"{body.line.strip()}\n\n{BROWSER_HELP}",
+                checked=False,
+                let_in=False,  # who holds the browser is not let into a private task they may not read
+                refs={"shows": [f"browser:{picked['tool_id']}/{picked['account_id']}"]},
             )
+            wait = question_marks.wait_id(marked)
             facts = mailbox.facts(str(picked["account_id"]))
-            mailbox.needs_you(str(picked["account_id"]), made.get("requirement_id"), who_of(c, who.actor))
+            mailbox.needs_you(str(picked["account_id"]), wait, who_of(c, who.actor))
             wt.log(c, picked, who, "needs_you", page_of(facts.url), facts.where or "central")
-            return {"requirement_id": made.get("requirement_id")}
+            return {"requirement_id": wait}
 
         return mutate(request, body, work)
 
     def _turn_task(c: sqlite3.Connection, who: Any, named: str | None) -> dict[str, Any] | None:
         """The live task the bot in this turn owns: the one it names, else the task its turn's message is on."""
-        task_id = named
+        # A named task may be a short id or `#number`, as everywhere a bot names a task.
+        task_id = auth.resolve_task(c, who, named) if named else None
         if not task_id:
             row = c.execute(
                 "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
@@ -1547,7 +1582,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 pass
             return central(c)
 
-    @app.post(base)
+    @app.post(
+        base,
+        **api_v2(
+            "Tools",
+            "openWebsiteBrowser",
+            "Open, or wake, the account's browser for your live view: on the computer its session runs on, else the browser host. A live session is woken without changing its page",
+            "BrowserOpened",
+        ),
+    )
     async def browser_open(request: Request, tool_id: str, account_id: str, body: BrowserOpen) -> Any:
         """Wake an existing session for the person's live view, or open one on the browser host."""
         who = request.state.identity
@@ -1582,6 +1625,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             200: {"description": "The newest picture of the page", "content": {"image/jpeg": {}}},
             204: {"description": "No picture yet"},
         },
+        **api_v2(
+            "Tools",
+            "getWebsiteBrowserFrame",
+            "The newest picture of the account's browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and X-Page-Height. From the computer the session runs on, at most one a second however many people watch",
+        ),
     )
     async def browser_frame(request: Request, tool_id: str, account_id: str) -> Response:
         """The newest picture of the account's browser (JPEG), with X-Page-Url, X-Page-Width and
@@ -1622,6 +1670,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 raise
         if pending is not None:
             began = time.perf_counter()
+            mailbox.watch(account_id, 1)
             try:
                 outcome = await asyncio.wait_for(asyncio.shield(pending.reply), FRAME_WAIT)
                 if isinstance(outcome, Problem):
@@ -1629,6 +1678,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             except TimeoutError:
                 pass
             finally:
+                mailbox.watch(account_id, -1)
                 _idle(request, began)
         with mailbox.lock:
             data, url, width, height = frame.data, frame.url, frame.width, frame.height
@@ -1653,7 +1703,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         if isinstance(outcome, BrowserReport):
             mailbox.note(cmd, outcome)
 
-    @app.post(base + "/control")
+    @app.post(
+        base + "/control",
+        **api_v2(
+            "Tools",
+            "setWebsiteBrowserControl",
+            "Take control (bots wait until you give it back, or 5 minutes idle), or give it back",
+            "BrowserControlState",
+        ),
+    )
     async def browser_control(request: Request, tool_id: str, account_id: str, body: BrowserControl) -> Any:
         """Take control of the account's browser (bots wait until it is given back, or 5 minutes idle), or give it back."""
         who = request.state.identity
@@ -1670,7 +1728,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         mailbox.clear_needs_you(account_id)  # the person did what the bot asked for
         return {"ok": True, "control": False}
 
-    @app.post(base + "/input")
+    @app.post(
+        base + "/input",
+        **api_v2(
+            "Tools",
+            "sendWebsiteBrowserInput",
+            "A click (x, y in frame pixels), typed text, a key or a scroll from the person in control",
+            "BrowserInputDone",
+        ),
+    )
     async def browser_input(request: Request, tool_id: str, account_id: str, body: BrowserInput) -> Any:
         """A click, typed text, a key or a scroll from the person in control; x and y are pixels of the frame."""
         who = request.state.identity
@@ -1712,7 +1778,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         return await once(request, who.actor, run)
 
     # ------------------------------------------------------------------------------------------------ the pick
-    @app.post("/api/v2/runners/{rid}/browser-host")
+    @app.post("/api/v2/computers/{rid}/browser-host")
     def browser_host(request: Request, rid: str, body: BrowserHostSet) -> Any:
         """Make this computer the company's browser host (one per company), or stop. It then takes no other bots."""
         who = request.state.identity

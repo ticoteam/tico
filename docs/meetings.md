@@ -18,7 +18,7 @@ or org owner may remove it. Writes require an `Idempotency-Key`.
 `GET /api/v2/tasks/{id}/meetings` returns `{meetings, next_cursor}`, newest meeting first, using its start time
 normalized to UTC (or creation time when no start is recorded). Cursors use the same UTC key.
 Both lists take `limit` (20 by default, at most 50) and `cursor`, cap titles at 200 characters and answers at 64 KB,
-and return no totals. Pending meetings cannot have links. Deleted meetings disappear until restored.
+and return no totals. Pending meetings cannot have links. Deleted meetings disappear and cannot be restored.
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
@@ -30,9 +30,10 @@ The meeting's task rows also follow title and status changes. Link events carry 
 null after unlink). Delivery checks access to both resources for each viewer, so hidden meeting activity sends
 no link event or meeting reference. An ordinary task change carries no hidden link kinds or references.
 
-**Meetings** is where the team's meeting transcripts live. Tico does not record: humans already
-have Granola, Zoom, Google Meet, Otter, Fireflies or Close for that. Tico takes what those tools
-produce, keeps it in one list, and turns it into work. How the pieces fit:
+**Meetings** is where the team's meeting transcripts live. They come from two places: calls held in
+Tico Meet, which Tico records and transcribes itself ([Calls](meet.md)), and the tools the team already
+uses (Granola, Zoom, Google Meet, Otter, Fireflies or Close), whose transcripts Tico imports. Tico
+keeps them in one list and turns them into work. How the pieces fit:
 [How Tico works](how-it-works.md).
 
 A meeting is a title, when it started, who was in it, a transcript (a list of segments: speaker,
@@ -43,7 +44,7 @@ in the tool that made it. Media files can be attached too.
 
 | Door | For | How |
 |---|---|---|
-| **Add notes** on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
+| **Log a meeting** (the notes icon) on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
 | `tico meeting import <file>` | a human or script on a computer | `tico meeting import call.vtt --title "Pricing call" --date 2026-09-28T16:00 --participant dana@example.com --source zoom --external-id 123` |
 | `tico_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
 | `POST /api/v2/meetings/import` | anything else | one JSON body, below |
@@ -53,20 +54,6 @@ in the tool that made it. Media files can be attached too.
 The CLI and the API act as the human whose credential they carry: set `HUB_API_URL` and `HUB_TOKEN` to
 a personal token (see [Who can do what](#who-can-do-what)). All of them land in the same place, in the same shape, so the list, search, sharing, Send and
 action items work identically whatever the source.
-
-### Tico Recorder
-
-**Get Tico Recorder** on Meetings downloads the Mac app
-(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`). A copy that cannot update itself, outside
-an Applications folder (for example, opened from Downloads or the disk image), asks once per launch, before your first
-recording: **Move** copies it to Applications (or `~/Applications`) and relaunches it from there; **Not now** keeps it
-where it is, and a smaller banner offers the move later. The link hides once Tico has seen one of your copies in the
-last 30 days. The Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its
-calls; Tico keeps the last version and time per person and copy, writing at most every ten minutes unless the version
-changes. The newest version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
-when the copy you used last is older, Meetings shows **Recorder update available**, and nothing else.
-`GET /api/v2/meetings/recorder` answers the same for your own copies; owners and admins see everyone's version in
-Settings > People. Neither link shows in the phone layout, in a browser window 760 px wide or less.
 
 ## Review before sharing
 
@@ -83,13 +70,16 @@ does, and the row shows **Processing** while it works and then what it created. 
 the select-all box) for Share and Dismiss on all of them; they apply only to ticked meetings shown by the current
 search and filters. Hidden meetings are never included, even if previously selected. Bulk sharing
 keeps each meeting's source privacy. Restore in Dismissed
-returns a meeting to Pending. **Settings** controls future imports and, for the owner, the Team default.
-Human **Add notes** stays live, including a pasted or uploaded transcript; a human API caller
+returns a meeting to Pending. Two words sound alike: a dismissed meeting can be restored; a deleted
+meeting cannot be restored. **Settings** controls future imports and, for the owner, the Team default.
+Human **Log a meeting** stays live, including a pasted or uploaded transcript; a human API caller
 can also choose `review: "live"`. Computer importers keep using the same payloads: the server
 decides the review state for the person named in `owner_email`.
 
 `GET /api/v2/meetings?review=pending` returns `{"meetings": [...], "count": N, "pending_count": N}`.
-The default list is live; `review=dismissed` reads the person's dismissed meetings. Every listed
+The default list is live; `review=dismissed` reads the person's dismissed meetings, and `review=shared` the live
+meetings someone else filed that are shared with the reader (the Team, its participants or its attendees; not the ones
+the company owner may open only as owner). Every listed
 meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existing
 `GET /api/v2/updates/unread` also returns `meetings_pending`, scoped to the caller.
 `GET /api/v2/meetings/{id}` opens a meeting under the same access rules as the older detail route.
@@ -101,18 +91,12 @@ and attached bots through `GET /api/v2/live-meetings/{id}` under the live meetin
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
-  `"audience": "participants"` (as Tico Recorder's **Participants only**) keeps it readable only by the
+  `"audience": "participants"` keeps it readable only by the
   person it is filed for, people added to or joined in the live meeting it came from, and attached bots;
   the company owner is held to that too. Attached bots can read filed notes, transcripts, versions and
-  attachments regardless of who added them or the filed audience, once shared and until deleted or discarded.
+  attachments regardless of who added them or the filed audience, once shared and until deleted.
   Pending and dismissed meetings remain unavailable to bots. `"audience": "team"` opens it to the Team. The import route takes
   `"audience": "participants"` as well, readable then by the person filing it. Only a review widens it again.
-- `POST /api/v2/live-meetings/{id}/discard {}`, by the person who connected it, ends a live meeting and
-  removes its transcript, chat and events from Tico; the recording stays on their computer.
-  Recorder **This Mac** uses this path and deletes a meeting already filed for review, removing its delivery
-  receipt and task links. The local recording and transcript stay, and tasks already sent remain unchanged.
-  Queued links and Link proposals are cleared; recovery cannot finalize the discarded live share or send its links.
-  An older Tico without discard ends the meeting and reports that its live transcript remains until Tico is updated.
 - `POST /api/v2/meetings/{id}/review` with `{"action": "dismiss"}` hides a pending meeting from Pending. Live meetings cannot be
   dismissed; existing deletion controls remain available. Later syncs may update its
   contents but keep it dismissed under the same dedup key. `{"action": "restore"}` brings a
@@ -268,7 +252,6 @@ format is a `422` that names the problem.
   links to it, and quotes the line when you gave one. A task shared to a bot has no footer and no quote.
   Participants-only meetings send
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
-  The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
   a failed draft. Save and Create carry the item’s `version`; a stale write returns 409 with the current item,
   keeps changed fields and shows the current values for retry. Untouched fields adopt the server's values even
@@ -277,11 +260,11 @@ format is a `422` that names the problem.
   Incoming edits preserve open forms, focus and caret.
   If another editor Creates or Dismisses an item with unsaved edits, both clients keep a closed card with
   their name, your draft and **Copy** and **Close** buttons until you copy or close it.
-  The web and saved Recorder views refetch on authorized `meeting_items` events, and close on `gone`.
+  The web views refetch on authorized `meeting_items` events, and close on `gone`.
   `GET /api/v2/presence?place=meeting:<id>` lists current people; each window heartbeats its own `session_id`
   every 15 seconds and leaves with `gone: true`. Sessions expire after 30 seconds; Maintenance deletes expired sessions in bounded batches, and deleting
   a meeting removes its sessions. Participant grants end only when no remaining source meeting permits access; task parties and readers
-  retain their independent task access. Tasks created in Recorder before Save are uploaded as sent items.
+  retain their independent task access.
   If Save partly succeeds, Create replays any uncertain item upload with its original request and key, then
   uses the server item and adopts its existing task if another editor already sent it. Local edits stay in
   the closed card with **Copy** and **Close**. Retrying Save recovers without creating another task.
@@ -334,7 +317,7 @@ source has **Sync now** (Granola), **Sign in again** or **Reconnect** when it ne
 that disconnects your account, for an importer it turns the importer off (owners only), and Close is managed on its
 tool page. The rest have **Connect**: Granola's sign-in for anyone, Close's tool page, and for the others a dialog with
 the same form as Tools > Meeting importers (owners only). With no meetings and nothing connected, the page shows them
-as large tiles instead (**Add notes** stays in the header).
+as large tiles instead (**Log a meeting** stays in the header).
 
 ## Meeting importers
 
@@ -652,8 +635,10 @@ def file_meeting(meeting, vtt):
 
 ## Upgrading from Recordings
 
-Tico used to record meetings itself. That is gone: no browser or desktop capture, no live captions,
-no live meeting brain, no processing worker on the Mac, no xAI or Gemini keys on the server. What
+Tico's browser and desktop app used to record meetings themselves. That recording is gone: the browser
+and desktop-app capture, their live captions, the live meeting brain, the processing worker on the Mac
+and the server's xAI and Gemini keys. Tico now records only calls held in Tico Meet ([Calls](meet.md)).
+What
 stays is everything that was ever imported or recorded. An upgrading install keeps all of it:
 
 - The tables are unchanged (`meetings`, `meeting_versions`, `meeting_items`, `meeting_comments`,
@@ -672,9 +657,4 @@ stays is everything that was ever imported or recorded. An upgrading install kee
 - The desktop app no longer captures audio or shows a meeting prompt; it is Tico in a window
   (with no menu-bar item since a later release). It no longer asks for microphone or system-audio permission.
 - `TICO_GEMINI_SECRET_ARN` and `TICO_XAI_SECRET_ARN` are no longer read;
-  `TICO_PROCESSING_OPERATORS` still names the computers that may run importers and calendar publishers.
-
-Recorder Save replays interrupted item uploads before applying current local fields with the item's version.
-If another teammate has changed or sent the item, the Recorder keeps the local draft with Copy and Close.
-Tasks added after Save go onto the meeting before Create sends them. Link proposals use Link, and queued task
-links are sent last in batches of 20; an interrupted Save resumes the remaining batches.
+  `TICO_PROCESSING_OPERATORS` still names the computers that may run importers.

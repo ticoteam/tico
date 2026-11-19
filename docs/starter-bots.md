@@ -35,7 +35,7 @@ Chief of Staff is no longer a default.
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`head-of-people`) | 11 | Hire well, keep good people |
 | Product | `category` | Product Lead (`product-lead`) | 10 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-manager`) | 18 | Ship reliable software, steadily |
+| Engineering | `code` | Engineering Manager (`engineering-manager`) | 18 | Ship reliable software, steadily |
 | Success | `sentiment_satisfied` | Success Manager (`success-manager`) | 3 | Customers who renew and grow |
 | Corporate | `contract` | Corporate Manager (`corporate-manager`) | 3 | Every deadline kept, every deal read first |
 | Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
@@ -48,7 +48,7 @@ themselves and never do their team's work.
 
 Five Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each has its team's bots under it, runs its team's week, routes the team's work to its owners and manages its team's pipelines: when a task stops, the Manager decides what happens to it. Product and Growth take no group's head seat.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
@@ -59,7 +59,11 @@ against, owns all design, and answers each growth bet's brand check (the Video O
 the KPIs and computes their readings; the Finance Owner (`finance-owner`) keeps the books, the Usage page and the weekly cash
 summary; the Rules Owner (`rules-owner`) reads the documents added to Rules and answers can-I questions; the Updates Owner
 (`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
-automations each week; and the Owners on the core chart each own one result and log readings for the KPI
+automations each week; the Tools Owner (`tools-owner`) owns Tools: it connects services, has keys typed into a card or
+dropped in its Tools chat (it never sees one), proposes each bot's level for a person to grant, and reviews the tools each
+week; it ships with guides to common vendors' logins and keys (`knowledge/vendors/`, `knowledge/logins.md`), reads how
+tools are used each day (`tico tool activity`) and keeps what people tell it about their logins in
+`knowledge/company/`; and the Owners on the core chart each own one result and log readings for the KPI
 that measures it with `tico kpi log`. Owning a result does not make a bot the only one who logs it. No other template
 owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
@@ -193,7 +197,7 @@ up.
 | `dashboard_customize` | `product-operations-manager` | Product Operations Manager | One feature request ledger with the accounts behind each request, the beta roster, an eight-week release calendar, roadmap hygiene flags and ship notices for a human to send | niche | Tico only; CRM, GitHub and calendar optional |
 | `text_fields` | `ux-writer` | UX Writer | Copy tables for each spec (labels, errors, empty states), the product glossary, and a weekly review of pull requests that change user-facing text, for an engineer to post | niche | GitHub connected (read) |
 | `sell` | `pricing-analyst` | Pricing Analyst | A monthly pricing review (competitor price changes, discounts given, plan mix) and impact notes for a price change being weighed | niche | Public web; a CRM optional |
-| `target` | `feature-owner` | Feature Owner | Owns one area of the product, or a customer segment, or the whole product, and takes each feature from pitch to production in one task and one session: a pitch of 280 characters a person OKs, the Spec page a person OKs, the build with a test that proves it, the fixes for both reviews, the QA page and a "Checked in production" page; each week the area's activation and retention with its problems ranked | default | GitHub connected; meetings and a CRM optional |
+| `target` | `feature-owner` | Feature Owner | Owns one area of the product, or a customer segment, or the whole product, and takes each feature from a chat to production in one task and one session: the Spec a person approves, the build with a test that proves it, the fixes for both reviews, the QA report, the Release report a person approves and a "Checked in production" page; each week the area's activation and retention with its problems ranked | default | GitHub connected; meetings and a CRM optional |
 | `lightbulb` | `product-manager` | Product Manager (team lead) | A weekly product summary: the roadmap, the decisions waiting on a person, what each Feature Owner and the product pipeline found, and scored proposals for what to build next; routes each piece of product work to its owner; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | Tico; GitHub, docs and meetings optional |
 
 ### Engineering
@@ -201,7 +205,7 @@ up.
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `code_blocks` | `reviewer` | Reviewer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
-| `code_blocks` | `builder` | Builder | Takes a task Head of Engineering gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments; merges only under the team's merge rules | common | GitHub connected |
+| `code_blocks` | `builder` | Builder | Takes a task the Engineering Manager gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments; merges only under the team's merge rules | common | GitHub connected |
 | `new_releases` | `release-notes-writer` | Release Notes Writer | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
 | `monitor_heart` | `site-reliability-engineer` | Site Reliability Engineer | An incident timeline, a blameless postmortem, action items followed to done, an on-call handoff and a weekly incident review | common | Tico only; an incident channel or error-tracker exports optional |
 | `description` | `technical-writer` | Technical Writer | A weekly drift report on READMEs and API docs in the product repositories, with the fixes written for an engineer to commit; internal docs stay with the Librarian | niche | GitHub connected |
@@ -213,7 +217,7 @@ up.
 To run these bots as one team that builds, reviews, tests and releases software, see
 [The software factory](software-factory.md): the roles in order and which model each runs on.
 | `developer_board` | `engineering-manager` | Engineering Manager (team lead) | Sends a request for a change to the Product pipeline, routes tests, security, CI and releases to their owners, and writes one weekly summary; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | GitHub connected |
-| `bug_report` | `qa-owner` | QA Owner | Owns every automated test, unit to end to end: a flaky test register with a fix or quarantine decision for each, a weekly suite health report, and product bugs filed into the Engineering pipeline | niche | GitHub connected; chat optional |
+| `bug_report` | `qa-owner` | QA Owner | Owns every automated test, unit to end to end: a flaky test register with a fix or delete decision for each, made the same day, a weekly suite health report, and product bugs filed into the Engineering pipeline | niche | GitHub connected; chat optional |
 | `security` | `security-owner` | Security Owner | A weekly dependency and advisory report ranked by real exposure, a patch plan in merge order, and a private report of any committed credential, by location only | common | GitHub and public web connected; chat optional |
 | `deployed_code` | `infrastructure-owner` | Infrastructure Owner | A weekly CI health report: slow jobs, red-main streaks, runner and workflow faults, and deploy frequency, each with a fix plan; flaky tests go to the QA Owner | niche | GitHub connected; chat optional |
 | `new_releases` | `release-owner` | Release Owner | A weekly report of how long merged changes take to reach users, which checks gate merging, and failed deploys; for each release, its readiness check, notes and staged rollout | niche | GitHub and Tico connected; docs and chat optional |
@@ -283,15 +287,15 @@ A starter's own prompt is not the gate. What the platform does, checked for ever
 
 | It might | The gate | Where |
 |---|---|---|
-| Send, reply to or forward email | The email tool keeps a Gmail draft unless the mailbox declares the `send` verb, and every send goes through Tico's send queue, which decides it under the bot's sending policy (On their own, Ask first or Never, set in Tico) with an undo window; under Ask first a person approves it. The starters declare `read` and `draft` only; a test refuses `send` in any starter's `access:` | `backend/email_sending.py`, `connectors/mail/policy.py`, `clients/tests/test_catalog.py` |
+| Send, reply to or forward email | Every send goes through Tico's send queue on the server, which checks the bot's level on the mailbox and decides the send under its sending policy (On their own, Ask first or Never, set in Tico) with an undo window; under Ask first a person approves it. The starters declare `read` and `draft` only; a test refuses `send` in any starter's `access:` | `backend/email_sending.py`, `backend/mailbox_access.py`, `clients/tests/test_catalog.py` |
 | Post to Slack | A post needs the `post` verb in the bot's Slack access, and the channel must be on the Slack channel list (Tools > Slack) with posting on, which it is unless an owner or admin turned it off; reading grants no posting right. Externally shared channels are always refused. The starters declare Slack read only, commented out until the owner connects it | [Slack gateway](slack-gateway.md) |
-| Comment on or label a GitHub issue, or review a pull request | **Added in this release.** The team's GitHub App token carries Issues: write, so nothing but a prompt stood between the QA Engineer (`qa-owner`) and a public comment. Its access is now `read`, and its `.claude/settings.json` denies `gh issue edit` and `gh issue comment` next to close, reopen, lock, transfer and create. It leaves proposed labels and comments with the exact commands on the task; writes need the corresponding Tool access. Senior Software Engineer, Release Owner, Technical Writer, Security Engineer, DevOps Engineer and Head of Engineering read GitHub the same way: `read` access, only `gh pr list`, `view`, `diff` and `checks` allowed, and `gh pr review`, `comment`, `merge`, `close`, `edit` and `create` denied, so a review is a draft on the task that a human posts. Turning writing on is the owner's edit of `bot.yaml` and the settings file, described in a comment there. The harness reads `.claude/settings.json`; the Codex runtime does not, so for a Codex-run bot the gate is the read-only access declared, the absence of any default write credential to a product repository, and the prompt | `templates/catalog/qa-owner`, `clients/tests/test_catalog.py` |
+| Comment on or label a GitHub issue, or review a pull request | **Added in this release.** The team's GitHub App token carries Issues: write, so nothing but a prompt stood between the QA Engineer (`qa-owner`) and a public comment. Its access is now `read`. It leaves proposed labels and comments with the exact commands on the task; writes need the corresponding Tool access. Senior Software Engineer, Release Owner, Technical Writer, Security Engineer, DevOps Engineer and Head of Engineering read GitHub the same way: `read` access, so a review is a draft on the task that a human posts. Turning writing on is the owner's edit of `bot.yaml`, described in a comment there. The gate is the read-only access declared, the absence of any default write credential to a product repository, and the prompt | `templates/catalog/qa-owner`, `clients/tests/test_catalog.py` |
 | Invite someone to a calendar event | Any address may be invited. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to limit bots to humans on the team roster (`403 external_attendee` otherwise); an invitation to anyone else is then a human's act | `backend/connectors.py`, `backend/tests/test_security_review.py` |
 | Message a human inside the team | Bot-to-human messages are linted and capped at ten unsolicited a day | `tico message send` |
 | Change a record in a CRM, the support tool, the books or a repository | The starters declare no such access. Sales Operations Manager reads the CRM and only lists the fixes; the finance roles read exports and never post, pay or send with the Tools shipped in their templates. A requested change needs that Tool's declared write access | the card |
 | Act on a public review surface | Reputation Manager declares `read` on its review surfaces and on Slack, and keeps `act` and `post` as a commented block the owner enables when it is needed; until then it drafts the requested batch | `templates/catalog/reputation-manager`, `clients/tests/test_catalog.py` |
 
-No template declares a `send`, `write`, `modify` or `delete` verb in `tools:`, and the template test fails one that does. A template's `.claude/settings.json` allows only its own repository's `git` and, for the GitHub bots, the read-only `gh` commands above; none allows `gh issue *` or `gh pr *` as a whole.
+No template declares a `send`, `write`, `modify` or `delete` verb in `tools:`, and the template test fails one that does. A template's `.claude/settings.json` holds only `deny` rules: Claude Code runs every turn with `bypassPermissions`, so an allow list would change nothing. Every bot gets the catalog's base file, which denies only what cannot be undone or is a credential: force pushes (a `--force-with-lease` push is allowed), `gh repo delete`, making a repository public, `gh release delete`, `gh run delete`, `gh cache delete`, `gh issue delete`, `gh secret`, `gh variable`, and `gh workflow enable` and `disable`. Merging, tagging, releasing and `gh api` are ordinary work and are not denied: where Tico's merge queue merges, a bot's instructions say to leave merging to the queue; where a company merges and releases another way (its own skill or playbook, git-flow, no queue), the bot merges, tags and releases as that says, never with red checks.
 
 When a person later gives such a bot write access but leaves the template's denies in place, Health shows **Harness
 permissions**: the bot, the repositories it may write to and the `gh` or `git` commands its `.claude/settings.json` still
@@ -373,6 +377,51 @@ team_templates: [finance-owner, accounts-receivable-specialist, accounts-payable
 ```
 
 ## The repository each one starts from
+
+A template folder holds only what is its own. What every bot starts with (`.gitignore`, `.claude/settings.json`,
+`memory/`, the `knowledge/` and `playbooks/` READMEs, empty `reports/` and `software/`) is one copy in
+`templates/catalog/_base/`; a card's `base_skip` leaves a base path out. Files several templates share (the
+`build-the-page` skill, the growth channel stage playbooks, the managers' skills) are one copy in
+`templates/catalog/_shared/`, and each card that takes one names its path in `shared_files`. A bot is made from the
+base, then its shared files, then the template's own folder, a later file replacing an earlier one at the same path
+(`clients/catalog.py` `files`). A skill shared this way lives in `.claude/skills/`, where Claude Code loads it without
+AGENTS.md listing it.
+
+## The skill library
+
+Business work a bot does end to end (answer a customer, close the month, review a contract, run a release, write the
+spec) is one library skill in `templates/catalog/_shared/.claude/skills/<skill>/`: a `SKILL.md` with the steps, the
+gates, what the bot does alone and what needs a person, plus `references/` for the long parts. There are 41, in eleven
+functions: customers, engineering, finance, growth, hardware, legal, marketing, operations, people, product and sales. Each
+`SKILL.md` names the roles that use it in `metadata.roles`, and each of those cards lists the skill in
+`shared_files`. A role's own `skills/` keep the narrow steps a library skill calls (a figure check, a deadline count);
+a narrow skill that a library skill fully covers is deleted and its references point at the library skill. Each deleted
+file or skill folder goes in `RETIRED` in `clients/catalog.py` with what replaced it: when a bot made before is refreshed,
+the old copy goes if the bot never edited it, and the files the bot kept (its own `AGENTS.md`, an edited playbook) are
+rewritten to name the replacement. A library skill that names another `.claude/skills/<name>` as a step needs that skill
+given to every role it goes to; `clients/tests/test_catalog.py` checks it, and a line that says "where your repository
+has it" marks a skill as optional.
+
+Every `SKILL.md` in the catalog carries `metadata.function`, one of `tico`, `legal`, `marketing`, `growth`, `sales`,
+`customers`, `finance`, `product`, `engineering`, `people`, `operations`, `hardware`, `data` or `security`:
+
+```yaml
+---
+name: count-a-notice-deadline
+description: "..."
+metadata:
+  function: legal
+---
+```
+
+A role's skills take its card's `group` (engineering, finance, legal, marketing, operations, product and sales as
+named; `hr` is people; `leadership` is operations; `corporate` is legal; `success` and `support` are customers), with a
+few roles set by hand: the security roles are security, the Product Analyst is data, the Growth Manager and Pricing
+Analyst are growth, the Partnerships Owner is sales. Skills about running Tico itself (BotOps, the Assistant, the
+Librarian, the Tools, Rules, Automations, Updates and Inbox helpers, and shared helpers such as `build-the-page`) are
+`tico`. Keep `metadata` after `name` and `description`: the frontmatter readers (`clients/skills.py`,
+`runner-rs/src/goals.rs`) read top-level `key: value` lines and skip the indented ones. A skill folder stays under 100
+files and 90,000 characters, and its description under 1,024 characters (`clients/skills.py` `bundle_problem`).
 
 Same layout as every template, plus what makes a starter reviewable:
 
@@ -549,7 +598,7 @@ routine, and ask BotOps to set it up only after the owner says yes.
 - Site Reliability Engineer (on-call handoff): a written handoff at each rotation change with open incidents, noisy alerts and risky changes, and alerts that fire without action tuned or removed, from [Google's SRE workbook on being on call](https://sre.google/workbook/on-call/).
 - Technical Writer: one page, one documentation type (tutorial, how-to, reference, explanation), second person, present tense, docs kept with the code so a change ships with its documentation, from [Diataxis](https://diataxis.fr/), the [Google developer documentation style guide](https://developers.google.com/style) and [Write the Docs on docs as code](https://www.writethedocs.org/guide/docs-as-code/).
 - Security Engineer: severity (CVSS) is an upper bound, not an order; rank by observed exploitation on [CISA's Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), exploit likelihood from [FIRST's EPSS](https://www.first.org/epss/) and whether the code can reach the flaw, with deadlines per tier; a committed secret is rotated, not just deleted, because history keeps it, from [GitHub's secret scanning documentation](https://docs.github.com/en/code-security/secret-scanning/about-secret-scanning).
-- DevOps Engineer: detect flaky tests by a pass and a fail on the same commit, give each one an owner and a fix-or-quarantine decision with a deadline, and never accept reruns as the fix, from [Google Testing Blog, Flaky Tests at Google and How We Mitigate Them](https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html); deploy frequency and failed deploys as in [DORA's metrics](https://dora.dev/guides/dora-metrics-four-keys/).
+- DevOps Engineer: detect flaky tests by a pass and a fail on the same commit, give each one an owner and a fix-or-delete decision the same day, and never accept reruns as the fix, from [Google Testing Blog, Flaky Tests at Google and How We Mitigate Them](https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html); deploy frequency and failed deploys as in [DORA's metrics](https://dora.dev/guides/dora-metrics-four-keys/).
 - Developer Advocate: a friction log that tells the story of a developer's journey step by step and is shared with the product and engineering owners who can remove the friction, from [Developer Relations' introduction to friction logging](https://developerrelations.com/guides/an-introduction-to-friction-logging/) and [a friction log guide on DEV](https://dev.to/thagomizer/friction-logs-3110); one reader and one job per tutorial, as under Technical Writer above.
 - Software Architect: one short record per significant decision with its context, the decision, its status and its consequences, superseded rather than deleted, from [adr.github.io](https://adr.github.io/) and [the original ADR template](https://github.com/joelparkerhenderson/architecture-decision-record/blob/main/locales/en/templates/decision-record-template-by-michael-nygard/index.md).
 

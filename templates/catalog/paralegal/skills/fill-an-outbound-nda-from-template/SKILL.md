@@ -1,6 +1,8 @@
 ---
 name: fill-an-outbound-nda-from-template
 description: Fill the team's own NDA template for an outbound request, list every blank with the source of its value, and ask once for anything missing rather than guess a legal name or an address.
+metadata:
+  function: legal
 ---
 # Fill an outbound NDA from the template
 

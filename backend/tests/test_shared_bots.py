@@ -116,9 +116,6 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     assert mine['owner_id'] == branch_actor
     other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
     assert other['owner_id'] == 'bot:cpo'
-    task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
-    assert task_chat['bot'] == bot_id(api, 'cpo-cara')
-    assert task_chat['message']['recipient_id'] == branch_actor
     chat = post(api, 'chat/cpo', {'text': 'Hello'}, 'cara-test')
     assert chat['recipient_id'] == branch_actor
     conversation = get(api, 'conversations?chat_with=cpo-cara', 'cara-test')['conversations'][0]
@@ -204,9 +201,15 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     branch_id = bot_id(api, 'cpo-cara')
     with api.app.state.store.transaction() as c:
         reminder = H.task_create(
-            c, H.KEEPER, "Finish setting up cpo-cara", "Still onboarding.", "human:ben", deduplicate=False, lint=False
+            c,
+            H.TICO_ACTOR,
+            "Finish setting up cpo-cara",
+            "Still onboarding.",
+            "human:ben",
+            deduplicate=False,
+            lint=False,
         )
-        H.event(c, H.KEEPER, "bot.setup_reminder", branch_id, {"task": reminder["id"], "owner": "human:ben"})
+        H.event(c, H.TICO_ACTOR, "bot.setup_reminder", branch_id, {"task": reminder["id"], "owner": "human:ben"})
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'

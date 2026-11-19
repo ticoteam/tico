@@ -1,0 +1,6 @@
+{
+  "ui/tests/finance.cts": {
+    "no-fixed-wait-ui": 9,
+    "no-raised-timeout": 1
+  }
+}

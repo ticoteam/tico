@@ -2,7 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
-from clients.commands import computer_upkeep, connections, pipelines
+from clients.commands import computer_upkeep, connections, page_history, pipelines, tools_admin
 from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
@@ -115,17 +115,9 @@ ASSISTANT_WRITES = {
 ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 
 
+# The email reads are everyone's: a person, the Assistant and a bot, at the mailbox level the server checks
+# (backend/mail.py), so they take the default audience.
 AUDIENCE = {
-    **{
-        name: HUMANS_AND_ASSISTANT
-        for name in (
-            "tico_email_mailboxes",
-            "tico_email_inbox",
-            "tico_email_search",
-            "tico_email_thread",
-            "tico_email_message",
-        )
-    },
     **{
         name: PEOPLE
         for name in (
@@ -155,6 +147,12 @@ AUDIENCE = {
     # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
     "tico_api": REQUESTER,
     "tico_credential_request": ("bot", "botops"),
+    # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
+    # person grants on the card. Never the Assistant.
+    "tico_tools_propose_grant": ("bot", "botops"),
+    # Access requests' weekly numbers are the Tools Owner's review (backend/access_requests.py); the Assistant's listing
+    # stays small.
+    "tico_access_stats": PEOPLE + BOTS,
     # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
@@ -175,16 +173,13 @@ AUDIENCE = {
     "tico_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "tico_repo_review": ("bot", "botops"),
     "tico_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)
-    **{
-        name: REQUESTER
-        for name in (
-            "tico_credential_grant",
-            "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
-            "tico_credential_revoke",
-            "tico_credential_import",
-            "tico_credential_delete",
-        )
-    },
+    # The Tools Owner gives and takes back a bot's key with the rights of the person who asked it (the server lends them
+    # on Tools changes only, backend/tools_delegation.py); any other bot is refused with who can.
+    **{name: REQUESTER + ("bot",) for name in ("tico_credential_grant", "tico_credential_revoke", "tico_tool_level")},
+    "tico_credential_import": REQUESTER,
+    "tico_credential_delete": REQUESTER + ("bot", "agent"),
+    # A bot registers, changes or removes its own bot.yaml tool entries; the Tools Owner any bot's (backend/bot_tools.py).
+    **{name: REQUESTER + ("bot",) for name in ("tico_tool_add", "tico_tool_update", "tico_tool_remove")},
     **{
         name: REQUESTER
         for name in (
@@ -209,9 +204,6 @@ AUDIENCE = {
             "tico_group_access",
             "tico_bot_owners",
             "tico_human_add",
-            "tico_tool_add",
-            "tico_tool_update",
-            "tico_tool_remove",
             "tico_bot_copy",
             "tico_bot_update_from_original",
             "tico_bot_suggest_to_original",
@@ -237,6 +229,8 @@ AUDIENCE = {
         )
     },
     **{name: REQUESTER for name in CALL_TOOLS},  # a person's act; BotOps acts as the person it works for
+    "tico_call_notes": NOT_ASSISTANT,
+    "tico_call_note": BOTS,
     # The Assistant only.
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
@@ -258,6 +252,7 @@ AUDIENCE = {
     "tico_assistant_read": PEOPLE,
     "tico_assistant_send": PEOPLE,
     "tico_needs_you_show": HUMANS_AND_ASSISTANT,  # views.human_only: a person's own list
+    "tico_screen_show": HUMANS_AND_ASSISTANT,  # views.human_only: the person's own open app
     "tico_assistant_change_list": HUMANS_AND_ASSISTANT,  # what the person's Assistant did for them
     "tico_assistant_change_restore": HUMANS_AND_ASSISTANT,  # taking one back, as the person
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
@@ -292,12 +287,15 @@ AUDIENCE = {
     "tico_org_models": KINDS,
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
     **{name: BOTS for name in ("tico_file_publish", "tico_file_link", "tico_file_touch", "tico_file_import")},
-    "tico_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
+    "tico_page_publish": KINDS,  # people publish too; until wave 2 a person's page is stored under their Assistant bot
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "tico_file_delete": ("owner", "botops"),
     "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
+    # Anyone who may write a page links it (the route checks the writer and the target's read rights).
+    "tico_page_link": NOT_ASSISTANT,
+    "tico_page_unlink": NOT_ASSISTANT,
     # A bot's read-only view of the app (backend/app_view.py): an owner or admin turns it on, as themselves; the bot
     # takes its own screenshots with it.
     "tico_bot_app_view": PEOPLE,
@@ -314,7 +312,7 @@ AUDIENCE = {
 
 
 # Modules that keep their own AUDIENCE (and SHELL_ONLY) lines next to their tools.
-for _module in (hubtools_org, connections, computer_upkeep, pipelines):
+for _module in (hubtools_org, connections, computer_upkeep, page_history, pipelines, tools_admin):
     AUDIENCE.update(_module.AUDIENCE)
 SHELL_ONLY |= pipelines.SHELL_ONLY
 
@@ -336,6 +334,10 @@ COUNSEL_TOOLS = frozenset(
 # The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
 # sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
+# Size: the Assistant's listing is asserted under 200,000 bytes (backend/tests/test_assistant_acts_as_you.py). It is
+# kept under by compacting the text at source (short descriptions, shared strings such as `operation_id` and
+# `SETUP_NOTE`) and by `listing()` dropping `additionalProperties: false` from its copy (`_advertised`), not by hiding
+# more here. Never hide a tool the Assistant template runs to make room; a tool added here is one the Assistant may not run.
 ASSISTANT_HIDDEN = frozenset(
     {
         # Contacts schema and field history: a person's Assistant reads entities (get, find, rules, self).
@@ -344,6 +346,11 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_history",
         # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
         "tico_growth_source_campaigns",
+        "tico_growth_segment_show",  # a segment owner bot's read, not a person's; hidden for the listing's size cap
+        "tico_growth_segment_list",  # the same
+        "tico_growth_segment_set",  # the Growth Manager's and an admin's setup, not a person's Assistant; same cap
+        "tico_growth_rows_push",  # the Growth Manager's pushes, not a person's Assistant; same cap
+        "tico_growth_costs_push",  # the same
         "tico_credential_grant",
         "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
@@ -363,6 +370,12 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_tool_call",
         "tico_task_readers_list",  # tico_task_show has the readers; the Assistant's listing is near its size cliff
         "tico_tool_check",  # tico_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
+        "tico_tool_activity",  # the Tools Owner's reading of how tools are used; the tool's page shows it. Same cliff.
+        "tico_tool_level",  # a Tools change the Assistant hands the Tools Owner (playbooks/acting-for-them.md)
+        # A message's attachments: the person opens them in Gmail; the Assistant reads the message. Same cliff.
+        "tico_email_attachments",
+        "tico_email_attachment",
+        "tico_email_lint",  # tico_email_draft runs the same lint; same cliff
     }
 )
 
@@ -462,12 +475,16 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_answer",
         "tico_task_attach",
         "tico_task_create",
+        # A Reviewer files its second review as a check-model sub-task.
+        "tico_task_child_create",
         "tico_task_close",
         "tico_task_link",
         "tico_task_relate",
         "tico_task_label",
         "tico_task_snooze",
         "tico_task_queue",
+        # Access to a tool or a repository a code bot needs (backend/access_requests.py), never a task to a person.
+        "tico_access_request",
         "tico_task_release",
         "tico_task_worktree_add",
         "tico_task_worktree_attach",
@@ -539,12 +556,30 @@ def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
     when the kind is not known), never an UNLISTED one, and with a profile only its list (PROFILES). Sorted by
     name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
-    together)."""
+    together). Only the Assistant's listing is compacted (_advertised): every other caller gets the full schema, which
+    a caller checks (backend/tests/test_mcp.py)."""
+    compact = kind == "assistant"
     return [
-        {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "inputSchema": _advertised(t["inputSchema"]) if compact else t["inputSchema"],
+        }
         for t in sorted(TOOLS, key=lambda t: t["name"])
         if t["name"] not in UNLISTED
         and (local or not t.get("local"))
         and (kind is None or kind in offered_to(t))
         and (profile not in PROFILES or t["name"] in PROFILES[profile])
     ]
+
+
+def _advertised(schema):
+    """A copy of a tool's input schema without `additionalProperties: false`, which is about 8.5 KB of the Assistant's
+    listing. Only the Assistant's listing drops it (listing, kind "assistant"): TOOLS keeps the full schema, and
+    `_mcp.argument_error` still refuses an unknown argument on every call, so a client that sends one is refused as
+    before."""
+    if isinstance(schema, dict):
+        return {k: _advertised(v) for k, v in schema.items() if not (k == "additionalProperties" and v is False)}
+    if isinstance(schema, list):
+        return [_advertised(v) for v in schema]
+    return schema

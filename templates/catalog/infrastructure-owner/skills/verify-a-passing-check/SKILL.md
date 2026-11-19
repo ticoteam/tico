@@ -1,6 +1,8 @@
 ---
 name: "verify-a-passing-check"
 description: "Confirm that a green check is a real pass for a specific commit: the right conclusion, the right head commit, tests that ran, and no skipped or ignored step counted as success."
+metadata:
+  function: engineering
 ---
 # Verify a passing check
 

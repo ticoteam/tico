@@ -3,6 +3,7 @@ import type * as PageSupport from './support/page.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
+const {buildSync}: typeof import('esbuild') = require('esbuild');
 const {chromium}: typeof import('playwright') = require('playwright');
 require('./support/page.cts') as PageSupport.Api;
 
@@ -19,6 +20,12 @@ declare const TicoObservability: Telemetry;
 declare const telemetry: Telemetry;
 
 (async () => {
+  // Sentry's accessor shares the adapter's browser scope without exporting SDK internals from Tico.
+  const [sentryProbe] = buildSync({
+    stdin: {contents: "export {getClient} from '@sentry/browser';", resolveDir: path.join(__dirname, '..', '..')},
+    bundle: true, format: 'esm', write: false,
+  }).outputFiles;
+  assert.ok(sentryProbe);
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"});
@@ -32,6 +39,9 @@ declare const telemetry: Telemetry;
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.hostname === 'acme.test') {
+        if (url.pathname === '/sentry-client.js') {
+          return route.fulfill({contentType: 'text/javascript', body: sentryProbe.text});
+        }
         const file = url.pathname === '/observability.ts' ? path.join(__dirname, '..', '..', 'build', 'ui', 'observability.js')
           : url.pathname === '/assets/observability-vendors.js' ? path.join(__dirname, '..', 'assets', 'observability-vendors.js') : null;
         return route.fulfill({contentType: file ? 'text/javascript' : 'text/html',
@@ -50,16 +60,26 @@ declare const telemetry: Telemetry;
       throw new Error('Unexpected SDK destination: ' + url.hostname);
     });
     await page.goto('http://acme.test/');
-    await page.evaluate(async () => {
+    const collection = await page.evaluate(async () => {
       window.telemetry = TicoObservability;
       // Use the production filters and adapter, with fictional authenticated config and no real backend.
       const fetch = window.fetch.bind(window);
       window.fetch = ((url: RequestInfo | URL, ...options: [RequestInit?]) => url === '/api/v2/observability'
         ? Promise.resolve({ok: true, json: async () => ({app: 'tico', environment: 'test',
-          distinct_id: 'tico:' + 'a'.repeat(64), posthog_key: 'phc_test', posthog_host: 'https://us.i.posthog.com'})} as unknown as Response)
+          distinct_id: 'tico:' + 'a'.repeat(64), posthog_key: 'phc_test', posthog_host: 'https://us.i.posthog.com',
+          sentry_dsn: `https://${'a'.repeat(32)}@o123.ingest.us.sentry.io/123`})} as unknown as Response)
         : fetch(url, ...options)) as typeof window.fetch;
       await telemetry.start();
       await telemetry.run('/v2/tasks', async () => ({ok: true, text: 'private-task-content'}));
+      const probeUrl = '/sentry-client.js';
+      const {getClient} = await import(probeUrl) as Pick<typeof import('@sentry/browser'), 'getClient'>;
+      return getClient()?.getDataCollectionOptions();
+    });
+    assert.deepEqual(collection, {
+      userInfo: false, cookies: false, httpHeaders: {request: false, response: false}, httpBodies: [],
+      urlQueryParams: false, graphQL: {document: false, variables: false}, genAI: {inputs: false, outputs: false},
+      mcp: {inputs: false, outputs: false}, databaseQueryData: false, queues: false,
+      stackFrameVariables: false, frameContextLines: 0,
     });
     let deadline;
     try {

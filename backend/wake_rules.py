@@ -33,7 +33,7 @@ import hashlib
 import json
 
 # Who made the request whose writes are being made (backend/app.py request_guard): the person, or the bot, or the
-# person a bot or the Assistant acts for. Empty for the keeper's own sweeps and the runner's calls, which no rule
+# person a bot or the Assistant acts for. Empty for Tico's own sweeps and the runner's calls, which no rule
 # reads as anyone's own write.
 CAUSE = contextvars.ContextVar("wake_cause", default="")
 
@@ -42,13 +42,13 @@ ALWAYS_WAKE = (
     ("task_turn", "a task in a pipeline is the bot's to work: the one task engine's wake (backend/task_wakes.py)"),
     ("person", "a person's message or comment, or a notice of a person's own act (an OK, a move)"),
     ("manager", "a task comment from a party’s org-chart manager"),
-    ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
+    ("ask", "a steer: an instruction to the bot while it works"),
     ("approval", "an instruction or a structured question: a command, a run now, an OK asked or given"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
     ("mention", "another bot's message that @mentions the bot (addressed: it goes by the message's way)"),
-    ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
+    ("reply", "a reply to a message the bot flagged needs-action, or to one it waits on (wait_s)"),
 )
-ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
+ALWAYS_KINDS = frozenset({"steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
 FLAG = "needs_action"
@@ -71,7 +71,7 @@ HOLDABLE_CLASSES = ("notice", "message")
 # The references news carries: a plain message's, the trigger stamp, a finished task's summary. Anything else (a
 # wake kind, a batch, an answer) is more than news, and so is a reference no rule here knows yet.
 # `news` names the event of a notice that is news but not a plain comment (rules.NOTE_EVENTS, task_done...).
-# The person whose own act a keeper notice reports (H._write_message): kept on the message, after the request ends.
+# The person whose own act a Tico notice reports (H._write_message): kept on the message, after the request ends.
 CAUSED_BY = "caused_by"
 NEWS_REFS = frozenset(
     {
@@ -86,7 +86,6 @@ NEWS_REFS = frozenset(
         FLAG,
         "trigger",
         "trigger_source",
-        "task_completion",
         CAUSED_BY,
         "rule",
         "news",
@@ -138,16 +137,16 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
 
 
 def _awaited_reply(conn, target, in_reply_to):
-    """Whether a reply answers something `target` waits on: its own ask, a message it flagged needs-action, or one
-    it sent with wait_s. True when the parent cannot be read."""
+    """Whether a reply answers something `target` waits on: a message it flagged needs-action, or one it sent with
+    wait_s. True when the parent cannot be read."""
     try:
-        parent = conn.execute("SELECT sender_id,kind,refs,wait_s FROM messages WHERE id=?", (in_reply_to,)).fetchone()
+        parent = conn.execute("SELECT sender_id,refs,wait_s FROM messages WHERE id=?", (in_reply_to,)).fetchone()
     except Exception:  # noqa: BLE001 - fail open
         return True
     if not parent:
         return True
     return parent["sender_id"] == target and bool(
-        parent["kind"] == "ask" or parent["wait_s"] or '"' + FLAG + '": true' in str(parent["refs"] or "")
+        parent["wait_s"] or '"' + FLAG + '": true' in str(parent["refs"] or "")
     )
 
 
@@ -263,7 +262,7 @@ def state_of(conn, task_row):
                 for r in conn.execute(
                     "SELECT id, edited_at FROM messages WHERE conversation_id=? AND sender_id<>? AND deleted_at IS NULL "
                     "ORDER BY rowid",
-                    (row["conversation_id"], H.KEEPER),
+                    (row["conversation_id"], H.TICO_ACTOR),
                 )
             ],
             "links": [
@@ -313,7 +312,7 @@ def settled_state(conn, task_row, bot, started, attempt_id):
             return None
         if conn.execute(
             "SELECT 1 FROM messages WHERE conversation_id=? AND created_at>? AND sender_id NOT IN (?,?) LIMIT 1",
-            (task_row["conversation_id"], started, me, H.KEEPER),
+            (task_row["conversation_id"], started, me, H.TICO_ACTOR),
         ).fetchone():
             return None
         # Starting a task lane records this turn's own session link after claim. That is known
@@ -412,7 +411,7 @@ def own_comment(conn, msg, task_row):
         return None
     return H.event(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         SKIPPED,
         msg["id"],
         {
@@ -443,7 +442,7 @@ def hold(conn, msg, rule, rule_id=None):
 
         return H.event(
             conn,
-            H.KEEPER,
+            H.TICO_ACTOR,
             SKIPPED,
             msg["id"],
             {
@@ -471,7 +470,7 @@ def hold(conn, msg, rule, rule_id=None):
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
         text = text[: H.NOTE_MAX - 400] + "... (the rest is in the message)"
-    sender = "Tico" if msg["sender_id"] == H.KEEPER else H.actor_id(msg["sender_id"])
+    sender = "Tico" if msg["sender_id"] == H.TICO_ACTOR else H.actor_id(msg["sender_id"])
     note = {
         "id": H.new_id(),
         "from_actor": msg["sender_id"],
@@ -490,7 +489,7 @@ def hold(conn, msg, rule, rule_id=None):
     trigger, _ = run_triggers.of_message(msg)
     H.event(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         SKIPPED,
         msg["id"],
         {

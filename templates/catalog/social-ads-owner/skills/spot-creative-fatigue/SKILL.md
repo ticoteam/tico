@@ -1,6 +1,8 @@
 ---
 name: spot-creative-fatigue
 description: Find a paid social ad whose frequency is rising while its link click-through falls against its own first-week baseline, separate creative fatigue from an auction or audience change, and queue a replacement before its cost per result breaks target.
+metadata:
+  function: marketing
 ---
 # Spot creative fatigue
 

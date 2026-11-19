@@ -1,6 +1,8 @@
 ---
 name: check-the-cancel-path
 description: Check that a cancellation reply gives the exact way to finish canceling, when billing stops and whether a refund applies, with no maze, guilt line or second offer after a no.
+metadata:
+  function: customers
 ---
 # Check the cancel path
 

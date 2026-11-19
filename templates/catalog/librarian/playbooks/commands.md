@@ -54,7 +54,7 @@ does and what it returns. For any other command, run `tico <group> --help` first
   posts the week's briefing with its tagged items and the Market page's answer lines (`playbooks/write-the-briefing.md`,
   step 3). The same week again replaces it; without `--answers-file` the week's answers stay.
 - `tico market briefing latest`: the newest briefing, with its items and the bets it touches.
-- `tico strategy show`: the published strategy: its bets and what each one cites.
+- `tico strategy show`: the live strategy: its bets and what each one cites.
 - `tico lens list --market` and `tico lens run where-to-play --answers-file <file.json>`: the market lenses, and a lens run.
 
 Market sizing (`tico market define|segment|size|figure|sources|spend`): the commands are in `playbooks/size-the-market.md`.
@@ -73,8 +73,8 @@ item's link as `--source` and the post's words as `--quote`.
 
 - `tico task list [--owner <id>]`: open tasks, with ids, titles and versions. Check it before you create a task.
 - `tico task show <task id>`: one task: its version, what it waits on, what is missing and what you may do next, with its history.
-- `tico task create --owner <person id> --title "<title>" --body "<text>"`: one task for a person, when a playbook says so.
+- `tico task create --owner <person id> --title "<title>" --message "<text>"`: one task for a person, when a playbook says so.
 - `tico task comment <task id> "<text>"`: adds a note to a task.
 - `tico task done <task id> -m "<result>" --version N`: finishes a task you own.
-- `tico task ask <task id> --to <person> "<one sentence>" --version N`: asks a person on the task. One open ask per task.
+- `tico task ask <task id> --to <person> "<one sentence>"`: asks a person on the task. One open ask per task.
 - `tico message send <bot or person> "<text>"`: a message. Only where a playbook names the recipient.

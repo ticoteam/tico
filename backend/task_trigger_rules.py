@@ -142,10 +142,10 @@ def webhook_result(conn, event_id, status):
 
 def _history(conn, item, rule, action, result):
     text = f"Trigger: {item['event']}. Action: {action}. Rule {rule['id']}: {result}"
-    H._task_event(conn, item["task"], H.KEEPER, "rule", None, rule["id"], text)
+    H._task_event(conn, item["task"], H.TICO_ACTOR, "rule", None, rule["id"], text)
     H.event(
         conn,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "rule.task",
         item["task"],
         {"rule": rule["id"], "trigger": item["event"], "action": action, "result": result},
@@ -244,6 +244,8 @@ def _run(conn, item, rule, params):
                 for k in ("id", "title", "body", "note", "status", "owner", "requester", "pipeline_id", "stage_id")
             },
         }
+        # A task has no description: {{task.body}} is what it was asked with (its request and Tico's instructions).
+        values["task"]["body"] = values["task"]["body"] or H.task_words(conn, row["id"])
         if action in R.EVENT_RUNNERS:
             revision = f"task-rule:{rule['id']}:{item['event']}:{item['revision']}"
             result = R.EVENT_RUNNERS[action](

@@ -1,5 +1,8 @@
 """People routes: remove, edit, Slack links, bot goals, models, conversations, outline."""
 
+from . import access as Access
+from .store import encode
+
 from .store import H
 from .harnesses import HARNESS_CATALOG
 from . import models as M
@@ -16,10 +19,18 @@ from . import rooms
 from . import teammate_access
 from . import turns as turn_work
 from . import views
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, settings, store, visual_view):
-    @app.delete("/api/v2/people/{pid}")
+    @app.delete(
+        "/api/v2/humans/{pid}",
+        **api_v2(
+            "Team chart",
+            "removePerson",
+            "Remove a left person with no history for good (owner only); anyone with history stays as left",
+        ),
+    )
     def person_remove(request: Request, pid: str):
         """The owner removes a left person who has no history, such as one added by mistake, for good
         (backend/people_remove.py). Anyone with history stays as left."""
@@ -49,7 +60,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             auth.sync_access(c)
         return result
 
-    @app.get("/api/v2/people/{pid}/slack")
+    @app.get("/api/v2/humans/{pid}/slack")
     def person_slack(request: Request, pid: str):
         """Slack DMs between this person and Tico bots (one Tico app; each bot has its own hub thread)."""
         who = request.state.identity
@@ -125,7 +136,7 @@ def register(app, auth, mutate, settings, store, visual_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/models")
+    @app.get("/api/v2/models", **api_v2("Bots", "listModels", "Models a bot can be set to"))
     def models(request: Request):
         auth.domain(request.state.identity)
         with store.read() as c:
@@ -144,18 +155,29 @@ def register(app, auth, mutate, settings, store, visual_view):
             "default": {"runtime": choice["runtime"], "model": choice["model"]},
         }
 
-    @app.get("/api/v2/conversations")
+    @app.get(
+        "/api/v2/conversations",
+        **api_v2(
+            "Conversations",
+            "listConversations",
+            "The caller's conversations; chat_with=<bot> for that bot's chat",
+            "ConversationList",
+        ),
+    )
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
         """`chat_with=<bot>`: my open chat with that bot or its Home after the chats move there.
         Otherwise my conversations, or the owner's view of a bot's."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot from the start: each row's read check below reads its room, root, task and membership from
+        # read_cache, which prime_rooms and prime_members fill for the whole list first.
+        with store.read_transaction() as c:
             if bot and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may inspect a bot's conversations", 403)
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if chat_with:
                 chat_with = (H.resolve_bot(c, chat_with) or {}).get("id", chat_with)
+                assert chat_with is not None  # named above, so never empty here
                 from .shared_bots import route
 
                 chat_with = H.actor_id(route(c, who.actor, "bot:" + chat_with))
@@ -164,6 +186,12 @@ def register(app, auth, mutate, settings, store, visual_view):
                 if chat_with
                 else H.conversations_for(c, "bot:" + bot if bot else who.actor)
             )
+            from . import threads
+
+            if len(rows) > 1:  # one row is checked as cheaply alone
+                ids = [row["id"] for row in rows]
+                privacy.prime_rooms(c, ids)
+                threads.prime_members(c, who, ids, roots={row.get("root_id") or row["id"] for row in rows})
             visible = []
             for row in rows:
                 try:
@@ -178,7 +206,7 @@ def register(app, auth, mutate, settings, store, visual_view):
                     row.pop(key, None)
             return {"actor": who.actor, "conversations": rows}
 
-    @app.post("/api/v2/conversations")
+    @app.post("/api/v2/conversations", **api_v2("Conversations", "createConversation", "Open a conversation"))
     def create_conversation(request: Request, body: M.ConversationCreate):
         who = request.state.identity
 
@@ -200,7 +228,15 @@ def register(app, auth, mutate, settings, store, visual_view):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/conversations/{cid}/messages")
+    @app.get(
+        "/api/v2/conversations/{cid}/messages",
+        **api_v2(
+            "Conversations",
+            "listMessages",
+            "The newest messages (up to 200, or limit=); before=<next_before> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
+            "MessagePage",
+        ),
+    )
     def messages(
         request: Request,
         cid: str,
@@ -210,20 +246,21 @@ def register(app, auth, mutate, settings, store, visual_view):
         max_bytes: int | None = None,
     ):
         with store.read() as c:
-            auth.conversation(c, request.state.identity, cid)
+            room = auth.conversation(c, request.state.identity, cid)
             page = privacy.page(
                 c,
                 request.state.identity,
                 cid,
                 since=views.since_time(since),
                 before=before,
+                chat=(auth, room),
                 **views.page_options(limit, max_bytes),
             )
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
             known = teammate_access.Known(c, request.state.identity, auth)  # people the reader may not see
             return {
-                "conversation": known.conversation(H.conversation(c, cid)),
+                "conversation": known.conversation(room),
                 **page,
                 "messages": known.messages(page["messages"]),
             }
@@ -263,3 +300,137 @@ def register(app, auth, mutate, settings, store, visual_view):
                 if len(prompts) >= 500:
                     break
             return {"prompts": prompts[::-1]}
+
+
+def register_profile(app, auth, delegated_identity, mutate, settings, store, visual_view):
+    def may_edit_person(c, who, pid):
+        """Manage on this person: the same rule `my_access.manage` shows and the Access card's editor asks."""
+        from . import teammate_access
+
+        return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
+
+    @app.post("/api/v2/humans/{pid}", **api_v2("Team chart", "updatePerson", "Edit a person's profile or reports_to"))
+    def person_update(request: Request, pid: str, body: M.PersonUpdate):
+        caller = request.state.identity
+
+        def work(c):
+            auth.domain(caller)
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            roster = views.roster(c)
+            person = P.person(pid, roster)
+            if person and person.get("hidden") and body.left:
+                return P.profile(person)  # already off the chart
+            if not person or person.get("hidden"):
+                raise Problem("not_found", "Person not found", 404)
+            if body.left is not None and who.role != "owner":
+                raise Problem("forbidden", "Only the owner takes someone off the org chart", 403)
+            if body.left and pid == H.actor_id(who.actor):
+                raise Problem("forbidden", "You cannot take yourself off the org chart", 403)
+            if not may_edit_person(c, who, pid):
+                raise Problem("forbidden", "You cannot edit this person's profile", 403)
+            if body.reports_to is not None:
+                boss = body.reports_to.strip()
+                if boss == pid:
+                    raise Problem("hierarchy", "A person cannot report to themselves", 422)
+                if boss and (not (boss_row := P.person(boss, roster)) or boss_row.get("hidden")):
+                    raise Problem("not_found", "Reports-to person was not found", 404)
+                # Nobody moves under their own report: the chain from the new boss must not reach here.
+                at, seen = boss, set()
+                while at and at not in seen:
+                    if at == pid:
+                        raise Problem("hierarchy", "A person cannot report to someone below them", 422)
+                    seen.add(at)
+                    at = str((P.person(at, roster) or {}).get("reports_to") or "")
+                # A manager may move their own reports, and may move them only under people they manage.
+                if (
+                    who.role != "owner"
+                    and boss
+                    and not auth.manages(c, who, "person", boss)
+                    and H.actor_id(who.actor) != boss
+                ):
+                    raise Problem("forbidden", "You can only move people under yourself or your own reports", 403)
+                if who.role != "owner" and not boss:
+                    raise Problem("forbidden", "Only the owner puts someone at the top of the chart", 403)
+            login = body.github.strip().lstrip("@").lower() if body.github is not None else None
+            # A review request names one login (backend/github.py), so two people never share one.
+            if login and any(
+                row["id"] != pid and not row.get("hidden") and str(row.get("github") or "").lower() == login
+                for row in roster["people"]
+            ):
+                raise Problem("github_taken", "Someone else on the team already has this GitHub login", 409)
+            people = list(roster["people"])
+            for i, row in enumerate(people):
+                if row["id"] != pid:
+                    continue
+                if body.title is not None:
+                    row = {**row, "title": body.title.strip()}
+                if body.about is not None:
+                    row = {**row, "about": body.about.strip()}
+                if body.goals is not None:
+                    row = {**row, "goals": body.goals}
+                if body.notes is not None:
+                    row = {**row, "notes": body.notes}
+                if login is not None:
+                    row = {**row, "github": login}
+                if body.notify_slack_bot_messages is not None:
+                    row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
+                if body.update_draft is not None:
+                    row = {**row, "update_draft": body.update_draft}
+                if body.notify_browser is not None:
+                    row = {**row, "notify_browser": body.notify_browser}
+                if body.email_digest is not None:
+                    row = {**row, "email_digest": body.email_digest}
+                if body.slack_muted_bots is not None:
+                    row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
+                if body.reports_to is not None:
+                    row = {**row, "reports_to": body.reports_to.strip()}
+                if body.left:
+                    row = Access.leave(c, people, row)
+                people[i] = row
+                roster = {**roster, "people": people}
+                from .report_order import roster_saved
+
+                roster_saved(c, roster)  # a new manager's report goes last there
+                c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+                from .finance import actions as FA
+
+                FA.revalidate_org(c)  # Finance's view grants follow the org chart at once (spec 7.5)
+                from . import people_mirror
+
+                people_mirror.changed()  # `left` and sign-in changes reach the Tico account
+                H.event(
+                    c,
+                    who.actor,
+                    "person.updated",
+                    pid,
+                    {
+                        "title": body.title is not None,
+                        "about": body.about is not None,
+                        "goals": body.goals is not None,
+                        "notes": body.notes is not None,
+                        "github": body.github is not None,
+                        "notify_slack_bot_messages": body.notify_slack_bot_messages,
+                        "update_draft": body.update_draft,
+                        "notify_browser": body.notify_browser,
+                        "email_digest": body.email_digest,
+                        "slack_muted_bots": body.slack_muted_bots,
+                        "reports_to": body.reports_to,
+                        "left": bool(body.left),
+                    },
+                )
+                if caller is not who:
+                    H.event(
+                        c,
+                        caller.actor,
+                        "person.update_delegated",
+                        pid,
+                        {"on_behalf_of": who.actor, "message_id": body.on_behalf_of},
+                    )
+                return P.profile(row)
+            raise Problem("not_found", "Person not found", 404)
+
+        return mutate(request, body, work)
+
+    register(app, auth, mutate, settings, store, visual_view)
+
+    # Org rule checks (backend/org_rule_check.py): a bot's output is checked before its write, outside the write's

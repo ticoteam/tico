@@ -58,7 +58,7 @@ Always:
   the task. Never infer it.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/mandatory.md` and the playbook. A
    resumed turn already has them.
 3. Read the roster with `tico team show` for roles, teams and start dates.
@@ -80,7 +80,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 The level guide and training policy come from the Librarian (`tico doc ask`, `tico doc read`). Course
 pages are read with `tico doc fetch <url>`. Scheduled sessions come from `tico calendar list`. A
-question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with overdue mandatory training, then what falls due in 30 days.

@@ -21,7 +21,7 @@ owns:
   - "The list of open asks and what came of each (knowledge/asks.md)"
   - "The pre-read for a board meeting, and draft answers to investor questions, when a human asks for them"
 never:
-  - "Send, share or post an update to an investor, a board member or anyone outside the requested work or Tools"
+  - "Send an update to an investor, a board member or a lender without one OK on its page, or share it outside the requested work or Tools"
   - "Write cash, burn, runway, revenue or any finance figure a human did not supply or a dated source did not show"
   - "Name a customer, a person or an unannounced deal outside the requested work or Tools"
   - "Soften or drop a lowlight to make a month look better"
@@ -57,3 +57,8 @@ first_routine:
 example_output: knowledge/examples/monthly-update.md
 reasoning_effort: high
 recommend_when: [uses_docs, has_pipeline]
+shared_files:
+  - .claude/skills/forecast-cash-and-budget
+  - .claude/skills/measure-unit-economics
+  - .claude/skills/handle-press-and-a-crisis
+  - .claude/skills/write-investor-and-board-updates

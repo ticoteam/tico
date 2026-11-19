@@ -46,8 +46,8 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `tico task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
   only whoever you @mention reaches it.
 - `tico task follow <id>` and `tico task unfollow <id>`: follow a task you care about, or stop when you are done with it.
-- `tico task ask <id> --to <person> "<question>" [--choices a,b] --version N`: ask a person on the task. One open ask per
-  task; asking again replaces it.
+- `tico task ask <id> --to <person> "<question>"`: ask a person on the task, a message marked ❓. One open ❓ per task;
+  asking again replaces it.
 - `tico task file --parent <id> "<title>"`: a sub-task, for work that is more than an answer.
 - `tico task done <id> -m "<result>" --version N`: the work of the stage is finished.
 - `tico task snooze <id> --until <date> -m "<why>" --version N`: you cannot go on now.
@@ -82,6 +82,22 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `tico credential grant <name> --to <slug>`: give a bot a credential it does not have. `tico credential import <VARIABLE> --from-bot <slug>`
   moves a bot's own copy into Credentials first.
 - `tico credential revoke <name> --from <slug>` and `tico credential delete <name>`: take a grant away, or remove a credential.
+- A key a bot already holds (one it made through the vendor's API): `tico credential add <name> --env <VARIABLE> --from-env <SRC>`
+  (or `--from-file <path>`), with `--tool <tool> --level read` for a tool's key and `--for-bot <slug>` for the bot that gets it. The
+  value is read on the computer, never typed. `tico credential update <name>` renames it or replaces it the same way.
+
+## Every Tools change, without the Tools page
+Do it yourself, as the requester; the server decides and a refusal names who can. The MCP tools have the same names.
+- Read: `tico tool index`, `tico tool detail <tool>`, `tico tool vendor <vendor>`, `tico tool website show <tool>`.
+- API tools: `tico tool create <name> --base-url <url>`, `tico tool edit <tool> --delivery proxy --everyone-reads off`,
+  `tico tool delete <tool>`, `tico tool level <tool> <slug> read`, `tico tool check <tool>`.
+- Settings (a host, a region, a project id): `tico tool setting add <tool> <NAME> <value>`, `tico tool setting change`,
+  `tico tool setting remove`.
+- MCP servers: `tico tool mcp probe <url>`, `tico tool mcp add <name> <url> oauth`, then `tico tool sign-in <tool>` and send
+  the person the address it prints.
+- Websites: `tico tool website add --site <host>`, `tico tool website edit`, `tico tool website delete`; accounts with
+  `tico credential login add <tool> --username <name> --password-from-env <VAR>`, `tico credential login edit`,
+  `tico credential login delete`, `tico credential login share <tool> <account> bot:<slug> on`.
 
 ## Tools, repositories and access
 
@@ -90,9 +106,12 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - Generated access tasks take a title prefix: `tico tool add --title-prefix <prefix>`. Keep requested title prefixes on child tasks
   and notes too.
 - Keep Tool declarations separate: they describe actions and do not grant repository access.
-- Repository access requests use `tico_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>` reads it; `--chosen owner/repo:read`
-  sets it). Then read `effective` to verify the requested repositories and read/write grants. Preserve existing grants unless
-  the requester asked to change them.
+- A bot that needs a level on a tool or a repository that exists: `tico access request <tool or owner/repo> --level read
+  --for <slug> --why "..."`. Read Tico can hold to reads is granted at once; anything else is one card to each person who
+  can grant it, and it closes itself once the access exists. Never file a person a task for it.
+- A person's own change to a bot's repository access uses `tico_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>`
+  reads it; `--chosen owner/repo:read` sets it). Then read `effective` to verify the requested repositories and read/write
+  grants. Preserve existing grants unless the requester asked to change them.
 - Putting a bot's local repository on GitHub, when the team has connected it: `tico bot repo-create <slug> --empty`.
 - Slack channels: "let the Setup bot read #customer_success" is `tico slack channel add '#customer_success' --reader <bot>`,
   then say so in one line. Only an owner or admin may do it, so a member is told who to ask.

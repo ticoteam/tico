@@ -3,8 +3,6 @@ changed the same line; the order "B6, then B7" lived on a side task, both were q
 conflict and B7 merged first. With the order on B7 itself, Merge holds B7 until B6 has merged, then queues it (or says
 to rebase it onto B6). GitHub is backend/tests/helpers/fake_github.py."""
 
-import sqlite3
-
 import pytest
 
 from backend import merge_order as MO
@@ -237,37 +235,16 @@ def test_both_tasks_show_the_order_and_a_reader_who_cannot_open_the_earlier_one_
     gh = FakeGitHub()
     b6, b7 = pair(c)
     green(c, gh, 2)
+    c.execute("UPDATE tasks SET number=CASE id WHEN ? THEN 40 ELSE 41 END WHERE id IN (?,?)", (b6, b6, b7))
     later_rows = TR.grouped(c, [b7])[b7]["after"]
     earlier_rows = TR.grouped(c, [b6])[b6]["after"]
     assert [(r["id"], r["direction"], r["stage"]) for r in later_rows] == [(b6, "out", "Build")]
     assert [(r["id"], r["direction"], r["stage"]) for r in earlier_rows] == [(b7, "in", "Merge")]
+    # Both halves of the relations read carry the other task's number: "After #40" and "Before #41".
+    assert ([r["number"] for r in later_rows], [r["number"] for r in earlier_rows]) == ([40], [41])
     wait = turn(c, b7)
     shown = W.view(wait, lambda task_id: task_id != b6)
     assert (shown["who"], shown["line"]) == (None, MO.UNNAMED)
-
-
-def test_the_migration_lets_an_old_table_take_after_and_keeps_its_rows():
-    from importlib import import_module
-
-    migration = import_module("backend.migrations.20261112165100_task_relations_after")
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
-    conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    # The table before it: no `after`, and no `until` (20261113070100 adds that column later).
-    until = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
-    conn.executescript(TR.SCHEMA.replace(",'after'", "").replace(until, ""))
-    conn.execute("INSERT INTO task_relations VALUES('a','b','follow_up','human:ana','2026-11-12T00:00:00Z')")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO task_relations VALUES('b','a','after','human:ana','2026-11-12T00:00:00Z')")
-    migration.up(conn)
-    migration.up(conn)  # once only
-    conn.execute("INSERT INTO task_relations VALUES('b','a','after','human:ana','2026-11-12T00:00:01Z')")
-    assert conn.execute("SELECT from_task, to_task, kind FROM task_relations ORDER BY rowid").fetchall() == [
-        ("a", "b", "follow_up"),
-        ("b", "a", "after"),
-    ]
-    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
-    assert indexes == {"task_relations_to", "task_relations_from", "task_relations_one_parent"}
 
 
 def test_a_pr_whose_metadata_comes_after_the_task_entered_merge_is_held_too(c):

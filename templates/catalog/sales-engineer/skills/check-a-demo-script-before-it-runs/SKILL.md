@@ -1,6 +1,8 @@
 ---
 name: check-a-demo-script-before-it-runs
 description: Test a demo script step by step against what has shipped, the buyer's own workflows and the never-show list, the day before a demo and again whenever the script is reused for a new buyer.
+metadata:
+  function: sales
 ---
 # Check a demo script before it runs
 

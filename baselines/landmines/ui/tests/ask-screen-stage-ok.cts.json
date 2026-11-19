@@ -1,0 +1,5 @@
+{
+  "ui/tests/ask-screen-stage-ok.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}

@@ -57,3 +57,5 @@ first_routine:
 example_output: knowledge/examples/entity-board-calendar.md
 reasoning_effort: medium
 recommend_when: [small_team, uses_meetings, uses_docs]
+shared_files:
+  - .claude/skills/write-investor-and-board-updates

@@ -9,7 +9,7 @@ Outcome: one job post draft under 400 words that the hiring manager can use with
 and a note of the gaps the manager must fill. Nothing is posted.
 
 Done when the post, the kit and the gap list are attached to the task, `knowledge/roles/<role>.md` is updated, and the
-post has passed `skills/check-a-job-post-before-it-goes-out/SKILL.md`.
+post has passed the checks in `.claude/skills/fill-a-role/references/human-hire.md`, section 3.
 
 ---
 
@@ -37,12 +37,12 @@ matters, mark it as a question for the manager, not a line in the post.
 
 ## 4. Check the wording and the rules
 
-Run `skills/check-a-job-post-before-it-goes-out/SKILL.md`. It covers pay ranges, location rules, coded wording, and any AI
+Run the checks in `.claude/skills/fill-a-role/references/human-hire.md`, section 3. They cover pay ranges, location rules, coded wording, and any AI
 screening notice.
 
 ## 5. Write the interview kit
 
-Run `skills/write-a-structured-interview-kit/SKILL.md` for the role's criteria. Four to six questions, each with a
+Follow `.claude/skills/fill-a-role/references/human-hire.md`, section 6, for the role's criteria. Four to six questions, each with a
 follow-up and a four-level scoring guide. The same kit for every candidate. Save it in `knowledge/roles/<role>.md`.
 
 ## 6. Hand over

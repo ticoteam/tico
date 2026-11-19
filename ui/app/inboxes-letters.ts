@@ -256,7 +256,7 @@ const pmMembers = (ctx: InboxCtx) => ctx.once('postal-members', async (): Promis
     } while (after);
     return all;
   };
-  const [b, p] = await Promise.all([bots(), get<{people?: PmPerson[]}>('/people').catch(() => ({people: []}))]);
+  const [b, p] = await Promise.all([bots(), get<{people?: PmPerson[]}>('/humans').catch(() => ({people: []}))]);
   return [...b.filter(x => x.state === 'active').map((x): PmMember => ({type: 'bot', id: x.id || x.slug, name: x.display_name || x.slug,
       readError: x.read_error || '', routingError: x.routing_error || ''})),
     ...(p.people || []).filter(x => !x.hidden).map((x): PmMember => ({type: 'person', id: x.id, name: x.name || x.id}))];

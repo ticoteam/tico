@@ -55,6 +55,12 @@ def desk(api, monkeypatch):
     return api
 
 
+def words(api, task_id):
+    """What the task was filed with: its first message and any instructions Tico gave its bot."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, task_id)
+
+
 def ask(api, question, token="ana-test", expected=200, **more):
     return post(api, "docs/ask", {"question": question, **more}, token=token, expected=expected)
 
@@ -207,8 +213,9 @@ def test_a_research_request_is_one_task_to_the_librarian_for_that_page_and_secti
     task = get(desk, f"tasks/{asked['task_id']}")
     task = task.get("task", task)
     assert task["owner_id"] == "bot:librarian" and task["title"] == "Research: Competitors · Pricing"
-    assert "Add Acme's and Northwind's public list prices." in task["body"]
-    assert "Target: " + doc["id"] in task["body"] and "playbooks/research-a-section.md" in task["body"]
+    said = words(desk, task["id"])
+    assert "Add Acme's and Northwind's public list prices." in said
+    assert "Target: " + doc["id"] in said and "playbooks/research-a-section.md" in said
     again = post(
         desk,
         "librarian/research",
@@ -260,8 +267,9 @@ def test_docs_first_visit_takes_the_sources_and_files_one_setup_task(desk):
     task = get(desk, f"tasks/{done['task_id']}")
     task = task.get("task", task)
     assert task["owner_id"] == "bot:librarian" and task["title"] == "Set up Docs"
-    assert "https://help.acme.example" in task["body"] and "Policies are in Google Drive." in task["body"]
-    assert "playbooks/docs-setup.md" in task["body"]
+    said = words(desk, task["id"])
+    assert "https://help.acme.example" in said and "Policies are in Google Drive." in said
+    assert "playbooks/docs-setup.md" in said
     # Docs is past its first visit for everyone now, and Ben can still set up more from the menu.
     after = get(desk, "librarian/setup")["docs"]
     assert after["show"] is False and after["task"]["id"] == done["task_id"]
@@ -304,7 +312,7 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
         "What Market tracks",
         "playbooks/market-setup.md",
     ):
-        assert text in task["body"]
+        assert text in words(desk, task["id"])
     assert done["skipped"] is False
     # Only the owner answers: the market is the owner's and the Librarian's to change.
     assert get(desk, "librarian/setup", token="ben-test")["market"] == {

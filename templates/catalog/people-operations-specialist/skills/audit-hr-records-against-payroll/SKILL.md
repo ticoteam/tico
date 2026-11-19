@@ -1,6 +1,8 @@
 ---
 name: audit-hr-records-against-payroll
 description: Compare an HR export with a payroll export and the team roster field by field, list each mismatch with both values and dates, and leave the correction to a human.
+metadata:
+  function: people
 ---
 # Audit HR records against payroll
 

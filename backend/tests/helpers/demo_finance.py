@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.bookkeeper import VIEW_TITLE
+from backend.finance import tab_money
 from backend.demo_sections.finance import FINANCE_OWNER, CONTENT as C
 
 
@@ -115,8 +116,11 @@ def _bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
 
 def _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
     settings, _ = book
-    with signed_in(settings) as api:
-        rules = {r["name"]: r for r in api.get("/api/v2/finance/rules").json()["rules"]}
+    with signed_in(settings) as api, api.app.state.store.read() as c:
+        [(owner,)] = c.execute(
+            "SELECT id FROM humans WHERE lower(email) = ?", (settings.owner_email.lower(),)
+        ).fetchall()
+        rules = {r["name"]: r for r in tab_money.rules(c, "human:" + owner)["rules"]}
     for name in ("Spend over $500 needs Ana", "Marketplace fees go to 6200"):
         assert rules[name]["active"], name
     assert not rules.get(C["proposal"]["name"], {}).get("active")

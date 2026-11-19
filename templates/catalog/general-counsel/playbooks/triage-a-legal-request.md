@@ -35,10 +35,10 @@ Log it in `knowledge/requests.md`.
 
 ## 4. Hand over
 
-Put the outcome on the task. Ask once with `tico task ask <id> --to <person> "<question>" --version N` if the scope or lawyer is missing. Route requested work: `tico task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
+Put the outcome on the task. Ask once with `tico task ask <id> --to <person> "<question>"` if the scope or lawyer is missing. Route requested work: `tico task create --owner <slug> --title "<what>" --message "<request and source>" --parent <id>`.
 End with the not-legal-advice line, update `knowledge/requests.md`, and `tico task done <id> -m "..." --version N`.
 
 ## Done when
 - The request has one of the three outcomes, on the task and in `knowledge/requests.md`.
-- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`skills/check-a-legal-deadline`).
-- Anything that meets `knowledge/escalation.md` has a counsel brief (`skills/write-a-counsel-brief`) on the task.
+- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`.claude/skills/check-a-legal-deadline`).
+- Anything that meets `knowledge/escalation.md` has a counsel brief (`.claude/skills/write-a-counsel-brief`) on the task.

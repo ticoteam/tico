@@ -53,19 +53,15 @@ function snapSignedOut() {
   return SNAP.banned;
 }
 const snapOn = () => { try { return typeof indexedDB !== 'undefined' && (!navigator.webdriver || window.ticoBootSnap === true); } catch { return false; } };
-// The pages kept: Home, Overview, Tasks (its list, any view), Threads (the list) and a team's page.
+// The pages kept: Company (#/home), Tasks (its list, any view), Threads (the list) and a team's page.
 function snapRouteOk(hash?: string): boolean {
   const [page = ''] = String(hash || '').split('?');
-  if ([HOME, OVERVIEW, TASKS, THREADS_ROUTE].includes(page)) return true;
+  if ([HOME, TASKS, THREADS_ROUTE].includes(page)) return true;
   const team = page.startsWith(TEAM_PAGE) ? page.slice(TEAM_PAGE.length) : '';
   return !!team && !team.includes('/');
 }
-// The bundle that draws the page (its ?v=); the separate files of a development checkout have none.
-const SNAP_VERSION = (() => {
-  const js = document.querySelector<HTMLScriptElement>('script[src*="/tico/ui/app.bundle.js"]');
-  try { return SNAP_SCHEMA + ':' + (js ? new URL(js.src, location.href).searchParams.get('v') || '' : 'files'); }
-  catch { return SNAP_SCHEMA + ':'; }
-})();
+// The build that draws the page (scripts/build-ui.cjs; ui/app/parts.ts reads it from the page).
+const SNAP_VERSION = SNAP_SCHEMA + ':' + UI_PARTS.build;
 const snapWho = (me: SelfPerson | null | undefined): string => JSON.stringify([location.origin, String(me?.owner_id || ''), String(me?.id || ''), String(me?.email || '')]);
 
 function snapDb(): Promise<IDBDatabase> {
@@ -159,6 +155,7 @@ function snapDelete() {
 // Signed out, or someone else: nothing more is kept in this page, a copy on screen goes now, and what was kept goes.
 function bootSnapDrop() {
   if (typeof rdNavForget === 'function') rdNavForget();   // the sidebar rows kept for them, too (redesign.js)
+  if (typeof tasksPipelinesForget === 'function') tasksPipelinesForget();   // and their boards (tasks-page.ts)
   SNAP.who = ''; SNAP.done = true; SNAP.banned = true;
   clearTimeout(SNAP.timer);
   bootSnapRelease();

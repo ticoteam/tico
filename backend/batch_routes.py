@@ -2,12 +2,16 @@
 
 import json
 from fastapi import Request
-from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, views
+from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, task_text_keys, views
 from .store import H, Problem
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, send, store, task_view):
-    @app.post("/api/v2/chat/{bot}/new")
+    @app.post(
+        "/api/v2/chat/{bot}/new",
+        **api_v2("Conversations", "startNewChat", "Archive the current personal chat and start fresh"),
+    )
     def new_chat(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
 
@@ -62,7 +66,7 @@ def register(app, auth, mutate, send, store, task_view):
             said = []
             for m in c.execute(
                 "SELECT * FROM messages WHERE recipient_id=? AND "
-                "sender_id LIKE 'bot:%' AND kind IN ('say','ask','answer') AND created_at>? "
+                "sender_id LIKE 'bot:%' AND kind='say' AND created_at>? "
                 "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 6",
                 (who.actor, start),
             ).fetchall():
@@ -168,6 +172,13 @@ def register(app, auth, mutate, send, store, task_view):
         views.human_only(who)
         if body.until and (not H.parse_ts(body.until) or H.parse_ts(body.until).tzinfo is None):
             raise Problem("date", "until must be an ISO-8601 date/time with a timezone", 422)
+        # Words on an item that is a task (an answer, a done or close note, an instruction recorded on a private task)
+        # are task text: a key in them is refused before the batch keeps them (backend/task_text_keys.py).
+        if task_text_keys.found(body.text) or task_text_keys.found(body.heard):
+            with store.read() as c:
+                on = batch.item_task(c, who.actor, bid, body.item)
+            if on:
+                task_text_keys.refuse_text(store, str(who.actor), on, {"text": body.text, "heard": body.heard})
         return mutate(
             request,
             body,

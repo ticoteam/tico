@@ -58,13 +58,6 @@ class NoCredential(CliError):
         self.code = code
 
 
-def thumb(value):
-    """up or down, as the thumbs route's `up`."""
-    if value not in ("up", "down"):
-        raise argparse.ArgumentTypeError("up or down")
-    return value == "up"
-
-
 def json_value(value):
     """`--content`: any JSON value, read exactly; a plain word that is not JSON is refused."""
     try:
@@ -73,24 +66,16 @@ def json_value(value):
         raise argparse.ArgumentTypeError("--content is JSON, for example '{\"usd\": \"10.00\"}'") from None
 
 
-def choice_list(value):
-    """`--choices a,b`: the answers a person picks from, in order."""
-    return [choice.strip() for choice in value.split(",") if choice.strip()]
-
-
-GO_LIVE_HELP = """When the computer does not have the bot's repository yet, go-live keeps the placement and answers
-waiting_for_repository: the computer clones it, and Tico finishes going live when it reports the repository."""
-
-
 def out(obj):
     print(json.dumps(obj, indent=2, default=str, sort_keys=False))
     return 0
 
 
 def body_of(args):
-    if getattr(args, "body_file", None):
-        return Path(args.body_file).read_text()
-    return args.body or ""
+    """A new task's first message, as `task create --message` (or --message-file) gave it."""
+    if getattr(args, "message_file", None):
+        return Path(args.message_file).read_text()
+    return getattr(args, "message", None) or ""
 
 
 # ----------------------------------------------------------------------------- dry run
@@ -158,12 +143,41 @@ def task_problems(actor, owner, title, body, pipeline=None):
     return target, problems, warnings
 
 
+def private_readers_line(args, body):
+    """A dry run into a pipeline prints first, as the create does, who else reads the task if it is private
+    (backend/private_readers.py). Only the server knows whether it will be private (a private parent, a bot's default)
+    and who holds each stage, so this one read asks its dry run; it files nothing. A notice only: when the server
+    cannot be asked, the local answer stands."""
+    pipeline = getattr(args, "pipeline", None)
+    if not pipeline:
+        return
+    from clients.tico import APIError, Client
+
+    fields = {
+        "title": args.title,
+        "body": body,
+        "owner": args.owner,
+        "pipeline": pipeline,
+        "private": True if args.private else None,
+        "parent": getattr(args, "parent", None),
+        "readers": list(getattr(args, "readers", None) or []) or None,
+    }
+    try:
+        client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), retries=0)
+        said = client.post("tasks/dry-run", {k: v for k, v in fields.items() if v is not None})
+    except (APIError, OSError, ValueError):  # a notice: the dry run still answers from its own checks
+        return
+    if isinstance(said, dict) and said.get("private_readers"):
+        print("tico: " + str(said["private_readers"]), file=sys.stderr)
+
+
 def cmd_task_dry_run(args, who):
     """`tico task create --dry-run`: print what a create would be refused for; write nothing.
 
-    No database is opened and no request is made; the owner's kind comes from the registry
-    files and the same lint runs here, so a bot on the cloud API can size a human item before
-    it spends a turn on a refusal. Prints lines rather
+    No database is opened; the owner's kind comes from the registry files and the same lint
+    runs here, so a bot on the cloud API can size a human item before it spends a turn on a
+    refusal. Into a pipeline, one read of the server's dry run says who else reads it if it is
+    private (private_readers_line). Prints lines rather
     than JSON: `- <problem>` per problem and exit 1, or one `ok:` line.
     """
     from backend import hubdb as H
@@ -184,6 +198,7 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    private_readers_line(args, body)
     if not args.owner:
         print(
             "ok: no owner named; the server decides at the create (a first stage that picks from several picks one, "
@@ -258,14 +273,6 @@ def delivery_of(args):
     if getattr(args, "defer_for", None) is not None:
         return {"delivery": "defer", **({"defer_for": args.defer_for} if args.defer_for else {})}
     return {"delivery": args.delivery} if getattr(args, "delivery", None) else {}
-
-
-def _pair(text):
-    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico contacts`."""
-    key, sep, value = str(text).partition("=")
-    if not sep or not key.strip():
-        raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
-    return key.strip(), value
 
 
 def _compact_at(text):
@@ -391,6 +398,17 @@ def example_line(p):
     return " ".join(parts)
 
 
+def missing_help(p, message):
+    """`finding-key: The finding's key: its signature (hm-...) on the finding's task`: the help of each argument the
+    required-arguments error names, so the error says where the value is, not only that it is missing."""
+    named = message.split(":", 1)[-1].split(", ")
+    return [
+        f"{argparse._get_action_name(a)}: {a.help}"
+        for a in p._actions
+        if a.help and a.help != argparse.SUPPRESS and argparse._get_action_name(a) in [n.strip() for n in named]
+    ]
+
+
 def _bad_command_word(p, message):
     """Whether argparse's error is about the word naming a command (`task lst`), not a flag's or argument's value
     (`rules due --status late`), which argparse's own list of choices already answers."""
@@ -410,6 +428,8 @@ class HubParser(argparse.ArgumentParser):
         if message.startswith("the following arguments are required"):
             self.print_usage(sys.stderr)
             print(f"Example: {example_line(self)}", file=sys.stderr)
+            for line in missing_help(self, message):
+                print(line, file=sys.stderr)
             self.exit(2, f"{self.prog}: error: {message}\n")
         hint = ""
         argv = getattr(self, "hub_argv", None)
@@ -433,8 +453,9 @@ class HubParser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: error: {message}{hint}\n")
 
 
-# A repeated event's edit: this one occurrence, it and the later ones, or the whole series.
-CALENDAR_SCOPES = ("this", "following", "all")
+def _group_subparsers(sub, name):
+    """The subcommands of group `name`, already added by a spec, so the hand parser can add one leaf it still builds."""
+    return next(a for a in sub.choices[name]._actions if isinstance(a, argparse._SubParsersAction))
 
 
 def parser():
@@ -446,37 +467,34 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
+    from clients.commands import risk as risk_commands
     from clients.commands import market as market_commands
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
-    from clients.commands import webhooks
+    from clients.commands import calls, webhooks
+    from clients.commands import contacts as contacts_commands
+    from clients.commands import products as products_commands
+    from clients.commands import page_history as page_history_commands
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
+    from clients.commands import bots as bot_commands, tasks as tasks_commands
+    from clients.commands import assistant as assistant_commands
+    from clients.commands import automations as automations_commands
     from clients.commands import browser as browser_commands, logins
+    from clients.commands import tools as tools_commands
+    from clients.commands import tools_admin
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
 
-    alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
-    for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
-        item = alerts.add_parser(action)
-        item.set_defaults(fn='alerts ' + action)
-        if action == 'confirm':
-            item.add_argument('code')
-        if action == 'verify':
-            item.add_argument('phone')
-            item.add_argument('--sms-consent', action='store_true', required=True)
-            item.add_argument('--call-consent', action='store_true', default=False)
-        if action == 'test':
-            item.add_argument('--accept-charge', action='store_true', required=True, help='company pays $1 if accepted')
-            item.add_argument('--operation-id', required=True, help='stable id for this paid test and retries')
-        if action in ('set', 'company'):
-            item.add_argument('--monthly-cap', type=int)
-        if action == 'set':
-            for flag in ('urgent-needs', 'legal-mail', 'bot-stuck', 'urgent-calls', 'emergency-exception'):
-                item.add_argument('--' + flag, action=argparse.BooleanOptionalAction, default=None)
-            for flag in ('timezone', 'quiet-start', 'quiet-end'):
-                item.add_argument('--' + flag)
+    cli_spec.add(sub, admin_commands.ALERTS)  # tico alerts: clients/commands/admin.py (all but `set`)
+    item = _group_subparsers(sub, "alerts").add_parser("set")  # hand-built: see ALERTS in clients/commands/admin.py
+    item.set_defaults(fn="alerts set")
+    item.add_argument("--monthly-cap", type=int)
+    for flag in ("urgent-needs", "legal-mail", "bot-stuck", "urgent-calls", "emergency-exception"):
+        item.add_argument("--" + flag, action=argparse.BooleanOptionalAction, default=None)
+    for flag in ("timezone", "quiet-start", "quiet-end"):
+        item.add_argument("--" + flag)
 
     cli_spec.add(sub, listening_commands.INBOUND)  # tico inbound: clients/commands/listening.py
     cli_spec.add(sub, mail_commands.LETTER)  # tico letter and tico mail: clients/commands/mail.py
@@ -485,50 +503,8 @@ def parser():
 
     cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
 
-    meeting = sub.add_parser(
-        "meeting", help="search meetings, read transcripts, import a transcript from another tool"
-    ).add_subparsers(dest="sub")
-    granola = meeting.add_parser(
-        "granola", help="your Granola account; connect in Meetings in your browser"
-    ).add_subparsers(dest="granola_action")
-    for action in ("status", "sync"):
-        granola.add_parser(action).set_defaults(fn="meeting granola " + action)
-    s = meeting.add_parser("link", help="link existing tasks to a saved meeting")
-    s.add_argument("id")
-    s.add_argument("task_ids", nargs="+")
-    s.set_defaults(fn="meeting link")
-    s = meeting.add_parser("unlink", help="remove a meeting's task link")
-    s.add_argument("id")
-    s.add_argument("task")
-    s.set_defaults(fn="meeting unlink")
-    s = meeting.add_parser("search")
-    s.add_argument("q", nargs="?", default="")
-    s.add_argument("--person", default="")
-    s.add_argument("--since")
-    s.add_argument("--until")
-    s.add_argument("--limit", type=int, default=20)
-    s.add_argument("--offset", type=int, default=0)
-    s.set_defaults(fn="meeting search")
-    s = meeting.add_parser("read", help="read a transcript")
-    s.add_argument("id")
-    s.add_argument("--offset", type=int, default=0)
-    s.add_argument("--limit", type=int, default=20000)
-    s.add_argument("--notes", action="store_true", default=None, help="read only the meeting's notes")
-    s.set_defaults(fn="meeting read")
-    s = meeting.add_parser("delete", help="delete a Meeting you may edit")
-    s.add_argument("id")
-    s.set_defaults(fn="meeting delete")
-    meeting.add_parser("pending", help="your Pending queue").set_defaults(fn="meeting pending")
-    s = meeting.add_parser("approve", help="share your Pending meetings")
-    target = s.add_mutually_exclusive_group(required=True)
-    target.add_argument("id", nargs="?")
-    target.add_argument("--all", action="store_true")
-    s.add_argument("--private", action="store_true", default=None)
-    s.set_defaults(fn="meeting approve")
-    for action in ("dismiss", "restore"):
-        s = meeting.add_parser(action)
-        s.add_argument("id")
-        s.set_defaults(fn="meeting " + action)
+    cli_spec.add(sub, calls.MEETING)  # tico meeting: clients/commands/calls.py (all but `import`)
+    meeting = _group_subparsers(sub, "meeting")  # hand-built: it reads the transcript and notes files on this computer
     s = meeting.add_parser(
         "import", help="file a transcript (text, WebVTT, SRT or JSON segments) as one of your meetings"
     )
@@ -645,258 +621,37 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="note delete")
 
-    feedback = sub.add_parser(
-        "feedback", help="a person's 👍/👎 on a bot's work: give, list, make a rule"
-    ).add_subparsers(dest="sub")
-    s = feedback.add_parser("give", help="rate a message or task a bot made; again replaces it (an ask: task thumbs)")
-    s.add_argument("subject_type", choices=("message", "task"))
-    s.add_argument("subject_id")
-    s.add_argument("rating", choices=("up", "down"))
-    s.add_argument("--reason")
-    s.add_argument("--tell-bot", dest="tell_bot", action="store_true", help="a 👎 only: a note for the bot's next run")
-    s.set_defaults(fn="feedback give")
-    s = feedback.add_parser("remove", help="take back your feedback, and its note if no run carried it")
-    s.add_argument("id")
-    s.set_defaults(fn="feedback remove")
-    s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
-    s.add_argument("subject_type", choices=("message", "task", "ask"), help="an ask's id: <visit-id>:<requirement-id>")
-    s.add_argument("subject_ids", nargs="+")
-    s.set_defaults(fn="feedback markers")
-    s = feedback.add_parser("list", help="feedback newest first, a page at a time")
-    s.add_argument("--bot", dest="bot_id")
-    s.add_argument("--rating", choices=("up", "down"))
-    s.add_argument("--since", help="an ISO time, or 24h / 7d")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="feedback list")
-    feedback.add_parser("reasons", help="your five latest distinct reasons").set_defaults(fn="feedback reasons")
-    s = feedback.add_parser("rule-draft", help="a one-sentence rule drafted from your 👎; stores nothing")
-    s.add_argument("id")
-    s.set_defaults(fn="feedback rule-draft")
-    s = feedback.add_parser("rule", help="your 👎 as an org rule: active if you manage the bot, else suggested")
-    s.add_argument("id")
-    s.add_argument("text")
-    s.add_argument("--all-bots", dest="all_bots", action="store_true")
-    s.set_defaults(fn="feedback rule")
+    cli_spec.add(sub, task_work_commands.FEEDBACK)  # tico feedback: clients/commands/task_work.py
 
-    files = sub.add_parser(
-        "file", help="what you publish for people: reports, documents, imported objects"
-    ).add_subparsers(dest="sub")
-    s = files.add_parser("archive", help="archive a File with your rights")
-    s.add_argument("id")
-    s.set_defaults(fn="file archive")
-    s = files.add_parser("list", help="the files on your page, newest activity first")
-    s.add_argument("--bot")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="file list")
-    s = files.add_parser("publish", help="upload a file from this checkout (reports/x.md); again adds a version")
-    s.add_argument("path")
-    s.add_argument("--title")
-    s.add_argument("--task", help="the task it is for; defaults to the one you are working on")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.set_defaults(fn="file publish")
-    s = files.add_parser("link", help="list a Google Doc, Notion page, Figma file or any https link")
-    s.add_argument("url")
-    s.add_argument("--title")
-    s.add_argument("--task")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.set_defaults(fn="file link")
-    s = files.add_parser("touch", help="you edited a linked document again: move it to the top")
-    s.add_argument("target", help="a file id or its https link")
-    s.set_defaults(fn="file touch")
-    s = files.add_parser("import", help="copy an s3:// object with this computer's credentials into Tico")
-    s.add_argument("uri")
-    s.add_argument("--title")
-    s.add_argument("--task")
-    s.set_defaults(fn="file import")
-    s = files.add_parser("search", help="every file you may read, by title and text")
-    s.add_argument("q")
-    s.add_argument("--kind", choices=["page", "document", "image", "data", "media", "other"])
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="file search")
-    s = files.add_parser("read", help="one version of a file you may read, as text, in full (default: the current one)")
-    s.add_argument("id")
-    s.add_argument("--version", type=int)
-    s.set_defaults(fn="file read")
-    s = files.add_parser("delete", help="the owner deletes a file for good: its bytes leave storage")
-    s.add_argument("id")
-    s.set_defaults(fn="file delete")
-    s = files.add_parser(
-        "approved",
-        help="exit 0 when a person approved this exact version on a review question, "
-        "1 when not (its JSON answer says \"approved\": false), 2 on bad input. "
-        "A failed call exits 1 or 2 with an error answer: check the answer, not only "
-        "the code",
-    )
-    s.add_argument(
-        "target", help="a path in this checkout (its bytes now), or FILE[@N] (the current version without @N)"
-    )
-    s.add_argument("--by", help="whose verdicts count: human (default), any, or bot:SLUG")
-    s.set_defaults(fn="file approved")
-    s = files.add_parser("review", help="approve or ask for changes on another bot's file version, on a task you read")
-    s.add_argument(
-        "target", help="FILE[@N] (the current version without @N), or a path in this checkout (its bytes now)"
-    )
-    verdict = s.add_mutually_exclusive_group(required=True)
-    verdict.add_argument("--approve", dest="verdict", action="store_const", const="approve")
-    verdict.add_argument("--changes", dest="verdict", action="store_const", const="changes")
-    s.add_argument("--task", required=True, help="the task the review is for")
-    s.add_argument("--note", help="what to change, or why it is approved")
-    s.set_defaults(fn="file review")
+    cli_spec.add(sub, content_commands.FILE)  # tico file: clients/commands/content.py
     cli_spec.add(sub, content_commands.PAGE)  # tico page: clients/commands/content.py
     cli_spec.add(sub, content_commands.CARD)  # tico card
     cli_spec.add(sub, content_commands.PIN)  # tico pin
-    docs = sub.add_parser(
-        "doc", help="read and search team docs and external sources, write internal docs, ask the Librarian"
-    ).add_subparsers(dest="sub")
-    s = docs.add_parser("archive", help="archive an internal Doc with your rights")
-    s.add_argument("ref")
-    s.set_defaults(fn="doc archive")
-    s = docs.add_parser("list", help="internal docs by path")
-    s.add_argument("--prefix", help="only paths starting with this, e.g. sales/")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor", help="the page after this one: a page's next_cursor")
-    s.set_defaults(fn="doc list")
-    s = docs.add_parser("read", help="one internal or indexed external doc in full")
-    s.add_argument("ref", help="a doc id/path, external:<id>, or manual:<name>")
-    s.add_argument("--revision", help="external commit returned by search")
-    s.set_defaults(fn="doc read")
-    s = docs.add_parser("search", help="search internal, indexed external and linked docs, then the Tico manual")
-    s.add_argument("q")
-    s.add_argument("--limit", type=int)
-    s.add_argument(
-        "--manual",
-        dest="collection",
-        action="store_const",
-        const="manual",
-        help="only the read-only Tico manual (how to do something in Tico)",
+    cli_spec.add(sub, content_commands.DOC)  # tico doc: clients/commands/content.py (all but `fetch`, below)
+    s = _group_subparsers(sub, "doc").add_parser(
+        "fetch", help="read a public link as text; runs on this computer, never on the server"
     )
-    s.add_argument("--team", dest="collection", action="store_const", const="team", help="only team docs")
-    s.add_argument("--market", action="store_true", default=None, help="also the market's notes, entities and evidence")
-    s.add_argument("--source-id", help="only this external source")
-    s.set_defaults(fn="doc search")
-    s = docs.add_parser("write", help="create or replace an internal doc at a path")
-    s.add_argument("path")
-    s.add_argument(
-        "--base-version",
-        dest="base_version",
-        type=int,
-        help="the version you read (tico doc read); refused if someone saved since. Leave out only to create a doc "
-        "or to replace your own latest version",
-    )
-    s.add_argument("--title")
-    s.add_argument("--body-file", dest="body_file", help="the Markdown file; standard input when omitted")
-    s.add_argument("--note", help="one line on what changed")
-    s.add_argument(
-        "--section",
-        help="a heading's text: replace only the text under it, up to the next heading of the same or a higher level",
-    )
-    s.add_argument(
-        "--append", action="store_true", default=None, help="add the text at the end of the doc, or of --section"
-    )
-    s.set_defaults(fn="doc write")
-    s = docs.add_parser("history", help="the versions of a doc")
-    s.add_argument("ref", help="a doc id or a path")
-    s.set_defaults(fn="doc history")
-    s = docs.add_parser("link-list", help="the linked docs: where the company's other docs live")
-    s.set_defaults(fn="doc link-list")
+    s.add_argument("url")
+    s.add_argument("--max-chars", dest="max_chars", type=int, default=30000)
+    s.set_defaults(fn="doc fetch")
     chat = sub.add_parser("chat", help="bot chat goals and commands").add_subparsers(dest="sub")
     s = chat.add_parser("goal", help="read, set, edit, pause, resume or clear a chat goal")
     s.add_argument("conversation_id")
     s.add_argument("action", nargs="?", default="get", choices=["get", "set", "edit", "pause", "resume", "clear"])
     s.add_argument("objective", nargs="?")
     s.set_defaults(fn="chat goal")
-    assistant = sub.add_parser("assistant", help="the Assistant's proposals for a person to confirm").add_subparsers(
-        dest="sub"
-    )
-    assistant.add_parser("read", help="read your private Assistant chat").set_defaults(fn="assistant read")
-    s = assistant.add_parser("send", help="ask your private Assistant")
-    s.add_argument("text")
-    s.set_defaults(fn="assistant send")
-    s = assistant.add_parser("propose", help="ask the person to confirm one side-effecting operation")
-    s.add_argument("--summary", required=True)
-    s.add_argument("--path", required=True)
-    s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
-    s.add_argument("--body", default="{}", help="the request's JSON body")
+    s = chat.add_parser("ask", help="ask a person in your direct chat, marked ❓: it needs their reply")
+    s.add_argument("message", help="what you ask: a short first line that stands on its own")
+    s.add_argument("--to", required=True, help="the person: their id")
     s.add_argument(
-        "--for",
-        dest="for_person",
-        default=None,
-        help="the Assistant's own background run only: the person (human:<id>) whose chat gets the card",
+        "--conversation", dest="conversation_id", help="a chat you are both in; your chat with them if left out"
     )
-    s.set_defaults(fn="assistant propose")
-    s = assistant.add_parser("morning", help="the Assistant's one morning message to a person (background run only)")
-    s.add_argument("--for", dest="for_person", required=True, help="the person (human:<id>) whose chat gets it")
-    s.add_argument("--body", required=True, help="the message, in Markdown, at most 2000 characters")
-    s.set_defaults(fn="assistant morning")
-    s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
-    s.add_argument("text", help="one short line, in their words")
-    s.add_argument(
-        "--company",
-        dest="layer",
-        action="store_const",
-        const="company",
-        default="personal",
-        help="the Strategy Owner in the owner's chat: about the company, not how they like things",
-    )
-    s.set_defaults(fn="assistant learn")
-    assistant.add_parser(
-        "learned", help="what your chat bot has learned: your layer, and the company's for the owner"
-    ).set_defaults(fn="assistant learned")
-    assistant.add_parser(
-        "shared", help="the people who chose you to view their Assistant chat, read only (a bot's own run)"
-    ).set_defaults(fn="assistant shared")
-    s = assistant.add_parser("shared-read", help="read one page of a person's Assistant chat they shared with you")
-    s.add_argument("person", help="the person's id, e.g. human:ana (tico assistant shared)")
-    s.add_argument("--before", default=None, help="next_before from the previous page, for older messages")
-    s.set_defaults(fn="assistant shared-read")
-    s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
-    s.add_argument("id", help="the card's proposal id (tico assistant proposals)")
-    s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
-    s.set_defaults(fn="assistant withdraw")
-    change = assistant.add_parser(
-        "change", help="what your Assistant did for you, and undoing one of those changes"
-    ).add_subparsers(dest="subsub")
-    s = change.add_parser("list", help="the Assistant's changes for you, newest first, with the words it acted on")
-    s.add_argument("--days", type=int, help="how far back (default 30, at most 90)")
-    s.add_argument("--limit", type=int, help="changes per page (default 50, at most 100)")
-    s.add_argument("--before", help="the `next` of the page before, to read older changes")
-    s.set_defaults(fn="assistant change list")
-    s = change.add_parser("restore", help="undo one change as you; restoring it again changes nothing")
-    s.add_argument("id", help="the change's id (tico assistant change list)")
-    s.set_defaults(fn="assistant change restore")
-    s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
-    s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
-    s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
-    s.set_defaults(fn="assistant proposals")
+    s.set_defaults(fn="chat ask")
+    cli_spec.add(sub, assistant_commands.ASSISTANT)  # tico assistant: clients/commands/assistant.py
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
-    task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
-    s = task.add_parser("child", help="create a subtask")
-    s.add_argument("parent")
-    s.add_argument("--owner", help="who does it; a --check-model subtask is your own (`me`)")
-    s.add_argument("--title", required=True)
-    s.add_argument("--body", default="")
-    s.add_argument(
-        "--check-model",
-        metavar="RUNTIME[:MODEL]",
-        nargs="?",
-        const="auto",
-        help="run this subtask of yours on another model, in its own session (e.g. grok, codex:gpt-6.1-sol); "
-        "with no value (put the flag after the parent id), the company's check model, from a provider other "
-        "than the parent's authors when one can run it",
-    )
-    s.add_argument(
-        "--role",
-        dest="check_role",
-        choices=("review", "check"),
-        help="review files a review child; with --check-model, what that model is asked for (default check)",
-    )
-    s.set_defaults(fn="task child create")
-    s = task.add_parser("tree", help="show nested subtasks")
-    s.add_argument("id")
-    s.set_defaults(fn="task tree")
+    cli_spec.add(sub, tasks_commands.TASK)  # tico task and tasks: clients/commands/tasks.py
+    task = _group_subparsers(sub, "task")  # the leaves still built here are added below
     worktree = task.add_parser("worktree", help="create or attach this task's worktree").add_subparsers(
         dest="worktree_sub"
     )
@@ -905,22 +660,6 @@ def parser():
         s.add_argument(argument)
         s.add_argument("--task", help="task id; defaults to this run's task")
         s.set_defaults(fn="task worktree " + operation)
-    s = task.add_parser(
-        "caps",
-        help="the task caps: today's count per pair, the tasks closed before the "
-        "receiver acted, and the changes bots asked for",
-    )
-    s.set_defaults(fn="task caps")
-    cap = task.add_parser(
-        "cap", help="set a task cap: how many tasks sender may create for receiver a day"
-    ).add_subparsers(dest="cap_sub")
-    s = cap.add_parser(
-        "set", help="sender receiver --per-day N; 0 blocks the pair, and with no --per-day the cap is removed"
-    )
-    s.add_argument("sender", help="bot:<slug> or person:<id>")
-    s.add_argument("receiver", help="bot:<slug> or person:<id>, a manager above the sender")
-    s.add_argument("--per-day", dest="per_day", type=int, help="tasks a day; 0 blocks the pair")
-    s.set_defaults(fn="task cap set")
     s = task.add_parser("create")
     s.add_argument("--visibility", choices=["public", "private"])
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
@@ -958,8 +697,10 @@ def parser():
         help="with --for: the id of the message that person asked in (you must be able to read it)",
     )
     s.add_argument("--title", required=True)
-    s.add_argument("--body", default="")
-    s.add_argument("--body-file", dest="body_file")
+    s.add_argument(
+        "--message", "--body", dest="message", default="", help="the first message on its chat: what you ask"
+    )
+    s.add_argument("--message-file", "--body-file", dest="message_file", help="the first message, from a file")
     s.add_argument("--due")
     s.add_argument("--parent", help="the task that files it: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")
@@ -987,58 +728,18 @@ def parser():
     s.add_argument("--harness", help="the harness that runs that model")
     s.set_defaults(fn="task create")
     version_help = "the version you were last shown: tico task show, a list row and every wake print it"
-    s = task.add_parser("done", help="the work of this stage is finished; never pushes past what is missing")
-    s.add_argument("id")
-    s.add_argument("-m", "--note", help="what was done, in a few plain sentences")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task done")
     s = task.add_parser(
-        "move", help="move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen"
+        "ask",
+        help="ask a person on this task: the message is posted on the task's chat marked ❓ (needs their reply); "
+        "with --kind ok and --show, an OK of what it shows",
     )
     s.add_argument("id")
-    s.add_argument("to", help="next, done, closed, reopen, or a stage's name or id")
-    s.add_argument("-m", "--why", help="why, in one plain sentence; a bot always says why")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task move")
-    s = task.add_parser("close", help="close a task with why; its open sub-tasks close with it")
-    s.add_argument("id")
-    s.add_argument("-m", "--why", help="why it is closed")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task close")
-    s = task.add_parser("reassign", help="give the task to another bot or person for this stage")
-    s.add_argument("id")
-    s.add_argument("owner", help="a bot slug, a person id, or me")
-    s.add_argument("-m", "--why", help="why, in one plain sentence")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument(
-        "--set-anyway", action="store_true", help="a person gives it all the same when a stage rule refused this owner"
-    )
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task reassign")
-    s = task.add_parser(
-        "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
-    )
-    s.add_argument("id")
-    s.add_argument("line", nargs="?", help="the one sentence they are asked, readable on its own")
+    s.add_argument("line", nargs="?", help="the message: a short first line that reads on its own, then any detail")
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
-        "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"
-    )
-    s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
-    s.add_argument(
-        "--choice",
-        action="append",
-        metavar="LABEL|WHAT HAPPENS",
-        help="one answer to pick from and what happens on it; repeat, 2 to 4 (a bot asking a person)",
-    )
-    s.add_argument(
-        "--recommend", metavar="LABEL", help="the choice you recommend (a bot asking a person, with choices)"
-    )
-    s.add_argument(
-        "--title", help="a short title, at most 60 characters: the heading above the question (not with --for)"
+        "--kind",
+        choices=["ok"],
+        help="ok: approve or send back what --show names (a question is the default)",
     )
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
@@ -1046,24 +747,15 @@ def parser():
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
     s.add_argument(
-        "-m", "--why", help="why it matters to them, in one line (a bot asking a person needs it); with --withdraw: why"
+        "--not-known",
+        dest="not_known",
+        action="store_true",
+        default=None,
+        help="send it to the person even though Tico answered it (its answer did not cover your question)",
     )
+    s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
-    s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
-    s.add_argument("id")
-    s.add_argument("requirement", help="the ask's requirement id, from tico task show")
-    s.add_argument("up", metavar="up|down", type=thumb, help="up: worth asking; down: what was wrong goes in --note")
-    s.add_argument("--note", help="what was wrong, in a few words")
-    s.set_defaults(fn="task thumbs")
-    s = task.add_parser("answer", help="answer what you are asked on a task: ok, no, again or your answer")
-    s.add_argument("id")
-    s.add_argument("requirement", help="the requirement's id from tico task show, or a stage's answer by its name")
-    s.add_argument("value", help="ok, no (send back, with -m), again (look again), or your answer")
-    s.add_argument("-m", "--note", help="what they read with it; required with no")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task answer")
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from tico task show")
@@ -1073,38 +765,8 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
     s = task.add_parser(
-        "file",
-        help="file a task this one waits on; yours unless --owner, or picked by a pipeline whose first stage picks",
+        "comment", help="leave a comment on a task (not your own task during your turn: your reply is posted there)"
     )
-    s.add_argument("title")
-    s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
-    s.add_argument("--pipeline", help="the pipeline's id; default general")
-    s.add_argument(
-        "--owner", help="who does it; default you, or the stage's pick in a pipeline whose first stage picks"
-    )
-    s.add_argument("--body", help="the details; default the title")
-    s.add_argument("--due")
-    s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
-    s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
-    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
-    s.set_defaults(fn="task file")
-    s = task.add_parser("update", help="edit a task's fields: title, body, due, labels, privacy, goal; with --version")
-    visibility = s.add_mutually_exclusive_group()
-    visibility.add_argument("--private", dest="private", action="store_true", default=None)
-    visibility.add_argument(
-        "--company", dest="private", action="store_false", help="human requester publishes the task"
-    )
-    s.add_argument("id")
-    s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--body")
-    s.add_argument("--due")
-    s.add_argument("--label", dest="labels", action="append", help="replace the labels with these; repeat for more")
-    s.add_argument("--goal", dest="goal_id", help='the goal this task serves; "" takes it off')
-    s.add_argument("-m", "--note", help="what changed, in a sentence")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task update")
-    s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
     s.add_argument("id")
@@ -1139,96 +801,6 @@ def parser():
         help="a bot's message to a bot waits for that bot's next run; this wakes it now",
     )
     s.set_defaults(fn="task comment")
-    s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
-    s.add_argument("id")
-    s.add_argument("comment_id")
-    s.add_argument("action", choices=["hide", "show", "delete"])
-    s.set_defaults(fn="task comment-moderate")
-    s = task.add_parser("requesters", help="a task's requesters: internal contacts and counts, never tokens")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="task requesters")
-    s = task.add_parser(
-        "requester-save", help="add a requester to a task, or update one with --requester-id; nothing is sent"
-    )
-    s.add_argument("id")
-    s.add_argument("--requester-id", dest="requester_id", help="the requester to update; omit to add one")
-    s.add_argument("--actor", help="a teammate (verified identity); omit for someone outside")
-    for field in ("name", "email", "phone", "other", "organization", "note"):
-        s.add_argument("--" + field)
-    s.add_argument("--source", choices=["public_form", "inbox", "meeting", "manual"])
-    s.add_argument("--important", action=argparse.BooleanOptionalAction, default=None)
-    s.set_defaults(fn="task requester-save")
-    s = task.add_parser("requester-remove", help="take a requester off a task")
-    s.add_argument("id")
-    s.add_argument("requester_id")
-    s.set_defaults(fn="task requester-remove")
-    s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
-    s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
-    s.add_argument("text")
-    s.set_defaults(fn="task comment-edit")
-    s = task.add_parser("comment-delete", help="take back a comment you wrote")
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
-    s.set_defaults(fn="task comment-delete")
-    s = task.add_parser("delete", help="delete a task made by mistake: its requester or a mover, never a bot")
-    s.add_argument("id")
-    s.set_defaults(fn="task delete")
-    s = task.add_parser("deleted", help="deleted tasks you may restore, newest first")
-    s.set_defaults(fn="task deleted")
-    s = task.add_parser("restore", help="put a deleted task back: whoever deleted it, its requester or a mover")
-    s.add_argument("id")
-    s.set_defaults(fn="task restore")
-    s = task.add_parser("link", help="attach a link: the pull request you opened, an issue, a document, a session")
-    s.add_argument("id")
-    s.add_argument("url", help="the URL; with --session also a resume command or a reference")
-    s.add_argument("--title")
-    s.add_argument(
-        "--session",
-        action="store_true",
-        help="another session working this task, tracked only: task chat goes to the owning bot",
-    )
-    s.add_argument(
-        "--wake-once",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="a pull request: wake this task once when its checks finish (pass or fail), it is approved or "
-        "gets changes requested, or a release ships it; never changes the task's status. "
-        "--no-wake-once disarms it",
-    )
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task link")
-    readers = task.add_parser("readers", help="who can see a private task: list, add, remove").add_subparsers(
-        dest="subsub"
-    )
-    s = readers.add_parser("list", help="its requester, owner and readers")
-    s.add_argument("id")
-    s.set_defaults(fn="task readers list")
-    for change, words in (
-        ("add", "let them see it: people, bots or group:<id>s"),
-        ("remove", "take them off: they stop seeing it"),
-    ):
-        s = readers.add_parser(change, help=words)
-        s.add_argument("id")
-        s.add_argument("readers", nargs="+", metavar="X", help="human:<id>, bot:<slug> or group:<id>")
-        s.set_defaults(fn="task readers " + change)
-    s = task.add_parser("followers", help="who follows a task, each at their level")
-    s.add_argument("id")
-    s.set_defaults(fn="task followers")
-    for change, words in (("follow", "follow a task, or set your level"), ("unfollow", "stop following a task")):
-        s = task.add_parser(change, help=words)
-        s.add_argument("id")
-        if change == "follow":
-            s.add_argument("--level", choices=("live", "mentions", "digest", "muted"))
-        s.add_argument(
-            "--who", help="someone else who sees it (human:<id> or bot:<slug>), when you may change the task"
-        )
-        s.set_defaults(
-            fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
-        )  # one tool: tico_task_follow
     for change, words in (
         ("relate", "relate another task to this one: <id> [<kind>] <task>, e.g. <id> depends_on <task>"),
         ("unrelate", "take a relation off: <id> [<kind>] <task>"),
@@ -1252,18 +824,6 @@ def parser():
                 "its merged PRs (how a Validate task waits for its work to reach production)",
             )
         s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
-    s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
-    s.add_argument("id", help="the task that merges later")
-    s.add_argument("task", help="the task it merges after")
-    s.add_argument("--remove", action="store_true", help="take the order off instead")
-    s.set_defaults(fn="task after")
-    s = task.add_parser("label", help="add or remove labels on a task")
-    s.add_argument("id")
-    s.add_argument("--add", action="append")
-    s.add_argument("--remove", action="append")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task label")
     s = task.add_parser(
         "attach",
         help="attach a file to a task; prints the link for your note. With --req, attach a page "
@@ -1271,11 +831,19 @@ def parser():
     )
     s.add_argument("id")
     s.add_argument("file", help="a local file, or page:<file id>[@<version>] with --req")
-    s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
+    s.add_argument(
+        "--doc",
+        metavar="NAME",
+        help="an .html file as the task's document NAME: a page linked to the task with that role, the same as "
+        "tico page publish FILE --task ID --as NAME (a run on a private task, which may not publish pages, writes it "
+        "through the task's own files instead). Spec, QA report, Release report and Invoice are the names a "
+        "stage approves; say what changed in a comment (no --note)",
+    )
+    s.add_argument("--req", help='the page requirement it is for, e.g. "Code review"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
-    s.add_argument("--note", help="short note on this version (at most 500 characters)")
+    s.add_argument("--note", help="short note on this version (at most 500 characters); not with --doc")
     s.add_argument(
         "--changed",
         action="append",
@@ -1289,99 +857,13 @@ def parser():
         help='with --req: "<point>: done|not done, <why>" for each point of the last send back (up to 12). '
         "Never quote their note back to them",
     )
+    s.add_argument(
+        "--add",
+        action="store_true",
+        help="with --req on a document approval (QA report, Spec): keep the pages already attached in this stage "
+        "beside this one, all judged together. Without it this page replaces them",
+    )
     s.set_defaults(fn="task attach")
-    s = task.add_parser("context", help="readable page and meeting references for a task")
-    s.add_argument("id")
-    s.set_defaults(fn="task context")
-    s = task.add_parser("meetings", help="meetings linked to a task")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="task meetings")
-    s = task.add_parser("list")
-    s.add_argument("--q", help="title words or #N")
-    s.add_argument("--owner")
-    s.add_argument("--requester")
-    s.add_argument("--status", action="append", choices=["open", "done", "closed"])
-    s.add_argument("--label")
-    s.add_argument("--sort", choices=["queue", "finished"], help="finished: most recently ended first")
-    s.add_argument("--number", type=int, help="only this task number")
-    s.add_argument("--updated-since", help="only tasks changed after this ISO-8601 time with a timezone")
-    s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
-    s.add_argument("--role", help="with --member: only tasks they are on in this role")
-    s.add_argument("--pipeline", help="only this pipeline's tasks: its id (tico pipeline list)")
-    s.add_argument(
-        "--stage",
-        help="only the tasks in this stage: its id, or its name with --pipeline (tico pipeline show <pipeline>)",
-    )
-    s.add_argument(
-        "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
-    )
-    s.add_argument("--brief", action="store_true", help="leave out bodies")
-    s.add_argument(
-        "--all", action="store_true", help="every task (snoozed ones too) and every bot you may see, as {tasks, bots}"
-    )
-    s.add_argument(
-        "--snoozed",
-        choices=["only", "all"],
-        help="snoozed tasks are left out: only lists just them, all lists them with the rest",
-    )
-    s.add_argument("--limit", type=int, help="tasks in a page (500 at most); the answer is then {tasks, next_offset}")
-    s.add_argument("--offset", type=int, help="skip this many: a page's next_offset")
-    s.set_defaults(fn="task list")
-    s = task.add_parser(
-        "show",
-        help="one task: its version, stage, owner, turn, what it takes to leave the stage, next; several ids: their "
-        "fields in one read",
-    )
-    s.add_argument("id", nargs="+")
-    s.add_argument("--json", action="store_true", help="the task as JSON instead of its lines")
-    s.set_defaults(fn="task show")
-    s = task.add_parser("run", help="start a bot's task now, as the task")
-    s.add_argument("id")
-    s.set_defaults(fn="task run")
-    s = task.add_parser(
-        "model",
-        help="the model this task's runs use, with its effort and harness; --clear puts it "
-        "back on the bot's task model",
-    )
-    s.add_argument("id")
-    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
-    s.add_argument("--effort")
-    s.add_argument("--harness")
-    s.add_argument(
-        "--clear", action="store_true", help="clear the task's own model: its runs use the bot's task model again"
-    )
-    s.set_defaults(fn="task model")
-    s = task.add_parser(
-        "snooze",
-        help="set a task aside in its stage, with why: off Needs you and quiet until DATE; with no date it is On ice",
-    )
-    s.add_argument("id")
-    s.add_argument("--until", help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
-    s.add_argument("-m", "--why", help='why, and what you wait for ("vendor replies by Nov 14")')
-    s.add_argument("--version", type=int, help=version_help)
-    s.set_defaults(fn="task snooze")
-    s = task.add_parser("unsnooze", help="a person brings a snoozed task back now; its owner is woken once")
-    s.add_argument("id")
-    s.add_argument("-m", "--why")
-    s.set_defaults(fn="task unsnooze")
-    s = task.add_parser("queue", help="queue again: put the PRs GitHub took out of the merge queue back in it")
-    s.add_argument("id")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task queue")
-    s = task.add_parser("release", help="cut the release a task in Release waits for, the way the repository makes one")
-    s.add_argument("id")
-    s.add_argument("--tag", help="the release's tag, where the repository releases from a tag")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task release")
-    s = task.add_parser("unlink", help="take a link off a task: a PR closed without merging, by its URL or id")
-    s.add_argument("id")
-    s.add_argument("link", help="the link's URL, or its id")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task unlink")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")
@@ -1397,61 +879,29 @@ def parser():
     cli_spec.add(sub, goal_commands.PROPOSAL)
 
     cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
+    cli_spec.add(sub, risk_commands.CLI)  # tico risk: clients/commands/risk.py
     cli_spec.add(sub, strategy_commands.STRATEGY)  # tico strategy and tico brand: clients/commands/strategy.py
     cli_spec.add(sub, strategy_commands.BRAND)
     cli_spec.add(sub, browser_commands.CLI)  # tico browser: clients/commands/browser.py
     cli_spec.add(sub, logins.CLI)  # tico login: clients/commands/logins.py
+    cli_spec.add(sub, tools_commands.ACCESS)  # tico access: clients/commands/tools.py
     cli_spec.add(sub, strategy_commands.CLI)  # tico growth: clients/commands/strategy.py
 
     cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py
 
     cli_spec.add(sub, market_commands.CLI)  # tico market: clients/commands/market.py
 
-    listen = sub.add_parser(
-        "listening", help="Listening's sources: the ones due a read, and saving what a read found"
-    ).add_subparsers(dest="sub")
-    s = listen.add_parser("sources", help="the Search sources due a read")
-    s.add_argument("--automation", help="only this listening's sources")
-    s.set_defaults(fn="listening sources")
+    # `tico listening` (clients/commands/listening.py): every leaf but save, which reads a file or stdin here.
+    cli_spec.add(sub, listening_commands.LISTENING)
+    listen = _group_subparsers(sub, "listening")
     s = listen.add_parser("save", help="what one read of one source found, from a JSON file")
     s.add_argument("--source", required=True, help="source id, from `tico listening sources`")
     s.add_argument("--file", required=True, help="JSON: {status, error, items: [...]}; - for stdin")
     s.set_defaults(fn="listening save")
 
-    def mcp_flags(s):
-        s.add_argument(
-            "--mcp-url",
-            dest="mcp_url",
-            help="the tool is a remote MCP server at this https address (http only for localhost)",
-        )
-        s.add_argument("--transport", choices=["http", "sse"], help="the MCP server's transport (default http)")
-        s.add_argument(
-            "--header",
-            dest="headers",
-            action="append",
-            metavar="'NAME: VALUE'",
-            help='an MCP header; the value may use ${VAR_NAME} for the tool\'s --env variable, never the value itself; repeatable',
-        )
-
-    tools = sub.add_parser(
-        "tool",
-        help="what the team uses: each tool, what a bot uses, its model, repository and declared tools (docs/creating-bots.md)",
-    ).add_subparsers(dest="sub")
-    s = tools.add_parser("list", help="the team's tools; with --bot, that bot's tools with their status")
-    s.add_argument("--bot", help="a bot's slug, or me: that bot's own tools instead of the team's")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="tool list")
-    s = tools.add_parser("show", help="one tool: the page, its queries and the learnings")
-    s.add_argument("service")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="tool show")
-    s = tools.add_parser("index", help="Tools: every API tool, mailbox, number and connection you may see")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="tool index")
-    s = tools.add_parser("check", help="check an API tool's keys now")
-    s.add_argument("id", help="the API tool id (`tico tool index`)")
-    s.set_defaults(fn="tool check")
+    # `tico tool` (clients/commands/tools.py): every leaf but `call`, which runs the vendor call on this computer.
+    cli_spec.add(sub, tools_commands.TOOL)
+    tools = _group_subparsers(sub, "tool")
     s = tools.add_parser("call", help="call a proxied API tool from a turn; Tico adds the real key")
     s.add_argument("tool", help="the API tool id, e.g. close-crm (its TICO_TOOL_<ID>_URL)")
     s.add_argument("method", type=str.upper, choices=("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"))
@@ -1459,70 +909,12 @@ def parser():
     s.add_argument("--data", help="a JSON body")
     s.add_argument("--query", action="append", default=[], help="a query parameter, key=value (repeatable)")
     s.set_defaults(fn="tool call")
-    s = tools.add_parser("query-search", help="search a tool's query catalog")
-    s.add_argument("service")
-    s.add_argument("term", nargs="?", default="", help="matched against id, title, description, tags and SQL")
-    s.add_argument("--id", dest="query_id", help="print one query's SQL and params")
-    s.add_argument("--json", action="store_true", help="print the matching queries as JSON")
-    s.set_defaults(fn="tool query-search")
-    s = tools.add_parser("learn", help='add a learning: tico tool learn <service> "<text>"')
-    s.add_argument("service")
-    s.add_argument("text")
-    s.set_defaults(fn="tool learn")
-    s = tools.add_parser("report", help="report the external profile's complete current tool list")
-    s.add_argument("tools", help="JSON array of tool entries")
-    s.set_defaults(fn="tool report")
-    s = tools.add_parser("add", help="register a tool: BotOps adds it to bot.yaml; never a credential value")
-    s.add_argument("bot")
-    s.add_argument("service", help="a short name such as posthog or google-calendar")
-    s.add_argument("--can", required=True, help="read, draft, post, act, use, send or write; comma separated")
-    s.add_argument("--identity", help="who it acts as, in words for a person")
-    s.add_argument(
-        "--scope",
-        action="append",
-        metavar="KEY=VALUE",
-        help="database=warehouse, channels=#a,#b, project=123; repeatable",
-    )
-    s.add_argument("--env", help="the variable's NAME, such as POSTHOG_KEY; the owner installs the value")
-    s.add_argument("--note")
-    mcp_flags(s)
-    s.add_argument("--title-prefix", dest="title_prefix", help="prefix for the generated BotOps task")
-    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="validate without opening a task")
-    s.set_defaults(fn="tool add")
-    s = tools.add_parser(
-        "update", help="change a declared tool's can, scope or note in place; never remove and add again"
-    )
-    s.add_argument("id", help="the tool id from `tico tool list --bot`")
-    s.add_argument("--bot", required=True, help="the bot's slug")
-    s.add_argument(
-        "--can", help="the full list from now on: read, draft, post, act, use, send or write; comma separated"
-    )
-    s.add_argument(
-        "--scope",
-        action="append",
-        metavar="KEY=VALUE",
-        help="set a key (database=warehouse, channels=#a,#b); KEY= takes it off; repeatable",
-    )
-    s.add_argument("--note", help='the new note; "" clears it')
-    mcp_flags(s)
-    s.add_argument("--title-prefix", dest="title_prefix", help="prefix for the generated BotOps task")
-    s.set_defaults(fn="tool update")
-    s = tools.add_parser("remove", help="ask BotOps to remove a tool, or withdraw a pending request")
-    s.add_argument("bot")
-    s.add_argument("id", help="the tool id from `tico tool list --bot`")
-    s.set_defaults(fn="tool remove")
+    cli_spec.add(sub, tools_commands.TOOL_AFTER_CALL, parents={("tool",): tools})
+    cli_spec.add(sub, tools_admin.TOOL_CLI, parents={("tool",): tools})  # clients/commands/tools_admin.py
 
-    auto = sub.add_parser(
-        "automation", aliases=["automations"], help="automations: a trigger and steps"
-    ).add_subparsers(dest="sub")
-    s = auto.add_parser("list")
-    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor", type=int, help="`next` from the page before")
-    s.set_defaults(fn="automation list")
-    s = auto.add_parser("show")
-    s.add_argument("id")
-    s.set_defaults(fn="automation get")
+    # Automations (clients/commands/automations.py): every leaf but create, update and inbox, which stay here.
+    cli_spec.add(sub, automations_commands.AUTOMATION)
+    auto = _group_subparsers(sub, "automation")
     s = auto.add_parser("create", help="save a new automation from a JSON flow")
     s.add_argument("--file", required=True, help="a JSON object {name, owner, trigger, steps, ...}; - reads stdin")
     s.set_defaults(fn="automation create")
@@ -1535,56 +927,6 @@ def parser():
     switch.add_argument("--enable", action="store_true")
     switch.add_argument("--disable", action="store_true")
     s.set_defaults(fn="automation update")
-    s = auto.add_parser("delete")
-    s.add_argument("id")
-    s.set_defaults(fn="automation delete")
-    s = auto.add_parser("run", help="run it now and print the run")
-    s.add_argument("id")
-    s.add_argument("--input", help="a JSON object standing in for the trigger's output")
-    s.set_defaults(fn="automation run")
-    s = auto.add_parser("runs")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="`next` from the page before")
-    s.set_defaults(fn="automation runs")
-    s = auto.add_parser("held", help="end a run-guard hold: release queues its held runs, drop skips them")
-    s.add_argument("id")
-    s.add_argument("action", choices=["release", "drop"])
-    s.set_defaults(fn="automation held")
-    s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
-    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
-    s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event, due or system")
-    s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="`next` from the page before")
-    s.set_defaults(fn="automation recent-runs")
-    s = auto.add_parser("stats", help="runs, failures and cost per automation over a range")
-    s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
-    s.set_defaults(fn="automation stats")
-    s = auto.add_parser("versions")
-    s.add_argument("id")
-    s.add_argument("--pending", action="store_true", help="proposals only")
-    s.set_defaults(fn="automation versions")
-    s = auto.add_parser("restore")
-    s.add_argument("id")
-    s.add_argument("n", type=int)
-    s.set_defaults(fn="automation restore")
-    s = auto.add_parser("discard", help="drop a pending version (a proposal)")
-    s.add_argument("id")
-    s.add_argument("n", type=int)
-    s.set_defaults(fn="automation discard")
-    s = auto.add_parser("question-sets", help="the question sets a Decide step may name")
-    s.set_defaults(fn="automation question-sets")
-    s = auto.add_parser("guide", help="how BotOps builds automations, with the flow format")
-    s.set_defaults(fn="automation guide")
-    s = auto.add_parser("templates", help="the inbox templates: founder, support, sales, blank")
-    s.set_defaults(fn="automation templates")
-    s = auto.add_parser("template", help="one inbox template filled in for an owner and an inbox (saves nothing)")
-    s.add_argument("id", help="founder, support, sales or blank")
-    s.add_argument("--owner", required=True, help="person:<id>, bot:<slug> or group:<id>")
-    s.add_argument("--inbox", required=True, help="an email address, slack:dm or slack:#<channel>")
-    s.set_defaults(fn="automation template")
     s = auto.add_parser("inbox", help="read or set an inbox's send switch")
     s.add_argument("inbox", help="an email address, slack:dm or slack:#<channel>")
     s.add_argument("--send", choices=["on", "off"], help="leave out to read it")
@@ -1597,55 +939,10 @@ def parser():
     s.add_argument("--before", help="`next` from the page before")
     s.set_defaults(fn="audit")
 
-    s = sub.add_parser("event-types", help="every event Tico names, with a one-line description and an example payload")
-    s.add_argument(
-        "--group",
-        help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
-        "inbound, health, webhook, tico, custom",
-    )
-    s.set_defaults(fn="event-types")
+    cli_spec.add(sub, automations_commands.EVENT_TYPES)  # tico event-types: clients/commands/automations.py
     cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
     cli_spec.add(sub, webhooks.RELAY)  # tico relay: clients/commands/webhooks.py
-    call = sub.add_parser(
-        "call", help="Tico Meet: audio and screen share in a thread, with a transcript posted to it"
-    ).add_subparsers(dest="sub")
-    s = call.add_parser("list", help="the calls in a thread, newest first")
-    s.add_argument("thread_id")
-    s.add_argument("--limit", type=int, default=25)
-    s.add_argument("--before", help="the next_before of the page you read, to read the next page")
-    s.set_defaults(fn="call list")
-    s = call.add_parser("start", help="start a call in a thread you can write to; you become its connector")
-    s.add_argument("thread_id")
-    s.add_argument("--title", default="")
-    s.add_argument(
-        "--speak",
-        dest="speak_replies",
-        action="store_true",
-        help="bots speak their replies on this call (refused until the Gateway has text-to-speech)",
-    )
-    s.set_defaults(fn="call start")
-    for action, help_text in (
-        ("show", "a call: its state, people, bots and how it ended"),
-        ("join", "join a call: the URL and a token good for 5 minutes"),
-        ("token", "a fresh token while you are joined"),
-        ("leave", "leave a call you joined"),
-        ("end", "end a call you started; its transcript is posted to the thread"),
-        ("retry", "ask again for action items the Gateway could not make"),
-    ):
-        s = call.add_parser(action, help=help_text)
-        s.add_argument("call_id")
-        s.set_defaults(fn="call " + action)
-    bot = call.add_parser("bot", help="bots that listen to a call and reply in its thread").add_subparsers(
-        dest="subsub"
-    )
-    s = bot.add_parser("add", help="let bots listen to a call you joined (up to 10)")
-    s.add_argument("call_id")
-    s.add_argument("bots", nargs="+")
-    s.set_defaults(fn="call bot add")
-    s = bot.add_parser("remove", help="take a bot out of a call")
-    s.add_argument("call_id")
-    s.add_argument("bot")
-    s.set_defaults(fn="call bot remove")
+    cli_spec.add(sub, calls.CALL)  # tico call: clients/commands/calls.py
     cli_spec.add(sub, webhooks.SLEEP)
 
     oks = sub.add_parser("ok", help="an OK you asked for with --for: use it once, just before you act").add_subparsers(
@@ -1659,27 +956,7 @@ def parser():
     s.set_defaults(fn="ok use")
     cli_spec.add(sub, webhooks.NOTICE)
 
-    catalogue = sub.add_parser(
-        "settings", help="find, read and change a control in Settings by its words (docs/permissions.md)"
-    ).add_subparsers(dest="sub")
-    s = catalogue.add_parser("find", help="settings whose name, place or key hold these words")
-    s.add_argument("words")
-    s.set_defaults(fn="settings find")
-    for leaf, text in (
-        ("show", "one setting: its value, who may change it and its card"),
-        ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked"),
-    ):
-        s = catalogue.add_parser(leaf, help=text)
-        s.add_argument("key", help="the key `tico settings find` gives, e.g. team.rules.admin_sql")
-        if leaf == "set":
-            s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
-            s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-        target = s.add_mutually_exclusive_group()
-        target.add_argument("--bot", help="the bot, for a setting set per bot")
-        target.add_argument("--computer", help="the computer, for a setting set per computer")
-        target.add_argument("--id", help="the one thing it sets: a trigger, webhook, rule, routine, repository...")
-        target.add_argument("--person", help="the person's id, for a setting set per person")
-        s.set_defaults(fn="settings " + leaf)
+    cli_spec.add(sub, admin_commands.SETTINGS)  # tico settings: clients/commands/admin.py
     cli_spec.add(sub, webhooks.RELEASE)
     cli_spec.add(sub, webhooks.WEBHOOK)
 
@@ -1697,35 +974,7 @@ def parser():
     )
     s.add_argument("ref", help="a task id (or its first 8 characters), a message id or an approval id")
     s.set_defaults(fn="origin show")
-    bt = sub.add_parser(
-        "needs-you", help="a person's walk through what needs them: respond, commit (backend/batch.py)"
-    ).add_subparsers(dest="sub")
-    s = bt.add_parser("start", help="start the batch of the bot that most needs you, or resume the one in progress")
-    s.add_argument("--bot", help="only this bot's items (a slug)")
-    s.add_argument("--all", action="store_true", help="every item from every bot in one batch")
-    s.add_argument("--fresh", action="store_true", help="drop the batch in progress and build a new list")
-    s.set_defaults(fn="needs-you start")
-    s = bt.add_parser("next", help="the next item; at the end, the summary to read back")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you next")
-    s = bt.add_parser("respond", help="record a response to the current item; nothing applies until commit")
-    s.add_argument("batch")
-    s.add_argument("kind", choices=["decide", "needs_info", "instruct", "rule", "skip", "later"])
-    s.add_argument("--text", default="")
-    s.add_argument("--decision", choices=["ok", "send_back", "done", "close", "answer"])
-    s.add_argument("--item", type=int, help="another item's number")
-    s.add_argument("--until", help="with later: an ISO date-time")
-    s.set_defaults(fn="needs-you respond")
-    s = bt.add_parser("commit", help="apply every recorded response")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you commit")
-    s = bt.add_parser("abandon", help="drop the batch without applying anything")
-    s.add_argument("batch")
-    s.set_defaults(fn="needs-you abandon")
-    s = bt.add_parser("show", help="what needs you: the count per kind and the items, oldest first")
-    s.add_argument("--kind", choices=["task", "ask", "paused", "mention"], help="only this kind")
-    s.add_argument("--limit", type=int, help="the items listed (default 20); the counts are of every item")
-    s.set_defaults(fn="needs-you show")
+    cli_spec.add(sub, assistant_commands.NEEDS_YOU)  # tico needs-you: clients/commands/assistant.py
 
     runs = sub.add_parser("run", help="a bot's runs").add_subparsers(dest="sub")
     s = runs.add_parser("list", help="a bot's recent runs")
@@ -1742,44 +991,21 @@ def parser():
     s.add_argument("--out", help="with --fixture: the parent folder (default: the current one)")
     s.set_defaults(fn="run export")
 
-    team = sub.add_parser("team", help="team chart and icon").add_subparsers(dest="sub")
+    # `tico team` (clients/commands/admin.py): every leaf but icon, which sends a file's bytes from this computer.
+    cli_spec.add(sub, admin_commands.TEAM)
+    team = _group_subparsers(sub, "team")
     s = team.add_parser("icon", help="set the public team logo (owner; PNG/JPEG/WebP up to 1 MB)")
     s.add_argument("file")
     s.set_defaults(fn="team icon")
-    s = team.add_parser("show", help="the team chart: humans, Slack, what they own, the bots with reports_to and group")
-    s.add_argument("--person", help="that human and everyone under them")
-    s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
-    s.set_defaults(fn="team show")
-    s = team.add_parser(
-        "budget", help="read or set the team's default runs per hour and per day for bots (owner and admins)"
-    )
-    for window in ("hour", "day"):
-        s.add_argument(
-            "--" + window,
-            type=int,
-            help=f"runs allowed per {window} for bots with no budget of their own; 0 for no limit",
-        )
-    s.set_defaults(fn="team budget")
+    cli_spec.add(sub, admin_commands.TEAM_AFTER_ICON, parents={("team",): team})
     cli_spec.add(sub, admin_commands.SEAT)  # tico seat: clients/commands/admin.py
     cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
     cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py
-    changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(
-        dest="sub"
-    )
-    s = changelog.add_parser("list", help="what changed; --unread catches up since your last look")
-    s.add_argument("--kind", choices=["product", "activity", "all"], default="product")
-    s.add_argument("--unread", action="store_true")
-    s.add_argument("--q", help="search change titles and bullets")
-    s.add_argument("--offset", type=int)
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="changelog list")
-    s = changelog.add_parser("mark-read", help="acknowledge only the changes you have reviewed")
-    s.add_argument("ids", nargs="+")
-    s.set_defaults(fn="changelog mark-read")
+    cli_spec.add(sub, assistant_commands.CHANGELOG)  # tico changelog: clients/commands/assistant.py
 
-    upd = sub.add_parser("update", help="create, read and reply to the bots' daily and weekly updates").add_subparsers(
-        dest="sub"
-    )
+    # `tico update` (clients/commands/assistant.py): every leaf but create, whose tool reads --slides-file here.
+    cli_spec.add(sub, assistant_commands.UPDATE)
+    upd = _group_subparsers(sub, "update")
     s = upd.add_parser(
         "create",
         help="post your update when Tico asks for it: three plain-English bullets "
@@ -1802,37 +1028,7 @@ def parser():
     )
     s.add_argument("--skip", action="store_true", help="nothing real to report since your last update: post nothing")
     s.set_defaults(fn="update create")
-    s = upd.add_parser("redo", help="ask the bots again for a past day's update in the current shape (owner)")
-    s.add_argument("--day", required=True)
-    s.add_argument("--kind", choices=("daily", "weekly"))
-    s.add_argument("--bot", dest="bots", action="append", help="only this bot (repeatable)")
-    s.add_argument("--with-managers", dest="managers", action="store_true", help="also the bots above them")
-    s.set_defaults(fn="update redo")
-    s = upd.add_parser("list", help="updates from bots and people, newest first")
-    s.add_argument("--kind", choices=("daily", "weekly"))
-    s.add_argument("--bot", help="one author: a bot slug or human:<id>")
-    s.add_argument("--scope", choices=("all", "direct"), help="direct: only your direct reports")
-    s.add_argument("--unread", action="store_true")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="older than this: a page's next_before")
-    s.set_defaults(fn="update list")
-    s = upd.add_parser("show")
-    s.add_argument("update")
-    s.set_defaults(fn="update show")
-    s = upd.add_parser("mark-read", help="mark updates read (--unread to mark them unread)")
-    s.add_argument("ids", nargs="*")
-    s.add_argument("--all", action="store_true")
-    s.add_argument("--unread", dest="read", action="store_false")
-    s.set_defaults(fn="update mark-read")
-    s = upd.add_parser("reply")
-    s.add_argument("update")
-    s.add_argument("text")
-    s.set_defaults(fn="update reply")
-    s = upd.add_parser("settings", help="turn a bot's daily or weekly update on or off")
-    s.add_argument("bot")
-    s.add_argument("--daily", choices=("on", "off"))
-    s.add_argument("--weekly", choices=("on", "off"))
-    s.set_defaults(fn="update settings")
+    cli_spec.add(sub, assistant_commands.UPDATE_AFTER_CREATE, parents={("update",): upd})
     grok = sub.add_parser("grokbot", help="your Grok Bots in Tico (docs/external-agent-sync.md)").add_subparsers(
         dest="sub"
     )
@@ -1847,9 +1043,10 @@ def parser():
     s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
-    calendar = sub.add_parser("calendar", help="events, free times and bookings on calendars").add_subparsers(
-        dest="sub"
-    )
+    # `tico calendar` (clients/commands/calls.py): every leaf but list, whose tool depends on --json, and schedule,
+    # which reads --description-file on this computer.
+    cli_spec.add(sub, calls.CALENDAR)
+    calendar = _group_subparsers(sub, "calendar")
     s = calendar.add_parser("list", help="events on calendars (--who), or a company calendar's appointments")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--who", help="comma-separated people or bots, refs or emails; default you")
@@ -1858,41 +1055,7 @@ def parser():
     s.add_argument("--kinds", help="comma-separated: event, run, due, away (default all)")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="calendar list")
-    s = calendar.add_parser("free", help="times when people are free, within their working hours")
-    s.add_argument("--who", help="comma-separated people or bots; default you")
-    s.add_argument("--minutes", type=int, default=30, help="length of the free slot (default 30)")
-    s.add_argument("--within", metavar="DURATION", help="how far ahead to look, such as 5d")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar free")
-    s = calendar.add_parser("add", help="book an event; a bot or the Assistant may book anyone a rule allows")
-    s.add_argument("--title", required=True)
-    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD with --all-day")
-    s.add_argument("--end", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD (exclusive) with --all-day")
-    s.add_argument("--who", help="comma-separated attendees, refs or emails")
-    s.add_argument("--repeat", help='words or an RRULE, such as "weekly on mon,wed" or "daily until 2026-12-31"')
-    s.add_argument("--calendar", help="whose calendar: a ref such as human:ana, or an email; default you")
-    s.add_argument("--all-day", action="store_true", help="start and end are dates")
-    s.add_argument("--notes", help="description for attendees")
-    s.add_argument("--no-meet", action="store_true", help="no Google Meet link")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar add")
-    s = calendar.add_parser("move", help="move one occurrence, or a repeated event from it on with --scope")
-    s.add_argument("occurrence", help="occurrence id from calendar list or search")
-    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD for all day")
-    s.add_argument("--end", help="same form as --start")
-    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar move")
-    s = calendar.add_parser("cancel", help="cancel one occurrence, or a repeated event from it on with --scope")
-    s.add_argument("occurrence", help="occurrence id from calendar list or search")
-    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar cancel")
-    s = calendar.add_parser("search", help="find events by words, with tokens such as with:ben or before:2026-12-01")
-    s.add_argument("q", metavar="words")
-    s.add_argument("--who", help="comma-separated calendars to search; default you")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="calendar search")
+    cli_spec.add(sub, calls.CALENDAR_AFTER_LIST, parents={("calendar",): calendar})
     s = calendar.add_parser("schedule", help="queue one calendar appointment")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--title", required=True)
@@ -1903,9 +1066,7 @@ def parser():
     s.add_argument("--description-file")
     s.add_argument("--no-meet", action="store_true")
     s.set_defaults(fn="calendar schedule")
-    s = calendar.add_parser("status", help="whether a queued appointment was created")
-    s.add_argument("id")
-    s.set_defaults(fn="calendar status")
+    cli_spec.add(sub, calls.CALENDAR_AFTER_SCHEDULE, parents={("calendar",): calendar})
 
     s = sub.add_parser("sql", help="read-only SQL over what you may see (docs/hub-sql.md)")
     s.add_argument("sql", help="one SELECT (or WITH, EXPLAIN QUERY PLAN)")
@@ -1979,7 +1140,7 @@ def parser():
     s.set_defaults(fn="decision outcome")
     s = decision.add_parser(
         "readout",
-        help="per question set: the last days' calls, cost, Jev or fallback and answer "
+        help="per question set: the last days' calls, cost, decision model or fallback and answer "
         "spread, and the month's spend against the cap",
     )
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
@@ -1987,31 +1148,11 @@ def parser():
 
     # A new bot: BotOps builds the chosen template in the workspace (`tico bot create`) or only registers it (--record-only).
     # The Librarian (docs/librarian.md): ask a question, and read a linked doc on this computer.
-    s = docs.add_parser("ask", help="ask the Librarian about the team's docs and wait for the answer")
-    s.add_argument("question")
-    s.add_argument("--wait", type=float, default=120, help="seconds to wait for the answer (default 120)")
-    s.set_defaults(fn="doc ask")
-    s = docs.add_parser("ask-status", help="collect the same Librarian answer without sending another question")
-    s.add_argument("conversation_id")
-    s.add_argument("message_id")
-    s.add_argument("--wait", type=float, default=0)
-    s.set_defaults(fn="doc ask-status")
-    s = docs.add_parser("fetch", help="read a public link as text; runs on this computer, never on the server")
-    s.add_argument("url")
-    s.add_argument("--max-chars", dest="max_chars", type=int, default=30000)
-    s.set_defaults(fn="doc fetch")
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(
         dest="sub"
     ).add_parser("list", help="the bot templates this company can pick from").set_defaults(fn="template list")
-    bot = sub.add_parser(
-        "bot", aliases=["bots"], help="build a bot from a template (BotOps), change it, place it, its status"
-    ).add_subparsers(dest="sub")
-    s = bot.add_parser(
-        "show",
-        help="one bot: its profile, and for one you may read also its status, machine, queue, goals and routines",
-    )
-    s.add_argument("slug")
-    s.set_defaults(fn="bot show")
+    cli_spec.add(sub, bot_commands.BOT)  # tico bot and bots: clients/commands/bots.py
+    bot = _group_subparsers(sub, "bot")  # the leaves still built here are added below
     s = bot.add_parser(
         "create", help="build a bot from a template in the workspace and register it; --record-only only registers"
     )
@@ -2031,47 +1172,6 @@ def parser():
         help="with --record-only: `hermes` or `openclaw` for a bot run by a Hermes or OpenClaw profile; the company's default otherwise",
     )
     s.set_defaults(fn="bot create")
-    s = bot.add_parser("update", help="change a bot's settings with your rights, or the requester's (BotOps)")
-    s.add_argument("slug")
-    s.add_argument(
-        "--on-behalf-of",
-        metavar="MESSAGE_ID",
-        help="the person's message to BotOps asking for this change; by default the one that started this run",
-    )
-    s.add_argument("--reports-to", help="a bot slug, or human:<id>")
-    s.add_argument("--new-slug", help="rename its slug (a label: its id, history and folder stay)")
-    s.add_argument("--display-name")
-    s.add_argument("--description")
-    s.add_argument("--repo", help="its GitHub repository: <org>/bot-<slug>")
-    s.add_argument("--status", choices=("active", "paused", "planned"))
-    s.add_argument("--session", choices=("bot", "task"), help="one provider session per bot or per task")
-    s.add_argument(
-        "--subtask-session",
-        choices=("parent", "own"),
-        help="parent (default): a subtask continues its parent task's session; own: its own session",
-    )
-    s.add_argument(
-        "--task-goal", choices=("on", "off"), help="on: work each task it owns as a goal; off (default): not"
-    )
-    s.add_argument(
-        "--review-model",
-        choices=("check", "own"),
-        help="check: every subtask it is handed under another's task runs on the company's check model, "
-        "for a reviewer bot; own (default): its own model",
-    )
-    s.add_argument(
-        "--capture-stream",
-        choices=("on", "off"),
-        help="on (owner only): keep each run's raw provider stream a week for tico run export; off (default): not",
-    )
-    s.add_argument(
-        "--subscribe-updates",
-        metavar="templates,tico|none",
-        help="Subscribe to updates, as deferred messages for its next run: templates (its template's changes), "
-        "tico (Tico releases), both, or none",
-    )
-    s.add_argument("--shared", action=argparse.BooleanOptionalAction, default=None, help="allow branches")
-    s.set_defaults(fn="bot update")
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
     s.add_argument("slug")
     s.set_defaults(fn="bot check")
@@ -2079,72 +1179,6 @@ def parser():
     s.add_argument("target", help="the bot's slug, or its checkout folder")
     s.add_argument("--fix", action="store_true", help="rewrite the names that have one new spelling")
     s.set_defaults(fn="bot check-names")
-    s = bot.add_parser("access", help="show or set who may see, read and write to a bot")
-    s.add_argument("slug")
-    for level in ("see", "read", "write"):
-        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
-    s.set_defaults(fn="bot access")
-    s = bot.add_parser("owners", help="add or remove the humans who own a bot")
-    s.add_argument("slug")
-    s.add_argument("--add", nargs="+", default=[], metavar="HUMAN")
-    s.add_argument("--remove", nargs="+", default=[], metavar="HUMAN")
-    s.set_defaults(fn="bot owners")
-    s = bot.add_parser("mail", help="show or set whether a bot sends mail on its own (a person only)")
-    s.add_argument("slug")
-    s.add_argument(
-        "--send",
-        dest="outbound_send",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="--send: its sending policy is On their own; --no-send: Ask first",
-    )
-    s.set_defaults(fn="bot mail")
-    s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
-    s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
-    s.set_defaults(fn="bot setup-done")
-    s = bot.add_parser("ready", help="an onboarding bot says it is ready, with what it learned")
-    s.add_argument("--summary", required=True, help="a few lines on what you learned and what you will do first")
-    s.set_defaults(fn="bot ready")
-    s = bot.add_parser("place", help="put a bot on a computer, as the person who asked (BotOps)")
-    s.add_argument("bot")
-    s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
-    s.set_defaults(fn="bot place")
-    s = bot.add_parser(
-        "go-live",
-        help="place it if needed, turn it on and start its setup (BotOps)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=GO_LIVE_HELP,
-    )
-    s.add_argument("bot")
-    s.add_argument("--computer")
-    s.add_argument("--no-setup", dest="no_setup", action="store_true", help="do not start its setup chat")
-    s.set_defaults(fn="bot go-live")
-    s = bot.add_parser("restore", help="bring an archived bot back, as the person who asked (BotOps)")
-    s.add_argument("bot")
-    s.set_defaults(fn="bot restore")
-    s = bot.add_parser("archive", help="archive a bot you manage")
-    s.add_argument("bot")
-    s.add_argument("--successor")
-    s.set_defaults(fn="bot archive")
-    s = bot.add_parser(
-        "turns-at-once", help="read or set the most turns the bot runs at once across all computers: N or unlimited"
-    )
-    s.add_argument("bot")
-    s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else int(v), default=argparse.SUPPRESS)
-    s.set_defaults(fn="bot turns-at-once")
-    s = bot.add_parser(
-        "browser-exit",
-        help="read or set the computer a bot browses the web through: a computer id, or none for its own",
-    )
-    s.add_argument("bot")
-    s.add_argument("computer", nargs="?", type=lambda v: None if v == "none" else v, default=argparse.SUPPRESS)
-    s.set_defaults(fn="bot browser-exit")
-    s = bot.add_parser(
-        "app-view", help="read or set whether a bot may view the app read only, for its screenshots: on or off"
-    )
-    s.add_argument("bot")
-    s.add_argument("on", nargs="?", type=lambda v: {"on": True, "off": False}[v], default=argparse.SUPPRESS)
-    s.set_defaults(fn="bot app-view")
     s = bot.add_parser(
         "app-shot", help="a screenshot of the app as you see it, read only: --width 390 for a phone, 1280 for a desktop"
     )
@@ -2155,53 +1189,9 @@ def parser():
     s.add_argument("--wait-ms", dest="wait_ms", type=int, default=argparse.SUPPRESS)
     s.add_argument("--full", action="store_true", default=argparse.SUPPRESS)
     s.set_defaults(fn="bot app-shot")
-    s = bot.add_parser("budget", help="read or set a bot's runs per hour and per day, or release it from a hold")
-    s.add_argument("bot")
-    s.add_argument(
-        "action", nargs="?", choices=["release"], help="release the bot from a hold instead of changing a budget"
-    )
-    for window in ("hour", "day"):
-        s.add_argument(
-            "--" + window,
-            type=lambda v: v if v == "default" else int(v),
-            help=f"runs allowed per {window}: a number, 0 for no limit, or default to follow the team",
-        )
-    s.set_defaults(fn="bot budget")
-    s = bot.add_parser("profile", help="read or set a bot's profile: what wakes it and which tasks it takes")
-    s.add_argument("bot")
-    s.add_argument(
-        "profile",
-        nargs="?",
-        choices=["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"],
-        help="the profile to set; leave out to read the bot's and the choices",
-    )
-    s.add_argument(
-        "--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest"
-    )
-    s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")
-    s.add_argument(
-        "--sweeps",
-        type=lambda v: {"on": True, "off": False}[v],
-        metavar="on|off",
-        help="custom: whether the task roundup lists it its task sweep lines (late, backlog, assigned, restate, quiet tasks)",
-    )
-    s.add_argument("--takes", choices=["all", "review", "watcher", "none"], help="custom: which tasks it may be given")
-    s.add_argument(
-        "--confirm-drop-rules",
-        dest="confirm_drop_rules",
-        action="store_true",
-        default=None,
-        help="leaving custom deletes the wake rules it copied into the rules table",
-    )
-    s.set_defaults(fn="bot profile")
     s = bot.add_parser(
-        "release",
-        help="release a bot Tico stopped (failed runs, too many runs, or a run it could not start); "
-        "its queue starts again",
+        "model", help="list the models, or change this bot's model, where it compacts or its output style (BotOps)"
     )
-    s.add_argument("bot")
-    s.set_defaults(fn="bot release")
-    s = bot.add_parser("model", help="list the models, or change this bot's model or where it compacts (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
     s.add_argument("--effort")
@@ -2211,33 +1201,19 @@ def parser():
         help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
         "600000, 700000, 800000, 900000 or 1000000; default puts it back on its model's default",
     )
+    s.add_argument(
+        "--output-style",
+        dest="output_style",
+        choices=("default", "Concise", "Explanatory", "Learning", "Proactive"),
+        help="Claude Code's output style for its turns; default is Claude Code's own",
+    )
+    s.add_argument(
+        "--verbosity",
+        choices=("default", "low", "medium", "high"),
+        help="Codex's verbosity for its turns; default is the model's own",
+    )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
-    s = bot.add_parser(
-        "task-model",
-        help="the model the bot's tasks run on, with its effort and harness; --clear puts "
-        "them back on the bot's own model",
-    )
-    s.add_argument("bot")
-    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
-    s.add_argument("--effort")
-    s.add_argument("--harness")
-    s.add_argument("--clear", action="store_true", help="the bot's tasks run on its own model again")
-    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
-    s.set_defaults(fn="bot task-model")
-    for verb in ("pause", "resume"):
-        s = bot.add_parser(verb, help=f"{verb} a bot (BotOps)")
-        s.add_argument("bot")
-        s.set_defaults(fn="bot " + verb)
-    s = bot.add_parser("scope", help="limit a bot's claims to one task and its subtasks, or lift that (BotOps)")
-    s.add_argument("bot")
-    s.add_argument("task", nargs="?", help="the task it may still work on")
-    s.add_argument("--release", action="store_true", help="lift the limit; its other work becomes claimable again")
-    s.set_defaults(fn="bot scope")
-    s = bot.add_parser("branch", help="make your branch of a bot that allows branches")
-    s.add_argument("bot")
-    s.add_argument("--computer", help="your computer's label or id")
-    s.set_defaults(fn="bot branch")
     s = bot.add_parser("copy", help="copy a bot into a new one the requester owns (BotOps)")
     s.add_argument("bot", help="the bot to copy")
     s.add_argument("--slug", help="the copy's slug; the original's with the next free number (builder-2) by default")
@@ -2267,25 +1243,10 @@ def parser():
     )
     s.add_argument("--title")
     s.set_defaults(fn="bot suggest-to-original")
-    s = bot.add_parser("repos", help="read or set a bot’s repository access")
-    s.add_argument("bot")
-    modes = s.add_mutually_exclusive_group()
-    modes.add_argument("--all", action="store_true")
-    modes.add_argument("--own", action="store_true")
-    modes.add_argument(
-        "--chosen",
-        nargs="*",
-        metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
-        help="+actions lets the bot run workflows there, +edit edit workflow files (Owner or admin)",
-    )
-    s.set_defaults(fn="bot repos")
-    repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
-    s = repos.add_parser("list")
-    s.set_defaults(fn="repo list")
-    for verb in ("tick", "untick"):
-        s = repos.add_parser(verb)
-        s.add_argument("full_name")
-        s.set_defaults(fn="repo " + verb)
+    cli_spec.add(sub, bot_commands.BOT_REPOS, parents={("bot",): bot})  # clients/commands/bots.py
+    # `tico repo` (clients/commands/tools.py and connections.py): every leaf but review and product-create.
+    cli_spec.add(sub, tools_commands.REPO)
+    repos = _group_subparsers(sub, "repo")
     s = repos.add_parser("review", help="submit a GitHub review at an exact PR head; shared App falls back to COMMENT")
     s.add_argument("repository", metavar="OWNER/REPO")
     s.add_argument("number", type=int)
@@ -2304,36 +1265,13 @@ def parser():
     s.add_argument("name", help="exact GitHub repository name, without an organization")
     s.add_argument("--confirm", metavar="ORG/NAME", help="the exact preview target, instead of typing it at a terminal")
     s.set_defaults(fn="repo product-create")
-    s = bot.add_parser("repo-create", help="owner or BotOps: create <org>/bot-<slug> from a template, or empty")
-    s.add_argument("slug")
-    s.add_argument("--template", default="ticoteam/botops", metavar="OWNER/REPO")
-    s.add_argument(
-        "--empty", action="store_true", help="an empty private repository, for a bot whose history is on a computer"
-    )
-    s.set_defaults(fn="bot repo-create")
-    s = bot.add_parser("recent", help="the bots you have been working with lately and where each stands")
-    s.add_argument("--days", type=int, help="how far back (default 7)")
-    s.add_argument("--limit", type=int, help="at most this many bots (default 10)")
-    s.set_defaults(fn="bot recent")
-    st = bot.add_parser(
-        "status", help="a bot's live status: set yours, list every bot's, read the history"
-    ).add_subparsers(dest="subsub")
-    s = st.add_parser("set", help="one factual line about what you are doing now")
-    s.add_argument("focus")
-    s.add_argument("--state")
-    s.add_argument("--task")
-    s.add_argument("--bot")
-    s.set_defaults(fn="bot status set")
-    s = st.add_parser("list", help="every bot you may see with its live status")
-    s.add_argument("--team")
-    s.set_defaults(fn="bot status list")
-    s = st.add_parser("history", help="a bot's status history")
-    s.add_argument("bot")
-    s.add_argument("--since")
-    s.set_defaults(fn="bot status history")
     skill = sub.add_parser(
-        "skill", help="a bot's skills: copy one to other bots, or propose one to the company's Skills directory"
+        "skill", help="skills: list and search them, copy one to other bots, or propose one to the company's directory"
     ).add_subparsers(dest="sub")
+    s = skill.add_parser("list", help="every skill on Library › Skills, by job function and search words")
+    s.add_argument("q", nargs="*", metavar="WORD", help="words to match in the name, description or function")
+    s.add_argument("--function", metavar="F", help="one job function, like legal or finance; other for the rest")
+    s.set_defaults(fn="skill list")
     s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (BotOps)")
     s.add_argument("skill", help="the skill's folder name under skills/")
     s.add_argument("--from", dest="bot", required=True, metavar="BOT", help="the bot that has the skill")
@@ -2348,52 +1286,9 @@ def parser():
     s.add_argument("--note", metavar="TEXT", help="one line for the admin (200 characters)")
     s.add_argument("--base", type=int, metavar="N", help="the version an update is based on (default: the latest)")
     s.set_defaults(fn="skill submit")
-    agent = sub.add_parser("agent", help="external agents: connect a Hermes profile to a bot").add_subparsers(
-        dest="sub"
-    )
-    pair = agent.add_parser(
-        "pair", help="approve or decline the code a Hermes profile printed when it asked to pair"
-    ).add_subparsers(dest="subsub")
-    s = pair.add_parser("show", help="preview the profile, computer and expiry without changing a credential")
-    s.add_argument("code")
-    s.set_defaults(fn="agent pair show")
-    s = pair.add_parser(
-        "approve", help="connect the profile that printed this code to a bot (BotOps, or its owner or an admin)"
-    )
-    s.add_argument("code", help="like K7QM-4F2P")
-    s.add_argument("--bot", required=True, help="the bot's slug; it must use the hermes harness")
-    s.set_defaults(fn="agent pair approve")
-    s = pair.add_parser("decline", help="turn down the profile that printed this code")
-    s.add_argument("code")
-    s.set_defaults(fn="agent pair decline")
+    cli_spec.add(sub, bot_commands.AGENT)  # tico agent: clients/commands/bots.py
     cli_spec.add(sub, org_commands.HUMAN)  # tico human: clients/commands/org.py
-    groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(
-        dest="sub"
-    )
-    groups.add_parser("list", help="the groups with their humans and bots").set_defaults(fn="group list")
-
-    s = groups.add_parser(
-        "update", help="create (no group given), rename, move, lead or fill a group (an owner or an admin)"
-    )
-    s.add_argument("group", nargs="?", help="the group's id; leave out to create one from --name")
-    s.add_argument("--name")
-    s.add_argument("--parent", help="the group it is in; an empty one is the top")
-    s.add_argument("--add-human", dest="add_humans", action="append", metavar="HUMAN", help="put a human in it")
-    s.add_argument("--add-bot", dest="add_bots", action="append", metavar="BOT", help="put a bot in it")
-    s.add_argument("--remove-human", dest="remove_humans", action="append", metavar="HUMAN")
-    s.add_argument("--remove-bot", dest="remove_bots", action="append", metavar="BOT")
-    s.add_argument("--lead", help="bot:<slug> or person:<id>; an empty one clears it")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="group update")
-    s = groups.add_parser("delete", help="delete a group; its teammates and groups move up to its parent")
-    s.add_argument("group")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="group delete")
-    s = groups.add_parser("access", help="show or set who may see, read and write to a group")
-    s.add_argument("group")
-    for level in ("see", "read", "write"):
-        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
-    s.set_defaults(fn="group access")
+    cli_spec.add(sub, admin_commands.GROUP)  # tico group: clients/commands/admin.py
     setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")
     setup.add_parser(
         "show", help="where it stands: the wizard, the people the company file names, the checklist"
@@ -2415,17 +1310,9 @@ def parser():
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     cli_spec.add(sub, computers.COMPUTER)  # tico computer: clients/commands/computers.py
-    cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(
-        dest="sub"
-    )
-    s = cred.add_parser("request", help="open a card in the chat for the person to type the credential into")
-    s.add_argument("env", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--for-bot", dest="for_bot")
-    s.add_argument("--label", help="what it is: 'your Jira login'")
-    s.add_argument("--format", help="its shape: you@company.com:API token")
-    s.add_argument("--help-url", dest="help_url", help="an https page where they make one")
-    s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
-    s.set_defaults(fn="credential request")
+    # `tico credential` (clients/commands/tools.py): every leaf but set, which reads the value from standard input.
+    cli_spec.add(sub, tools_commands.CREDENTIAL)
+    cred = _group_subparsers(sub, "credential")
     s = cred.add_parser("set", help="store a credential a person gave you, for one bot; the value is read from stdin")
     s.add_argument("env")
     s.add_argument("--for-bot", dest="for_bot", required=True)
@@ -2434,138 +1321,20 @@ def parser():
     s.add_argument("--username")
     s.add_argument("--no-redact", dest="no_redact", action="store_true", help="leave the pasted words in the chat")
     s.set_defaults(fn="credential set")
-    cred.add_parser("list", help="names, variables and which bots have each; never a value").set_defaults(
-        fn="credential list"
-    )
-    s = cred.add_parser("grant", help="give a bot a stored credential")
-    s.add_argument("credential", help="its name in Credentials (or its variable's name)")
-    s.add_argument("--to", dest="to_bot", required=True, metavar="BOT")
-    s.set_defaults(fn="credential grant")
-    s = cred.add_parser("revoke", help="take a stored credential away from a bot")
-    s.add_argument("credential")
-    s.add_argument("--from", dest="from_bot", required=True, metavar="BOT")
-    s.set_defaults(fn="credential revoke")
-    s = cred.add_parser("delete", help="erase a Credential and all its grants (credential administrators)")
-    s.add_argument("credential")
-    s.set_defaults(fn="credential delete")
-    s = cred.add_parser(
-        "import", help="move one variable from a bot's own secrets file into Credentials, granted to that bot"
-    )
-    s.add_argument("env", metavar="VAR", help="the variable's name, like JIRA_BASIC_AUTH")
-    s.add_argument("--from-bot", dest="from_bot", required=True, metavar="BOT")
-    s.add_argument("--name", help="what to call it in Credentials; the variable's name by default")
-    s.add_argument("--kind", choices=["api_key", "token", "password", "connection"])
-    s.add_argument("--wait", type=int, help="seconds to wait for the computer to answer (30; at most 60)")
-    s.set_defaults(fn="credential import")
-    slack = sub.add_parser("slack", help="the Slack channels bots may read and post in").add_subparsers(dest="sub")
-    chan = slack.add_parser("channel", help="list, add or remove a channel").add_subparsers(dest="subsub")
-    chan.add_parser("list", help="the listed channels, their readers, and whether bots may post").set_defaults(
-        fn="slack channel list"
-    )
-    s = chan.add_parser("add", help="list a channel, or add readers to one already listed (an owner or an admin)")
-    s.add_argument("channel", help="#name or id (C0123456789)")
-    s.add_argument(
-        "--reader", dest="readers", action="append", metavar="BOT", help="a bot that reads it; repeat for several"
-    )
-    s.add_argument(
-        "--post",
-        dest="post",
-        action="store_true",
-        default=None,
-        help="bots may post there (the default for a new channel)",
-    )
-    s.add_argument("--no-post", dest="post", action="store_false", help="bots may only read it")
-    s.add_argument("--note", help="what the channel is for")
-    s.add_argument(
-        "--digest-hours", dest="digest_hours", type=float, help="readers get it at most once in this many hours"
-    )
-    s.add_argument("--name", help="its name, when you give the id")
-    s.set_defaults(fn="slack channel add")
-    s = chan.add_parser("remove", help="take a channel off the list, or one reader off it")
-    s.add_argument("channel")
-    s.add_argument("--reader", help="only this bot stops reading it")
-    s.set_defaults(fn="slack channel remove")
-    chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
-        fn="slack channel import"
-    )
+    cli_spec.add(sub, tools_commands.CREDENTIAL_AFTER_SET, parents={("credential",): cred})
+    cli_spec.add(sub, tools_admin.CREDENTIAL_CLI, parents={("credential",): cred})  # clients/commands/tools_admin.py
+    cli_spec.add(sub, tools_commands.SLACK)  # tico slack: clients/commands/tools.py
     cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
-    contacts = sub.add_parser(
-        "contacts",
-        help="contacts: people, organizations and places, their links, values and notes, as you see them",
-    ).add_subparsers(dest="sub")
-    s = contacts.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
-    s.add_argument("--text", dest="as_text", action="store_true", help="a short summary, not JSON")
-    s.set_defaults(fn="contacts self")
-    contacts.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
-        fn="contacts types"
+    cli_spec.add(sub, products_commands.PRODUCTS)  # tico products: clients/commands/products.py (backend/products.py)
+    cli_spec.add(sub, page_history_commands.PAGE_HISTORY)  # tico page-history: clients/commands/page_history.py
+    cli_spec.add(sub, contacts_commands.CONTACTS)  # tico contacts: clients/commands/contacts.py (not attribute add)
+    attribute = (
+        _group_subparsers(sub, "contacts")
+        .add_parser("attribute", help="add an attribute to a type")
+        .add_subparsers(dest="subsub")
     )
-    s = contacts.add_parser(
-        "describe", help="one type: its attributes (owners, options) and the link types that touch it"
-    )
-    s.add_argument("type")
-    s.set_defaults(fn="contacts describe")
-    s = contacts.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
-    s.add_argument("type")
-    s.add_argument("--name", help="a name prefix")
-    s.add_argument("--status")
-    s.add_argument("--link", help="a link to us, like customer_of")
-    s.add_argument("--after", help="the next the last page gave")
-    s.add_argument("--limit", type=int, help="up to 50")
-    s.add_argument("--text", dest="as_text", action="store_true", help="one line per entity, not JSON")
-    s.set_defaults(fn="contacts find")
-    s = contacts.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--text", dest="as_text", action="store_true", help="a short card, not JSON")
-    s.set_defaults(fn="contacts get")
-    s = contacts.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--as", dest="as_bot", metavar="BOT", help="the bot the rules are for")
-    s.add_argument("--action", help="what you would do, like email")
-    s.set_defaults(fn="contacts rules")
-    s = contacts.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
-    s.add_argument("type")
-    s.add_argument("--match", required=True, type=_pair, metavar="KEY=VALUE", help="email, domain, name or id")
-    s.add_argument(
-        "--set", dest="set_values", action="append", type=_pair, metavar="KEY=VALUE", help="one value, repeatable"
-    )
-    s.add_argument("--name")
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
-    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="contacts upsert")
-    s = contacts.add_parser("link", help="a typed, dated link between two entities: a works_at b")
-    s.add_argument("from_ref", metavar="a")
-    s.add_argument("link_key", metavar="link")
-    s.add_argument("to_ref", metavar="b")
-    s.add_argument("--from", dest="valid_from_on", metavar="DATE", help="YYYY-MM-DD the link starts")
-    s.add_argument("--until", dest="valid_until_on", metavar="DATE", help="YYYY-MM-DD the link ends")
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
-    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="contacts link")
-    s = contacts.add_parser("unlink", help="end a link: it stops being current today; its history stays")
-    s.add_argument("link_id")
-    s.set_defaults(fn="contacts unlink")
-    s = contacts.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
-    s.add_argument("keep")
-    s.add_argument("drop")
-    s.set_defaults(fn="contacts merge")
-    s = contacts.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
-    s.add_argument("drop")
-    s.set_defaults(fn="contacts unmerge")
-    s = contacts.add_parser("history", help="past values of an entity's fields, newest first")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("--attribute", help="one field's history")
-    s.add_argument("--after", help="the next the last page gave")
-    s.add_argument("--limit", type=int, help="up to 50")
-    s.set_defaults(fn="contacts history")
-    s = contacts.add_parser("note", help="a note on an entity; --audience me keeps it to you")
-    s.add_argument("ref", metavar="id|email|domain|name")
-    s.add_argument("body")
-    s.add_argument("--audience", choices=["me", "company"])
-    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it cites")
-    s.set_defaults(fn="contacts note")
-    attribute = contacts.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
     s = attribute.add_parser("add", help="add an attribute: name, value type, description, and options for a select")
     s.add_argument("type")
     s.add_argument("key")
@@ -2573,7 +1342,7 @@ def parser():
     s.add_argument("--value-type", dest="value_type", required=True, help="text, number, date, select, status ...")
     s.add_argument("--description", required=True, help="what it holds; required")
     s.add_argument(
-        "--option", dest="options", action="append", type=_pair, metavar="KEY=LABEL", help="a select's option"
+        "--option", dest="options", action="append", type=cli_spec.pair, metavar="KEY=LABEL", help="a select's option"
     )
     s.add_argument("--multiple", action="store_true")
     s.add_argument("--unique", dest="unique_value", action="store_true")
@@ -2581,43 +1350,7 @@ def parser():
     s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
     s.add_argument("--owner", help="tico (the default) or connection:<id>")
     s.set_defaults(fn="contacts attribute add")
-    kind = contacts.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
-    s = kind.add_parser("add", help="add an entity type, with its description")
-    s.add_argument("key")
-    s.add_argument("--name", required=True)
-    s.add_argument("--description", required=True)
-    s.add_argument("--plural", dest="plural_name")
-    s.add_argument("--icon")
-    s.set_defaults(fn="contacts type add")
-    link_type = contacts.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
-    s = link_type.add_parser("add", help="add a link type: its name both ways, its description, the ends it may join")
-    s.add_argument("key")
-    s.add_argument("--name", required=True)
-    s.add_argument("--inverse", dest="inverse_name", required=True, help="the name from the far end")
-    s.add_argument("--description", required=True)
-    s.add_argument("--from", dest="from_type", help="the type the link starts at")
-    s.add_argument("--to", dest="to_type", help="the type the link ends at")
-    s.add_argument(
-        "--inherits-rules", dest="inherits_rules", action="store_true", help="a rule toward one end reaches the other"
-    )
-    s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
-    s.set_defaults(fn="contacts link-type add")
-    manager = sub.add_parser(
-        "general-manager", help="the General Manager's hourly department check (docs/general-manager.md)"
-    ).add_subparsers(dest="sub")
-    manager.add_parser(
-        "status", help="bot, report switch and schedule, last run, each department's last check"
-    ).set_defaults(fn="general-manager status")
-    manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="general-manager on")
-    manager.add_parser("off", help="switch the hourly report off").set_defaults(fn="general-manager off")
-    manager.add_parser("run", help="run the department check now").set_defaults(fn="general-manager run")
-    s = manager.add_parser("schedule", help="pick when the report runs")
-    s.add_argument("preset", choices=["business", "hourly", "4h", "daily"])
-    s.add_argument("--at", help="HH:MM for the daily preset")
-    s.set_defaults(fn="general-manager schedule")
-    s = manager.add_parser("bot", help="turn the General Manager bot itself on or off")
-    s.add_argument("state", choices=["on", "off"])
-    s.set_defaults(fn="general-manager bot")
+    cli_spec.add(sub, task_work_commands.GENERAL_MANAGER)  # tico general-manager: clients/commands/task_work.py
     cli_spec.add(sub, computers.MAINTENANCE)  # tico maintenance: clients/commands/computers.py
     roadmap = sub.add_parser(
         "roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)"
@@ -2675,7 +1408,6 @@ def parser():
     s = keys.add_parser("revoke", help="stop a key at once")
     s.add_argument("id")
     s.set_defaults(fn="service-key revoke")
-    org_commands.add_commands(sub)  # tico bot list|go-live-all|quarantine-clear
     cli_spec.add(sub, org_commands.SPEND)  # tico usage, billing, reach: clients/commands/org.py
     from clients.commands import connections
 
@@ -2788,12 +1520,12 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 # Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
 # and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person on your task with: tico task ask <id> --to <person> "<one line>" --version N; '
+    'ask a person on your task with: tico task ask <id> --to <person> "<question>" (a message marked ❓); '
     'ask a bot with: tico message send <bot> "<question>" --needs-action'
 )
 ANSWER_INSTEAD = (
-    "a person answers in Needs you; a bot named on an ask answers with: "
-    "tico task answer <id> <requirement> ok|no|<answer> --version N"
+    "a person replies in Needs you; a bot named on an OK answers with: "
+    "tico task answer <id> <requirement> ok|no --version N"
 )
 WAIT_INSTEAD = (
     "a task waits only on a person it asks (tico task ask) or a task it files (tico task file --parent <id>); "
@@ -2822,6 +1554,7 @@ REMOVED = [
     (("task", "stuck"), "Tico's own check finds a task that is stuck; tico task list lists tasks"),
     (("task", "bulk"), "a person changes many tasks at once on the Tasks page; a bot changes one task at a time"),
     (("task", "waive-qa"), MOVE_INSTEAD),
+    (("task", "thumbs"), "asks no longer take a thumbs up or down; answer the ask: tico task answer"),
     (("task", "type"), PIPELINE_INSTEAD),
     (("task", "types"), PIPELINE_INSTEAD),
     (

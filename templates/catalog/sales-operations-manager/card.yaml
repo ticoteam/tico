@@ -57,3 +57,6 @@ first_routine:
 example_output: knowledge/examples/crm-report.md
 reasoning_effort: medium
 recommend_when: [uses_crm, has_pipeline, sells_to_businesses]
+shared_files:
+  - .claude/skills/run-a-sales-deal
+  - .claude/skills/set-and-test-prices

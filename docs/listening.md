@@ -33,6 +33,7 @@ A source is one thing to read. A listening has 1 to 50.
 |---|---|---|
 | **Search** | A search or a community on a site (Reddit, X, LinkedIn and so on) | A bot with a browser that holds the Listening tool. It is due again 24 hours after its last read |
 | **Page** | One web address | The server, once a day. A change is an item |
+| **GitHub** | One repository, as `owner/repo` (a pasted github.com address is trimmed to that): its **Merged PRs** (the default) or its **Releases** | The server, once an hour. Each PR merged into the default branch, or each release published (pre-releases too, never drafts), is one item: the PR's title, labels and the start of its description, or the release's tag, name and notes; never the diff. Items are known by the repository and number, so a PR read twice is one item, and two PRs with the same title are never called copies. It reads with the team's GitHub App when it can, otherwise GitHub's public API (60 calls an hour per server). A private repository is read when the team's GitHub App is installed on it (Tico asks it for read access to that repository's PRs and releases); otherwise the source shows Blocked. A read lists up to 500 PRs; when more changed since the last one, the next reads carry on where it stopped, and none is skipped. GitHub lists releases by the date of their commit, not of publication, so each read lists every release (one call per 100): a release published from an older commit (a backport) is found at the next read, wherever it sits. GitHub lists only the 1,000 newest by commit date; past them, a read lists the repository's tags (one more call) and looks up each new tag as a release. For a repository that commits without PRs, follow Releases |
 | **Push** | Nothing: an outside service (a monitoring service, a partner, a script) sends matches to an address | Nobody. Saving the source shows a secret address once |
 
 Every read is saved with whether it worked. Saving the same post twice does nothing.
@@ -41,6 +42,8 @@ Each source has a dot:
 
 - **Filled**: the last read worked, and it is not overdue.
 - **Hollow**: blocked, failed, never read, or not read for two days.
+
+Page and GitHub sources start from now on: the first read is where later ones start and makes no item.
 
 A push source is never overdue. Its dot is filled once something has arrived. The Listening line on
 [Tools](connect-tools.md#tools-list) shows the worst source's state, so a blocked source does not read as "on".
@@ -193,7 +196,8 @@ In the automation, the listening is the trigger:
 {"type": "listening",
  "sources": [{"id": "s1", "kind": "search", "site": "reddit", "target": "project tracking small team"},
              {"id": "s2", "kind": "page", "target": "https://northwind.com/pricing"},
-             {"id": "s3", "kind": "push", "site": "monitoring"}],
+             {"id": "s3", "kind": "push", "site": "monitoring"},
+             {"id": "s4", "kind": "github", "target": "acme/widgets", "follow": "prs"}],
  "rules":   [{"do": "keep", "tag": "question", "text": "Someone asking how to plan or track work for a small team"},
              {"do": "drop", "text": "Vendors promoting themselves. Job posts."}],
  "limits":  [{"count": 3, "per": "hour"}, {"count": 10, "per": "day"}],

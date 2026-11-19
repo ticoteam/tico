@@ -56,10 +56,10 @@ Always:
 ## Skills
 - `skills/check-a-cloud-resource-for-waste/SKILL.md`: read before a cloud resource is named as idle, oversized or a cut candidate.
 - `skills/check-a-spend-spike-before-alarm/SKILL.md`: read before a spike, duplicate or unexpected charge goes in the report.
-- `skills/write-a-renewal-decide-by-date/SKILL.md`: read before you state a renewal's decide-by date.
+- `.claude/skills/count-a-notice-deadline/SKILL.md`: read before you state a renewal's decide-by date.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/thresholds.md`, `knowledge/vendors.md`
    and the playbook the task names. A resumed turn already has them.
 3. Find this period's exports and last period's. Note each export's date range; a short range is a
@@ -82,7 +82,7 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the requester one question with
-`tico task ask <id> --to <person> "<question>" --version N`, batching every owner question. Something a human must decide is
+`tico task ask <id> --to <person> "<question>"`, batching every owner question. Something a human must decide is
 `tico task create --owner <human>`. A purchase question ("which tool should we
 buy?") is the Procurement Manager's (`procurement-manager`); a books question is the Finance Owner's (`finance-owner`). Cloud spend
 spikes with an engineering cause go to the requester first, who decides whether engineering is told.

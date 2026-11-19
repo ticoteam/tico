@@ -1,5 +1,5 @@
 # pyright: strict
-"""The one writer of a task's stage, owner and status (docs/pipelines-v3.md, "The five rules").
+"""The one writer of a task's stage, owner and status (docs/dev/pipelines-v3.md, "The five rules").
 
 Every change to `tasks.status`, `stage_id`, `owner_id` and `pipeline_id` is made here, by `_write`, which opens the
 guard the trigger `tasks_move_only` reads, writes, and closes it again inside the caller's transaction. Reassign, Done,
@@ -16,13 +16,14 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, idea_checks, stage_effects, stage_pick, task_effects
 from . import task_requirements as R
 from . import task_depends, task_wakes, validate_gate
-from .hubdb_core import KEEPER as SYSTEM
+from .hubdb_core import TICO_ACTOR as SYSTEM
 
 if TYPE_CHECKING:
     import sqlite3
@@ -115,7 +116,7 @@ def _then(row: Row, *which: str) -> list[str]:
     said = {
         "push": f'tico task move {ident} next -m "why" --version {version}',
         "back": f'tico task move {ident} <earlier stage> -m "why" --version {version}',
-        "ask": f'tico task ask {ident} --to <person> "one sentence" --version {version}',
+        "ask": f'tico task ask {ident} --to <person> "<question>"',
         "file": f'tico task file --parent {ident} "title"',
         "snooze": f'tico task snooze {ident} -m "why" --version {version}',
         "close": f'tico task close {ident} -m "why" --version {version}',
@@ -153,8 +154,33 @@ def _part(row: Row, key: str) -> Row:
 
 
 # ----------------------------------------------------------------------------- reads
+PIPELINE_SQL = "SELECT * FROM pipelines WHERE id=?"
+STAGE_SQL = "SELECT * FROM stages WHERE id=?"
+
+
 def pipeline(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
-    return _h()._one(conn, "SELECT * FROM pipelines WHERE id=?", (pipeline_id,))
+    return _h()._one(conn, PIPELINE_SQL, (pipeline_id,))
+
+
+def prime_parts(conn: "sqlite3.Connection", stage_ids: Iterable[object], pipeline_ids: Iterable[object]) -> None:
+    """Read many stages and pipelines by id, one statement a table, for the `stage` and `pipeline` reads that follow
+    in this snapshot (`task` reads both for each task of a list). Nothing outside a snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    for one_sql, table, ids in ((STAGE_SQL, "stages", stage_ids), (PIPELINE_SQL, "pipelines", pipeline_ids)):
+        unread = sorted({str(i) for i in ids if i and ("one", one_sql, (str(i),)) not in values})
+        if not unread:
+            continue
+        found = {
+            str(row["id"]): row
+            for row in conn.execute(
+                f"SELECT * FROM {table} WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(unread),)
+            )
+        }
+        read_cache.prime(conn, one_sql, {(i,): found.get(i) for i in unread})
 
 
 _STAGES_SQL = (
@@ -194,8 +220,50 @@ def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> Non
         values.setdefault(("stages", pipeline_id), found)
 
 
+_PLACES = (
+    (
+        "stage_id",
+        "SELECT * FROM stages WHERE id=?",
+        "SELECT * FROM stages WHERE id IN (SELECT value FROM json_each(?))",
+    ),
+    (
+        "pipeline_id",
+        "SELECT * FROM pipelines WHERE id=?",
+        "SELECT * FROM pipelines WHERE id IN (SELECT value FROM json_each(?))",
+    ),
+)
+
+
+def prime_places(conn: "sqlite3.Connection", rows: Iterable[Row]) -> None:
+    """Read the stages and pipelines of many tasks together, for the `stage` and `pipeline` reads that follow in this
+    snapshot: a list of tasks reads them in two statements, not one for each stage and pipeline it shows."""
+    import sqlite3
+
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None or conn.row_factory is not sqlite3.Row:
+        return
+    rows = list(rows)
+    for column, one_sql, many_sql in _PLACES:
+        ids = sorted({str(r[column]) for r in rows if r.get(column)})
+        unread = [i for i in ids if ("one", one_sql, (i,)) not in values]
+        if unread:
+            found = {str(r["id"]): r for r in conn.execute(many_sql, (json.dumps(unread),)).fetchall()}
+            read_cache.prime(conn, one_sql, {(i,): found.get(i) for i in unread})
+
+
 def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:
-    return _h()._one(conn, "SELECT * FROM stages WHERE id=?", (stage_id,))
+    return _h()._one(conn, STAGE_SQL, (stage_id,))
+
+
+def is_main_work(stage_row: Row) -> bool:
+    return stage_row["kind"] == "work" and not stage_row.get("side")
+
+
+def main_work(order: Iterable[Row]) -> list[Row]:
+    """The work stages on a pipeline's main path, in their original order."""
+    return [s for s in order if is_main_work(s)]
 
 
 def task(conn: "sqlite3.Connection", task_id: str) -> Row | None:
@@ -252,7 +320,7 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
     (`rides_with_filer`): the stage may then hold one over its limit, and takes no other task until it is under
     again."""
     limit = stage_row.get("task_limit")
-    if stage_row["kind"] != "work" or not limit:
+    if not is_main_work(stage_row) or not limit:
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
@@ -270,11 +338,11 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_ro
 
 
 def next_stage(conn: "sqlite3.Connection", task_row: Row) -> Row | None:
-    """The stage after the task's own: the next work stage, or Done after the last one. None for an ended task."""
-    if task_row["stage"]["kind"] != "work":
+    """The next main work stage, or Done after the last one. Side stages and ended tasks have no automatic next."""
+    if not is_main_work(task_row["stage"]):
         return None
     order = stages(conn, task_row["pipeline_id"])
-    work = [s for s in order if s["kind"] == "work"]
+    work = main_work(order)
     at = next((i for i, s in enumerate(work) if s["id"] == task_row["stage_id"]), None)
     if at is not None and at + 1 < len(work):
         return work[at + 1]
@@ -407,7 +475,7 @@ def shut_out(
     conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False
 ) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
-    it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
+    it may. The engine never adds a reader, an owner or a party to a private task (docs/dev/pipelines-v3.md, "Private
     tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
     stage asks, cannot read it, and waits until a person who can see it shares it. A bot the pipeline names for the
     stage (`names`) is the exception: it reads the task while it holds the stage, and only then (`stage_read`).
@@ -429,7 +497,7 @@ def shut_out(
     if private and new_owner and not names(target, new_owner) and not H.task_private_readable(conn, new_owner, full):
         blocked.append((new_owner, "owns"))
     for requirement in R.on_stage(conn, target["id"]):
-        who = R.person_of(conn, requirement, "") if requirement["kind"] in ("ok", "answer") else None
+        who = R.person_of(conn, requirement, "") if requirement["kind"] == "ok" else None
         if who and who != owner and not H.task_private_readable(conn, who, after):
             blocked.append((who, "is asked in"))
     if not blocked:
@@ -475,6 +543,7 @@ WRITES = frozenset(
         "done_at",
         "closed_at",
         "closed_by_id",
+        "prefix",
     }
 )
 
@@ -613,21 +682,26 @@ def _wake_turn(
     own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
     from . import waiting_on as W
 
+    refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     target, turn_lead = _turn_of(conn, row)
     if not target:
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     out = task_wakes.add(
         conn,
         row,
         target,
         row["visit"],
-        task_wakes.body(conn, row, turn_lead or lead, to=target),
-        refs=refs,
+        task_wakes.with_instructions(task_wakes.body(conn, row, turn_lead or lead, to=target), instructions),
+        refs={**refs, task_wakes.INSTRUCTIONS: True} if instructions else refs,
         trigger=trigger,
         source=source,
     )
+    if instructions and not out:
+        task_wakes.keep_instructions(conn, row, instructions)
     for wait in W.of(conn, row):
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
@@ -756,7 +830,7 @@ def enter(
     if row.get("pipeline_id"):
         _refuse(conn, by, "task_changed", "The task is already in a pipeline", task_id)
     pipe = pipeline(conn, pipeline_id)
-    work = [s for s in stages(conn, pipeline_id) if s["kind"] == "work"] if pipe else []
+    work = main_work(stages(conn, pipeline_id)) if pipe else []
     first = next((s for s in work if s["id"] == start), None) if start else (work[0] if work else None)
     if not pipe or pipe.get("retired_at") or not first:
         _refuse(conn, by, "task_no_such_stage", "No such pipeline", task_id)
@@ -795,6 +869,8 @@ def enter(
         assignee_id=assignee,
         status="open",
         updated_at=ts,
+        # Its label's letters are the pipeline's it is made in, and stay the task's wherever it moves (`refile`).
+        **({} if row.get("prefix") else {"prefix": pipe.get("prefix") or None}),
     )
     entered_visit = _open_visit(conn, task_id, first["id"], "new", ts)
     if picked:
@@ -840,23 +916,29 @@ def short_of_queue(work: Sequence[Row], stage: Row | None) -> Row | None:
     new visit. Nothing that skips the stages before it lands in a stage that queues PRs."""
     from .item_sources import github as GS
 
-    if not stage or not GS.queues_prs(stage):
+    if not stage or not is_main_work(stage) or not GS.queues_prs(stage):
         return stage
-    at = next((i for i, s in enumerate(work) if s["id"] == stage["id"]), 0)
-    return work[at - 1] if at > 0 else stage
+    main = main_work(work)
+    at = next((i for i, s in enumerate(main) if s["id"] == stage["id"]), 0)
+    return main[at - 1] if at > 0 else stage
 
 
 def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row, str] | tuple[None, None]:
-    """The stage `to` names for this task, and the kind of move it is: forward, back, done, closed or reopen. None
+    """The stage `to` names for this task, and the kind of move it is: forward, side, back, done, closed or reopen. None
     when the task is already there."""
     order = stages(conn, row["pipeline_id"])
-    work = [s for s in order if s["kind"] == "work"]
+    work = main_work(order)
     here = row["stage"]
     ended = here["kind"] != "work"
     if to == NEXT:
         if ended:
             _refuse(conn, by, "task_ended", f"The task is {here['name']}. Reopen it first.", row["id"])
-        target = next_stage(conn, row)
+        if here.get("side"):
+            position = (here["position"], here["id"])
+            target = next((s for s in work if (s["position"], s["id"]) > position), None)
+            target = target or next((s for s in order if s["kind"] == "done"), None)
+        else:
+            target = next_stage(conn, row)
     elif to in (DONE, CLOSED):
         target = next((s for s in order if s["kind"] == to), None)
     elif to == REOPEN:
@@ -865,10 +947,10 @@ def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row
         before = conn.execute(
             "SELECT v.stage_id FROM visits v JOIN stages s ON s.id = v.stage_id "
             "WHERE v.task_id=? AND v.left_at IS NOT NULL AND s.kind='work' AND s.retired_at IS NULL "
-            "ORDER BY v.left_at DESC, v.entered_at DESC LIMIT 1",
-            (row["id"],),
+            "AND s.pipeline_id=? ORDER BY v.left_at DESC, v.entered_at DESC, v.rowid DESC LIMIT 1",
+            (row["id"], row["pipeline_id"]),
         ).fetchone()
-        target = next((s for s in work if before and s["id"] == before[0]), None) or (work[0] if work else None)
+        target = next((s for s in order if before and s["id"] == before[0]), None) or (work[0] if work else None)
         target = short_of_queue(work, target)
     else:
         target = next((s for s in order if s["id"] == to), None)
@@ -885,13 +967,15 @@ def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row
         return target, "closed"
     if target["kind"] == "done":
         return target, "done"
+    if here.get("side") or target.get("side"):
+        return target, "side"
     positions = {s["id"]: i for i, s in enumerate(work)}
     return target, "forward" if positions[target["id"]] > positions[here["id"]] else "back"
 
 
 def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standing]:
     """The requirements of every work stage a forward move jumps over, each as not met."""
-    work = [s for s in stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    work = main_work(stages(conn, row["pipeline_id"]))
     at = next(i for i, s in enumerate(work) if s["id"] == row["stage_id"])
     end = next((i for i, s in enumerate(work) if s["id"] == target["id"]), len(work))
     out: list[R.Standing] = []
@@ -1011,19 +1095,25 @@ def _decide(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, deci
         answers._write(conn, row, standing.requirement["id"], by, "ok", why, version)  # pyright: ignore[reportPrivateUsage]
 
 
-def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row, kind: str) -> None:
+def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row) -> None:
     """Only a person moves a task back into a stage that queues its PRs (from a later stage, where a new PR may have
     been linked). Anyone else moves it back to the stage before that one, where what it needs is asked again."""
-    if kind != "back" or is_human(by):
+    if is_human(by):
         return
-    work = [s for s in stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    from .item_sources import github as GS
+
+    if not GS.queues_prs(target):
+        return
+    work = main_work(stages(conn, row["pipeline_id"]))
     short = short_of_queue(work, target)
-    if short and short["id"] != target["id"]:
+    earlier = short is not None and short["id"] != target["id"]
+    if earlier or row["stage"].get("side"):
+        alternative = f" Move it back to {short['name']} instead." if short and earlier else ""
         _refuse(
             conn,
             by,
             "task_stage",
-            f"Only a person moves a task back into {target['name']}. Move it back to {short['name']} instead.",
+            f"Only a person moves a task back into {target['name']}.{alternative}",
             row["id"],
             row=row,
             then=("back", "ask"),
@@ -1075,6 +1165,13 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    side = kind == "side" or (kind == "done" and bool(row["stage"].get("side")))
+    if kind in ("forward", "done", "closed") and not cascade and not side:
+        from . import question_marks
+
+        question_marks.refuse_ending(
+            conn, by, task_id, closing=kind == "closed"
+        )  # a bot's own open ❓ waits for its reply
     held = shut_out(conn, row, target)
     if held:
         _refuse(
@@ -1092,7 +1189,8 @@ def move(
     visit = row["visit"]
     pushed: list[Row] = []
     decided: list[R.Standing] = []
-    if kind in ("forward", "done"):
+    missing: list[R.Standing] = []
+    if kind in ("forward", "done") and not side:
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
         if is_bot(by) and (why or "").strip():
             # The bot asked to decide a page Jev was unsure of moved it on with a reason: that is its decision, an OK
@@ -1100,42 +1198,47 @@ def move(
             decided = [s for s in missing if R.asked_to_decide(s, by)]
             missing = [s for s in missing if not R.asked_to_decide(s, by)]
         _may_push_past(conn, by, row, why, missing, target["id"])
-        if target["kind"] == "work" and not has_room(conn, target, task_row=row):
-            # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
-            # person's request that moves on by itself (`not_held_by_hand`).
-            held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
-            then_what = (
-                f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
-                if held_here
-                else "The task moves in when there is room."
-            )
-            _refuse(
-                conn,
-                by,
-                "task_stage_full",
-                f"No room in {target['name']}. {then_what}",
-                task_id,
-                row=row,
-                then=("snooze", "close"),
-                version=row.get("version"),
-            )
+    if kind in ("forward", "side") and not has_room(conn, target, task_row=row):
+        # A stage tasks leave by hand needs another move when the target has room.
+        held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
+        then_what = (
+            f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
+            if held_here
+            else "The task moves in when there is room."
+        )
+        _refuse(
+            conn,
+            by,
+            "task_stage_full",
+            f"No room in {target['name']}. {then_what}",
+            task_id,
+            row=row,
+            then=("snooze", "close"),
+            version=row.get("version"),
+        )
+    if kind in ("forward", "done") and not side:
         _decide(conn, by, row, why, decided)
         pushed = _push_past(conn, by, row, why, missing, ts)
     elif kind == "reopen":
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
-    else:
+    elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
-        _may_go_back_to(conn, by, row, target, kind)
+    if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
+        _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:
         _may_close(conn, by, row)
     # Why its sub-tasks close, kept on each: their readers may not read a private task that filed them, so it is not named.
     named = not H.task_private(conn, row) and row.get("title")
     closed_with = f"Closed with {named or 'the task that filed it'}"
-    if kind in ("back", "closed"):
+    if kind in ("back", "closed") or (kind == "side" and is_main_work(row["stage"])):
         stage_effects.undo(conn, row, by, closed_with)
     if kind == "closed":
         _close_under(conn, task_id, by, closed_with)
-    how = {"forward": "met", "done": "met", "back": "back", "closed": "closed", "reopen": "reopened"}[kind]
+    how = (
+        "side"
+        if side
+        else {"forward": "met", "done": "met", "back": "back", "closed": "closed", "reopen": "reopened"}[kind]
+    )
     if pushed:
         how = "pushed_past"
     _close_visit(conn, visit, how, by, why, ts)
@@ -1186,7 +1289,7 @@ def move(
         target["id"],
         ". ".join(part for part in (why, unable) if part) or None,
         {
-            "move": "pushed_past" if pushed else kind,
+            "move": how if pushed or side else kind,
             "owner": owner,
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
@@ -1217,7 +1320,210 @@ def move(
         task_depends.release(conn, task_id, SYSTEM)
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
-    task_effects.moved(conn, row, moved, kind, by, why, revision)
+    task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
+    return _task(conn, task_id)
+
+
+# ----------------------------------------------------------------------------- move to another pipeline
+MOVED = "moved"
+
+
+def pipeline_named(conn: "sqlite3.Connection", by: str, name: str, task_id: str | None = None) -> Row:
+    """The pipeline in use that `name` names: its id, or its name in any case. Refuses `task_no_such_stage` otherwise."""
+    wanted = str(name or "").strip()
+    found = pipeline(conn, wanted) if wanted else None
+    if not found and wanted:
+        found = _h()._one(conn, "SELECT * FROM pipelines WHERE name=? COLLATE NOCASE AND retired_at IS NULL", (wanted,))
+    if not found or found.get("retired_at"):
+        _refuse(conn, by, "task_no_such_stage", f"No pipeline called {wanted or 'that'}", task_id)
+    return found
+
+
+def _refile_target(conn: "sqlite3.Connection", by: str, row: Row, pipe: Row, to: str | None) -> Row:
+    """Where a task moved into `pipe` lands: an open task in the work stage `to` names (its id or name; none is the
+    first), a Done or Closed task in that pipeline's Done or Closed: a move never reopens or ends a task."""
+    order = stages(conn, str(pipe["id"]))
+    here = row["stage"]["kind"]
+    if here != "work":
+        found = next((s for s in order if s["kind"] == here), None)
+    elif not str(to or "").strip():
+        found = next((s for s in order if is_main_work(s)), None)
+    else:
+        wanted = str(to).strip()
+        work = [s for s in order if s["kind"] == "work"]
+        found = next((s for s in work if s["id"] == wanted), None)
+        found = found or next((s for s in work if s["name"].lower() == wanted.lower()), None)
+    if not found:
+        _refuse(conn, by, "task_no_such_stage", f"No stage {to} in {pipe['name']}", row["id"])
+    return found
+
+
+def turn_running(conn: "sqlite3.Connection", task_id: str, by: str | None = None) -> str | None:
+    """The bot whose turn on this task is running now (a leased or running attempt), or None. A bot's own turn is not
+    in the way of its own move: `by` is left out."""
+    found = conn.execute(
+        "SELECT bot_id FROM attempts WHERE task_id=? AND state IN ('leased','running') "
+        "AND (lease_until IS NULL OR lease_until>?) ORDER BY created_at DESC",
+        (task_id, _h().now()),
+    ).fetchall()
+    mine = _h().actor_id(by) if by and is_bot(by) else None
+    return next((str(bot) for (bot,) in found if bot != mine), None)
+
+
+def where_line(conn: "sqlite3.Connection", stage_row: Row) -> str:
+    """ "Backlog › On ice": a stage with its pipeline's name, as a move to another pipeline says it."""
+    pipe = pipeline(conn, str(stage_row["pipeline_id"])) or {}
+    return f"{pipe.get('name') or stage_row['pipeline_id']} › {stage_row['name']}"
+
+
+def refile(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    to_pipeline: str,
+    to: str | None,
+    by: str,
+    why: str | None = None,
+    seen_version: int | str | None = None,
+    *,
+    batch: str | None = None,
+    turn_check: bool = True,
+) -> Row:
+    """Move a task to a stage of another pipeline (docs/pipelines-v3.md, "Move to another pipeline"): the same task,
+    with its number, label, history, comments, files and links. It is a re-file, not a forward move: the old stage's
+    unmet requirements do not hold it, and it pushes past nothing. Entering the new stage is a normal entry: its owner
+    rule, stage rules, room and wake apply. The old visit ends `moved` (its asks withdrawn), a snooze ends, and what the
+    old stage did on entering is undone as a back move undoes it, except that sub-tasks stay open where they are. An
+    open task lands in the work stage `to` names (none: the first), a Done or Closed one in the new pipeline's Done or
+    Closed. A bot says why. Refused while a bot's turn on the task runs (`task_turn_running`), and into a full stage
+    (`task_stage_full`). `batch` is the bulk move it is part of, on its event."""
+    from . import private_pipelines
+
+    H = _h()
+    row = task(conn, task_id)
+    if not row:
+        _refuse(conn, by, "not-found", "No such task")
+    check_version(conn, by, row, seen_version)
+    pipe = pipeline_named(conn, by, to_pipeline, task_id)
+    target = _refile_target(conn, by, row, pipe, to)
+    _need_why(conn, by, why, "move it to another pipeline", task_id)
+    running = turn_running(conn, task_id, by) if turn_check else None
+    if running:
+        _refuse(
+            conn,
+            by,
+            "task_turn_running",
+            f"{H.actor_name(conn, 'bot:' + running)} is working on this task now. Move it after the turn, or stop it.",
+            task_id,
+            version=row.get("version"),
+        )
+    if not is_human(by) and target["kind"] == "work":
+        # Landing further in skips the stages before it, so a bot never moves a task past a person's OK.
+        work = main_work(stages(conn, str(pipe["id"])))
+        target_at = (target["position"], target["id"])
+        for skipped in work:
+            if (skipped["position"], skipped["id"]) >= target_at:
+                break
+            if any(R.people_only(r) for r in R.on_stage(conn, skipped["id"])):
+                _refuse(conn, by, "task_needs_person", f"{skipped['name']} needs a person's OK first", task_id)
+    if private_pipelines.is_private(pipe) and pipe["id"] != row["pipeline_id"]:
+        # Every task in a private pipeline is private and its manager reads it: entering one adds readers, which only a
+        # person does (a bot never widens who reads a task).
+        if not is_human(by) and by != SYSTEM:
+            _refuse(
+                conn, by, "task_needs_person", f"Only a person moves a task into {pipe['name']}: it is private", task_id
+            )
+        private_pipelines.admit(conn, task_id, pipe)  # undone with the move if the move is refused
+        row = task(conn, task_id) or row
+    held = shut_out(conn, row, target)
+    if held:
+        _refuse(
+            conn,
+            by,
+            "task_not_shared",
+            told(conn, by, row, held),
+            task_id,
+            row=row,
+            version=row.get("version"),
+            said={**held, "fix": fix_for(conn, by, row, held)},
+        )
+    if target["kind"] == "work" and not has_room(conn, target, task_row=row):
+        _refuse(
+            conn,
+            by,
+            "task_stage_full",
+            f"No room in {where_line(conn, target)}. Move it again when one leaves.",
+            task_id,
+            version=row.get("version"),
+        )
+    ts = H.now()
+    if row["status"] == "open":
+        # Why a hand-off it filed closes, kept on that task: a private task that filed it is not named (as in `move`).
+        named = not H.task_private(conn, row) and row.get("title")
+        stage_effects.undo(conn, row, by, f"{named or 'The task that filed it'} moved", sub_tasks=False)
+    if row.get("visit"):
+        _close_visit(conn, row["visit"], MOVED, by, why, ts)
+    if row.get("snooze"):
+        _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
+    assignee = _feature_owner(row)
+    wanted = owner_for(target, assignee, row.get("owner_id"))
+    owner, unable, ruled = owner_ruled(conn, {**row, "pipeline_id": pipe["id"]}, target, wanted)
+    task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
+    extra: Row = {}
+    if assignee != row.get("assignee_id"):
+        extra["assignee_id"] = assignee
+    picked = _pick(conn, {**row, "pipeline_id": pipe["id"]}, target, owner, unable)
+    if picked and picked[0].bot:
+        owner = picked[0].bot
+        if picked[1].owns_task:
+            extra["assignee_id"] = owner
+    if row.get("prefix") is None:
+        # The label keeps the letters of the pipeline the task was made in ('' when that one had none).
+        extra["prefix"] = _part(row, "pipeline").get("prefix") or ""
+    _write(
+        conn,
+        task_id,
+        pipeline_id=pipe["id"],
+        stage_id=target["id"],
+        owner_id=owner,
+        version=int(row.get("version") or 0) + 1,
+        updated_at=ts,
+        **extra,
+    )
+    entered_visit = _open_visit(conn, task_id, target["id"], MOVED, ts)
+    if picked:
+        _picked(conn, task_id, entered_visit, target, picked[0])
+    if target["kind"] == "work":
+        stage_read(conn, task_id, target)
+    # The history line reads "Steven moved it from Dev › Ideas to Backlog › On ice — why" (both stages are named).
+    revision = _event(
+        conn,
+        task_id,
+        by,
+        "move",
+        row["stage_id"],
+        target["id"],
+        ". ".join(part for part in (why, unable) if part) or None,
+        {
+            "move": MOVED,
+            "owner": owner,
+            "was_owner": row.get("owner_id"),
+            "from_pipeline": row["pipeline_id"],
+            "to_pipeline": pipe["id"],
+            "why": why or "",
+            **({"batch": batch} if batch else {}),
+            **({"stage_rule": ruled["id"]} if ruled else {}),
+        },
+    )
+    if ruled:
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+        stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": wanted or ""})
+    _owned(conn, row, _task(conn, task_id), by)
+    moved = _task(conn, task_id)
+    if target["kind"] == "work":
+        _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
+    task_effects.moved(conn, row, moved, MOVED, by, why, revision, batch=batch)
     return _task(conn, task_id)
 
 
@@ -1377,13 +1683,11 @@ def _checks_need_no_run(conn: "sqlite3.Connection", row: Row, owner: str, refs: 
 
     - PASSED_MOVES_ON: with the checks passed the stage asks for nothing more, so it is nobody's turn and the
       never-stuck check moves the task on when the next stage has room. `turn` is already False then: this only names it.
-    - CHECKS_SEEN: it is the owner's turn, but its last run on the task (not a keep-warm turn) began after Tico had this
+    - CHECKS_SEEN: it is the owner's turn, but its last run on the task began after Tico had this
       result (`refs.pr_done_at`), and the pull request's head is still this one: that run already had the head and its
       checks. The result stays a note for its next run.
 
     Anything it cannot read starts the run."""
-    from . import run_triggers
-
     if refs.get("pr_result") != "pass":
         return None
     if not turn:
@@ -1394,8 +1698,8 @@ def _checks_need_no_run(conn: "sqlite3.Connection", row: Row, owner: str, refs: 
         return None
     last = conn.execute(
         "SELECT started_at FROM attempts WHERE bot_id=? AND task_id=? AND started_at IS NOT NULL "
-        "AND coalesce(purpose,'')<>? ORDER BY rowid DESC LIMIT 1",
-        (_h().actor_id(owner), row["id"], cast("Any", run_triggers).KEEP_WARM),
+        "ORDER BY rowid DESC LIMIT 1",
+        (_h().actor_id(owner), row["id"]),
     ).fetchone()
     if not last or str(last[0]) <= at:
         return None
@@ -1423,6 +1727,23 @@ def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) ->
     )
 
 
+TICOS_DONE = "Nothing else holds the task now"
+STUCK_TITLE = "Stuck"  # the heading of a stopped task's question (never_stuck.ask_person), kept in its settings
+
+
+def stuck_ask(requirement: Row) -> bool:
+    """A question on this visit taken back once nothing else holds the task: a stopped task's (never_stuck.ask_person,
+    by its heading) or a feature's about the task's own work (`ends_with_task`, backend/person_asks.py)."""
+    if not requirement.get("visit_id"):
+        return False
+    settings: object = requirement.get("settings")
+    found: object = json.loads(settings) if isinstance(settings, str) and settings else settings
+    if not isinstance(found, dict):
+        return False
+    said = cast("dict[str, object]", found)
+    return said.get("title") == STUCK_TITLE or bool(said.get("ends_with_task"))
+
+
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     """Forward, by the engine: move the task to its next stage if everything is met, there is room, and nobody there
     is shut out of a private task (`shut_out`: it waits until it is shared). Returns the moved task, or None when it
@@ -1433,7 +1754,16 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if task_depends.blocked(conn, task_id):
         return None  # a task it depends on is still open: it goes on when that ends (task_depends.release)
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
+    unmet = R.unmet(conn, row)
+    if target and unmet and all(stuck_ask(s.requirement) for s in unmet):
+        # Only a stopped task's question is left (never_stuck.ask_person): what it asked about is over (the bot
+        # finished, the release came), so it is taken back and the task moves on.
+        hub = _h()
+        for standing in unmet:
+            conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))
+            _event(conn, task_id, hub.TICO_ACTOR, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
+        unmet = []
+    if not target or unmet or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
     if idea_checks.holds(conn, row):
         return None  # Jev's duplicate check comes first (idea_checks), for WAIT_S at most
@@ -1573,10 +1903,10 @@ def _may_name(conn: "sqlite3.Connection", by: str, actor: str | None, task_id: s
 
 def _sets_assignee(conn: "sqlite3.Connection", row: Row) -> bool:
     """Whether a reassign in an assignee-held stage names the task's assignee: in its pipeline's first work stage
-    (Product's Pitch: who the feature owner is), or while it has none."""
+    (Product's Spec: who the feature owner is), or while it has none."""
     if not row.get("assignee_id"):
         return True
-    first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if s["kind"] == "work"), None)
+    first = next((s for s in stages(conn, str(row.get("pipeline_id") or "")) if is_main_work(s)), None)
     here: Row = row.get("stage") or {}
     return first is not None and first["id"] == here.get("id")
 
@@ -1623,6 +1953,8 @@ def reassign(
     said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
     data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
     revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, said, data)
+    if "assignee_id" in fields and fields["assignee_id"] != row.get("assignee_id"):
+        _event(conn, task_id, by, "assignee_id", row.get("assignee_id"), fields["assignee_id"])
     if overturned:
         H.event(conn, by, "stage_rule.overturned", task_id, {"rule": overturned["id"], "owner": owner})
     moved = _task(conn, task_id)
@@ -1662,7 +1994,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
     says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
     start the ladder again themselves. `standings` saves reading them again when the caller has them."""
-    from . import read_cache
+    from . import question_marks, read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
     if not found:
@@ -1671,27 +2003,25 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         row = task(conn, found[0])
         standings = R.standings(conn, row) if row and _part(row, "visit").get("id") == visit_id else ()
     stand = ",".join(f"{s.requirement['id']}={s.state}:{s.on or ''}" for s in standings)
-    return ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    mark = ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+    # A person's reply to a ❓ on it is progress too (backend/question_marks.py). Only a task that has one says so,
+    # so every other task keeps the mark it had.
+    replies = question_marks.replies(conn, found[0])
+    return f"{mark}.q{replies}" if replies else mark
 
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
     """The task changed: start the never-stuck ladder again. The owner has it, no tries are counted, and the check
-    looks again after the first gap. Call it after the change is written, so the mark it keeps includes the change. A
-    task that Late brought to a person stays with that person until a person acts. Wakes still queued for a bot that
-    has no turn now are canceled (`_drop_stale`)."""
+    looks again after the first gap, also when the ladder had rested on it (Late included: it is in no person's list
+    to keep it in). Call it after the change is written, so the mark it keeps includes the change. Wakes still queued
+    for a bot that has no turn now are canceled (`_drop_stale`)."""
     mark = progress_mark(conn, visit["id"])
     look = _h().shift(ts, seconds=FIRST_TRY_S)
-    if visit.get("level") == "person" and visit.get("late_person_at") and not _h().by_own_hand(by):
-        conn.execute(
-            "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
-            (mark, ts, look, visit["id"]),
-        )
-    else:
-        conn.execute(
-            "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
-            "WHERE id=?",
-            (look, ts, mark, visit["id"]),
-        )
+    conn.execute(
+        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
+        "WHERE id=?",
+        (look, ts, mark, visit["id"]),
+    )
     _drop_stale(conn, visit["task_id"])
 
 
@@ -1792,6 +2122,11 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
     conn.execute(f"DELETE FROM idea_checks WHERE task_id IN ({marks})", ids)  # an owed check is for this visit
     conn.execute(f"DELETE FROM related_inputs WHERE task_id IN ({marks})", ids)  # likewise Jev's related bots
+    conn.execute(f"DELETE FROM ask_opinions WHERE task_id IN ({marks})", ids)  # and Flow's opinion on each ask
+    conn.execute(f"DELETE FROM ask_snoozes WHERE task_id IN ({marks})", ids)  # and each person's snooze of an ask
+    from . import question_marks
+
+    question_marks.end_tasks(conn, ids, "deleted", by)  # and each ❓ on its chat
     return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
 
 
@@ -1876,7 +2211,7 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
 def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence[Row], was: object) -> Row | None:
     """Where an open task comes back (`restore`): the work stage it was in, while it is still in the pipeline, has
     room and may take it, else the first one if that may. Refused when a private task may go into neither."""
-    first = work[0] if work else None
+    first = next((s for s in work if is_main_work(s)), None)
     saved = short_of_queue(work, next((s for s in work if s["id"] == was), None))
     held: Row | None = None
     for stage in (saved, first):
@@ -2056,50 +2391,52 @@ def add_requirement(
     person: str | None,
     line: str,
     *,
-    choices: list[str] | None = None,
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
-    brief: Row | None = None,
-    title: str | None = None,
+    ends_with_task: bool = False,
 ) -> Row:
-    """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
-    choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
-    requirement's settings. The task does not leave the stage
-    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
-    `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
-    (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
-    `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
-    H = _h()
+    """Add an OK from a named person to this task, for this visit (C30). A question is refused: it is a message marked
+    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page, a file or a web
+    address). `ends_with_task`: an OK a feature asks
+    about the task's own work (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it
+    never holds it alone. The task does not leave the stage until it is answered, withdrawn or pushed past. A bot has
+    one open per task: asking again replaces it (C15, `_replace_open`). A bot does not ask an OK in Product's Validate
+    that is not an OK of its passed proof page (validate_gate; `for_action`: an OK bound to an action, task_asks.ask_ok,
+    is that action's own)."""
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
-    if kind not in ("ok", "answer"):
-        _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
+    if kind == "answer":
+        # A question is a message marked ❓ now (backend/question_marks.py), not an ask the task waits on.
+        _refuse(conn, by, "task_requirement", QUESTION_INSTEAD, task_id)
+    if kind != "ok":
+        _refuse(conn, by, "task_requirement", "Only an OK can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
     if person == by and not is_human(by):
         # A bot never satisfies its own request. A person may ask themself: their own click is what answers it (an OK
         # of their own ask is refused unless it is that click, answers._may_answer).
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
-    if kind == "ok" and not is_human(person):
+    if not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
-    if is_bot(by):
-        page = _people_page(conn, row, kind, shows, choices)
+    if is_bot(by) and not for_action:
+        page = people_page(conn, row, shows)
+        if page and page in R.APPROVED:
+            # A stage's approval is asked by Tico when the bot writes the document, never by the bot.
+            hint = R.DOCUMENT_OK_HINT.format(document=page)
+            _refuse(conn, by, "task_requirement", f"This stage asks a person to approve the {page}. {hint}", task_id)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
-        shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
-    if is_bot(by) and kind == "answer" and is_human(person):
-        signoff = _stage_asks(conn, row, str(person))
-        if signoff:
-            name = H.actor_name(conn, person)
-            _refuse(
-                conn, by, "task_requirement", f"The stage already asks {name} to OK {signoff}. {ASKED_HINT}", task_id
-            )
+        shows = validate_gate.check_ask(conn, row, by, person, shows)
+        if is_bot(by) and not shows_a_file(conn, by, shows):
+            # A bot's OK that is not bound to an action approves something it shows: a page or a file it may read. A
+            # bare "OK?", or one that shows only a link, is a question.
+            _refuse(conn, by, "task_requirement", OK_SHOWS, task_id)
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
@@ -2107,14 +2444,32 @@ def add_requirement(
         _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
+    return _write_ask(conn, row, by, kind, person, line, shows=shows, ends=ends_with_task)
+
+
+def _write_ask(
+    conn: "sqlite3.Connection",
+    row: Row,
+    by: str,
+    kind: str,
+    person: str | None,
+    line: str,
+    *,
+    shows: object = None,
+    ends: bool = False,
+) -> Row:
+    """The ask `add_requirement` checked, written on the task's visit: it replaces the bot's open one, starts the
+    ladder again and wakes whom it names. Returns the task with `requirement_id`."""
+    H = _h()
+    task_id = str(row["id"])
     ts = H.now()
     visit = row["visit"]
     if is_bot(by):
         _replace_open(conn, task_id, visit["id"], by, ts)
     requirement_id = H.new_id()
     conn.execute(
-        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, settings, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -2125,8 +2480,7 @@ def add_requirement(
             1 if is_bot(by) else 0,
             line.strip(),
             None if shows is None else json.dumps(shows),
-            None if choices is None else json.dumps(choices),
-            json.dumps({**({"brief": brief} if brief else {}), **({"title": title} if title else {})}),
+            json.dumps({"ends_with_task": True} if ends else {}),
             ts,
         ),
     )
@@ -2141,54 +2495,69 @@ def add_requirement(
     return out
 
 
-def _people_page(
-    conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
-) -> str | None:
+def people_page(conn: "sqlite3.Connection", row: Row, shows: object, *, question: bool = False) -> str | None:
     """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK that shows that
-    page or shows nothing, or a yes/no question that shows that page, while the stage has one. A person OKs that page
-    already, every version, so the bot's ask adds a second one and nothing passes on it. A yes/no that shows nothing is
+    page or shows nothing, or a ❓ (`question`) whose message names that page, while the stage has one; any OK at all
+    while the stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that
+    page already, every version, so the bot's ask adds a second one and nothing passes on it. A ❓ that names no page is
     a plain question (a Spec stage's clarifying question) and is allowed."""
-    yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
-    if kind != "ok" and not yes_no:
-        return None
     from . import task_pages as P
 
     refs = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
     for requirement in R.for_visit(conn, row["visit"]):
-        if requirement["kind"] != "page" or not requirement.get("stage_id") or not R.people_only(requirement):
+        signoff = R.people_only(requirement) or bool(requirement.get("person_id"))
+        if requirement["kind"] != "page" or not requirement.get("stage_id") or not signoff:
+            continue
+        document = R.document_of(requirement)
+        if document and not question:
+            return document
+        if not R.people_only(requirement):
             continue
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
-        if named or (kind == "ok" and not refs):
+        if named or (not question and not refs):
             return R.name_of(requirement)
     return None
 
 
-# What a bot is told when the stage already asks the person it names (`_stage_asks`).
-ASKED_HINT = "Do not ask them again: put any question on the page or in a comment."
+# What a question is now (backend/question_marks.py), and what a bot's unbound OK needs (`add_requirement`).
+QUESTION_INSTEAD = (
+    'A question is a message: tico task ask <id> --to <person> "<question>" posts it on the task marked ❓, and '
+    "their reply clears it. No choices or --why: say them in the message."
+)
+OK_SHOWS = (
+    "An OK approves what it shows: add --show page:<id> or file:<id>@<version>. "
+    'For anything else, mark a ❓ instead: tico task ask <id> --to <person> "<question>".'
+)
 
 
-def _stage_asks(conn: "sqlite3.Connection", row: Row, person: str) -> str | None:
-    """The name of the stage's OK or page that waits on `person` now, or None. A bot's question to that same person
-    would be a second item in their Needs you, and the stage would wait on both (Tico Team, Nov 12: the Product Owner
-    asked "Please OK the attached spec" beside the Spec page's own OK, and Spec stayed after the page was OK'd). A page
-    a person OKs anyway counts while Jev is still checking it: it goes to them next."""
-    from . import waiting_on
+# What a bot's OK may approve (`shows_a_file`): a page, at a version or its current one, or a file at a version.
+SHOWN = re.compile(r"page:(?P<page>[^@\s]+)(?:@(?P<at>[0-9]+))?|file:(?P<file>[^@\s]+)@(?P<version>[0-9]+)")
 
-    for standing in R.standings(conn, row):
-        requirement = standing.requirement
-        if standing.state != R.WAITING or not requirement.get("stage_id") or requirement["kind"] not in R.STEERED:
+
+def shows_a_file(conn: "sqlite3.Connection", by: str, shows: object) -> bool:
+    """Whether what an OK shows names at least one page (`page:<id>`, `page:<id>@<version>`) or file version
+    (`file:<id>@<version>`) that is there and that `by` may read: its page audience, and the task it lives on. A link or
+    any other text approves nothing Tico holds."""
+    from . import task_privacy as _privacy
+
+    H, privacy = _h(), cast(Any, _privacy)
+    for ref in cast("list[object]", shows) if isinstance(shows, list) else [shows] if shows else []:
+        found = SHOWN.fullmatch(str(ref).strip())
+        if not found:
             continue
-        on = standing.on
-        if on == R.JEV:
-            if not (requirement.get("person_id") or R.people_only(requirement)):
-                continue  # Jev passing it is enough: no person is asked
-            on = R.person_of(conn, requirement, row["visit"]["id"])
-        elif on and not is_human(on):
-            continue  # a bot named to approve, or a source
-        if (on or waiting_on.person_for(conn, row)) == person:
-            return R.name_of(requirement)
-    return None
+        fid = found["page"] or found["file"]
+        row = conn.execute("SELECT task_id, current_version, archived FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if not row or row["archived"]:
+            continue
+        number = int(found["at"] or found["version"] or row["current_version"] or 0)
+        if not conn.execute("SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone():
+            continue
+        if row["task_id"] and not H.task_private_readable(conn, by, H.task(conn, row["task_id"])):
+            continue
+        if privacy.page_content_readable(conn, by, [f"page:{fid}"]):
+            return True
+    return False
 
 
 def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:

@@ -1,6 +1,7 @@
 """A computer given a person's plans for a runtime (backend/model_subscriptions.py `_pick`, `settle`): every plan that
 person owns for it, used one at a time. The plan in use stays while it has usage left; when it is held at its limit or
-needs reconnecting, the next turn moves to the available plan whose weekly reset comes soonest, in a fresh session.
+needs reconnecting, the next turn moves to the available plan whose weekly reset comes soonest: a runner that resumes a
+Claude thread on another plan keeps the sessions, an older one starts them fresh.
 Spec: Models, "Give a computer a person's plans" (task #226)."""
 
 import json
@@ -160,6 +161,53 @@ def test_a_persons_plans_run_on_the_soonest_reset_with_usage_left_then_move_on_w
     after = epoch(api)
     finish(api, m, turn(api, m))
     assert epoch(api) == after and len(moves(api)) == 1
+
+
+def sessions(api):
+    """Each conversation's session epoch: a reset moves every one of the bot's."""
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT conversation_id,epoch FROM session_epochs").fetchall())
+
+
+def test_a_move_between_claude_plans_keeps_the_sessions_and_only_a_persons_change_asks(api, readings):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    p1, p2, p3 = three_plans(api, readings)
+    m = machine(api, label="Studio Mac", caps=("model_subscriptions_v1", MS.RESUME_CAPABILITY))
+    give_person(api, m)
+    first = turn(api, m)
+    assert signed_with(api, first) == p2
+    finish(api, m, first)
+    before, kept = epoch(api), sessions(api)
+    # Plan 2 is held: the next turn runs on Plan 3, and resumes the session Plan 2's turn began (runner-rs execute.rs).
+    hold(api, p2, days=2, since=H.shift(H.now(), seconds=5))
+    moved = turn(api, m)
+    assert signed_with(api, moved) == p3
+    assert (epoch(api), sessions(api)) == (before, kept)
+    [event] = moves(api)
+    assert (event["from"], event["to"], event["why"]) == (p2, p3, "held")
+    assert (event["sessions_kept"], event["sessions_reset"]) == (True, 0)
+    # Plan 3 is refused while its turn runs: the set moves on at the next claim, the sessions still kept.
+    with api.app.state.store.transaction() as c:
+        assert MS.turn_rejected(c, api.app.state.store.settings, moved["id"], "ops", "claude", "Token revoked", "")
+    assert (epoch(api), sessions(api)) == (before, kept)
+    # A person's change still asks first, and starts the sessions fresh.
+    one = {"runner_id": m["runner_id"], "runtime": "claude", "subscription": p1}
+    refused = put(api, "computer-subscriptions", one, expected=409)
+    assert refused["error"]["code"] == "confirm_restart" and refused["error"]["running"] == 1
+    assert put(api, "computer-subscriptions", {**one, "confirm": True})["stopped"] == 1
+    assert epoch(api) > before
+
+
+def test_a_codex_move_or_an_older_runner_still_starts_the_sessions_fresh(api):
+    setup(api)
+    m = machine(api, caps=("model_subscriptions_v1", MS.RESUME_CAPABILITY))
+    with api.app.state.store.read() as c:
+        assert MS.keeps_sessions(c, m["runner_id"], "claude")
+        # Codex keeps its threads in each plan's own home; an older runner keys a thread by its plan.
+        assert not MS.keeps_sessions(c, m["runner_id"], "codex")
+        assert not MS.keeps_sessions(c, "an-older-runner", "claude")
 
 
 def limit_met(api, m, found):
@@ -393,7 +441,7 @@ def test_a_reading_a_turn_reports_on_a_plan_in_a_persons_set_is_that_plans_usage
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
+            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
             "readiness": {
                 "schema_version": 1,
                 "bots": {"ops": {"runtime": "claude", "ready": True}},
@@ -422,25 +470,6 @@ def test_a_reading_a_turn_reports_on_a_plan_in_a_persons_set_is_that_plans_usage
     )
     usage = next(s for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == sid)["usage"]
     assert (usage["window"], usage["used_pct"], usage["weekly_used_pct"]) == ("week", 30, 30)
-
-
-def test_the_person_migration_adds_the_column_and_skips_a_new_file():
-    import importlib
-    import sqlite3
-
-    step = importlib.import_module("backend.migrations.20261112190000_computer_subscription_person")
-    fresh = sqlite3.connect(":memory:")
-    step.up(fresh)  # no table yet: SCHEMA makes it with the column
-    assert not fresh.execute("SELECT 1 FROM sqlite_master WHERE name='computer_subscriptions'").fetchone()
-    old = sqlite3.connect(":memory:")
-    old.execute(
-        "CREATE TABLE computer_subscriptions(runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT "
-        "NOT NULL, set_by TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(runner_id, runtime))"
-    )
-    old.execute("INSERT INTO computer_subscriptions VALUES('r','claude','s','human:ana','2026-11-12')")
-    step.up(old)
-    step.up(old)  # a second start changes nothing
-    assert old.execute("SELECT subscription_id, person FROM computer_subscriptions").fetchall() == [("s", "")]
 
 
 def test_settings_search_finds_the_picker_by_the_name_of_a_person_who_owns_a_plan(api):

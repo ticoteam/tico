@@ -36,8 +36,11 @@ function vaultForIntegration(row: VaultToolRow | null | undefined): VaultCredent
   });
 }
 async function vaultFetch() {
-  if (!S.me?.credential_access) return null;
-  VAULT = await get('/v2/credentials');
+  if (!(S.me?.credential_access || S.me?.credential_remove_access)) return null;
+  VAULT = await get<VaultState>('/v2/credentials').catch((error: unknown) => {
+    if ((error as {status?: number})?.status === 403) return null;
+    throw error;
+  });
   return VAULT;
 }
 // A write level in words: what a bot may change there (backend/integrations.py `write_level`).
@@ -56,7 +59,7 @@ async function integrationDetail(service: string, load: number, {base = TOOLS_RO
     return;
   }
   if (load !== INT_LOAD || !$('#int-detail')) return;
-  // Another name for the same tool goes to its own; a page with no service (an older hub) stays put.
+  // Another name for the same tool goes to its own; a page with no service stays put.
   if (page.service && page.service !== service) { location.replace(base + '/' + page.service + (location.hash.includes('?') ? '?' + location.hash.split('?')[1] : '')); return; }
   // A query entry carries `sql`, or `mongo` for a MongoDB database; bots run either with `tico db`.
   const queryText = (q: IntegrationQuery): string => q.sql ? q.sql.trim() : JSON.stringify(q.mongo, null, 2);

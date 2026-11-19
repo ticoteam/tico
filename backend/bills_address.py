@@ -30,15 +30,8 @@ from pydantic import Field
 from .auth import validate_identity
 from .models import Contract
 from .store import H, Problem
+from .api_contract import KEYLESS, api_v2
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bills_inbound(
- id TEXT PRIMARY KEY, delivery TEXT NOT NULL, received_at TEXT NOT NULL, sender TEXT NOT NULL DEFAULT '',
- subject TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', mime TEXT NOT NULL, sha256 TEXT NOT NULL,
- state TEXT NOT NULL DEFAULT 'waiting', file_id TEXT, action_id TEXT, code TEXT NOT NULL DEFAULT '',
- tries INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS bills_inbound_state ON bills_inbound(state, updated_at);
-"""
 ACTOR = "bot:finance-owner"
 READABLE = ("application/pdf", "image/png", "image/jpeg", "image/webp", "image/heic")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -241,7 +234,7 @@ def file_bill(c, files, row, blob_id, digest, size):
         "UPDATE bills_inbound SET state=?, file_id=?, action_id=?, code=?, updated_at=? WHERE id=?",
         (state, made["id"], action_id, code[:80], H.now(), row["id"]),
     )
-    H.event(c, H.KEEPER, "bills.received", row["id"], {"state": state, "file": made["id"]})
+    H.event(c, H.TICO_ACTOR, "bills.received", row["id"], {"state": state, "file": made["id"]})
     return state
 
 
@@ -286,7 +279,16 @@ class BillsAddress(Contract):
 
 
 def install(app, store, auth):
-    @app.put("/api/v2/finance/bills-address")
+    @app.put(
+        "/api/v2/finance/bills-address",
+        **api_v2(
+            "Finance",
+            "setFinanceBillsAddress",
+            "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
+            "FinanceBillsAddress",
+            idempotency=KEYLESS,
+        ),
+    )
     def bills_address_set(request: Request, body: BillsAddress):
         """Set the bills email vendors send bills to (`address`), or clear it (`null`). Owner or admin. `inbox_id` says
         which Tico address receives it; null means mail to it never reaches Tico, and uploads still work."""

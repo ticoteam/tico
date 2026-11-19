@@ -1,6 +1,8 @@
 ---
 name: write-a-written-consent
 description: Draft a board or stockholder written consent with each resolution standing alone, the signers the bylaws require, the filing place, and a notice step where the law needs one, for counsel to settle before anyone signs.
+metadata:
+  function: legal
 ---
 # Write a written consent
 

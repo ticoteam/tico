@@ -13,7 +13,7 @@ def online(api):
 
 
 def start(api, r, runtime="codex", **kw):
-    return post(api, f"runners/{r['runner_id']}/logins", {"runtime": runtime}, **kw)
+    return post(api, f"computers/{r['runner_id']}/logins", {"runtime": runtime}, **kw)
 
 
 def report(api, r, lid, **body):
@@ -22,7 +22,7 @@ def report(api, r, lid, **body):
 
 def test_other_members_cannot_start_read_or_cancel_a_login(api):
     r = online(api)
-    base = f"runners/{r['runner_id']}/logins"
+    base = f"computers/{r['runner_id']}/logins"
     post(api, base, {"runtime": "codex"}, token="cara-test", expected=403)
     lid = start(api, r)["id"]
     get(api, f"{base}/{lid}", token="cara-test", expected=403)
@@ -57,10 +57,10 @@ def test_nothing_token_like_is_stored_or_shown(api):
         ],
         message=f"failed {jwt}",
     )
-    dump = json.dumps(stored(api)) + json.dumps(get(api, f"runners/{r['runner_id']}/logins/{login['id']}"))
+    dump = json.dumps(stored(api)) + json.dumps(get(api, f"computers/{r['runner_id']}/logins/{login['id']}"))
     for leaked in (jwt, secret, blob, "eyJ", "sk-ant"):
         assert leaked not in dump
-    shown = get(api, f"runners/{r['runner_id']}/logins/{login['id']}")
+    shown = get(api, f"computers/{r['runner_id']}/logins/{login['id']}")
     assert shown["url"] == "" and shown["code"] == ""  # http and free text are refused
     assert "Enter code AB12-CD345" in shown["lines"]
     assert "\x1b" not in dump

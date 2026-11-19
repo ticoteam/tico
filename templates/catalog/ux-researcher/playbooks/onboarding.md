@@ -33,7 +33,7 @@ Record each answer, dated, in the `knowledge/` file it belongs to. Write the out
 
 ## 5. Do the first piece of work now
 
-Take the first one or two conversations you can read and follow `playbooks/write-an-interview-snapshot.md`. Write the digest in the shape of `knowledge/examples/research-digest.md` to `reports/`, attach it to the task, labelled "First draft, not yet reviewed". Contact no one.
+Take the first one or two conversations you can read and write a snapshot of each (`.claude/skills/learn-from-customers/SKILL.md`, step 8). Write the digest in the shape of `knowledge/examples/research-digest.md` to `reports/`, attach it to the task, labelled "First draft, not yet reviewed". Contact no one until the owner has said who you may contact for research.
 
 ## 6. Check the routine
 

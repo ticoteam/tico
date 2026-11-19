@@ -58,7 +58,7 @@ Always:
 - `skills/answer-a-plan-question-from-the-page/SKILL.md`: read before you answer a plan question for anyone.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/eligibility.md`,
    `knowledge/change-log.md` and the playbook. A resumed turn already has them.
 3. Read who joined, leaves or changed: `tico team show` and the open people tasks.
@@ -79,7 +79,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Plan documents come through the Librarian: `tico doc ask "<question>"`, then `tico doc read <path>` for the page it cites.
 The roster is `tico team show`. A change a human must submit is `tico task create --owner <person>` with what the provider
-needs. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
+needs. A question for the requester is `tico task ask <id> --to <person> "<question>"`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The page opens with the windows closing in the next 14 days.

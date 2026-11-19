@@ -1,7 +1,7 @@
 import json
 
 from backend.tests.helpers.api import post, get, runner, assign, ready, claim, headers
-from backend.tests.helpers.credentials import create, setup
+from backend.tests.helpers.credentials import create, explicit_only, setup
 
 
 def test_ciphertext_only_and_authorizers_and_validation_redaction(api):
@@ -39,6 +39,7 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='finance'")
     child = post(api, f'credentials/{cid}/grants', {'subject': 'bot:finance'}, 'cara-test')
+    explicit_only(api)  # what explicit grants alone give
     machine = runner(api)
     assign(api, machine, 'finance')
     ready(api, machine, ['finance'])
@@ -84,6 +85,7 @@ def test_the_person_who_stored_a_credential_shares_it_only_with_their_own_bots(a
     post(api, f'credentials/{theirs}/grants', {'subject': 'bot:finance'}, 'cara-test', expected=403)
     ops = post(api, f'credentials/{mine}/grants', {'subject': 'bot:ops'})
     post(api, f'credentials/{mine}/grants/{ops["id"]}/revoke', {}, 'cara-test', expected=403)
+    explicit_only(api)  # what explicit grants alone give
     machine = runner(api)
     assign(api, machine, 'finance')
     ready(api, machine, ['finance'])
@@ -136,14 +138,6 @@ def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_ro
             ).fetchone()[0]
             == 1
         )
-
-    # A server that ran the old backfill: no row already there stays anyone's, even one a member stored.
-    with store.transaction() as c:
-        c.execute('ALTER TABLE credentials DROP COLUMN member_stored')
-    store.initialize()
-    with store.read() as c:
-        assert c.execute('SELECT count(*) FROM credentials WHERE member_stored=1').fetchone()[0] == 0
-    post(api, f'credentials/{again["id"]}/grants', {'subject': 'bot:finance'}, 'cara-test', expected=403)
 
     # Her own credential stops being hers once someone else saves a new value for it.
     mine = member_stores(api, 'finance', 'POSTHOG_API_KEY', 'phx-member-own-value-987')['id']
@@ -204,6 +198,35 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
         assert 'PostHog' in event and 'synthetic-private' not in event and 'ciphertext' not in event
 
 
+def test_member_removes_a_credential_they_stored_without_a_grant_to_read_it(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='cpo'")
+    cid = member_stores(api, 'cpo', 'POSTHOG_API_KEY', 'phx-member-owned-value-123456')['id']
+    [item] = get(api, 'credentials', 'cara-test')['credentials']
+    assert item['id'] == cid and item['can_remove'] and not item['can_reveal']
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('cara-test')).json()['deleted']
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM credentials WHERE id=?', (cid,)).fetchone()
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='credential.deleted' AND target=?", (cid,)).fetchone()[0]
+            == 'human:cara'
+        )
+
+
+def test_demoted_adder_can_list_and_remove_a_loose_password_without_seeing_its_value(api):
+    setup(api)
+    cid = post(
+        api, 'credentials', {'name': 'Acme account', 'kind': 'password', 'secret': 'stored-password'}, 'ben-test'
+    )['id']
+    api.app.state.store.settings.credential_admins = ('ana@acme.example',)
+    [item] = get(api, 'credentials', 'ben-test')['credentials']
+    assert item['id'] == cid and item['tool_id'] is None and item['remove_only'] and not item['can_reveal']
+    assert 'preview' not in item and 'username' not in item and item['grants'] == []
+    get(api, 'credentials', 'cara-test', expected=403)
+    assert api.delete(f'/api/v2/credentials/{cid}', headers=headers('ben-test')).json()['deleted']
+
+
 def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(api):
     setup(api)
     from backend.credentials import FILE_MIGRATION
@@ -234,17 +257,114 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
         c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
     post(api, 'runner-credential-migration', values, machine['token'])
     assert get(api, 'runner-credential-grants', machine['token'])['bots'] == {'ops': []}
-    # The first pass on an unreported runner preserves a later HUB_ pass for the upgraded runner.
+    # A database an rc.1 server left with a HUB_ pass for a bot serves it to any runner, then drains it.
     from backend.credentials import HUB_MIGRATION
 
-    with api.app.state.store.read() as c:
-        assert 'ops' in json.loads(
-            c.execute('SELECT value FROM registry_metadata WHERE key=?', (HUB_MIGRATION,)).fetchone()[0]
-        )
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'release': '0.2.32'}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), HUB_MIGRATION))
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == ['ops']
     post(api, 'runner-credential-migration', {'bot': 'ops', 'credentials': []}, machine['token'])
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == []
+
+
+def test_a_computer_file_import_records_the_computers_owner_as_the_keys_adder(api):
+    setup(api)
+    from backend.credentials import FILE_MIGRATION
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator='ben')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
+    values = {'bot': 'ops', 'credentials': [{'env': 'QA_MOVED_KEY', 'value': 'fixture-moved-value-123456'}]}
+    post(api, 'runner-credential-migration', values, machine['token'])
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT id,created_by,updated_by FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+        [granted_by] = c.execute('SELECT granted_by FROM credential_grants WHERE credential_id=?', (row['id'],))
+        [event] = c.execute("SELECT actor FROM events WHERE action='credential.migrated' AND target=?", (row['id'],))
+    # Ben's computer brought it over: he is its adder. The Computer itself still made the grant and the event.
+    assert row['created_by'] == 'human:ben'
+    assert row['updated_by'] == granted_by[0] == event[0] == 'runner:' + machine['runner_id']
+
+
+def test_migration_shares_one_credential_per_value_by_grant(api):
+    setup(api)
+    from backend.credentials import FILE_MIGRATION
+
+    machine = runner(api)
+    for bot in ('ops', 'finance', 'cpo'):
+        assign(api, machine, bot)
+    ready(api, machine, ['ops', 'finance', 'cpo'])
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            'UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops', 'finance', 'cpo']), FILE_MIGRATION)
+        )
+
+    def migrate(bot, value):
+        item = {'env': 'QA_SHARED_KEY', 'value': value}
+        post(api, 'runner-credential-migration', {'bot': bot, 'credentials': [item]}, machine['token'])
+
+    def rows():
+        with api.app.state.store.read() as c:
+            return [
+                dict(r)
+                for r in c.execute("SELECT id,name,tool_id FROM credentials WHERE env='QA_SHARED_KEY' ORDER BY name")
+            ]
+
+    # Two bots with the same value: one credential named after its variable, two grants, one tool.
+    migrate('ops', 'fixture-shared-value-1')
+    migrate('finance', 'fixture-shared-value-1')
+    shared = rows()
+    assert [r['name'] for r in shared] == ['QA_SHARED_KEY'] and shared[0]['tool_id']
+    assert get(api, 'runner-credential-grants', machine['token'])['bots'] == {
+        'ops': ['QA_SHARED_KEY'],
+        'finance': ['QA_SHARED_KEY'],
+        'cpo': [],
+    }
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?', (shared[0]['id'],)).fetchone()[0]
+            == 2
+        )
+        assert c.execute('SELECT count(*) FROM tools').fetchone()[0] == 1
+        events = [
+            r[0] for r in c.execute("SELECT detail FROM events WHERE action='credential.migrated' ORDER BY rowid")
+        ]
+    assert json.loads(events[1])['shared'] is True and all('fixture-shared' not in e for e in events)
+    # A different value is its own credential; the bot's name tells it apart from the first.
+    migrate('cpo', 'fixture-other-value-2')
+    assert [r['name'] for r in rows()] == ['QA_SHARED_KEY', 'QA_SHARED_KEY (cpo)']
+
+    # A revoked grant still wins: the same value migrated again never gives the bot the shared credential back.
+    row = next(r for r in get(api, 'credentials')['credentials'] if r['id'] == shared[0]['id'])
+    grant = next(g for g in row['grants'] if g['subject'] == 'bot:finance')
+    post(api, f"credentials/{row['id']}/grants/{grant['id']}/revoke", {})
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['finance']), FILE_MIGRATION))
+    migrate('finance', 'fixture-shared-value-1')
+    assert get(api, 'runner-credential-grants', machine['token'])['bots']['finance'] == []
+    assert len(rows()) == 2
+
+    # A key of an Only listed tool is never shared this way: the value gets a credential of its own.
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tools SET audience=? WHERE id=?', (json.dumps(['human:ana']), shared[0]['tool_id']))
+        c.execute("DELETE FROM credential_grants WHERE subject='bot:cpo'")
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['cpo']), FILE_MIGRATION))
+    migrate('cpo', 'fixture-shared-value-1')
+    assert len(rows()) == 3
+
+    # A key on the proxy is never shared this way either: the bot keeps getting the value itself, not a proxy token.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE tools SET audience=NULL, delivery='proxy' WHERE id IN "
+            "(SELECT tool_id FROM credentials WHERE env='QA_SHARED_KEY')"
+        )
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
+        c.execute("DELETE FROM credential_grants WHERE subject='bot:ops'")
+    migrate('ops', 'fixture-shared-value-1')
+    assert len(rows()) == 4
 
 
 def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(api):
@@ -421,40 +541,6 @@ def test_a_person_reveal_and_a_reveal_with_no_attempt_always_write_a_row(api, mo
         ]
 
 
-def test_the_backfill_copies_each_actor_and_bots_newest_use_once(api):
-    from backend import hubdb as H
-
-    setup(api)
-    cid = create(api)['id']
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DELETE FROM credential_uses WHERE credential_id=?", (cid,))
-        c.execute("DELETE FROM registry_metadata WHERE key='credential-use-backfill'")
-        for ts, actor, action, detail in [
-            ('2026-10-20T10:00:00Z', 'bot:finance', 'credential.revealed', '{"attempt": "a"}'),
-            ('2026-10-20T11:00:00Z', 'bot:finance', 'credential.revealed', '{"attempt": "b"}'),
-            ('2026-10-21T10:00:00Z', 'runner:r1', 'credential.sent_to_computer', '{"bot": "ops", "use": "watcher"}'),
-            ('2026-10-22T10:00:00Z', 'runner:r1', 'credential.sent_to_computer', '{"bot": "ops", "use": "watcher"}'),
-            ('2026-10-23T10:00:00Z', 'human:ana', 'credential.revealed', '{"attempt": null}'),
-        ]:
-            c.execute(
-                'INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)',
-                (H.new_id(), ts, actor, action, cid, detail),
-            )
-        H.backfill_credential_uses(c)
-    with store.read() as c:
-        rows = [
-            tuple(r)
-            for r in c.execute(
-                'SELECT actor,bot,used_at FROM credential_uses WHERE credential_id=? ORDER BY actor,bot', (cid,)
-            )
-        ]
-        assert rows == [
-            ('bot:finance', 'finance', '2026-10-20T11:00:00Z'),
-            ('runner:r1', 'ops', '2026-10-22T10:00:00Z'),
-        ]
-
-
 def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
     setup(api)
     cid = create(api)['id']
@@ -483,6 +569,7 @@ def test_a_bot_lists_only_the_names_of_what_it_is_granted(api):
     setup(api)
     mine = create(api)['id']
     other = create(api, name='Stripe', secret='sk-synthetic-other-123456', env='STRIPE_KEY')['id']
+    explicit_only(api)  # what explicit grants alone give
     post(api, f'credentials/{mine}/grants', {'subject': 'bot:ops'})
     post(api, f'credentials/{other}/grants', {'subject': 'bot:finance'})
     as_bot(api, 'ops')

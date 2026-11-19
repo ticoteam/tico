@@ -1,6 +1,8 @@
 ---
 name: run-a-joiner-or-leaver-checklist
 description: Run the IT checklist for one person starting or leaving, one line per account and device, each marked done with the date and time it was read, waiting on a named person, or not started, with a leaver's accounts disabled by the last day.
+metadata:
+  function: operations
 ---
 # Run a joiner or leaver checklist
 
@@ -9,7 +11,7 @@ line is done.
 
 Steps:
 1. Take the person, their role, the start or last day, and the manager from the roster or the task. If the day is
-   missing, ask the manager once with `tico task ask <id> --to <person> "<question>" --version N`. Do not guess a date.
+   missing, ask the manager once with `tico task ask <id> --to <person> "<question>"`. Do not guess a date.
 2. Open `knowledge/checklists/joiner.md` or `leaver.md`. Give one line per account in `knowledge/tools.md` and one line
    per device in `knowledge/devices.md` that the person holds or needs.
 3. Joiner: create each account at the role the manager chose. Assign the device and confirm its disk is encrypted before

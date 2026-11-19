@@ -1,6 +1,8 @@
 ---
 name: decide-whether-an-action-is-a-task
 description: Decide whether something said in a meeting is an action item that gets a task, using the commitment test, a named owner and a stated date, search for an existing open task first, and attach to that task rather than create a second one for the same need.
+metadata:
+  function: operations
 ---
 # Decide whether an action is a task
 
@@ -17,9 +19,9 @@ Steps:
    one exists, link it, and add the meeting as its source with `tico task comment`. Do not create a second task for the
    same need.
 5. If the item is new and passes steps 1 to 3, create the task with `tico task create --owner <person> --link <meeting
-   link>`, with the quote and timestamp in the body. If it does not pass, propose it on the write-up with its gap named.
+   link>`, with the quote and timestamp in the first message. If it does not pass, propose it on the write-up with its gap named.
 6. If the item needs a person who is not in the task, do not file a new ask. Leave the original task with its owner,
-   `tico task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
+   `tico task ask <id> --to <owner> "<what you need from them>"`, and say in one line what it waits for.
 7. Add the row to `knowledge/actions.md`: the item, owner, date (or "not said"), task id and status.
 
 Checks before you finish:

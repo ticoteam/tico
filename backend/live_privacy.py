@@ -93,9 +93,9 @@ class Sources:
         room = self.room(cid)
         if room.startswith(ROOM_PREFIX):
             return frozenset((room[len(ROOM_PREFIX) :],))
-        # Existing rooms predate the durable room binding. Their original keeper input
+        # Existing rooms predate the durable room binding. Their original Tico input
         # remains provenance even when its message is deleted or the bot is detached.
-        # The sender index scans every keeper notice in the company for each ordinary room, and the room index every
+        # The sender index scans every Tico notice in the company for each ordinary room, and the room index every
         # message of the room: the meeting-input index holds only the messages that name a meeting turn.
         rows = self.c.execute(
             "SELECT m.refs FROM messages m INDEXED BY messages_live_meeting_input "
@@ -104,7 +104,7 @@ class Sources:
             "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
             "WHERE m.conversation_id=? AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
             "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot LIMIT 101",
-            (cid, H.KEEPER),
+            (cid, H.TICO_ACTOR),
         ).fetchall()
         return self._legacy_room([row[0] for row in rows])
 
@@ -118,7 +118,7 @@ class Sources:
 
     def prime_conversations(self, cids):
         """The meeting provenance of many rooms, as _conversation builds it one room at a time: the rooms read in one
-        query per 500 and the legacy keeper inputs of the unbound ones in one more, each room capped as its own lookup
+        query per 500 and the legacy Tico inputs of the unbound ones in one more, each room capped as its own lookup
         caps it. A room past the cap is left out, so its own check reads it again and refuses as before."""
         from . import provenance_clock
 
@@ -133,7 +133,7 @@ class Sources:
                 "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                 "WHERE m.conversation_id IN (%s) AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
                 "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot) WHERE n<=101" % ",".join("?" * len(part)),
-                (*part, H.KEEPER),
+                (*part, H.TICO_ACTOR),
             ):
                 inputs[cid].append(refs)
             for cid, found in inputs.items():
@@ -200,12 +200,19 @@ class Sources:
         ids = self.references(refs)
         if message.get("conversation_id"):
             ids.update(self.conversation(message["conversation_id"]))
-        parents = [message.get("in_reply_to")]
+        reply = message.get("in_reply_to")
+        parents = [reply]
         for key in ("answers", "inputs"):
             if isinstance(refs.get(key), list):
                 parents.extend(v for v in refs[key] if isinstance(v, str))
         for parent in filter(None, parents):
-            ids.update(self.message(H.message(self.c, parent, include_deleted=True), include_run=False, seen=seen))
+            ids.update(
+                self.message(
+                    H.message(self.c, parent, include_deleted=True),
+                    include_run=include_run and parent == reply,
+                    seen=seen,
+                )
+            )
         run = refs.get("run")
         aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if aid and include_run:
@@ -307,13 +314,3 @@ def require_conversation(c, actor, cid):
         raise Problem("not_found", "Conversation not found", 404)
     # Client-supplied message references can narrow access, never grant room membership.
     return index.bound_conversation(cid)
-
-
-def private_room(c, room_key):
-    """The meeting a conversation's room is, unless that meeting is open to the team, else None."""
-    if not (room_key or "").startswith(ROOM_PREFIX):
-        return None
-    row = c.execute(
-        "SELECT id FROM live_meetings WHERE id=? AND visibility<>'team'", (room_key[len(ROOM_PREFIX) :],)
-    ).fetchone()
-    return row["id"] if row else None

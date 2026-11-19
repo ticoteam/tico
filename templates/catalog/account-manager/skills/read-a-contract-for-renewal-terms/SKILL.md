@@ -1,6 +1,8 @@
 ---
 name: read-a-contract-for-renewal-terms
 description: Pull the renewal facts from a signed contract (term end, notice clause, auto-renew, uplift, price basis, seats) and work out the notice deadline, with a clause reference and a date for every fact.
+metadata:
+  function: sales
 ---
 # Read a contract for its renewal terms
 

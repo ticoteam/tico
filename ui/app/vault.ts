@@ -4,7 +4,7 @@
 
 // The vault as GET /v2/credentials answers it (integrations.js vaultFetch): credentials as metadata, and who they are shared with.
 interface VaultGrant { id: string; subject: string; parent_id?: string | null; can_revoke?: boolean; }
-interface VaultCredential { id: string; name: string; kind: string; env?: string; source?: string; username?: string; stored?: boolean; revision?: number; grants: VaultGrant[]; }
+interface VaultCredential { id: string; name: string; kind: string; env?: string; source?: string; username?: string; stored?: boolean; revision?: number; can_remove?: boolean; remove_only?: boolean; grants: VaultGrant[]; }
 // A person or a bot a credential can be shared with.
 interface VaultParty { id: string; name?: string; email?: string; }
 interface VaultState { credentials: VaultCredential[]; computers?: { id: string; label?: string }[]; people: VaultParty[]; bots: VaultParty[]; can_manage?: boolean; }
@@ -111,9 +111,8 @@ function vaultShare(id: string) {
   if (!VAULT) return;
   const row = VAULT.credentials.find(row=>row.id===id);
   if (!row) return;
-  const modelKey=['OPENAI_API_KEY','ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN','CURSOR_API_KEY'].includes(row.env ?? '')&&['api_key','token'].includes(row.kind)&&row.stored;
-  const choices=[...(VAULT.can_manage&&modelKey?[{subject:'computers',label:'Every computer (signs models in)'}]:[]),
-    ...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
+  // A model key reaches computers through Settings > Models (backend/model_subscriptions.py), not a grant here.
+  const choices=[...(VAULT.can_manage ? VAULT.people.map(person=>({subject:'human:'+person.id,label:person.name || person.email})) : []),
     ...VAULT.bots.map(bot=>({subject:'bot:'+bot.id,label:`${bot.name} (bot)`}))];
   const dialog=vaultDialog('Access to '+row.name,`<p class="muted">Revoking access also revokes the access they gave their bots.</p>
     <div>${row.grants.map(grant=>`<div class="row"><span>${esc(vaultSubject(grant.subject))}${grant.parent_id?' · delegated':''}</span>${grant.can_revoke?`<button class="ghost" type="button" data-revoke="${esc(grant.id)}">Revoke</button>`:''}</div>`).join('') || '<p>Owners only.</p>'}</div>

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import browser_commands as B
+from backend import question_marks
 from backend import website_tools as W
 from backend.auth import Identity
 from backend.store import H, Problem
@@ -187,7 +188,7 @@ def computers(website):
     share(s, s.aid, "bot:ops")
     s.host = runner(s.api, label="Host")
     ready(s.api, s.host, [], capabilities=["browser_v1"])
-    post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": True})
     s.own = runner(s.api, operator="ben", label="Own")
     with s.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara',team='product' WHERE bot='ops'")
@@ -308,7 +309,7 @@ def test_an_attempt_ending_mid_command_is_refused_before_delivery_or_report(comp
     """11: the attempt must still run on its own computer, for central commands as well as fallback."""
     s = computers
     if not central:
-        post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": False})
+        post(s.api, f"computers/{s.host['runner_id']}/browser-host", {"on": False})
     machine = s.host if central else s.own
     thread, box = begin(s)
     if delivered:
@@ -365,7 +366,7 @@ def test_botops_uses_the_requesters_rights_and_the_host_change_waits_for_confirm
     assert response.status_code == 200
     assert pick(s, "bot:ops")["account_id"] == aid
     host = runner(s.api, label="Host")
-    response = act(s.api, attempt, "POST", f"runners/{host['runner_id']}/browser-host", {"on": True})
+    response = act(s.api, attempt, "POST", f"computers/{host['runner_id']}/browser-host", {"on": True})
     assert response.status_code == 200 and response.json()["needs_confirm"]
     with s.store.read() as c:
         assert B.host_id(c) is None
@@ -491,7 +492,7 @@ def test_host_change_rejects_an_old_report_and_the_next_command_uses_the_new_hos
     get(s.api, "runner-browser-commands?wait=0", other["token"])
     thread, box = begin(s)
     [old] = poll(s, s.host, wait=3)
-    post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{other['runner_id']}/browser-host", {"on": True})
     assert report(s, s.host, old, expected=404)["error"]["code"] == "not_found"
     end(thread, box, 409, "browser_host_offline")
     thread, box = begin(s)
@@ -511,7 +512,7 @@ def test_changing_a_host_closes_an_already_open_session_on_the_old_computer(comp
     other = runner(s.api, label="New host")
     ready(s.api, other, [], capabilities=["browser_v1"])
     get(s.api, "runner-browser-commands?wait=0", other["token"])
-    post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
+    post(s.api, f"computers/{other['runner_id']}/browser-host", {"on": True})
     assert B.session_view(s.aid)["state"] == "unknown"
     [close] = poll(s, s.host, wait=3)
     assert close["verb"] == "close" and "value" not in close
@@ -720,11 +721,11 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
         s.own["token"],
     )
     end(thread, box)
-    rid = post(s.api, "browser/needs-you", {"site": s.tid, "line": "Please finish sign-in."}, s.turn["token"])[
+    wait = post(s.api, "browser/needs-you", {"site": s.tid, "line": "Please finish sign-in."}, s.turn["token"])[
         "requirement_id"
     ]
-    with s.store.read() as c:
-        person = c.execute("SELECT person_id FROM requirements WHERE id=?", (rid,)).fetchone()[0]
+    with s.store.read() as c:  # the bot's ❓ on its task (backend/question_marks.py)
+        person = question_marks.get(c, question_marks.mark_id(wait))["person_id"]
     token = person.removeprefix("human:") + "-test"
     path = f"website-tools/{s.tid}/accounts/{s.aid}/browser"
     thread, box = person_request(s, path, token, {})
@@ -752,7 +753,7 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
         s.own["token"],
     )
     assert end(thread, box).headers["content-type"] == "image/jpeg"
-    post(s.api, f"tasks/{s.task['id']}/asks/{rid}/answer", {"value": "Done"}, token)
+    post(s.api, f"tasks/{s.task['id']}/comments", {"text": "Done."}, token)  # their reply clears the ❓
     post(s.api, path + "/control", {"take": False}, token)
     thread, box = begin(s, "read")
     [cmd] = poll(s, s.own, wait=3)

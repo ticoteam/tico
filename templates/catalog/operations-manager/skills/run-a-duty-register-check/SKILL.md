@@ -1,6 +1,8 @@
 ---
 name: run-a-duty-register-check
 description: Put each row of the recurring-duties register into one state (overdue, in its lead window, due this week, blocked, fine, needs a date or needs an owner), with its date and source, before the weekly ops page is written.
+metadata:
+  function: operations
 ---
 
 # Run a duty register check

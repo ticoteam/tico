@@ -56,7 +56,8 @@ MAX_FIND = 100
 MAX_IDLE_HOURS = 8760  # the stale-PR find's bound: a year
 # A listening trigger (backend/listening.py): where posts come from, which are kept, and how many are sent on.
 LISTENING_KEYS = {"type", "sources", "rules", "limits", "at", "tz", "filters"}
-SOURCE_KINDS = ("search", "page", "push")
+SOURCE_KINDS = ("search", "page", "push", "github")
+GITHUB_FOLLOWS = ("prs", "releases")
 MAX_SOURCES = 50
 MAX_LISTENING_RULES = 20
 RULE_TEXT = 300
@@ -322,9 +323,9 @@ def _check_listening(trigger):
     for n, source in enumerate(sources):
         at = f"{where} source {n + 1}"
         _need(
-            isinstance(source, dict) and set(source) <= {"id", "kind", "site", "target"},
+            isinstance(source, dict) and set(source) <= {"id", "kind", "site", "target", "follow"},
             at,
-            "has id, kind, site and target",
+            "has id, kind, site and target (and follow, on a GitHub source)",
         )
         _need(
             isinstance(source.get("id"), str) and SOURCE_ID.fullmatch(source["id"]), at, "id is letters, digits, _ or -"
@@ -333,8 +334,17 @@ def _check_listening(trigger):
         ids.add(source["id"])
         kind = source.get("kind")
         _need(kind in SOURCE_KINDS, at, f"kind is one of {', '.join(SOURCE_KINDS)}")
-        _text(source.get("site", ""), at, "site", required=kind != "page", cap=80)
-        if kind == "push":
+        _text(source.get("site", ""), at, "site", required=kind not in ("page", "github"), cap=80)
+        _need(kind == "github" or "follow" not in source, at, "only a GitHub source has follow")
+        if kind == "github":
+            from .listening_github import repo_of
+
+            repo = repo_of(source.get("target"))
+            _need(repo is not None, at, "A GitHub source is owner/repo")
+            source["target"] = repo  # a pasted https://github.com/owner/repo is kept as owner/repo
+            source.setdefault("follow", "prs")
+            _need(source["follow"] in GITHUB_FOLLOWS, at, f"follow is one of {', '.join(GITHUB_FOLLOWS)}")
+        elif kind == "push":
             _need("target" not in source, at, "a push source has no target")
         else:
             _text(source.get("target"), at, "target", cap=500)
@@ -388,7 +398,7 @@ def _check_due(trigger):
     except ValueError:
         raise Invalid("trigger: first_due is a date such as 2027-01-31") from None
     _need(trigger["repeats"] in D.REPEATS, "trigger", "repeats is once, weekly, monthly, quarterly or yearly")
-    open_days = trigger.get("open_days", D.OPEN_DAYS)
+    open_days = trigger.get("open_days", D.DEFAULT_OPEN_DAYS)
     _need(
         type(open_days) is int and 0 <= open_days <= D.MAX_OPEN_DAYS,
         "trigger",
@@ -802,7 +812,7 @@ def render_prompt(text, values, cap=MAX_TEXT):
 # ---------------------------------------------------------------------------------------------------- Decide's state
 # The trigger's object a Decide step judges, first found wins: a find's item, then the trigger's own object.
 OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule", "due")
-SNIPPET_CHARS = 400  # as the mail connector's brief listing (connectors/mail/judge.py)
+SNIPPET_CHARS = 400  # a message's snippet a Decide step reads: enough to judge, short enough to stay cheap
 
 
 def mail_state(m):
@@ -898,7 +908,8 @@ TRIGGER_FIELDS = {
     "task_received": "to: a person id or a bot slug",
     "schedule": "cron: five fields, e.g. `0 9 * * 1-5`; tz: a time zone such as `Europe/Paris`",
     "webhook": "id: the existing trigger's id",
-    "listening": "sources: `[{id, kind: search|page|push, site, target}]`; rules: `[{do: keep, tag, text}, {do: drop, "
+    "listening": "sources: `[{id, kind: search|page|push|github, site, target}]` (a github source: target `owner/repo`, "
+    "follow `prs` (merged pull requests, the default) or `releases`, one item each); rules: `[{do: keep, tag, text}, {do: drop, "
     "text}]`; limits: `[{count, per: hour|day|week|month}]`; at: `08:00`; tz: a time zone. The run reads "
     "`listening.text`, `listening.items` and `listening.groups`",
     "event": "name: the event name",
@@ -946,7 +957,7 @@ def shape_text():
         f"{MAX_RULES} rules per filter, {MAX_CONDS} conditions per rule or path, {MAX_PATHS} paths per fork, "
         f"{MAX_DEPTH} levels of forks inside forks, {MAX_STEPS} steps, {MAX_PROMPT} characters per prompt.",
         "",
-        "Decide asks Jev, the one decision model. A `paths` path has `name`, `match` (all or any, default all), "
+        "Decide asks the decision model. A `paths` path has `name`, `match` (all or any, default all), "
         "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions), `stop`, "
         "`next` (end, rule or step) and `to` (a destination id). With `to`, or with `stop` true, `next` is end or left out.",
         "",
@@ -997,7 +1008,8 @@ Do not ask about anything a sensible default answers.
   `tico automation recent-runs [--range 1h] [--status failed]` and `tico automation stats [--range 24h]` (which fail or
   cost the most). A message from the Automations page may carry its filters (`automations_filter` in its refs).
 - New: `tico automation create --file -` (the flow as JSON on stdin). Its owner is the asker unless they named another.
-  It is saved off; send `"enabled": true` only when the request said to turn it on.
+  It is saved on unless the flow sends `"enabled": false` (what BotOps builds is saved off when it leaves `enabled`
+  out); send `"enabled": false` unless the request said to turn it on; then send `"enabled": true`.
 - Use a template: `tico automation templates` lists the inbox templates (founder, support, sales, blank) with their
   destinations. `tico automation template <id> --owner <ref> --inbox <address>` returns one filled in for that owner: the
   roles it names resolved on the org chart, and the destinations the owner may not use taken out. It saves nothing. Show

@@ -42,7 +42,7 @@ const init = () => {
    const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: width <= 390, serviceWorkers: 'block'});
    const sharedBrowser = {newPage: async (options: {viewport: {width: number; height: number}}) => { const page = await context.newPage(); await page.setViewportSize(options.viewport); return page; }};
    const {page, data, errors} = await open(sharedBrowser, {viewport: {width, height: 900}});
-   const task: TaskCode.Fixture['tasks'][number] = {...data.tasks[0]!, title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
+   const task: TaskCode.Fixture['tasks'][number] = {...data.tasks[0]!, title: 'Review launch', links: [], children_summary: undefined};
    data.tasks[0] = task;
    const writes: Record<string, unknown>[] = []; let hold!: Gate | null, offline = false, expired = false;
    let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
@@ -64,8 +64,8 @@ const init = () => {
     return route.fulfill({json: {task}});
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
-   // The request and its Edit are on the task window's Description tab.
-   const info = async () => { await page.locator('#task-modal[open] [data-task-tab="desc"]').click(); };
+   // Details: its icon, pressed while Details shows.
+   const info = async () => { await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]').click(); };
    await page.evaluate(async task => taskModalShow(task), task);
    await info();
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
@@ -83,30 +83,34 @@ const init = () => {
     await page.evaluate(() => taskSafety!.forEach(fn => fn()));
     await page.waitForFunction(seq => taskModal().drawSeq! > seq && !taskModal().taskLive!.reading, seq);
    };
-   const title = page.locator('#task-modal .tmodal-title'), details = page.getByRole('textbox', {name: 'Details', exact: true});
+   // A task has no description: the second field these drafts keep beside the title is the roadmap's public summary,
+   // written by script because it sits under Activity and links.
+   const title = page.locator('#task-modal .tmodal-title'), summary = page.locator('#task-modal [data-task-field="public_summary"]');
+   const fillSummary = (value: string) => summary.evaluate((el, value) => { (el as HTMLTextAreaElement).focus(); (el as HTMLTextAreaElement).value = value; el.dispatchEvent(new Event('input', {bubbles: true})); }, value);
    const fillTitle = async (value: string) => { await title.click(); await title.fill(value); };
    const error = page.locator('[data-task-edit-error]:not([hidden])');
    const retry = async () => { await page.locator('[data-task-edit-retry]').click(); await idle(); };
    const unload = () => page.evaluate(() => { const e = new Event('beforeunload', {cancelable: true}); window.dispatchEvent(e); return e.defaultPrevented; });
-   // A focuses clean text, B saves, A receives the event and appends. A must still send A's old revision.
-   await page.getByRole('button', {name: 'Edit details', exact: true}).click();
+   // A focuses the clean title, B saves another, A receives the event and appends. A must still send A's old revision.
+   await title.click();
    const originalVersion = task.version;
-   task.body = 'B changed details'; task.version++;
+   task.title = 'B changed the title'; task.version++;
    await update();
-   assert.equal(await details.inputValue(), 'Original details');
-   await details.press('End'); await details.pressSequentially(' plus A');
-   await details.evaluate(el => el.blur());
+   assert.equal(await title.textContent(), 'Review launch');
+   await title.press('End'); await title.pressSequentially(' plus A');
+   await title.evaluate(el => el.blur());
    await error.waitFor(); await idle();
    assert.equal(writes.at(-1)!.version, originalVersion);
-   assert.equal(task.body, 'B changed details', 'A cannot silently replace B with a newer version');
-   assert.equal(await details.inputValue(), 'Original details plus A');
+   assert.equal(task.title, 'B changed the title', 'A cannot silently replace B with a newer version');
+   assert.equal(await title.textContent(), 'Review launch plus A');
    await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
-   await retry(); assert.equal(task.body, 'Original details plus A');
-   // The publication fields use the same field base as title/details, even through a clean focused redraw.
+   await retry(); assert.equal(task.title, 'Review launch plus A');
+   // The publication fields use the same field base as the title, even through a clean focused redraw.
    // A task in the Product pipeline is a roadmap item (ui/app/roadmaps.ts roadmapTask).
    Object.assign(task, {pipeline_id: 'product', public_title: 'Public A', public_summary: 'Summary A'});
    await update();
-   await page.locator('#task-modal[open] [data-task-tab="details"]').click();   // the public text is under Activity and links
+   // the public text is under Activity and links, in Details
+   if (await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]').count()) await info();
    for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']] as const) {
     const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
     await box.focus();
@@ -194,8 +198,8 @@ const init = () => {
     await box.pressSequentially('X'); values[i] = values[i]!.slice(0, 2) + 'X' + values[i]!.slice(2);
     assert.equal(await box.inputValue(), values[i]!, boxes[i]! + ' keeps its native caret');
    }
-   // The comment box keeps its text and focus through both redraw paths too.
-   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   // The comment box keeps its text and focus through both redraw paths too. Details closes back to the chat.
+   await page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="true"]').click();
    const message = page.getByRole('textbox', {name: 'Message', exact: true});
    await message.fill('Unsent comment'); await message.focus();
    for (const redraw of [update, refresh]) {
@@ -238,27 +242,26 @@ const init = () => {
    await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle();
    assert.equal(await title.textContent(), 'New view failed draft');
-   // Offline title/details survive a real reload with their old revisions and still conflict before overwriting B.
+   // An offline title and summary survive a real reload with their old revisions and still conflict before overwriting B.
    await info();
-   await page.getByRole('button', {name: 'Edit details', exact: true}).click();
-   await details.fill('Offline details to keep');
+   await fillSummary('Offline summary to keep');
    const keptVersion = task.version;
    assert.equal(await unload(), true);
-   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'body'))!).base.version), keptVersion);
-   task.title = 'B title during offline'; task.body = 'B details during offline'; task.version++;
+   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'public_summary'))!).base.version), keptVersion);
+   task.title = 'B title during offline'; task.public_summary = 'B summary during offline'; task.version++;
    page.on('dialog', dialog => dialog.accept());
    await page.reload();
    await info();
-   await page.locator('#task-modal[open] [data-task-field="body"]').waitFor();
+   await page.locator('#task-modal[open] [data-task-field="public_summary"]').waitFor({state: 'attached'});
    assert.equal(await title.textContent(), 'New view failed draft');
-   assert.equal(await details.inputValue(), 'Offline details to keep');
+   assert.equal(await summary.inputValue(), 'Offline summary to keep');
    offline = false;
    await retry(); await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
    assert.equal(writes.at(-1)!.version, keptVersion);
-   assert.equal(task.title, 'B title during offline'); assert.equal(task.body, 'B details during offline');
-   assert.equal(await details.inputValue(), 'Offline details to keep');
+   assert.equal(task.title, 'B title during offline'); assert.equal(task.public_summary, 'B summary during offline');
+   assert.equal(await summary.inputValue(), 'Offline summary to keep');
    await retry();
-   assert.equal(task.title, 'New view failed draft'); assert.equal(task.body, 'Offline details to keep');
+   assert.equal(task.title, 'New view failed draft'); assert.equal(task.public_summary, 'Offline summary to keep');
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false, 'success clears persisted drafts');
    assert.equal(await unload(), false, 'a saved page needs no unload prompt');
    // Debounce text is already durable before a request starts, without an unload prompt.
@@ -272,21 +275,20 @@ const init = () => {
    await info();
    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal[open] .tmodal-title')?.textContent === 'Before debounce');
    await page.waitForFunction(() => !taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length);
-   // A closed task's failed title/details survive expiry with their bases, even after another editor saves.
+   // A closed task's failed title and summary survive expiry with their bases, even after another editor saves.
    offline = true;
    await fillTitle('Closed task title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
-   await page.getByRole('button', {name: 'Edit details', exact: true}).click();
-   await details.fill('Closed task details'); await details.evaluate(el => el.blur()); await idle();
-   const closedDraft = await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
+   await fillSummary('Closed task summary'); await summary.evaluate(el => el.blur()); await idle();
+   const closedDraft = await page.evaluate(id => Object.fromEntries(['title', 'public_summary'].map(key =>
     [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key))!)])), task.id);
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive && !TASK_MODAL_BACK);
    offline = false; expired = true;
    await page.evaluate(() => get('/v2/me', {fresh: true}).catch(() => {}));
    await page.locator('#signed-out:not([hidden])').waitFor();
-   assert.deepEqual(await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
+   assert.deepEqual(await page.evaluate(id => Object.fromEntries(['title', 'public_summary'].map(key =>
     [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key))!)])), task.id), closedDraft, 'expiry preserves closed drafts and bases');
-   task.title = 'Other title while signed out'; task.body = 'Other details while signed out'; task.version++;
+   task.title = 'Other title while signed out'; task.public_summary = 'Other summary while signed out'; task.version++;
    const beforeReturn = writes.length;
    expired = false;
    await page.evaluate(() => history.replaceState(null, '', '#/tasks'));
@@ -297,13 +299,13 @@ const init = () => {
    await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle(); await info();
    assert.equal(await title.textContent(), 'Closed task title');
-   assert.equal(await details.inputValue(), 'Closed task details');
+   assert.equal(await summary.inputValue(), 'Closed task summary');
    assert.equal(writes.length, beforeReturn, 'failed drafts wait for Retry after reopening');
    await retry(); await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
    assert.equal(writes.at(-1)!.version, Math.min(...Object.values(closedDraft).map(field => field.base.version)));
-   assert.equal(task.title, 'Other title while signed out'); assert.equal(task.body, 'Other details while signed out');
+   assert.equal(task.title, 'Other title while signed out'); assert.equal(task.public_summary, 'Other summary while signed out');
    await retry();
-   assert.equal(task.title, 'Closed task title'); assert.equal(task.body, 'Closed task details');
+   assert.equal(task.title, 'Closed task title'); assert.equal(task.public_summary, 'Closed task summary');
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false, 'saving the restored text consumes its stored drafts');
    // Sign-in recovery also keeps the open task's contenteditable title and property fields.
    offline = true;
@@ -337,7 +339,8 @@ const init = () => {
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
-   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   const shut = page.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="true"]');
+   if (await shut.count()) await shut.click();   // Details closes back to the chat
    await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive);

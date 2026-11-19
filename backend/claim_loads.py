@@ -4,36 +4,22 @@ page (health._prime_claims). Both run the same checks with it (execution._claim_
 hold, a bot it was not loaded for, is asked of the database the way the check always asked it, so a caller without the
 object keeps the same answers."""
 
-import json
-
-
-def _dict(raw):
-    try:
-        value = json.loads(raw) if raw else {}
-    except (ValueError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
 
 class Loads:
     """The company's values read once (`record`, `plain`, `access`, `given`), and each bot's rows keyed by the bot.
-    `runners` is {id: runners row}; `holds` is every login hold ({key: stored value}), so a missing key is no hold."""
+    `runners` is {id: runners row}; `holds` is every open hold, by (kind, holdable_type, holdable_id, bot_id or ''),
+    so a missing key is no hold."""
 
-    def __init__(
-        self, record, plain, access, given, runners, status, waits, limits, backoff, exits, held, holds, company=None
-    ):
+    def __init__(self, record, plain, access, given, runners, limits, failing, held, holds, company=None):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
         self.access = access  # cloud_access.access(c)
         self.given = given  # model_subscriptions._given(c): {(runner_id, runtime): subscription}
         self.runners = runners
-        self.status = status  # {bot: bot_status row as a dict, {} when none}
-        self.waits = waits  # {bot: the Gateway's wait, a dict}
         self.limits = limits  # {bot: own usage limits, as usage_limits.own returns them}
-        self.backoff = backoff  # {bot: run_backoff row as a dict, {} when none}
-        self.exits = exits  # {bot: browser exit's computer or None}; None when not read
+        self.failing = failing  # {bot: its open `failing` hold, None when none} (run_failures.get reads it)
         self.held = held  # {bot: turns it holds on every computer}
-        self.holds = holds  # {login-hold key: stored value}
+        self.holds = holds  # {(kind, holdable_type, holdable_id, bot_id or ''): open holds row}
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
 
     def runner_of(self, c, runner_id, live=False):
@@ -53,41 +39,12 @@ class Loads:
             self.plain = providers.load(c)
         return self.plain
 
-    def status_of(self, c, bot):
-        if bot in self.status:
-            return self.status[bot]
-        from .hubdb import status
-
-        return status(c, bot) or {}
-
-    def wait_of(self, c, bot):
-        if bot in self.waits:
-            return self.waits[bot]
-        from .repositories import metadata
-        from .execution import GATEWAY_WAIT
-
-        return metadata(c, GATEWAY_WAIT + bot)
-
     def limit_of(self, c, bot):
         if bot in self.limits:
             return self.limits[bot]
         from . import usage_limits
 
         return usage_limits.own(c, bot)
-
-    def backoff_of(self, c, bot):
-        if bot in self.backoff:
-            return self.backoff[bot]
-        from . import run_backoff
-
-        return run_backoff.get(c, bot)
-
-    def exit_of(self, c, bot):
-        if self.exits is not None and bot in self.exits:
-            return self.exits[bot]
-        from . import browser_exit
-
-        return browser_exit.bot_exit(c, bot)
 
     def held_of(self, c, bot):
         if bot in self.held:
@@ -96,61 +53,38 @@ class Loads:
 
         return start_places.bot_held(c, bot)
 
-    def hold_of(self, key):
-        """The login hold stored under `key`, as a dict ({} when none)."""
-        return _dict(self.holds.get(key))
 
-
-def read(c, settings, runners, bots, *, exits=True):
+def read(c, settings, runners, bots):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
-    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer). `exits`: whether the
-    browser exits are read (a computer that does not advertise browser_exit_v1 needs them)."""
-    from . import providers, cloud_access, usage_limits, run_backoff, browser_exit, start_places
+    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer)."""
+    from . import providers, cloud_access, usage_limits, start_places
     from . import model_subscriptions, company_pause
-    from .hubdb import chunks
-    from .execution import GATEWAY_WAIT
 
     bots = list(dict.fromkeys(bots))
     record = providers.load(c, settings)
     given = model_subscriptions._given(c)
     plain = providers.load(c) if given else None
     access = cloud_access.access(c)
-    status = {bot: {} for bot in bots}
-    waits = {bot: {} for bot in bots}
-    for part in chunks(bots):
-        marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT * FROM bot_status WHERE bot IN ({marks})", part):
-            status[row["bot"]] = dict(row)
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key IN (" + ",".join("?" * len(part)) + ")",
-            [GATEWAY_WAIT + bot for bot in part],
-        ):
-            waits[row["key"][len(GATEWAY_WAIT) :]] = _dict(row["value"])
-    holds = {
-        row["key"]: row["value"]
-        for row in c.execute(
-            "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
-            (_hold_prefix(), _hold_prefix()[:-1] + ";"),
-        )
-    }
+    holds = open_holds(c)
     return Loads(
         record,
         plain,
         access,
         given,
         dict(runners),
-        status,
-        waits,
         usage_limits.own_many(c, bots),
-        run_backoff.get_many(c, bots),
-        browser_exit.exits_of(c, bots) if exits else None,
+        {bot: holds.get(("failing", "bot", bot, bot)) for bot in bots},  # its open `failing` hold (run_failures)
         start_places.held_counts(c, bots),
         holds,
         company_pause.record(c),
     )
 
 
-def _hold_prefix():
-    from .login_holds import PREFIX
-
-    return PREFIX
+def open_holds(c):
+    """Every open hold of every kind (backend/holds.py), by (kind, holdable_type, holdable_id, bot_id or ''). Read
+    through holds_bot, the partial index of open holds only: the table keeps every released hold as history, and stale
+    stats can plan a scan of all of it (test_holds_usage_limit_plan)."""
+    return {
+        (row["kind"], row["holdable_type"], row["holdable_id"], row["bot_id"] or ""): dict(row)
+        for row in c.execute("SELECT * FROM holds INDEXED BY holds_bot WHERE released_at IS NULL")
+    }

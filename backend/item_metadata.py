@@ -1,5 +1,5 @@
 # pyright: strict
-"""Item metadata: Tico's saved copy of what a source said of one item (docs/pipelines-v3.md "Sources and items").
+"""Item metadata: Tico's saved copy of what a source said of one item (docs/dev/pipelines-v3.md "Sources and items").
 
 Requirements read saved metadata only; nothing here calls a source. One `item_metadata` row per item (source, item
 type, item key). A task reaches its items through its `task_links` rows that name one (`source`, `item_type`,
@@ -21,6 +21,7 @@ Every function takes the caller's open write transaction and never commits, exce
 
 import json
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,12 +55,20 @@ def _loaded(row: Row) -> Row:
 
 def get(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> Row | None:
     """One item's saved metadata (an `item_metadata` row with `fields` loaded), or None when Tico has none yet."""
-    found = _rows(
-        conn,
-        "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=?",
-        (source, item_type, key),
-    )
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    cached = (GET_SQL, source, item_type, str(key))
+    if values is not None and cached in values:
+        kept: Row | None = values[cached]
+        return _loaded(dict(kept)) if kept else None
+    found = _rows(conn, GET_SQL, (source, item_type, key))
+    if values is not None:  # kept for the read snapshot as stored; `prime_of_task` reads its tasks' items together
+        values[cached] = dict(found[0]) if found else None
     return _loaded(found[0]) if found else None
+
+
+GET_SQL = "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key=?"
 
 
 def save(
@@ -125,12 +134,65 @@ def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str) ->
 def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: str) -> list[Row]:
     """The items of one type linked to a task, oldest link first (links made in one millisecond in the order they were
     made): its `task_links` rows, each with `metadata` (`get`) or None."""
-    links = _rows(
-        conn,
-        "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, rowid",
-        (task_id, source, item_type),
-    )
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    key = (OF_TASK_SQL, str(task_id), source, item_type)
+    if values is not None and key in values:
+        links: list[Row] = [dict(link) for link in values[key]]
+    else:
+        links = _rows(conn, OF_TASK_SQL, (task_id, source, item_type))
+        if values is not None:  # kept for the read snapshot; `prime_of_task` reads many tasks' together
+            values[key] = tuple(dict(link) for link in links)
     return [{**link, "metadata": get(conn, source, item_type, str(link["item_key"]))} for link in links]
+
+
+OF_TASK_SQL = "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, rowid"
+OF_TASKS_SQL = (
+    "SELECT * FROM task_links WHERE task_id IN (SELECT value FROM json_each(?)) AND source=? AND item_type=? "
+    "ORDER BY created_at, rowid"
+)
+
+
+def prime_of_task(conn: "sqlite3.Connection", task_ids: "Iterable[str]", source: str, item_type: str) -> None:
+    """The links `of_task` reads, of many tasks in one statement (a task with none too), for the reads that follow in
+    this snapshot. Nothing outside a snapshot."""
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = sorted({str(t) for t in task_ids if t and (OF_TASK_SQL, str(t), source, item_type) not in values})
+    if not wanted:
+        return
+    found: dict[str, list[Row]] = {task_id: [] for task_id in wanted}
+    for link in _rows(conn, OF_TASKS_SQL, (json.dumps(wanted), source, item_type)):
+        found[str(link["task_id"])].append(link)
+    for task_id, links in found.items():
+        values.setdefault((OF_TASK_SQL, task_id, source, item_type), tuple(links))
+    keys = sorted({str(link["item_key"]) for links in found.values() for link in links})
+    keys = [k for k in keys if (GET_SQL, source, item_type, k) not in values]
+    if keys:
+        # `item_key` is COLLATE NOCASE: a link's key finds its row whatever the case of either, so both sides are
+        # matched as NOCASE compares them (ASCII letters only), as `get` finds it.
+        items = {
+            nocase(str(row["item_key"])): row
+            for row in _rows(
+                conn,
+                "SELECT * FROM item_metadata WHERE source=? AND item_type=? AND item_key IN (SELECT value FROM json_each(?))",
+                (source, item_type, json.dumps(keys)),
+            )
+        }
+        for k in keys:
+            values.setdefault((GET_SQL, source, item_type, k), items.get(nocase(k)))
+
+
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def nocase(text: str) -> str:
+    """`text` as SQLite's NOCASE collation compares it: ASCII A-Z folded to a-z, every other character as it is."""
+    return text.translate(_ASCII_LOWER)
 
 
 def tasks_of(conn: "sqlite3.Connection", source: str, item_type: str, key: str) -> list[str]:

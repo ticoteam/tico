@@ -13,7 +13,7 @@ from backend import google_connect
 from backend import google_workspace as W
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, runner  # noqa: F401
-from backend.tests.helpers.google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
+from backend.tests.helpers.google_connect import FakeGoogle, app, door, own_app, signed_in, start  # noqa: F401
 from backend.tests.helpers.google_workspace import (
     CALENDAR,
     GMAIL,
@@ -29,11 +29,10 @@ from backend.tests.helpers.google_workspace import (
     rows,
 )
 from backend.store import Problem
-from connectors.mail import oauth
 
 PERMISSIONS = "/api/v2/google/permissions"
 ALL_ON = {"organize_mail": True, "send_mail": True, "change_calendar": True}
-G = oauth.G
+G = google_connect.G
 
 
 def allow(api, token="ana-test", **changes):
@@ -57,14 +56,12 @@ def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
 
 
 def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
-    machine = runner(app)
     with app.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})),
         )
     assert get(app, "google", "cara-test")["permissions"] == ALL_ON
-    assert get(app, "connectors/mail/targets", machine["token"])["company"] == ALL_ON
     changed = app.post("/api/v2/bots/inbox/mail-settings", json={"outbound_send": True}, headers=headers())
     assert changed.status_code == 200, changed.text
     own = get(app, "bots/inbox/mail-settings", "inbox-test")
@@ -80,8 +77,7 @@ def test_the_company_s_own_app_asks_only_for_what_is_ticked(own_app):
 
 
 def test_a_box_turned_off_narrows_the_next_refresh_and_turned_on_offers_a_reconnect(own_app, monkeypatch):
-    machine = runner(own_app)
-    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES + [G + "gmail.modify"]))
+    signed_in(own_app, scope=" ".join(google_connect.READ_SCOPES + [G + "gmail.modify"]))
     seen = get(own_app, "mail/google", "cara-test")
     assert seen["acts"] == {"mail": True, "calendar": False}
     assert seen["message"] == google_connect.UPGRADE["calendar"][0]
@@ -94,11 +90,11 @@ def test_a_box_turned_off_narrows_the_next_refresh_and_turned_on_offers_a_reconn
     assert get(own_app, "mail/google", "cara-test")["acts"] == {"mail": False, "calendar": False}
     google = FakeGoogle({"access_token": "ya29.read", "expires_in": 3599, "scope": G + "gmail.readonly"})
     monkeypatch.setattr(google_connect, "post_token", google)
-    r = refresh(own_app, machine["token"], scopes=[G + "gmail.modify", G + "gmail.readonly"])
-    assert r.status_code == 200, r.text
-    assert r.json()["scopes"] == [G + "gmail.readonly"] and google.calls[-1]["scope"] == G + "gmail.readonly"
+    answer = door(own_app, scopes="allowed")
+    assert answer["scopes"] == [G + "gmail.readonly"] and google.calls[-1]["scope"] == G + "gmail.readonly"
     count = len(google.calls)
-    assert refresh(own_app, machine["token"], scopes=[G + "gmail.modify"]).status_code == 422  # nothing left to ask
+    with pytest.raises(Problem):
+        door(own_app, scopes="write")  # nothing left to ask
     assert len(google.calls) == count
     # Back on: the grant still holds gmail.modify, so the next refresh carries it with no new sign-in.
     assert allow(own_app, change_calendar=False).status_code == 200
@@ -107,8 +103,7 @@ def test_a_box_turned_off_narrows_the_next_refresh_and_turned_on_offers_a_reconn
         "expires_in": 3599,
         "scope": G + "gmail.modify " + G + "gmail.readonly",
     }
-    r = refresh(own_app, machine["token"], scopes=[G + "gmail.modify", G + "gmail.readonly"])
-    assert r.json()["scopes"] == [G + "gmail.modify", G + "gmail.readonly"]
+    assert door(own_app, scopes="allowed")["scopes"] == [G + "gmail.modify", G + "gmail.readonly"]
     # Change calendar on again, on a grant without calendar events: the reconnect hint comes back.
     assert allow(own_app).status_code == 200
     seen = get(own_app, "mail/google", "cara-test")
@@ -117,8 +112,7 @@ def test_a_box_turned_off_narrows_the_next_refresh_and_turned_on_offers_a_reconn
 
 
 def test_one_missing_write_with_the_other_unused_names_only_what_a_reconnect_adds(own_app):
-    machine = runner(own_app)
-    exchanged(own_app, machine, scope=" ".join(google_connect.READ_SCOPES + [G + "calendar.events"]))
+    signed_in(own_app, scope=" ".join(google_connect.READ_SCOPES + [G + "calendar.events"]))
     assert allow(own_app, change_calendar=False).status_code == 200
     seen = get(own_app, "mail/google", "cara-test")
     assert seen["acts"] == {"mail": False, "calendar": False}

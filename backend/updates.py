@@ -8,7 +8,7 @@ sensitive so it can take a while."
 - `update_queue`: one request per enabled bot per day, sent one at a time (the next only once the
   last has posted or its run ended), so updates never crowd out real work on a Mac. Quietest bots
   first; a bot busy with a run is passed over and asked again later that day. A request is a
-  keeper notice to the bot, which queues its run like any message; the facts it needs ride along.
+  Tico notice to the bot, which queues its run like any message; the facts it needs ride along.
   A bot with nothing real to report skips instead of posting (`skip`): the request finishes `skipped` with
   "nothing new to report", and is never retried or marked missed.
 - `updates`: what a bot posted (one per bot, day and kind; a second post replaces the first).
@@ -104,30 +104,6 @@ TASK_ID = re.compile(
     r"|\b(?:task|job|attempt|msg|message)[:#\s]+[0-9a-f]{4,}\b",
     re.I,
 )
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS updates(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL,
- headline TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- format_version INTEGER NOT NULL DEFAULT 1, learnings_saved INTEGER, suggestions_seen TEXT, delivery_batch_id TEXT,
- UNIQUE(bot, kind, day));
-CREATE INDEX IF NOT EXISTS updates_created ON updates(created_at);
-CREATE TABLE IF NOT EXISTS update_reads(
- update_id TEXT NOT NULL, actor TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY(update_id, actor));
-CREATE TABLE IF NOT EXISTS update_archive_overrides(
- update_id TEXT NOT NULL, actor TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('archived','restored')), updated_at TEXT NOT NULL,
- PRIMARY KEY(update_id, actor));
-CREATE INDEX IF NOT EXISTS update_archive_actor ON update_archive_overrides(actor, state, updated_at);
-CREATE TABLE IF NOT EXISTS update_queue(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, day TEXT NOT NULL, rank INTEGER NOT NULL,
- state TEXT NOT NULL, message_id TEXT, sent_at TEXT, done_at TEXT, reason TEXT,
- delivery_only INTEGER NOT NULL DEFAULT 0, run_id TEXT,
- UNIQUE(bot, kind, day));
-CREATE INDEX IF NOT EXISTS update_queue_day ON update_queue(day, state, rank);
-CREATE TABLE IF NOT EXISTS update_settings(
- bot TEXT PRIMARY KEY, daily INTEGER NOT NULL DEFAULT 1, weekly INTEGER NOT NULL DEFAULT 1);
-"""
 
 
 def local_now(at=None):
@@ -414,33 +390,6 @@ def _busy(c, bot):
         ).fetchone()
         is not None
     )
-
-
-def ensure_schema(c):
-    """Columns added after the tables first shipped."""
-    H.add_column(c, "update_queue", "tries", "INTEGER NOT NULL DEFAULT 0")
-    H.add_column(c, "update_queue", "redo", "INTEGER NOT NULL DEFAULT 0")
-    H.add_column(c, "update_queue", "held_at", "TEXT")
-    H.add_column(c, "updates", "slides", "TEXT")
-    H.add_column(c, "updates", "drafted_by", "TEXT")
-    H.add_column(c, "updates", "edited_by", "TEXT")
-    H.add_column(c, "updates", "inputs", "TEXT")
-    # `source`: the automation run that posted it (`post_update`, backend/automation_actions.py); a post by hand
-    # clears it. Shown as `source` only when set.
-    H.add_column(c, "updates", "source", "TEXT")
-    # `meetings`: a person's draft written with meeting summaries in its facts, or from a report's update that was,
-    # is read only by a meeting reader (`meeting_reader`). A draft from before the column cannot say what it used,
-    # so every one already there counts as having used them.
-    if "meetings" not in {row[1] for row in c.execute("PRAGMA table_info(updates)")}:
-        c.execute("SAVEPOINT update_meetings")
-        try:
-            H.add_column(c, "updates", "meetings", "INTEGER NOT NULL DEFAULT 0")
-            c.execute("UPDATE updates SET meetings=1 WHERE drafted_by IS NOT NULL AND bot LIKE 'human:%'")
-        except Exception:
-            c.execute("ROLLBACK TO update_meetings")
-            c.execute("RELEASE update_meetings")
-            raise
-        c.execute("RELEASE update_meetings")
 
 
 def meeting_reader(who):
@@ -853,7 +802,7 @@ def shared_tasks_sql(hidden, prefix=""):
     return rule
 
 
-# How an OK's answer reads in a draft; a question's answer is its own words.
+# How an OK's answer reads in a draft.
 _ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
 WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
 WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
@@ -951,7 +900,7 @@ def draft_facts(c, author, kind, day):
         "(SELECT a.actor_id || ' ' || a.kind || ' ' || coalesce(a.new, '') FROM history_events a "
         "WHERE a.subject_type='task' AND a.subject_id=e.subject_id AND a.rowid<e.rowid ORDER BY a.rowid DESC LIMIT 1)"
         f"=? || ' answer done') AND {shared_tasks_sql(hidden, 't.')} ORDER BY e.created_at DESC LIMIT ?",
-        (since, author, H.KEEPER, author, DRAFT_LIST_MAX),
+        (since, author, H.TICO_ACTOR, author, DRAFT_LIST_MAX),
     ).fetchall()
     # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
     answers = [
@@ -959,7 +908,7 @@ def draft_facts(c, author, kind, day):
         for r in c.execute(
             "SELECT t.title, a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
             "JOIN tasks t ON t.id=v.task_id JOIN requirements q ON q.id=a.requirement_id "
-            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind IN ('ok','answer') "
+            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind='ok' "
             "AND a.answer NOT IN ('pushed_past','give') AND NOT EXISTS (SELECT 1 FROM answers later "
             "WHERE later.visit_id=a.visit_id AND later.requirement_id=a.requirement_id AND later.undone_at IS NULL "
             f"AND later.rowid>a.rowid) AND {shared_tasks_sql(hidden, 't.')} ORDER BY a.created_at DESC LIMIT ?",
@@ -1235,7 +1184,7 @@ def send_request(c, row, assistant=None, delivery=False):
         refs["release"] = shipped_release(row["kind"])
     message = H.say(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         H.bot_actor(row["bot"]),
         request_text(
             c,
@@ -1818,7 +1767,7 @@ def purge_rejected(c):
             "message_id=NULL, sent_at=NULL, done_at=NULL, reason='asked again: the last one broke the update rules'",
             (H.new_id(), row["bot"], row["kind"], row["day"], last + 1),
         )
-        H.event(c, H.KEEPER, "update.rejected", row["id"], {"bot": row["bot"]})
+        H.event(c, H.TICO_ACTOR, "update.rejected", row["id"], {"bot": row["bot"]})
         removed.append(row["bot"])
     # The ones #635 deleted as "not given" (too long) are asked again the same way.
     for row in c.execute(

@@ -1,6 +1,8 @@
 ---
 name: read-why-an-inbound-lead-was-lost
 description: Give each closed-lost inbound lead one primary reason from a fixed list, backed by the buyer's own words or a dated note, so the weekly read-out counts reasons that can be checked against the evidence.
+metadata:
+  function: sales
 ---
 # Read why an inbound lead was lost
 

@@ -4,7 +4,7 @@
 
 const API = '/api';
 const GH = 'https://github.com/ticoteam/tico';
-// My dashboard (Company › Mine) is where the app opens; Company › Dashboard is the company's.
+// Company (the place person:me, the reader's own) is where the app opens.
 const HOME = '#/home';
 const OVERVIEW = '#/overview';
 const WELCOME = '#/welcome';          // first run: names, the team, the bot templates, a computer
@@ -12,10 +12,11 @@ const CHAT = '#/chat';                // retired with the Tico chat: old links l
 const NOTES = '#/notes';               // legacy route
 const RECORDINGS = '#/recordings';    // legacy route
 const MEETINGS = '#/meetings';        // imported meeting transcripts: the list, Import, and each meeting
+const CALL_ROUTE = '#/call/';        // a Tico Meet call's meeting window: #/call/<call id> (ui/app/call-window.ts)
 const UPDATES = '#/updates';          // the bots' daily and weekly updates, a feed (backend/updates.py)
 const TASKS = '#/tasks';              // hub tasks and Issues in one page (List | Board)
 const DECIDE = '#/decide';            // retired: old links land on Needs you, or open the item's card (ui/app/router.ts)
-const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; answerable cards walked by Catch up (ui/app/decide.ts)
+const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; answerable cards walked by Flow (ui/app/decide.ts)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.ts)
 const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/app/learned.ts)

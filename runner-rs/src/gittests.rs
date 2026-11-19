@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::env::Env;
+use crate::util::text_of;
 use crate::{execute, fetchrepo, sessions, worktrees};
 
 struct Tmp(PathBuf);
@@ -448,7 +449,7 @@ async fn isolated_existing_checkout_proofs_go_to_the_bot_and_links_in_their_fold
         "nor handed over itself"
     );
 
-    // The bot's `hub worktree setup` replaces a proof the way runner_support/worktrees.py does: temp file, then rename.
+    // The bot's `hub worktree setup` replaces a proof the way `write_marker` does: temp file, then rename.
     let replace = format!(
         "printf %s '{{\"schema\":1}}' > {0}.tmp && mv {0}.tmp {0}",
         marker.display()
@@ -581,7 +582,7 @@ async fn isolated_existing_task_locks_go_to_the_bot_without_replacing_inodes_or_
 
 // HotMic 0.3.46 leftovers: a managed base clone (repos/<name>/.git, its config and tico-managed) owned by
 // ticorun, directories 755, files 644. Refreshing it hands it to the bot, whose worktree add and
-// mark_managed (runner_support/repositories.py) then work.
+// mark_managed (repositories.rs) then work.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "requires a disposable Linux two-user environment"]
@@ -1530,81 +1531,6 @@ async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_w
 }
 
 #[tokio::test]
-async fn a_task_turn_moves_the_bots_claude_memory_into_its_worktree_and_it_is_done_once_pushed() {
-    use crate::harness_memory::{claude_dir, move_for_turn, Moved};
-    let tmp = Tmp::new();
-    let (bare, _seed) = remote(&tmp.0, "bot-ops");
-    let projects = tmp.0.join("projects");
-    std::fs::create_dir_all(&projects).unwrap();
-    let main = projects.join("bot-ops");
-    sh(
-        &projects,
-        &[
-            "clone",
-            "-q",
-            bare.to_str().unwrap(),
-            main.to_str().unwrap(),
-        ],
-    );
-    let env = turn_env(&tmp.0, &[]);
-    let session = sessions::path_for(&projects, "ops", "t1");
-    assert_eq!(
-        sessions::ensure(&main, &session, "t1", &env)
-            .await
-            .unwrap()
-            .1,
-        ""
-    );
-    // Claude named the bot's memory by its own checkout, not the task's worktree.
-    let home = tmp.0.join("home");
-    let dir = claude_dir(&home, &main);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("MEMORY.md"),
-        "- [Ask first](ask-first.md) — hook\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("ask-first.md"),
-        "---\nname: ask-first\ndescription: Ask before a spec\n---\nAsk first.\n",
-    )
-    .unwrap();
-    let (gemini, state) = (tmp.0.join("gemini-home"), tmp.0.join("state"));
-
-    let turn = |checkout: &std::path::Path| {
-        move_for_turn(&home, &main, checkout, &gemini, &state, "2026-10-21").unwrap()
-    };
-    assert_eq!(
-        turn(&session),
-        Moved::Copied(1),
-        "a task turn copies into its worktree before the harness starts"
-    );
-    assert!(std::fs::read_to_string(session.join("memory/learnings.md"))
-        .unwrap()
-        .contains("[source: claude-memory/ask-first.md;"));
-    // A main-lane turn meanwhile leaves it to the task's checkout: no second copy to collide on rebase.
-    assert_eq!(turn(&main), Moved::Elsewhere);
-    assert!(!main.join("memory/learnings.md").exists());
-    // Not done until the repository has it: the turn's memory commit, then the push.
-    assert_eq!(turn(&session), Moved::Copied(0));
-    assert_eq!(
-        sessions::finish(&session, "run-1", &env, &[], true).await,
-        ""
-    );
-    assert_eq!(execute::push_repo(&session, &env).await.1, "");
-    assert_eq!(turn(&session), Moved::Done);
-    assert!(state.join("done").exists());
-    // Done means done: an owner's edit that removes a moved rule stays removed.
-    sh(&main, &["pull", "-q"]);
-    std::fs::write(main.join("memory/learnings.md"), "# Learnings\n").unwrap();
-    assert_eq!(turn(&main), Moved::Done);
-    assert_eq!(
-        std::fs::read_to_string(main.join("memory/learnings.md")).unwrap(),
-        "# Learnings\n"
-    );
-}
-
-#[tokio::test]
 async fn a_shared_checkout_never_forces_and_says_which_files_conflict() {
     let tmp = Tmp::new();
     let (bare, seed) = remote(&tmp.0, "bot-eng");
@@ -1915,6 +1841,280 @@ async fn a_checkout_with_an_unpushed_commit_is_left_alone_and_still_reports_the_
         "no commit is dropped"
     );
     assert!(path.join(".git").is_dir(), "the folder stays");
+}
+
+fn test_lanes(root: &Path) -> crate::sessions::Lanes {
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    crate::sessions::Lanes::new(std::sync::Arc::new(crate::repositories::Repositories::new(
+        root, root, client,
+    )))
+}
+
+/// The folders beside `path` whose names start with its own, other than `path` itself.
+fn beside(path: &Path) -> Vec<PathBuf> {
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let mut out: Vec<PathBuf> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != path && p.file_name().unwrap().to_string_lossy().contains(&name))
+        .collect();
+    out.sort();
+    out
+}
+
+/// A checkout that cannot fast-forward (a local commit deleted AGENT.md and was never pushed) is cloned again from
+/// GitHub; the old copy is kept beside it with its commit, so nothing is lost and the bot runs again.
+#[tokio::test]
+async fn a_checkout_that_cannot_fast_forward_is_cloned_again_and_the_old_copy_kept() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-reclone");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-reclone");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-reclone", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    std::fs::write(path.join("scratch.txt"), "untracked work\n").unwrap();
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-reclone",
+        &path,
+        &env,
+        "org/bot-reclone",
+        Some(&url),
+    )
+    .await;
+    assert_eq!(problem, "");
+    assert!(
+        path.join("AGENT.md").is_file(),
+        "the bot has its instructions again"
+    );
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        sh(&path, &["rev-parse", "@{u}"])
+    );
+    let kept = beside(&path);
+    assert_eq!(
+        kept.len(),
+        1,
+        "only the set-aside copy is left beside it: {kept:?}"
+    );
+    assert!(kept[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .contains(".set-aside-"));
+    assert_eq!(
+        sh(&kept[0], &["rev-parse", "HEAD"]),
+        head,
+        "the local commit is kept"
+    );
+    assert_eq!(
+        std::fs::read_to_string(kept[0].join("scratch.txt")).unwrap(),
+        "untracked work\n"
+    );
+}
+
+/// When GitHub's own copy has no instructions file either, nothing is moved and no fresh clone is left behind.
+#[tokio::test]
+async fn a_checkout_is_not_replaced_when_githubs_copy_has_no_instructions_either() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-nofile");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-nofile");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-nofile", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    sh(&seed, &["rm", "-q", "AGENT.md"]);
+    sh(&seed, &["commit", "-qm", "Wipe on GitHub"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-nofile",
+        &path,
+        &env,
+        "org/bot-nofile",
+        Some(&url),
+    )
+    .await;
+    assert!(problem.contains("no AGENTS.md either"), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout is left as it is"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
+}
+
+/// A checkout with a live task worktree is not replaced, even when it cannot fast-forward: a task turn reuses only
+/// a worktree whose common Git folder is the bot's current checkout (sessions::ensure), so a replacement would cut
+/// the task off from its branch and unpushed commit. A worktree whose folder is gone does not hold it back.
+#[tokio::test]
+async fn a_checkout_with_a_live_task_worktree_is_not_replaced() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-linked");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-linked");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-linked", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    let task = tmp.0.join("tasks/t1/bot-linked");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    let gone = tmp.0.join("tasks/t0/bot-linked");
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t0",
+            gone.to_str().unwrap(),
+        ],
+    );
+    std::fs::remove_dir_all(&gone).unwrap();
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t1",
+            task.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(task.join("work.txt"), "task work\n").unwrap();
+    sh(&task, &["add", "work.txt"]);
+    sh(&task, &["commit", "-qm", "Unpushed task work"]);
+    let work = sh(&task, &["rev-parse", "HEAD"]);
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-linked",
+        &path,
+        &env,
+        "org/bot-linked",
+        Some(&url),
+    )
+    .await;
+    assert!(problem.contains(task.to_str().unwrap()), "{problem}");
+    assert!(!problem.contains(gone.to_str().unwrap()), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout stays"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
+    let common = sh(
+        &task,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    assert_eq!(
+        std::path::Path::new(&common).canonicalize().unwrap(),
+        path.join(".git").canonicalize().unwrap(),
+        "the task worktree still belongs to the bot's checkout"
+    );
+    assert_eq!(
+        sh(&path, &["rev-parse", "tico/t1"]),
+        work,
+        "the task's commit is reachable"
+    );
+
+    std::fs::remove_dir_all(&task).unwrap();
+    let problem = fetchrepo::heal_or_replace(
+        &lanes,
+        "bot-linked",
+        &path,
+        &env,
+        "org/bot-linked",
+        Some(&url),
+    )
+    .await;
+    assert_eq!(problem, "", "with no live worktree left it is replaced");
+    assert!(path.join("AGENT.md").is_file());
+}
+
+/// A task worktree that git recorded with a relative gitdir (worktree.useRelativePaths) also keeps the checkout in
+/// place: the path is read from the worktree's admin folder, not from the runner's working folder.
+#[tokio::test]
+async fn a_relative_task_worktree_also_keeps_the_checkout_in_place() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-rel");
+    let env = turn_env(&tmp.0, &[]);
+    let path = tmp.0.join("projects/bot-rel");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = bare.display().to_string();
+    assert_eq!(
+        fetchrepo::clone_repository(&path, "org/bot-rel", &env, Some(&url)).await,
+        ("cloned", String::new())
+    );
+    let task = tmp.0.join("tasks/t1/bot-rel");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    sh(
+        &path,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/t1",
+            task.to_str().unwrap(),
+        ],
+    );
+    let admin = path.join(".git/worktrees/bot-rel");
+    // admin -> worktrees -> .git -> bot-rel -> projects -> the temp root
+    std::fs::write(
+        admin.join("gitdir"),
+        "../../../../../tasks/t1/bot-rel/.git\n",
+    )
+    .unwrap();
+    sh(&path, &["rm", "-q", "AGENT.md"]);
+    sh(&path, &["commit", "-qm", "Local wipe"]);
+    let head = sh(&path, &["rev-parse", "HEAD"]);
+
+    let lanes = test_lanes(&tmp.0);
+    let problem =
+        fetchrepo::heal_or_replace(&lanes, "bot-rel", &path, &env, "org/bot-rel", Some(&url)).await;
+    assert!(problem.contains("task worktrees"), "{problem}");
+    assert_eq!(
+        sh(&path, &["rev-parse", "HEAD"]),
+        head,
+        "the checkout stays"
+    );
+    assert!(
+        beside(&path).is_empty(),
+        "no clone or copy is left beside it"
+    );
 }
 
 /// A clone whose own commit deleted AGENT.md and was pushed; then GitHub's copy is reverted from the seed.
@@ -2293,11 +2493,28 @@ async fn recording_server() -> (
     crate::client::Client,
     std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
 ) {
+    let (client, seen, _, _) = routed_server().await;
+    (client, seen)
+}
+
+/// What the fake server answers, by "METHOD /api/v2/path": a status and a JSON body (else 200 `{}`). Status 0
+/// closes the connection without an answer.
+type Routes = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (u16, Value)>>>;
+
+/// A fake Tico server that records each request ("METHOD /path", body) and answers from `Routes`, which a test
+/// may change between calls. Returns a client for it, what it saw, its routes and its URL.
+async fn routed_server() -> (
+    crate::client::Client,
+    std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    Routes,
+    String,
+) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let log = seen.clone();
+    let routes: Routes = Default::default();
+    let (log, answers) = (seen.clone(), routes.clone());
     tokio::spawn(async move {
         loop {
             let Ok((mut sock, _)) = listener.accept().await else {
@@ -2333,17 +2550,33 @@ async fn recording_server() -> (
                 .take(2)
                 .collect::<Vec<_>>()
                 .join(" ");
+            let (status, answer) = answers
+                .lock()
+                .unwrap()
+                .get(&line)
+                .cloned()
+                .unwrap_or((200, json!({})));
             log.lock()
                 .unwrap()
                 .push((line, serde_json::from_str(&body).unwrap_or(Value::Null)));
-            let reply = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+            if status == 0 {
+                continue;
+            }
+            let answer = answer.to_string();
+            let reply = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
             let _ = sock.write_all(reply.as_bytes()).await;
             let _ = sock.shutdown().await;
         }
     });
+    let url = format!("http://127.0.0.1:{port}");
     (
-        crate::client::Client::new(&format!("http://127.0.0.1:{port}"), "t", 5, 0).unwrap(),
+        crate::client::Client::new(&url, "t", 5, 0).unwrap(),
         seen,
+        routes,
+        url,
     )
 }
 
@@ -2459,6 +2692,494 @@ async fn a_worktree_reserved_for_a_waiting_task_is_checked_out_set_up_and_report
     assert_eq!(
         (last["state"].as_str(), last["checkout_state"].as_str()),
         (Some("pending"), Some("setup_failed"))
+    );
+}
+
+/// A workspace whose managed base clone of org/product already exists (origin is GitHub's address, read from
+/// the local bare repository), as a turn finds it after the runner's first fetch.
+fn workspace_with_base(root: &Path) -> PathBuf {
+    let (bare, _seed) = remote(root, "product");
+    let workspace = root.join("ws");
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(
+        root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/org/product.git",
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", bare.display()),
+            "https://github.com/org/product.git",
+        ],
+    );
+    workspace
+}
+
+/// A turn's environment for `tico-runner worktree`: the git settings plus the variables a turn sets.
+fn worktree_turn(root: &Path, workspace: &Path, url: &str) -> Env {
+    let mut turn = turn_env(root, &[]);
+    for (k, v) in [
+        ("HUB_WORKSPACE", workspace.display().to_string()),
+        ("HUB_BOT", "ops".into()),
+        ("HUB_TASK_ID", "task-0007".into()),
+        ("HUB_API_URL", url.into()),
+        ("HUB_TOKEN", "attempt-token".into()),
+    ] {
+        turn.insert(k.into(), v);
+    }
+    turn
+}
+
+fn writable(setup: &str) -> Value {
+    json!({"configured": true, "repositories": [{"full_name": "org/product", "access": "write",
+           "default_branch": "main", "setup_command": setup}]})
+}
+
+/// The states a link was PATCHed through, as "state/checkout_state".
+fn patched(seen: &std::sync::Mutex<Vec<(String, Value)>>, link: &str) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|(l, _)| l == &format!("PATCH /api/v2/tasks/task-0007/links/{link}"))
+        .map(|(_, b)| format!("{}/{}", text_of(&b["state"]), text_of(&b["checkout_state"])))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_turns_worktree_add_checks_out_sets_up_and_then_finds_it_ready() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let link = json!({"link_id": "link-0007", "branch": "tico/added", "path": "tasks/t7/product", "repo": "org/product",
+                      "state": "pending", "checkout_state": "queued", "setup_pending": true});
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("echo ok > ../setup-ran")),
+        );
+        r.insert(
+            "GET /api/v2/tasks/t7".into(),
+            (200, json!({"task": {"id": "task-0007"}})),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (200, link.clone()),
+        );
+    }
+
+    // A short task id is resolved to the task's canonical id first.
+    let added = worktrees::cli::run("add", "org/product", Some("t7"), &turn)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.to_json()));
+    let tree = workspace.join("tasks/t7/product");
+    assert_eq!(
+        (
+            added["state"].as_str(),
+            added["checkout_state"].as_str(),
+            added["setup_pending"].as_bool()
+        ),
+        (Some("present"), Some("ready"), Some(false))
+    );
+    assert_eq!(added["workspace_path"], json!(tree.display().to_string()));
+    assert_eq!(
+        sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
+        "tico/added"
+    );
+    assert!(workspace.join("tasks/t7/setup-ran").exists());
+    assert_eq!(
+        patched(&seen, "link-0007"),
+        [
+            "pending/initializing",
+            "pending/checkout_ready",
+            "pending/setup_running",
+            "present/ready"
+        ]
+    );
+    assert_eq!(seen.lock().unwrap()[0].0, "GET /api/v2/tasks/t7");
+
+    // The next add finds it ready from the server's record and its local proof, and changes nothing.
+    let proof = seen.lock().unwrap().last().unwrap().1.clone();
+    let mut ready = link.clone();
+    for k in ["expected_head", "checkout_target", "expected_base"] {
+        ready[k] = proof[k].clone();
+    }
+    ready["state"] = json!("present");
+    ready["checkout_state"] = json!("ready");
+    ready["setup_pending"] = json!(false);
+    routes.lock().unwrap().insert(
+        "POST /api/v2/tasks/task-0007/worktrees".into(),
+        (200, ready),
+    );
+    let before = patched(&seen, "link-0007").len();
+    let again = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.to_json()));
+    assert_eq!(
+        (again["state"].as_str(), again["checkout_state"].as_str()),
+        (Some("present"), Some("ready"))
+    );
+    assert_eq!(patched(&seen, "link-0007").len(), before);
+}
+
+#[tokio::test]
+async fn a_failed_setup_is_kept_until_worktree_setup_runs_it_again() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let link = json!({"link_id": "link-0008", "branch": "tico/retry", "path": "tasks/t8/product", "repo": "org/product",
+                      "state": "pending", "checkout_state": "queued", "setup_pending": true});
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("exit 3")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (200, link.clone()),
+        );
+    }
+    let failed = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    let detail = text_of(&failed["error"]["detail"]);
+    assert!(detail.contains("setup failed (exit 3)"), "{failed}");
+    // The checkout is there, so the link is not reset to pending: its setup_failed record stands.
+    assert_eq!(
+        patched(&seen, "link-0008").last().unwrap(),
+        "pending/setup_failed"
+    );
+    assert!(workspace.join("tasks/t8/product/.git").is_file());
+
+    let proof = seen.lock().unwrap().last().unwrap().1.clone();
+    let row = json!({"id": "link-0008", "kind": "worktree", "repo": "org/product", "state": "pending",
+                     "path": "tasks/t8/product", "branch": "tico/retry",
+                     "detail": {"checkout_state": "setup_failed", "setup_pending": true,
+                                "expected_head": proof["expected_head"], "checkout_target": proof["checkout_target"],
+                                "expected_base": proof["expected_base"]}});
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("echo ok > ../setup-ran")),
+        );
+        r.insert(
+            "GET /api/v2/tasks/task-0007/links".into(),
+            (200, json!({"links": [row]})),
+        );
+    }
+    let done = worktrees::cli::run("setup", "org/product", None, &turn)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.to_json()));
+    assert_eq!(
+        (done["state"].as_str(), done["checkout_state"].as_str()),
+        (Some("present"), Some("ready"))
+    );
+    assert!(workspace.join("tasks/t8/setup-ran").exists());
+    assert_eq!(patched(&seen, "link-0008").last().unwrap(), "present/ready");
+}
+
+#[tokio::test]
+async fn an_attached_worktree_is_registered_and_certified_ready() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    let tree = workspace.join("tasks/t9/product");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/mine",
+            tree.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees/attach".into(),
+            (200, json!({"link_id": "link-0009", "branch": "tico/mine", "path": "tasks/t9/product", "state": "pending"})),
+        );
+    }
+    let attached = worktrees::cli::run("attach", tree.to_str().unwrap(), None, &turn)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.to_json()));
+    assert_eq!(
+        attached["workspace_path"],
+        json!(tree.display().to_string())
+    );
+    let seen = seen.lock().unwrap();
+    let asked = seen
+        .iter()
+        .find(|(l, _)| l == "POST /api/v2/tasks/task-0007/worktrees/attach")
+        .unwrap();
+    assert_eq!(
+        asked.1,
+        json!({"path": "tasks/t9/product", "repo": "org/product", "branch": "tico/mine"})
+    );
+    let (line, body) = seen.last().unwrap();
+    assert_eq!(line, "PATCH /api/v2/tasks/task-0007/links/link-0009");
+    assert_eq!(
+        (body["state"].as_str(), body["checkout_state"].as_str()),
+        (Some("present"), Some("ready"))
+    );
+    assert_eq!(
+        body["expected_head"],
+        json!(sh(&tree, &["rev-parse", "HEAD"]))
+    );
+    assert_eq!(
+        worktrees::read_marker(&workspace, "link-0009")
+            .unwrap()
+            .unwrap()["phase"],
+        json!("ready")
+    );
+}
+
+#[tokio::test]
+async fn a_server_failure_inside_checkout_or_setup_stays_a_refusal_to_retry() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let record = "PATCH /api/v2/tasks/task-0007/links/link-0007";
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (
+                200,
+                json!({"link_id": "link-0007", "branch": "tico/added", "path": "tasks/t7/product", "repo": "org/product",
+                       "state": "pending", "checkout_state": "queued", "setup_pending": true}),
+            ),
+        );
+        // The checkout's first record (worktrees.rs patch_checkout) is where Tico fails.
+        r.insert(
+            record.into(),
+            (
+                503,
+                json!({"error": {"code": "unavailable", "detail": "Tico is busy; try again"}}),
+            ),
+        );
+    }
+    let busy = worktrees::cli::run_with_backoff("add", "org/product", None, &turn, 0.001)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (
+            &busy["error"]["code"],
+            &busy["error"]["detail"],
+            &busy["error"]["status"],
+            &busy["error"]["retryable"]
+        ),
+        (
+            &json!("unavailable"),
+            &json!("Tico is busy; try again"),
+            &json!(503),
+            &json!(true)
+        )
+    );
+    // The client tried it four times (three retries) before giving up.
+    let tries = || {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _)| l == record)
+            .count()
+    };
+    assert_eq!(tries(), 4);
+
+    // A connection lost on the same record is one to retry too, with the operation to retry it as.
+    routes.lock().unwrap().insert(record.into(), (0, json!({})));
+    let lost = worktrees::cli::run_with_backoff("add", "org/product", None, &turn, 0.001)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (&lost["error"]["code"], &lost["error"]["retryable"]),
+        (&json!("unavailable"), &json!(true)),
+        "{lost}"
+    );
+    assert!(lost["error"]["operation_id"].is_string(), "{lost}");
+    assert_eq!(tries(), 8);
+}
+
+#[tokio::test]
+async fn worktree_refusals_keep_the_servers_words_and_say_what_is_missing() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+
+    // No bot run: nothing is asked of the server.
+    let mut bare = turn.clone();
+    bare.remove("HUB_WORKSPACE");
+    let refused = worktrees::cli::run("add", "org/product", None, &bare)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert!(
+        text_of(&refused["error"]["detail"])
+            .starts_with("Task worktrees need a bot run and a task"),
+        "{refused}"
+    );
+    assert!(seen.lock().unwrap().is_empty());
+
+    // Read-only access names what the server listed.
+    routes.lock().unwrap().insert(
+        "GET /api/v2/runners/me/repositories".into(),
+        (200, json!({"configured": true, "repositories": [{"full_name": "org/product", "access": "read"}]})),
+    );
+    let refused = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        refused["error"]["detail"],
+        json!("This bot needs write access to this repository: Tico lists org/product as read-only for this run (writable here: none)")
+    );
+
+    // A wait for a free worktree slot comes back whole, so the CLI can say how to wait (exit 3).
+    routes.lock().unwrap().insert(
+        "GET /api/v2/runners/me/repositories".into(),
+        (200, writable("")),
+    );
+    routes.lock().unwrap().insert(
+        "POST /api/v2/tasks/task-0007/worktrees".into(),
+        (
+            409,
+            json!({"error": {"code": "worktree_limit", "detail": "All worktree slots are in use",
+                                "retryable": false, "wait": {"id": "wait-1"}}}),
+        ),
+    );
+    let waiting = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (
+            &waiting["error"]["code"],
+            &waiting["error"]["status"],
+            &waiting["error"]["wait"]
+        ),
+        (
+            &json!("worktree_limit"),
+            &json!(409),
+            &json!({"id": "wait-1"})
+        )
+    );
+
+    // A server without task worktrees (FastAPI's bare route miss) says so.
+    routes.lock().unwrap().insert(
+        "POST /api/v2/tasks/task-0007/worktrees".into(),
+        (404, json!({"detail": "Not Found"})),
+    );
+    let old = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        old["error"]["detail"],
+        json!("The server is too old for task worktrees; update Tico")
+    );
+}
+
+#[tokio::test]
+async fn ticos_own_not_found_is_passed_on_not_taken_for_an_old_server() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, _, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let gone = |detail: &str| {
+        (
+            404,
+            json!({"error": {"code": "not_found", "detail": detail}}),
+        )
+    };
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            gone("Task not found"),
+        );
+    }
+    let missing = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (
+            &missing["error"]["code"],
+            &missing["error"]["detail"],
+            &missing["error"]["status"]
+        ),
+        (&json!("not_found"), &json!("Task not found"), &json!(404))
+    );
+
+    // The worktree's record deleted mid-turn: the first checkout record finds it gone.
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (
+                200,
+                json!({"link_id": "link-0007", "branch": "tico/added", "path": "tasks/t7/product", "repo": "org/product",
+                       "state": "pending", "checkout_state": "queued", "setup_pending": true}),
+            ),
+        );
+        r.insert(
+            "PATCH /api/v2/tasks/task-0007/links/link-0007".into(),
+            gone("Worktree not found"),
+        );
+    }
+    let deleted = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (&deleted["error"]["code"], &deleted["error"]["detail"]),
+        (&json!("not_found"), &json!("Worktree not found"))
     );
 }
 
@@ -2987,4 +3708,32 @@ async fn a_template_repository_with_links_to_agent_md_gets_one_agents_md_file() 
     );
     assert_eq!(sh(&main, &["status", "--porcelain"]), "");
     assert_eq!(sh(&main, &["ls-tree", "--name-only", "HEAD"]), "AGENTS.md");
+}
+
+/// A turn's start skips the computer's push lock only where publish_history would find nothing to publish.
+#[tokio::test]
+async fn only_a_branch_that_tracks_its_upstream_is_published_already() {
+    let tmp = Tmp::new();
+    let (_bare, seed) = remote(&tmp.0, "ops");
+    let env = turn_env(&tmp.0, &[]);
+    let agree = |path: PathBuf| {
+        let env = env.clone();
+        async move {
+            let quick = execute::published_already(&path, &env).await;
+            let (state, _) = execute::publish_history(&path, "acme/ops", &env).await;
+            (quick, state)
+        }
+    };
+    assert_eq!(agree(seed.clone()).await, (true, "current"));
+    sh(&seed, &["checkout", "-q", "-b", "local"]);
+    // (publish_history would publish it, to GitHub: not run here.)
+    assert!(
+        !execute::published_already(&seed, &env).await,
+        "a branch with no upstream"
+    );
+    sh(&seed, &["checkout", "-q", "--detach", "main"]);
+    assert_eq!(agree(seed.clone()).await, (false, "skipped"));
+    let empty = tmp.0.join("empty");
+    sh(&tmp.0, &["init", "-q", empty.to_str().unwrap()]);
+    assert_eq!(agree(empty).await, (false, "skipped"));
 }

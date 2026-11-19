@@ -76,7 +76,7 @@ Always:
 - `skills/check-a-page-as-a-crawler/SKILL.md`: read before you call a page fine, broken or missing from search.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/visibility-method.md`, `knowledge/prompts.md` and `knowledge/pages.md`. A resumed turn already has them.
 3. Find the playbook for the task: a routine names its own; a Growth task's stage names one in "Your pipelines";
@@ -101,19 +101,19 @@ stop, and their end wakes you.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `tico strategy show`.
-Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. At the start of each run, read your channel with `tico growth channel show <slug>`: its KPI against target, what changed and what lines up with it, its tests and how fresh its sources are. A task labelled `growth:alert` means your channel crossed a line the team set: read the channel, act, and close the task when it is dealt with.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
 `tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
 contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`, and link its KPI with `--input-kpi <id>`.
 Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager or a person. Read the
 record with `tico task show <id>`. Competitor facts you find go to `tico market report`, in prose with the source, never
-into a second list here. Ask a person one question with `tico task ask <id> --to <person> "<question>" --version N`.
+into a second list here. Ask a person one question with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Ranked, cited and named are three results.** A page that loads is not a page that ranks. A ranking is

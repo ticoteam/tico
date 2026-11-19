@@ -7,6 +7,8 @@ interface OnbNames { company_name: string; app_name: string; assistant_name: str
 interface OnbAnswers {
   building: string; what_we_do: string; customers: string; team_size: string; work_arrives: string[]; repetitive_work: string;
   software_product: string; departments: string[]; briefings: Record<string, string>; teams_off: string[];
+  /** The job picked on the Your team step's "Start with" line (backend company_import.FIRST_JOBS); '' is none. */
+  first_job?: string;
   /** An earlier release's answer: dropped when the record loads. */
   never_without_person?: unknown;
 }
@@ -17,7 +19,11 @@ interface OnbRunner { id?: string; label?: string | null; online?: boolean }
 /** One team of the default chart (GET /api/v2/setup `default_chart`): its seats in chart order, each with the seat it
  *  reports to inside the team (null for the team's top seats); `locked`: built-ins only, always on. The chart's teams
  *  and titles are the server's. */
-interface OnbTeam { team: string; on: boolean; locked?: boolean; roles: {id?: string; title: string; live: boolean; reports_to?: string | null}[] }
+interface OnbTeam { team: string; on: boolean; locked?: boolean; picked?: boolean;
+  roles: {id?: string; title: string; live: boolean; built_in?: boolean; reports_to?: string | null}[] }
+/** The Your team step's "Start with" line (GET /api/v2/setup `first_jobs`): the first jobs offered, each with the one seat
+ *  it makes live and that seat's team, and the one the step opens with picked. */
+interface OnbFirstJobs { choices: {key: string; label: string; seat: string; team: string}[]; picked: string }
 /** The company file the team was set up from. */
 interface OnbImported { seats?: number; deferred?: string[]; people?: {invited_at?: string | null}[] }
 interface OnbRecord {
@@ -31,6 +37,7 @@ interface OnbRecord {
   machine: {runners: OnbRunner[]; enrolled: boolean; cloud?: boolean};
   needed: boolean;
   default_chart?: OnbTeam[];
+  first_jobs?: OnbFirstJobs;
   company_import_failed?: {reason?: string} | null;
   company_import?: OnbImported | null;
 }
@@ -83,7 +90,7 @@ const ONB_TITLES: Record<string, string> = {building: 'What are you building?', 
 const ONB_BLANK: OnbRecord = {
   names: {company_name: '', app_name: '', assistant_name: '', owner_name: '', team_domain: '', website: ''},
   answers: {building: '', what_we_do: '', customers: '', team_size: '', work_arrives: [], repetitive_work: '',
-            software_product: '', departments: [], briefings: {}, teams_off: []},
+            software_product: '', departments: [], briefings: {}, teams_off: [], first_job: ''},
   selected: {}, completed: null, home: '', bots: [], machine: {runners: [], enrolled: false}, needed: true};
 // The open setup; null until the page opens. ui/setup-strategy.ts, ui/first-run.ts and ui/org-builder.ts read it.
 let ONB: OnbState | null = null;
@@ -249,16 +256,45 @@ function onbTeamHTML(state: OnbState): string {
     ? `<p class="onb-failed" id="onb-import-failed" role="alert">Your company file wasn't imported: ${esc(String(state.record.company_import_failed.reason || 'it could not be applied').replace(/\.?$/, '.'))}</p>` : '';
   if (state.mode === 'custom') return failed + obStepHTML(state);
   if (state.mode === 'file' && state.companyImport) return failed + onbFileTeamHTML(state.companyImport.preview) + onbActions(state, 'Create team');
-  const teams = state.record.default_chart || [];
-  return `${failed}<div class="onb-teams" role="group" aria-label="Teams">${teams.map(team => `<label class="onb-team" data-onb-team-row="${esc(team.team)}">
-      <input type="checkbox" class="people-switch" data-onb-team="${esc(team.team)}" aria-label="${esc(team.team)}"${team.on || team.locked ? ' checked' : ''}${team.locked ? ' disabled' : ''}>
-      <span class="onb-team-text"><strong>${esc(team.team)}</strong>${onbTeamRolesHTML(team)}</span>
-      <span class="onb-team-n tnum" aria-hidden="true">${team.roles.length}</span></label>`).join('')}</div>
+  return `${failed}${onbFirstJobHTML(state)}${onbTeamsHTML(state)}
     <p class="onb-team-more"><button class="linkish" type="button" id="onb-change">Change</button>
       <span aria-hidden="true">·</span><button class="linkish" type="button" id="onb-file-pick">I have a company file</button>
       <input type="file" id="onb-company-file" accept=".yaml,.yml" hidden></p>
     ${onbActions(state, 'Create team')}`;
 }
+// The first job picked on the "Start with" line: the saved answer, else the one the server opens the step with. Null
+// when the server offers none (an older server): the chart's own live seats are drawn.
+function onbFirstJob(state: OnbState): OnbFirstJobs['choices'][number] | null {
+  const jobs = state.record.first_jobs?.choices || [];
+  const key = state.record.answers.first_job || state.record.first_jobs?.picked || '';
+  return jobs.find(job => job.key === key) || null;
+}
+// "Start with": one radio per first job. The team starts with the built-ins and the one bot for the job picked; every
+// other seat is Recruiting until someone recruits it.
+function onbFirstJobHTML(state: OnbState): string {
+  const jobs = state.record.first_jobs?.choices || [];
+  if (!jobs.length) return '';
+  const picked = onbFirstJob(state);
+  return `<p class="onb-first-job-label" id="onb-first-job-label">Start with</p>
+    <div class="onb-choices" id="onb-first-job" role="radiogroup" aria-labelledby="onb-first-job-label">${jobs.map(job =>
+      `<label><input type="radio" name="onb-first-job" data-onb-first-job value="${esc(job.key)}"${job.key === picked?.key ? ' checked' : ''}>${esc(job.label)}</label>`).join('')}</div>`;
+}
+// The default chart, one row per team with its switch, drawn for the first job picked: that job's seat is the only
+// live one besides the built-ins, and its team is on, its switch disabled until another job is picked.
+function onbTeamsHTML(state: OnbState): string {
+  const job = onbFirstJob(state);
+  const teams = (state.record.default_chart || []).map(team => onbTeamForJob(team, job));
+  return `<div class="onb-teams" id="onb-teams" role="group" aria-label="Teams">${teams.map(team => {
+    const fixed = team.locked || team.picked;
+    return `<label class="onb-team" data-onb-team-row="${esc(team.team)}">
+      <input type="checkbox" class="people-switch" data-onb-team="${esc(team.team)}" aria-label="${esc(team.team)}"${team.on || fixed ? ' checked' : ''}${fixed ? ' disabled' : ''}>
+      <span class="onb-team-text"><strong>${esc(team.team)}</strong>${onbTeamRolesHTML(team)}</span>
+      <span class="onb-team-n tnum" aria-hidden="true">${team.roles.length}</span></label>`;
+  }).join('')}</div>`;
+}
+const onbTeamForJob = (team: OnbTeam, job: OnbFirstJobs['choices'][number] | null): OnbTeam => !job ? team : {...team,
+  picked: team.team === job.team,
+  roles: team.roles.map(role => ({...role, live: !!role.built_in || role.id === job.seat}))};
 // A team's seats in the chart's own order: each top seat (its manager) first, then everyone under it, depth first.
 // A Recruiting seat (no bot yet) is muted.
 function onbTeamRolesHTML(team: OnbTeam): string {
@@ -474,9 +510,17 @@ function onbWire(state: OnbState, key: string) {
     // Back from the builder's first screen or from a file's team is back to the default chart.
     if (state.mode !== 'default' && back) back.onclick = () => onbTeamMode(state, 'default');
     if (state.mode === 'custom') { obWire(state); return; }
-    state.dialog?.querySelectorAll<HTMLInputElement>('[data-onb-team]').forEach(input => input.onchange = () => {
-      const team = state.record.default_chart?.find(row => row.team === input.dataset.onbTeam);
-      if (team) team.on = input.checked;
+    onbWireTeams(state);
+    state.dialog?.querySelectorAll<HTMLInputElement>('[data-onb-first-job]').forEach(input => {
+      input.onchange = () => {
+        if (!input.checked) return;
+        state.record.answers.first_job = input.value;
+        // The job's team is made: it switches on, and stays on while the job is picked.
+        const job = onbFirstJob(state), team = state.record.default_chart?.find(row => row.team === job?.team);
+        if (team) team.on = true;
+        const box = $('#onb-teams');
+        if (box) { box.outerHTML = onbTeamsHTML(state); onbWireTeams(state); }
+      };
     });
     const change = $('#onb-change');
     if (change) change.onclick = () => onbTeamMode(state, 'custom');
@@ -489,6 +533,14 @@ function onbWire(state: OnbState, key: string) {
   const hide = $('#onb-hide');
   // For good: Finish setup leaves the sidebar now and stays away (Getting started's dismissal, per person).
   if (hide) hide.onclick = () => { if (GS) GS = {...GS, dismissed: true}; void gsState({checklist: true}); state.dialog?.close(); };
+}
+function onbWireTeams(state: OnbState) {
+  state.dialog?.querySelectorAll<HTMLInputElement>('[data-onb-team]').forEach(input => {
+    input.onchange = () => {
+      const team = state.record.default_chart?.find(row => row.team === input.dataset.onbTeam);
+      if (team) team.on = input.checked;
+    };
+  });
 }
 function onbWireComputer(state: OnbState) {
   const commands = onbCommands(state);
@@ -534,12 +586,14 @@ function onbCollect(state: OnbState, key: string) {
       ...($('#onb-domain') ? {team_domain: $('#onb-domain').value.trim()} : {})};
   }
   if (key === 'team') {
-    if (state.mode === 'custom') obCollect(state);
+    if (state.mode === 'custom') { obCollect(state); r.answers = {...r.answers, first_job: ''}; }
     else {
-      // The default chart: no roles picked (the server lays it out, company_import.default_chart), less the teams off.
+      // The default chart: no roles picked (the server lays it out, company_import.default_chart), less the teams off,
+      // with only the first job's seat live. The job's team is never off.
+      const job = onbFirstJob(state);
       r.selected = {};
-      r.answers = {...r.answers, departments: [], briefings: {},
-        teams_off: (r.default_chart || []).filter(team => !team.on && !team.locked).map(team => team.team)};
+      r.answers = {...r.answers, departments: [], briefings: {}, first_job: job?.key || '',
+        teams_off: (r.default_chart || []).filter(team => !team.on && !team.locked && team.team !== job?.team).map(team => team.team)};
     }
   }
 }
@@ -655,8 +709,10 @@ async function onbCompleted(state: OnbState, record: Partial<OnbRecord> | null |
   await refresh(true);                      // the new bots in the sidebar, behind the modal
 }
 // Done: Tasks. The model plan is a default (Settings > Models), not a step.
+// Setup goes on in Flow: each bot an open setup area waits on asks the person its first ❓ (backend/flow_ping.py `setup`).
 function onbDone(state: OnbState) {
   state.dialog?.close();
+  post('/v2/flow/ping', {scope: 'setup'}).catch(() => {});
 }
 
 // ----------------------------------------------------------------- Welcome (a team from the company file)

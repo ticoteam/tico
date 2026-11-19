@@ -3,16 +3,17 @@
 import pytest
 
 from backend import hubdb as H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import job_state
 from backend.tests.helpers.held_runs import botops
 from backend.tests.helpers.task_lanes import new_task, task_bot
-from backend.tests.helpers.task_quarantine import refusals, started
+from backend.tests.helpers.task_quarantine import OPEN_SQL, refusals, started
 
 
 def holds(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM quarantine_holds WHERE released_at IS NULL")]
+        return [dict(r) for r in c.execute(OPEN_SQL)]
 
 
 @pytest.fixture
@@ -40,7 +41,13 @@ def test_external_asks_fence_their_task(api, external_work):
 
     def ask(row, expected=200):
         version = get(api, "tasks/" + row["id"])["task"]["version"]
-        body = {"to": "ana", "line": "OK to merge the export fix?", "kind": "ok", "version": version}
+        body = {
+            "to": "ana",
+            "line": "OK to merge the export fix?",
+            "kind": "ok",
+            "show": X.shown_on(api),
+            "version": version,
+        }
         return post(api, f"tasks/{row['id']}/asks", body, token, expected=expected)
 
     with api.app.state.store.read() as c:
@@ -496,7 +503,16 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
             machine["token"],
         )
     assert claim(api, machine) is None
-    assert any("Held for" in m["body"] for m in get(api, f"conversations/{task['conversation_id']}/messages"))
+    # Tico's line to the bot about the hold: the bot reads it with the room; no person's chat shows it.
+    with api.app.state.store.read() as c:
+        said = [
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE conversation_id=? AND sender_id='keeper'", (task["conversation_id"],)
+            )
+        ]
+    assert any("Held for" in body for body in said)
+    assert not any("Held for" in m["body"] for m in get(api, f"conversations/{task['conversation_id']}/messages"))
     assert other["id"] != task["id"]
 
 
@@ -580,8 +596,8 @@ def test_held_scopes_are_also_contained_at_the_total_refusal_backstop(api, rule)
                 with pytest.raises(H.Refused):
                     H.refuse(c, "bot:ops", rule, f"Refused target {i}", task=task["id"])
                 assert H.bot(c, "ops")["state"] == "active"
-                held = c.execute("SELECT task_id FROM quarantine_holds WHERE released_at IS NULL").fetchall()
-                assert (task["id"] in {row[0] for row in held}) == (i == H.QUARANTINE_TOTAL_AT - 1)
+                held = c.execute(OPEN_SQL).fetchall()
+                assert (task["id"] in {row["task_id"] for row in held}) == (i == H.QUARANTINE_TOTAL_AT - 1)
     assert {row["task_id"] for row in holds(api)} == {first["id"], second["id"]}
 
 
@@ -972,7 +988,7 @@ def _task_mutation(api, token, mutation, n):
             body = {} if mutation == "delete_comment" else {"text": "Checked the report."}
         elif mutation == "update":
             suffix = ""
-            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "body": "Check the export again."}
+            body = {"version": get(api, "tasks/" + tid)["task"]["version"], "title": task["title"] + " again"}
         requests.append((f"tasks/{tid}" + ("/" + suffix if suffix else ""), body))
     with api.app.state.store.transaction() as c:
         Q.hold(c, H.actor_id(tasks[0]["owner_id"]), "task:" + tasks[0]["id"], "Repeated refusals", {"rule": "identity"})
@@ -990,7 +1006,8 @@ def _task_mutation(api, token, mutation, n):
 
 
 def _held_notes(api, machine, source, n):
-    from backend import bot_to_bot as B, task_quarantine as Q
+    from backend import bot_to_bot as B
+    from backend import task_quarantine as Q
 
     with api.app.state.store.transaction() as c:
         if source.startswith("chat"):
@@ -1025,7 +1042,7 @@ def _held_notes(api, machine, source, n):
     if not source.startswith("chat"):
         row = get(api, "tasks/" + task["id"])["task"]
         result = post(
-            api, "tasks/" + task["id"], {"version": row["version"], "body": "Check it."}, attempt["token"], expected=403
+            api, "tasks/" + task["id"], {"version": row["version"], "title": "Check it"}, attempt["token"], expected=403
         )
         assert result["error"]["code"] == "quarantined"
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])

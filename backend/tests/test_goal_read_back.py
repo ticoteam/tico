@@ -185,7 +185,7 @@ def test_a_question_between_the_plan_and_the_yes_keeps_the_plan(api):
     with api.app.state.store.transaction() as c:
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(
-            c, H.KEEPER, "human:ana", "Ops finished a task", room, "notice", {"assistant": True}, None, None
+            c, H.TICO_ACTOR, "human:ana", "Ops finished a task", room, "notice", {"assistant": True}, None, None
         )
     assert say(api, "great, go ahead")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
@@ -738,7 +738,7 @@ def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_targe
         post(api, path, body, token="strategy-test", expected=status)
     p = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "kpi_target",
             "goal_id": row["id"],
@@ -795,7 +795,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
     for token in ("ana-test", "strategy-test"):
         refused = post(
             api,
-            "goal-proposals",
+            "proposals",
             {"kind": "flag", "goal_id": row["id"], "payload": {"issue": "unmeasured", "note": "No KPI"}},
             token=token,
             expected=422,
@@ -806,7 +806,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
     # Allowed flags still work; pre-existing rows are not deleted or rewritten.
     allowed = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "flag", "goal_id": row["id"], "payload": {"issue": "vague"}},
         token="strategy-test",
     )["proposal"]
@@ -814,7 +814,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
         c.execute(
             "UPDATE goal_proposals SET payload=? WHERE id=?", (json.dumps({"issue": "unmeasured"}), allowed["id"])
         )
-    assert get(api, "goal-proposals")["proposals"][0]["payload"]["issue"] == "unmeasured"
+    assert get(api, "proposals")["proposals"][0]["payload"]["issue"] == "unmeasured"
 
 
 def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):

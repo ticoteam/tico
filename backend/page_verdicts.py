@@ -1,5 +1,5 @@
 # pyright: strict
-"""Jev's verdicts on pages: one per page version and rubric (docs/pipelines-v3.md "The nine requirement kinds", 3).
+"""Jev's verdicts on pages: one per page version and rubric (docs/dev/pipelines-v3.md "The nine requirement kinds", 3).
 
 A page attached to a page requirement (backend/task_pages.py) is owed a verdict. The Jev step on the Heartbeat (`run`)
 judges what is owed through `pipeline_judges.judge_many`, with no write transaction held during the model call, and
@@ -17,6 +17,8 @@ Every function takes the caller's open write transaction and never commits, exce
 
 import hashlib
 import json
+import re
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -35,10 +37,14 @@ def _h() -> Any:
     return hubdb
 
 
-def rubric_hash(rubric: str, context: Row | None = None) -> str:
-    """The key for what a page is judged against: the rubric and the context Jev is shown beside the page (JSON-able,
-    key order does not matter)."""
-    text = json.dumps({"rubric": rubric.strip(), "context": context or {}}, sort_keys=True, separators=(",", ":"))
+def rubric_hash(rubric: str, context: Row | None = None, rules: list[str] | None = None) -> str:
+    """The key for what a page is judged against: the rubric, the context Jev is shown beside the page (JSON-able,
+    key order does not matter) and the rules added to the check (Flow's suggested rules), in order. With no rules the
+    key is what it was before rules existed, so no verdict already given is owed again."""
+    held: Row = {"rubric": rubric.strip(), "context": context or {}}
+    if rules:
+        held["rules"] = list(rules)
+    text = json.dumps(held, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -48,13 +54,101 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
     return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
 
 
+GET_SQL = "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?"
+
+
 def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row | None:
-    """The verdict row for a page version and rubric hash, or None when none is owed yet."""
-    return _one(
-        conn,
-        "SELECT * FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=?",
-        (file_id, int(version), key),
-    )
+    """The verdict row for a page version and rubric hash, or None when none is owed yet. Kept for the read snapshot
+    (read_cache: a write starts it again); `prime` reads many together."""
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    cached = (GET_SQL, str(file_id), int(version), str(key))
+    if values is not None and cached in values:
+        found: Row | None = values[cached]
+        return dict(found) if found else None
+    found = _one(conn, GET_SQL, (file_id, int(version), key))
+    if values is not None:
+        values[cached] = dict(found) if found else None
+    return found
+
+
+# `get` of many keys: only the asked (file id, version, rubric hash), each found by the unique key's index, never every
+# verdict a page ever had (a page revised often has many).
+PRIME_SQL = (
+    "SELECT v.* FROM json_each(?) AS k CROSS JOIN page_verdicts AS v WHERE v.file_id = json_extract(k.value, '$[0]') "
+    "AND v.version = json_extract(k.value, '$[1]') AND v.rubric_hash = json_extract(k.value, '$[2]')"
+)
+
+
+def prime(conn: "sqlite3.Connection", keys: Iterable[tuple[str, int, str]]) -> None:
+    """Read `get` of many (file id, version, rubric hash) in one statement, misses too, for the reads that follow in
+    this snapshot. Nothing outside a snapshot."""
+    from . import read_cache
+
+    values: dict[Any, Any] | None = read_cache.cache(conn)
+    if values is None:
+        return
+    wanted = {(str(f), int(v), str(k)) for f, v, k in keys}
+    wanted = {key for key in wanted if (GET_SQL, *key) not in values}
+    if not wanted:
+        return
+    found: dict[tuple[str, int, str], Row] = {}
+    cursor = conn.execute(PRIME_SQL, (json.dumps(sorted(wanted)),))
+    names = [d[0] for d in cursor.description]
+    for raw in cursor.fetchall():
+        row = dict(zip(names, raw, strict=True))
+        found[(str(row["file_id"]), int(row["version"]), str(row["rubric_hash"]))] = row
+    for key in wanted:
+        values.setdefault((GET_SQL, *key), found.get(key))
+
+
+# Each page's versions Jev passed, with the page requirement each counted for: newest version first, then the newest
+# verdict. `checks_of` reads one page; `prime_checks` reads many together.
+PASSED = (
+    "SELECT p.file_id, p.version, p.requirement_id FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id "
+    "AND v.version = p.version AND v.rubric_hash = COALESCE(p.rubric_hash, '') WHERE p.file_id IN (SELECT value FROM "
+    "json_each(?)) AND v.verdict='met' ORDER BY p.version DESC, v.updated_at DESC"
+)
+
+
+def _passed(conn: "sqlite3.Connection", file_ids: list[str]) -> dict[str, list[tuple[int, str]]]:
+    out: dict[str, list[tuple[int, str]]] = {fid: [] for fid in file_ids}
+    if file_ids:
+        for fid, version, rid in conn.execute(PASSED, (json.dumps(file_ids),)).fetchall():
+            out[str(fid)].append((int(version), str(rid)))
+    return out
+
+
+def prime_checks(conn: "sqlite3.Connection", refs: Iterable[object]) -> None:
+    """Read what Jev passed on the pages of many `page:<id>[@<version>]` refs together, for the `checks_of` that follow
+    in this snapshot (Needs you shows an OK's check rows for each OK on it). Without a read snapshot it reads nothing."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    ids = {
+        m.group(1) for m in (re.fullmatch(r"page:([A-Za-z0-9_-]+)(?:@[0-9]{1,9})?", str(r or "")) for r in refs) if m
+    }
+    for fid, found in _passed(conn, sorted(i for i in ids if (PASSED, i) not in values)).items():
+        values.setdefault((PASSED, fid), found)
+
+
+def checks_of(conn: "sqlite3.Connection", file_id: str, version: int | None = None) -> list[str]:
+    """The check rows of a page version (its newest, with no version) that Jev passed: one short line per part of the
+    check it was judged by (pipeline_judges.CHECKS, `Part.found`). An OK that shows the page lists them under its
+    question; [] when no verdict on it passed, or its check is a company's own."""
+    from . import pipeline_judges as PJ
+    from . import read_cache
+    from . import task_requirements as R
+
+    passed = read_cache.value(conn, (PASSED, file_id), lambda: _passed(conn, [file_id])[file_id], shared=True)
+    found = next((rid for at, rid in passed if version is None or at == int(version)), None)
+    requirement: Row = (R.get(conn, found) if found else None) or {}
+    settings: Row = requirement.get("settings") or {}
+    check = PJ.check_of(settings.get("rubric"))
+    return [part.found for part in PJ.CHECKS[check] if part.found] if check else []
 
 
 def owe(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row:
@@ -153,6 +247,7 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
 
     requirement = R.get(conn, page["requirement_id"]) or {"id": page["requirement_id"], "kind": "page"}
     task = E.task(conn, page["task_id"]) or {}
+    task["request"] = _h().task_request_text(conn, page["task_id"]) if task else ""
     judged: Row = json.loads(page.get("judged_against") or "{}")
     version = _one(
         conn,
@@ -186,7 +281,7 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
 def job_of(
     requirement: Row, task: Row, page: Row, text: str | None, cut: bool, judged: Row, link: Row | None = None
 ) -> tuple[Row, Row]:
-    """`_job` with nothing read: the requirement (its id and name), the task (title, body, version, pipeline), the page
+    """`_job` with nothing read: the requirement (its id and name), the task (title, request, version, pipeline), the page
     (file_id, version, digest), its text and whether it was cut, what it is judged against (`judged_against`: the
     rubric and the context), and the task's PR link (repo, number, detail) when it links one. The eval
     (evals/pipeline_judge) builds its page cases through this, so the judge is shown there exactly what it is shown
@@ -200,6 +295,8 @@ def job_of(
         "rubric": judged.get("rubric") or requirement.get("name") or "",
         "goal": pipeline.get("goal") or "",
         "pipeline_id": task.get("pipeline_id"),
+        # The rules added to the check when the page was attached (task_pages.judged_against): each one more part.
+        **({"rules": list(judged["rules"])} if judged.get("rules") else {}),
     }
     ref = f"page:{page['file_id']}@{page['version']}"
     attachment: Row = {
@@ -210,7 +307,7 @@ def job_of(
         "text": text,
         "truncated": cut,
         "task_title": task.get("title") or "",
-        "task_spec": task.get("body") or "",
+        "task_spec": task.get("request") or "",  # what was asked: the task's first message
         "task_work_version": task.get("version") or 0,
         # The page is made for the work as it is now: without this Jev is shown evidence for version 0 of work at
         # version N, and hedges on a page that is right (live rc.4, Nov 11).
@@ -254,9 +351,9 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
         E.changed(conn, task_id, E.SYSTEM)
         if said == "not_met" and R.jev_gates(requirement):
             line = (
-                f'Jev sent back "{R.name_of(requirement)}": {reasons}'
+                f'Decision model sent back "{R.name_of(requirement)}": {reasons}'
                 if reasons
-                else (f'Jev sent back "{R.name_of(requirement)}"')
+                else (f'Decision model sent back "{R.name_of(requirement)}"')
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
         elif said in ("unsure", "failed"):
@@ -281,8 +378,8 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
     standing = R.standing(conn, row, requirement, answer)
     name = R.name_of(requirement)
     if standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
-        what_jev = "could not check" if "Jev couldn't check" in standing.line else "is unsure of"
-        lead = f'Jev {what_jev} "{name}": you decide it, as the pipeline\'s manager.'
+        model_action = "could not check" if "Decision model couldn't check" in standing.line else "is unsure of"
+        lead = f'The decision model {model_action} "{name}": you decide it, as the pipeline\'s manager.'
         task_wakes.add(
             conn,
             row,

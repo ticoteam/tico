@@ -53,7 +53,7 @@ declare function threadsLoad(): void;
       const version = reads.version || 'v1';
       return json(url.searchParams.get('version') === version ? {count: 0, version, unchanged: true} : {items: [], count: 0, version, next: null});
     }
-    if (p === '/api/v2/threads' && method === 'GET') {
+    if (p === '/api/v2/threads/rail' && method === 'GET') {
       reads.threads++;
       if (reads.hold) await reads.hold;
       if (reads.failThreads) return route.fulfill({status: 500, contentType: 'application/json', body: '{"error":"down"}'});

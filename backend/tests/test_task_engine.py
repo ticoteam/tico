@@ -1,16 +1,19 @@
-"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/pipelines-v3.md "How a task moves").
+"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/dev/pipelines-v3.md "How a task moves").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a three-stage Build pipeline, the fictional
 company's person and two bots.
 """
 
+import json
 import sqlite3
 
 import pytest
 
+from backend import check_models
 from backend import task_delete
 from backend import task_engine as E
 from backend import task_requirements as R
+from backend.item_sources import github as F
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -218,7 +221,7 @@ def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
     H.task_link(c, ANA, merged["id"], "https://github.com/acme/app/pull/1")
     F.save_pr(c, "acme/app", 1, {"state": "merged", "head_sha": "a", "merged_sha": "m"}, 1)
     E.move(c, top["id"], E.CLOSED, ANA, "The flow is off")
-    # Its work is in the code (docs/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
+    # Its work is in the code (docs/dev/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
     states = [E.task(c, t["id"])["status"] for t in (top, merged, other)]
     assert states == ["closed", "open", "closed"]
 
@@ -252,6 +255,154 @@ def test_a_filed_task_that_was_deleted_counts_as_closed_not_done(c, general):
     standing = R.standings(c, E.task(c, parent["id"]))[0]
     assert (standing.state, standing.line) == (R.NOT_MET, "A deleted task was closed: It was deleted")
     assert E.advance(c, parent["id"]) is None
+
+
+def test_a_done_replacement_satisfies_linked_work_after_a_filed_task_closes(c, general):
+    stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
+    X.pipeline(c, "product", "Product", stages)
+    parent = X.new_task(c, ANA, "Checkout flow", "product")
+    stale = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    E.move(c, stale["id"], E.CLOSED, ANA, "Superseded")
+    assert R.standings(c, E.task(c, parent["id"]))[0].state == R.NOT_MET
+
+    retry = X.new_task(c, ANA, "Build the updated cart", assignee="bot:builder", parent=parent["id"])
+    standing = R.standings(c, E.task(c, parent["id"]))[0]
+    assert (standing.state, standing.on) == (R.WAITING, retry["id"])
+    X.say_done(c, retry)
+    E.advance(c, retry["id"])
+    assert E.task(c, parent["id"])["status"] == "done"
+
+
+REVIEW_CHECK = {"runtime": "codex", "model": "gpt-5", "harness": "codex", "effort": "", "role": "review"}
+
+
+def _review_stage(c):
+    # A Review stage: its page at the newest commit, and the second review it waits on.
+    stages = (
+        {
+            "name": "Review",
+            "owner": "bot:manager",
+            "requirements": [{"kind": "page", "settings": {"at_head": True}}, {"kind": "linked_done"}],
+        },
+    )
+    X.pipeline(c, "product", "Product", stages)
+    return X.new_task(c, ANA, "Checkout flow", "product")
+
+
+def _says(c, row, sender, commit, about=None):
+    body = f"PR https://github.com/acme/app/pull/7 at {commit}."
+    refs = json.dumps({"task": about}) if about else None
+    c.execute(
+        "INSERT INTO messages(id, conversation_id, sender_id, kind, body, refs, created_at) VALUES(?,?,?,?,?,?,?)",
+        (H.new_id(), row["conversation_id"], sender, "say", body, refs, "2026-11-18T04:00:00Z"),
+    )
+
+
+def test_a_review_gate_counts_only_a_second_review_check_of_the_newest_commit(c, general, monkeypatch):
+    # Only a subtask filed as a review check counts. A builder's or a reviewer's routing task never does, even when it
+    # names the newest commit; a review filed at an older commit does not either, and an older review still open does
+    # not hide a finished review of the newest commit.
+    reviewer = X.bot(c, "reviewer-2")
+    c.execute("UPDATE bot_settings SET template='reviewer' WHERE bot_id=?", (reviewer.split(":", 1)[1],))
+    parent = _review_stage(c)
+    old, new = "2" * 40, "1" * 40
+    head = {"sha": old}
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head["sha"]})
+
+    def gate():
+        return R.standings(c, E.task(c, parent["id"]))[1]
+
+    def review():
+        row = X.new_task(
+            c, ANA, f"Second review: acme/app#7 at {head['sha'][:7]}", assignee=reviewer, parent=parent["id"]
+        )
+        check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"], row["title"])
+        return row
+
+    builder = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    assert (gate().state, gate().on, gate().line) == (R.NOT_MET, "bot:manager", "No second review filed yet")
+    routing = X.new_task(c, ANA, "Route this to Product", assignee=reviewer, parent=parent["id"])
+    _says(c, routing, reviewer, old)
+    X.say_done(c, routing)
+    E.advance(c, routing["id"])
+    E.move(c, builder["id"], E.CLOSED, ANA, "Not a review")
+    assert (gate().state, gate().line) == (R.NOT_MET, "No second review filed yet")
+
+    stale = review()  # filed at the old head, and left open
+    assert (gate().state, gate().on) == (R.WAITING, stale["id"])
+    head["sha"] = new
+    c.execute("UPDATE tasks SET updated_at=updated_at WHERE id=?", (parent["id"],))  # a new head is a write
+    assert gate().state == R.NOT_MET and "did not read the newest commit" in gate().line
+
+    current = review()
+    assert (gate().state, gate().on) == (R.WAITING, current["id"])
+    X.say_done(c, current)
+    E.advance(c, current["id"])
+    assert E.task(c, stale["id"])["status"] == "open"
+    assert gate().state == R.MET
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "PR https://github.com/acme/app/pull/7 at {a}",
+        "Please review acme/app#7 at {a}, the cart change.",
+        "Review #7 @ commit {short}",
+        "Review the cart change at {short}.",
+    ],
+)
+def test_a_review_gate_counts_the_commit_the_request_named_not_a_newer_head(c, general, monkeypatch, request_text):
+    # The filer picks head A and asks for a review of A, in any of the ways a request names it; the PR moves on to B
+    # before the review is filed. The review read A: finishing it never meets the gate for B, and B is never inferred.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    a, b = "a1" * 20, "b2" * 20
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": b})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(c, reviewer, row["id"], REVIEW_CHECK, parent["id"], request_text.format(a=a, short=a[:7]))
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    gate = R.standings(c, E.task(c, parent["id"]))[1]
+    assert gate.state == R.NOT_MET and "did not read the newest commit" in gate.line
+
+
+def test_a_review_that_names_no_commit_never_meets_the_gate(c, general, monkeypatch):
+    # A request with no commit binds none. While open the review can still say which commit it reads; once Done with
+    # none named, the gate is not met and says why, whatever the PR's head is.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    head = "c3" * 20
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(
+        c, reviewer, row["id"], REVIEW_CHECK, parent["id"], "Second review\nPlease review the cart change."
+    )
+    assert (R.standings(c, E.task(c, parent["id"]))[1].state, R.standings(c, E.task(c, parent["id"]))[1].on) == (
+        R.WAITING,
+        row["id"],
+    )
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    gate = R.standings(c, E.task(c, parent["id"]))[1]
+    assert gate.state == R.NOT_MET and "names no commit" in gate.line
+
+
+def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monkeypatch):
+    # A review filed for another bot, before the PR head was read: its request, written by the filer, names the
+    # commit, and the review's owner never repeats it.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    head = "1" * 40
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    row = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(c, reviewer, row["id"], REVIEW_CHECK)
+    X.say_done(c, row)
+    E.advance(c, row["id"])
+    # A message about another task, in the same conversation, names the head: it is not this review's commit.
+    _says(c, row, ANA, head, about=parent["id"])
+    assert R.standings(c, E.task(c, parent["id"]))[1].state == R.NOT_MET
+    _says(c, row, ANA, head)
+    assert R.standings(c, E.task(c, parent["id"]))[1].state == R.MET
 
 
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
@@ -309,6 +460,11 @@ def test_reassign_is_a_move_it_resets_the_tries_and_drops_the_old_owners_wakes(c
         "bot:reviewer",
         row["version"] + 1,
     )
+    change = c.execute(
+        "SELECT old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='assignee_id'",
+        (row["id"],),
+    ).fetchone()
+    assert tuple(change) == ("bot:builder", "bot:reviewer")
     assert (moved["visit"]["id"], moved["visit"]["tries"], moved["visit"]["level"]) == (row["visit"]["id"], 0, "owner")
     states = dict(
         c.execute(
@@ -392,16 +548,13 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     E.fill_open_slots(c)
     row = E.task(c, row["id"])
     seen = row["version"]
+    plan = X.shown(c)  # what the bot's OK shows
     with _refused("task_changed"):
-        E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?")
+        E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK the retry plan", shows=plan)
     with _refused("task_requirement"):
         E.add_requirement(c, row["id"], "bot:builder", "owner_done", ANA, "Is it done?", seen_version=seen)
-    first = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?", choices=["3", "5"], seen_version=seen
-    )
-    second = E.add_requirement(
-        c, row["id"], "bot:builder", "answer", ANA, "Retry 3 or 5 times?", choices=["3", "5"], seen_version=seen
-    )
+    first = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 3 retries", shows=plan, seen_version=seen)
+    second = E.add_requirement(c, row["id"], "bot:builder", "ok", ANA, "OK 5 retries", shows=plan, seen_version=seen)
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move
@@ -409,7 +562,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     assert len(R.on_visit(c, row["visit"]["id"])) == 2  # a person has no such limit
     X.say_done(c, row)
     assert E.advance(c, row["id"]) is None  # the stage's own requirement is met: the task still waits
-    X.answer(c, row, second["requirement_id"], "5", ANA)
+    X.answer(c, row, second["requirement_id"], "ok", ANA)
     assert E.advance(c, row["id"]) is None
     moved = E.withdraw_requirement(c, mine["requirement_id"], ANA)
     assert moved["stage"]["name"] == "Review"

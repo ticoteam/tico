@@ -1,6 +1,8 @@
 ---
 name: check-a-group-before-reporting
 description: Check every group in a survey result against the anonymity threshold before any number, count or quote leaves the working files, merge or suppress small groups, and confirm that no combination of filters can single someone out.
+metadata:
+  function: people
 ---
 # Check a group before reporting
 

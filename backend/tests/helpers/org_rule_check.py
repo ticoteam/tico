@@ -14,13 +14,31 @@ NEEDLE = "favorite color is"
 
 class Judge:
     """Answers rule-check@1: a rule is broken when the output holds that rule's needle. It notes whether the store's
-    write lock was held when it was asked, which must never happen."""
+    write lock was held when it was asked, which must never happen. A rule-part@1 call is not noted: it runs on its
+    own thread, started from the hold's after-commit hook while the committing thread still holds the gate (released
+    after the hooks), so a queued write then is that other thread's, not the part call's."""
 
     def __init__(self, store, needles=None):
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
+        self.parts, self.part_fail = [], None  # rule-part@1's calls, kept apart: `calls` are the rule checks
+        self.part_gate = None  # a threading.Event the part call waits on, to hold it back (a slow call)
+
+    def part(self, state, questions):
+        """Answers rule-part@1: the first part that holds a needle, else `whole`."""
+        self.parts.append({"state": state, "questions": questions})
+        if self.part_gate is not None:
+            self.part_gate.wait(10)
+        if self.part_fail:
+            raise self.part_fail
+        needles = [n.lower() for n in self.needles.values()]
+        hit = next((p["id"] for p in state["parts"] if any(n in p["text"].lower() for n in needles)), "whole")
+        answers = {qid: {"type": "choice", "choice": hit, "confidence": 0.9} for qid in questions}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 120, "output_tokens": 0}, "ms": 30, "answers": answers}
 
     def __call__(self, state, questions, label=None):
+        if str(label or "").startswith("rule-part@"):
+            return self.part(state, questions)
         self.locked.append(bool(self.store.writer.queue))
         self.calls.append({"state": state, "questions": questions, "label": label})
         if self.hold:
@@ -47,9 +65,13 @@ def color_rule(api, if_broken="block", **more):
     return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": if_broken, **more})
 
 
-def say(api, text, to="ana", token="ops-test", **more):
+def say(api, text, to="ana", token="ops-test", settle=True, **more):
     r = api.post("/api/v2/messages", json={"to": to, "text": text, **more}, headers=headers(token))
     assert r.status_code == 200, r.text
+    if settle:
+        from backend import org_rule_check
+
+        org_rule_check.settle_parts()  # a held write's part call runs after it: let it finish
     return r.json()
 
 

@@ -88,16 +88,15 @@ for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.class
 // the next visit). A browser that will not store it keeps the choice for this visit (RD_LIB.mem).
 const RD_LIB_KEY = 'tico.nav.library';
 const RD_LIB = {inside: false, was: false, mem: false};
-// Contacts sits on the Team header, so its page (and its old Directory address) leaves Library as it is.
-const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
+const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return [DOCS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
 function rdLibRemember(open: boolean): void { RD_LIB.mem = open; try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) === 'open'; } catch { return RD_LIB.mem; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
-// Company folds the same way: folded unless opened here, opened while Strategy, Finance, Growth, Automations, Listening
-// or Rules is showing (its own page, #/home, shows its row whatever the fold).
+// Company folds the same way: folded unless opened here, opened while Strategy, Products, Finance, Growth, Risk,
+// Automations, Listening or Rules is showing (its own page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
 const RD_CO = {inside: false, was: false, mem: false};
-const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+const rdInCompany = (r: string): boolean => ['#/strategy', PRODUCTS_ROUTE, GR_ROUTE, FIN_ROUTE, RISK_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
 function rdCoRemember(open: boolean): void { RD_CO.mem = open; try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) === 'open'; } catch { return RD_CO.mem; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
@@ -140,7 +139,9 @@ function redesignNavCurrent(nav: string | undefined): boolean {
   if (nav === 'skills') return rdUnder(r, SKILLS_ROUTE);
   if (nav === 'contacts') return rdUnder(r, DIR_ROUTE);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
+  if (nav === 'products') return rdUnder(r, PRODUCTS_ROUTE);
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
+  if (nav === 'risk') return rdUnder(r, RISK_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
   if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
   if (nav === 'calendar') return rdUnder(r, CAL_ROUTE);
@@ -156,7 +157,7 @@ function redesignRoute(r: string): boolean {
   if (r === '#/settings/listening' || r === '#/strategy/market/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
-  if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_SOURCES); return true; }   // Sources is growth's now
+  if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_ROUTE); return true; }   // Sources' numbers are Growth's now
   if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace('#/strategy'); return true; }
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0] ?? '')) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
   if (rdUnder(r, RD_AUTOMATIONS) || rdUnder(r, RD_LISTENING)) {
@@ -168,7 +169,9 @@ function redesignRoute(r: string): boolean {
   if (toolsRoute(r)) return true;   // Tools and every old address of what it holds (ui/app/tools.ts)
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.ts
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.ts
+  if (riskRoute(r)) return true;   // Company › Risk (ui/app/risk.ts)
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.ts
+  if (productsRoute(r)) return true;   // Company › Products (ui/app/products.ts)
   if (skillsRoute(r)) return true;   // Library › Skills (ui/app/skills.ts)
   if (directoryRoute(r)) return true;   // Library › Contacts and its old #/library/directory (ui/app/directory.ts)
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.ts)
@@ -187,6 +190,9 @@ function redesignAfterRoute() {
   pagesStop(S.route || '');
   skillsStop(S.route || '');
   directoryStop(S.route || '');
+  productsStop(S.route || '');
+  riskStop(S.route || '');
+  riskNavWire();
   rdLibSync();
   financeStop();
   growthStop();
@@ -194,6 +200,16 @@ function redesignAfterRoute() {
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
+// The Strategy tabs whose setup area waits on the person (Flow's mark beside the name), as GET /v2/setup/gaps says
+// (ui/app/setup-gaps.ts sets them, and again on each `setup` event).
+const STRAT_TAB_NEEDS = new Set<string>();
+function strategyTabNeeds(tab: string, needs: boolean): void {
+  if (needs) STRAT_TAB_NEEDS.add(tab); else STRAT_TAB_NEEDS.delete(tab);
+  document.querySelectorAll<HTMLElement>(`[data-strat-tab="${tab}"]`).forEach(el => {
+    el.querySelector(':scope > .needs-mark')?.remove();
+    if (needs) el.insertAdjacentHTML('beforeend', needsMarkHTML(12, tab));
+  });
+}
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
 // from the Strategy tab and keeps it lit, so the Strategy tab is the way back from either.
 // Every tab has ⋯, last at the far right (style guide, "Top bars: one line"): what is used less than daily lives there
@@ -201,6 +217,7 @@ function redesignAfterRoute() {
 // its own keeps the header's Copy link.
 function redesignStrategyHead(tab: string): string {
   const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
+  void setupGapsWatch();
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
   const more = tab === 'strategy' ? `<a href="${LENSES_ROUTE}" data-strat-lenses>Lenses</a>`
@@ -211,7 +228,7 @@ function redesignStrategyHead(tab: string): string {
   // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
   return pageHead({title: sub || 'Strategy', back: sub ? {href: '#/strategy', label: 'Strategy'} : undefined,
     hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
-    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
+    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`, mark: STRAT_TAB_NEEDS.has(id) ? id : ''})),
     more, actId: 'strat-actions'});
 }
 

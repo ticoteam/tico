@@ -212,7 +212,9 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       await page.locator('#bot-instructions-changes').fill('Add the review step.');
       await page.locator('.bot-instructions-acts .primary').click();
       await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
-      assert.equal(seen.posts.at(-1)?.path, '/api/v2/assistant/messages');
+      // The last thing sent is the message; a page visit's own preference save (org.history, sent a moment after the
+      // visit: ui/app/sidebar.ts orgHistorySave) can land after it.
+      assert.equal(seen.posts.filter(x => !x.path.startsWith('/api/v2/preferences/')).at(-1)?.path, '/api/v2/assistant/messages');
       await shot(page, 'instructions-1440');
       // Settings: the editor's own "Settings" title is not drawn under the Settings tab (a screen reader still has it).
       await page.goto('https://tico-ui.test/#/bot/spo/settings');
@@ -322,7 +324,7 @@ const lastInLine = (page: Page) => page.locator('#bot-top').evaluate(top => [...
       assert.equal(await dlg.locator('.tmodal-head .tmodal-x .nav-icon').innerText(), 'close');
       assert.deepEqual(await dlg.locator('.tmodal-foot button').allInnerTexts(), ['Cancel', 'Create task']);
       await shot(page, `person-task-${phone ? 390 : 1440}`);
-      await dlg.locator('[name=body]').fill('The signed copy, please.');
+      await dlg.locator('[name=message]').fill('The signed copy, please.');
       await dlg.locator('[name=title]').fill('Send the signed form');
       await dlg.locator('[name=title]').press('Enter');
       await page.waitForFunction(() => !(document.querySelector('#person-task-modal') as HTMLDialogElement | null)?.open);

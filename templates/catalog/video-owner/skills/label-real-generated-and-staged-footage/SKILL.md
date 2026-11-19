@@ -1,6 +1,8 @@
 ---
 name: label-real-generated-and-staged-footage
 description: Classify every shot as real footage, recorded demo data, sped-up or sample material, generated, or drawn, label each on screen and on the task, and check the platform's disclosure rule before any file is published.
+metadata:
+  function: marketing
 ---
 # Label real, generated and staged footage
 

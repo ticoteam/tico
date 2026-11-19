@@ -241,6 +241,11 @@ def claim(store, now):
     return None
 
 
+def _now():
+    """Every webhook-timestamp is read here, so a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 def deliver(store, vault, claimed, *, transport=None):
     """Post one claimed send and record what came back. Nothing is posted once the claim is no longer this worker's."""
     send_id, token = claimed
@@ -271,7 +276,7 @@ def deliver(store, vault, claimed, *, transport=None):
         return
     # A body queued before the API v2 rename still says attempt_id: it leaves as a run, like one queued after it.
     body = runs.public_json(send["body"]).encode()
-    timestamp = int(time.time())
+    timestamp = int(_now())
     started = time.monotonic()
     status, head, error, abort = None, "", "", False
     try:
@@ -375,7 +380,7 @@ def exhausted(c, send, attempts, status, shown, now):
     person who owns it. Health shows the failure from the rows themselves."""
     H.event(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         "webhook.exhausted",
         send["id"],
         {"webhook": send["webhook_id"], "type": send["type"], "attempts": attempts, "status": status},
@@ -389,15 +394,18 @@ def exhausted(c, send, attempts, status, shown, now):
     try:
         # One savepoint: a refusal to file the line must not undo the failed send's record.
         c.execute("SAVEPOINT webhook_notice")
-        task = H.task_create(
+        from . import person_asks
+
+        task = person_asks.task_for(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             f"Webhook {hook['name']} is not receiving events",
             f"Tico gave up on a {send['type']} event after {attempts} attempts ({shown}). "
             f"Check the endpoint, then retry the send from Tools › Webhooks or "
             f"`tico webhook retry {send['id']}`.",
             hook["created_by"],
-            lint=False,
+            question=f"Can you check the endpoint of webhook {hook['name']}?",
+            why=f"Tico gave up on an event after {attempts} attempts.",
         )
         c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
         c.execute("RELEASE webhook_notice")

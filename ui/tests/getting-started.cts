@@ -318,13 +318,13 @@ const importedChart = {org_groups: [{id: 'built-in', name: 'General', order: 0},
     role = 'human';
     page = await open('#/strategy/market/players');
     await page.locator('#market-shell .market-none').waitFor();
-    assert.equal(await page.locator('#market-shell').textContent(), 'Nothing here yet.');
+    assert.equal(await page.locator('#market-shell').textContent(), 'Nothing here yet');
     assert.equal(await page.locator('[data-market-setup], [data-market-resume], #market-canvas').count(), 0);
     await shotAll(page, 'none');
     await page.close();
     role = 'owner';
 
-    // ---- Meetings has no intro card: the page itself offers Add notes and the sources
+    // ---- Meetings has no intro card: the page itself offers Log a meeting and the sources
     page = await open('#/meetings');
     assert.equal(await page.locator('[data-gs-card]').count(), 0);
     await page.close();

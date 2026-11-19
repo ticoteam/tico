@@ -1,6 +1,7 @@
 """The Growth page's numbers: one read that tells the story of growth, for anyone signed in.
 
-`GET /api/v2/growth/numbers?months=12` (1 to 24, default 12):
+`GET /api/v2/growth/numbers?months=12&month=YYYY-MM` (1 to 24, default 12; `month`, the last month read, default the
+newest with numbers):
 - `months`: the newest N months with cohort rows, oldest first.
 - `series`: one per month, every channel together (growth.economics' total, with revenue and margin from
   growth.aggregate over the same rows). A figure not recorded is null, never 0.
@@ -18,22 +19,28 @@
 The tasks, KPIs and channels are read as their own routes read them: a marker shows only a task the reader may see
 (auth.task_sql, as task lists do). `may_edit` is who may record cohorts: an admin or a bot (growth.py's cohort rule).
 `you_may` (what the caller may do per action) and `setup` (what is left to set up) as every Growth read
-(backend/growth_setup.py).
+(backend/growth_setup.py). `line`: the picked month joined source to KPI, as the page draws it above its cards
+(backend/growth_line.py); null with no channel.
 """
 
+import re
 from datetime import datetime, timezone
 
 from fastapi import Request
 
 from . import growth as G
+from . import growth_line as GL
 from . import growth_setup as GS
 from . import hubdb as H
 from . import kpis as K
 from . import marketing_tasks as MT
+from . import models as M
 from .brand import admin
 from .store import Problem
+from .api_contract import api_v2
 
 MONTHS_DEFAULT, MONTHS_MIN, MONTHS_MAX = 12, 1, 24
+MONTH_RE = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
 MARKERS_MAX = 200
 KPI_KEYS = (
     "id",
@@ -279,8 +286,9 @@ def _markers(c, auth, who, since):
     return out
 
 
-def numbers(c, auth, who, months, hidden, until=None):
-    """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
+def numbers(c, auth, who, months, hidden, until=None, with_line=False):
+    """The numbers for the newest `months` months with rows up to `until` (default: all of them); `with_line`: and the
+    Growth line for `until` (else the newest month)."""
     window = _window(c, months, until)
     conf = G.settings(c)
     totals, by_month, total_origin = {}, {}, {}
@@ -290,7 +298,7 @@ def numbers(c, auth, who, months, hidden, until=None):
         totals[m] = _with_money(econ["total"], total)
         by_month[m] = {row["channel"]: _with_money(row, per[row["channel"]]) for row in econ["rows"]}
         total_origin[m] = total_origins(econ["rows"])
-    return {
+    out = {
         "months": window,
         "series": [_month(totals[m], m, total_origin[m]) for m in window],
         "channels": _channels(c, window, by_month),
@@ -298,20 +306,50 @@ def numbers(c, auth, who, months, hidden, until=None):
         "markers": _markers(c, auth, who, _since(window)),
         "may_edit": who.role == "bot" or admin(auth, who),
     }
+    if with_line:
+        out["line"] = GL.line(c, until or (window[-1] if window else None), hidden)
+    return out
 
 
-def install(app, store, auth):
+def install(app, store, auth, mutate):
     from .goal_routes import _hidden_owners
 
-    @app.get("/api/v2/growth/numbers")
-    def growth_numbers(request: Request, months: int = MONTHS_DEFAULT):
+    @app.get(
+        "/api/v2/growth/numbers",
+        **api_v2(
+            "KPIs",
+            "getGrowthNumbers",
+            "The Growth page's numbers: the newest months (1 to 24, default 12) up to `month` (YYYY-MM, default the newest "
+            "with numbers), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null "
+            "where not recorded), the KPI tree with each KPI's last 24 readings, the marketing tests that started or "
+            "finished, newest first, and `line`: that month joined source to KPI as the page draws it (null with no channel)",
+            "GrowthNumbers",
+        ),
+    )
+    def growth_numbers(request: Request, months: int = MONTHS_DEFAULT, month: str | None = None):
         """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
-        margin, the KPI tree with its last readings, and the marketing ideas whose test started or that finished.
-        `months`: the newest 1 to 24 months."""
+        margin, the KPI tree with its last readings, the marketing ideas whose test started or that finished, and the
+        Growth line for the last month (backend/growth_line.py). `months`: the newest 1 to 24 months; `month`
+        (YYYY-MM): the last month read, default the newest with numbers."""
         who = request.state.identity
         auth.domain(who)
         if not MONTHS_MIN <= months <= MONTHS_MAX:
             raise Problem("validation", "months is between 1 and 24", 422)
+        if month is not None and not MONTH_RE.fullmatch(month):
+            raise Problem("validation", "month is YYYY-MM", 422)
         with store.read() as c:
-            out = numbers(c, auth, who, months, _hidden_owners(c, auth, who))
+            out = numbers(c, auth, who, months, _hidden_owners(c, auth, who), until=month, with_line=True)
         return GS.attach(store, auth, who, out, seen=True)
+
+    @app.post("/api/v2/growth/line/used")
+    def growth_line_used(request: Request, body: M.GrowthLineUse):
+        """A person or bot opened a number's trace (`trace`) or selected a source (`source`) on the Growth line:
+        counted once per day each, for the share of Growth's weekly viewers who use it."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            GL.used(c, who.actor, body.use)
+            return {"ok": True}
+
+        return mutate(request, body, work)

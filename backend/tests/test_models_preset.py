@@ -163,7 +163,7 @@ def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     # The Gateway is the last hop only on a computer that falls back to it (its own switch, off until turned on).
-    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})
+    post(api, f"computers/{machine['runner_id']}/gateway-fallback", {"on": True})
     with api.app.state.store.read() as c:
         record = providers.load(c, api.app.state.store.settings)
     rows = providers.default_fallbacks(record)
@@ -299,9 +299,22 @@ def test_one_sign_in_card_until_claude_and_chatgpt_are_signed_in_and_it_names_th
 
 
 def test_no_sign_in_card_under_the_other_choices(api):
-    for preset in ("subscriptions", "gateway", "own-keys", ""):
+    for preset in ("gateway", "own-keys", ""):
         choose(api, preset)
         assert needs(api) == []
+
+
+def test_subscriptions_only_shows_the_sign_in_card_without_the_docker_runner_line(api):
+    """Subscriptions only (recommended since Nov 18) still asks for the sign-ins, but no Gateway work waits on a
+    Docker runner, so the card doesn't name one."""
+    choose(api, "subscriptions")
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated=False)
+    cards = needs(api)
+    assert [c["title"] for c in cards] == [models_preset.SIGN_IN_TITLE]
+    assert models_preset.NOT_ISOLATED_LINE not in cards[0]["first_line"]
 
 
 @pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
@@ -515,7 +528,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
-    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})  # it finishes on the Gateway
+    post(api, f"computers/{machine['runner_id']}/gateway-fallback", {"on": True})  # it finishes on the Gateway
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
     with api.app.state.store.read() as c:
@@ -748,7 +761,7 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
         )
         c.execute(f"INSERT INTO attempts({','.join(old)}) VALUES({','.join('?' * len(old))})", list(old.values()))
     with api.app.state.store.read() as c:
-        on_now, _, carrying = health._fallbacks(c)
+        on_now, _, carrying = health._fallbacks(c, api.app.state.store.settings)
     assert [r["bot"] for r in on_now] == ["ops"] and carrying == {"ops"}
     check = next(x for x in found["checks"] if x["id"] == "on_fallback")
     assert check["status"] == "info" and check["summary"] == row["line"]
@@ -816,7 +829,7 @@ def test_the_one_fallback_line_names_its_bots_when_a_healthy_bot_also_ran(api, m
             c.execute(f"INSERT INTO attempts({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     settings = api.app.state.store.settings
     with api.app.state.store.read() as c:
-        on, _, carrying = health._fallbacks(c)
+        on, _, carrying = health._fallbacks(c, api.app.state.store.settings)
         text = health._fallback_lines(c, settings, on, carrying)
         names = [health._bot_name(c, bot) for bot in ("ops", "cpo", "pipe")]
     assert sorted(r["bot"] for r in on) == ["cpo", "ops"] and carrying == {"cpo", "ops"}

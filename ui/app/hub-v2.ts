@@ -53,6 +53,15 @@ interface SourceLineOptions {
   cls?: string | undefined;
   attrs?: string | undefined;
   tail?: string | undefined;
+  lead?: string | undefined;
+}
+interface ChatTaskActivity {
+  id: string;
+  seq: number;
+  created_at: string;
+  task_id: string;
+  title: string;
+  excerpt: string;
 }
 /** The task fields the task text helpers read. */
 interface HubTask {
@@ -61,7 +70,8 @@ interface HubTask {
   filer?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
-  body?: string | null | undefined;
+  /** The first chat message: who asked, and what. */
+  request?: {id?: string; from?: string | null; text?: string | null; at?: string | null} | null | undefined;
   attachments?: readonly unknown[] | null | undefined;
 }
 /** A read of Needs you (GET /v2/needs-you): a page, the whole list, the items named by `ids=`, or `unchanged`. */
@@ -75,9 +85,10 @@ interface NeedsRead {
   plate_count?: number | null;
   by_kind?: Record<string, number> | null;
   folded_task_ids?: string[] | null;
-  went_away?: WentAway | null;
   unchanged?: boolean;
   restart?: boolean;
+  /** When the first ask this person snoozed for themselves comes back (backend/ask_snoozes.py): read again then. */
+  snoozed_until?: string | null;
   /** An `ids=` read: each item's place in the list at `version`. */
   positions?: Record<string, number>;
 }
@@ -93,7 +104,7 @@ interface NeedsChange extends NeedsRead {
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
-// A bot that waits on someone or on another task is not running: it reads Idle (docs/pipelines-v3.md S14, S18). Who has
+// A bot that waits on someone or on another task is not running: it reads Idle (docs/dev/pipelines-v3.md S14, S18). Who has
 // a task's turn is the task's own line, never the bot's.
 const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Idle', waiting_bot: 'Idle', blocked: 'Idle',
                  limited: 'Rate limited', crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
@@ -101,8 +112,6 @@ const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiti
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
-const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
-                 question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = (slug: string | null | undefined) => S.v2.status[String(slug)] || null;
 const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
@@ -147,12 +156,10 @@ const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_act
 const taskFiledByBuiltin = (t: HubTask) => SOURCE_BUILTINS[String(t.filer || '')] || '';
 const taskAsker = (t: HubTask) => t.filer || taskRequester(t);
 const taskAskerLabel = (t: HubTask) => taskFiledByBuiltin(t) || actorLabel(taskAsker(t));
-// Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
+// What the task asks: its first chat message (a task has no description), without the attachments' trailer.
 const taskBody = (t: HubTask) => {
-  const raw = String(t.body || '');
-  const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
-  return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created from schedule `$1`._');
+  const raw = String(t.request?.text || '');
+  return (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
 };
 
 // ---- who or what wrote a row: `source` on message, task history and event rows (docs/threads.md, "Who wrote it")
@@ -202,12 +209,32 @@ function sourceLeadHTML(src: RowSource) {
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
 // hover says what made it and when, and the whole text when the line may be cut.
-function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''}: SourceLineOptions = {}) {
+function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = '', lead = sourceLeadHTML(src)}: SourceLineOptions = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
   const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
   return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
-    sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+    lead}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
+}
+const sourceActivityRow = (activity: ChatTaskActivity) => ({
+  id: 'task-activity:' + activity.id, seq: activity.seq, created_at: activity.created_at, body: activity.excerpt,
+  source: {kind: 'task_update', name: '', link: null}, task_activity: activity,
+});
+function sourceActivityLineHTML(m: SourceRow, activity: ChatTaskActivity) {
+  return sourceLineHTML(m, {
+    lead: `<a class="src-name" href="#/task/${esc(encodeURIComponent(activity.task_id))}">${esc(activity.title)}</a>`,
+  });
+}
+// Keep the chat's own ordering while inserting the activity from the same page window.
+function sourceMergeActivity<T>(messages: T[], activity: T[], before: (a: T, m: T) => boolean): T[] {
+  if (!activity.length) return messages;
+  const rows: T[] = [];
+  let i = 0;
+  for (const m of messages) {
+    while (i < activity.length && before(activity[i]!, m)) rows.push(activity[i++]!);
+    rows.push(m);
+  }
+  return rows.concat(activity.slice(i));
 }
 // Consecutive task updates (two or more) are one gray "N task updates" row, shut by default; open shows a line each.
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
@@ -228,7 +255,7 @@ function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = 
     else {
       const key = String(first.id || first.message?.id || ''), last = run.at(-1)!, at = last.created_at || last.ts || last.message?.created_at;
       out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
-        run.length} ${esc(noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
+        run.length} ${esc(run.length === 1 ? 'task update' : noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
         run.map(line).join('')}</details>`);
     }
     i = end;
@@ -240,19 +267,11 @@ function sourceGroupToggle(set: Set<string> | null | undefined, el: EventTarget 
   if (!set || !(el instanceof HTMLDetailsElement) || !el?.matches?.('details.src-group')) return;
   for (const row of el.querySelectorAll<HTMLElement>('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message!);
 }
-const actorChip = (a: unknown) => {
-  const slug = actorSlug(a);
-  return slug && botRow(slug)
-    ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
-    : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
-};
 const v2Firstline = (body: unknown) => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
 const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".
 // Takes an actor (human:jo), an email, a roster id, or the Issue's "Jo"; '' when unknown.
 const personHandle = (x: unknown) => (actorPerson(x) || String(x || '')).split('@')[0]!.trim().toLowerCase();
-const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue text is the owner's
-const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }
@@ -267,7 +286,6 @@ async function v2Refresh() {
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
-  if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT) botNeedsChanged(BOT.slug);
   if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
   if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
@@ -305,17 +323,30 @@ async function v2NeedsRead() {
   NEEDS_KEPT = seq;
   if (!needs.unchanged) needsTake(needs);
   else if (needs.plate_count != null) { S.v2.needsPlateCount = needs.plate_count; needsListsRedraw(); }
-  S.v2.wentAway = needs.went_away || null;
+  needsWakeAt(needs.snoozed_until || null);
   return needs;
 }
-// The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
+// A snoozed ask comes back with nothing run on the server (the list leaves it out only until its time): the page reads
+// Needs you again when the first one ends.
+let NEEDS_WAKE = 0, NEEDS_WAKE_AT = 0;
+/** Reads Needs you again at `until` (an ISO moment), or sooner when an earlier end is already set. */
+function needsWakeAt(until: string | null) {
+  const at = until ? Date.parse(until) : NaN;
+  if (Number.isNaN(at) || (NEEDS_WAKE && NEEDS_WAKE_AT <= at && NEEDS_WAKE_AT > Date.now())) return;
+  clearTimeout(NEEDS_WAKE);
+  NEEDS_WAKE_AT = at;
+  // A browser timer holds at most ~24.8 days; a later end is set again when that one fires and reads the list.
+  NEEDS_WAKE = window.setTimeout(() => { NEEDS_WAKE = 0; void v2Refresh(); }, Math.min(Math.max(at - Date.now(), 0) + 1000, 2 ** 31 - 1));
+}
+// The next page (`limit` items, NEEDS_PAGE by default), one read at a time: a read already out is shared, whatever its
+// size. Resolves true when the list grew (or was read again because it moved).
 let NEEDS_MORE: Promise<boolean> | null = null;
-function v2NeedsMore() {
+function v2NeedsMore(limit = NEEDS_PAGE) {
   if (needsAll()) return Promise.resolve(false);
   return NEEDS_MORE ||= (async () => {
     try {
       const cursor = S.v2.needsNext, read = NEEDS_READ;
-      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
+      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${Math.min(limit, NEEDS_PAGE_MAX)}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
       // A newer read owns the next snapshot even before it lands; this older page must not invalidate it.
       if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
@@ -351,10 +382,7 @@ async function v2NeedsDrain(): Promise<boolean> {
   let moved = false;
   while (NEEDS_PENDING.length) {
     const held = S.v2.needsVersion, last = held ? NEEDS_PENDING.map(p => p.d.version).lastIndexOf(held) : -1;
-    if (last >= 0) {
-      for (const p of NEEDS_PENDING.splice(0, last + 1)) if (p.d.went_away) S.v2.wentAway = p.d.went_away;
-      continue;
-    }
+    if (last >= 0) { NEEDS_PENDING.splice(0, last + 1); continue; }
     const next = NEEDS_PENDING.shift()!;
     const r = await v2NeedsMend(next.d);
     if (r !== 'whole') { moved = r || moved; continue; }
@@ -366,7 +394,6 @@ async function v2NeedsDrain(): Promise<boolean> {
 }
 /** One event onto the held list: true when it moved, 'whole' when only a whole read will do (v2NeedsDrain sends it). */
 async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
-  if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
     needsTake({...d, version: null, next: null});
@@ -462,6 +489,8 @@ document.addEventListener('click', async ev => {
 function pausedNotice(slug: string) {
   const s: Partial<V2BotState> = v2StatusOf(slug) || {};
   // Tico's own words for the stop, as the server sends them: what happened and what to check.
+  // Stopped for credit: adding credit starts its machine again; Release would not.
+  if (s.stopped === 'out_of_credit') return `${esc(s.focus || 'Out of credit')}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
   if (s.backoff) return esc(s.backoff);
   const when = (since: string | null | undefined) => since ? ` since ${clockTime(since)}` : '';
@@ -541,6 +570,8 @@ function v2StatePill(slug: string) {
   if (!s) return botStatePill(slug);
   // A back-off keeps the bot's state; its wait is the line beside it until the next try.
   const line = s.backoff || s.focus;
+  // A cloud machine stopped for credit (backend/events.py credit_overlay) says so, with Add credit, never Idle.
+  if (s.stopped === 'out_of_credit') return `<span class="pill fail">Out of credit</span>${line ? ` <span class="muted">${esc(line)}</span>` : ''}${typeof cloudCreditLinkHTML === 'function' ? cloudCreditLinkHTML() : ''}`;
   return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(s.stopped ? 'Stopped' : V2_WORD[s.state] || s.state || 'Unknown')}</span>${
     line ? ` <span class="muted">${esc(line)}</span>` : ''}`;
 }

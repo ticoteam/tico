@@ -37,7 +37,7 @@ evidence would change that (an export, a screen recording, a request id). Follow
 
 - **Setup mistake**: the fix in steps the customer can follow, for the Support Agent's reply.
 - **Doc gap**: the answer, plus a task to the Librarian.
-- **Bug**: the report (`skills/write-an-engineering-bug-report/SKILL.md`: title, steps, expected, actual,
+- **Bug**: the report (`.claude/skills/write-an-engineering-bug-report/SKILL.md`: title, steps, expected, actual,
   environment, frequency, customers affected, evidence with credentials removed), a workaround if one exists and is
   tested, and the filing command for a human.
 

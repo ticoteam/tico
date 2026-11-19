@@ -1,6 +1,8 @@
 ---
 name: build-a-letter-from-records
 description: Prepare an employment letter or verification in which every fact comes from a named record, the letter carries only what the type allows, and a human signs and sends it.
+metadata:
+  function: people
 ---
 # Build a letter from records
 
@@ -14,7 +16,7 @@ Steps:
 3. Include only what the type allows. Dates and title are the default. Leave out any reason for leaving, a salary, a performance
    note or a conduct note unless a human wrote that line for this letter.
 4. Check the letter against the policy on verifications in the handbook. If the request asks for more than policy allows, stop and
-   ask the HR owner with `tico task ask <id> --to <person> "<question>" --version N`, one question.
+   ask the HR owner with `tico task ask <id> --to <person> "<question>"`, one question.
 5. Mark the letter "Prepared, waiting for signature", with the signer's name and the date it was prepared. Do not sign it and do
    not send it.
 6. Attach the letter and its records list to the task. The weekly check counts the days each letter has waited.

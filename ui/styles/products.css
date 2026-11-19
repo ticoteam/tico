@@ -1,0 +1,41 @@
+/* Company › Products (ui/app/products.ts). The list is the shared .tt-list; a product's page is Contacts' cards
+   (.dir-card with .dir-kv, ui/styles/directory.css). Tokens only, so light and dark both follow the theme. */
+.pr-name a{display:inline-flex;max-width:min(100%,420px);min-width:0;color:var(--ink);text-decoration:none}
+.pr-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr-agreement a{color:var(--ink)}
+.pr-list td.muted{white-space:nowrap}
+.pr-items li.muted .pr-item a{color:var(--muted)}   /* a closed matter */
+
+/* a product's fields: each value a quiet select that reads as text until it is used */
+.pr-select{max-width:100%;height:auto;min-height:0;margin:-3px 0;padding:2px 22px 2px 6px;border-color:transparent;background-color:transparent;color:var(--ink);font:inherit;font-size:var(--t-sm)}
+.pr-select:hover,.pr-select:focus-visible{border-color:var(--line);background-color:var(--surface2)}
+.pr-main section.card>header{display:flex;align-items:center;gap:8px}
+.pr-main section.card>header h2{margin:0}
+.pr-main .spacer{flex:1}
+.pr-add,.pr-x{display:inline-grid;place-items:center;width:28px;height:28px;min-height:0;padding:0;border-radius:var(--r-ctl);color:var(--muted)}
+.pr-add .nav-icon{font-size:20px}
+.pr-x .nav-icon{font-size:16px}
+.pr-add:hover,.pr-x:hover{color:var(--ink);background:var(--surface2)}
+.pr-items{list-style:none;margin:6px 0 0;padding:0}
+.pr-items li{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:var(--t-sm)}
+.pr-items li+li{border-top:1px solid var(--line)}
+.pr-item{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr-item a{color:var(--ink)}
+.pr-x{opacity:0}
+.pr-items li:hover .pr-x,.pr-x:focus-visible{opacity:1}
+.pr-new{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0 0}
+.pr-new :is(input,select){flex:1 1 200px;min-width:0;height:var(--ctl)}
+
+.pr-dlg{width:min(420px,calc(100vw - 32px))}
+.pr-dlg .tmodal-head{display:flex;align-items:center;gap:var(--s2)}
+.pr-dlg .tmodal-head b{color:var(--ink);font-size:var(--t-card)}
+.pr-dlg .spacer{flex:1}
+.pr-form{display:flex;flex-direction:column;gap:10px}
+.pr-form input{height:var(--ctl);color:var(--ink)}
+.pr-foot{display:flex;justify-content:flex-end;gap:var(--s2)}
+
+@media (hover:none),(max-width:760px){
+  .pr-x{opacity:1;width:44px;height:44px}   /* no hover on a phone: remove shows, with a finger-sized target */
+  .pr-add{width:44px;height:44px}
+  .pr-list td.muted{white-space:normal}
+}

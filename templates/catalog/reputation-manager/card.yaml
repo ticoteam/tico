@@ -59,3 +59,8 @@ first_routine:
 example_output: knowledge/examples/review-sweep.md
 reasoning_effort: high
 recommend_when: [tracks_mentions, sells_to_consumers, publishes_content]
+shared_files:
+  - .claude/skills/recover-a-bad-experience
+  - .claude/skills/answer-a-demand-or-complaint
+  - .claude/skills/send-a-cease-and-desist
+  - .claude/skills/handle-press-and-a-crisis

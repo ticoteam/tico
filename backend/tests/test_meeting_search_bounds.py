@@ -153,5 +153,5 @@ def test_candidates_walk_the_newest_index_and_the_day_index_without_sorting_the_
 
 def test_the_day_index_is_on_the_expression_the_search_queries():
     # SQLite serves an expression index only for the same expression, and INDEXED BY fails without it.
-    migration = Path(__file__).parents[1] / "migrations/20261112080700_meeting_search_indexes.sql"
-    assert f"ON meetings(({context_search.RECORDED_DAY}))" in migration.read_text()
+    baseline = Path(__file__).parents[1] / "migrations/baseline.sql"  # migration meeting_search_indexes made it
+    assert f"ON meetings(({context_search.RECORDED_DAY}))" in baseline.read_text()

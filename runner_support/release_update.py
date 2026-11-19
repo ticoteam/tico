@@ -26,6 +26,17 @@ from pathlib import Path
 from . import checkout_links, release_branch
 from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
+
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 STATUS_FILE = "update-status.json"
@@ -40,10 +51,12 @@ DEFERRAL_LIMIT_S = 2 * 3600
 DEFERRAL_FIELDS = ("deferrals", "deferred_since", "deferral_cause", "cause_count")
 KINDS = ("mac", "linux", "docker")
 HELPERS = (
-    "connectors",
     "close-calls",
     "importers",
 )  # scripts/tico-computer installs these as launchd jobs (systemd user units on Linux) beside the bot job
+# Helper jobs a computer set up earlier may still have, and an update removes: mail and calendar run on the server now.
+# A one-time step that 0.7 removes.
+RETIRED = ("connectors",)
 
 
 def key(value):
@@ -137,7 +150,7 @@ def repair_instruction_links(root, g):
                 git_dir
                 / "tico-instruction-backups"
                 / Path(name).parent
-                / (Path(name).name + f".tico-backup-{int(time.time())}-{uuid.uuid4().hex}-sha256-{digest}")
+                / (Path(name).name + f".tico-backup-{int(_now())}-{uuid.uuid4().hex}-sha256-{digest}")
             )
             backup.parent.mkdir(parents=True, exist_ok=True)
             if backup.parent.resolve() != backup.parent:
@@ -462,34 +475,44 @@ def restart_runner(pid, wait=60, env=os.environ, run=subprocess.run):
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-    deadline = time.time() + wait
-    while time.time() < deadline:
+    deadline = _now() + wait
+    while _now() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        time.sleep(0.5)
+        _sleep(0.5)
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
 
 
-def helper_labels(env=os.environ):
+def helper_labels(env=os.environ, helpers=HELPERS):
     """The launchd label of each helper job. scripts/tico-computer names them from the bot job's label (`team.tico.tico-bot`,
     or `team.tico.tico.<env>.bot` for a company environment), and launchd gives this process that label."""
     service = env.get("XPC_SERVICE_NAME", "")
     prefix = service[:-3] if service.startswith("team.tico") and service.endswith("bot") else "team.tico.tico-"
-    return {helper: prefix + helper for helper in HELPERS}
+    return {helper: prefix + helper for helper in helpers}
 
 
 def restart_helpers(env=os.environ, run=subprocess.run, agents=None, uid=None, say=None):
     """Restart the helper jobs that are installed on this Mac (scripts/tico-computer restart semantics: `launchctl kickstart -k`,
     or a bootstrap when the job is installed but not loaded), so none keeps the old release in memory. A job with no
-    plist is not installed and is left alone. Returns the restarted job names."""
+    plist is not installed and is left alone. A RETIRED job is removed first. Returns the restarted job names."""
     say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
     agents = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
     domain = f"gui/{os.getuid() if uid is None else uid}"
+    for label in helper_labels(env, RETIRED).values():
+        plist = agents / f"{label}.plist"
+        if plist.is_file():
+            try:
+                run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True, text=True, timeout=60)
+                plist.unlink()
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: could not remove {label}: {type(exc).__name__}")
+                continue
+            say(f"Tico update: removed {label}, retired")
     restarted = []
     for helper, label in helper_labels(env).items():
         plist = agents / f"{label}.plist"
@@ -515,9 +538,19 @@ def restart_helpers(env=os.environ, run=subprocess.run, agents=None, uid=None, s
 def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, say=None):
     """The systemd counterpart of restart_helpers: restart the helper units installed beside this runner's unit (their
     files are in the user unit directory), so none keeps the old release in memory. Returns the restarted job names."""
-    from .systemd_units import helper_units, is_installed
+    from .systemd_units import helper_units, is_installed, user_unit_dir
 
     say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
+    for unit in helper_units(systemd_unit(env), RETIRED).values():
+        if is_installed(unit, unit_dir):
+            try:
+                run(["systemctl", "--user", "disable", "--now", unit], capture_output=True, text=True, timeout=60)
+                (Path(unit_dir) if unit_dir else user_unit_dir()).joinpath(unit).unlink()
+                run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: could not remove {unit}: {type(exc).__name__}")
+                continue
+            say(f"Tico update: removed {unit}, retired")
     restarted = []
     for helper, unit in helper_units(systemd_unit(env)).items():
         if not is_installed(unit, unit_dir):
@@ -537,8 +570,8 @@ def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, s
 
 def wait_healthy(directory, commit, since, seconds=HEALTH_S, sleep=time.sleep):
     """True once a runner started on `commit` has heartbeated to the server after `since`."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
+    deadline = _now() + seconds
+    while _now() < deadline:
         started = read_json(Path(directory) / "runner-revision")
         beat = Path(directory) / "heartbeat"
         if started.get("revision") == commit and beat.exists() and beat.stat().st_mtime >= since:
@@ -578,20 +611,20 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
             directory, target, "the checkout is busy or its update lock cannot be checked", clock=clock, transient=True
         )
     with open_regular_lock(path) as handle:
-        deadline, said = time.time() + lock_wait, False
+        deadline, said = _now() + lock_wait, False
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.time() >= deadline:
+                if _now() >= deadline:
                     return defer_update(
                         directory, target, "another update still holds the checkout lock", clock=clock, transient=True
                     )
                 if not said:
                     write_status(directory, state="updating", target=target, error="", at=clock())
                     said = True
-                time.sleep(1)
+                _sleep(1)
         try:
             result = update(root, version, directory, run=run, clock=clock, repair_links=True, **kw)
         finally:
@@ -805,7 +838,9 @@ def main(argv=None):
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)
-    parser.add_argument("--pid", type=int, required=True)
+    # The runner process to restart; 0 when none runs yet (a cloud machine's first boot, cloud_machine.py catch_up):
+    # the checkout moves forward only, and nothing is restarted or waited on.
+    parser.add_argument("--pid", type=int, default=0)
     parser.add_argument("--started", default="")  # the commit the runner started on; "" from an older runner
     args = argparse.Namespace()
     try:
@@ -840,15 +875,15 @@ def main(argv=None):
 
 
 def run_update(args):
-    deadline = time.time() + 600
-    while (
-        in_flight(args.state_dir) and time.time() < deadline
-    ):  # the runner waits for quiet first; this is the second look
-        time.sleep(10)
+    deadline = _now() + 600
+    while in_flight(args.state_dir) and _now() < deadline:  # the runner waits for quiet first; this is the second look
+        _sleep(10)
     if in_flight(args.state_dir):
         result = defer_update(args.state_dir, args.version, "this computer still has work running", transient=True)
         print(json.dumps(result))
         return 1
+    if not args.pid:
+        return catch_up(args)
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
     result = apply(
         args.root,
@@ -860,6 +895,18 @@ def run_update(args):
         helpers=helpers,
         started=args.started,
     )
+    print(json.dumps(result))
+    return 0 if result["state"] == "healthy" else 1
+
+
+def catch_up(args, run=subprocess.run, **kw):
+    """No runner yet: move the checkout to the release when it is behind it, with the same checks and rollback as any
+    update but no restart and no health wait (the runner starts afterwards, on whatever is checked out)."""
+    have = checkout_release(args.root, run=run)
+    if have and key(have) and key(args.version) and key(have) >= key(args.version):
+        result = {"state": "healthy", "target": args.version.lstrip("v"), "error": ""}
+    else:
+        result = apply(args.root, args.version, args.state_dir, run=run, **kw)
     print(json.dumps(result))
     return 0 if result["state"] == "healthy" else 1
 

@@ -198,7 +198,8 @@ def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
     assert "Credentials or its chat card" in made["credentials"] and "grant it to this bot" in made["credentials"]
     task = botops_tasks(api)[0]
     assert task["id"] == made["task_id"] and task["title"] == "QA Add PostHog access to ops"
-    body = api.get("/api/v2/tasks/" + task["id"], headers=headers()).json()["task"]["body"]
+    with api.app.state.store.read() as c:  # what Tico gave BotOps: its instructions (a task has no description)
+        body = H.task_words(c, task["id"])
     assert made["yaml"] in body and "- service: posthog" in body and "env: POSTHOG_KEY" in body
     assert "can: [read]" in body and "project: '340585'" in body
     assert "bot.yaml" in body and "never commit it" in body

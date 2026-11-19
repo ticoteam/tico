@@ -37,7 +37,9 @@ def task(api, task_id):
 
 
 def ben_list(api):
-    return {i.get("task_id") for i in get(api, "needs-you", "ben-test")["items"]}
+    """Ben's open to-dos: the tasks he owns (in Tasks; Needs you holds only what is asked of him)."""
+    with api.app.state.store.read() as c:
+        return {r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' AND status='open'")}
 
 
 def notices(api, bot="bot:ops"):
@@ -46,7 +48,7 @@ def notices(api, bot="bot:ops"):
             dict(r)
             for r in c.execute(
                 "SELECT body, refs FROM messages WHERE sender_id=? AND recipient_id=? AND kind='notice'",
-                (H.KEEPER, bot),
+                (H.TICO_ACTOR, bot),
             )
         ]
 
@@ -67,7 +69,7 @@ def test_a_decision_filed_as_a_to_do_is_closed_with_a_note_and_its_bot_is_woken_
             "SELECT why FROM visits WHERE task_id=? AND left_at IS NOT NULL ORDER BY left_at DESC LIMIT 1",
             (decision["id"],),
         ).fetchone()[0]
-    assert "this is a decision for" in why and "asks it as a question" in why
+    assert "this is a decision for" in why and "❓" in why
     # The bot that filed it is woken with how to ask it; the chore stays a to-do.
     [told] = [n for n in notices(api) if "was a decision" in n["body"]]
     assert DECISION in told["body"] and "tico task ask <task> --to ben" in told["body"]
@@ -131,7 +133,7 @@ def test_only_open_to_dos_a_bot_filed_for_a_person_are_judged(gate):  # noqa: F8
     for_a_bot = todo(api, DECISION + " (for a bot)", owner="bot:cpo")
     done = todo(api, DECISION + " (done)")
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, done["id"], "Not needed")
+        H.task_close(c, H.TICO_ACTOR, done["id"], "Not needed")
     out = D.sweep(api.app.state.store, model)
     assert out["closed"] == [bots["id"]] and len(model.calls) == 1
     assert task(api, persons["id"])["status"] == "open" and task(api, for_a_bot["id"])["status"] == "open"

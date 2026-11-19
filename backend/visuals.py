@@ -6,6 +6,8 @@ with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /
 reader, the file, the version and an expiry, and every request on it (each range request too) checks again that the
 reader can still open the file. Nothing on that route reads or sets the app's cookies."""
 
+from fastapi import Request
+
 import base64
 import errno
 import hashlib
@@ -532,6 +534,13 @@ def _head(blobs, digest):
         return b""
 
 
+# A visual is a file of this conversation; any other file one may open is shared in its thread (thread_api.shared_files).
+NOT_IN_ROOM = (
+    "File version not found in this conversation. To share another file you can open, post it in the thread: "
+    "tico thread post <thread> <text> --file <file id>@<version>"
+)
+
+
 def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     """The stored attachments for a message, in the order given, and what each page left unembedded.
 
@@ -557,12 +566,12 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
                 or row["archived"]
                 or not files.visible(c, who, row, {})
             ):
-                raise Problem("not_found", "File version not found in this conversation", 404)
+                raise Problem("not_found", NOT_IN_ROOM, 404)
             version = c.execute(
                 "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
             ).fetchone()
             if not version:
-                raise Problem("not_found", "File version not found in this conversation", 404)
+                raise Problem("not_found", NOT_IN_ROOM, 404)
             version = dict(version)
         digest = version.get("digest")
         mime = (version.get("mime") or "").split(";", 1)[0].strip().lower()
@@ -885,6 +894,38 @@ def _headers(rule, how="inline"):
         "Cross-Origin-Resource-Policy": "cross-origin",
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, no-cache",
+        "Cache-Control": "private, no-cache, no-transform",
         "Content-Disposition": how,
     }
+
+
+def register(app, auth, settings, store):
+    def visual_view(c, who, rows):
+        """Messages with each visual as this reader sees it now: fresh addresses on /visuals (backend/visuals.py), on the
+        visual address or, in the fallback, the app's own (pictures, video and audio only)."""
+        return for_reader(app, settings, c, who, rows)
+
+    def visual_key():
+        return key_for(app, settings)
+
+    def visual_ancestors():
+        return ancestors(settings)
+
+    @app.api_route("/visuals/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    def visual(request: Request, token: str):
+        """A visual for inline display, apart from the app's sign-in: the signed token is the only credential, and
+        the reader it names is checked again on every request (each range request too)."""
+        return serve(
+            request,
+            store,
+            auth,
+            app.state.files,
+            app.state.blobs,
+            visual_key(),
+            visual_ancestors(),
+            token,
+            full=mode(settings) == "full",
+            visual_origin=settings.visual_origin,
+        )
+
+    return visual_view

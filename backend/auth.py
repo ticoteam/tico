@@ -47,18 +47,37 @@ TASK_PREFIX_MIN = 8
 
 
 def _edit_distance(a, b, limit):
-    """Levenshtein distance when it is at most `limit`, else None (gives up as soon as it must exceed it)."""
-    if abs(len(a) - len(b)) > limit:
+    """Levenshtein distance when it is at most `limit`, else None (gives up as soon as it must exceed it).
+
+    Only the band of cells with |i - j| <= limit is computed: a cell outside it is at least |i - j| away, so it stands
+    in as limit + 1, a lower bound that keeps every cell exact while it is within `limit` and above `limit` once not."""
+    m = len(b)
+    if abs(len(a) - m) > limit:
         return None
-    previous = list(range(len(b) + 1))
+    over = limit + 1
+    previous = [j if j <= limit else over for j in range(m + 1)]
     for i, ca in enumerate(a, 1):
-        row = [i]
-        for j, cb in enumerate(b, 1):
-            row.append(min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        row = [over] * (m + 1)
+        if i <= limit:
+            row[0] = i
+        for j in range(max(1, i - limit), min(m, i + limit) + 1):
+            row[j] = min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (ca != b[j - 1]))
         if min(row) > limit:
             return None
         previous = row
-    return previous[-1] if previous[-1] <= limit else None
+    return previous[m] if previous[m] <= limit else None
+
+
+def near_task_sql(typed):
+    """A filter that keeps every id within edit distance 2 of `typed` (already lowercased) and drops nearly all
+    others, with its parameters. Two edits touch at most two of the three pieces typed[:12], typed[12:24] and
+    typed[24:] (an insertion before the first or after the last character counts against the end piece), so a match
+    holds one of them whole. Each is looked for anywhere in the id with instr, which reads past a NUL where substr
+    and length stop; a piece of ten or more characters is rarely anywhere in an unrelated id."""
+    pieces = (typed[:12], typed[12:24], typed[24:])
+    if not all(pieces):
+        return "1", ()  # too short to split in three: every id is a candidate, as before
+    return "(instr(id,?)>0 OR instr(id,?)>0 OR instr(id,?)>0)", pieces
 
 
 OPERATOR_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
@@ -286,6 +305,26 @@ def reader_sql(c, actor):
     )
 
 
+def followed_credential_admins(c, owner_email, admins):
+    """The credential administrators when the server names none (TICO_CREDENTIAL_ADMINS unset): the owner and the
+    Admins, or the owner alone when the owner's rule "Admins store credentials" is off. `Auth.sync_access` adopts this
+    for each request; `credential_admins` gives it to work that runs outside one."""
+    admins = sorted(admins) if team_rules.load(c)["admin_credentials"] else []
+    return tuple(dict.fromkeys(e for e in (owner_email, *admins) if e))
+
+
+def credential_admins(c, settings):
+    """The credential administrators in force for work outside a request (a worker, a timer with no sign-in): the
+    server's own list when it names one, else `followed_credential_admins` of the stored owner and Admins, so a
+    transfer counts here as it does in `Auth.sync_access`, never the owner the settings were started with."""
+    from . import access
+
+    if not getattr(settings, "credential_admins_follow_owner", False):
+        return tuple(settings.credential_admins)
+    owner = access.load_owner(c, settings)["email"]
+    return followed_credential_admins(c, owner, access.load_access(c, settings)["admins"])
+
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -345,8 +384,7 @@ class Auth:
                 else ((previous,) if previous else ())
             )
             if tuple(self.settings.credential_admins) == expected:
-                admins = sorted(lists["admins"]) if team_rules.load(c)["admin_credentials"] else []
-                self._credential_followed = tuple(dict.fromkeys(e for e in (self.owner_email, *admins) if e))
+                self._credential_followed = followed_credential_admins(c, self.owner_email, lists["admins"])
                 self.settings.credential_admins = self._credential_followed
 
     def admits(self, email):
@@ -797,7 +835,7 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Owner, the Health Monitor, the General
-        Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner): they act for the whole company, so only the company owner changes them. Admins
+        Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner, the Tools Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
@@ -812,6 +850,7 @@ class Auth:
             H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
+            H.TOOLS_OWNER,
         )
 
     def bot_manager(self, c, who, slug, operator=None):
@@ -920,25 +959,6 @@ class Auth:
                 return False
         return report_managers.manages(c, me)
 
-    @staticmethod
-    def member_bot_row(c, slug):
-        """The same as `member_bot`, from the database alone (Health has no Auth): the creator's role."""
-        row = c.execute("SELECT created_by FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        creator = (
-            H.human(c, H.actor_id(row["created_by"]))
-            if row and str(row["created_by"] or "").startswith("human:")
-            else None
-        )
-        if not creator:
-            return False
-        from . import access
-
-        email = str(creator.get("email") or "").lower()
-        stored = access._load_json(c, access.ACCESS) or {}
-        admins = access.emails(stored["admins"] if "admins" in stored else stored.get("bot_admins"))
-        owner_row = access._load_json(c, access.OWNER) or {}
-        return email not in admins and email != str(owner_row.get("email") or "").lower()
-
     def member_bot(self, c, slug, row=None, creators=None):
         """Whether a member (not an owner or an Admin) created this bot: those go only on computers that
         accept members' bots. A bot with no recorded creator is the company's. `row` is the bot's
@@ -1042,13 +1062,15 @@ class Auth:
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
+        from . import call_follow_ups
         from .meeting_audience import participant_access_sql
 
         participant = participant_access_sql(c, me)
         # A private task's readers (hubdb.task_reader: by name or through a group) read it as its two parties do.
         audience = (
             f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
-            f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}))) "
+            f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}) "
+            f"OR {call_follow_ups.reader_sql(c, who.actor)})) "
             f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))"
         )
         if who.task_actor:
@@ -1064,7 +1086,8 @@ class Auth:
             )
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own_oks})"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}) "
+                f"OR {call_follow_ups.reader_sql(c, who.task_actor)}{own_oks})"
             )
         from . import counsel
 
@@ -1100,8 +1123,16 @@ class Auth:
             return False
         from . import views
 
-        archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
-        return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived, True)
+        # Pages ask this once per bot, so it reads the snapshot's roster, entries and archived bots as they are (people
+        # `manages` only reads them): copying them per call was most of a non-admin's time on the people pages.
+        archived = read_cache.value(
+            c,
+            ("archived_bots",),
+            lambda: frozenset(row["id"] for row in H.bots(c) if row.get("state") == "archived"),
+            shared=True,
+        )
+        roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
+        return P.manages(H.actor_id(who.actor), kind, ident, roster, entries, archived, True)
 
     def bot_admin(self, who):
         """Whether a person may administer bots assigned to their own operator identity. Tico support with app access
@@ -1143,7 +1174,7 @@ class Auth:
         unreachable. Four things still get through, because each one is the protected bot's own
         doing or its own chain of command:
 
-        - itself, and the keeper (notices about its own tasks are written directly, not here)
+        - itself, and Tico (notices about its own tasks are written directly, not here)
         - its direct bot manager named in `reports_to`; task comments and questions also
           admit managers through the full org chain when they inherit a task party's rights
         - a bot holding an open task this bot requested — how a ticket gets a question back
@@ -1154,14 +1185,14 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute(
-            f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
-        ).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
-        if sender == "bot:" + slug or sender == H.KEEPER:
+        if sender == "bot:" + slug or sender == H.TICO_ACTOR:
             return True
+        row = read_cache.one(
+            c, f"SELECT {BS.CONFIG} AS config,bc.reports_to FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
+        )
         if not row:
             return True
         declared = json.loads(row["config"]) if row["config"] else {}
@@ -1236,7 +1267,7 @@ class Auth:
         actor = H.resolve_actor(c, target)
         if not actor and (why := H.recruiting(c, target)):
             raise Problem("recruiting", why, 409)
-        if not actor or actor == H.KEEPER:
+        if not actor or actor == H.TICO_ACTOR:
             raise Problem("not_found", "Unknown recipient", 404)
         if actor.startswith("bot:"):
             self.require(c, who, H.actor_id(actor), need, missing="Unknown recipient")
@@ -1401,6 +1432,23 @@ class Auth:
                 return rows[0]["id"]
             raise Problem("not_found", "No task %s" % ident, 404)
 
+        # A task's label (`D18450`, or `D-18450`): the prefix it was made with and its number, wherever it is now.
+        label = re.fullmatch(r"([A-Za-z]{1,2})-?(\d{1,18})", ident)
+        if label:
+            rows = readable(
+                H._rows(
+                    c.execute(
+                        "SELECT id,title,owner_id,requester_id FROM tasks WHERE number=? AND upper(COALESCE(prefix, "
+                        "(SELECT p.prefix FROM pipelines p WHERE p.id = tasks.pipeline_id), ''))=? AND ("
+                        + visible
+                        + ")",
+                        (int(label.group(2)), label.group(1).upper()),
+                    )
+                )
+            )
+            if rows:
+                return rows[0]["id"]
+
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(
                 H._rows(
@@ -1426,14 +1474,19 @@ class Auth:
                 )
         if len(ident) >= 34:
             near = []
+            typed = ident.lower()
+            # Only ids that could be within two edits are read and compared (near_task_sql): checking every visible
+            # task took seconds on a large company, inside the write transaction of a bot's write.
+            close, params = near_task_sql(typed)
             for row in H._rows(
                 c.execute(
+                    # In table order, as the scan of every task gave them: the first three of a tie are named.
                     "SELECT id,title,owner_id,requester_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
-                    "AND (" + visible + ")",
-                    (len(ident) - 2, len(ident) + 2),
+                    "AND " + close + " AND (" + visible + ") ORDER BY rowid",
+                    (len(ident) - 2, len(ident) + 2, *params),
                 )
             ):
-                distance = _edit_distance(ident.lower(), row["id"], 2)
+                distance = _edit_distance(typed, row["id"], 2)
                 if distance is not None:
                     near.append((distance, row))
             if near:

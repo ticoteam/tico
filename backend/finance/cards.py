@@ -459,7 +459,7 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     `merchant` is the merchant the card is
     asked for, kept as the request's intent: Mercury has no merchant locks (§8.1), so the limit is what it enforces."""
     V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id", "merchant"))
-    holder = V.text(p, "holder", 120)
+    holder = T.teammate(ctx.c, V.text(p, "holder", 120))
     if holder not in ctx.org.humans | ctx.org.bots:
         raise invalid("no such teammate")
     bot = holder in ctx.org.bots

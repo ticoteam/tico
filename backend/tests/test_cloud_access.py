@@ -15,6 +15,8 @@ from backend.tests.helpers.gateway_enroll import fake_hq
 from backend.tests.helpers.gateway_enroll import setup as enroll_setup
 from backend.tests.helpers.gateway_enroll import tick
 from backend.tests.helpers.cloud_access import BILLING_URL, signals
+from backend.tests.helpers.company import bot
+from backend.tests.helpers.openapi_v2 import conforms
 
 
 @pytest.fixture
@@ -56,6 +58,7 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
         "plan": "trial",
         "trial_days_left": 14,
         "billing_url": BILLING_URL,
+        "days_left": None,
     }
     assert not [url for url, _ in hq.calls if url.endswith("/cloud")]
     # Credit added: the page's next answer opens it again.
@@ -124,6 +127,21 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
     assert [(m["from"], m["to"]) for m in moves] == [(None, "locked"), ("locked", "open")]
 
 
+def test_the_access_and_the_locked_refusal_answer_their_declared_shapes_and_a_bot_is_refused(api, hq):  # noqa: F811
+    document = get(api, "openapi.json")
+    op = document["paths"]["/api/v2/cloud-access"]["get"]
+    schema = op["responses"]["200"]["content"]["application/json"]["schema"]
+    assert conforms(get(api, "cloud-access"), schema, document) is None  # off cloud: null
+    refused = api.get("/api/v2/cloud-access", headers=headers(bot(api, "ops")))
+    assert (refused.status_code, refused.json()["error"]["code"]) == (403, "identity")
+    say(api, hq, "locked", "trial_over")
+    assert conforms(get(api, "cloud-access", "cara-test"), schema, document) is None
+    locked = api.get("/api/v2/tasks", headers=headers())
+    assert locked.status_code == 402
+    assert conforms(locked.json(), document["components"]["schemas"]["Problem"], document) is None
+    assert conforms(locked.json()["error"]["cloud"], document["components"]["schemas"]["CloudAccess"], document) is None
+
+
 def test_a_restart_keeps_the_lock_until_hq_answers(api, hq):  # noqa: F811
     say(api, hq, "locked", "unpaid")
     store = api.app.state.store
@@ -169,7 +187,7 @@ def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
     store = api.app.state.store
     with store.transaction() as c:
         routines.create(
-            c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"}, key="morning"
+            c, H.TICO_ACTOR, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"}, key="morning"
         )
         aid = routines.row(c, "ops:morning")["automation"]
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-03T07:00:00.000000Z", aid))

@@ -14,7 +14,8 @@ was waiting on a human; check whether each moved.
 
 ## 2. Check each inbound NDA
 
-Read it whole, then compare with `knowledge/standard-nda.md`, clause by clause:
+Review it with `.claude/skills/review-a-contract/SKILL.md`: read it whole, then compare with
+`knowledge/standard-nda.md`, clause by clause. These seven groups are the NDA lines of its playbook:
 1. **Mutual or one-way**, and whether that matches who will share (both sides sharing on a one-way NDA is a flag).
 2. **Definition** of confidential information, and the exclusions: already known, independently developed,
    received lawfully from a third party, public, required by law (with notice where lawful).

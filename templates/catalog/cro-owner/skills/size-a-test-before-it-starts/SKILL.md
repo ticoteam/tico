@@ -1,6 +1,8 @@
 ---
 name: size-a-test-before-it-starts
 description: Work out a test's sample size, run time and stop rules before it starts, from a dated baseline, the smallest change worth shipping and the eligible traffic, and say so when the page is too small to test.
+metadata:
+  function: marketing
 ---
 # Size a test before it starts
 

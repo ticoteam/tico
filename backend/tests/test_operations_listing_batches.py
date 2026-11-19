@@ -9,7 +9,7 @@ PER_COMPUTER = (
     "runner_harness_choices",
     "runner_harness_actions",
     "model_login_cleared",
-    "computer_keys",
+    "computer_subscriptions",
     "assignments",
     "computer-repositories:",
     "subscription:",

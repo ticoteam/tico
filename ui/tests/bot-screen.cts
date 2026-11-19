@@ -52,7 +52,7 @@ declare function setDrawer(open: boolean): void;
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({...me, cloud: true, registered: true, config: {version: '0.3.52', app_name: 'Tico'}});
         if (p === '/api/employees') return json(bots);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}, {id: 'bo', name: 'Bo'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}, {id: 'bo', name: 'Bo'}], teams: {}});
         if (p === '/api/issues') return json([]);
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], schedules: []});
         if (p === '/api/v2/status') return json({bots: []});

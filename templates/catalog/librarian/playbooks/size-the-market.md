@@ -13,16 +13,25 @@ filed.
 **Never invent a number.** Every figure comes from a source you read, with a row of evidence. A share you cannot
 source is a judgement: say so (step 4).
 
+**Never ask the owner for a source or for data.** Finding the numbers is the job. When the public figures don't
+split the way you need, estimate bottom-up, make the missing share a judgement parameter (step 4), set
+`--confidence low` and carry on. Name the paid source that would help in the closing note (step 9). Ask the
+owner only what the market is, and only when the strategy and the task's words leave it open.
+
 ---
 
 ## 1. Define the market first
 
     tico market define --description "..." --root-name "..." --include "..." --exclude "..." --rule "..." --year 2026
 
-- `description`: what the market is, in one or two sentences. Start from the task's words.
+- Read the company first (`tico strategy show`): what it sells, to whom, and how it charges. The
+  market is what those buyers spend on the job the company does for them, whether they pay for it as software, as a
+  service, as a fee on revenue, or with their own time. A company that replaces a service is sized by that
+  service's spend, not by the software around it.
+- `description`: what the market is, in one or two sentences. Start from the task's words and the strategy.
 - `includes` and `excludes`: what counts and what does not. Say why for each exclusion.
 - `counting_rules`: one vendor in one segment (the one that earns most from it), how a bundle is split, what
-  counts as spend (paid software, not services), the currency and the year.
+  counts as spend (the money buyers pay for that job, and which of it is left out), the currency and the year.
 - Do not start sizing until the definition is written. `tico market spend` shows it.
 
 ## 2. Cut it into segments
@@ -57,7 +66,7 @@ For each segment, file at least two estimates by different methods, using web se
 
 ## 4. Shares are named parameters
 
-A share (the small-business part of a total, the part that buys software) is a parameter, not a number buried in
+A share (the small-business part of a total, the part that pays someone else for the job) is a parameter, not a number buried in
 a formula.
 
     tico market define --param smb_share=0.35

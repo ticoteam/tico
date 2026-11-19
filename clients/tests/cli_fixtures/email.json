@@ -169,7 +169,7 @@
     null
    ]
   ],
-  "stdout": "# Email mailboxes\n\n- ops@acme.test\n- billing@acme.test\n",
+  "stdout": "# Email mailboxes\n\n- ops@acme.test: may nothing; connection none\n- billing@acme.test: may nothing; connection none\n",
   "stderr": "",
   "exit": 0
  },

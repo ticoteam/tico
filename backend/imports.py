@@ -48,6 +48,7 @@ from .media import (
 from .meetings import get as meeting, initial_review, announce
 from .store import H, Problem, encode
 from .views import roster
+from .api_contract import api_v2
 
 SOURCES = ("close",)
 SOURCE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
@@ -279,6 +280,10 @@ def transcript_meta(turns):
     }
 
 
+def notes_hash(notes):
+    return hashlib.sha256(notes.encode()).hexdigest()
+
+
 def segments_of(body):
     """The importer's transcript as validated segments, or a 422 that says what is wrong."""
     if isinstance(body.transcript, str) and not body.transcript.strip():
@@ -343,7 +348,15 @@ def install_imports(app, store, auth, execution, mutate):
         row = c.execute("SELECT deleted_at FROM media_control WHERE meeting_id=?", (rid,)).fetchone()
         return bool(row and row[0])
 
-    @app.post("/api/v2/meetings/import", openapi_extra=upload_contract(MeetingImport))
+    @app.post(
+        "/api/v2/meetings/import",
+        **api_v2(
+            "Meetings",
+            "importMeeting",
+            "Import into your Pending queue unless shared explicitly or automatically",
+            openapi_extra=upload_contract(MeetingImport),
+        ),
+    )
     async def meeting_import(request: Request):
         """File a meeting of the caller's (or of `owner_email`, from a machine), or update the one
         this source and id already made."""
@@ -355,7 +368,7 @@ def install_imports(app, store, auth, execution, mutate):
 
         return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
 
-    def file_meeting(c, machine, body, uploads, *, fill_empty=False, live_client=None):
+    def file_meeting(c, machine, body, uploads, *, fill_empty=False):
         person_call = machine.role in ("owner", "human")
         turns = segments_of(body)
         runner = None
@@ -422,10 +435,7 @@ def install_imports(app, store, auth, execution, mutate):
                 else initial_review(c, who),
             )
         rid = meta["id"]
-
-        def notes_hash(notes):
-            return hashlib.sha256(notes.encode()).hexdigest()
-
+        source_notes = False
         if fill_empty and existing:
             stored = meeting(rid, c)
             source_notes = body.source == "granola" and meta.get("granola_mcp_notes_hash") == notes_hash(
@@ -525,14 +535,15 @@ def install_imports(app, store, auth, execution, mutate):
                 meta["granola_mcp_notes_hash"] = notes_hash(body.notes)
             else:
                 meta.pop("granola_mcp_notes_hash", None)
+        elif source_notes:
+            # The source no longer has the summary it filed, so the stored one goes with it.
+            meta.pop("granola_mcp_notes_hash", None)
         if body.send_to:
             send_to = (H.resolve_bot(c, body.send_to) or {}).get("id", body.send_to)
             auth.target(c, who, send_to, need="write")
             if meta.get("review_state") == "pending":
                 meta["review_send_to"] = send_to
         transcript = raw_transcript(turns)
-        if live_client is not None:
-            meta["client"] = live_client
         save(
             c,
             meta,
@@ -542,7 +553,7 @@ def install_imports(app, store, auth, execution, mutate):
             else stored["transcript_readable"]
             if fill_empty and existing
             else None,
-            notes=body.notes or None,
+            notes=body.notes or ("" if source_notes else None),
         )
         if key and not existing:
             c.execute(
@@ -593,6 +604,24 @@ def install_imports(app, store, auth, execution, mutate):
         return result
 
     app.state.import_meeting = file_meeting
+
+    def clear_import_notes(c, who, source, external_id):
+        """Take back the summary a source filed with a meeting when the source has none to give now. Notes a
+        person wrote, or edited after the source filed them, stay."""
+        key = (source, "meeting", f"{who.actor}:{external_id}")
+        ref = c.execute(
+            "SELECT meeting_id FROM recording_source_refs WHERE source=? AND resource_type=? AND external_id=?", key
+        ).fetchone()
+        if not ref or deleted(c, ref[0]):
+            return
+        stored = meeting(ref[0], c) or {}
+        meta = dict(authorized(c, who, ref[0], write=True)["metadata"])
+        if not stored.get("notes") or meta.get("granola_mcp_notes_hash") != notes_hash(stored["notes"]):
+            return
+        meta.pop("granola_mcp_notes_hash")
+        save(c, meta, notes="", readable=stored["transcript_readable"])
+
+    app.state.clear_import_notes = clear_import_notes
 
     @app.post("/api/v2/imports/transcripts")
     def transcript_import(request: Request, body: TranscriptImport):
@@ -766,7 +795,7 @@ def install_imports(app, store, auth, execution, mutate):
                     meta,
                     transcript=transcript,
                     readable=transcript.replace("\n", "\n\n"),
-                    notes=body.summary_text if primary else None,
+                    notes=(body.summary_text or None) if primary else None,
                 )
             H.event(
                 c,

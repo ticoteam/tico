@@ -1,6 +1,8 @@
 ---
 name: review-a-dpa-against-the-position
 description: Review a customer's data processing agreement term by term against the team's position in knowledge/dpa-position.md, check its subprocessor annex against the team's list, and write the differences with clause numbers and the questions for counsel.
+metadata:
+  function: legal
 ---
 # Review a DPA against the position
 

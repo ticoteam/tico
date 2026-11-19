@@ -104,12 +104,13 @@ Proposing a new role goes to your team's Manager as a note on its task; you neve
 work, how often it came up and what it cost or risked, and send the note to `success-manager` once.
 
 ## Skills
-- `skills/write-a-reply-with-a-marked-gap/SKILL.md`: read before you draft a reply the docs answer only in part.
+- `.claude/skills/answer-a-customer/SKILL.md`: read before you draft any reply, including one the docs answer only in
+  part (its marked gap).
 - `skills/check-a-repeat-before-you-escalate/SKILL.md`: read before you call a ticket a known issue or open a task for it.
 - `skills/run-a-follow-up-cadence/SKILL.md`: read on each pass for every ticket that waits on someone.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/follow-ups.md`,
    `knowledge/known-issues.md` and the playbook the task names. A resumed turn already has them.
 
@@ -132,9 +133,9 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: read the record first (`tico task show <id>`, `tico task list`, `tico task list --all`).
-Mail, where you have it: `$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`, then
-`mail.sh thread <id> --format md` for one thread you are about to answer (docs/mail.md). Research the answer
-with `tico doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a
+Mail, where you have it: `tico email inbox <address>`, then
+`tico email thread <address> <thread-id>` for one thread you are about to answer (docs/mail.md). Research the answer
+with `tico doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `tico task ask <id> --to <person> "<question>"`. Something a
 human must decide is `tico task create --owner <human>`; a repeated product problem is one such task
 for whoever `knowledge/escalation.md` names. A bot that cannot run, or a source that will not connect, is a task to
 `botops`. Finish every task, quiet day or not. A `tico doc ask` that does not

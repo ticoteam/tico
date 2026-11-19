@@ -1,6 +1,8 @@
 ---
 name: check-a-security-answer-against-its-source
 description: Test a security, privacy or compliance answer against a documented source before it reaches a buyer, and sort it into documented yes, workaround, not supported, or no documented answer.
+metadata:
+  function: sales
 ---
 # Check a security answer against its source
 

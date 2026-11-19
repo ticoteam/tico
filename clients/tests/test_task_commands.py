@@ -7,6 +7,7 @@ import json
 import pytest
 
 from clients import hubcli, hubtools, remotecli
+from clients.commands import tasks as task_commands
 from clients.tico import APIError
 
 
@@ -56,6 +57,45 @@ COMMANDS = [
         ("POST", "tasks/T1/move", {"to": "Build", "version": 3}),
     ),
     (
+        ["task", "move", "T1", "--to", "Backlog/On ice", "-m", "Parked", "--version", "3"],
+        ("tico_task_move", {"id": "T1", "to_pipeline": "Backlog", "to": "On ice", "why": "Parked", "version": 3}),
+        ("POST", "tasks/T1/move", {"to": "On ice", "to_pipeline": "Backlog", "version": 3, "why": "Parked"}),
+    ),
+    (
+        ["task", "move", "--from", "Dev/Ideas", "--to", "Backlog", "-m", "Old ideas"],
+        (
+            "tico_task_move",
+            {"from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
+        (
+            "POST",
+            "tasks/move",
+            {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
+    ),
+    (
+        ["task", "move", "--from", "Dev/Ideas", "closed", "-m", "Stale"],
+        ("tico_task_move", {"from_pipeline": "Dev", "from_stage": "Ideas", "to": "closed", "why": "Stale"}),
+        ("POST", "tasks/move", {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to": "closed", "why": "Stale"}),
+    ),
+    (
+        ["task", "reassign", "--from", "Dev/Ideas", "ana", "-m", "Hers now"],
+        ("tico_task_reassign", {"from_pipeline": "Dev", "from_stage": "Ideas", "owner": "ana", "why": "Hers now"}),
+        ("POST", "tasks/owner", {"from": {"pipeline": "Dev", "stage": "Ideas"}, "owner": "ana", "why": "Hers now"}),
+    ),
+    (
+        ["task", "snooze", "--from", "Dev/Ideas", "--until", "2026-12-01", "-m", "After the launch"],
+        (
+            "tico_task_snooze",
+            {"from_pipeline": "Dev", "from_stage": "Ideas", "until": "2026-12-01", "why": "After the launch"},
+        ),
+        (
+            "POST",
+            "tasks/snooze",
+            {"from": {"pipeline": "Dev", "stage": "Ideas"}, "until": "2026-12-01", "why": "After the launch"},
+        ),
+    ),
+    (
         ["task", "close", "T1", "-m", "Not needed", "--version", "3"],
         ("tico_task_close", {"id": "T1", "why": "Not needed", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "closed", "version": 3, "why": "Not needed"}),
@@ -72,9 +112,9 @@ COMMANDS = [
             "T1",
             "--to",
             "chris",
-            "Which plan?",
-            "--choices",
-            "a,b",
+            "OK the plan?",
+            "--kind",
+            "ok",
             "--show",
             "page:12",
             "--version",
@@ -85,8 +125,8 @@ COMMANDS = [
             {
                 "id": "T1",
                 "to": "chris",
-                "line": "Which plan?",
-                "choices": ["a", "b"],
+                "line": "OK the plan?",
+                "kind": "ok",
                 "show": ["page:12"],
                 "version": 3,
             },
@@ -94,7 +134,7 @@ COMMANDS = [
         (
             "POST",
             "tasks/T1/asks",
-            {"to": "chris", "line": "Which plan?", "version": 3, "choices": ["a", "b"], "show": ["page:12"]},
+            {"to": "chris", "line": "OK the plan?", "version": 3, "kind": "ok", "show": ["page:12"]},
         ),
     ),
     (
@@ -166,7 +206,6 @@ COMMANDS = [
             {
                 "owner": "ana",
                 "title": "Sign the FCC filing",
-                "body": "Sign the FCC filing",
                 "due": None,
                 "goal_id": None,
                 "pipeline": "general",
@@ -323,7 +362,7 @@ def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version
         ("tico_task_move", {"id": "T1", "to": "next", "why": "x"}),
         ("tico_task_close", {"id": "T1", "why": "x"}),
         ("tico_task_reassign", {"id": "T1", "owner": "ana"}),
-        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "Which plan?"}),
+        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "OK the plan?", "kind": "ok"}),
         ("tico_task_answer", {"id": "T1", "requirement": "r9", "value": "ok"}),
         ("tico_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
         ("tico_task_snooze", {"id": "T1", "why": "x"}),
@@ -378,67 +417,27 @@ def test_an_ask_names_who_and_the_line_before_anything_is_sent():
     assert api.calls == []
 
 
-def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens_and_the_recommendation():
-    """`tico task ask --why ... --choice "Label|what happens" --recommend Label` (asks-not-todos, For the engineer)."""
-    argv = [
-        "task",
-        "ask",
-        "T1",
-        "Which tone?",
-        "--to",
-        "chris",
-        "--why",
-        "It goes out Friday.",
-        "--choice",
-        "Plain|Safe for customers",
-        "--choice",
-        "Playful | Stands out",
-        "--recommend",
-        "Plain",
-        "--version",
-        "3",
-    ]
+def test_a_question_with_why_is_refused_before_anything_is_sent():
+    """A question is a message marked ❓: its options, pick and why are words in it (backend/question_marks.py)."""
+    argv = ["task", "ask", "T1", "Which tone?", "--to", "chris", "--why", "It goes out Friday.", "--version", "3"]
     args = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
     api = Recorder()
-    hubtools.task_ask(api, args)
-    assert api.writes() == [
-        (
-            "POST",
-            "tasks/T1/asks",
-            {
-                "to": "chris",
-                "line": "Which tone?",
-                "version": 3,
-                "why": "It goes out Friday.",
-                "recommend": "Plain",
-                "choices": ["Plain", "Playful"],
-                "details": ["Safe for customers", "Stands out"],
-            },
-        )
-    ]
-    with pytest.raises(ValueError, match="not both"):
-        hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
+    with pytest.raises(ValueError, match="A question is a message"):
+        hubtools.task_ask(api, args)
+    assert api.calls == []
 
 
-def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
-    """`tico task ask ... --title "<at most 60 characters>"`: the decision view's heading (task #390)."""
-    argv = ["task", "ask", "T1", "Which tone should the launch note take?", "--to", "chris", "--version", "3"]
-    args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--title", "Launch note tone"])).items()}
-    args = {k: v for k, v in args.items() if k != "fn" and v is not None}
-    api = Recorder()
-    hubtools.task_ask(api, args)
-    [(_, _, body)] = api.writes()
-    assert body["title"] == "Launch note tone"
-    plain = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
-    api = Recorder()
-    hubtools.task_ask(api, plain)
-    [(_, _, body)] = api.writes()
-    assert "title" not in body, "an ask without a title sends none, as older clients do"
-    bound = {**plain, "kind": "ok", "subject": "hq_reply:t-1", "content": {"text": "hi"}, "title": "Reply"}
-    api = Recorder()
-    with pytest.raises(ValueError, match="title"):
-        hubtools.task_ask(api, bound)
-    assert api.calls == [], "an OK bound to a subject has no title: refused, not dropped"
+@pytest.mark.parametrize(
+    "flag", [["--choices", "a,b"], ["--choice", "a|b"], ["--recommend", "a"], ["--title", "t"], ["--details", "d"]]
+)
+def test_the_removed_ask_flags_and_kind_answer_are_errors(flag, capsys):
+    argv = ["task", "ask", "T1", "Which tone?", "--to", "chris", *flag]
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(argv)
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["task", "ask", "T1", "x", "--to", "chris", "--kind", "answer"])
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["task", "thumbs", "T1", "R1", "up"])
 
 
 TASK = {
@@ -648,3 +647,51 @@ def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
             return {"task": task, "events": events, "actors": {}}
 
     assert "Picked: Build given to Builder 2" in hubtools.BY_NAME["tico_task_show"]["fn"](Shown(), {"id": "T1"})["text"]
+
+
+@pytest.mark.parametrize(
+    "args, why",
+    [
+        ({"id": None, "from_pipeline": "Dev", "from_stage": None, "to_pipeline": "Backlog"}, "needs from_pipeline"),
+        ({"id": None, "from_pipeline": "Dev", "from_stage": "Ideas"}, "Say where it goes"),
+        ({"id": "T1", "from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog"}, "not both"),
+        ({"id": None, "to": "next"}, "Say which task"),
+        ({"id": "T1"}, "Say where it goes"),
+    ],
+)
+def test_a_task_move_that_names_no_task_or_no_place_sends_nothing(args, why):
+    api = Recorder()
+    with pytest.raises(ValueError, match=why):
+        hubtools.BY_NAME["tico_task_move"]["fn"](api, args)
+    assert api.writes() == []
+
+
+@pytest.mark.parametrize(
+    "place, why",
+    [
+        ({"id": None, "to": "next", "to_place": "Backlog/On ice", "from_place": None}, "Give the stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": "Dev/Ideas"}, "Say where they go"),
+        ({"id": "T1", "to": None, "to_place": "Backlog", "from_place": "Dev/Ideas"}, "Give a task, or --from"),
+        ({"id": None, "to": None, "to_place": "Backlog", "from_place": "Dev"}, "names a stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": None}, "Say which task"),
+    ],
+)
+def test_the_cli_refuses_a_move_place_it_cannot_read_before_it_sends(place, why):
+    api = Recorder()
+    fields = {k: place[k] for k in ("id", "to") if place[k]}
+    with pytest.raises(APIError, match=why):
+        task_commands._move(api, fields, to_place=place["to_place"], from_place=place["from_place"])
+    assert api.writes() == []
+
+
+def test_not_known_is_sent_only_when_given():
+    """`tico task ask ... --not-known`: past Tico's own answer to the person (Tasks spec "Tico answers what it already
+    knows", criterion 9)."""
+    argv = ["task", "ask", "T1", "Which repo is this in?", "--to", "chris", "--version", "3"]
+    for extra, sent in ((["--not-known"], True), ([], None)):
+        args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, *extra])).items()}
+        args = {k: v for k, v in args.items() if k != "fn" and v is not None}
+        api = Recorder()
+        hubtools.task_ask(api, args)
+        [(_, path, body)] = api.writes()
+        assert path == "tasks/T1/questions" and body.get("not_known") is sent

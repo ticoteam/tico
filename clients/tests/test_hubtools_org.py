@@ -351,7 +351,7 @@ def run(argv):
         (["bot", "list", "--needs-action"], ("GET", "bots", {})),
         (["bots", "list", "--archived"], ("GET", "bots", {"include_archived": "1"})),
         (["bot", "quarantine-clear", "qa", "--note", "fine"], ("POST", "bots/qa/quarantine/clear", {"note": "fine"})),
-        (["bot", "go-live-all", "--dry-run"], ("GET", "bots", {})),
+        (["bot", "go-live-all", "--dry-run"], ("GET", "bots", {"fields": "slug,state,onboarding_state"})),
         (["org", "show"], ("GET", "pipelines", {})),
         (["human", "show", "u2"], ("GET", "org", {})),
         (["human", "invite", "u2"], ("POST", "access/humans/u2/invite", {})),

@@ -34,6 +34,7 @@ from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, inval
 from .handlers import Plan, Result, budget_impact, private_hidden
 from .store import attribution as ATT
 from .store import ledger as SL
+from .store import tico
 
 MAX_TEXT = 80
 
@@ -48,7 +49,7 @@ def _splits(raw: object, ctx: Ctx) -> tuple[CA.Split, ...]:
     for item in V.items(raw, "splits", CA.MAX_PARTS):
         q = V.obj(item, "a share")
         V.only(q, ("teammate", "team", "share_bps"))
-        mate = V.opt_text(q, "teammate", MAX_TEXT) or ""
+        mate = tico.teammate(ctx.c, V.opt_text(q, "teammate", MAX_TEXT) or "")
         team = V.opt_text(q, "team", MAX_TEXT) or ""
         if not mate and not team:
             raise invalid("a share names a teammate or a team")

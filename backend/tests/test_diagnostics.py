@@ -153,7 +153,7 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
         # The features block names the Assistant feature (`"assistant": false`), which is not the bot's slug.
         assert name not in text.replace("[company-domain]", "").replace('"assistant":', ""), name
     assert bundle["versions"]["tico"] and bundle["counts"]["people"] == 3 and bundle["counts"]["bots"] >= 2
-    assert bundle["database"]["migration"] >= 11 and set(bundle["features"]) <= set(D.FEATURES)
+    assert bundle["database"]["migration"] >= "20261116" and set(bundle["features"]) <= set(D.FEATURES)
     assert all(set(x) == {"name", "status"} for x in bundle["health"]) and bundle["health"]
     assert D.digest(bundle) == answer["id"] and answer["bytes"] == len(text.encode()) <= D.MAX_BYTES
 

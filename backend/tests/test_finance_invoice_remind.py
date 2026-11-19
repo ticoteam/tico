@@ -51,7 +51,7 @@ def test_a_stage_reminder_is_recorded_once_with_the_fixed_text_and_the_payment_l
         assert made.status == "committed", made
         assert made.result["status"] == "reminded" and made.result["delivery"] == "send_approval"
         assert made.result["send_approval_id"] and made.result["mailbox"] == BOX
-        assert made.result["subject"] == f"Invoice {made.result['document']['number']} is unpaid"
+        assert made.result["subject"] == f"Invoice {made.result['document']['number']} is unpaid (7-day reminder)"
         assert made.result["to"] == [EMAIL]
         text = made.result["text"]
         assert DUE in text and "still unpaid" in text and "Pay here: https://pay.example/inv-1" in text

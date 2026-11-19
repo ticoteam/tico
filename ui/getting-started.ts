@@ -13,7 +13,7 @@ let GS: GsAnswer | null = null;                     // the last answer, or null 
 let GS_LOAD = 0;
 
 async function gsRefresh(): Promise<GsAnswer | null> {
-  if (!S.me?.cloud) return null;
+  if (!S.me) return null;
   const seq = ++GS_LOAD;
   const data: GsAnswer | null = await v2Get('/v2/setup/getting-started');
   if (seq !== GS_LOAD) return GS;
@@ -54,7 +54,7 @@ function gsTourStart(): void {
   if (GS_TOUR) return;
   const phone = drawerMedia.matches;
   if (phone) setDrawer(true, false, $('#mobile-more'));
-  // Docs, Strategy and Meetings sit in Company and Library, which start folded: the tour shows them open while it runs
+  // Docs and Strategy sit in Library and Company, which start folded: the tour shows them open while it runs
   // and leaves the person's own fold as it was (getting-started.css html.gs-touring).
   document.documentElement.classList.add('gs-touring');
   const steps = GS_STEPS.filter(([selector]) => {
@@ -173,7 +173,7 @@ window.gsBoot = function () {
     if (!(setup?.completed && setup.company_import && await onbWelcome(setup))) gsTourStart();
   });
   // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
-  setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);
+  setInterval(() => { if (!document.hidden && S.me) void gsRefresh(); }, 300000);
 };
 
 // ---------------------------------------------------------------- one listener for all of it

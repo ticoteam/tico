@@ -1,6 +1,8 @@
 ---
 name: report-a-doc-conflict
 description: "When two sources give different values for the same fact, use the replacement if one says it replaces the other; otherwise report both with their dates and owners without picking one, record the conflict once in the gap list, and open one task for a person if it matters."
+metadata:
+  function: tico
 ---
 # Report a doc conflict
 
@@ -12,7 +14,7 @@ Steps:
 3. Say what each source is, in one clause: a policy, a process, a web page, or a file a bot or person made. A file is evidence of what was made, not a decision. Do not rank the sources to choose a winner.
 4. Answer with both values, dated and both cited. Begin by saying the docs disagree. Do not give either value as the answer.
 5. Record it once under **Docs that disagree** in `_librarian/missing.md`: both links, both values and both dates, in the shape `playbooks/faq-and-gaps.md` gives. If the line is already there, leave it.
-6. If a person will act on the fact (a price, a policy, a limit, a deadline), look for an open task on it first (`tico task list`). If there is none, file one: `tico task create --owner <person> --title "Settle <topic>: two docs disagree" --body "<both links and one sentence>"`. The person is the owner the docs name, or the team owner if none is named. One task per problem.
+6. If a person will act on the fact (a price, a policy, a limit, a deadline), look for an open task on it first (`tico task list`). If there is none, file one: `tico task create --owner <person> --title "Settle <topic>: two docs disagree" --message "<both links and one sentence>"`. The person is the owner the docs name, or the team owner if none is named. One task per problem.
 
 Checks before you finish:
 - An explicit replacement was answered with the replacement, and the old doc is under Out of date, not in the conflict list.

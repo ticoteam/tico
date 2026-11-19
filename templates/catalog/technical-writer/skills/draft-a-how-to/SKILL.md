@@ -1,6 +1,8 @@
 ---
 name: draft-a-how-to
 description: Write a how-to page that solves one task for a reader who knows the basics, with a goal title, numbered single-action steps, an exact expected result, and recovery steps for the failures people hit.
+metadata:
+  function: engineering
 ---
 # Draft a how-to
 

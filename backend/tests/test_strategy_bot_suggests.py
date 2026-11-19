@@ -39,7 +39,7 @@ def recovery(api, goal_id, ops_task, token, expected=200):
     }
     out = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "recovery", "goal_id": goal_id, "payload": payload, "reason": "Red for a week"},
         token=token,
         expected=expected,
@@ -67,7 +67,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     # A task for a person stays the person's to make, at every level.
     post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "recovery",
             "goal_id": goal["id"],
@@ -93,8 +93,8 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     assert {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")} == before  # nothing yet
     assert [i["kind"] for i in get(api, "goals/needs-you")["items"]].count("recovery") == 1
     # Ben may not decide Ana's company goal; Ana approves the pick.
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
-    decided = post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})["proposal"]
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
+    decided = post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"})["proposal"]
     assert decided["status"] == "confirmed" and decided["result"]["unchanged"] is True
     assert decided["result"]["left"] == [] and decided["result"]["follow_up"] is None
     ops = tasks_of(api, "bot:ops")
@@ -128,19 +128,19 @@ def test_what_cant_be_done_comes_back_saying_why_and_lowering_to_1_withdraws(api
     proposal = recovery(api, goal["id"], bot_task(api, "ops", "Clean up old reports"), strategy_token)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
-    decided = post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "option": 1})["proposal"]
+    decided = post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "option": 1})["proposal"]
     result = decided["result"]
     assert result["unchanged"] is False and result["done"] == []
     assert result["left"][0]["why"] == "finance is paused right now" and result["follow_up"]
     assert tasks_of(api, "bot:finance") == []
-    again = get(api, "goal-proposals")["proposals"]
+    again = get(api, "proposals")["proposals"]
     [back] = [p for p in again if p["id"] == result["follow_up"]]
     assert back["kind"] == "recovery" and "finance is paused right now" in back["reason"]
     sync(api)
     [item] = [a for a in asks(api, OWNER) if a["kind"] == "recovery" and a["status"] == "open"]
     assert "finance is paused right now" in item["body"]
     level(api, 1)
-    assert [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "recovery"] == []
+    assert [p for p in get(api, "proposals")["proposals"] if p["kind"] == "recovery"] == []
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "closed"
 
@@ -153,14 +153,14 @@ def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(
     proposal = recovery(api, red_goal(api)["id"], bot_task(api, "ops", "Clean up old reports"), strategy_token)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
-    first = post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "option": 1})["proposal"]
-    second = post(api, f"goal-proposals/{first['result']['follow_up']}/decide", {"decision": "confirm"})["proposal"]
+    first = post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "option": 1})["proposal"]
+    second = post(api, f"proposals/{first['result']['follow_up']}/decide", {"decision": "confirm"})["proposal"]
     retry = second["result"]["follow_up"]
     assert retry and retry != second["id"]
-    assert [p["id"] for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "recovery"] == [retry]
+    assert [p["id"] for p in get(api, "proposals")["proposals"] if p["kind"] == "recovery"] == [retry]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='finance'")
-    done = post(api, f"goal-proposals/{retry}/decide", {"decision": "confirm"})["proposal"]["result"]
+    done = post(api, f"proposals/{retry}/decide", {"decision": "confirm"})["proposal"]["result"]
     assert done["left"] == [] and done["follow_up"] is None
     assert [t["title"] for t in tasks_of(api, "bot:finance")] == ["Pause the signup campaign"]
 
@@ -174,7 +174,7 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
     goal = red_goal(api)
     for n in range(13):
         p = recovery(api, goal["id"], bot_task(api, "ops", f"Task {n}"), strategy_token)
-        post(api, f"goal-proposals/{p['id']}/decide", {"decision": "reject" if n == 2 else "confirm"})
+        post(api, f"proposals/{p['id']}/decide", {"decision": "reject" if n == 2 else "confirm"})
         if n == 2:
             assert get(api, "strategy-bot")["level3_offer"]["streak"] == 0
         if n == 11:

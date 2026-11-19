@@ -1,6 +1,8 @@
 ---
 name: draft-minutes-from-a-meeting
 description: Draft minutes of a board or stockholder meeting from a recording or the chair's notes, recording attendance, quorum, declared conflicts, each resolution with its vote, and actions, with anything unconfirmed marked for the chair.
+metadata:
+  function: legal
 ---
 # Draft minutes from a meeting
 

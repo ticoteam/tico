@@ -22,7 +22,20 @@
 .ph>.ph-tools{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
 .ph>.ph-tools:empty{display:none}
 .ph>.ph-tools input[type=search]{min-width:160px}
-/* a control's words never wrap: a narrow row shows the tools as icons, then folds them into ⋯ (page-head.ts pageHeadFit) */
+/* A search that does not fit is its magnifier (.ph-find on the header, .ph-q on the search, page-head.ts pageHeadFind):
+   the tool is drawn as the glyph alone, a mask, so a bare box and a box with its own icon, hint and keys all look the
+   same; its box lies over it to take the tap. One holding words draws its glyph in ink. Tapped, it opens over the title
+   line, so nothing on the row moves or wraps. */
+.ph{--ph-find-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/%3E%3C/svg%3E")}
+.ph.ph-find>.ph-tools>.ph-q:not(:focus-within){flex:none;position:relative;box-sizing:border-box;width:var(--ctl);min-width:0;max-width:none;height:var(--ctl);margin:0;padding:0;border:0;border-radius:0;outline:0;box-shadow:none;background:var(--muted);color:transparent;cursor:pointer;-webkit-mask:var(--ph-find-mask) center/20px 20px no-repeat;mask:var(--ph-find-mask) center/20px 20px no-repeat}
+.ph.ph-find>.ph-tools>.ph-q:not(:focus-within):is(:hover,:not(:has(input:placeholder-shown)):not(:placeholder-shown)){background:var(--ink)}
+.ph.ph-find>.ph-tools>input.ph-q:not(:focus)::placeholder{color:transparent}
+.ph.ph-find>.ph-tools>.ph-q:not(:focus-within) *{visibility:hidden}
+.ph.ph-find>.ph-tools>.ph-q:not(:focus-within) input[type=search]{visibility:visible;position:absolute;inset:0;width:100%;min-width:0;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}
+.ph.ph-find:has(>.ph-tools>.ph-q:focus-within){position:relative}
+.ph.ph-find>.ph-tools>.ph-q:focus-within{position:absolute;z-index:2;top:0;left:0;right:0;flex:none;box-sizing:border-box;width:auto;min-width:0;max-width:none;height:var(--ctl);margin:0}
+.ph.ph-pad.ph-find>.ph-tools>.ph-q:focus-within{top:8px;left:28px;right:28px}
+/* a control's words never wrap: a narrow row shows the tools as icons, then folds them, all but a search, into ⋯ (page-head.ts pageHeadFit) */
 .ph>.ph-tools>:is(button,a){flex:none;white-space:nowrap}
 /* A tool's word becomes its icon (.ph-icons): a tool that carries a .nav-icon or an svg shows that, at least a square
    the row's height, and hides its words: bare words (page-head.ts wraps them in .ph-w) and a word span. Counts and
@@ -40,7 +53,6 @@
 .ph-menu>:is(.ph-tools,.ph-mtabs):not(:last-child){margin:0 0 4px;padding:0 0 4px;border-bottom:1px solid var(--line)}
 .ph-menu .ph-mtab{display:flex;align-items:center}
 .ph-menu .ph-mtab.cur{background:var(--surface2);font-weight:600}
-.ph-menu>.ph-tools input[type=search]{box-sizing:border-box;width:100%;min-width:240px}
 .ph-fold-word{display:none}
 /* A filter icon folded into ⋯ is one row of the menu: its icon, its word (hidden in the header), its badge at the right. */
 .ph-menu>.ph-tools>.tl-ib{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:auto}
@@ -49,8 +61,6 @@
 .ph>.ph-more{flex:none;display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .ph>.ph-more:hover,.ph>.ph-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .ph>.ph-more .nav-icon{font-size:20px}
-.ph>.ph-more.ph-held{position:relative}
-.ph>.ph-more.ph-held::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
 .ph-menu[popover]{position:fixed;inset:auto;margin:0;width:max-content;min-width:160px;max-width:calc(100vw - 24px);padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 12px 32px #0005;color:var(--ink)}
 .ph-menu :is(button,a){display:block;box-sizing:border-box;width:100%;min-height:0;padding:6px 10px;border:0;border-radius:5px;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;text-decoration:none;cursor:pointer}
 .ph-menu :is(button,a):hover{background:var(--surface2);text-decoration:none}
@@ -81,5 +91,6 @@
   .ph>.ph-tools{flex:0 1 auto;flex-wrap:nowrap}
   .ph>.ph-tools input[type=search]{min-width:120px}
   .ph-menu :is(button,a){min-height:44px;padding:10px 12px}
+  .ph.ph-pad.ph-find>.ph-tools>.ph-q:focus-within{top:18px;left:12px;right:12px}
   #main .ph>.ph-chat:not(:empty){flex:none;display:flex}
 }

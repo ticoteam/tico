@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 
 
 _logged = OrderedDict()
-_clock = time.monotonic
+
+
+def _clock():
+    """The clock `report` reads for its hourly limit. A test replaces this, not time.monotonic for the whole process."""
+    return time.monotonic()
+
 
 # Errors of the storage or the writer lock, not of the row being worked on: they stop the batch or the claim.
 STORAGE_CODES = (

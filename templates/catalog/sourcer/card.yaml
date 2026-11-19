@@ -8,7 +8,7 @@ pack: basics
 icon: manage_search
 suggest: common
 tags: [hiring, sourcing, outbound, referrals, passive-candidates, remote]
-summary: "Finds interested people for each open role from public professional work and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate."
+summary: "Finds interested people for each open role from public professional work and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate, and starts only once a person has OK'd a search for a role a bot cannot do."
 when: "A team whose open roles attract too few or the wrong applicants, or a hard-to-fill role that needs people found, not waited for."
 pains:
   - "we only hear from people who apply"
@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/sourcing-slate.md
 reasoning_effort: medium
 recommend_when: [uses_email, small_team]
+shared_files:
+  - .claude/skills/fill-a-role

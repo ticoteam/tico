@@ -9,14 +9,25 @@ The runner adds up the `tokens` events a run's runtime reports (`runner-rs/src/e
 `usage`: uncached input, cached input and output tokens, the model that ran, and how the run was billed. The server keeps them on the run
 (`attempts.input_tokens`, `cached_tokens`, `output_tokens`, `usage_model`, `provider`, `est_cost_usd`, `billing`; migration 12, moved
 from the old `turns` table by migration 0072) and prices them
-from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
-regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
+from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input, plus Anthropic's
+write premium on a Claude model (below); batch, priority and regional premiums are not modelled. A model with no price keeps its tokens
+and shows a dash for the cost.
 
 Cache writes are counted apart: the cache writes a run's harness reports (Claude's `cache_creation_input_tokens`, Cursor's
 `cacheWriteTokens`, pi's `cacheWrite`) go to `cache_write_tokens` (on `attempts` and `usage_facts`) and are left out of
-`input_tokens`, which is then the uncached input only. They are still priced as input. A runtime that reports no cache
+`input_tokens`, which is then the uncached input only. A runtime that reports no cache
 writes (Codex, Gemini, Antigravity, Muse Code) records 0. A run recorded
 before they were counted apart, or by a runner too old to send them, has NULL there and its `input_tokens` include them.
+
+On a Claude model (`claude-*` with a list price, `providers.prices_cache_writes`) a cache write costs more than input, by how long
+the entry lives (`providers.CACHE_WRITE`, Anthropic's pricing page read 2026-11-18): 1.25x input for a 5-minute entry, 2x for a 1-hour
+one. The Claude runner reads the split from `usage.cache_creation.ephemeral_1h_input_tokens` and sends the 1-hour part as
+`cache_write_1h_tokens`, only to a server whose `runners/desired` features say `usage_cache_write_1h`. Without it (an older runner,
+or a Claude Code that reports no split) the server guesses from the sign-in: Claude Code (`claude` runtime) on a Claude plan
+(`billing: subscription`) writes 1-hour entries, so all its writes are 1-hour; any other run's are 5-minute
+(`execution.cache_write_split`). A runner too old to count writes apart (NULL above) has them in `input_tokens` at the input rate.
+Other providers' writes, and the Gateway's models (priced from the Gateway's rates), stay at the input rate. Runs priced before
+2026-11-18 keep the estimate they were stored with (`attempts.est_cost_usd`, `usage_facts.cost_nano`); they are not re-priced.
 
 Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku
 5.5 over 100,000 tokens, counting cache reads and writes). For those, the Claude runner sends each model request's tokens as `requests`
@@ -115,10 +126,17 @@ Usage > Limits; the hub decides who may change which, and a row it says is not y
 
 ## API
 
-`GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
+`GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|hour|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
 `totals` with `runs`, `input_tokens`, `cached_tokens`, `cache_write_tokens` (NULL runs sum as 0), `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
 model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `bots` (slugs, comma separated) narrows to those bots; `group` selects how rows are aggregated (`task`: the top 25 tasks by spend, a private one named only as one, one the reader cannot open only as that, runs with no task together). A group lead also sees the bots in the groups they lead, as `/usage/limits` lists them. See `GET /api/v2/openapi.json`.
+
+`from` and `to` also take exact UTC times (ISO-8601, `2026-11-18T17:00:00Z`; one with no offset is read as UTC): the window then runs
+from `from` (included) up to `to` (excluded), and every group sums only the runs that started in it. A date keeps meaning the whole
+day, so `from=2026-11-18T17:00:00Z&to=2026-11-18` is 17:00 to midnight. `group=hour` gives one row per UTC hour, `hour` its start
+(`2026-11-18T17:00:00Z`), in order, every hour of the window up to now with empty ones as zeros; its window is at most 7 days
+(a longer one is a 422). The last three hours of spend, by model (`est_cost_usd` is what API-billed runs spent):
+`GET /api/v2/usage?group=model&from=2026-11-18T15:00:00Z` (or `tico usage show --group hour --from 2026-11-18T15:00:00Z`).
 
 ## Filter by the settings used for a run
 

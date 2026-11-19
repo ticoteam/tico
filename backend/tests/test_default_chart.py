@@ -7,12 +7,12 @@ from backend import automations, reach, report_managers, task_caps, usage
 from backend import hubdb as H
 from backend.auth import Identity
 from backend.store import Problem
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
 
 
 def started(environment):
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     machine(api)
     with api.app.state.store.transaction() as c:
@@ -68,14 +68,22 @@ def lines(api):
 
 def test_every_bot_has_one_manager_and_the_built_ins_are_the_general_managers_team(environment):
     api = environment()
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     machine(api)
     with api.app.state.store.transaction() as c:
         api.app.state.onboarding.complete_company(c)
     first = lines(api)
     owner = first["general-manager"]
     assert owner.startswith("human:") and first["assistant"] == owner
-    for slug in ("botops", "librarian", "strategy-owner", "rules-owner", "design-owner", "automations-owner"):
+    for slug in (
+        "botops",
+        "librarian",
+        "strategy-owner",
+        "rules-owner",
+        "design-owner",
+        "automations-owner",
+        "tools-owner",
+    ):
         assert first[slug] == "general-manager", slug
     assert [slug for slug, line in first.items() if not line] == []
     groups = {g["id"]: g for g in api.get("/api/v2/groups", headers=signed_in()).json()}
@@ -103,7 +111,7 @@ def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_s
     out the built-ins' lines for a new company; a line set afterwards stays through later starts."""
     api = environment()
     seeded_under_the_assistant(api)
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     first = lines(api)
     owner = first["general-manager"]
     assert owner.startswith("human:") and first["assistant"] == owner and first["finance-owner"] == owner
@@ -115,6 +123,7 @@ def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_s
         "design-owner",
         "automations-owner",
         "updates-owner",
+        "tools-owner",
     )
     assert {slug: first[slug] for slug in team} == dict.fromkeys(team, "general-manager")
     assert [slug for slug, line in first.items() if not line] == []
@@ -136,7 +145,7 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
         # rc.7 filled only a line nobody had set, so the seed's line stayed.
         fill = Onboarding.ensure_general_team
         rc7.setattr(Onboarding, "ensure_general_team", lambda self, c, laid=(): fill(self, c))
-        assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
         machine(api)
     assert lines(api)["botops"] == "assistant"
     with api.app.state.store.transaction() as c:
@@ -172,7 +181,7 @@ def test_a_manager_changes_its_reports_model_name_and_routines_and_nothing_that_
     """What "Managers and their reports" (docs/permissions.md) gives each Manager of the default chart, and what stays
     with people. A change to either list is a change to this test."""
     api = environment()
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     machine(api)
     auth, admin = api.app.state.auth, api.app.state.onboarding.admin
     with api.app.state.store.transaction() as c:
@@ -218,7 +227,7 @@ def test_a_manager_changes_its_reports_model_name_and_routines_and_nothing_that_
 
 def test_the_general_manager_changes_nothing_on_the_built_ins_under_it(environment):
     api = environment()
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     machine(api)
     auth = api.app.state.auth
     with api.app.state.store.transaction() as c:

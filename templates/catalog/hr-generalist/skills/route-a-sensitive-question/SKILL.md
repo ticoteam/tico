@@ -1,6 +1,8 @@
 ---
 name: route-a-sensitive-question
 description: Decide whether a question must go to a named human untouched, because it touches pay, leave, discipline, performance, health, a complaint, harassment, immigration or a termination, and write the hand-off task with the question copied exactly and no opinion, so the person who owns it can answer.
+metadata:
+  function: people
 ---
 # Route a sensitive question
 

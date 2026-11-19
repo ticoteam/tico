@@ -131,7 +131,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico tag show <id>\ntico tag show: error: the following arguments are required: id",
+  "stderr": "Example: tico tag show <id>\nid: Tag id or key\ntico tag show: error: the following arguments are required: id",
   "exit": 64
  },
  {
@@ -211,7 +211,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico tag create <key>\ntico tag create: error: the following arguments are required: key",
+  "stderr": "Example: tico tag create <key>\nkey: Unique key: the label string a task carries\ntico tag create: error: the following arguments are required: key",
   "exit": 64
  },
  {
@@ -405,7 +405,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico tag update <id>\ntico tag update: error: the following arguments are required: id, --version",
+  "stderr": "Example: tico tag update <id>\nid: Tag id or key\n--version: Its current version, from `tag show`\ntico tag update: error: the following arguments are required: id, --version",
   "exit": 64
  },
  {
@@ -417,7 +417,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico tag update <id>\ntico tag update: error: the following arguments are required: --version",
+  "stderr": "Example: tico tag update <id>\n--version: Its current version, from `tag show`\ntico tag update: error: the following arguments are required: --version",
   "exit": 64
  },
  {

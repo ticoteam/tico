@@ -3,12 +3,12 @@
 import json
 import sqlite3
 from contextlib import closing
-from types import SimpleNamespace
-from unittest.mock import patch
-from backend import cloud_machines, page_owners, providers, settings_catalog
+from backend import cloud_access, page_owners, providers, settings_catalog
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner
 from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.cloud_access import signals
+from backend.tests.helpers.cloud_machines import FakeHQ
 
 
 PEOPLE = {"owner": ("ana-test", "ana"), "admin": ("ben-test", "ben"), "member": ("cara-test", "cara")}
@@ -108,6 +108,8 @@ NOT_PROVEN = {
     "bot.definition": "422: needs expected_revision",
     "bot.turns_at_once": "422: the body needs expected_revision",
     "bot.manages_reports": "422: the body needs expected_revision",
+    "bot.output_style": "422: the body needs expected_revision",
+    "bot.verbosity": "422: the body needs expected_revision",
     "bot.owners": "422: the entry sends owners without expected_revision",
     "bot.profile": "422: the body shape",
     "rules.system": "422: the body shape",
@@ -174,11 +176,6 @@ def _objects(api, machine):
             "INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
             (H.new_id(), "Acme/product", now),
         )
-        c.execute(
-            "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
-            "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
-            ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now),
-        )
         system = (
             c.execute("SELECT id FROM system_routines LIMIT 1").fetchone()
             if c.execute("SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone()
@@ -186,7 +183,6 @@ def _objects(api, machine):
         )
     found["repositories"] = "Acme/product"
     found["usage/pools"] = "company"
-    found["settings/transitions"] = "tr-parity"
     found["system-routines"] = system[0] if system else "daily_update"
     found["computers"] = machine["runner_id"]
     with api.app.state.store.read() as c:
@@ -283,13 +279,6 @@ def ask(api, attempt, e, objects, person, token):
         _saved_subscription(api, objects)
     # The bot's revision as it is now: an earlier entry may have changed it, and a stale one is a 409, not the setting.
     objects["bot-revision"] = get(api, "bots/finance", token)["revision"]
-    if e.route.startswith("settings/transitions/"):
-        # The fixture change is prepared at the bot's revision now, and an apply consumes it, so each entry gets it fresh.
-        with api.app.state.store.transaction() as c:
-            c.execute(
-                "UPDATE bot_transitions SET state='prepared', expected_revision=? WHERE id=?",
-                (objects["bot-revision"], objects["settings/transitions"]),
-            )
     if "{computer}" in e.route or e.route == "computer-subscriptions":
         # A computer an earlier entry revoked (computer.revoke) is not found by the next one: each gets its own.
         objects["computers"] = runner(api)["runner_id"]
@@ -303,14 +292,17 @@ def ask(api, attempt, e, objects, person, token):
     if got != "card":
         return got
     if e.route == "cloud-machines/support":
-        # This switch exists only on cloud companies. Give its tap an available company and a synthetic HQ, so
-        # the shared sweep proves the owner's confirmation as well as refusing everyone else.
-        hq = SimpleNamespace(support=lambda on=None, **_: {"on": on is not False, "machines": []})
-        with (
-            patch.object(cloud_machines, "cloud_company", return_value=True),
-            patch.object(api.app.state.cloud_machines, "client", hq),
-        ):
+        # This switch exists only on cloud companies. For this one tap the company is one, and a fake HQ keeps the
+        # switch, so the shared sweep proves the owner's confirmation as well as refusing everyone else.
+        store, manager = api.app.state.store, api.app.state.cloud_machines
+        before = cloud_access.current(store)
+        cloud_access.apply(store, cloud_access.parse(signals("open")))
+        client, manager.client = manager.client, FakeHQ()
+        try:
             tap = tapped(api, planned.json(), token)
+        finally:
+            manager.client = client
+            cloud_access.apply(store, before)
     else:
         tap = tapped(api, planned.json(), token)
     if tap != "ran":

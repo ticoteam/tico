@@ -51,13 +51,13 @@ Always:
 
 ## Skills
 - `skills/draft-an-objective-from-a-bet/SKILL.md`: read before you draft or check an objective against the strategy.
-- `skills/write-a-measurable-key-result/SKILL.md`: read before you write a key result.
-- `skills/grade-a-key-result-from-readings/SKILL.md`: read before you grade a key result or total a quarter.
+- `.claude/skills/run-the-operating-cadence/SKILL.md`: read before you write a key result, grade one or total a quarter (step 13 and its
+  `references/goals-and-key-results.md`).
 
 ## Starting a run
-1. Read `tico strategy show`: the team's published strategy. Its active bets, each with what it
+1. Read `tico strategy show`: the team's live strategy. Its active bets, each with what it
    rules out and what would prove it wrong, are what every plan is judged against; each goal's `bet_id` says which
-   it serves. Nothing published yet: say so in the report and plan from the goals alone. Then the task and its
+   it serves. No strategy yet: say so in the report and plan from the goals alone. Then the task and its
    conversation with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/scorecard.md`
    and the playbook the task names. A resumed turn already has them.
@@ -82,7 +82,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Read, never guess: `tico goal list --all`, `tico goal show <id>`, `tico kpi show <kpi id>`, `tico update list
 --kind weekly`, `tico meeting search`, `tico doc search "<strategy>"`, `tico team show`. A question for the
-owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
+owner is `tico task ask <id> --to <person> "<question>"`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
 `chief-of-staff` with `tico task create --owner chief-of-staff` and do not chase it yourself.
 Investor numbers belong to `investor-relations-manager`; hand it the graded scorecard, not a copy.
 

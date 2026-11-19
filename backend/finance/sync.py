@@ -11,6 +11,7 @@ marks what it would send as withheld. The token is a Tico credential read at use
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -29,8 +30,10 @@ from .store import tico
 log = logging.getLogger(__name__)
 
 SWEEP = 300.0  # seconds between sweeps without a ring
+BACKFILL_PAUSE = 2.0  # seconds between sweeps while a first backfill has its next step due
 POLL_MINUTES = 15  # how often a connection is read without a webhook
 BACKFILL_PAGES = 4  # /transactions pages per step: the first backfill is paced across steps
+POSTING_LAG_DAYS = 30  # Mercury's `start` reads the day a row was made; one made this long before posting is still read
 EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
@@ -192,8 +195,20 @@ brex_probe = brex_sync.probe_credential
 
 
 # ------------------------------------------------------------------------------------------------ one step
-def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None) -> None:
-    """One pass over every connection that is due, or rung."""
+def step(
+    store: Any,
+    vault: Any,
+    *,
+    rehearsal: bool = False,
+    make: Make | None = None,
+    at: str | None = None,
+    backfill_only: bool = False,
+) -> None:
+    """One pass over every connection that is due, or rung. `backfill_only` (a short wake between backfill steps)
+    steps only the connections whose first backfill is due (_backfill_due): one in error, its webhooks, its owed
+    calls and its unknown transfers wait for a full sweep or a ring. A connection whose step raises is put in error
+    and due a poll later (_raised), so it never loops on the short pause."""
+    now = at or _now()
     with store.read() as c:
         if not is_set_up(c):
             return
@@ -201,10 +216,37 @@ def step(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None =
     for row in rows:
         if str(row["status"]) not in ("active", "error"):
             continue
+        if backfill_only and not _backfill_due(row, now):
+            continue
         try:
             connection(store, vault, str(row["id"]), rehearsal=rehearsal, make=make, at=at)
-        except Exception:
+        except Exception as e:
             log.exception("Finance sync step failed")
+            _raised(store, str(row["id"]), e, now)
+
+
+def _raised(store: Any, cid: str, e: Exception, now: str) -> None:
+    """A step that raised before it recorded its outcome: the connection goes to error and is due a poll later, as a
+    failed read is, and the owner is told once (banking.sync_failed)."""
+    try:
+        with store.read() as c:
+            row = SK.get(c, "fin_connections", cid)
+        if row is None or str(row["status"]) == "disconnected":
+            return
+        why = f"the sync stopped on an unexpected error ({type(e).__name__}); Tico tries again at the next poll"
+        _failed(store, cid, why, now, str(row["status"]))
+    except Exception:
+        log.exception("Finance sync could not record a failed step")
+
+
+def _backfill_due(row: Any, now: str) -> bool:
+    """An active Mercury, Stripe or Brex connection whose first backfill is unfinished and has its next step due."""
+    return (
+        str(row["provider"]) in ("mercury", "stripe", "brex")
+        and str(row["status"]) == "active"
+        and not _settings(row).get("backfilled")
+        and (not row["next_sync_at"] or str(row["next_sync_at"]) <= now)
+    )
 
 
 def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider | None:
@@ -218,7 +260,7 @@ def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider |
 def connection(
     store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None, at: str | None = None
 ) -> str:
-    """Sync one connection. `withheld` in rehearsal, `no_token`, else `ok` or `failed`."""
+    """Sync one connection. `withheld` in rehearsal, `refused` (`banking.unusable_key`), `no_token`, else `ok` or `failed`."""
     now = at or _now()
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
@@ -243,6 +285,10 @@ def connection(
     due = not row["next_sync_at"] or str(row["next_sync_at"]) <= now
     if not (due or inbox or owed):
         return "idle"
+    refused = banking.unusable_key(store, row)
+    if refused:  # never read or send a key its connector may not use (a grant revoked, a person gone)
+        _failed(store, cid, refused, now, str(row["status"]))
+        return "refused"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
         _failed(store, cid, "the Mercury token is missing; store it again in Settings", now, str(row["status"]))
@@ -403,9 +449,23 @@ def _ingest_all(store: Any, cid: str, raws: list[dict[str, Any]], now: str, vers
                     )
 
 
+def _in_history(raw: Mapping[str, Any], since: str | None) -> bool:
+    """Whether a Mercury row belongs to a history cut at `since`: a pending row does (it posts from now on), a settled
+    one when the books date it (its posting day, F.mercury_txn) on or after that day."""
+    if not since or str(raw.get("status") or F.PENDING) == F.PENDING:
+        return True
+    when = raw.get("postedAt") if str(raw.get("status")) == F.POSTED and raw.get("postedAt") else raw.get("createdAt")
+    try:
+        return F.day_of(when) >= since
+    except FinanceError:
+        return True  # ingest refuses it, and queues it to try again, as for any row it cannot read
+
+
 def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
-    """The first backfill: /transactions oldest first from its cursor, a few pages per step. When it ends, the Events
-    cursor starts at Mercury's newest event, so catch-up reads only what came after."""
+    """The first backfill: /transactions oldest first from its cursor, a few pages per step, from the connection's
+    `history_from` day on when it has one (by posting day: _in_history). When it ends, the Events cursor starts at
+    Mercury's newest event, so catch-up reads only what came after, and each account's opening is its balance less the
+    rows taken in (opening_balance)."""
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
     conf = _settings(row)
@@ -417,15 +477,19 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    since = str(conf.get("history_from") or "") or None  # none on a connection made before it: the whole history
+    # Mercury's `start` filters the day a row was made, the books its posting day: read back far enough for a row made
+    # before history_from and posted on or after it, then keep only the rows the books date from that day on.
+    read_from = (datetime.fromisoformat(since) - timedelta(days=POSTING_LAG_DAYS)).date().isoformat() if since else None
     repeat = False  # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
-        page = provider.transactions(cursor)
+        page = provider.transactions(cursor, start=read_from)
         if not page.ok:
             return [error_text(page)]
         raws = listed(page, "transactions")
         with store.read() as c:
             known = SK.known_txns(c, cid, [str(r.get("id")) for r in raws if r.get("id")])
-        _ingest_all(store, cid, raws, now)
+        _ingest_all(store, cid, [r for r in raws if _in_history(r, since)], now)
         before, cursor = cursor, next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
         # The end: an empty or short last page, or (whatever Mercury's page says) a page that moves the cursor nowhere
         # or a second page in a row of rows already taken in, so a list that keeps naming a next page still ends. One
@@ -1053,6 +1117,8 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
 
 # ------------------------------------------------------------------------------------------------ the thread
 BELL = Bell()
+# Set once a pass of the current worker has ended, so a test waits for it and not for a sleep. `start` clears it.
+FIRST_PASS = threading.Event()
 _worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
 
 
@@ -1071,6 +1137,7 @@ def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None 
             return
         if cast(threading.Event, _worker["stop"]).is_set():
             _worker["stop"] = threading.Event()
+        FIRST_PASS.clear()
         made = threading.Thread(
             target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]), name="finance-banking", daemon=True
         )
@@ -1094,11 +1161,41 @@ def stop() -> None:
     _worker["thread"] = None
 
 
+def pause(store: Any, at: str | None = None) -> float:
+    """How long the worker waits before its next sweep: BACKFILL_PAUSE while an active connection's first backfill has
+    its next step due (Mercury, Stripe or Brex: `backfilled` not yet set), so a large history comes in step after step
+    and not one step a SWEEP; else SWEEP. A step that failed (a 429, an error) or raised (_raised) leaves its connection
+    in error and due a poll later, so a failing backfill falls back to SWEEP and never loops tight. A short wake steps
+    only those backfills (step's backfill_only); a ring or a SWEEP steps every connection, the outbox with them."""
+    now = at or _now()
+    try:
+        with store.read() as c:
+            if not is_set_up(c):
+                return SWEEP
+            rows = SK.connections(c)
+    except Exception:
+        log.exception("Finance sync could not read its connections")
+        return SWEEP
+    return BACKFILL_PAUSE if any(_backfill_due(row, now) for row in rows) else SWEEP
+
+
+def _monotonic() -> float:
+    """The loop's clock: a test advances it instead of patching time."""
+    return time.monotonic()
+
+
 def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: threading.Event) -> None:
+    """Step, then wait for a ring or the pause. A wake on the short BACKFILL_PAUSE (no ring, a SWEEP not yet gone by
+    since the last full step) steps only the backfills that are due; a ring or a SWEEP's wait steps everything."""
+    short, full_at = False, _monotonic()
     while not halt.is_set():
         seen = BELL.rung
         try:
-            step(store, vault, rehearsal=rehearsal, make=make)
+            step(store, vault, rehearsal=rehearsal, make=make, backfill_only=short)
         except Exception:
             log.exception("Finance sync failed")
-        BELL.wait(seen, SWEEP)
+        if not short:
+            full_at = _monotonic()
+        FIRST_PASS.set()
+        rung = BELL.wait(seen, SWEEP if rehearsal else pause(store))
+        short = rung == seen and _monotonic() - full_at < SWEEP

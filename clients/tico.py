@@ -14,15 +14,26 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 CLIENT_VERSION = "0.2.1"
 
 
 def gmail_read_timeout(method, path, default):
     """Live Gmail reads and organizing may mint and page before answering."""
     route = path.split("?", 1)[0]
-    if method == "POST" and route == "/api/v2/mail/messages/organize":
+    if method == "POST" and (
+        route in ("/api/v2/mail/messages/organize", "/api/v2/mail/drafts")
+        or re.fullmatch(r"/api/v2/mail/messages/[^/]+/unsubscribe", route)
+    ):
         return max(default, 90)
-    if method == "GET" and re.fullmatch(r"/api/v2/mail/(?:messages(?:/[^/]+)?|threads/[^/]+)", route):
+    if method == "GET" and re.fullmatch(
+        r"/api/v2/mail/(?:messages(?:/[^/]+(?:/attachments(?:/[^/]+)?)?)?|threads/[^/]+)", route
+    ):
         return max(default, 90)
     return default
 
@@ -249,7 +260,7 @@ class Client:
                 )
             if not failure.retryable or attempt == retries:
                 raise failure
-            time.sleep(min(2**attempt, 5) + random.random() * 0.2)
+            _sleep(min(2**attempt, 5) + random.random() * 0.2)
 
     def bearer(self):
         """The token to send. Persistent harnesses retain a reference (`tico-file:PATH`), never an expired per-turn

@@ -30,6 +30,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import replay
 
+
+def _sleep(seconds):
+    """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
+    time.sleep(seconds)
+
+
 # The BotOps runner's HTTP client; loaded by path because that file is also named run.py.
 _spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
 botops_run = importlib.util.module_from_spec(_spec)
@@ -88,21 +94,20 @@ def outcome(server, token, tid, bot):
 
 
 def choose(question, text):
-    """The case's words as the answer: the choice they name, else the words themselves. An OK is answered `ok`
-    unless the words say no, then `no` with the words as the note."""
-    if question["kind"] == "ok":
-        refused = text.strip().casefold().startswith(("no", "send it back"))
-        return {"value": "no", "note": text} if refused else {"value": "ok"}
-    picked = [c for c in question["choices"] if c.casefold() == text.strip().casefold()][:1]
-    return {"value": picked[0] if picked else text}
+    """The case's words as the answer to an OK: `ok` unless the words say no, then `no` with the words as the note."""
+    refused = text.strip().casefold().startswith(("no", "send it back"))
+    return {"value": "no", "note": text} if refused else {"value": "ok"}
 
 
 def answer(server, token, me, tid, now, text):
     """The simulated person answers the oldest open ask to them the way a person does in the app: through the ask's
-    answer, or a task filed for them by saying it is done. False when nothing waits on them."""
+    answer or a reply to a ❓, or a task filed for them by saying it is done. False when nothing waits on them."""
     mine = [q for q in now["open_questions"] if q["to"] == me]
     if mine:
         q = mine[0]
+        if q["kind"] == "question":  # a ❓: the person's reply in the task's chat clears it
+            ok(server, "POST", f"tasks/{q['task']}/comments", {"text": text}, token)
+            return True
         version = ok(server, "GET", f"tasks/{q['task']}", token=token)["task"]["version"]
         ok(server, "POST", f"tasks/{q['task']}/asks/{q['id']}/answer", {**choose(q, text), "version": version}, token)
         return True
@@ -121,7 +126,7 @@ def run_one(server, token, me, case, quiet=60, timeout=1800, poll=5):
     deadline = time.monotonic() + timeout
     now = outcome(server, token, tid, case["bot"])
     while time.monotonic() < deadline:
-        time.sleep(poll)
+        _sleep(poll)
         now = outcome(server, token, tid, case["bot"])
         if answers and not now["running"] and answer(server, token, me, tid, now, answers[0]["text"]):
             answers.pop(0)

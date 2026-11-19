@@ -51,3 +51,5 @@ first_routine:
 example_output: knowledge/examples/expense-audit.md
 reasoning_effort: medium
 recommend_when: [uses_docs, small_team]
+shared_files:
+  - .claude/skills/pay-bills-and-buy

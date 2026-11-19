@@ -3510,13 +3510,8 @@
   ],
   "waiting": [
    [
-    "person",
-    "human:ana",
-    "Stuck in Merge"
-   ],
-   [
-    "person",
-    "human:ana",
+    "bot",
+    "bot:release",
     "Dropped from the merge queue: The merge group's checks failed (e2e)"
    ]
   ],

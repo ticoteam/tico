@@ -105,13 +105,35 @@ const DEFAULT_THEMES = 'light,dark';
 // every run. TICO_DEMO_NOW overrides it; the demo reads the same variable (backend/demo.py demo_now).
 const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
+// Refusals the app asks for on purpose and handles, so they are not problems. Each is matched by status, path, a query
+// part and the error code in the body, so the same route refusing for another reason (a missing route's 404) still fails.
+// GET /api/v2/threads/dm?create=false answers 404 no_dm when the viewer has no DM with that bot yet (backend/threads.py);
+// ui/app/thread-view.ts thvResolve and ui/app/bot-page.ts botDmRead read it as "no DM". The page chat asks it on
+// org-chart, market and strategy.
+const EXPECTED_REFUSALS: {status: number; path: string; query: string; code: string}[] = [
+  {status: 404, path: '/api/v2/threads/dm', query: 'create=false', code: 'no_dm'},
+];
+function expectedRefusal(status: number, url: string, code?: string): boolean {
+  const at = new URL(url);
+  return EXPECTED_REFUSALS.some(r => r.status === status && at.pathname === r.path && at.search.slice(1).split('&').includes(r.query)
+    && (code === undefined || code === r.code));
+}
+// Chrome logs every refused request a second time, as a console error naming no URL in its text; the message's location
+// is the request. That line is dropped only for a refusal above (its body code is checked on the HTTP line).
+function expectedRefusalLog(text: string, url: string | undefined): boolean {
+  const status = /^Failed to load resource: the server responded with a status of (\d+)/.exec(text);
+  return !!status && !!url && expectedRefusal(Number(status[1]), url);
+}
+
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
-  'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
+  'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
+  'ui/app/stage-menu.ts',  // each stage header's ⋯: Move all to…, Close all, Assign all to…, Snooze all…
+  'ui/app/prop-menu.ts',  // a task's row menus and ⋯, and a folded document tab row's ⋯ (the task window and Flow)
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
-  'ui/app/give-to.ts', 'ui/styles/give-to.css',  // Give to…: a task's Owner, New task, Ask someone, Subtask (and Needs you)
+  'ui/app/give-to.ts', 'ui/app/give-to-field.ts', 'ui/styles/give-to.css',  // Give to…: a task's Owner, New task, Ask someone, Subtask (and Needs you)
 ];
 const BOT_CHAT_UI = [
   'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
@@ -130,20 +152,24 @@ const SETTINGS_UI = ['ui/app/settings.ts', 'ui/styles/settings.css'];
 // open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.cts): a change
 // to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
 const PAGES: PageSpec[] = [
+  // Company (#/home): the Floor first, then the reader's cards. The halls are the Floor's only words until a hover.
+  {name: 'company', route: '#/home', ready: 'Needs you', ui: ['ui/app/dashboard.ts', 'ui/app/company-floor.ts', 'ui/styles/dashboard.css', 'ui/styles/company-floor.css'],
+    steps: async page => {
+      await page.locator('.cf-hall-name').first().waitFor({timeout: 20000});
+    }},
   {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
-  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
-    await page.click('#task-scope');
-    await page.click('#task-filter-pop [data-task-type="general"]');
-    await page.getByText('Draft replies for the open support tickets').first().waitFor();
-  }},
+  // The default view (You). The page lost its task-type filter in the Pipelines v3 cut-over (Nov 10); clicking it timed
+  // out every release's tasks pictures.
+  {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
-    ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
+    ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
-      'ui/app/drag-pan.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
+      'ui/app/drag-pan.ts', 'ui/app/org-chart-shape.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
-  // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
-  {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
+  // The "Have a draft ready" line shows on desktop only. The bot's Home holds seeded messages (backend/demo_content.py),
+  // so the page is ready when the newest shows; it was "No messages yet" while that thread was empty, and never showed.
+  {name: 'bot-chat', route: '#/bot/support-owner', ready: "Drafted 11 replies from Ben's list.", ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = (await (await fetch('/api/meetings')).json()) as Meeting[];
@@ -207,25 +233,30 @@ const PAGES: PageSpec[] = [
     ui: ['ui/market-*.ts', 'ui/app/redesign.ts', 'ui/app/redesign-market.ts', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
       'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
-    ui: ['ui/strategy-page.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts', 'ui/app/redesign-market.ts', 'ui/app/strategy-budget.ts',
+    ui: ['ui/strategy-page.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts', 'ui/app/redesign-market.ts', 'ui/app/strategy-budget.ts', 'ui/app/setup-gaps.ts',
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
-  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/app/org-rule-review.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
     // The stage rules panel opens from Rules › Pipelines and stages and from each stage header on the board.
-    'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css']},
+    'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
+  {name: 'products', route: '#/products', ready: 'Lightshow Kit', ui: ['ui/app/products.ts', 'ui/styles/products.css']},
+  {name: 'risk', route: '#/risk', ready: 'Customer disputes', ui: ['ui/app/risk.ts', 'ui/styles/risk.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'listening', route: '#/listening', ready: 'Listening', ui: ['ui/app/listening.ts', 'ui/styles/listening.css', 'ui/app/page-chat.ts', 'ui/styles/page-chat.css', 'ui/app/empty-art.ts']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
     ui: ['ui/app/learnings.ts', 'ui/app/learned.ts', 'ui/app/assistant-viewers.ts', 'ui/app/bot-learnings.ts', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css', 'ui/app/empty-art.ts']},
   {name: 'threads', route: '#/threads', ready: 'Threads',
-    ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
+    ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/access-requests.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
       'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
       'ui/styles/visual-*.css', 'ui/app/call-ring.ts', 'ui/app/new-message.ts', 'ui/styles/calls.css', 'ui/app/empty-art.ts']},
   {name: 'calendar', route: '#/calendar', ready: 'Calendar', ui: ['ui/app/calendar*.ts', 'ui/styles/calendar.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
-    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)), ready: 'Job post',
+    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)),
+    // "Job post" is a header tool that a phone folds into the hidden ⋯ menu, so it never showed there: the ready text is
+    // the seat's Reports to line, shown at both widths.
+    ready: 'Reports to',
     ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
 ];
 
@@ -386,13 +417,24 @@ async function capture(): Promise<void> {
         });
         await page.clock.setFixedTime(new Date(DEMO_NOW));
         let where = 'load';
-        page.on('console', message => { if (message.type() === 'error') problems.push(`${where}: console error: ${message.text()}`); });
+        page.on('console', message => {
+          if (message.type() === 'error' && !expectedRefusalLog(message.text(), message.location().url)) problems.push(`${where}: console error: ${message.text()}`);
+        });
         page.on('pageerror', error => problems.push(`${where}: page error: ${error.message}`));
         // Leaving a page cancels its open event streams; that is not a failure.
         page.on('requestfailed', request => {
           if (request.failure()?.errorText !== 'net::ERR_ABORTED') problems.push(`${where}: request failed: ${request.url()}`);
         });
-        page.on('response', response => { if (response.status() >= 400) problems.push(`${where}: HTTP ${response.status()} ${response.url()}`); });
+        page.on('response', async response => {
+          if (response.status() < 400) return;
+          const label = where;
+          if (expectedRefusal(response.status(), response.url())) {
+            // Read the code before calling it expected; a body that cannot be read is reported, not assumed.
+            const code = await response.json().then((body: {error?: {code?: string}}) => body?.error?.code).catch(() => undefined);
+            if (code !== undefined && expectedRefusal(response.status(), response.url(), code)) return;
+          }
+          problems.push(`${label}: HTTP ${response.status()} ${response.url()}`);
+        });
         await page.goto(demo.url + '/');
         await page.locator('#tree a.node').first().waitFor({state: 'attached'});
         // Inter is font-display: optional, so a cold first load keeps the fallback face; every later load has it.

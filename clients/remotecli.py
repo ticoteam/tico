@@ -9,14 +9,13 @@ import re
 import sys
 import time
 import uuid
-from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import cli_spec, hubcli_pipelines, s3links
+from clients import cli_spec, hubcli_pipelines
+from clients.commands.calls import calendar_names, calendar_notes, calendar_text
 from clients.tico import APIError, Client
 
 
@@ -46,21 +45,10 @@ def _delivery(args):
 
 
 def _contacts_args(args):
-    """`tico contacts` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
-    --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
-    if getattr(args, "match", None):
-        args.match = {args.match[0]: args.match[1]}
-    if getattr(args, "set_values", None) is not None:
-        args.values = dict(args.set_values)
-    args.set_values = None
+    """`tico contacts attribute add` flags as the tool takes them: each --option pair is a {key, label} option."""
     if getattr(args, "options", None) is not None:
         args.options = [{"key": key, "label": label} for key, label in args.options]
     return args
-
-
-# `tico bot` commands that are one tool each, run through via_tool: anything else under `tico bot` falls to bots(),
-# whose last branch is `bot create` and reads args.template.
-BOT_TOOLS = ("bot turns-at-once", "bot browser-exit", "bot app-view", "bot app-shot")
 
 
 def unwrap(result):
@@ -79,17 +67,14 @@ def via_tool(client, args, **more):
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn == "bot turns-at-once" and hasattr(args, "limit"):
-        fields["limit"] = args.limit  # explicit null restores the default; omission only reads
-    if args.fn == "bot browser-exit" and hasattr(args, "computer"):
-        fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
 
 def automation(client, args):
-    """`tico automation ...`: the tico_automation_* tools, with flows read from a file or stdin."""
+    """`tico automation create|update|inbox`: the flows read from a file or stdin. The other leaves are specs
+    (clients/commands/automations.py)."""
     from clients import hubtools
 
     def flow(path):
@@ -107,38 +92,13 @@ def automation(client, args):
     if args.sub == "inbox":
         return run("tico_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
     fields = {"id": args.id} if hasattr(args, "id") else {}
-    if args.sub == "list":
-        fields.update({k: getattr(args, k) for k in ("owner", "limit", "cursor") if getattr(args, k) is not None})
-    elif args.sub == "create":
+    if args.sub == "create":
         fields.update(flow(args.file))
     elif args.sub == "update":
         fields.update(flow(args.file) if args.file else {})
         fields.update({k: getattr(args, k) for k in ("name", "summary") if getattr(args, k) is not None})
         if args.enable or args.disable:
             fields["enabled"] = bool(args.enable)
-    elif args.sub == "run":
-        try:
-            fields["input"] = json.loads(args.input) if args.input else {}
-        except ValueError:
-            raise APIError("input", "--input must be JSON") from None
-    elif args.sub == "runs":
-        fields.update({k: getattr(args, k) for k in ("limit", "before") if getattr(args, k) is not None})
-    elif args.sub in ("recent-runs", "stats"):
-        fields.update(
-            {
-                k: getattr(args, k)
-                for k in ("range", "status", "trigger", "owner", "limit", "before")
-                if getattr(args, k, None) is not None
-            }
-        )
-    elif args.sub == "versions" and args.pending:
-        fields["status"] = "pending"
-    elif args.sub in ("restore", "discard"):
-        fields["n"] = args.n
-    elif args.sub == "held":
-        fields["action"] = args.action
-    elif args.sub == "template":
-        fields.update({"owner": args.owner, "inbox": args.inbox})
     return run(tool_name(args.fn), fields)
 
 
@@ -187,28 +147,6 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
         },
         key=key,
     )
-
-
-def chosen_grant(value):
-    """`owner/repo`, `owner/repo:read`, `owner/repo:write`, or a write grant with options: `+actions` (may run
-    workflows) and `+edit` (may edit workflow files), as in `owner/repo:write+actions+edit`. Left out, an option keeps
-    whatever setting the grant has; `-actions` or `-edit` turns it off."""
-    name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
-    access, *options = re.split(r"(?=[+-])", level)
-    flags = {}
-    for option in options:
-        flag = {"actions": "run_workflows", "edit": "edit_workflows"}.get(option[1:])
-        if not flag or flag in flags:
-            access = ""
-            break
-        flags[flag] = option[0] == "+"
-    if access not in ("read", "write") or access == "read" and flags:
-        raise APIError(
-            "validation",
-            f"'{value}': use owner/repo, :read, :write, or :write with +actions, -actions, "
-            "+edit or -edit (e.g. :write+actions+edit)",
-        )
-    return {"full_name": name, "access": access, **flags}
 
 
 def counsel_held(args):
@@ -260,148 +198,19 @@ def calendar_text_mode(args):
     )
 
 
-def _names(value, *, text=False):
-    """A comma-separated flag as its names, spaces dropped: a list, or the text the API reads; None when it is empty."""
-    names = [part.strip() for part in (value or "").split(",") if part.strip()]
-    if not names:
-        return None
-    return ",".join(names) if text else names
-
-
 def calendar_command(client, args):
-    """The Calendar tools (tico_calendar_*) with the command's flags as they take them."""
+    """`tico calendar list` with a Calendar flag: the events on calendars (tico_calendar_events). The other Calendar
+    leaves are specs (CALENDAR in clients/commands/calls.py)."""
     from clients import hubtools
 
-    def call(name, fields):
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        return hubtools.BY_NAME[name]["fn"](client, fields)
-
-    if args.sub == "list":
-        return call(
-            "tico_calendar_events",
-            {
-                "who": _names(args.who, text=True) or args.calendar or None,
-                "from": args.from_,
-                "to": args.to,
-                "kinds": args.kinds,
-            },
-        )
-    if args.sub == "free":
-        return call(
-            "tico_calendar_free",
-            {"who": _names(args.who, text=True), "minutes": args.minutes, "within": args.within},
-        )
-    if args.sub == "add":
-        return call(
-            "tico_calendar_add",
-            {
-                "calendar": args.calendar,
-                "title": args.title,
-                "start": args.start,
-                "end": args.end,
-                "all_day": args.all_day or None,
-                "attendees": _names(args.who),
-                "repeat": args.repeat,
-                "notes": args.notes,
-                "add_meet": not args.no_meet,
-            },
-        )
-    if args.sub == "move":
-        return call(
-            "tico_calendar_move",
-            {"occurrence": args.occurrence, "start": args.start, "end": args.end, "scope": args.scope},
-        )
-    if args.sub == "cancel":
-        return call("tico_calendar_cancel", {"occurrence": args.occurrence, "scope": args.scope})
-    return call("tico_calendar_search", {"q": args.q, "who": _names(args.who, text=True)})
-
-
-def _zone(name):
-    """The IANA zone a time is shown in, or None when there is none to use."""
-    try:
-        return ZoneInfo(name) if name else None
-    except (KeyError, ValueError):
-        return None
-
-
-def _answer_zone(result):
-    """The zone an answer's times show in: the first calendar the server gives a time zone for, else a single event's
-    own zone. None keeps the offsets the server sent (UTC for Z)."""
-    if not isinstance(result, dict):
-        return None
-    for calendar in result.get("calendars") or []:
-        if calendar.get("time_zone"):
-            return _zone(calendar["time_zone"])
-    return _zone(result.get("time_zone"))
-
-
-def _instant(iso, zone):
-    moment = datetime.fromisoformat(iso)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(zone) if zone else moment
-
-
-def _day(day):
-    return f"{day:%a} {day.day} {day:%b}"
-
-
-def _when(start, end, all_day, zone):
-    """`Wed 11 Nov 09:30–10:00`, or `Wed 11 Nov all day`: where a line says when, in the zone its answer names."""
-    if all_day:
-        first = date.fromisoformat(start)
-        last = date.fromisoformat(end or start) - timedelta(days=1)  # the end is exclusive
-        if last <= first:
-            return f"{_day(first)} all day"
-        return f"{_day(first)}–{_day(last)} all day"
-    begin, finish = _instant(start, zone), _instant(end or start, zone)
-    if begin.date() == finish.date():
-        return f"{_day(begin)} {begin:%H:%M}–{finish:%H:%M}"
-    return f"{_day(begin)} {begin:%H:%M}–{_day(finish)} {finish:%H:%M}"
-
-
-def _occurrence_line(occ, zone):
-    """`Wed 11 Nov 09:30–10:00  Standup  (Ana)  [occurrence id]`: one occurrence, its calendar named."""
-    parts = [_when(occ.get("start"), occ.get("end"), occ.get("all_day"), zone), occ.get("title") or "(no title)"]
-    if occ.get("planned"):
-        parts.append("(planned)")
-    if occ.get("count"):
-        parts.append(f"({occ['count']} runs)")
-    name = (occ.get("calendar") or {}).get("name")
-    if name:
-        parts.append(f"({name})")
-    parts.append(f"[{occ.get('occurrence_id')}]")
-    return "  ".join(parts)
-
-
-def calendar_text(args, result):
-    """The Calendar command's answer as lines a person reads."""
-    if args.sub == "cancel":
-        return f"cancelled {args.occurrence}" + (f" ({args.scope})" if args.scope else "")
-    if args.sub in ("add", "move"):
-        if not isinstance(result, dict) or "start" not in result:
-            return json.dumps(result, indent=2)
-        return _occurrence_line(result, _answer_zone(result))
-    zone = _answer_zone(result)
-    if args.sub == "free":
-        slots = (result or {}).get("slots") or []
-        return (
-            "\n".join(_when(slot["start"], slot["end"], False, zone) for slot in slots)
-            or "No free time in that window."
-        )
-    occurrences = (result or {}).get("occurrences") or []
-    empty = "No matches." if args.sub == "search" else "Nothing in that window."
-    return "\n".join(_occurrence_line(occ, zone) for occ in occurrences) or empty
-
-
-def calendar_notes(result):
-    """What a Calendar answer could not give: a calendar that did not answer, a search that ran out of time."""
-    if not isinstance(result, dict):
-        return []
-    lines = [f"tico: could not read {err.get('ref')}: {err.get('reason')}" for err in result.get("errors") or []]
-    if result.get("partial"):
-        lines.append("tico: some results are missing: the search ran out of time")
-    return lines
+    fields = {
+        "who": calendar_names(args.who, text=True) or args.calendar or None,
+        "from": args.from_,
+        "to": args.to,
+        "kinds": args.kinds,
+        "operation_id": os.environ.get("HUB_OPERATION_ID"),
+    }
+    return hubtools.BY_NAME["tico_calendar_events"]["fn"](client, fields)
 
 
 def run(args, who=None):
@@ -429,40 +238,32 @@ def run(args, who=None):
         **({"retries": 0} if browsing else {}),
     )
     fn = args.fn
-    if args.cmd == "calendar" and args.sub in CALENDAR_SUBS and calendar_on_events(args):
+    if args.cmd == "calendar" and args.sub == "list" and calendar_on_events(args):
         return calendar_command(client, args)
     if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
         return spec.call(client, args)
-    from clients.commands.org import COMMANDS as ORG_COMMANDS
-
-    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # `tico bot list` and the like; `tico task request` ...
+    if fn in hubcli_pipelines.COMMANDS:  # `tico task request` and the other pipeline leaves
         return via_tool(client, args)
 
     from clients.commands import connections as hubtools_connections
 
     if fn in hubtools_connections.COMMANDS:
         return hubtools_connections.run_command(client, args)
-    if args.cmd == "alerts" or fn in ("tool index", "tool check"):
+    if args.cmd == "alerts":
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
-    if args.cmd == "settings":
-        return via_tool(client, args)
     if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
         return via_tool(client, args)
-    if args.cmd == "feedback":
-        return via_tool(client, args)
     if args.cmd == "call":
-        return via_tool(client, args)
-    if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner_support.worktrees import command
+        from clients.commands.task_work import worktree
 
-        return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
+        return worktree(args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
 
@@ -479,84 +280,24 @@ def run(args, who=None):
                     **({"operation_id": args.operation_id} if args.operation_id else {}),
                 },
             )
-        if args.fn == "repo product-create":
-            return product_repo_create(client, args.name, confirm=args.confirm)
-        if args.sub == "list":
-            return hubtools.repo_list(client, {})
-        return hubtools.repo_update(client, {"full_name": args.full_name, "enabled": args.sub == "tick"})
-    if fn == "bot repos":
-        from clients import hubtools
-
-        if not args.all and not args.own and args.chosen is None:
-            return hubtools.bot_repos_get(client, {"bot": args.bot})
-        body = {"bot": args.bot, "mode": "all" if args.all else "own" if args.own else "chosen"}
-        if args.chosen is not None:
-            body["chosen"] = [chosen_grant(r) for r in args.chosen]
-        result = hubtools.bot_repos_set(client, body)
-        # Say what the change took away: a switch to own keeps the chosen rows, but they stop applying.
-        lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
-        lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
-        lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
-        lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
-        lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
-        if lost:
-            print(f"{args.bot} no longer has: " + ", ".join(lost), file=sys.stderr)
-        return result
-    if fn in ("tool list", "tool show", "tool query-search") and not (fn == "tool list" and args.bot):
-        # Reads a runner credential may make outside a turn; /me would refuse a runner.
-        return integrations(client, args)
+        return product_repo_create(client, args.name, confirm=args.confirm)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
-    if fn in BOT_TOOLS:
+    if fn == "skill list":
         return via_tool(client, args)
-    if fn == "tool report":
-        return via_tool(client, args, tools=json.loads(args.tools))
-    if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
+    if fn == "bot app-shot":
+        return via_tool(client, args)  # it writes the PNG on this computer
+    if args.cmd in ("template", "bot"):  # `bot create`, `check` and `model`; the other bot leaves are specs
         return bots(client, args)
     if fn in (
-        "bot repo-create",
-        "group list",
-        "group update",
-        "group delete",
-        "group access",
-        "tool list",
-        "tool learn",
-        "tool add",
-        "tool update",
-        "tool remove",
         "update create",
-        "update redo",
-        "update list",
-        "update show",
-        "update mark-read",
-        "update reply",
-        "update settings",
-        "changelog list",
-        "changelog mark-read",
-        "needs-you start",
-        "needs-you next",
-        "needs-you respond",
-        "needs-you commit",
-        "needs-you abandon",
-        "needs-you show",
         "origin show",
         "brief",
         "mcp stats",
         "calendar list",
-        "calendar status",
-        "team show",
-        "team budget",
         "run list",
         "message list",
         "message mark-read",
-        "bot recent",
-        "agent pair show",
-        "agent pair approve",
-        "agent pair decline",
-        "slack channel list",
-        "slack channel add",
-        "slack channel remove",
-        "slack channel import",
         "setup show",
         "setup complete",
         "setup invite",
@@ -569,15 +310,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["tico_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task model", "task meetings", "task context"):
-        return via_tool(client, args)
-    if fn in (
-        "task requesters",
-        "task requester-save",
-        "task requester-remove",
-        "task comment-moderate",
-        "roadmap tasks",
-    ):
+    if fn == "roadmap tasks":
         return via_tool(client, args)
     if fn == "roadmap settings":
         # Any flag is a partial update of those settings; none reads them. An empty value clears a list.
@@ -597,21 +330,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn == "audit":
         return via_tool(client, args)
-    if fn and fn.startswith("general-manager "):
-        from clients import hubtools
-
-        op = os.environ.get("HUB_OPERATION_ID")
-        if fn == "general-manager status":
-            return hubtools.general_manager_status(client, {})
-        if fn == "general-manager run":
-            return hubtools.general_manager_run(client, {"operation_id": op})
-        change = {
-            "general-manager on": {"on": True},
-            "general-manager off": {"on": False},
-            "general-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
-            "general-manager bot": {"bot": getattr(args, "state", None)},
-        }[fn]
-        return hubtools.general_manager_set(client, {**change, "operation_id": op})
     if args.cmd in ("api", "credential") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
@@ -623,24 +341,11 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
-    if args.cmd == "meeting":
+    if fn == "meeting import":  # the other meeting leaves are specs (clients/commands/calls.py)
         from clients import hubtools
 
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields.pop("granola_action", None)
-        if fn == "meeting import":
-            return hubtools.meetings_import_file(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if fn == "doc ask-status":
-        from clients import docs_ask
-
-        return docs_ask.status(
-            client, args.conversation_id, args.message_id, args.wait, key=os.environ.get("HUB_OPERATION_ID")
-        )
-    if fn == "doc ask":  # `doc fetch` never gets here: it runs locally (clients/hubcli.py)
-        from clients import docs_ask
-
-        return docs_ask.ask(client, args.question, args.wait, key=os.environ.get("HUB_OPERATION_ID"))
+        return hubtools.meetings_import_file(client, fields)
     if args.cmd == "grokbot":
         from clients import hubtools
 
@@ -651,57 +356,6 @@ def run(args, who=None):
 
         body = json.loads(Path(args.file).read_text())
         return hubtools.BY_NAME["tico_external_sync"]["fn"](client, {**body, "provider": args.provider})
-    if args.cmd == "file":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "file publish":
-            return hubtools.files_publish_path(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "doc":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn", "body_file") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "doc write":
-            fields["body"] = (
-                sys.stdin.read()
-                if not args.body_file or args.body_file == "-"
-                else Path(args.body_file).read_text(encoding="utf-8-sig")
-            )
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "assistant":
-        from clients import hubtools
-
-        if args.sub in (
-            "read",
-            "send",
-            "learn",
-            "learned",
-            "withdraw",
-            "proposals",
-            "change",
-            "morning",
-            "shared",
-            "shared-read",
-        ):
-            return via_tool(client, args)
-        try:
-            body = json.loads(args.body or "{}")
-        except ValueError:
-            raise APIError("body", "--body must be JSON") from None
-        return hubtools.BY_NAME["tico_assistant_propose"]["fn"](
-            client,
-            {
-                "summary": args.summary,
-                "path": args.path,
-                "method": args.method,
-                "body": body,
-                "for_person": getattr(args, "for_person", None),
-                "operation_id": os.environ.get("HUB_OPERATION_ID"),
-            },
-        )
     if args.cmd == "db":
         # Runs here, beside the credential; the hub only checks who is asking and keeps the audit.
         from clients import dbquery
@@ -720,8 +374,13 @@ def run(args, who=None):
         return client.get("service-keys")["keys"]
     if args.cmd == "ok":
         return unwrap(via_tool(client, args))
-    identity = client.get("me")
-    actor = identity["actor"]
+    identity = []  # GET /me, read the first time a command needs the caller: most of these never do
+
+    def me():
+        if not identity:
+            identity.append(client.get("me"))
+        return identity[0]
+
     key = os.environ.get("HUB_OPERATION_ID")
 
     def post(path, body, suffix="", delegate=False):
@@ -734,20 +393,13 @@ def run(args, who=None):
         return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
 
     def target(value):
-        return actor if value in ("me", "self") else value
-
-    def refs(values):
-        out = {}
-        for value in values or []:
-            kind, _, ident = value.partition(":")
-            out.setdefault(kind, []).append(ident)
-        return out
+        return me()["actor"] if value in ("me", "self") else value
 
     cmd, sub = args.cmd, getattr(args, "sub", None)
     if cmd == "whoami":
         from clients import cli_plumbing
 
-        return cli_plumbing.identity(client, identity)  # plus the company, its address and the profile in use
+        return cli_plumbing.identity(client, me())  # plus the company, its address and the profile in use
     if fn == "message send":
         from clients import hubtools
 
@@ -767,15 +419,19 @@ def run(args, who=None):
                 **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {}),
             },
         )
+
+    def call_tool(name, fields):
+        """The tool a command runs, with the request's operation id (a retry lands once)."""
+        from clients import hubtools
+
+        return hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": key} if key else fields)
+
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
-        payload = {
-            "to": target(args.to),
-            "text": text,
-            **({"defer_for": args.defer_for} if getattr(args, "defer_for", None) else {}),
-        }
-        links = s3links.apply(client, payload, ("text",))
-        return s3links.annotate(post("notes", payload)["note"], links)
+        return call_tool(
+            "tico_note_create",
+            {"to": target(args.to), "text": text, "defer_for": getattr(args, "defer_for", None)},
+        )
     if fn == "note list":
         since = args.since
         m = re.fullmatch(r"(\d+)([hd])", since or "")
@@ -791,7 +447,7 @@ def run(args, who=None):
             limit=args.limit,
         )
     if fn == "note delete":
-        return post(f"notes/{args.id}/cancel", {})["note"]
+        return call_tool("tico_note_delete", {"id": args.id})
     if cmd == "task":
         asked = getattr(args, "on_behalf_of", None) or False
         if sub == "create":
@@ -800,7 +456,7 @@ def run(args, who=None):
             fields = {
                 "owner": args.owner,
                 "title": args.title,
-                "body": Path(args.body_file).read_text() if args.body_file else args.body,
+                "message": Path(args.message_file).read_text() if args.message_file else args.message,
                 "due": args.due,
                 "goal_id": getattr(args, "goal", None) or None,
                 "labels": [x.strip() for one in args.label or [] for x in one.split(",") if x.strip()] or None,
@@ -829,45 +485,12 @@ def run(args, who=None):
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))
-        if sub == "show":
-            from clients import hubtools
-
-            ids = args.id if isinstance(args.id, list) else [args.id]
-            if len(ids) > 1:  # one read for several (tico_task_show_many), not one GET each
-                return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
-            return hubtools.task_show(client, {"id": ids[0]})
-        if sub == "run":
-            return post(f"tasks/{args.id}/run-now", {})
-        if sub in ("list", "readers", "followers", "follow", "unfollow", "caps"):
-            return via_tool(client, args)
-        if sub in (
-            "done",
-            "move",
-            "close",
-            "reassign",
-            "ask",
-            "answer",
-            "thumbs",
-            "file",
-            "snooze",
-            "unsnooze",
-            "update",
-            "queue",
-            "release",
-            "unlink",
-            "after",
-        ):
-            # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
+        if sub == "ask":
+            # The engine's commands (docs/dev/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
-        if sub == "cap":  # `task cap set`: no --per-day removes the cap, so null is sent, never left out
-            return via_tool(client, args, per_day=args.per_day)
         if sub == "give":  # `--to <person>`, or the person as a third word
             args.to = args.to or args.to_person
             del args.to_person
-            return unwrap(via_tool(client, args))
-        if sub == "label":
-            split = lambda values: [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
-            args.add, args.remove = split(args.add), split(args.remove)
             return unwrap(via_tool(client, args))
         if sub == "comment":
             from clients.task_review import attachment
@@ -876,61 +499,48 @@ def run(args, who=None):
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
                 references.append(f"{made['file_id']}@{made['version']}")
-            local = []
-            if getattr(args, "visual", None):
-                from clients import hubtools
-
-                visuals, local = hubtools._visuals(
-                    client,
-                    visuals_from_args(args),
-                    lambda index, name, data: hubtools._uploaded(
-                        hubtools._posted_file(
-                            client, f"tasks/{args.id}/files", name, data, (key + ":visual:" + index) if key else None
-                        )
-                    ),
-                )
-                references.extend(visuals)
-            body = {"text": args.text}
+            fields = {"id": args.id, "text": args.text, **_delivery(args)}
             if references:
-                body["attachments"] = references
+                fields["attachments"] = references
+            if getattr(args, "visual", None):
+                fields["visuals"] = visuals_from_args(args)
             if getattr(args, "needs_action", False):
-                body["needs_action"] = True
-            body.update(_delivery(args))
+                fields["needs_action"] = True
             if getattr(args, "public", None):
-                body["public"] = True
+                fields["public"] = True
             if getattr(args, "ok", None):
-                body["approval_id"] = args.ok
-            links = s3links.apply(client, body, ("text",))
-            result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
-            return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
-        if sub == "comment-edit":
-            body = {"text": args.text}
-            if getattr(args, "ok", None):
-                body["approval_id"] = args.ok
-            links = s3links.apply(client, body, ("text",))
-            return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
-        if sub == "comment-delete":
-            return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
-        if sub == "delete":
-            return post(f"tasks/{args.id}/delete", {})
-        if sub == "deleted":
-            return client.get("deleted-tasks")
-        if sub == "restore":
-            return post(f"tasks/{args.id}/restore", {})
-        if sub == "link":
-            return post(
-                f"tasks/{args.id}/links",
-                {
-                    "url": args.url,
-                    "title": args.title,
-                    **({"kind": "session"} if args.session else {}),
-                    **({"wake_once": args.wake_once} if args.wake_once is not None else {}),
-                },
-                delegate=asked,
-            )
+                fields["ok"] = args.ok
+            if asked:
+                fields["on_behalf_of"] = asked
+            return call_tool("tico_task_comment", fields)  # a CommentResult, never a bare task
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
+            if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
+                from clients import hubtools
+                from clients.commands._shared import DOCUMENT_NOTE, document_attachment, private_document
+
+                if getattr(args, "note", None) is not None:
+                    raise APIError("validation", DOCUMENT_NOTE, 422)
+                fields = {"path": args.file, "task": args.id, "as": args.doc}
+                fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+
+                def embedded():
+                    from clients import bot_files as BF, visual_embed
+
+                    if not visual_embed.is_page(args.file):
+                        raise APIError("validation", "A document is an .html file", 422)
+                    return visual_embed.embed(BF.checkout_root(), args.file)[0].decode("utf-8", errors="replace")
+
+                published = private_document(
+                    lambda: hubtools.pages_publish_path(client, fields),
+                    client,
+                    args.id,
+                    args.doc,
+                    embedded,
+                    fields["operation_id"],
+                )
+                return document_attachment(published, args.doc)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
@@ -955,34 +565,21 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-    if cmd == "listening":
-        if fn == "listening save":
-            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-            try:
-                read = json.loads(text)
-            except ValueError as exc:
-                raise APIError("file", f"--file is not JSON ({exc})") from None
-            if not isinstance(read, dict):
-                raise APIError("file", "--file must hold a JSON object")
-            return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
-        return client.get("listening/sources", due=1, automation=args.automation)
+    if fn == "listening save":  # `listening sources` is a spec (clients/commands/listening.py)
+        text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
+        try:
+            read = json.loads(text)
+        except ValueError as exc:
+            raise APIError("file", f"--file is not JSON ({exc})") from None
+        if not isinstance(read, dict):
+            raise APIError("file", "--file must hold a JSON object")
+        return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
     if fn == "conversation show":
-        page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
-        return {
-            "conversation": page.get("conversation"),
-            "messages": page.get("messages", []),
-            "has_more": bool(page.get("has_more")),
-            "next_before": page.get("next_before"),
-        }
+        return call_tool(
+            "tico_conversation_show", {"conversation": args.conversation, "before": args.before, "since": args.since}
+        )
     if cmd == "automation":
         return automation(client, args)
-    if fn.startswith("bot status"):
-        if fn == "bot status set":
-            bot = args.bot or actor.split(":", 1)[-1]
-            return post(f"bots/{bot}/status", {"state": args.state, "focus": args.focus, "task_id": args.task})
-        if fn == "bot status history":
-            return client.get(f"bots/{args.bot}/history", since=args.since)
-        return [b for b in client.get("bots") if not args.team or b["team"] == args.team]
     if cmd == "calendar":
         from clients import hubtools
 
@@ -1001,10 +598,9 @@ def run(args, who=None):
             },
         )
     if cmd == "sql":
-        body = {"sql": args.sql, "params": sql_params(args.param)}
-        if args.max_rows:
-            body["max_rows"] = args.max_rows
-        return post("sql", body)
+        return unwrap(
+            call_tool("tico_sql", {"sql": args.sql, "params": sql_params(args.param), "max_rows": args.max_rows})
+        )
     raise APIError("unsupported", "This command is not supported by the remote API")
 
 
@@ -1059,8 +655,8 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`tico template list`, `tico bot create|check` and the bot commands that act as the requester: how BotOps sets the
-    chosen bots up.
+    """`tico template list`, `tico bot create|check` and `tico bot model`: how BotOps sets the chosen bots up. The other
+    `tico bot` commands are specs (BOT in clients/commands/bots.py).
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
     server is this company's names, the onboarding answers everybody's `knowledge/company.md` is
@@ -1076,88 +672,16 @@ def bots(client, args):
             return client.get("templates")["cards"]
         except (APIError, KeyError, TypeError):
             return catalog.cards()
-    if args.fn == "bot branch":
-        from clients import hubtools
-
-        fields = {"bot": args.bot}
-        if args.computer:
-            listing = hubtools._as_person(client).get("computers")
-            rows = listing.get("computers", []) if isinstance(listing, dict) else listing
-            me = hubtools._as_person(client).get("me")
-            person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
-            matches = [
-                row
-                for row in rows
-                if not row.get("revoked_at")
-                and row.get("owner_id") == person
-                and args.computer in (row.get("id"), row.get("label"))
-            ]
-            if len(matches) != 1:
-                raise APIError("computer", "Choose one of your computers by its id or unique label")
-            fields["runner_id"] = matches[0]["id"]
-        return hubtools.bot_branch(client, fields)
-    if args.fn == "bot update":
-        # The server checks the change as the person who sent the cited message (backend/app.py).
-        from clients import hubtools
-
-        fields = {
-            k: v
-            for k, v in (
-                ("slug", args.slug),
-                ("reports_to", args.reports_to),
-                ("display_name", args.display_name),
-                ("description", args.description),
-                ("status", args.status),
-                ("repo", args.repo),
-                ("on_behalf_of", args.on_behalf_of),
-                ("shared", args.shared),
-                ("session", args.session),
-                ("subtask_session", getattr(args, "subtask_session", None)),
-                ("task_goal", getattr(args, "task_goal", None)),
-                ("review_model", getattr(args, "review_model", None)),
-                ("capture_stream", getattr(args, "capture_stream", None)),
-                ("new_slug", getattr(args, "new_slug", None)),
-            )
-            if v is not None
-        }
-        if getattr(args, "subscribe_updates", None) is not None:
-            picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
-            fields["update_subscriptions"] = picked
-        try:
-            return hubtools.BY_NAME["tico_bot_update"]["fn"](client, fields)
-        except ValueError as exc:
-            raise APIError("not_found", str(exc)) from None
-    if args.fn in (
-        "bot show",
-        "bot access",
-        "bot mail",
-        "bot owners",
-        "bot setup-done",
-        "bot ready",
-        "bot place",
-        "bot go-live",
-        "bot model",
-        "bot pause",
-        "bot resume",
-        "bot scope",
-        "bot restore",
-        "bot archive",
-        "bot budget",
-        "bot release",
-        "bot profile",
-        "bot task-model",
-    ) or (args.fn == "bot create" and args.record_only):
+    if args.fn == "bot model" or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
 
         fields = {
             k: v
             for k, v in vars(args).items()
-            if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])
+            if k not in ("cmd", "sub", "subsub", "fn", "record_only") and v not in (None, [])
         }
         if args.fn == "bot create" and args.record_only:
             fields["build"] = False
-        if getattr(args, "no_setup", False):
-            fields["setup"] = False
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
@@ -1204,7 +728,7 @@ def local_slug(client, args, workspace):
 
     card = catalog.card(args.template) or {}
     try:
-        known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
+        known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1", fields="slug,name")}
     except (APIError, AttributeError, TypeError):
         known = set()
     reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")
@@ -1337,24 +861,6 @@ def onboarding(client):
     return record if isinstance(record, dict) else {}
 
 
-# ----------------------------------------------------------------------------- integrations
-def integrations(client, args):
-    if args.fn == "tool list":
-        return client.get("tools")["integrations"]
-    page = client.get("tools/" + args.service)
-    if args.fn == "tool show":
-        return page
-    if args.query_id:
-        for query in page["queries"]:
-            if query["id"] == args.query_id:
-                return query
-        raise APIError("not_found", f"No query {args.query_id} under {page['service']}", 404)
-    return query_search(page["queries"], args.term)
-
-
-from clients.hubtools import query_search  # (one search, shared with the tico_tool_query_search tool)
-
-
 # ----------------------------------------------------------------------------- decisions
 def judge(client, args):
     """`tico decision ask`: load the questions on this side, send them inline, print the answers.
@@ -1397,63 +903,6 @@ def judge(client, args):
         return J.through_hub(client)(state, questions, args.label or label)
     except J.JudgeError as exc:
         raise APIError(exc.code, exc.detail, exc.status, exc.retryable)
-
-
-def integrations_text(rows):
-    blocks = []
-    for row in rows:
-        head = (
-            f"{row['service']:<24} {row['kind']:<8} {row['writes']:<9} {row['summary']}"
-            f"  [{row['query_count']} queries, {row['learning_count']} learnings]"
-        )
-        extra = [f"  credentials: {c}" for c in (row.get("credentials") or [])]
-        if row.get("access"):
-            extra.append(f"  access: {row['access']}")
-        blocks.append("\n".join([head, *extra]))
-    return "\n\n".join(blocks) or "no integrations"
-
-
-def integration_text(page):
-    out = [
-        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
-        "",
-        page["summary"],
-        "",
-        f"Access: {page['access']}",
-        "Credentials:",
-    ]
-    out += [f"  - {c}" for c in page["credentials"]]
-    out += ["Declared in bot.yaml as:"] + ["  " + line for line in page["declared_as"].rstrip().splitlines()]
-    out += ["", page["body"].rstrip()]
-    if page["queries"]:
-        out += [
-            "",
-            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
-        ]
-        out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
-    notes = page.get("learnings") or []
-    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
-    return "\n".join(out)
-
-
-def query_text(query):
-    out = [
-        f"{query['id']}: {query['title']}",
-        query.get("description", ""),
-        f"database: {query.get('database', '')}  category: {query.get('category', '')}  tags: {', '.join(query.get('tags') or [])}",
-    ]
-    if query.get("params"):
-        out.append("params:")
-        for p in query["params"]:
-            extra = (" required" if p.get("required") else "") + (f" default={p['default']}" if "default" in p else "")
-            out.append(f"  {p['name']} ({p.get('type', 'text')}): {p.get('label', p['name'])}{extra}")
-    out += ["", query["sql"].rstrip() if "sql" in query else json.dumps(query.get("mongo"), indent=2)]
-    return "\n".join(out)
-
-
-def queries_text(rows):
-    return "\n".join(f"{q['id']:<44} {q['title']}  — {q.get('description', '')}" for q in rows) or "no matching queries"
 
 
 def sql_params(pairs):
@@ -1584,6 +1033,12 @@ def growth_next(setup):
         names = ", ".join(str(p.get("name")) for p in nxt.get("who_may") or [])
         who = "the owner, an admin or a bot" if nxt.get("bots_may") else "the owner or an admin"
         lines.append(f"  Only {who} can" + (f": {names}." if names else "."))
+        propose = nxt.get("you_may_propose")
+        if propose:  # a bot may propose it instead (backend/growth_proposals.py)
+            oks = ", ".join(str(p.get("name")) for p in propose.get("oks") or [])
+            lines.append("  You may propose it: " + str(propose.get("says")))
+            lines.append("  " + str(propose.get("command")))
+            lines.append(f"  tool: {propose.get('tool')}" + (f"; OK'd by {oks}" if oks else ""))
     return "\n".join(lines)
 
 
@@ -1636,15 +1091,35 @@ def _growth_body(fn, result):
     if fn == "growth cohort list" and not result.get("cohorts"):
         return "No months yet."
     if fn in ("growth channel list",):
+        channels = result.get("channels") or []
+        segmented = (
+            [("segment", lambda r: r.get("segment") or "all")] if any(r.get("segment") for r in channels) else []
+        )
         return _table(
-            result.get("channels") or [],
+            channels,
             [
                 ("slug", "slug"),
                 ("name", "name"),
+                *segmented,
                 ("stage", "stage"),
                 ("track", "track"),
                 ("owner", "owner_ref"),
                 ("budget/mo", "budget_month"),
+            ],
+        )
+    if fn == "growth segment list":
+        if not result.get("segments"):
+            return "No segments yet: customers' segment labels read as they are."
+        return _table(
+            result["segments"],
+            [
+                ("slug", "slug"),
+                ("name", "name"),
+                ("churn days", "churn_days"),
+                ("revenue/mo", "revenue_month"),
+                ("margin %", "margin_pct"),
+                ("channels", lambda r: ", ".join(r.get("channels") or [])),
+                ("rule", "customer_rule"),
             ],
         )
     if fn == "growth source list":
@@ -1666,6 +1141,10 @@ def _growth_body(fn, result):
         return _source_run(result)
     if fn in ("growth cohort list", "growth economics") and "by" in result and "cohorts" in result:
         return computed_text(result)
+    if fn == "growth channel show" and "changed" in result:
+        return channel_brief_text(result)
+    if fn == "growth segment show":
+        return segment_brief_text(result)
     if fn == "growth customers load":
         lines = [f"{result.get('customers')} customers loaded ({result.get('spells')} spells)."]
         if result.get("removed"):
@@ -1731,6 +1210,186 @@ def _growth_body(fn, result):
     return "\n".join(_plain(result)) or "Nothing yet."
 
 
+def _num(value, pct=False, money=False):
+    if value is None:
+        return "not recorded"
+    text = f"{value:,.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else f"{value:,}"
+    return ("$" + text) if money else (text + "%") if pct else text
+
+
+_MONEY, _PCT = ("spend", "cac", "ltv"), ("kept_d30", "kept_d90")
+
+
+def _change_lines(figures):
+    out = []
+    for f in figures:
+        money, pct = f["figure"] in _MONEY, f["figure"] in _PCT
+        if not f.get("recorded"):
+            out.append(f"  {f['name']}: not recorded")
+            continue
+        diff = f.get("diff") or 0
+        sign = "+" if diff > 0 else "-" if diff < 0 else ""
+        tail = f", {f['pct']:+g}%" if f.get("pct") is not None else ""
+        out.append(
+            f"  {f['name']} {_num(f['before'], pct, money)} -> {_num(f['value'], pct, money)}"
+            f" ({sign}{_num(abs(diff), pct, money)}{tail})"
+        )
+        for e in f.get("beside") or []:
+            out.append(f"    {str(e.get('at'))[:10]} {e.get('text')}")
+        for gap in f.get("data_gap") or []:
+            out.append(f"    {gap}")
+        if f.get("note") and f.get("recorded") and diff:
+            out.append(f"    {f['note']}")
+    return out
+
+
+def channel_brief_text(r):
+    """`tico growth channel show <slug>`: its KPI against target, 6 months, what changed and what lines up with it, its
+    tests, and how fresh its sources are (backend/growth_brief.py)."""
+    owner = r.get("owner_ref") or "no owner"
+    budget = f" · budget {_num(r['budget_month'], money=True)}/mo" if r.get("budget_month") is not None else ""
+    lines = [f"{r.get('name')} · {r.get('stage')} · owner {owner}{budget}", ""]
+    k = r.get("kpi") or {}
+    if not k.get("linked"):
+        lines.append(f"KPI  {k.get('text')} Link one: {k.get('fix')} ({k.get('who_may')} may).")
+    elif k.get("hidden"):
+        lines.append(f"KPI  {k.get('text')}")
+    else:
+        at = str(k.get("at") or "")[:10]
+        value = "no reading yet" if k.get("value") is None else f"{_num(k['value'])}{k.get('unit') or ''} on {at}"
+        judged = (
+            f"target {k['target'].lstrip('→ ')} · {str(k.get('colour') or '').upper()}"
+            if k.get("target")
+            else k.get("text")
+        )
+        lines += [f"KPI  {k.get('name')}", f"     {value} · {judged}"]
+    g = r.get("guardrail")
+    if g and not g.get("hidden"):
+        state = "OVER" if g.get("breached") else "ok"
+        lines.append(f"Guardrail  {g.get('name')}: {_num(g.get('value'))} (max {_num(g.get('max'))}) · {state}")
+    lines.append("")
+    months = r.get("months") or []
+    if months:
+        lines.append(
+            _table(
+                months,
+                [
+                    ("Month", "month"),
+                    ("Spend", lambda m: _num(m.get("spend"), money=True)),
+                    ("New", lambda m: _num(m.get("new_customers"))),
+                    ("CAC", lambda m: _num(m.get("cac"), money=True)),
+                    ("Kept30", lambda m: _num(m.get("kept_d30"), pct=True)),
+                    ("LTV:CAC", lambda m: _num(m.get("ltv_cac"))),
+                    ("Quality", "quality"),
+                ],
+            )
+        )
+    else:
+        lines.append("No months yet.")
+    ch = r.get("changed") or {}
+    if ch.get("month"):
+        lines += ["", f"Changed ({ch['month']} vs {ch['before']}), with what lines up"]
+        lines += _change_lines(ch.get("figures") or [])
+        for e in ch.get("events") or []:
+            if e.get("kind") == "crossing":
+                lines.append(f"  {str(e.get('at'))[:10]} {e.get('text')}")
+    t = r.get("tests") or {}
+    lines.append("")
+    running = [f'"{x["title"]}" ({x["stage"]}) since {str(x["started"])[:10]}' for x in t.get("open") or []]
+    done = [
+        f'"{x["title"]}" {x["outcome"]} {str(x["at"])[:10]}' + (f", result:{x['result']}" if x.get("result") else "")
+        for x in t.get("finished") or []
+    ]
+    lines.append("Tests  " + ("; ".join(running) if running else "none open"))
+    if done:
+        lines.append("       Finished: " + "; ".join(done))
+    src = r.get("sources") or {}
+    lines.append("")
+    rows = src.get("sources") or []
+    if not rows:
+        lines.append("Sources  none: its numbers are typed by hand")
+    for i, s in enumerate(rows):
+        good = str(s.get("last_good") or "never")[:10]
+        state = "STALE" if s.get("stale") else s.get("health")
+        lines.append(f"{'Sources' if i == 0 else '       '}  {s.get('name')}: last good {good} · {state}")
+    if src.get("newest_month_stale"):
+        lines.append(f"         Newest month {src.get('newest_month')} is more than 45 days old: STALE")
+    alerts = r.get("alerts") or []
+    if alerts:
+        lines += ["", "Open alerts"] + [f"  {a['title']} ({a['task_id']})" for a in alerts]
+    return "\n".join(lines)
+
+
+def segment_brief_text(r):
+    """`tico growth segment show <label>`: 6 months from customer facts and the change from the month before."""
+    lines = [f"Segment {r.get('name') or r.get('segment')} · {r.get('spend')}"]
+    if r.get("customer_rule"):
+        lines.append(f"Customer: {r['customer_rule']}")
+    if r.get("churn_days"):
+        lines.append(f"Churn waits {r['churn_days']} days, so each retention day fills that much later.")
+    if "channels" in r:
+        lines.append("Channels: " + (", ".join(r["channels"]) or "none; company-wide spend loads by share"))
+    health = r.get("health") or {}
+    if health.get("no_segment") or health.get("mismatch"):
+        lines.append(
+            f"Health: {health.get('no_segment', 0)} customers with no segment, "
+            f"{health.get('mismatch', 0)} in a segment their channel's spend is not for."
+        )
+    lines.append("")
+    months = r.get("months") or []
+    money = [
+        (head, key)
+        for head, key in (
+            ("CAC", "cac"),
+            ("Loaded", "cac_loaded"),
+            ("Net90", "ltv_observed_d90"),
+            ("Net180", "ltv_observed_d180"),
+            ("Net365", "ltv_observed_d365"),
+        )
+        if any(key in m for m in months)
+    ]
+    if r.get("counts_only"):
+        lines.append(f"Under the minimum cohort ({r.get('min_cohort')}): counts only.")
+        lines.append(
+            _table(
+                months,
+                [("Month", "month"), ("New", lambda m: _num(m.get("new_customers"))), *_money_cols(money)],
+            )
+        )
+    else:
+        lines.append(
+            _table(
+                months,
+                [
+                    ("Month", "month"),
+                    ("New", lambda m: _num(m.get("new_customers"))),
+                    ("Kept30", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d30"), pct=True)),
+                    ("Kept90", lambda m: "too few" if m.get("too_few") else _num(m.get("kept_d90"), pct=True)),
+                    ("LTV", lambda m: "too few" if m.get("too_few") else _num(m.get("ltv"), money=True)),
+                    *_money_cols(money),
+                ],
+            )
+        )
+    ch = r.get("changed") or {}
+    if ch.get("figures"):
+        lines += ["", f"Changed ({ch.get('month')} vs the month before)"] + _change_lines(ch["figures"])
+    return "\n".join(lines)
+
+
+def _money_cols(cols):
+    """A segment's month: each CAC or observed LTV in dollars, or its status where it has no value."""
+
+    def cell(key):
+        def show(m):
+            if m.get(key) is not None:
+                return _num(m[key], money=True)
+            return (m.get("status") or {}).get(key, "").replace("_", " ")
+
+        return show
+
+    return [(head, cell(key)) for head, key in cols]
+
+
 def _retention_cell(figure):
     """One retention figure as a person reads it: 79% (56/71), 12 of 19 (too few for a rate), not yet 2026-12-29."""
     status = figure.get("status")
@@ -1776,6 +1435,7 @@ def computed_text(result):
             ("day 180", lambda r: _retention_cell(r["kept_d180"])),
             ("LTV", lambda r: _value_cell(r["ltv"])),
             ("CAC", lambda r: _value_cell(r["cac"])),
+            *([("loaded CAC", lambda r: _value_cell(r["cac_loaded"]))] if any("cac_loaded" in r for r in rows) else []),
             ("payback", lambda r: _value_cell(r["payback_months"])),
             ("source", lambda r: "computed"),
         ],
@@ -1785,6 +1445,16 @@ def computed_text(result):
         notes.append(f"Under {result.get('min_cohort')} customers a cohort shows counts only: too few for a rate.")
     if result.get("cac_note"):
         notes.append(f"CAC and payback are per channel: {result['cac_note']}.")
+    if any("cac_loaded" in r for r in rows):
+        notes.append(
+            "CAC is the segment's channels' spend; loaded CAC adds company-wide spend by its share of new customers."
+        )
+    health = result.get("health") or {}
+    if health.get("no_segment") or health.get("mismatch"):
+        notes.append(
+            f"{health.get('no_segment', 0)} customers have no segment; "
+            f"{health.get('mismatch', 0)} are in a segment their channel's spend is not for."
+        )
     lines = [table, *notes]
     for r in rows:
         for window in (30, 90, 180):
@@ -1855,6 +1525,9 @@ def main(args, who=None, fields=None):
 
     try:
         result = run(args, who)
+        if isinstance(result, dict) and result.get("private_readers"):
+            # A private task's filer reads, first, who else reads it as it moves (backend/private_readers.py).
+            print("tico: " + str(result["private_readers"]), file=sys.stderr)
         if fields:
             from clients import profiles
 
@@ -1874,12 +1547,6 @@ def main(args, who=None, fields=None):
                 print(line, file=sys.stderr)
         elif args.cmd == "contacts" and getattr(args, "as_text", False):
             print(contacts_text(args.fn, result))
-        elif args.fn == "tool list" and not args.bot and not args.json:
-            print(integrations_text(result))
-        elif args.fn == "tool show" and not args.json:
-            print(integration_text(result))
-        elif args.fn == "tool query-search" and not args.json:
-            print(query_text(result) if args.query_id else queries_text(result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "meeting read" and getattr(args, "notes", False):
@@ -1890,7 +1557,7 @@ def main(args, who=None, fields=None):
             and isinstance(result, dict)
             and "text" in result
         ):
-            print(result["text"])  # the lines a bot reads (docs/pipelines-v3.md S16); --json prints the task
+            print(result["text"])  # the lines a bot reads (docs/dev/pipelines-v3.md S16); --json prints the task
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
             print(

@@ -1,5 +1,147 @@
 {
- "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (scripts/build-ui.cjs, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "library-files": {
+  "files": [
+   "app/library-files.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageLibraryFiles"
+  ],
+  "calls": [
+   "lfLoad"
+  ],
+  "idle": []
+ },
+ "thread-connect": {
+  "files": [
+   "app/thread-connect.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "thread-settings": {
+  "files": [
+   "app/threads-page.ts"
+  ],
+  "deps": [
+   "thread-connect"
+  ],
+  "pages": [],
+  "calls": [
+   "threadMembersOpen",
+   "threadSettingsOpen",
+   "threadEarlierOpen"
+  ],
+  "idle": []
+ },
+ "access-requests": {
+  "files": [
+   "app/access-requests.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "arMount"
+  ],
+  "idle": []
+ },
+ "thread-library": {
+  "files": [
+   "app/thread-library.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvLibOpen",
+   "libPickerMount"
+  ],
+  "idle": []
+ },
+ "thread-pin-archive": {
+  "files": [
+   "app/thread-pin-archive.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvPinToggle",
+   "thvArchive"
+  ],
+  "idle": []
+ },
+ "thread-reactions": {
+  "files": [
+   "app/thread-reactions.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvReact",
+   "thvEmojiPick",
+   "thvSheet"
+  ],
+  "idle": []
+ },
+ "threads-rail": {
+  "files": [
+   "app/thread-rail.ts",
+   "app/catch-up.ts",
+   "app/new-message.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageThreads",
+   "pageThread",
+   "pageNewMessage"
+  ],
+  "calls": [],
+  "idle": [
+   "railRender",
+   "cuReconcile",
+   "catchUpGone"
+  ]
+ },
+ "browser-view": {
+  "files": [
+   "app/browser-view.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "key-drop": {
+  "files": [
+   "app/secret-drop.ts",
+   "app/tools-key-drop.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "kdWire",
+   "kdBeforeSend"
+  ],
+  "idle": [
+   "kdForget"
+  ]
+ },
+ "tags": {
+  "files": [
+   "app/tags.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageTags",
+   "pageTag"
+  ],
+  "calls": [
+   "settingsTags"
+  ],
+  "idle": []
+ },
  "tool-icons": {
   "files": [
    "tool-icons.ts"
@@ -81,9 +223,12 @@
    "app/settings-people.ts",
    "app/cloud-agents.ts",
    "model-login.ts",
-   "app/catalog.ts"
+   "app/catalog.ts",
+   "app/settings-access-edit.ts"
   ],
-  "deps": [],
+  "deps": [
+   "tags"
+  ],
   "pages": [
    "pageSettings",
    "pageSkillsConnect"
@@ -105,6 +250,7 @@
    "settingsHistoryAddress",
    "settingsMachinesRead",
    "settingsReleasesOpen",
+   "settingsRunPickerMount",
    "teamBuildOpen",
    "cloudAgentsOpen"
   ],
@@ -168,6 +314,151 @@
    "onbStop"
   ]
  },
+ "task-files": {
+  "files": [
+   "app/task-files.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "task-docs": {
+  "files": [
+   "app/prop-menu.ts",
+   "app/task-docs.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "decide": {
+  "files": [
+   "app/decide.ts",
+   "app/decide-about.ts",
+   "app/decide-content.ts"
+  ],
+  "deps": [
+   "browser-view",
+   "task-docs"
+  ],
+  "pages": [],
+  "calls": [
+   "decideStageOpen",
+   "decideWanted",
+   "decideStageWanted",
+   "decideGoThrough",
+   "decideOpen",
+   "decideFlow",
+   "decideBotsFlow",
+   "decideBrowserOpen"
+  ],
+  "idle": [
+   "decideStop",
+   "decideRefresh",
+   "decidePaintBody"
+  ]
+ },
+ "rule-review": {
+  "files": [
+   "app/org-rule-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "ruleReviewMount",
+   "ruleReviewGroupInto"
+  ],
+  "idle": [
+   "ruleReviewTick",
+   "ruleReviewReset"
+  ]
+ },
+ "setup-gaps": {
+  "files": [
+   "app/setup-gaps.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "setupGapsWatch"
+  ],
+  "idle": [
+   "setupGapsPaint"
+  ],
+  "events": [
+   "[data-setup-area]"
+  ]
+ },
+ "stage-rules": {
+  "files": [
+   "app/stage-rules.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "task": {
+  "files": [
+   "app/github-nudge.ts",
+   "app/pipeline-editor.ts",
+   "app/task-requirements.ts",
+   "app/task-meetings.ts",
+   "app/task-modal.ts",
+   "app/roadmaps.ts",
+   "app/task-code.ts",
+   "app/task-runs.ts",
+   "app/task-props.ts",
+   "app/task-live-form.ts",
+   "app/task-pages.ts",
+   "app/task-status-text.ts"
+  ],
+  "deps": [
+   "task-files",
+   "task-docs",
+   "decide",
+   "tags",
+   "stage-rules"
+  ],
+  "pages": [
+   "pageRoadmap"
+  ],
+  "calls": [
+   "githubNudgeBot",
+   "githubNudgeTools",
+   "openPipelineEditor",
+   "roadmapSettingsMount",
+   "taskChatLive",
+   "taskChatOthersChange",
+   "taskChatJump",
+   "taskChatRead",
+   "taskCommentsRender",
+   "taskModalOpen",
+   "taskModalShow",
+   "taskMoveToMenu",
+   "taskPropsMsgPaint",
+   "taskRunCatalog",
+   "taskThreadOpen"
+  ],
+  "idle": [
+   "taskAskSettled",
+   "taskChatStop",
+   "taskModalRouteClose"
+  ]
+ },
+ "task-pick": {
+  "files": [
+   "app/task-pick.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "pvPick"
+  ],
+  "idle": []
+ },
  "bot": {
   "files": [
    "bot-tools.ts",
@@ -180,13 +471,16 @@
    "app/bot-page-view.ts",
    "app/bot-details.ts",
    "app/bot-conversation.ts",
-   "app/recruit.ts"
+   "app/recruit.ts",
+   "app/bot-issues.ts",
+   "app/bot-history.ts"
   ],
   "deps": [
    "settings",
    "task",
    "bot-files",
-   "tool-icons"
+   "tool-icons",
+   "decide"
   ],
   "pages": [
    "pageBot",
@@ -255,11 +549,7 @@
    "app/goals-kpi-views.ts",
    "app/growth-charts.ts",
    "app/growth-page.ts",
-   "app/growth-retention.ts",
-   "app/brand-page.ts",
-   "app/growth-channels.ts",
-   "app/growth-start.ts",
-   "app/growth-sources.ts"
+   "app/brand-page.ts"
   ],
   "deps": [],
   "pages": [
@@ -280,22 +570,21 @@
    "strategy-page.ts",
    "lenses-page.ts",
    "goals-kpis.ts",
-   "app/overview-factories.ts",
    "app/org-factories.ts",
    "app/goals.ts",
-   "app/overview.ts",
-   "app/overview-hours.ts",
-   "app/overview-graph.ts",
    "app/strategy-budget.ts",
    "app/company-page.ts",
    "app/redesign-org.ts",
    "app/redesign-market.ts",
-   "app/org-rules.ts"
+   "app/org-rules.ts",
+   "app/org-chart-shape.ts",
+   "app/drag-pan.ts"
   ],
   "deps": [
    "computers",
    "growth",
-   "docs-editor"
+   "docs-editor",
+   "stage-rules"
   ],
   "pages": [
    "pageBudget",
@@ -303,10 +592,7 @@
    "pageGoals",
    "pageLenses",
    "pageMarket",
-   "pageOverview",
    "pageOverviewCompany",
-   "pageOverviewFactories",
-   "pageOverviewGraph",
    "pageRdOrg",
    "pageRules",
    "pageStrategy"
@@ -319,63 +605,18 @@
    "goalsRefresh",
    "headGoalsLoad",
    "openGoal",
-   "overviewNeedsDraw"
+   "strategyBrandSaved"
   ],
   "idle": [
    "companyPageStop",
-   "graphStop",
    "lensesStop",
    "marketStop",
-   "overviewRefresh",
-   "overviewStop",
-   "overviewStuckDraw",
    "rulesStop",
    "strategyStop",
    "goalsFollowRoster"
-  ]
- },
- "library": {
-  "files": [
-   "docs-page.ts",
-   "app/skills.ts",
-   "app/directory.ts",
-   "app/directory-entity.ts",
-   "app/directory-settings.ts",
-   "app/integrations.ts",
-   "app/vault.ts",
-   "app/tools.ts",
-   "app/tools-api.ts",
-   "app/redesign-library.ts",
-   "app/tools-website.ts",
-   "app/who-picker.ts"
   ],
-  "deps": [
-   "finance",
-   "webhooks",
-   "docs-editor"
-  ],
-  "pages": [
-   "pageCompanyDocs",
-   "pageDirectory",
-   "pageDirectoryEntity",
-   "pageToolKey",
-   "pageSkill",
-   "pageSkillProposal",
-   "pageSkills",
-   "pageToolApi",
-   "pageToolService",
-   "pageTools",
-   "toolsInboxPage",
-   "pageToolWebsite"
-  ],
-  "calls": [
-   "directorySettingsShow",
-   "taCampaignsReload"
-  ],
-  "idle": [
-   "directoryStop",
-   "skillsStop",
-   "toolsStop"
+  "events": [
+   "[data-brand-setup-go]"
   ]
  },
  "finance": {
@@ -391,7 +632,8 @@
    "app/finance-receipts.ts",
    "app/finance-subscriptions.ts",
    "app/finance-brief.ts",
-   "app/finance-statement-upload.ts"
+   "app/finance-statement-upload.ts",
+   "app/finance-shared.ts"
   ],
   "deps": [],
   "pages": [
@@ -412,6 +654,63 @@
    "finCampaignOwnerChange"
   ],
   "idle": []
+ },
+ "who-picker": {
+  "files": [
+   "app/who-picker.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "library": {
+  "files": [
+   "docs-page.ts",
+   "app/skills.ts",
+   "app/directory.ts",
+   "app/directory-entity.ts",
+   "app/directory-settings.ts",
+   "app/integrations.ts",
+   "app/vault.ts",
+   "app/tools.ts",
+   "app/tools-api.ts",
+   "app/tools-mcp.ts",
+   "app/redesign-library.ts",
+   "app/tools-website.ts"
+  ],
+  "deps": [
+   "finance",
+   "webhooks",
+   "docs-editor",
+   "browser-view",
+   "thread-connect",
+   "who-picker"
+  ],
+  "pages": [
+   "pageCompanyDocs",
+   "pageDirectory",
+   "pageDirectoryEntity",
+   "pageToolKey",
+   "pageSkill",
+   "pageSkillProposal",
+   "pageSkills",
+   "pageToolApi",
+   "pageToolVendor",
+   "pageToolService",
+   "pageTools",
+   "toolsInboxPage",
+   "pageToolWebsite"
+  ],
+  "calls": [
+   "directorySettingsShow",
+   "taCampaignsReload"
+  ],
+  "idle": [
+   "directoryStop",
+   "skillsStop",
+   "toolsStop"
+  ]
  },
  "automations": {
   "files": [
@@ -445,13 +744,17 @@
    "app/meetings-sources.ts"
   ],
   "deps": [
-   "tool-icons"
+   "tool-icons",
+   "webhooks",
+   "who-picker"
   ],
   "pages": [
    "pageLiveMeetings",
    "pageNotes"
   ],
-  "calls": [],
+  "calls": [
+   "meetCallDialog"
+  ],
   "idle": [
    "liveMeetingsStop",
    "meetStop"
@@ -493,7 +796,6 @@
    "app/assistant-page.ts",
    "app/learned.ts",
    "app/learnings.ts",
-   "app/new-message.ts",
    "app/mail.ts",
    "app/messaging.ts",
    "app/sql.ts"
@@ -507,7 +809,6 @@
    "pageLearnings",
    "pageMail",
    "pageMessaging",
-   "pageNewMessage",
    "pagePerson",
    "pageSql"
   ],
@@ -519,40 +820,143 @@
    "mailForget"
   ]
  },
- "task": {
+ "assistant": {
   "files": [
-   "app/github-nudge.ts",
-   "app/pipeline-editor.ts",
-   "app/task-requirements.ts",
-   "app/task-meetings.ts",
-   "app/task-modal.ts",
-   "app/roadmaps.ts",
-   "app/task-code.ts",
-   "app/task-runs.ts",
-   "app/task-props.ts"
+   "assistant.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "assistantCards",
+   "assistantOff",
+   "assistantSettingsStrip"
+  ],
+  "idle": []
+ },
+ "changelog": {
+  "files": [
+   "changelog.ts"
   ],
   "deps": [],
   "pages": [
-   "pageRoadmap"
+   "pageChangelog"
   ],
+  "calls": [],
+  "idle": []
+ },
+ "file-review": {
+  "files": [
+   "app/file-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
   "calls": [
-   "githubNudgeBot",
-   "githubNudgeTools",
-   "openPipelineEditor",
-   "roadmapSettingsMount",
-   "taskChatLive",
-   "taskChatRead",
-   "taskCommentsRender",
-   "taskModalOpen",
-   "taskModalShow",
-   "taskPropsMsgPaint",
-   "taskRunCatalog",
-   "taskThreadOpen"
+   "frvShow",
+   "frvAboveTask",
+   "frvTeardown",
+   "fileShowInto"
+  ],
+  "idle": []
+ },
+ "style-guide": {
+  "files": [
+   "app/style-guide.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageStyleGuide"
+  ],
+  "calls": [],
+  "idle": []
+ },
+ "give-to": {
+  "files": [
+   "app/give-to.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "giveToOpen"
+  ],
+  "idle": []
+ },
+ "stage-menu": {
+  "files": [
+   "app/stage-menu.ts"
+  ],
+  "deps": [
+   "task",
+   "give-to",
+   "task-pick"
+  ],
+  "pages": [],
+  "calls": [
+   "pvColMenu"
+  ],
+  "idle": []
+ },
+ "thread-call-live": {
+  "files": [
+   "app/thread-call-start.ts",
+   "app/thread-call-live.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "callStartThread",
+   "callStartBot",
+   "callStartTeammates",
+   "callJoin",
+   "callHangUp",
+   "callHandOff"
   ],
   "idle": [
-   "taskAskSettled",
-   "taskChatStop",
-   "taskModalRouteClose"
+   "callBarDraw",
+   "callDone"
+  ]
+ },
+ "call-window": {
+  "files": [
+   "app/call-window.ts"
+  ],
+  "deps": [
+   "thread-call-live"
+  ],
+  "pages": [
+   "pageCallWindow"
+  ],
+  "calls": [],
+  "idle": [
+   "callWindowDraw",
+   "callWindowStop"
+  ]
+ },
+ "products": {
+  "files": [
+   "app/products.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageProduct",
+   "pageProducts"
+  ],
+  "calls": [],
+  "idle": [
+   "productsStop"
+  ]
+ },
+ "risk": {
+  "files": [
+   "app/risk.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageRisk",
+   "pageRiskOne"
+  ],
+  "calls": [],
+  "idle": [
+   "riskStop"
   ]
  }
 }

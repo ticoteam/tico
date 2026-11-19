@@ -1,12 +1,13 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
+from backend import holds, usage_limits
 from backend import task_engine as E
-from backend import task_privacy as privacy, usage_limits
+from backend import task_privacy as privacy
 from backend.events import prime_status_lines, status_line
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
-from backend.tests.helpers.run_backoff import hold_bot, setup
-from backend import usage_limits
+from backend.tests.helpers.run_failures import failing, hold_bot, setup
 from backend.tests.helpers.status_reads import busy, page
 
 
@@ -35,11 +36,11 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     post(api, f"attempts/{live['id']}/started", {"thread_id": "t-live"}, machine["token"])  # a live run
     with api.app.state.store.transaction() as c:
         for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
-            H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
-        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
-        c.execute(
-            "INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)", (H.shift(H.now(), seconds=600),)
+            H.status_set(c, H.TICO_ACTOR, slug, state=state, focus="Checked the queue")
+        holds.put(
+            c, holds.RUNAWAY, "bot", "cpo", actor=H.TICO_ACTOR, details={"window": "hour", "runs": 301, "budget": 300}
         )
+        failing(c, "finance", 2, until_at=H.shift(H.now(), seconds=600))
         usage_limits.save_own(c, "assistant", {"daily_usd": 0.000001}, "human:ana")
     slugs = ["assistant", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
     each, plain = lines(api, slugs, primed=False)
@@ -91,7 +92,7 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})),
             )
         for slug in ("ops", "cpo", "assistant", "finance"):
-            H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
+            H.status_set(c, H.TICO_ACTOR, slug, state="crashed", focus="Checked the queue")
     each = lines(api, ["assistant", "cpo", "finance", "ops"], primed=False)[0]
     together, primed = lines(api, ["assistant", "cpo", "finance", "ops"], primed=True)
     assert together == each and lines(api, ["cpo", "ops"], primed=True)[1] == primed
@@ -135,7 +136,7 @@ def finish_private(store, slug):
         for tid, owner in c.execute(
             f"SELECT id, owner_id FROM tasks WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)
         ).fetchall():
-            E.move(c, tid, E.DONE if owner == "bot:" + slug else E.CLOSED, H.KEEPER, "Finished")
+            E.move(c, tid, E.DONE if owner == "bot:" + slug else E.CLOSED, H.TICO_ACTOR, "Finished")
     return ids
 
 
@@ -186,7 +187,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             # Only the task read is counted: each new task also gets a room under a random id, and where those ids
             # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
             c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
-            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.execute(privacy.status_tasks_sql(marks), actors * 5).fetchall()
             c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {
@@ -215,9 +216,10 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
                 "bot:" + slugs[(n + 1) % 6],
                 private=False,
             )
-            E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.KEEPER, "Finished")
+            E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.TICO_ACTOR, "Finished")
     after, more = read()
-    assert after == before and more == steps and steps
+    # Seeks move a step or two with the random ids of new rows; reading the 40 finished tasks costs far more than 5.
+    assert after == before and abs(more - steps) <= 5 and steps
 
     # Tico Team: the status task read stepped 1,100 rows a page (850 of them private tasks), each step the GIL given up
     # and taken back; with other requests running Python it took 100 ms to 1 s for 2 ms of SQLite work. The rows now
@@ -227,7 +229,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)  # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
-        E.move(c, done["id"], E.DONE, H.KEEPER, "Finished")
+        E.move(c, done["id"], E.DONE, H.TICO_ACTOR, "Finished")
     actors = [f"bot:busy-{n}" for n in range(4)]
     marks = " IN (" + ",".join("?" * len(actors)) + ")"
 
@@ -235,17 +237,17 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         return sorted(tuple((k, type(v).__name__, v) for k, v in row.items()) for row in rows)
 
     with store.read_transaction() as c:
-        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 4)]
+        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 5)]
         seen = []
         c.set_trace_callback(seen.append)
-        packed = privacy.status_tasks(c, marks, actors * 4)
+        packed = privacy.status_tasks(c, marks, actors * 5)
         c.set_trace_callback(None)
         assert len(seen) == 1 and len(c.execute(seen[0]).fetchall()) == 1
         assert [list(row) for row in packed] == [privacy.STATUS_TASK_COLUMNS.split(",")] * len(packed)
         assert typed(packed) == typed(stepped)
         for bot in actors:
-            assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
-                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4)
+            assert typed(privacy.status_tasks(c, "=?", (bot,) * 5)) == typed(
+                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 5)
             )
     ids = {row["id"] for row in packed}
     assert shared["id"] in ids and done["id"] not in ids
@@ -292,7 +294,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
 
 
 def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(api, monkeypatch):
-    # A bot with a stopped run costs its own queries on the status page (held runs, the keeper's leftovers, the
+    # A bot with a stopped run costs its own queries on the status page (held runs, Tico's leftovers, the
     # queued work behind them). Its runs are read for all bots together, so each further bot adds fewer statements
     # than before (about ten, now about seven); the bot's own checks still read per bot.
     machine = setup(api, monkeypatch, tasks=4)
@@ -370,12 +372,22 @@ def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_
     # reader cannot open is not counted for them, so the number never hints that the task is there.
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
-        H.status_set(c, H.KEEPER, "ops", state="idle", focus="")
+        H.status_set(c, H.TICO_ACTOR, "ops", state="idle", focus="")
         shared = H.task_create(c, "human:ana", "Check the vendor list", "Compare them.", "bot:ops", private=False)
         secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
         for task in (shared, secret):
             version = H.task(c, task["id"])["version"]
-            H.task_ask(c, "bot:ops", task["id"], "human:ana", "Spend $5 on the test?", kind="ok", seen_version=version)
+            shows = X.shown(c)
+            H.task_ask(
+                c,
+                "bot:ops",
+                task["id"],
+                "human:ana",
+                "Spend $5 on the test?",
+                kind="ok",
+                shows=shows,
+                seen_version=version,
+            )
         assert H.status_counts(c, "bot:ops")[1] == 2
     with store.read_transaction() as c:
         seen = {

@@ -1,6 +1,8 @@
 ---
 name: write-a-personal-first-line
 description: Write the first line of an outbound message from one dated, public and true fact about the account or the role, with what it means for them, and check that the line could not be sent unchanged to a competitor's prospect.
+metadata:
+  function: sales
 ---
 # Write a personal first line
 

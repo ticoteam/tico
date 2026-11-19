@@ -165,20 +165,21 @@ function goalColourHtml(g: GoalDraft) {
 }
 function goalNoteHtml(g: GkGoal, may: boolean) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(String(g.status));
-  const said = byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
+  const plain = goalNoMeasure(g) ? String(g.status_note).slice(GOAL_NO_MEASURE.length).replace(/^:\s*/, '') : g.status_note || '';
+  const said = byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : plain.charAt(0).toUpperCase() + plain.slice(1);
   const suggest = byHand && g.suggest_status
     ? `<div class="goal-note goal-suggest">Suggested: <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ', ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let the Assistant set it</button>' : ''}</div>` : '';
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
 }
 // The bets a goal may serve (ui/strategy-page.ts): the active ones, and the one it serves now whatever its status, so
-// saving never drops it, even one this person can't see (retired or not yet published). Its caption is the strategy's
+// saving never drops it, even one this person can't see (retired). Its caption is the strategy's
 // word for one ("Bet").
 function goalBetHtml(g: GoalRef & {bet_id?: string | null}, may: boolean) {
   const st = GOALS_ST?.strategy, all = st?.bets || [];
   const options = all.filter((c: GkStrategyBet) => c.status === 'active' || c.id === g.bet_id).sort((a: GkStrategyBet, b: GkStrategyBet) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
   if (!options.length) return '';
   const unseen = g.bet_id && !options.some((c: GkStrategyBet) => c.id === g.bet_id)
-    ? `<option value="${esc(g.bet_id)}" selected>Retired or unpublished</option>` : '';
+    ? `<option value="${esc(g.bet_id)}" selected>Retired</option>` : '';
   return `<label class="goal-f goal-bet-f"><span>${esc(st!.label_one || 'Bet')}</span><select name="bet"${may ? '' : ' disabled'}>
       <option value=""${g.bet_id ? '' : ' selected'}>None</option>${unseen}${options.map((c: GkStrategyBet) =>
         `<option value="${esc(c.id)}"${c.id === g.bet_id ? ' selected' : ''}>${esc(c.statement)}</option>`).join('')}</select></label>`;

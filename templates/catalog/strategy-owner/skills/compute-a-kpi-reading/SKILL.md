@@ -1,6 +1,8 @@
 ---
 name: compute-a-kpi-reading
 description: "Computes one KPI reading for the period that just ended, checks it against known values, and posts it with its evidence and definition version. Use it on the KPI pass or for a new KPI's first reading."
+metadata:
+  function: operations
 ---
 
 # Compute a KPI reading

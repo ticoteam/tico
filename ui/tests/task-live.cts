@@ -24,27 +24,15 @@ type Gate = ReturnType<typeof gate>;
  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
  const pages: Page[] = [];
  try {
-  // The details editor opens from the padded edge of its phone target, including the layout breakpoint.
-  for (const width of [400, 560, 760, 761, 1440]) {
-   const phone = width <= 760;
-   const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: phone});
+  // A task is a title and a chat: Details has no description and no editor for one, on a phone or a computer.
+  for (const width of [400, 1440]) {
+   const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: width <= 760});
    try {
     const {page, errors} = await open({newPage: () => context.newPage()}, {viewport: {width, height: 900}});
-    const edit = page.getByRole('button', {name: 'Edit details', exact: true});
-    // The request and its Edit are on the task window's Description tab.
-    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
-    await edit.waitFor();
-    const box = (await edit.boundingBox())!;
-    if (phone) {
-     assert.ok(box.height >= 40 && box.width >= 40, `Edit details needs a 40 px target at ${width} px; got ${box.width}x${box.height}`);
-     await edit.tap({position: {x: box.width / 2, y: box.height - 2}});
-    } else {
-     assert.ok(box.height < 40, 'desktop Edit details stays compact');
-     await edit.click();
-    }
-    const details = page.getByRole('textbox', {name: 'Details', exact: true});
-    await details.waitFor();
-    assert.equal(await details.evaluate(el => document.activeElement === el), true, 'opening details focuses its editor');
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();
+    await page.locator('#task-modal[open] [data-task-props]').waitFor();
+    assert.equal(await page.getByRole('button', {name: 'Edit details', exact: true}).count(), 0, `no Edit details at ${width} px`);
+    assert.equal(await page.getByRole('textbox', {name: 'Details', exact: true}).count(), 0, `no description box at ${width} px`);
     assert.deepEqual(errors, []);
    } finally { await context.close(); }
   }
@@ -60,7 +48,7 @@ type Gate = ReturnType<typeof gate>;
     const {page, data, errors} = await open(browser, {at: '#/task/t-checkout', viewport: {width: viewport, height: 900}});
     pages.push(page); viewers.push(page); viewerErrors.push(errors);
     await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'});
-    task ||= {...data.tasks[0]!, title: 'Review the launch', body: 'Initial details', links: [], children_summary: undefined};
+    task ||= {...data.tasks[0]!, title: 'Review the launch', links: [], children_summary: undefined};
     await page.evaluate(viewer => {
      taskLiveStop(taskModal());
      S.me.id = viewer;
@@ -91,8 +79,7 @@ type Gate = ReturnType<typeof gate>;
     });
     await page.evaluate(async task => { await taskModalShow(task); }, task);
     await page.waitForFunction(() => !!taskModal().taskLive?.shared);
-    // The request and its Edit are on the task window's Description tab.
-    await page.locator('#task-modal[open] [data-task-tab="desc"]').click();
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();
     assert.deepEqual(errors, []);
    }
    const [a, b] = viewers as [Page, Page];
@@ -109,12 +96,10 @@ type Gate = ReturnType<typeof gate>;
    await fillTitle('Final title');
    await title.evaluate(el => { const selection = getSelection()!; selection.setBaseAndExtent(el.firstChild!, 2, el.firstChild!, 7); });
    const caret = () => title.evaluate(el => [document.activeElement === el, getSelection()!.anchorOffset, getSelection()!.focusOffset]);
-   await b.getByRole('button', {name: 'Edit details', exact: true}).click();
-   await b.getByRole('textbox', {name: 'Details', exact: true}).fill('Sam changed only details');
-   await b.locator('[data-task-more]').click(); await b.keyboard.press('Escape');
-   await b.waitForFunction(() => !taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length);
+   // Sam sets its size meanwhile: the redraw keeps Ana's title and its caret.
+   task.size = 'S'; task.version++; events.push({field: 'size', actor: 'human:sam', created_at: new Date().toISOString()});
    await update();
-   await a.waitForFunction(() => taskModal().taskLive!.draft.base.body === 'Sam changed only details');
+   await a.waitForFunction(() => taskModal().taskLive!.draft.base.size === 'S');
    assert.equal(await title.textContent(), 'Final title');
    assert.deepEqual(await caret(), [true, 2, 7], 'live redraw preserves the actual title caret');
    next.resolve();
@@ -123,14 +108,14 @@ type Gate = ReturnType<typeof gate>;
    assert.deepEqual(await caret(), [true, 2, 7]);
    await a.getByRole('button', {name: 'Retry', exact: true}).click();
    await a.waitForFunction(() => !taskModal().taskLive!.draft.error && !taskModal().taskLive!.draft.flight);
-   assert.equal(task.title, 'Final title'); assert.equal(task.body, 'Sam changed only details');
+   assert.equal(task.title, 'Final title'); assert.equal(task.size, 'S');
    assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1)!.patch).sort(), ['title', 'version']);
    // No "edited" line under the title: who changed it is the chat's history ("renamed it", folded with the updates).
    assert.equal(await a.locator('#task-modal [data-task-edited]').count(), 0, 'no edited line');
    await a.waitForFunction(() => /You renamed it/.test(document.querySelector('#task-modal .task-comments')?.textContent || ''));
-   await a.waitForFunction(() => /edited the request/.test(document.querySelector('#task-modal .task-comments')?.textContent || ''));
+   await a.waitForFunction(() => /set its size/.test(document.querySelector('#task-modal .task-comments')?.textContent || ''));
    // Both are in the folded "N updates" line, not lines of their own.
-   assert.ok(await a.evaluate(() => [...document.querySelectorAll('#task-modal .task-comments details.src-group')].some(g => /renamed it/.test(g.textContent || '') && /edited the request/.test(g.textContent || ''))), 'the edits fold into the updates line');
+   assert.ok(await a.evaluate(() => [...document.querySelectorAll('#task-modal .task-comments details.src-group')].some(g => /renamed it/.test(g.textContent || '') && /set its size/.test(g.textContent || ''))), 'the edits fold into the updates line');
    assert.equal(listReads, 0, 'autosave and task invalidations never reread the task list');
    deny = true;
    await fillTitle('Keep this refused draft'); await title.evaluate(el => el.blur());

@@ -1,15 +1,11 @@
 """Personal import review protects drafts and publishes exactly once."""
 
-import json
-import sqlite3
-
-import pytest
-
-from backend import hubdb as H, meetings
+from backend import meetings
 from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.helpers.lifecycle import debrief
+from backend.tests.helpers.media import import_meeting
 from backend.tests.helpers.new_bot_flows import create_bot
 
 
@@ -121,31 +117,6 @@ def test_dismiss_survives_sync_restore_and_batch_selection_is_atomic(api):
     assert post(api, f"meetings/{other['id']}/review", {'action': 'approve'}, 'cara-test', expected=409)
 
 
-def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, tmp_path):
-    db = sqlite3.connect(tmp_path / 'old.db', isolation_level=None)
-    db.row_factory = sqlite3.Row
-    for version, script in enumerate(H.MIGRATIONS[:19], 1):
-        H._apply(db, script)
-        db.execute(f'PRAGMA user_version={version}')
-    db.execute(
-        "INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-        ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()),
-    )
-    H.migrate(db)
-    assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-    assert meetings.get('legacy', db)['review_state'] == 'live'
-    assert db.execute("SELECT 1 FROM sqlite_master WHERE name='task_file_reviews'").fetchone()
-    assert 'media_state' in {r[1] for r in db.execute('PRAGMA table_info(bot_file_versions)')}
-    db.close()
-    made = imported(api)
-    api.app.state.store.initialize(seed_market=False)
-    assert queue(api)['meetings'][0]['id'] == made['id']
-    with api.app.state.store.read() as c:
-        assert {53, 54, 55, 56, 57} <= {
-            r[0] for r in c.execute('SELECT version FROM cloud_migrations WHERE version>=53')
-        }
-
-
 def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
     mine = imported(api, token='cara-test')
     other = imported(api)
@@ -156,28 +127,6 @@ def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
     err, shared = call(api, 'tico_meeting_approve', {'id': mine['id']}, token=attempt['token'])
     assert not err and shared['review_state'] == 'live'
     assert queue(api)['count'] == 1
-
-
-@pytest.mark.parametrize('version', [21])
-def test_released_migrations_remain_in_place(tmp_path, version):
-    db = sqlite3.connect(tmp_path / 'released.db', isolation_level=None)
-    db.row_factory = sqlite3.Row
-    for i, script in enumerate(H.MIGRATIONS[:version], 1):
-        H._apply(db, script)
-        db.execute(f'PRAGMA user_version={i}')
-    db.execute("INSERT INTO blob_locations VALUES('digest','example-bucket','2026-10-01')")
-    db.execute(
-        "INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-        ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()),
-    )
-    H.migrate(db)
-    assert db.execute('SELECT bucket FROM blob_locations').fetchone()[0] == 'example-bucket'
-    assert db.execute('SELECT count(*) FROM task_file_reviews').fetchone()[0] == 0
-    assert meetings.get('released', db)['review_state'] == 'live'
-    assert meetings.get('released', db)['metadata']['ready_announced'] is True
-    H.migrate(db)
-    assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-    db.close()
 
 
 def test_delayed_send_rechecks_rights_and_rolls_back_approval(api):
@@ -221,3 +170,24 @@ def test_a_shared_meeting_goes_to_a_uuid_bot_by_id_or_slug_as_one_task(api):
     with api.app.state.store.read() as c:
         assert c.execute('SELECT owner_id FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
     assert review(api, made['id'], send_to='field-helper')['delivery']['task_id'] == task
+
+
+def test_shared_lists_what_others_shared_with_the_reader_not_what_the_owner_may_open(api):
+    # ana is the company owner and may open Ben's private meeting; nobody shared it with her.
+    team = import_meeting(api, 'ben-test', title='Standup', private=False)['id']
+    attended = import_meeting(api, 'ben-test', title='Hiring sync', private=True, participants=['cara@acme.example'])[
+        'id'
+    ]
+    private = import_meeting(api, 'ben-test', title='Comp notes', private=True)['id']
+    cara_own = import_meeting(api, 'cara-test', title='Vendor call', private=False)['id']
+    imported(api)  # Ben's, still pending: never shared
+
+    def shared(token):
+        return {m['id'] for m in queue(api, token, 'shared')['meetings']}
+
+    assert shared('cara-test') == {team, attended}
+    assert shared('ben-test') == {cara_own}
+    assert private in {m['id'] for m in queue(api, 'ana-test', 'live')['meetings']}
+    assert shared('ana-test') == {team, cara_own}
+    _, _, attempt = setup_attempt(api)
+    assert get(api, 'meetings?review=shared', attempt['token'], expected=403)['error']['code'] == 'identity'

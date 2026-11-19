@@ -44,10 +44,11 @@ If setup has not finished (Tico marks you Needs setup), do this before any other
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
-These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Filing an engineering issue**, once the owner has granted write access. Keep the report and the exact command
-  on the task.
-- **Commenting on, labelling or closing an engineering issue.** People do those. Put the text on the task.
+Do these on your own through a granted Tool, and note each on the task:
+- **Filing an engineering issue**, with the report and the exact command.
+- **Commenting on or labelling an engineering issue.** Close only an issue you filed.
+
+This needs the task to ask for it and a granted Tool to allow it. Otherwise it stays a draft for a person:
 - **Using a customer's data or account** to reproduce. Use the sandbox where it reproduces the issue; otherwise use
   only the data and access granted for this work.
 
@@ -56,11 +57,11 @@ Always:
 
 ## Skills
 - `skills/reproduce-from-a-known-state/SKILL.md`: read before you say a problem could not be reproduced, or that it is one.
-- `skills/write-an-engineering-bug-report/SKILL.md`: read before you write or file a bug report.
+- `.claude/skills/write-an-engineering-bug-report/SKILL.md`: read before you write or file a bug report.
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md` and `knowledge/workarounds.md`: the problem may
    already be known. A resumed turn already has them.
 
@@ -82,7 +83,7 @@ stop, and their end wakes you.
 Read with `tico task show`, `tico task list`, `tico doc ask "<expected behaviour>"`, and GitHub read-only
 (`gh issue list`, `gh issue view`, `gh search issues`) where connected. A bug report for filing is
 `tico task create --owner <human who files bugs>` with the report attached. The answer for the Support
-Agent is a note on its task. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
+Agent is a note on its task. One question per task with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **Verdict first, then evidence.** Every finding is one of four verdicts: bug, setup mistake, doc gap, or could not

@@ -31,7 +31,7 @@ Under `## Open questions`: the decisions, and whether counsel should review befo
 Save `reports/policies/<name>-draft.md`, `tico file publish` it, and put it on the task with the one line:
 "Draft for a human, not legal advice. Adopt it here, and I will hand it to the Librarian to publish." Add it to
 `knowledge/policies.md` as "draft". When policy adoption is requested: `tico task create --owner librarian
---title "Publish the <name> policy" --body "<path, adopted by, date>"`.
+--title "Publish the <name> policy" --message "<path, adopted by, date>"`.
 
 ## Done when
 - The draft is saved, published and on the task with the "draft for a human" line; `knowledge/policies.md` shows it as "draft".

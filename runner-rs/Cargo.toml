@@ -2,7 +2,7 @@
 name = "tico-runner"
 version = "0.5.4"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "The Tico local runner (step 1: the chat path)"
 license-file = "../LICENSE"
 publish = false
@@ -13,8 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "sync", "signal", "net", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "http2"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+# rustls without a bundled provider: every client gets crate::tls's ring config, so aws-lc-rs is never built.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"] }
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
@@ -38,6 +39,7 @@ webpki-roots = "1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 # Thin LTO keeps most of fat LTO's inlining but runs in parallel: a clean build takes about two minutes on four

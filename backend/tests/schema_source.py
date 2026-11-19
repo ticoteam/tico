@@ -1,6 +1,6 @@
 """Every table the source can create, read from the source: a dump of a fresh hub misses the ones made on first use.
 
-Used by backend/tests/test_schema_every_table.py and scripts/cleanup/gen_upgrade_fixture.py.
+Used by backend/tests/test_schema_baseline.py and scripts/cleanup/gen_upgrade_fixture.py.
 """
 
 import ast
@@ -108,3 +108,34 @@ def add_lazy_tables(conn, creates, columns, skip=()):
             except sqlite3.OperationalError:  # a NOT NULL without a default: only its name matters here
                 conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}"')
             have[table].add(column)
+
+
+def _plain(sql):
+    return re.sub(r"\s+", " ", sql or "").replace("( ", "(").replace(" )", ")").strip()
+
+
+def shape(conn):
+    """{object: its definition} for every table, index, view and trigger in `main`, as a comparison of two databases
+    needs it: a table by its columns (name, type, NOT NULL, default, key), foreign keys, CHECKs and UNIQUE constraints,
+    since a column added by ALTER TABLE sits at the end where a new table's CREATE may have put it elsewhere; anything
+    else by its SQL with the whitespace folded. FTS shadow tables and SQLite's own are left out."""
+    shadow = {row[1] for row in conn.execute("PRAGMA main.table_list") if row[2] == "shadow"}
+    out = {}
+    for kind, name, sql in conn.execute("SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name"):
+        if name.startswith("sqlite_") or name in shadow or not sql:
+            continue
+        if kind != "table" or sql.upper().startswith("CREATE VIRTUAL"):
+            out[f"{kind} {name}"] = _plain(sql)
+            continue
+        unique = sorted(
+            (row[2], row[3], tuple(c[2] for c in conn.execute(f'PRAGMA index_info("{row[1]}")')))
+            for row in conn.execute(f'PRAGMA index_list("{name}")')
+            if row[1].startswith("sqlite_autoindex")
+        )
+        out[f"table {name}"] = {
+            "columns": sorted(tuple(row[1:]) for row in conn.execute(f'PRAGMA table_xinfo("{name}")')),
+            "foreign_keys": sorted(tuple(row[2:]) for row in conn.execute(f'PRAGMA foreign_key_list("{name}")')),
+            "checks": sorted(_plain(c) for c in re.findall(r"CHECK\s*\((?:[^()]|\([^()]*\))*\)", sql, re.I)),
+            "unique": unique,
+        }
+    return out

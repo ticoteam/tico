@@ -19,9 +19,9 @@ HUB = "https://acme.example"
 class Fake:
     """Stands in for every command: `enroll` writes runner.json the way the Rust runner does, after `fail` failures."""
 
-    def __init__(self, m_home, fail=0, install_ok=True):
+    def __init__(self, m_home, fail=0, install_ok=True, updates=()):
         self.calls, self.home, self.fail, self.install_ok = [], m_home, fail, install_ok
-        self.code_files = []
+        self.code_files, self.updates = [], list(updates)
 
     def __call__(self, command, **kw):
         self.calls.append(command)
@@ -40,6 +40,9 @@ class Fake:
                 config = Path(command[command.index("--config") + 1])
                 config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(json.dumps({"runner_id": "r1", "token": "t"}))
+        elif "runner_support.release_update" in command:
+            result = self.updates.pop(0) if self.updates else {"state": "healthy"}
+            out, code = json.dumps(result) + "\n", 0 if result["state"] == "healthy" else 1
         elif command[-1] == "install" and "scripts/tico-computer" in command[-2]:
             if self.install_ok:
                 units = self.home / ".config" / "systemd" / "user"
@@ -52,6 +55,16 @@ class Fake:
 
     def named(self, word):
         return [c for c in self.calls if word in c]
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """The first boot reads the hub's release; a test that does not give one sees an unreachable hub."""
+
+    def unreachable(url, timeout):
+        raise OSError("no network in tests")
+
+    monkeypatch.setattr("urllib.request.urlopen", unreachable)
 
 
 @pytest.fixture
@@ -115,7 +128,7 @@ def test_a_later_boot_only_starts_the_runner_and_takes_out_a_code_boat_wrote_aga
     assert cm.boot(m2, {}) == 0
     assert not fake2.named("enroll") and not fake2.named("install")
     starts = fake2.named("start")
-    assert starts and starts[0][-4:] == [f"tico-{job}.service" for job in cm.JOBS]
+    assert starts and starts[0][-len(cm.JOBS) :] == [f"tico-{job}.service" for job in cm.JOBS]
     assert (machine.etc / "environment").read_text() == 'PATH="/usr/bin"\n'
 
 
@@ -326,3 +339,105 @@ def test_the_boot_units_command_runs_through_the_runner_forwarder():
     )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and "boot" in old.stdout
+
+
+class Healthz:
+    """urlopen's stand-in for the hub's /healthz."""
+
+    def __init__(self, body):
+        self.body, self.urls = body, []
+
+    def __call__(self, url, timeout):
+        self.urls.append(url)
+        if isinstance(self.body, Exception):
+            raise self.body
+        body = self.body
+
+        class Reply:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n):
+                return json.dumps(body).encode()
+
+        return Reply()
+
+
+def test_a_new_machine_moves_to_the_hubs_release_before_it_enrolls(machine, monkeypatch):
+    """#648: an image built on 0.5.19 enrolled with a server that refuses runners below 0.6; the first boot moves it
+    before the runner enrolls, so nothing below the hub's release ever enrolls."""
+    hub = Healthz({"ok": True, "release": "0.6.64"})
+    monkeypatch.setattr("urllib.request.urlopen", hub)
+    m, fake = machine()
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert hub.urls == [HUB + "/healthz"]
+    names = [" ".join(c) for c in fake.calls]
+    update = next(i for i, c in enumerate(names) if "runner_support.release_update" in c)
+    enroll = next(i for i, c in enumerate(names) if " enroll " in f" {c} ")
+    assert update < enroll, "the checkout moves before the runner enrolls"
+    command = fake.calls[update]
+    assert command[:3] == ["runuser", "-u", "user"]
+    assert command[command.index("--version") + 1] == "0.6.64"
+    assert command[command.index("--state-dir") + 1] == str(machine.home / ".config" / "tico" / "first-boot-update")
+    assert "--pid" not in command  # no runner yet: forward only, nothing restarted
+    assert not any(CODE in c for c in names)
+    assert any("on release 0.6.64" in line for line in machine.said)
+    # A later boot never moves the checkout: the running runner follows the hub itself.
+    m2, fake2 = machine()
+    assert cm.boot(m2, {}) == 0 and not fake2.named("--state-dir") and len(hub.urls) == 1
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        {"state": "blocked", "error": "the checkout has 3 changed files; commit or stash them: a"},
+        {"state": "blocked", "error": "the checkout changed during the update; retry"},
+    ],
+)
+def test_a_momentary_refusal_is_tried_again_and_other_failures_leave_it_to_the_runner(machine, monkeypatch, refusal):
+    monkeypatch.setattr("urllib.request.urlopen", Healthz({"release": "0.6.64"}))
+    waits = []
+    m, fake = machine(updates=[refusal, refusal, {"state": "healthy"}])
+    m.sleep = waits.append
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert len(fake.named("--state-dir")) == 3 and waits == [cm.CATCH_UP_WAIT_S] * 2
+    assert fake.named("enroll") and fake.named("install")
+
+    m.config.unlink()
+    shutil.rmtree(machine.home / ".config" / "systemd")
+    boat_bashrc(machine.home)
+    m2, fake2 = machine(updates=[{"state": "failed", "error": "release v0.6.64 was not found"}])
+    assert cm.boot(m2, {}) == 0
+    assert len(fake2.named("--state-dir")) == 1 and fake2.named("enroll") and fake2.named("install")
+    assert any("the runner will keep trying" in line for line in machine.said)
+
+
+def test_a_refusal_that_lasts_is_tried_a_bounded_number_of_times_inside_the_codes_life(machine, monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen", Healthz({"release": "0.6.64"}))
+    m, fake = machine(updates=[{"state": "blocked", "error": "the checkout has 1 changed file: a"}] * 99)
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert len(fake.named("--state-dir")) == cm.CATCH_UP_TRIES and fake.named("enroll")
+    assert cm.CATCH_UP_TRIES * cm.CATCH_UP_WAIT_S <= 8 * 60  # the enroll code lasts 15 minutes
+
+
+@pytest.mark.parametrize(
+    "body",
+    [OSError("unreachable"), {"release": ""}, {"release": "main; rm -rf /"}, ["0.6.64"], {"ok": True}],
+)
+def test_an_unreadable_hub_release_skips_the_catch_up(machine, monkeypatch, body):
+    monkeypatch.setattr("urllib.request.urlopen", Healthz(body))
+    m, fake = machine()
+    boat_bashrc(machine.home)
+    assert cm.boot(m, {}) == 0
+    assert not fake.named("--state-dir") and fake.named("enroll") and fake.named("install")
+
+
+def test_hub_release_reads_healthz_and_strips_a_leading_v():
+    assert cm.hub_release(HUB + "/", Healthz({"release": "v0.6.64"})) == "0.6.64"
+    assert cm.hub_release(HUB, Healthz({"release": "0.7.0-rc.1"})) == "0.7.0-rc.1"

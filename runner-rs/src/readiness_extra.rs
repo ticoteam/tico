@@ -24,7 +24,6 @@ pub const OPTIONAL: &[&str] = &[
     "worktree_waits",
     "worktrees",
     "harnesses",
-    "mail_key",
     "shared_env",
     "recent_errors",
     "container_exec",
@@ -33,8 +32,10 @@ pub const OPTIONAL: &[&str] = &[
     "disk",
     "disk_cleanup",
     "screen",
-    "appdriver",
     "isolated",
+    // Sent once GET config says readiness_browser (runner.rs); a hub rolled back since then refuses it until the next
+    // config answer.
+    "browser",
 ];
 
 // ------------------------------------------------------------------------------------- credential grants

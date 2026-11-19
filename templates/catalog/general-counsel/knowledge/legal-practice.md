@@ -17,7 +17,7 @@ read.
 - A later instruction from the owner overrides an earlier standing rule for its scope only. Record the override with its date.
 
 ## Deadlines
-- Confirm a date from its source and rule before it goes on a calendar or into a summary (`skills/check-a-legal-deadline`).
+- Confirm a date from its source and rule before it goes on a calendar or into a summary (`.claude/skills/check-a-legal-deadline`).
 - A date from a notice, a regulator's page or a court order beats a date from a summary or a chat message. Where a relative count
   ("14 days") and a saved date disagree, use the saved date and record both.
 

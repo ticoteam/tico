@@ -355,7 +355,7 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
     role = getattr(viewer, "role", "")
     if role not in ("human", "owner", "bot") or role == "owner":
         return {slug: dict(full) for slug in (wanted if wanted is not None else rows)}
-    out = {}
+    out, unwritable = {}, []
     for slug in wanted if wanted is not None else rows:
         row = rows.get(slug)
         doc = A.document(row["access"]) if row else None
@@ -369,10 +369,8 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
                 out[slug] = dict(full)
                 continue
             levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
-            # A bot may answer one that wrote to it, or that holds work it asked for, so a
-            # private bot can still be replied to: nothing else about it opens up.
-            if not levels["write"] and may_reply(c, viewer, "bot:" + slug):
-                levels["write"] = True
+            if not levels["write"]:
+                unwritable.append(slug)
         else:
             pid = ctx.me
             admin_now = ctx.admin if admin is None else admin
@@ -388,6 +386,10 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
             levels = {level: ctx.names(doc[level]) for level in AUDIENCE_LEVELS}
         levels["see"] = levels["see"] or levels["read"] or levels["write"]
         out[slug] = levels
+    # A bot may answer one that wrote to it, or that holds work it asked for, so a private bot can still be replied
+    # to: nothing else about it opens up. Asked for every such bot at once, not two statements per bot.
+    for target in replies(c, viewer, ["bot:" + slug for slug in unwritable]):
+        out[target[4:]].update(write=True, see=True)
     return out
 
 
@@ -519,6 +521,32 @@ def may_reply(c, viewer, target):
             (other, actor),
         ).fetchone()
     )
+
+
+# `may_reply` for many targets in one statement each: the same index seek per target (messages_open_asks,
+# tasks_requester_status_cover), driven by json_each.
+_WROTE_SQL = (
+    "SELECT j.value FROM json_each(?) j WHERE EXISTS "
+    "(SELECT 1 FROM messages m WHERE m.recipient_id=? AND m.sender_id=j.value)"
+)
+_ASKED_SQL = (
+    "SELECT j.value FROM json_each(?) j WHERE EXISTS "
+    "(SELECT 1 FROM tasks t WHERE t.requester_id=j.value AND t.owner_id=? AND t.status='open')"
+)
+
+
+def replies(c, viewer, targets):
+    """The `kind:ident` of each of `targets` the viewer may answer (`may_reply`), read in two statements however many
+    targets there are."""
+    actor = str(getattr(viewer, "actor", "") or "")
+    others = sorted({f"{kind}:{ident}" for kind, ident in map(parse_target, targets) if kind != "group"})
+    if not actor or not others:
+        return set()
+    found = {row[0] for row in c.execute(_WROTE_SQL, (json.dumps(others), actor))}
+    rest = [other for other in others if other not in found]
+    if rest:
+        found |= {row[0] for row in c.execute(_ASKED_SQL, (json.dumps(rest), actor))}
+    return found
 
 
 def group_member_actors(c, group_id, roster=None, entries=None):

@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a letter quoted again between showing and clicking (docs/pipelines-v3.md S3): the click on
+// Offline browser check of a letter quoted again between showing and clicking (docs/dev/pipelines-v3.md S3): the click on
 // what was shown is refused (409 task_requirement, the old ask is not asked any more), and the screen moves to the ask
 // that took its place, reads its new proof and hash, and only a new click sends that hash. No dead end.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -16,7 +16,7 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   version: 3});
 const need = (rid: string, line: string, hour: number, shows: string[] = []) => ({kind: 'ask', id: rid, task_id: 't-' + rid, requirement_id: rid, line,
   since: `2026-11-09T${String(hour).padStart(2, '0')}:00:00Z`, task: brief('t-' + rid, line),
-  ask: {requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', choices: null, may: ['ok', 'no', 'thumbs'], met: false,
+  ask: {requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'], met: false,
     shows, standing: 'waiting', answer: null}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
@@ -47,7 +47,7 @@ const letter = (id: string, rid: string, blob: string) => ({id, approval_id: rid
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needs.map(n => n.id).join(','), next: null});
       const ok = /^\/api\/v2\/oks\/(r1|r1b)$/.exec(p);
@@ -55,6 +55,7 @@ const letter = (id: string, rid: string, blob: string) => ({id, approval_id: rid
       if (p === '/api/v2/oks/r9') return json({requirement_id: 'r9', subject: 'spec:1', content: {title: 'Plan', body: 'The plan.'}, shown_hash: '3'.repeat(64), standing: 'waiting', task_id: 't-r9'});
       if (p === '/api/v2/letters/L1') return json(current);
       if (p === '/api/v2/files/b1' || p === '/api/v2/files/b2') return route.fulfill({contentType: 'application/pdf', body: pdf});
+      if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         if (p === '/api/v2/tasks/t-r1/asks/r1/ok')

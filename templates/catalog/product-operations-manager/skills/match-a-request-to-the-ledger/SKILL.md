@@ -1,6 +1,8 @@
 ---
 name: match-a-request-to-the-ledger
 description: Decide whether a feature request is the same need as a ledger row, a close but different need, or a new one, and record the account, source and date without merging away a real difference.
+metadata:
+  function: product
 ---
 # Match a request to the ledger
 
@@ -20,7 +22,7 @@ Steps:
    - New: a new row with the need, area, account, segment, source and date.
 5. Check the segment before you merge. If the new account is a different kind of customer (for example one site or
    several), record the segment on the row. Do not let the merge hide it.
-6. If the account is missing from the request, ask the sender once with `tico task ask <id> --to <person> "<question>" --version N`. Do not guess an account.
+6. If the account is missing from the request, ask the sender once with `tico task ask <id> --to <person> "<question>"`. Do not guess an account.
 7. Recount distinct accounts for the row. One account that asked three times is one account.
 
 Checks before you finish:

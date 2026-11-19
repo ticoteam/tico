@@ -19,7 +19,7 @@ The outcome is the cause, the first bad commit, and the fix or the owner. You re
    state behind. Classify the failure with `skills/classify-a-failed-run/SKILL.md`: product bug, flaky test,
    infrastructure, dependency or configuration. Quote the lines that show it, with any credential redacted.
 3. **Check flakiness before blaming a commit.** Has this test flipped before? Did the same commit pass on another run?
-   If so, it is flaky, not broken. Say so and hand the test to the QA Owner with the run ids; the QA Owner decides fix or quarantine.
+   If so, it is flaky, not broken. Say so and hand the test to the QA Owner with the run ids; the QA Owner decides fix or delete.
 4. **Name the owner.** Take the owner from `knowledge/workflows.md`. A product bug goes to the QA Owner for triage, as
    a note, when their decision is needed.
 

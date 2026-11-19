@@ -47,7 +47,7 @@ LIGHT_TEMPLATES = frozenset(("librarian", "rules-owner", "updates-owner", "autom
 ASSISTANT_TEMPLATE = "assistant"
 
 # role -> {plans connected: (model, effort)} for the bot's own turns. Heavy is every role not named: every Feature Owner
-# (it pitches, specs, builds and validates in one task), Reviewer 1, every other Owner and manager, a Builder a company
+# (it specs, builds and validates in one task), Reviewer 1, every other Owner and manager, a Builder a company
 # still has, and the spec and plan writers. Their own turns (routing, stage
 # moves, comments) run on the cheap model and their tasks on the strong one (TASK_SETS). The Assistant chats with
 # people rather than working tasks, and Haiku scores half of Opus on its evals (evals/assistant/BASELINE.md), so it keeps
@@ -62,13 +62,13 @@ SETS: dict[str, dict[str, tuple[str, str]]] = {
     },
     ASSISTANT: {
         CLAUDE: ("claude-opus-5-5", "medium"),
-        CHATGPT: ("gpt-6.1-sol", "high"),
+        CHATGPT: ("gpt-6.2-sol", "high"),
         BOTH: ("claude-opus-5-5", "medium"),
     },
     REVIEWER_2: {
         CLAUDE: ("claude-haiku-5-5", "xhigh"),
         CHATGPT: ("gpt-6.1-terra", "medium"),
-        BOTH: ("gpt-6.1-sol", "high"),
+        BOTH: ("gpt-6.2-sol", "high"),
     },
     LIGHT: {
         CLAUDE: ("claude-haiku-5-5", "xhigh"),
@@ -82,7 +82,7 @@ SETS: dict[str, dict[str, tuple[str, str]]] = {
 TASK_SETS: dict[str, dict[str, tuple[str, str]]] = {
     HEAVY: {
         CLAUDE: ("claude-opus-5-5", "medium"),
-        CHATGPT: ("gpt-6.1-sol", "high"),
+        CHATGPT: ("gpt-6.2-sol", "high"),
         BOTH: ("claude-opus-5-5", "medium"),
     },
 }

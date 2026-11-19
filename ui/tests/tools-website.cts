@@ -93,7 +93,7 @@ function fake() {
     if (p === '/api/v2/groups') return [200, {groups: []}];
     if (p === '/api/v2/website-tools/groups') return [200, GROUPS.map(g => ({id: g.id, name: g.name, members: g.actors.length, actors: g.actors}))];
     if (method !== 'GET') writes.push({method, path: p + (url.search ? '?' + [...url.searchParams.keys()].join('&') : ''), body});
-    if (p === '/api/v2/runners/c1/browser-host' && method === 'POST') { machines[0]!.browser_host = !!body.on; return [200, {on: body.on}]; }
+    if (p === '/api/v2/computers/c1/browser-host' && method === 'POST') { machines[0]!.browser_host = !!body.on; return [200, {on: body.on}]; }
     if (p === '/api/v2/website-tools' && method === 'POST') {
       const id = 'w' + (Object.keys(tools).length + 1), site = String((body.sites as string[])[0]);
       tools[id] = {tool: {id, name: site, kind: 'website', sites: [site], central_only: !!body.central_only}, status: {label: 'No account', tone: 'waiting'},
@@ -179,7 +179,7 @@ async function start(browser: import('playwright').Browser, hash: string, width:
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, credential_access: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json(EMPS);
-    if (p === '/api/humans' || p === '/api/people') return json({people: PEOPLE, teams: {}, org_groups: GROUPS.map(g => ({id: g.id, name: g.name}))});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: PEOPLE, teams: {}, org_groups: GROUPS.map(g => ({id: g.id, name: g.name}))});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/needs-you') return json({items: []});
@@ -541,7 +541,7 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
       await box.uncheck();
       await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-browser-host=c1]')?.checked === false
         && !document.querySelector<HTMLInputElement>('[data-browser-host=c1]')?.disabled);
-      assert.deepEqual(last(f, 'POST', '/api/v2/runners/c1/browser-host')?.body, {on: false});
+      assert.deepEqual(last(f, 'POST', '/api/v2/computers/c1/browser-host')?.body, {on: false});
       assert.equal(f.machines[0]!.browser_host, false);
       await page.locator('#set-machines dialog[open] [data-detail-section=settings]').scrollIntoViewIfNeeded();
       await shot(page, 'computer-desktop');

@@ -167,14 +167,20 @@ def test_only_readers_follow_a_private_task(api):
     assert rows(api, row["id"])["human:ben"][0] == 1
 
 
-def test_a_bot_adds_followers_only_in_its_reach(api):
+def test_a_bot_adds_anyone_to_a_task_it_owns_and_others_only_in_its_reach(api):
     row = made(api)
     token = bot_token(api)
     assert follow(api, row["id"], {"actor": "cara"}, token).status_code == 200
     r = api.put("/api/v2/reach/settings/bot:ops", json={"mode": "closed"}, headers=headers())
     assert r.status_code == 200, r.text
-    r = follow(api, row["id"], {"actor": "ben"}, token)
+    # Its own task: sharing it is never out of reach, whatever its reach rule.
+    assert follow(api, row["id"], {"actor": "ben"}, token).status_code == 200
+    with api.app.state.store.transaction() as c:  # a task ops asked for and does not own
+        theirs = H.task_create(c, "bot:ops", "Vendor check", "Check the vendor.", "human:ana", lint=False)
+    r = follow(api, theirs["id"], {"actor": "ben"}, token)
     assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    assert "reach rule, Closed (set for it) on Rules › Internal" in r.json()["error"]["detail"]
+    assert unfollow(api, row["id"], {"actor": "ben"}, token).status_code == 200
     # Taking someone off, or its own level, needs no reach.
     assert unfollow(api, row["id"], {"actor": "cara"}, token).status_code == 200
     assert follow(api, row["id"], {"notify": "digest"}, token).status_code == 200
@@ -202,81 +208,3 @@ def test_a_chat_task_made_private_gets_a_room_its_owner_follows(api):
     moved = get(api, "tasks/" + row["id"])["task"]
     assert moved["conversation_id"] != row["conversation_id"]
     assert who(api, row["id"]) == {"human:ben": ("live", "owner")}
-
-
-def _migration(name):
-    path = Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_backfill_seeds_owners_and_drops_bots_that_only_posted():
-    """20261105235413_task_followers: an open task's owner follows its thread; a bot that follows a task thread (or a
-    sub-thread under it) only because it posted stops; people, chosen rows, chats and closed tasks stay; running again
-    changes nothing."""
-    up = _migration("20261105235413_task_followers").up
-    with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY, owner_id TEXT, status TEXT, conversation_id TEXT)")
-        c.execute("CREATE TABLE conversations(id TEXT PRIMARY KEY, kind TEXT, task_id TEXT, root_id TEXT)")
-        c.execute(
-            "CREATE TABLE thread_followers(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
-            "following INTEGER NOT NULL DEFAULT 1, notify TEXT NOT NULL DEFAULT 'live', reason TEXT NOT NULL "
-            "DEFAULT 'manual', last_read_seq INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, "
-            "updated_at TEXT NOT NULL, UNIQUE (thread_id, actor))"
-        )
-        c.executemany(
-            "INSERT INTO tasks VALUES(?,?,?,?)",
-            [
-                ("t1", "bot:ops", "open", "c1"),
-                ("t2", "human:ben", "doing", "c2"),
-                ("t3", "bot:ops", "closed", "c3"),
-                ("t4", "bot:ops", "open", "chat"),
-            ],
-        )
-        c.executemany(
-            "INSERT INTO conversations VALUES(?,?,?,?)",
-            [
-                ("c1", "task", "t1", None),
-                ("c2", "task", "t2", None),
-                ("c3", "task", "t3", None),
-                ("c1-sub", "thread", None, "c1"),
-                ("chat", "group", None, None),
-            ],
-        )
-        c.executemany(
-            "INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
-            "created_at,updated_at) VALUES(?,?,?,?,?,?,?,'then','then')",
-            [
-                ("f1", "c1", "bot:cpo", 1, "live", "posted", 4),  # a bot that only posted: drops
-                ("f2", "c1", "human:ana", 1, "live", "posted", 4),  # a person: stays
-                ("f3", "c1-sub", "bot:cmo", 1, "live", "posted", 2),  # under a task thread: drops
-                ("f4", "c2", "human:ben", 1, "digest", "posted", 3),  # the owner: becomes owner, keeps level
-                ("f5", "c1", "bot:cmo", 1, "mentions", "manual", 1),  # chosen: stays
-                ("f6", "chat", "bot:cpo", 1, "live", "posted", 9),  # a chat: stays
-                ("f7", "c3", "bot:cpo", 0, "live", "read", 5),
-            ],
-        )  # a read mark: stays
-        up(c)
-        got = {
-            (r[0], r[1]): r[2:]
-            for r in c.execute(
-                "SELECT thread_id, actor, following, notify, reason, last_read_seq FROM thread_followers"
-            )
-        }
-        assert got == {
-            ("c1", "bot:cpo"): (0, "live", "read", 4),
-            ("c1", "human:ana"): (1, "live", "posted", 4),
-            ("c1-sub", "bot:cmo"): (0, "live", "read", 2),
-            ("c2", "human:ben"): (1, "digest", "owner", 3),
-            ("c1", "bot:cmo"): (1, "mentions", "manual", 1),
-            ("chat", "bot:cpo"): (1, "live", "posted", 9),
-            ("c3", "bot:cpo"): (0, "live", "read", 5),
-            ("c1", "bot:ops"): (1, "live", "owner", 0),
-        }
-        before = c.execute("SELECT * FROM thread_followers ORDER BY id").fetchall()
-        up(c)
-        assert c.execute("SELECT * FROM thread_followers ORDER BY id").fetchall() == before
-    with sqlite3.connect(":memory:") as c:
-        up(c)  # a database with no threads yet has nothing to backfill

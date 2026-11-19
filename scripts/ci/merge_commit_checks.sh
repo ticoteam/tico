@@ -2,8 +2,9 @@
 # A merge queue group's static checks on its merge commit, which is what lands on main: the static checks job's own list.
 # Two pull requests can each pass their own static checks and still break one together (a migration timestamp, a route
 # one removes and the other calls, a lint rule one turns on and the other's new code breaks), so the group runs them all.
-# The plan job starts this beside its test selection, so a group needs no static checks VM
+# The queue group's merge commit checks job runs it on its own VM, beside the plan and the tests
 # (.github/workflows/pr-checks.yml). Every check runs; any failure fails the script.
+# Includes scripts/gates.sh: shared gate scripts and ast-grep rules with their fixtures.
 #   PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/ci/merge_commit_checks.sh <base sha> <merge commit sha>
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
@@ -18,10 +19,11 @@ check() {
   fi
 }
 # The pinned uv the static checks job installs: basedpyright runs through uvx.
-command -v uvx >/dev/null || python3 -m pip install --disable-pip-version-check --quiet uv==0.13.0
+command -v uvx >/dev/null || python3 -m pip install --disable-pip-version-check --quiet uv==0.13.9
 export PYRIGHT_BASE_REF="$base" LINT_BASE_REF="$base"
 check python3 scripts/check_migration_order.py --base "$base" --head "$head" --base-name main
 check bash scripts/lint.sh
+check bash scripts/gates.sh --base "$base"
 check python3 -m backend.openapi_v2 --check
 check python3 scripts/build_api_docs.py --check
 check python3 scripts/check_wire_contract.py

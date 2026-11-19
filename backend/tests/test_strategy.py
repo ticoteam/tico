@@ -1,6 +1,6 @@
-"""The team's strategy (backend/strategy.py): the owner writes a draft and publishes numbered versions; bets carry what
-they rule out and what would show them wrong; goals serve bets; a bot proposes and the owner confirms. Examples use
-Acme."""
+"""The team's strategy (backend/strategy.py): every save the owner makes is live at once as the next numbered version;
+bets carry what they rule out and what would show them wrong; goals serve bets; a bot proposes and the owner confirms.
+Examples use Acme."""
 
 import json
 
@@ -34,47 +34,47 @@ def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     write(api, summary="x" * (S.SUMMARY_MAX + 1), expected=422)
 
 
-def test_publish_needs_a_wont_and_an_active_bet_rules_out_and_wrong_if_optional(api):
+def test_every_save_is_live_as_the_next_version_and_publish_only_answers_it(api):
+    assert get(api, "strategy", token="cara-test")["current"] is None and get(api, "strategy/versions") == []
+    # Before the first save there is nothing to answer: publish says so and makes no empty version 1.
+    assert "no strategy yet" in json.dumps(publish(api, expected=422))
+    assert get(api, "strategy/versions") == []
     write(api, summary="Acme runs rentals with bots.")
+    assert get(api, "strategy", token="cara-test")["current"]["summary"] == "Acme runs rentals with bots."
+    # No preconditions: no active bet and no "What we won't do" yet, live all the same. Rules out and Wrong if are
+    # optional: a bare statement is active.
     proposed = post(api, "strategy/bets", {"statement": "Landlords pay"})["bet"]
-    write(api, sections={"not": "No enterprise deals."})
-    publish(api, expected=422)  # no active bet
-    # Rules out and Wrong if are optional: a bare statement is active, and publishes.
     bare = post(api, "strategy/bets/" + proposed["id"], {"status": "active"})["bet"]
     assert bare["status"] == "active" and bare["rules_out"] == "" and bare["wrong_if"] is None
-    post(api, "strategy/bets/" + proposed["id"], {"status": "proposed"})
-    write(api, sections={"not": ""})
-    add_bet(api)
-    publish(api, expected=422)  # no "What we won't do"
-    write(api, sections={"not": "No enterprise deals."})
-    first = publish(api)
-    assert (
-        first["n"] == 1
-        and first["status"] == "published"
-        and [b["status"] for b in first["bets"]] == ["proposed", "active"]
-    )
+    assert [v["n"] for v in get(api, "strategy/versions")] == [3, 2, 1]
+    live = get(api, "strategy", token="cara-test")["current"]
+    assert live["n"] == 3 and live["status"] == "published" and [b["status"] for b in live["bets"]] == ["active"]
+    # A save that changes nothing is no version; publish, kept for older callers, answers the live one.
+    write(api, summary="Acme runs rentals with bots.")
+    assert publish(api)["n"] == 3 and len(get(api, "strategy/versions")) == 3
     fresh = draft(api)
-    assert fresh["n"] is None and fresh["summary"] == "Acme runs rentals with bots." and fresh["revision"] > 0
-    publish(api, expected=422)  # nothing changed
+    assert fresh["n"] is None and fresh["revision"] == live["revision"]
     write(api, summary="Acme runs small rentals with bots.")
-    assert publish(api, "Second")["n"] == 2
-    assert [v["n"] for v in get(api, "strategy/versions")] == [2, 1]
+    assert get(api, "strategy/versions/4")["summary"] == "Acme runs small rentals with bots."
     assert get(api, "strategy/versions/1")["summary"] == "Acme runs rentals with bots."
+    assert [f["key"] for f in get(api, "strategy/diff?from=1&to=4")["fields"]] == ["summary"]
 
 
 def test_only_the_owner_writes_and_reads_the_draft_a_bot_proposes_at_any_level(api):
+    """Unless the Strategy Owner names a task with the owner's words on it (test_strategy_owners_words.py); it reads
+    the draft so it can write onto its revision then."""
     strategy_token = with_strategy_bot(api, level=3)
     ready(api)
     for token in ("ben-test", "cara-test", strategy_token):
-        assert "draft" not in get(api, "strategy", token=token)
+        assert ("draft" in get(api, "strategy", token=token)) == (token == strategy_token)
         put(api, "strategy/draft", {"revision": 0, "summary": "Mine."}, token=token, expected=403)
         add_bet(api, token=token, expected=403)
         post(api, "strategy/publish", {"revision": 0}, token=token, expected=403)
-    assert get(api, "strategy", token="cara-test")["current"] is None
+    assert get(api, "strategy", token="cara-test")["current"]["n"] == 2
     bet = get(api, "strategy")["bets"][0]
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "The site says so.",
@@ -85,20 +85,24 @@ def test_only_the_owner_writes_and_reads_the_draft_a_bot_proposes_at_any_level(a
         },
         token=strategy_token,
     )["proposal"]
-    # The proposal carries the unpublished draft: the owner and the bot that made it read it, no one else.
+    # The proposal carries words the owner has not confirmed: the owner and the bot that made it read it, no one else.
     for token in ("ben-test", "cara-test"):
-        assert not [p for p in get(api, "goal-proposals", token=token)["proposals"] if p["kind"] == "strategy_draft"]
+        assert not [p for p in get(api, "proposals", token=token)["proposals"] if p["kind"] == "strategy_draft"]
         assert not [p for p in get(api, "goals/tree", token=token)["proposals"] if p["kind"] == "strategy_draft"]
-    assert [p["id"] for p in get(api, "goal-proposals", token=strategy_token)["proposals"]] == [proposal["id"]]
-    assert [p["id"] for p in get(api, "goal-proposals")["proposals"]] == [proposal["id"]]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=strategy_token, expected=403)
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+    assert [p["id"] for p in get(api, "proposals", token=strategy_token)["proposals"]] == [proposal["id"]]
+    assert [p["id"] for p in get(api, "proposals")["proposals"]] == [proposal["id"]]
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=strategy_token, expected=403)
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"})
     view = get(api, "strategy")
-    assert view["draft"]["summary"] == "Acme runs rentals for small landlords." and view["current"] is None
+    assert view["draft"]["summary"] == "Acme runs rentals for small landlords."
     assert {(b["statement"], b["status"]) for b in view["bets"]} == {
         ("Small landlords pay for bots", "retired"),
         ("Landlords refer landlords", "proposed"),
     }
+    # Confirmed is live at once, the whole proposal as one version.
+    live = get(api, "strategy", token="cara-test")["current"]
+    assert live["n"] == 3 and live["summary"] == "Acme runs rentals for small landlords."
+    assert [b["statement"] for b in live["bets"]] == ["Landlords refer landlords"]
 
 
 def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
@@ -106,14 +110,14 @@ def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
     ids = [
         post(
             api,
-            "goal-proposals",
+            "proposals",
             {"kind": "strategy_draft", "reason": "r", "payload": {"summary": text}},
             token=strategy_token,
         )["proposal"]["id"]
         for text in ("First.", "Second.")
     ]
     for pid in reversed(ids):
-        post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+        post(api, f"proposals/{pid}/decide", {"decision": "confirm"})
     assert draft(api)["summary"] == "First."
 
 
@@ -163,7 +167,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
     # The Strategy Owner proposes proof from the evidence; the owner confirms; publishing dates it.
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "October's numbers are in.",
@@ -171,7 +175,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
         },
         token=strategy_token,
     )["proposal"]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"})
     second = publish(api, "Proof")
     write(api, summary="Acme runs small rentals with bots.")
     publish(api, "Summary only")
@@ -220,8 +224,8 @@ def test_proof_since_reaches_past_a_hundred_versions_with_the_same_proof(api):
     changed = publish(api, "New proof")
     with api.app.state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(strategy_versions)")]
-        row = dict(zip(cols, c.execute("SELECT * FROM strategy_versions WHERE n=2").fetchone()))
-        for n in range(3, S.VERSIONS_PAGE + 30):  # more unchanged versions than one page holds
+        row = dict(zip(cols, c.execute("SELECT * FROM strategy_versions WHERE n=?", (changed["n"],)).fetchone()))
+        for n in range(changed["n"] + 1, S.VERSIONS_PAGE + 30):  # more unchanged versions than one page holds
             copy = {**row, "id": f"v-copy-{n}", "n": n, "published_at": f"2099-01-01T00:{n // 60:02d}:{n % 60:02d}Z"}
             c.execute(
                 f"INSERT INTO strategy_versions ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
@@ -252,7 +256,7 @@ def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(
     strategy_token = with_strategy_bot(api)
     pid = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "strategy_draft",
             "reason": "r",
@@ -260,10 +264,10 @@ def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(
         },
         token=strategy_token,
     )["proposal"]["id"]
-    post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{pid}/decide", {"decision": "confirm"})
     assert draft(api)["sections"]["extra"]["brand"] == {"title": "Positioning", "body": "Plain."}
-    current = get(api, "strategy")["current"]
-    assert current["n"] == 1 and current["sections"]["extra"]["brand"]["title"] == "Brand"
+    current = get(api, "strategy", token="cara-test")["current"]
+    assert current["n"] == 4 and current["sections"]["extra"]["brand"] == {"title": "Positioning", "body": "Plain."}
 
 
 def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are_gray(api):
@@ -299,12 +303,13 @@ def test_the_diff_says_what_changed_and_a_bet_back_to_proposed_is_not_retired(ap
     one = ready(api)
     two = add_bet(api, "Landlords refer landlords")["bet"]
     add_bet(api, "Landlords want one bill")
-    publish(api)
+    first = publish(api)["n"]
     post(api, f"strategy/bets/{one['id']}", {"status": "proposed", "statement": "Small landlords pay $99"})
     post(api, f"strategy/bets/{two['id']}", {"status": "retired"})
     write(api, sections={"extra": {"brand": {"title": "Brand", "body": "Plain."}}})
-    publish(api, "Second")
-    out = get(api, "strategy/diff?from=1&to=2")
+    last = publish(api, "Second")["n"]
+    assert last == first + 3  # one version a save
+    out = get(api, f"strategy/diff?from={first}&to={last}")
     assert [b["id"] for b in out["bets"]["retired"]] == [two["id"]] and out["bets"]["added"] == []
     assert [c["id"] for c in out["bets"]["changed"]] == [one["id"]]
     assert "sections.extra.brand" in [f["key"] for f in out["fields"]]
@@ -315,9 +320,9 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
     one = ready(api)
     two = add_bet(api, "Landlords refer landlords")["bet"]
     goal = post(api, "goals", {"title": "Sign 10 landlords", "owner": "cara", "bet_id": one["id"]})["goal"]
-    publish(api)
+    # Retiring it is live at once, and so is the card.
     post(api, f"strategy/bets/{one['id']}", {"status": "retired"})
-    publish(api, "Second")
+    n = get(api, "strategy")["current"]["n"]
     with api.app.state.store.read() as c:
         proposal = H._one(c, "SELECT * FROM goal_proposals WHERE kind=?", (S.REALIGN,))
         task = H._one(
@@ -325,19 +330,30 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
             "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.kind='proposal' AND a.ref=?",
             (proposal["id"],),
         )
+    # The Strategy Owner's task, with its question to Ana: in her Needs you.
     assert (
-        task and task["owner_id"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
+        task
+        and task["owner_id"] == "bot:strategy-owner"
+        and task["title"] == f"Choose what happens to 1 goal after strategy v{n}"
     )
-    assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
+    assert task["id"] in {i.get("task_id") for i in get(api, "needs-you")["items"]}
+    said = words(api, task["id"])
+    assert "Keep as it is, Retire goal, or Move to a bet" in said and "Confirm" not in said
     payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
         closed = H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))
         assert closed["status"] == "closed"
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
     assert closing_note(api, task["id"]) == "Resolved: the goals were realigned with the strategy."
+
+
+def words(api, tid):
+    """What the task was filed with: its first message and the instructions Tico gave its bot."""
+    with api.app.state.store.read() as c:
+        return H.task_words(c, tid)
 
 
 def closing_note(api, tid):
@@ -360,10 +376,8 @@ def realign_card(api):
         post(api, "goals", {"title": title, "owner": "cara", "bet_id": one["id"]})["goal"]
         for title in ("Sign 10 landlords", "Sign 20 landlords")
     ]
-    publish(api)
     post(api, f"strategy/bets/{one['id']}", {"statement": "Small landlords pay $99 a month"})
-    publish(api, "Second")
-    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == S.REALIGN]
+    [card] = [p for p in get(api, "proposals")["proposals"] if p["kind"] == S.REALIGN]
     with api.app.state.store.read() as c:
         task = H._one(c, "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.ref=?", (card["id"],))
     return card, task, goals
@@ -375,8 +389,12 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
         ("rewritten", "Small landlords pay $99 a month", "Small landlords pay for bots")
     ] * 2
     assert card["closed_goals"] == []
-    assert task["title"] == "Choose what happens to 2 goals after strategy v2" and "reworded" in task["body"]
-    post(api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
+    n = card["payload"]["n"]
+    assert n == get(api, "strategy")["current"]["n"]
+    assert task["title"] == f"Choose what happens to 2 goals after strategy v{n}" and "reworded" in words(
+        api, task["id"]
+    )
+    post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
     assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
@@ -384,28 +402,43 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
 def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(api):
     card, task, goals = realign_card(api)
     post(api, f"goals/{goals[0]['id']}/status", {"status": "done", "note": "Signed"})
-    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["id"] == card["id"]]
+    [card] = [p for p in get(api, "proposals")["proposals"] if p["id"] == card["id"]]
     assert card["closed_goals"] == [goals[0]["id"]]
-    out = post(
-        api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}}
-    )["proposal"]
+    out = post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}})[
+        "proposal"
+    ]
     assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
     assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
 
-def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_version(api):
+def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_wrong_if(api):
     with_strategy_bot(api)
     goal, kpi = goal_with_kpi(api)
-    ready(api, wrong_if={"kind": "kpi", "kpi_id": kpi["id"], "direction": "below", "threshold": 30})
-    publish(api)
+    bet = ready(api, wrong_if={"kind": "kpi", "kpi_id": kpi["id"], "direction": "below", "threshold": 30})
     log(api, kpi["id"], 45)
     log(api, kpi["id"], 20)
     log(api, kpi["id"], 10)
-    with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
+
+    def trips():
+        with api.app.state.store.read() as c:
+            return H._rows(
+                c.execute("SELECT id, title, owner_id FROM tasks WHERE title LIKE 'Bet %' ORDER BY created_at")
+            )
+
+    tasks = trips()
     assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
-    assert "Evidence:" in tasks[0]["body"]
+    assert "Evidence:" in words(api, tasks[0]["id"])
+    # Its task closed, a save that leaves the wrong-if as it was (a new version) trips nothing again.
+    with api.app.state.store.transaction() as c:
+        E.move(c, tasks[0]["id"], E.DONE, "human:ana", "Keeping it")
+    write(api, summary="Acme runs small rentals with bots.")
+    log(api, kpi["id"], 9)
+    assert len(trips()) == 1
+    # Kept with a new wrong-if, the bet is watched again.
+    post(api, f"strategy/bets/{bet['id']}", {"wrong_if": {**bet["wrong_if"], "threshold": 5}})
+    log(api, kpi["id"], 4)
+    assert len(trips()) == 2
 
 
 def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(api):
@@ -413,7 +446,7 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
     goal, kpi = goal_with_kpi(api)
     ready(api, wrong_if={"kind": "kpi", "kpi_id": kpi["id"], "direction": "below", "threshold": 30})
     with api.app.state.store.transaction() as c:
-        H.task_create(c, H.KEEPER, "Bet 1: may be wrong", "From strategy v0.", "bot:strategy-owner", lint=False)
+        H.task_create(c, H.TICO_ACTOR, "Bet 1: may be wrong", "From strategy v0.", "bot:strategy-owner", lint=False)
     publish(api)
     log(api, kpi["id"], 20)
     with api.app.state.store.transaction() as c:
@@ -449,10 +482,9 @@ def test_a_text_wrong_if_trips_after_its_check_by_and_nothing_trips_with_checks_
 def test_the_summary_text_is_what_runs_carry(api):
     get(api, "strategy/summary", expected=404)
     ready(api)
-    publish(api)
     text = api.get("/api/v2/strategy/summary", headers={"Authorization": "Bearer cara-test"}).text
     assert text.startswith("Acme runs rentals with bots.") and "1. Small landlords pay for bots" in text
-    assert "We won't: No enterprise deals." in text and text.rstrip().endswith("version 1")
+    assert "We won't: No enterprise deals." in text and text.rstrip().endswith("version 2")
     assert len(json.dumps(get(api, "strategy"))) < 20_000
 
 
@@ -489,6 +521,23 @@ def test_the_old_company_vision_moves_into_the_first_draft(api):
     assert draft(api)["vision"] == "Acme for every landlord."
     assert draft(api)["sections"]["sell"] == "Bots that run rentals."
     assert get(api, "company", token="cara-test")["company"]["vision"] == "Acme for every landlord."
+    assert get(api, "strategy/versions") == []  # nobody has saved it yet
+
+
+def test_a_draft_an_older_release_left_ahead_of_its_versions_is_live_from_the_next_start(api):
+    ready(api)  # versions 1 and 2
+    with api.app.state.store.transaction() as c:
+        # What an older release left: version 1 published, the draft written on since and never published.
+        c.execute("DELETE FROM strategy_versions WHERE n=2")
+        c.execute(
+            "UPDATE strategy_versions SET summary='Acme runs small rentals with bots.', revision=9 WHERE status='draft'"
+        )
+        S.ensure(c)  # every start (backend/store.py)
+        S.ensure(c)
+    assert [v["n"] for v in get(api, "strategy/versions")] == [2, 1]
+    live = get(api, "strategy", token="cara-test")["current"]
+    assert live["summary"] == "Acme runs small rentals with bots." and live["published_by"] == "human:ana"
+    assert [b["statement"] for b in live["bets"]] == ["Small landlords pay for bots"]
 
 
 def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
@@ -512,10 +561,9 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
         },
     )
     assert not err and out["bet"]["wrong_if"]["kind"] == "text"
-    err, out = ok("tico_strategy_publish", {"note": "First"})
-    assert not err and out["n"] == 1
+    # Each save is live: no publish tool.
     err, out = ok("tico_strategy_summary", token="cara-test")
-    assert not err and out["n"] == 1 and "Landlords pay for bots" in out["text"]
+    assert not err and out["n"] == 2 and "Landlords pay for bots" in out["text"]
     err, _ = ok("tico_strategy_draft", {"summary": "Mine."}, token="cara-test")
     assert err
     err, out = ok(
@@ -525,36 +573,28 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
     assert not err and out["bet_id"]
 
 
-def test_an_unpublished_vision_stays_out_of_the_company_history_until_publish(api):
+def test_a_saved_vision_is_the_teams_at_once_and_in_the_company_history(api):
     ready(api)
     write(api, vision="Every landlord on Acme.")
-    publish(api)
     seen = lambda: [
         e["new"] for e in get(api, "company/history", token="cara-test")["events"] if e["field"] == "vision"
     ]
-    assert seen() == ["Every landlord on Acme."]  # before v1 the draft's vision was the team's
-    write(api, vision="Every small landlord on Acme.")
-    assert seen() == ["Every landlord on Acme."]
-    assert get(api, "company", token="cara-test")["company"]["vision"] == "Every landlord on Acme."
     sql = lambda: post(api, "sql", {"sql": "SELECT vision FROM company_profile"}, token="cara-test")["rows"][0][0]
-    assert sql() == "Every landlord on Acme."
-    publish(api, "Second")
+    assert seen() == ["Every landlord on Acme."] and sql() == "Every landlord on Acme."
+    write(api, vision="Every small landlord on Acme.")
     assert seen()[0] == "Every small landlord on Acme." and sql() == "Every small landlord on Acme."
+    assert get(api, "company", token="cara-test")["company"]["vision"] == "Every small landlord on Acme."
 
 
-def test_company_profile_vision_follows_the_published_vision_after_publish_and_at_start(api):
+def test_company_profile_vision_follows_the_live_vision_after_every_save_and_at_start(api):
     ready(api)
     write(api, vision="Every landlord on Acme.")
     sql = lambda: post(api, "sql", {"sql": "SELECT vision FROM company_profile"}, token="cara-test")["rows"][0][0]
     store = api.app.state.store
+    assert sql() == "Every landlord on Acme."
     with store.transaction() as c:  # what a release before this one left: the pre-strategy sentence
         c.execute("UPDATE company_profile SET vision='Rentals, simpler.'")
-    publish(api)  # the first publish, the same vision as the draft
-    assert sql() == "Every landlord on Acme."
-    with store.transaction() as c:
-        c.execute("UPDATE company_profile SET vision='Rentals, simpler.'")
-    write(api, summary="Acme runs small rentals with bots.")
-    publish(api, "Second")  # a later publish, the vision unchanged
+    write(api, summary="Acme runs small rentals with bots.")  # a later save, the vision unchanged
     assert sql() == "Every landlord on Acme."
     with store.transaction() as c:
         c.execute("UPDATE company_profile SET vision='Rentals, simpler.'")
@@ -567,12 +607,10 @@ def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_pro
     one = ready(api)
     add_bet(api, "Landlords refer landlords")
     post(api, "goals", {"title": "Sign 10 landlords", "owner": "cara", "bet_id": one["id"]})
-    publish(api)
-    post(api, f"strategy/bets/{one['id']}", {"status": "retired"})
-    publish(api, "Second")  # files a strategy_realign card
+    post(api, f"strategy/bets/{one['id']}", {"status": "retired"})  # files a strategy_realign card
     post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "strategy_draft", "reason": "r", "payload": {"sections": {"not": "Unannounced: no franchise deals."}}},
         token=strategy_token,
     )

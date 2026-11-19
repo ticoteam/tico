@@ -1,9 +1,8 @@
-"""The stale PR keeper re-enqueues a pull request the merge queue dropped for a flake, at most once per head, and
+"""The stale PR sweep re-enqueues a pull request the merge queue dropped for a flake, at most once per head, and
 comments once naming the failure for the rest. No network: a fake GitHub serves trimmed real fixtures."""
 
 import copy
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -11,18 +10,17 @@ import subprocess
 
 import pytest
 
-from scripts import stale_pr_keeper as keeper
+from scripts import stale_pr_keeper as sweep
 
 FIXTURES = Path(__file__).parent / "stale_pr_keeper"
 NOW = datetime(2026, 11, 8, 18, 0, tzinfo=timezone.utc)
 # The tests and UI script the real logs name, read from them: a literal path to a test here would make pr_checks.py select
 # this file for every change to that test (and its folder).
-RECRUITING = re.search(r" FAILED (\S+) - ", (FIXTURES / "pytest-failed.log").read_text()).group(1)  # quarantined
+RECRUITING = re.search(r" FAILED (\S+) - ", (FIXTURES / "pytest-failed.log").read_text()).group(1)  # a real failure
 CRASHED = re.search(r" FAILED (\S+) - worker", (FIXTURES / "worker-crashed.log").read_text()).group(1)
 UI_SCRIPT = re.search(r"UI scripts failed: (\S+)", (FIXTURES / "browser-failed.log").read_text()).group(1)
 # Made-up test ids live under a folder no checkout has.
 OTHER = "made_up/test_x.py"
-QUARANTINE = frozenset({RECRUITING})
 
 
 def sha(c):
@@ -47,7 +45,7 @@ def jobs_with(failing_name, failing_step="Run selected tests"):
 
 # Each queue commit's run: its failed job's name and log. The log is None when it expired.
 RUNS = {
-    sha("1"): ("python-5", "pytest-failed.log"),  # #2984: the quarantined recruiting test
+    sha("1"): ("python-5", "worker-crashed.log"),  # #2984: an xdist worker crashed
     sha("2"): ("python-9", "worker-crashed.log"),  # #3060: an xdist worker crashed
     sha("3"): ("python-8", "pytest-failed.log"),  # #3034: the recruiting test
     sha("6a"): ("browser-1", "browser-failed.log"),  # #3033: a UI script
@@ -56,17 +54,16 @@ RUNS = {
 }
 
 
-def comment_marker(head, queue, tests=QUARANTINE, flags="", failed=(RECRUITING, CRASHED)):
-    """A comment's marker lines, written when `tests` were quarantined and naming `failed`."""
-    key = keeper.quarantine_key(failed, tests)
+def comment_marker(head, queue, flags="", failed=(CRASHED,)):
+    """A comment's marker lines, naming `failed`."""
     return (
         f"<!-- stale-pr-keeper:tests {json.dumps(list(failed))} -->\n"
-        f"<!-- stale-pr-keeper:comment {head} queue={queue} quarantine={key}{flags} -->"
+        f"<!-- stale-pr-keeper:comment {head} queue={queue}{flags} -->"
     )
 
 
-def requeued_marker(head, queue, tests=QUARANTINE, failed=(RECRUITING, CRASHED)):
-    return comment_marker(head, queue, tests, " requeued", failed)
+def requeued_marker(head, queue, failed=(CRASHED,)):
+    return comment_marker(head, queue, " requeued", failed)
 
 
 class FakeGitHub:
@@ -118,12 +115,12 @@ class FakeGitHub:
     def read_job_log(self, job_id):
         self.calls.append(("log", job_id))
         _, log = RUNS[job_id.split(":")[0]]
-        return None if log is None else keeper.read_log(log_lines(log))
+        return None if log is None else sweep.read_log(log_lines(log))
 
     def _write(self, *call):
         self.calls.append(call)
         if call[0] in self.limited:
-            raise keeper.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
+            raise sweep.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
         if call[0] in self.fail:
             raise subprocess.CalledProcessError(1, ["gh"], stderr=self.stderr.format(call[0]))
 
@@ -162,18 +159,18 @@ def test_a_crash_pytest_never_summarised_still_names_its_test():
     lines = [
         line for line in log_lines("worker-crashed.log") if "short test summary" not in line and "FAILED" not in line
     ]
-    tests = keeper.read_log(lines)[0]
+    tests = sweep.read_log(lines)[0]
     assert tests == [(CRASHED, True), ("no pytest summary", False)]
-    assert not keeper.flaky([finding(*tests)], set())  # what else failed is unknown
+    assert not sweep.flaky([finding(*tests)])  # what else failed is unknown
 
 
 def test_a_failed_line_outside_the_summary_is_test_output_not_a_failure():
     lines = ["2026-11-08T20:00:00.0Z FAILED made_up/test_x.py::test_printed - from a test's own output\n"]
-    assert keeper.read_log(lines) == ([], [])
+    assert sweep.read_log(lines) == ([], [])
 
 
 def test_the_browser_suite_names_its_failed_ui_scripts():
-    assert keeper.read_log(log_lines("browser-failed.log")) == ([], [UI_SCRIPT])
+    assert sweep.read_log(log_lines("browser-failed.log")) == ([], [UI_SCRIPT])
 
 
 def summary(*lines, results="1 failed, 3 passed in 1.0s"):
@@ -183,31 +180,33 @@ def summary(*lines, results="1 failed, 3 passed in 1.0s"):
 
 def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
     quote = f"worker 'gw3' crashed while running '{CRASHED}'"
-    tests, _ = keeper.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
+    tests, _ = sweep.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
     assert tests == [(CRASHED, False)]
     other = f"{OTHER}::test_y"
-    assert keeper.read_log(summary(f"FAILED {other} - {quote}"))[0] == [(other, False)]  # another test's crash
-    assert keeper.read_log([f"E   AssertionError: {quote}\n"])[0] == []  # test output, not xdist's line
+    assert sweep.read_log(summary(f"FAILED {other} - {quote}"))[0] == [(other, False)]  # another test's crash
+    assert sweep.read_log([f"E   AssertionError: {quote}\n"])[0] == []  # test output, not xdist's line
 
 
 @pytest.mark.parametrize("test", [f"{OTHER}::test_y[can't]", f"{OTHER}::test_y[a\\b]"])
 def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
     line = f"FAILED {test} - worker 'gw1' crashed while running {test!r}"
-    assert keeper.read_log(summary(line))[0] == [(test, True)]
-    assert keeper.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0][0] == (test, True)
+    assert sweep.read_log(summary(line))[0] == [(test, True)]
+    assert sweep.read_log([f"worker 'gw1' crashed while running {test!r}\n"])[0][0] == (test, True)
 
 
 def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
-    lines = summary(f"FAILED {RECRUITING} - x")[:-1]  # no result line: the log was cut off
-    tests, _ = keeper.read_log(lines)
-    assert tests == [(RECRUITING, False), ("pytest's summary, cut off", False)]
-    assert not keeper.flaky([finding(*tests)], QUARANTINE)
+    lines = summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'")[
+        :-1
+    ]  # no result line: the log was cut off
+    tests, _ = sweep.read_log(lines)
+    assert tests == [(CRASHED, True), ("pytest's summary, cut off", False)]
+    assert not sweep.flaky([finding(*tests)])
 
 
 def test_a_parameter_id_holding_a_dash_is_read_whole():
     test = f"{OTHER}::test_split[a - b]"
-    assert keeper.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
-    assert keeper.read_log(summary(f"FAILED {test}"))[0] == [(test, False)]
+    assert sweep.read_log(summary(f"FAILED {test} - AssertionError: x - y"))[0] == [(test, False)]
+    assert sweep.read_log(summary(f"FAILED {test}"))[0] == [(test, False)]
 
 
 def test_a_coloured_summary_still_reads():
@@ -216,35 +215,40 @@ def test_a_coloured_summary_still_reads():
         f"\x1b[31mFAILED\x1b[0m {RECRUITING} - AssertionError\n",
         "\x1b[31m1 failed\x1b[0m, 3 passed in 1.0s\n",
     ]
-    assert keeper.read_log(lines)[0] == [(RECRUITING, False)]
+    assert sweep.read_log(lines)[0] == [(RECRUITING, False)]
 
 
 def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
-    tests, _ = keeper.read_log(
+    tests, _ = sweep.read_log(
         summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", f"ERROR {OTHER}")
     )
     assert tests == [(CRASHED, True), (OTHER, False)]
-    assert not keeper.flaky([finding(*tests)], set())
+    assert not sweep.flaky([finding(*tests)])
 
 
 def test_an_internalerror_is_named_and_is_never_a_crash():
     crash = f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'"
     lines = [*summary(crash), "INTERNALERROR> Traceback\n", "INTERNALERROR> x\n"]
-    tests, _ = keeper.read_log(lines)
+    tests, _ = sweep.read_log(lines)
     assert tests == [(CRASHED, True), ("pytest INTERNALERROR", False)]
 
 
 def test_failures_the_summary_does_not_list_are_named():
-    tests, _ = keeper.read_log(summary(f"FAILED {RECRUITING} - x", results="2 failed, 1 error, 3 passed in 1.0s"))
-    assert tests == [(RECRUITING, False), ("2 failure(s) the summary does not list", False)]
-    assert not keeper.flaky([finding(*tests)], QUARANTINE)
+    tests, _ = sweep.read_log(
+        summary(
+            f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'",
+            results="2 failed, 1 error, 3 passed in 1.0s",
+        )
+    )
+    assert tests == [(CRASHED, True), ("2 failure(s) the summary does not list", False)]
+    assert not sweep.flaky([finding(*tests)])
 
 
 # Jobs and verdicts
 
 
 def test_the_failed_shard_is_found_by_its_step_though_the_job_reads_cancelled():
-    failed = keeper.failed_jobs(jobs_with("python-5"))
+    failed = sweep.failed_jobs(jobs_with("python-5"))
     assert [(job["name"], step) for job, step in failed] == [("python-5", "Run selected tests")]
 
 
@@ -256,7 +260,7 @@ def test_a_job_that_timed_out_with_no_failed_step_still_counts():
             "steps": [{"name": "Run selected tests", "conclusion": "cancelled"}],
         }
     ]
-    assert [step for _, step in keeper.failed_jobs(jobs)] == ["timed out"]
+    assert [step for _, step in sweep.failed_jobs(jobs)] == ["timed out"]
 
 
 def attempt(jobs, number, **changes):
@@ -270,7 +274,7 @@ def attempt(jobs, number, **changes):
 def test_a_failure_in_any_attempt_counts_though_a_later_rerun_passed():
     first = attempt(jobs_with("python-5"), 1)
     rerun = attempt([j for j in first if j["name"] == "python-5"], 2, conclusion="success", steps=[])
-    assert [(job["name"], job["run_attempt"]) for job, _ in keeper.failed_jobs(first + rerun)] == [("python-5", 1)]
+    assert [(job["name"], job["run_attempt"]) for job, _ in sweep.failed_jobs(first + rerun)] == [("python-5", 1)]
 
 
 def test_a_partial_rerun_keeps_the_failures_it_did_not_rerun():
@@ -278,7 +282,7 @@ def test_a_partial_rerun_keeps_the_failures_it_did_not_rerun():
     first = attempt(jobs_with("python-5"), 1)
     first += attempt([j for j in first if j["name"] == "python-5"], 1, name="browser-1", id=99)
     rerun = attempt([j for j in first if j["name"] == "python-5"], 2, id=100)
-    failed = [(job["name"], job["run_attempt"]) for job, _ in keeper.failed_jobs(first + rerun)]
+    failed = [(job["name"], job["run_attempt"]) for job, _ in sweep.failed_jobs(first + rerun)]
     assert failed == [("python-5", 1), ("browser-1", 1), ("python-5", 2)]
 
 
@@ -307,38 +311,38 @@ def test_any_failed_step_names_its_tests_and_only_pytest_steps_can_be_flakes(job
     run(gh)
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == (["comment", "enqueue"] if requeued else ["comment"])
-    assert f"`{RECRUITING}` (quarantined) in [{job}]" in calls[0][2]
+    assert f"`{CRASHED}` (worker crashed) in [{job}]" in calls[0][2]
 
 
 def test_a_job_that_timed_out_after_a_failed_step_counts_both():
     (job,) = [j for j in jobs_with("python-5") if j["name"] == "python-5"]
     job["conclusion"] = "timed_out"
-    assert [step for _, step in keeper.failed_jobs([job])] == ["Run selected tests", "timed out"]
+    assert [step for _, step in sweep.failed_jobs([job])] == ["Run selected tests", "timed out"]
 
 
 def test_every_failed_step_of_a_job_counts():
     (job,) = [j for j in jobs_with("python-5") if j["name"] == "python-5"]
     job["steps"].append({"name": "Upload test results", "conclusion": "failure"})
-    assert [step for _, step in keeper.failed_jobs([job])] == ["Run selected tests", "Upload test results"]
+    assert [step for _, step in sweep.failed_jobs([job])] == ["Run selected tests", "Upload test results"]
     gh = FakeGitHub()
     gh.jobs = lambda run_id: [{**job, "id": f"{run_id}:{job['id']}"}]
     run(gh)
-    assert [c[0] for c in written_to(gh, 2984)] == ["comment"]  # a quarantined test, but the upload failed too
+    assert [c[0] for c in written_to(gh, 2984)] == ["comment"]  # a crashed worker, but the upload failed too
     assert sum(1 for c in gh.calls if c[0] == "log" and c[1].startswith(sha("1"))) == 1
 
 
 def finding(*tests, job="python-5", step="Run selected tests", **kw):
-    return keeper.Finding(job=job, step=step, url="https://x", tests=list(tests), **kw)
+    return sweep.Finding(job=job, step=step, url="https://x", tests=list(tests), **kw)
 
 
 @pytest.mark.parametrize(
     ("findings", "expected"),
     [
-        ([finding((RECRUITING, False))], True),  # quarantined
         ([finding((CRASHED, True))], True),  # crashed worker
         ([finding((CRASHED, True), job="contracts")], True),
-        ([finding((RECRUITING, False), (CRASHED, True))], True),
-        ([finding((RECRUITING + "[a]", False))], True),  # a parameter of a quarantined test function
+        ([finding((CRASHED, True)), finding((CRASHED + "[a]", True), job="python-6")], True),
+        ([finding((RECRUITING, False))], False),  # a test that failed is never a flake to re-enqueue
+        ([finding((RECRUITING, False), (CRASHED, True))], False),
         ([finding((f"{OTHER}::test_y", False))], False),
         ([finding((RECRUITING, False)), finding((f"{OTHER}::test_y", False))], False),
         ([finding()], False),  # a failed step that named no test
@@ -351,75 +355,27 @@ def finding(*tests, job="python-5", step="Run selected tests", **kw):
         ([], False),
     ],
 )
-def test_only_quarantined_tests_and_crashed_workers_in_pytest_legs_are_flakes(findings, expected):
-    assert keeper.flaky(findings, QUARANTINE) is expected
-
-
-def entry(test, **overrides):
-    data = {
-        "test": test,
-        "first_seen": "2026-11-07",
-        "commit": sha("a"),
-        "runs": ["https://github.com/ticoteam/tico/actions/runs/1"],
-        "ticket": "",
-        "reason": "failed and passed on the same commit",
-    }
-    return {**data, **overrides}
-
-
-def test_the_quarantine_applies_flake_quarantines_rules_until_that_script_is_in_the_checkout(tmp_path):
-    folder = tmp_path / "ci" / "quarantine"
-    folder.mkdir(parents=True)
-    for test in (RECRUITING, CRASHED):
-        (tmp_path / test.split("::")[0]).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / test.split("::")[0]).write_text("")
-    (folder / keeper.entry_name(RECRUITING)).write_text(json.dumps(entry(RECRUITING)))
-    (folder / "misnamed.json").write_text(json.dumps(entry(CRASHED)))
-    (folder / keeper.entry_name(CRASHED)).write_text(json.dumps(entry(CRASHED, runs=[])))  # no run url
-    gone = "made_up/test_gone.py::test_x"
-    (folder / keeper.entry_name(gone)).write_text(json.dumps(entry(gone)))  # its test file is gone
-    (folder / "broken.json").write_text("{not json")
-    assert keeper.quarantined(tmp_path) == {RECRUITING}
-    assert keeper.quarantined(tmp_path / "missing") == set()
-
-
-def test_entry_names_match_flake_quarantine():
-    digest = hashlib.sha256(b"a/b.py::test_x[1-2]").hexdigest()[:10]
-    assert keeper.entry_name("a/b.py::test_x[1-2]") == f"a-b.py-test_x-1-2-{digest}.json"
-
-
-def test_the_quarantine_uses_flake_quarantine_load_when_the_checkout_has_it(tmp_path):
-    script = tmp_path / keeper.QUARANTINE_SCRIPT
-    script.parent.mkdir()
-    script.write_text("def load(root):\n    return {'from/flake_quarantine.py::test_load': {'file': str(root)}}\n")
-    assert keeper.quarantined(tmp_path) == {"from/flake_quarantine.py::test_load"}
+def test_only_crashed_workers_in_pytest_legs_are_flakes(findings, expected):
+    assert sweep.flaky(findings) is expected
 
 
 # The whole run
 
 
-def run(gh, tests=QUARANTINE, dry_run=False):
-    return keeper.keep(gh, set(tests), NOW, dry_run)
+def run(gh, dry_run=False):
+    return sweep.keep(gh, NOW, dry_run)
 
 
-def test_a_quarantined_failure_is_re_enqueued_at_its_head_with_its_marker_first():
+def test_a_crashed_worker_is_re_enqueued_at_its_head_with_its_marker_first():
     gh = FakeGitHub()
     text, ok = run(gh)
     assert ok
     calls = written_to(gh, 2984)
     assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert requeued_marker(sha("a"), sha("1"), failed=(RECRUITING,)) in calls[0][2]
-    assert f"`{RECRUITING}` (quarantined)" in calls[0][2]
+    assert requeued_marker(sha("a"), sha("1")) in calls[0][2]
+    assert f"`{CRASHED}` (worker crashed)" in calls[0][2]
     assert calls[1] == ("enqueue", 2984, sha("a"))  # expectedHeadOid: a newer push is not queued
     assert "#2984" in text.split("### Re-enqueued")[1].split("###")[0]
-
-
-def test_a_crashed_worker_is_re_enqueued():
-    gh = FakeGitHub()
-    run(gh)
-    calls = written_to(gh, 3060)
-    assert [c[0] for c in calls] == ["comment", "enqueue"]
-    assert "(worker crashed)" in calls[0][2]
 
 
 def test_without_a_queue_token_a_flake_is_commented_with_the_command_and_its_one_requeue_is_kept():
@@ -428,18 +384,18 @@ def test_without_a_queue_token_a_flake_is_commented_with_the_command_and_its_one
     assert gh.writes("enqueue") == []
     (call,) = written_to(gh, 2984)
     assert "Only flakes failed. Re-enqueue it: `gh pr merge 2984`." in call[2]
-    assert not keeper.markers([(1, call[2])])[0].requeued
+    assert not sweep.markers([(1, call[2])])[0].requeued
 
 
 def test_a_real_failure_gets_one_comment_naming_the_test_and_no_enqueue():
     gh = FakeGitHub()
-    run(gh, tests=set())
+    run(gh)
     calls = written_to(gh, 3034)
     assert [c[0] for c in calls] == ["comment"]
     body = calls[0][2]
     assert f"`{RECRUITING}` in [python-8]" in body
     assert "a check failed" in body
-    assert comment_marker(sha("c"), sha("3"), set(), failed=(RECRUITING,)) in body
+    assert comment_marker(sha("c"), sha("3"), failed=(RECRUITING,)) in body
 
 
 def test_a_ui_script_failure_names_the_script():
@@ -458,35 +414,26 @@ def test_a_head_already_commented_on_costs_no_run_lookup():
 
 
 def test_a_comment_on_an_older_head_does_not_count():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("99"), sha("7a"), set())]})
-    run(gh, tests=set())
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("99"), sha("7a"))]})
+    run(gh)
     assert [c[0] for c in written_to(gh, 2966)] == ["comment"]
 
 
-def test_a_test_quarantined_after_the_comment_gets_its_head_re_enqueued_in_the_same_comment():
-    # #2966 was commented on before the recruiting test was quarantined.
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"), set())]})
-    run(gh)
-    assert [c[0] for c in written_to(gh, 2966)] == ["enqueue"]
-    (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and requeued_marker(sha("c2"), sha("7a"), failed=(RECRUITING,)) in edit[2]
-    assert gh.calls.index(edit) < gh.calls.index(("enqueue", 2966, sha("c2")))  # the marker first
-
-
 def test_a_refused_enqueue_puts_the_existing_comment_back():
-    old = comment_marker(sha("c2"), sha("7a"), set())
-    gh = FakeGitHub(comments={2966: [old]}, fail={"enqueue"})
+    # #2953 was commented on for an older queue run; its new one (8a) failed only on a crashed worker.
+    old = comment_marker(sha("d3"), sha("0"))
+    gh = FakeGitHub(comments={2953: [old]}, fail={"enqueue"})
     _, ok = run(gh)
-    assert not ok
-    assert [c[1:] for c in gh.writes("edit_comment") if c[1] == 2966000][-1] == (2966000, old)
+    assert not ok and ("enqueue", 2953, sha("d3")) in gh.calls
+    assert [c[1:] for c in gh.writes("edit_comment") if c[1] == 2953000][-1] == (2953000, old)
 
 
 def test_a_new_queue_run_of_the_same_head_updates_the_comment_instead_of_adding_one():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("55"), set())]})
-    text, _ = run(gh, tests=set())
+    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("55"))]})
+    text, _ = run(gh)
     assert written_to(gh, 2966) == []
     (edit,) = gh.writes("edit_comment")
-    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), set(), failed=(RECRUITING,)) in edit[2]
+    assert edit[1] == 2966000 and comment_marker(sha("c2"), sha("7a"), failed=(RECRUITING,)) in edit[2]
     assert "#2966 Mail from the source: updated" in text
 
 
@@ -498,23 +445,15 @@ def test_a_head_dropped_again_after_its_requeue_is_diagnosed_in_the_same_comment
     (edit,) = gh.writes("edit_comment")
     assert edit[1] == 2953000 and "Already re-queued once for this commit" in edit[2]
     assert f"`{CRASHED}` (worker crashed)" in edit[2]
-    (marker,) = keeper.markers([(1, edit[2])])
+    (marker,) = sweep.markers([(1, edit[2])])
     assert marker.requeued and marker.queue == sha("8a")
-
-
-def test_a_requeued_head_is_never_re_enqueued_again_when_the_quarantine_changes():
-    gh = FakeGitHub(comments={2966: [requeued_marker(sha("c2"), sha("7a"), set())]})
-    run(gh)
-    assert written_to(gh, 2966) == []
-    (edit,) = gh.writes("edit_comment")
-    assert "Already re-queued once for this commit" in edit[2]
 
 
 def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued_once_a_token_is_added():
     first = FakeGitHub(can_enqueue=False)
     run(first)
     (call,) = written_to(first, 2984)
-    assert keeper.markers([(1, call[2])])[0].deferred
+    assert sweep.markers([(1, call[2])])[0].deferred
     again = FakeGitHub(comments={2984: [call[2]]}, can_enqueue=False)
     run(again)
     assert written_to(again, 2984) == [] and again.writes("edit_comment") == []
@@ -522,24 +461,17 @@ def test_without_a_queue_token_the_flake_comment_is_marked_deferred_and_requeued
     run(later)
     assert [c[0] for c in written_to(later, 2984)] == ["enqueue"]
     (edit,) = later.writes("edit_comment")
-    marker = keeper.markers([(1, edit[2])])[0]
+    marker = sweep.markers([(1, edit[2])])[0]
     assert marker.requeued and not marker.deferred
-
-
-def test_a_quarantine_change_that_touches_none_of_a_comments_tests_costs_no_reads():
-    gh = FakeGitHub(comments={2966: [comment_marker(sha("c2"), sha("7a"))]})
-    run(gh, tests=QUARANTINE | {"made_up/test_other.py::test_z"})
-    assert written_to(gh, 2966) == [] and not any(c[0] == "edit_comment" and c[1] == 2966000 for c in gh.calls)
-    assert ("queue_run", sha("7a")) not in gh.calls
 
 
 def test_a_comment_naming_tests_with_an_html_comment_end_still_reads():
     test = f"{OTHER}::test_y[-->]"
-    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = keeper.comment_body(pr, [finding((test, False))], {test}, None)
+    pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = sweep.comment_body(pr, [finding((test, False))], None)
     assert "-->]" not in body.split("<!-- stale-pr-keeper:tests")[1]
-    (marker,) = keeper.markers([(1, body)])
-    assert marker.tests == [test] and marker.quarantine == keeper.quarantine_key([test], {test})
+    (marker,) = sweep.markers([(1, body)])
+    assert marker.tests == [test]
 
 
 def with_mergeable(gh, number, state):
@@ -554,7 +486,7 @@ def test_a_conflicting_flake_is_re_enqueued_once_the_conflict_is_gone():
     first = with_mergeable(FakeGitHub(), 2984, "CONFLICTING")
     run(first)
     (call,) = written_to(first, 2984)
-    assert "once it no longer conflicts with main" in call[2] and keeper.markers([(1, call[2])])[0].deferred
+    assert "once it no longer conflicts with main" in call[2] and sweep.markers([(1, call[2])])[0].deferred
     still = with_mergeable(FakeGitHub(comments={2984: [call[2]]}), 2984, "CONFLICTING")
     run(still)
     assert written_to(still, 2984) == [] and still.writes("edit_comment") == []
@@ -566,12 +498,12 @@ def test_a_conflicting_flake_is_re_enqueued_once_the_conflict_is_gone():
 def test_huge_test_ids_keep_the_comment_small_and_are_never_a_flake():
     many = [(f"{OTHER}::test_y[{i}{'p' * 1000}]", True) for i in range(200)]
     findings = [finding(*many, job=f"python-{n}") for n in range(1, 6)]
-    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = keeper.comment_body(pr, findings, set(), "https://x")
+    pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = sweep.comment_body(pr, findings, "https://x")
     assert len(body) < 40_000
-    (marker,) = keeper.markers([(1, body)])
+    (marker,) = sweep.markers([(1, body)])
     assert 0 < len(marker.tests) < 200 and marker.tests == [t for t, _ in many[: len(marker.tests)]]
-    assert not keeper.flaky(findings, set())  # every one a crash, but too many to be flakes
+    assert not sweep.flaky(findings)  # every one a crash, but too many to be flakes
 
 
 def with_reason(gh, number, reason):
@@ -587,16 +519,16 @@ def test_a_timed_out_removal_names_its_failing_tests_and_is_never_re_enqueued():
     run(gh)
     (call,) = written_to(gh, 2984)
     assert call[0] == "comment" and "its checks timed out" in call[2]
-    assert f"`{RECRUITING}` (quarantined) in [python-5]" in call[2]
+    assert f"`{CRASHED}` (worker crashed) in [python-5]" in call[2]
 
 
 def test_ids_holding_an_html_comment_end_stay_inside_the_budget():
-    many = [(f"{OTHER}::test_y[{i}{'-->' * 160}]", False) for i in range(40)]
+    many = [(f"{OTHER}::test_y[{i}{'-->' * 160}]", True) for i in range(40)]
     findings = [finding(*many[n * 8 : n * 8 + 8], job=f"python-{n}") for n in range(5)]
-    pr = keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
-    body = keeper.comment_body(pr, findings, {t for t, _ in many}, "https://x")
+    pr = sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))[0]
+    body = sweep.comment_body(pr, findings, "https://x")
     assert len(body) < 60_000
-    assert not keeper.flaky(findings, {t for t, _ in many})  # quarantined, but not all fit the marker
+    assert not sweep.flaky(findings)  # every one a crash, but not all fit the marker
 
 
 def test_a_requeued_head_whose_comment_is_current_is_done():
@@ -635,11 +567,10 @@ def test_conflicting_red_prs_are_labelled_and_the_label_comes_off_once_clean():
     ],
 )
 def test_the_label_rule(mergeable, checks, labels, expected):
-    pr = keeper.PR(1, "t", "u", False, "main", sha("a"), mergeable, False, labels, None, checks)
-    assert keeper.needs_label(pr) is expected
+    pr = sweep.PR(1, "t", "u", False, "main", sha("a"), mergeable, False, labels, None, checks)
+    assert sweep.needs_label(pr) is expected
     assert (
-        keeper.needs_label(keeper.PR(1, "t", "u", True, "main", sha("a"), mergeable, False, labels, None, checks))
-        is None
+        sweep.needs_label(sweep.PR(1, "t", "u", True, "main", sha("a"), mergeable, False, labels, None, checks)) is None
     )
 
 
@@ -726,11 +657,11 @@ def test_add_label_does_not_try_to_create_the_label_under_the_rate_limit(monkeyp
 
     def limited(*args, **_):
         calls.append(args)
-        raise keeper.RateLimited(1, ["gh"], stderr="API rate limit exceeded")
+        raise sweep.RateLimited(1, ["gh"], stderr="API rate limit exceeded")
 
-    gh = keeper.GitHub("ticoteam/tico")
+    gh = sweep.GitHub("ticoteam/tico")
     monkeypatch.setattr(gh, "_gh", limited)
-    with pytest.raises(keeper.RateLimited):
+    with pytest.raises(sweep.RateLimited):
         gh.add_label(1, "needs-main-merge")
     assert len(calls) == 1
 
@@ -741,7 +672,7 @@ def test_the_rate_limit_stops_the_run_at_once(monkeypatch):
 
     def limited(job_id):
         if job_id.startswith(sha("2")):
-            raise keeper.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
+            raise sweep.RateLimited(1, ["gh"], stderr="HTTP 403: API rate limit exceeded")
         return real(job_id)
 
     monkeypatch.setattr(gh, "read_job_log", limited)
@@ -786,7 +717,7 @@ def test_a_read_error_writes_nothing_for_that_pr_and_fails_the_run(monkeypatch):
 
 
 def test_parse_prs_reads_the_tested_head_and_the_push_time():
-    prs = {pr.number: pr for pr in keeper.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))}
+    prs = {pr.number: pr for pr in sweep.parse_prs(json.loads((FIXTURES / "open-prs.json").read_text()))}
     assert prs[2999].queue_commit == sha("5") and prs[2999].tested_head == sha("9") and prs[2999].head == sha("e")
     assert prs[3017].removed_reason is None and prs[3017].in_queue
     assert prs[2984].node_id == "PR_kwDO2984"
@@ -809,8 +740,8 @@ def test_the_github_client_pages_open_prs_with_one_graphql_call_each(monkeypatch
         seen.append(args)
         return subprocess.CompletedProcess(args, 0, stdout=json.dumps(pages[len(seen) - 1]))
 
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
-    assert keeper.GitHub("ticoteam/tico").open_prs() == pages
+    monkeypatch.setattr(sweep.subprocess, "run", fake_run)
+    assert sweep.GitHub("ticoteam/tico").open_prs() == pages
     assert len(seen) == 2
     assert "after=Y3Vyc29yOjk=" in seen[1] and not any(a.startswith("after=") for a in seen[0])
 
@@ -833,29 +764,29 @@ def test_comments_page_back_until_the_heads_marker_is_found(monkeypatch):
         seen.append(args)
         return subprocess.CompletedProcess(args, 0, stdout=json.dumps(replies[len(seen) - 1]))
 
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
-    out = keeper.GitHub("ticoteam/tico").comments({1: head, 2: sha("b")})
+    monkeypatch.setattr(sweep.subprocess, "run", fake_run)
+    out = sweep.GitHub("ticoteam/tico").comments({1: head, 2: sha("b")})
     assert len(seen) == 2  # the second page had the marker: the third is never read
     assert 'before: "c1"' in seen[1][4]
-    assert len(out[1]) == 200 and len(keeper.markers(out[1])) == 1
+    assert len(out[1]) == 200 and len(sweep.markers(out[1])) == 1
     assert out[2] == [(2000, "x")]
 
 
-def test_only_the_keepers_own_comments_count(monkeypatch):
+def test_only_the_sweeps_own_comments_count(monkeypatch):
     head = sha("a")
     page = comments_page(1, [requeued_marker(head, sha("1")), "mine"])
     page["pr1"]["comments"]["nodes"][0]["viewerDidAuthor"] = False  # pasted by someone else
-    monkeypatch.setattr(keeper.subprocess, "run", completed(json.dumps({"data": {"repository": page}})))
-    assert keeper.GitHub("ticoteam/tico").comments({1: head}) == {1: [(1001, "mine")]}
+    monkeypatch.setattr(sweep.subprocess, "run", completed(json.dumps({"data": {"repository": page}})))
+    assert sweep.GitHub("ticoteam/tico").comments({1: head}) == {1: [(1001, "mine")]}
 
 
 def test_a_rate_limited_call_raises_rate_limited(monkeypatch):
     def fake_run(args, **_):
         raise subprocess.CalledProcessError(1, args, stderr="gh: API rate limit exceeded for installation (HTTP 403)")
 
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
-    with pytest.raises(keeper.RateLimited):
-        keeper.GitHub("ticoteam/tico").api("rate_limit")
+    monkeypatch.setattr(sweep.subprocess, "run", fake_run)
+    with pytest.raises(sweep.RateLimited):
+        sweep.GitHub("ticoteam/tico").api("rate_limit")
 
 
 def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tmp_path):
@@ -865,7 +796,7 @@ def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tm
         script.chmod(0o755)
         monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
 
-    gh = keeper.GitHub("ticoteam/tico")
+    gh = sweep.GitHub("ticoteam/tico")
     fake_gh("gh: Not Found (HTTP 410)", 1)
     assert gh.read_job_log(1) is None
     fake_gh("HTTP 502: Bad Gateway", 1)
@@ -875,7 +806,7 @@ def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tm
     with pytest.raises(subprocess.CalledProcessError, match="returned non-zero"):
         gh.read_job_log(1)
     fake_gh("gh: API rate limit exceeded (HTTP 403)", 1)
-    with pytest.raises(keeper.RateLimited):
+    with pytest.raises(sweep.RateLimited):
         gh.read_job_log(1)
     fake_gh("", 0)
     assert gh.read_job_log(1) == ([], [])
@@ -888,8 +819,8 @@ def test_comment_bodies_go_through_stdin(monkeypatch):
         seen.append((args, input))
         return subprocess.CompletedProcess(args, 0, stdout='{"id": 5}')
 
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
-    gh = keeper.GitHub("ticoteam/tico")
+    monkeypatch.setattr(sweep.subprocess, "run", fake_run)
+    gh = sweep.GitHub("ticoteam/tico")
     assert gh.comment(12, "x" * 300_000) == 5
     gh.edit_comment(5, "body")
     assert all("--input" in args and all(len(a) < 200 for a in args) for args, _ in seen)
@@ -904,11 +835,11 @@ def test_enqueue_uses_the_queue_token_and_the_inspected_head(monkeypatch):
         seen.update(args=args, token=env["GH_TOKEN"])
         return subprocess.CompletedProcess(args, 0, stdout=json.dumps(reply))
 
-    monkeypatch.setattr(keeper.subprocess, "run", fake_run)
+    monkeypatch.setattr(sweep.subprocess, "run", fake_run)
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    gh = keeper.GitHub("ticoteam/tico", queue_token="app-token")
-    assert gh.can_enqueue and not keeper.GitHub("ticoteam/tico").can_enqueue
-    pr = keeper.PR(12, "t", "u", False, "main", sha("a"), "MERGEABLE", False, [], None, "SUCCESS", node_id="PR_12")
+    gh = sweep.GitHub("ticoteam/tico", queue_token="app-token")
+    assert gh.can_enqueue and not sweep.GitHub("ticoteam/tico").can_enqueue
+    pr = sweep.PR(12, "t", "u", False, "main", sha("a"), "MERGEABLE", False, [], None, "SUCCESS", node_id="PR_12")
     gh.enqueue(pr)
     assert seen["args"][:3] == ["gh", "api", "graphql"] and "enqueuePullRequest" in seen["args"][4]
     assert "id=PR_12" in seen["args"] and f"head={sha('a')}" in seen["args"]  # never a newer push
@@ -916,7 +847,7 @@ def test_enqueue_uses_the_queue_token_and_the_inspected_head(monkeypatch):
     reply = {"data": {"enqueuePullRequest": {"mergeQueueEntry": None}}}
     with pytest.raises(subprocess.CalledProcessError) as raised:
         gh.enqueue(pr)
-    assert keeper.REFUSED.search(raised.value.stderr)  # nothing queued: the marker is taken back
+    assert sweep.REFUSED.search(raised.value.stderr)  # nothing queued: the marker is taken back
 
 
 @pytest.mark.parametrize(
@@ -938,7 +869,7 @@ def test_add_label_creates_the_label_only_when_it_is_missing(monkeypatch, label_
             raise subprocess.CalledProcessError(1, ["gh"], stderr=label_stderr)
         return ""
 
-    gh = keeper.GitHub("ticoteam/tico")
+    gh = sweep.GitHub("ticoteam/tico")
     monkeypatch.setattr(gh, "_gh", fake_gh)
     if raises:
         with pytest.raises(subprocess.CalledProcessError):
@@ -951,7 +882,7 @@ def test_add_label_creates_the_label_only_when_it_is_missing(monkeypatch, label_
 def test_the_workflow_is_hourly_and_on_demand_and_keeps_the_queue_token_apart():
     import yaml
 
-    workflow = yaml.safe_load((keeper.ROOT / ".github/workflows/stale-pr-keeper.yml").read_text())
+    workflow = yaml.safe_load((sweep.ROOT / ".github/workflows/stale-pr-sweep.yml").read_text())
     triggers = workflow[True]  # PyYAML reads the bare `on` key as True
     assert "workflow_dispatch" in triggers
     assert triggers["schedule"][0]["cron"].split()[1:] == ["*", "*", "*", "*"]

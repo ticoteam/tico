@@ -4,38 +4,30 @@ import base64
 import copy
 import json
 import sqlite3
-from contextlib import closing, contextmanager
+from contextlib import closing
 from email.message import EmailMessage
-from unittest import mock
 from types import SimpleNamespace
 
 import pytest
 
-from backend import judge, task_asks
+from backend import task_asks
 from backend.store import Problem
-from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt
+from backend.tests.helpers.api import headers, post, runner, setup_attempt
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,
     H,
     S,
     autonomous,
-    claim,
+    dispatch,
     inbox,
     incoming,
     mime,
     policy,
-    post,
     queue,
 )
-
-
-@contextmanager
-def engine_mock(**kwargs):
-    """The decision engine `classify` asks (Jev), as a Mock that `server_engine` hands out."""
-    ask = mock.Mock(**kwargs)
-    with mock.patch.object(judge, "server_engine", return_value=ask):
-        yield ask
+from backend.tests.helpers.judge import fake
 
 
 def approved(api, queued, token="ana-test", expected=200):
@@ -81,9 +73,9 @@ def test_unsupported_recipient_visible_bodies_always_ask(inbox, form):
         message.set_content(commitment.encode(), maintype="application", subtype="x-body")
     snap = S.snapshot(raw(message), BOX)
     assert snap["classification_complete"] is False
-    with engine_mock() as ask:
-        response = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
-    ask.assert_not_called()
+    engine = fake(inbox)
+    response = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    assert engine.calls == []
     assert response["classification"]["legal_or_money"] is None
     assert response["state"] == "waiting_approval"
     preview = inbox.get("/api/v2/email/sends/" + response["id"], headers=headers()).json()
@@ -114,18 +106,13 @@ def test_named_inline_bodies_cannot_hide_commitments_from_classification(inbox, 
     supported = form in ("inline_html", "primary_plain", "named_container")
     assert snap["classification_complete"] is supported
 
-    def classify(context, *args):
-        assert commitment in context["body"]
-        return {"answers": {"legal_or_money": {"value": "yes"}}}
-
-    with (
-        engine_mock(side_effect=classify) as ask,
-        mock.patch.object(judge, "audit_detail", return_value={}),
-    ):
-        result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
-    assert ask.call_count == int(supported)
-    assert result["classification"]["legal_or_money"] is (True if supported else None)
-    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
+    engine = fake(inbox, legal_or_money="yes")
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(message)})["send"]
+    assert len(engine.calls) == int(supported)
+    if supported:
+        assert commitment in engine.calls[0]["state"]["body"]
+    assert result["classification"]["status"] == ("classified" if supported else "incomplete_content")
+    assert result["state"] == "waiting_approval" and dispatch(inbox) == []
 
 
 @pytest.mark.parametrize("subtype", ["plain", "html", "enriched"])
@@ -142,18 +129,15 @@ def test_inline_text_files_are_classified_and_keep_attachment_approval_and_downl
     file = snap["attachments"][0]
     expected = message.get_payload()[-1].get_payload(decode=True)
     assert file["name"] == "notes." + subtype and file["sha256"] == S.digest(expected)
-    with (
-        engine_mock(return_value={"answers": {"legal_or_money": {"value": "no"}}}) as ask,
-        mock.patch.object(judge, "audit_detail", return_value={}),
-    ):
-        result = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": encoded})["send"]
+    engine = fake(inbox, legal_or_money="no")
+    result = post(inbox, "email/sends", {"mailbox": BOX, "raw": encoded})["send"]
     if subtype != "enriched":
-        assert "Harmless notes" in ask.call_args.args[0]["body"]
+        assert "Harmless notes" in engine.calls[0]["state"]["body"]
         assert "attachments" in result["decision"]["reasons"]
     else:
-        ask.assert_not_called()
+        assert engine.calls == []
         assert not snap["classification_complete"]
-    assert result["state"] == "waiting_approval" and claim(inbox, runner(inbox)["token"]) is None
+    assert result["state"] == "waiting_approval" and dispatch(inbox) == []
     response = inbox.get(f'/api/v2/email/sends/{result["id"]}/attachments/{file["part"]}', headers=headers())
     assert response.status_code == 200 and response.content == expected
     message.get_payload()[-1].set_payload("Changed notes")
@@ -177,294 +161,22 @@ def test_an_ok_of_one_copy_cannot_authorize_an_added_internal_bcc(inbox):
     assert asked["recipients"] == ["ben@acme.example", "cara@acme.example"]
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    [
-        "cancel_twice",
-        "conference_twice",
-        "conference_failure_twice",
-        "trusted_duplicates",
-        "legacy_no_snapshot",
-        "legacy_notes",
-        "legacy_link",
-        "changed_hold",
-        "moved_hold",
-        "unrelated",
-        "edit_create_failure",
-        "edit_create_pending",
-        "edit_reuse_failure",
-        "edit_reuse_ready",
-    ],
-)
-def test_standing_booking_retries_reuse_one_verified_silent_hold(inbox, scenario):
-    from contextlib import nullcontext
-    from connectors.mail import __main__ as cli, scheduling, calendar as cal
-    from connectors.mail.tests.fake import FakeCalendarService
-
-    message = {
-        "id": "inbound",
-        "from": CONTACT,
-        "to": [BOX],
-        "cc": [],
-        "labels": [],
-        "epoch": 1,
-        "subject": "Meeting",
-        "headers": {"message-id": "<inbound@vendor.example>"},
-    }
-    args = SimpleNamespace(
-        thread="thread",
-        category="influencer",
-        bd_confirmation="",
-        mode="book",
-        slot="2030-01-08T10:00:00-08:00",
-        acceptance_message="inbound",
-    )
-    service = FakeCalendarService(calendars=["primary"])
-    calendar = cal.Calendar(service, BOX)
-    original_query, original_insert, original_exec, original_patch = (
-        service.query,
-        service.insert,
-        calendar._exec,
-        service.patch,
-    )
-    conference_requests, polls = [], []
-
-    def execute(request, what):
-        if scenario == "conference_twice" and what == "events.get conference":
-            raise cal.Failure("Transient conference read failure", status=503)
-        if scenario.startswith("edit_") and what == "events.get conference":
-            polls.append(what)
-            # The original insert snapshot is persisted before any poll, including failure paths.
-            receipt = json.loads(
-                connection.execute("SELECT result FROM scheduling_actions WHERE key NOT LIKE 'retired:%'").fetchone()[0]
-            )
-            assert receipt["hold_version"] == 1 and receipt["hold"]["summary"] == "Meeting"
-            if scenario.startswith("edit_reuse") and len(polls) == 1:
-                raise cal.Failure("Transient conference read failure", status=503)
-            event = next(iter(service.created_events.values()))
-            if scenario.endswith("pending"):
-                event["conferenceData"]["notes"] = "User added conference notes"
-            else:
-                event["summary"] = "User changed the meeting title"
-                event["attendees"].append({"email": "other@vendor.example"})
-            event["etag"] = '"user-edited"'
-            event["conferenceData"]["createRequest"]["status"] = {
-                "statusCode": "success"
-                if scenario.endswith("ready")
-                else "failure"
-                if scenario.endswith("failure")
-                else "pending"
-            }
-            if scenario.endswith("ready"):
-                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
-            return copy.deepcopy(event)
-        return copy.deepcopy(original_exec(request, what))
-
-    def query(body=None):
-        service.busy = [
-            (e["start"]["dateTime"], e["end"]["dateTime"]) for e in service.events_by_calendar.get("primary", [])
-        ]
-        return original_query(body=body)
-
-    def insert(**kwargs):
-        request = original_insert(**kwargs)
-        execute = request.execute
-
-        def pending():
-            event = execute()
-            event.pop("hangoutLink", None)
-            event["conferenceData"]["createRequest"]["status"] = {
-                "statusCode": "failure" if scenario == "conference_failure_twice" else "pending"
-            }
-            conference_requests.append(event["conferenceData"]["createRequest"]["requestId"])
-            return event
-
-        if scenario in ("conference_twice", "conference_failure_twice") or scenario.startswith("edit_"):
-            request.execute = pending
-        return request
-
-    def retry_conference(**kwargs):
-        request = original_patch(**kwargs)
-        execute = request.execute
-
-        def finish():
-            event = execute()
-            conference_requests.append(event["conferenceData"]["createRequest"]["requestId"])
-            if len(conference_requests) < 3:
-                event.pop("hangoutLink", None)
-                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "failure"}
-            return event
-
-        request.execute = finish
-        return request
-
-    with closing(sqlite3.connect(":memory:")) as connection:
-        ctx = SimpleNamespace(
-            conn=connection, mailbox=BOX, dry=False, calendar=calendar, gmail=mock.MagicMock(), audit=mock.MagicMock()
-        )
-
-        def submit(mailbox, raw, thread_id, reply_id):
-            return queue(inbox, actor="bot:ops", raw=raw, thread_id=thread_id, reply_to_id=reply_id)
-
-        def read(path):
-            response = inbox.get("/api/v2/" + path, headers=headers())
-            assert response.status_code == 200, response.text
-            return response.json()
-
-        with (
-            mock.patch.object(cli, "thread_context", return_value=([message], "", "", "", [])),
-            mock.patch.object(scheduling, "permission"),
-            mock.patch.object(scheduling, "review_thread", return_value={}),
-            mock.patch.object(scheduling, "mailbox_lock", side_effect=lambda _: nullcontext()),
-            mock.patch.object(scheduling.pl, "queue_send", side_effect=submit) as enqueue,
-            mock.patch.object(scheduling.pl, "HUB_GET", side_effect=read),
-            mock.patch.object(service, "query", side_effect=query),
-            mock.patch.object(service, "insert", side_effect=insert),
-            mock.patch.object(service, "patch", side_effect=retry_conference),
-            mock.patch.object(calendar, "_exec", side_effect=execute),
-            mock.patch.object(cal.time, "sleep"),
-        ):
-            first = scheduling.run(ctx, args)
-            if scenario.startswith("edit_"):
-                result = scheduling.run(ctx, args) if scenario.startswith("edit_reuse") else first
-                assert result["retry"] and not result["queued"] and "Review the calendar hold" in result["reason"]
-                assert result["hold"] == first["hold"] and result["hold"]["summary"] == "Meeting"
-                assert result["hold"]["attendees"] == [{"email": CONTACT}]
-                assert "notes" not in result["hold"]["conferenceData"]
-                with pytest.raises(scheduling.Refused, match="Review the calendar hold"):
-                    scheduling.run(ctx, args)
-                enqueue.assert_not_called()
-                assert not service.patch.called and not service.deleted and service.insert.call_count == 1
-                return
-            if scenario in ("conference_twice", "conference_failure_twice"):
-                assert first["retry"] and not first["queued"]
-                second = scheduling.run(ctx, args)
-                assert second["retry"] and not second["queued"]
-                enqueue.assert_not_called()
-                if scenario == "conference_twice":
-                    event = next(iter(service.created_events.values()))
-                    event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
-                    event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
-            else:
-                post(inbox, "email/sends/" + first["send_id"] + "/cancel", {})
-                if scenario.startswith("legacy_"):
-                    receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions").fetchone()[0])
-                    if scenario == "legacy_no_snapshot":
-                        receipt.pop("hold")
-                    receipt.pop("hold_version")
-                    connection.execute("UPDATE scheduling_actions SET result=?", (json.dumps(receipt),))
-                    event = service.created_events[first["event"]]
-                    if scenario == "legacy_notes":
-                        event["conferenceData"]["notes"] = "User added dial-in instructions; preserve this meeting."
-                    elif scenario == "legacy_link":
-                        event["hangoutLink"] = "https://meet.google.com/user-link-url"
-                    if scenario != "legacy_no_snapshot":
-                        snapshots = []
-                        duplicate = calendar.create_scheduling_event(
-                            scheduling.datetime.fromisoformat(args.slot),
-                            scheduling.datetime.fromisoformat(args.slot) + scheduling.DURATION,
-                            CONTACT,
-                            "newer-hold",
-                            receipt["body"],
-                            on_insert=snapshots.append,
-                        )
-                        newer = {
-                            **receipt,
-                            "event": duplicate["id"],
-                            "expected_event_id": duplicate["id"],
-                            "hold": snapshots[0],
-                            "hold_version": 1,
-                            "state": "canceled",
-                        }
-                        connection.execute(
-                            "INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",
-                            ("retired:newer", BOX, "thread", "book", "2030-01-01", "canceled", json.dumps(newer)),
-                        )
-                    with pytest.raises(scheduling.Refused, match="Review the calendar hold"):
-                        scheduling.run(ctx, args)
-                    assert enqueue.call_count == 1 and not service.deleted and not service.patch.called
-                    assert len(service.created_events) == (1 if scenario == "legacy_no_snapshot" else 2)
-                    return
-                if scenario in ("changed_hold", "moved_hold", "unrelated"):
-                    event = service.created_events[first["event"]]
-                    if scenario == "changed_hold":
-                        event["summary"] = "A person changed this meeting"
-                    elif scenario == "moved_hold":
-                        event["start"]["dateTime"] = "2030-01-08T10:15:00-08:00"
-                    else:
-                        service.events_by_calendar["primary"].append({**event, "id": "unrelated"})
-                    with pytest.raises(
-                        scheduling.Refused,
-                        match="calendar blocks" if scenario == "unrelated" else "Review the calendar hold",
-                    ):
-                        scheduling.run(ctx, args)
-                    assert enqueue.call_count == 1 and not service.deleted
-                    return
-                if scenario == "trusted_duplicates":
-                    # Every verified original hold is excluded; the newest is reused and none is deleted.
-                    receipt = json.loads(connection.execute("SELECT result FROM scheduling_actions").fetchone()[0])
-                    snapshots = []
-                    duplicate = calendar.create_scheduling_event(
-                        scheduling.datetime.fromisoformat(args.slot),
-                        scheduling.datetime.fromisoformat(args.slot) + scheduling.DURATION,
-                        CONTACT,
-                        "older-duplicate",
-                        receipt["body"],
-                        on_insert=snapshots.append,
-                    )
-                    receipt.update(
-                        event=duplicate["id"],
-                        expected_event_id=duplicate["id"],
-                        state="canceled",
-                        queued=False,
-                        hold=snapshots[0],
-                    )
-                    connection.execute(
-                        "INSERT INTO scheduling_actions VALUES (?,?,?,?,?,?,?)",
-                        ("retired:old", BOX, "thread", "book", "2030-01-01", "canceled", json.dumps(receipt)),
-                    )
-                    connection.commit()
-                second = scheduling.run(ctx, args)
-                assert second["queued"] and second["send_id"] != first["send_id"]
-                post(inbox, "email/sends/" + second["send_id"] + "/cancel", {})
-            third = scheduling.run(ctx, args)
-            assert third["queued"] and third["state"] == "waiting_approval"
-            assert (
-                first["expected_event_id"] == second["expected_event_id"] == third["expected_event_id"]
-                or scenario == "trusted_duplicates"
-            )
-            assert second["hold"] == third["hold"]
-            assert (
-                len(service.created_events)
-                == len(service.events_by_calendar["primary"])
-                == (2 if scenario == "trusted_duplicates" else 1)
-            )
-            assert all(
-                event["sendUpdates"] == "none" for event in service.created_events.values() if "sendUpdates" in event
-            )
-            assert not service.deleted
-            assert service.insert.call_count == (2 if scenario == "trusted_duplicates" else 1)
-            if scenario == "conference_failure_twice":
-                assert service.patch.call_count == 2 and len(set(conference_requests)) == 3
-            assert scheduling.run(ctx, args)["send_id"] == third["send_id"]
-
-
 def test_negative_chat_cannot_approve_a_different_large_send_through_the_api(inbox):
+    fake(inbox, legal_or_money="yes")
     _, _, attempt = setup_attempt(inbox, "ops")
-    note = api_post(inbox, "chat/ops", {"text": "Do not send any email to outsiders."})
-    with mock.patch.object(S, "classify", return_value={"legal_or_money": True, "status": "classified"}):
-        result = api_post(
-            inbox,
-            "email/sends",
-            {
-                "mailbox": BOX,
-                "raw": mime(
-                    to=[f"person{i}@vendor.example" for i in range(11)], files=True, body="We agree to pay $100000."
-                ),
-                "approval_id": note["id"],
-            },
-            token=attempt["token"],
-        )["send"]
+    note = post(inbox, "chat/ops", {"text": "Do not send any email to outsiders."})
+    result = post(
+        inbox,
+        "email/sends",
+        {
+            "mailbox": BOX,
+            "raw": mime(
+                to=[f"person{i}@vendor.example" for i in range(11)], files=True, body="We agree to pay $100000."
+            ),
+            "approval_id": note["id"],
+        },
+        token=attempt["token"],
+    )["send"]
     assert result["state"] == "waiting_approval" and not result["decision"]["approved"]
     assert result["approval_id"] != note["id"]
 
@@ -500,37 +212,122 @@ def test_unnamed_inline_files_require_approval_and_bind_the_actual_bytes(inbox):
 
 
 def test_classifier_sees_html_as_well_as_plain_text_and_never_truncates_to_a_no(inbox):
+    engine = fake(inbox, legal_or_money="yes")
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = BOX, CONTACT, "Update"
     msg.set_content("Thanks for the update.")
     msg.add_alternative("<p>We accept the contract and agree to pay $100000.</p><script>bad()</script>", subtype="html")
-    seen = []
-    with (
-        mock.patch.object(judge, "audit_detail", return_value={}),
-        engine_mock(
-            side_effect=lambda context, *args: seen.append(context) or {"answers": {"legal_or_money": {"value": "yes"}}}
-        ),
-    ):
-        result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
-    assert result["legal_or_money"] is True and "$100000" in seen[0]["body"] and "Thanks" in seen[0]["body"]
-    assert "<p>" not in seen[0]["body"] and "bad()" not in seen[0]["body"]
+    result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
+    seen = engine.calls[-1]["state"]["body"]
+    assert result["status"] == "classified" and "$100000" in seen and "Thanks" in seen
+    assert "<p>" not in seen and "bad()" not in seen
     inline = EmailMessage()
     inline.set_content("<p>Also agree to pay $500000.</p>", subtype="html")
     inline["Content-Disposition"] = "inline"
     msg.make_mixed()
     msg.attach(inline)
-    with (
-        mock.patch.object(judge, "audit_detail", return_value={}),
-        engine_mock(
-            side_effect=lambda context, *args: seen.append(context) or {"answers": {"legal_or_money": {"value": "yes"}}}
+    S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
+    assert "$500000" in engine.calls[-1]["state"]["body"]
+    asked = len(engine.calls)
+    result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(mime(body="a" * 16001 + "Pay $100000"), BOX))
+    assert result["legal_or_money"] is None and len(engine.calls) == asked
+
+
+def test_the_classifier_reads_the_choice_the_judge_answers(inbox):
+    # The judge answers a choice question with `choice` (clients/judge.py `_project`); only the audit says `value`.
+    fake(inbox, legal_or_money="yes")
+    snap = S.snapshot(mime(body="We agree to pay $100000."), BOX)
+    assert S.classify(inbox.app, inbox.app.state.store, snap)["legal_or_money"] is True
+    fake(inbox, legal_or_money="no", review="send")
+    second = {"thread": None, "approver_instruction": None}
+    result = S.classify(inbox.app, inbox.app.state.store, snap, review=second)
+    assert result["legal_or_money"] is False and result["review"] is True
+    fake(inbox, legal_or_money="no", review="stop")
+    assert S.classify(inbox.app, inbox.app.state.store, snap, review=second)["review"] is False
+
+
+def test_a_stop_always_says_why_in_words(inbox):
+    """The decision model writes no prose: the reason is a second choice in the same call, and a stop that names none
+    of them, or a review that gave no verdict, says so and what to do. A send carries no reason."""
+    from clients.judge import JudgeError
+
+    snap = S.snapshot(mime(body="We will refund the full $400 by Friday."), BOX)
+    second = {"thread": "", "approver_instruction": ""}
+
+    def review(**choices):
+        engine = fake(inbox, legal_or_money="yes", **choices)
+        return S.classify(inbox.app, inbox.app.state.store, snap, review=second), engine
+
+    found, engine = review(review="stop", review_reason="commitment")
+    assert (found["review"], found["review_reason"]) == (False, S.STOPPED["commitment"])
+    (call,) = engine.calls
+    assert set(call["questions"]) == {"legal_or_money", "review", "review_reason"} and found["questions"] == 3
+    assert set(call["questions"]["review_reason"]["criteria"]) == {*S.STOPPED, "none"}
+    assert call["state"]["attachments"] == "(no files attached)"
+    for named in ("none", None):  # the reviewer stopped it but named none of the reasons
+        found, _ = review(review="stop", **({"review_reason": named} if named else {}))
+        assert found["review"] is False and found["review_reason"] == S.NO_REASON
+    found, _ = review(review="send", review_reason="commitment")
+    assert (found["review"], found["review_reason"]) == (True, "")
+    found, engine = review(review="maybe")  # an answer that is not one of the options is no verdict
+    assert found["review"] is None and found["review_reason"] == S.UNANSWERED["unavailable"]
+    engine.fail = JudgeError("unavailable", "down")
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review=second)
+    assert (found["status"], found["review"], found["review_reason"]) == (
+        "unavailable",
+        None,
+        S.UNANSWERED["unavailable"],
+    )
+    whole = S.snapshot(mime(body="a" * 16001), BOX)
+    found = S.classify(inbox.app, inbox.app.state.store, whole, review=second)
+    assert found["review"] is None and found["review_reason"] == S.UNANSWERED["incomplete_content"]
+    # A person's own email has no second reviewer, so no reason either.
+    assert "review_reason" not in S.classify(inbox.app, inbox.app.state.store, snap)
+
+
+@pytest.mark.parametrize(
+    "body,files,stopped",
+    [
+        ("Please find attached the records you asked for.", False, True),
+        ("The signed declaration is enclosed.", False, True),
+        ("Attachments: records.zip", False, True),
+        ("Please find attached the records you asked for.", True, False),
+        ("The files are not attached yet; they follow tomorrow.", False, False),
+        ("Thanks, see you Monday.\n\n> Please send the attached form back.", False, False),
+        (
+            "Thanks, will do.\n\nOn Mon, 16 Nov 2026 at 09:00, Dana <dana@vendor.example> wrote:\nForm attached.",
+            False,
+            False,
         ),
-    ):
-        S.classify(inbox.app, inbox.app.state.store, S.snapshot(raw(msg), BOX))
-    assert "$500000" in seen[-1]["body"]
-    with engine_mock() as ask:
-        result = S.classify(inbox.app, inbox.app.state.store, S.snapshot(mime(body="a" * 16001 + "Pay $100000"), BOX))
-        assert result["legal_or_money"] is None
-        ask.assert_not_called()
+    ],
+)
+def test_an_email_that_says_files_are_attached_and_has_none_is_stopped_for_that(inbox, body, files, stopped):
+    """Whatever the model answers: a reviewed email whose own words say files are attached, with none attached, is
+    stopped with exactly that reason. Quoted lines and a negation are not a claim."""
+    fake(inbox, legal_or_money="no", review="send", review_reason="none")
+    snap = S.snapshot(mime(body=body, files=files), BOX)
+    assert S.says_attached_without_files(snap) is stopped
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review={"thread": "", "approver_instruction": ""})
+    assert found["review"] is (not stopped)
+    assert found["review_reason"] == (S.STOPPED["missing_file"] if stopped else "")
+    if files:
+        assert inbox.app.state.judge.calls[-1]["state"]["attachments"] == ["proof.pdf"]
+    # With no decision model at all, the deterministic check still says it.
+    inbox.app.state.judge.fail = __import__("clients.judge", fromlist=["JudgeError"]).JudgeError("unavailable", "x")
+    found = S.classify(inbox.app, inbox.app.state.store, snap, review={"thread": "", "approver_instruction": ""})
+    assert found["review_reason"] == (S.STOPPED["missing_file"] if stopped else S.UNANSWERED["unavailable"])
+
+
+def test_a_queued_send_keeps_the_reviewers_reason_for_the_person_it_asks(inbox):
+    autonomous(inbox, second_review=True)
+    fake(inbox, legal_or_money="no", review="stop", review_reason="confirmed_time")
+    _, _, attempt = setup_attempt(inbox, "ops")
+    message = {"mailbox": BOX, "raw": mime(body="Confirmed: we meet Tuesday at 3pm.")}
+    queued = post(inbox, "email/sends", message, token=attempt["token"])["send"]
+    assert queued["state"] == "waiting_approval" and "second_review" in queued["decision"]["reasons"]
+    assert queued["classification"]["review_reason"] == S.STOPPED["confirmed_time"]
+    preview = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ana-test")).json()
+    assert preview["send"]["classification"]["review_reason"] == S.STOPPED["confirmed_time"]
 
 
 def test_nested_email_attachment_headers_and_mime_charset_are_bound_to_the_proof():
@@ -569,25 +366,30 @@ def test_mime_reply_headers_enforce_loop_and_duplicate_guards_without_caller_met
         queue(inbox, raw=mime(In_Reply_To="<inbound@vendor.example>"), reply_to_id="automatic")
 
 
-def test_expired_unpermitted_claim_is_recoverable_and_old_lease_is_fenced(inbox):
+def test_an_older_computers_abandoned_lease_is_recovered_and_its_old_lease_fenced(inbox):
+    """An unpermitted lease an older computer held is safe to send again (no permit, nothing reached Gmail); a permitted
+    one that never reported is unknown, never sent again."""
     autonomous(inbox)
-    queued = queue(inbox)
+    first, second = queue(inbox), queue(inbox, raw=mime(body="Second answer"))
     machine = runner(inbox)
-    old = claim(inbox, machine["token"])
+    stale = H.shift(H.now(), minutes=-6)
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET claimed_at=? WHERE id=?", (H.shift(H.now(), minutes=-6), queued["id"]))
-    renewed = claim(inbox, machine["token"])
-    assert renewed["id"] == queued["id"] and renewed["lease_id"] != old["lease_id"]
-    path = "connectors/email/sends/" + queued["id"] + "/dispatch"
-    api_post(inbox, path, {"mailbox": BOX, "lease_id": old["lease_id"]}, token=machine["token"], expected=403)
-    permit = api_post(inbox, path, {"mailbox": BOX, "lease_id": renewed["lease_id"]}, token=machine["token"])
-    assert permit["send"]["raw"]
-    with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE email_sends SET claimed_at=? WHERE id=?", (H.shift(H.now(), minutes=-6), queued["id"]))
-    assert claim(inbox, machine["token"]) is None
+        c.execute(
+            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='old',claimed_at=? WHERE id=?",
+            (machine["runner_id"], stale, first["id"]),
+        )
+        c.execute(
+            "UPDATE email_sends SET state='dispatching',runner_id=?,lease_id='permitted',claimed_at=?,"
+            "provider_attempted_at=? WHERE id=?",
+            (machine["runner_id"], stale, stale, second["id"]),
+        )
+    assert len(dispatch(inbox) + dispatch(inbox)) == 1  # recovered on one pass, sent on the next
+    path = "connectors/email/sends/" + first["id"] + "/dispatch"
+    post(inbox, path, {"mailbox": BOX, "lease_id": "old"}, token=machine["token"], expected=405)  # no route
     with inbox.app.state.store.read() as c:
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-        assert row["state"] == "unknown" and not row["raw"]
+        rows = {r["id"]: r for r in c.execute("SELECT * FROM email_sends").fetchall()}
+    assert rows[first["id"]]["state"] == "sent"
+    assert rows[second["id"]]["state"] == "unknown" and not rows[second["id"]]["raw"]
 
 
 def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
@@ -599,8 +401,9 @@ def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
     for index in range(100):
         queue(inbox, actor="bot:ops", raw=mime(body="Unapproved " + str(index)))
     due = queue(inbox, raw=mime(body="Authorized human send"))
-    machine = runner(inbox)
-    assert claim(inbox, machine["token"])["id"] == due["id"]
+    assert len(dispatch(inbox)) == 1
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (due["id"],)).fetchone()[0] == "sent"
 
 
 def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachment(inbox):
@@ -612,7 +415,7 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
             S.content(c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone())
         )
     # Knowing what it says is not having seen it: the OK needs the preview the server showed Cara.
-    api_post(
+    post(
         inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", {"shown_hash": unseen}, token="cara-test", expected=409
     )
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ben-test")).status_code == 403
@@ -624,7 +427,7 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
     response = inbox.get(path, headers=headers("cara-test"))
     assert response.content == b"proof" and S.digest(response.content) == file["sha256"]
     ok = {"shown_hash": preview["shown_hash"]}
-    api_post(inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", ok, token="cara-test")
+    post(inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", ok, token="cara-test")
     with inbox.app.state.store.read() as c:
         assert task_asks.standing(c, queued["approval_id"]) == task_asks.OK
 
@@ -689,9 +492,9 @@ def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless
     preview = "\n".join(body["text"] for body in frozen["visible_bodies"])
     assert "Thanks." in preview
     assert "$100000" in preview or "contract.css" in preview
-    with engine_mock() as ask:
-        queued = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(msg)})["send"]
-    ask.assert_not_called()
+    engine = fake(inbox)
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": raw(msg)})["send"]
+    assert engine.calls == []
     assert queued["state"] == "waiting_approval"
     assert queued["classification"]["status"] == "incomplete_content"
     shown = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()
@@ -703,6 +506,6 @@ def test_render_dependent_body_is_previewed_but_cannot_be_classified_as_harmless
 )
 def test_unknown_classification_needs_approval_even_when_the_legal_prompt_is_off(inbox, body, status):
     autonomous(inbox, ask_legal_money=False)
-    with mock.patch.object(judge, "server_engine", return_value=None):
-        queued = api_post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(body=body)})["send"]
+    inbox.app.state.judge = None  # no decision model is configured on this server
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(body=body)})["send"]
     assert queued["state"] == "waiting_approval" and queued["classification"]["status"] == status

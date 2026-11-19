@@ -109,12 +109,6 @@ At each start of a release image, the server also asks GitHub which commit that 
 (`GET api.github.com/repos/ticoteam/tico/commits/v<version>`, nothing else in the request) to check its image was built from it
 ([flight recorder](docs/observability.md#the-flight-recorder)). `TICO_UPDATE_CHECK=off` stops this too.
 
-The server also reads the Tico Recorder's public updater feed on GitHub
-(`github.com/ticoteam/tico/releases/latest/download/recorder-latest.json`, at most hourly, nothing else in the request) to
-know the newest Recorder version. The Recorder tells your own Tico, never anyone else, its version and a random id for
-that copy (kept in its library folder) on each call; Tico keeps the last version and time per person and copy, so
-owners and admins see it in Settings > People. `TICO_UPDATE_CHECK=off` stops the feed check too.
-
 ### Check it yourself
 
 - `TICO_TELEMETRY_DEBUG=1` prints the exact request Tico would send to the server log and sends nothing.
@@ -506,7 +500,7 @@ Every field:
 | Field | What | Redacted sample |
 |---|---|---|
 | `capture` | Server capture start, event/repeat/eviction counts, omitted entries, memory-only retention, and whether the sender edited the attachment | `{"server_repeats": 12, "truncated": 0, "edited": true}` |
-| `browser` | Up to 20 in-memory browser failure groups: kind, UTC time, known app script filename, line/column, count. No error/rejection text, stack text, raw URL, console output or user input. Uploaded to your server only when building the attachment, and to HQ only on Send. | `{"kind": "error", "file": "app.bundle.js", "line": 42, "count": 2}` |
+| `browser` | Up to 20 in-memory browser failure groups: kind, UTC time, known app script filename, line/column, count. No error/rejection text, stack text, raw URL, console output or user input. Uploaded to your server only when building the attachment, and to HQ only on Send. | `{"kind": "error", "file": "app.bundle.0123456789abcdef.js", "line": 42, "count": 2}` |
 | `format`, `created_at` | The bundle's version and when it was made | `1`, `2026-10-01T09:30:00Z` |
 | `versions` | Tico, server, each computer's release, the updater's | `{"tico": "0.2.18", "runners": ["0.2.17"], "updater": "v0.2.18"}` |
 | `system` | The server's OS and architecture, Docker and compose versions if the updater is there, whether it runs in Docker | `{"os": "Linux", "arch": "x86_64", "docker": "27.1.2", "compose": "2.29.1", "in_docker": true}` |
@@ -515,7 +509,7 @@ Every field:
 | `health` | Each Health check by name and status; no summary text | `{"name": "Computers", "status": "warn"}` |
 | `runners` | Per computer, numbered `runner-1`: online, last heartbeat time (`last_seen_at`), platform, kind, release, update state and error, each installed runtime (name, version, ready or not, its sign-in state and detail), how many bots are ready, their problem lines, and the computer's last 50 warning or error log lines | `{"label": "runner-1", "online": true, "runtimes": [{"name": "codex", "ready": true, "detail": "Signed in with ChatGPT"}], "problems": ["bot-2: repository missing at /Users/person-1/work"]}` |
 | `failures` | The last week's failed setup steps and other failure events, newest first, at most 30: when, the event, who as a label, a category from a fixed list in the code, the step (a route pattern, never an address with its values), HTTP status, exit code and elapsed time when there is one, a short reference, the bot or computer as a label, and for a computer's failure up to 20 of its own error lines. No request body, query string, header, refusal sentence, exception message or provider answer. | `{"event": "setup.failed", "category": "github_state", "step": "GET /api/v2/github/app/callback", "status": 400, "ref": "sf-1a2b3c4d", "who": "person-1"}` |
-| `database` | The migration level of the database | `{"migration": 12, "cloud_migration": 44}` |
+| `database` | The newest migration the database has run | `{"migration": "20261116182727_drop_retired_tables"}` |
 | `features` | Which of these are on, as true or false only: `demo`, `updater`, `update_check`, `usage_count`, `backups`, `github_app`, `slack`, `sign_in_proxy`, `blob_storage`, `scheduler`, `observability`, `assistant`, `librarian` | `{"slack": false, "backups": true}` |
 | `counts` | How many bots, humans and routines | `{"bots": 12, "people": 5, "routines": 30}` |
 | `performance` | Only for the window chosen on the form (1 day by default; None sends none). Per computer, numbered `runner-1`: whole computer or container, memory and disk size, CPU and memory points (ten-minute points up to two days, hourly beyond), the overload summary and each overload's time, reasons, peaks, the bots running and the busiest process names, the bots with the most turns and their models, and the busiest processes | `{"label": "runner-1", "summary": "Overloaded once in the last 1 day (CPU over 90%) ...", "bots": [{"bot": "bot-2", "model": "claude-opus-5-5", "runs": 14}]}` |

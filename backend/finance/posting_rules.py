@@ -93,8 +93,9 @@ def lines_for(
 
 def card_lines(
     ctx: Ctx, row: Any, money: Any, account_id: str, tags: Mapping[str, str]
-) -> tuple[list[dict[str, object]], bool]:
-    """The spend lines of a charge or refund on a card Tico issued, and whether a person should look. The first
+) -> tuple[list[dict[str, object]], bool, bool]:
+    """The spend lines of a charge or refund on a card Tico issued, whether a person should look, and whether a
+    posting rule set them. The first
     matching posting rule sets the account, tags and vendor; the holder's teammate tag stays, and the money line (the
     card liability, which card use is read from) is the caller's, so a rule never moves the charge off the card.
     No rule, or an `ask`, keeps the card's budget line; an `ask` also asks."""
@@ -103,8 +104,8 @@ def card_lines(
     rule = first_for(ctx, feed_facts(row, money))
     if rule is not None and rule.then.outcome == "post" and usable(ctx, rule.then):
         keep = {"teammate": tags["teammate"]} if tags.get("teammate") else {}
-        return lines_for(ctx, row, rule, tags, keep), False
-    return [feed_line(account_id, -int(row["amount"]), tags, str(row["counterparty"] or ""))], rule is not None
+        return lines_for(ctx, row, rule, tags, keep), False, True
+    return [feed_line(account_id, -int(row["amount"]), tags, str(row["counterparty"] or ""))], rule is not None, False
 
 
 def post_feed(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gl_id: str) -> bool:
@@ -128,6 +129,37 @@ def post_feed(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gl_id: str) -> bool:
     entry = post_row(ctx, fid, t, [feed_line(account.id, -t.amount, {}, str(contact["id"]))], gl_id, [])
     mark_posted(ctx, [fid], entry)
     return True
+
+
+APPLY_MOST = 5000  # past rows one rule_create or rule_update with apply_from looks at
+
+
+def apply_from(ctx: Ctx, rule_id: str, day: str) -> dict[str, object]:
+    """Post the past rows from `day` this rule matches that still wait for a category (banking.by_rule_again), each by
+    the first matching rule as a new row would be, so a higher-priority rule still wins. A row in a closed period is
+    skipped and counted. At most APPLY_MOST rows are looked at; `capped` says the rest were not. A row that raises is
+    undone alone and counted in `failed`; the others still post."""
+    from .banking import by_rule_again, opening_terms, shift_openings
+
+    row = SK.get(ctx.c, "fin_rules", rule_id)
+    if row is None or not row["active"]:
+        return {"reposted": 0, "skipped_closed": 0, "capped": False}  # a rule turned off posts nothing
+    rule = rule_of(row)
+    money = {str(m["id"]): m for m in SK.money_accounts(ctx.c, ctx.book.id)}
+    found = SK.rule_candidates(ctx.c, ctx.book.id, day, APPLY_MOST + 1)
+    before = opening_terms(ctx)  # a waiting credit comes into the books with no bank movement
+    reposted = closed = failed = 0
+    for r in found[:APPLY_MOST]:
+        m = money.get(str(r["money_account_id"]))
+        if m is None or not G.matches(rule.when, feed_facts(r, m)):
+            continue
+        done = by_rule_again(ctx, r, m)
+        reposted += done == "posted"
+        closed += done == "closed"
+        failed += done == "failed"
+    shift_openings(ctx, before)
+    out: dict[str, object] = {"reposted": reposted, "skipped_closed": closed, "capped": len(found) > APPLY_MOST}
+    return {**out, "failed": failed} if failed else out
 
 
 # ------------------------------------------------------------------------------------------------ writing rules

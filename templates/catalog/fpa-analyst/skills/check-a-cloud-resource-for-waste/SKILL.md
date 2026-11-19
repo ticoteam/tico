@@ -1,6 +1,8 @@
 ---
 name: check-a-cloud-resource-for-waste
 description: Decide whether a cloud resource is idle or oversized before anyone proposes a cut. Use a window long enough for the claim, measure at the level where cost is incurred, rule out production dependencies, and count a saving only once the next bill shows it.
+metadata:
+  function: finance
 ---
 # Check a cloud resource for waste
 

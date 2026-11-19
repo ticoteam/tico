@@ -29,7 +29,7 @@ def stamp(at):
 
 
 def next_due(expr, at, zone):
-    # Preserve the existing keeper's AND semantics for day-of-month and day-of-week.
+    # Preserve the existing Tico's AND semantics for day-of-month and day-of-week.
     return croniter(expr, at.astimezone(ZoneInfo(zone)), day_or=False).get_next(datetime)
 
 
@@ -433,6 +433,8 @@ class Scheduler:
         self.goals_checked = None
         self.gateway_checked = None
         self.tools_checked = None
+        self.access_swept = None
+        self.renewals_swept = None
         self.billing_checked = None
         self.cloud_checked = None
         self.threads_ranked = None
@@ -743,6 +745,26 @@ class Scheduler:
                 from . import api_tools
 
                 api_tools.check_soon(self.store, self.store.settings)
+        if self.renewals_swept is None or at - self.renewals_swept >= timedelta(hours=1):
+            # API tools whose key ends within api_tools.EXPIRING_DAYS get their Renew task, checked or not
+            # (backend/reconnect_tasks.py `sweep`): plain SQL, no vendor call.
+            self.renewals_swept = at
+            with SR.recording(self.store, "tool_renewals", failures, "tools") as run:
+                from . import reconnect_tasks
+
+                synced = reconnect_tasks.sweep(self.store)
+                run.did(
+                    f"Looked at {synced} tools with a key ending soon" if synced else "No keys ending soon",
+                    quiet=not synced,
+                )
+        if self.access_swept is None or at - self.access_swept >= timedelta(hours=1):
+            # Access requests whose access exists by a path no write announced, and old free-text access tasks
+            # (backend/access_requests.py).
+            self.access_swept = at
+            with SR.recording(self.store, "access_requests", failures, "access_requests") as run:
+                from . import access_requests
+
+                run.did(access_requests.sweep(self.store))
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.

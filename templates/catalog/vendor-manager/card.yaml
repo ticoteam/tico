@@ -57,3 +57,10 @@ first_routine:
 example_output: knowledge/examples/vendor-page.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email]
+shared_files:
+  - .claude/skills/count-a-notice-deadline
+  - .claude/skills/manage-insurance
+  - .claude/skills/manage-leases-and-real-estate
+  - .claude/skills/pay-bills-and-buy
+  - .claude/skills/source-and-certify-hardware
+  - .claude/skills/review-a-contract

@@ -193,7 +193,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
   once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
-  the reviewer sends it anyway. A held message nobody decides within 24 hours expires unsent ([Rules](rules-plan.md)).
+  the reviewer sends it anyway. A held message nobody decides within 24 hours expires unsent ([Rules](dev/rules-plan.md)).
 
 A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
 to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
@@ -236,7 +236,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
-| **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
+| **Bots send reports to Tico support without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to Tico support is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 
@@ -250,7 +250,7 @@ same rights. Built-in bots stay in the General group, which nobody adds to or re
 **The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `strategy-owner` or `assistant`; an Admin can, and manages every other bot.
-The Strategy Owner's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
+The Strategy Owner's level, regular checks and name, and writing the strategy, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_setup`
@@ -407,6 +407,7 @@ credential stops being the member's once someone else saves a new value for it o
 their bots** off. Giving it to a bot with co-owners puts the value in every co-owner's runs of that bot. A human who holds a
 credential may also delegate it to a bot they own or run, directly or through BotOps. Revoking the human's grant removes the
 delegated bot access; changing the bot owner invalidates delegation from its former owner. A holder cannot delegate a credential they do not hold ([credential-vault.md](credential-vault.md)).
+The person or bot that added a credential can remove it while they can still see its tool, including after rotation.
 On upgrade, Tico automatically grants each existing bot its own-file values, the shared Credentials it could read,
 and its declared profile and runtime keys. New bots do not inherit the whole environment or `_shared.env`.
 
@@ -510,7 +511,7 @@ The row follows the computer as the page refreshes (it comes online, its screen 
 
 ## Tico support
 
-A session a person opens from a support request ([support.md](support.md#letting-tico-support-in)) lets the Tico team in as
+A session a person opens from a support request ([support.md](support.md#letting-tico-support-in)) lets Tico support in as
 one more identity, `human:tico-support`, named **Tico support** wherever names show. It has no roster row and no sign-in: it
 exists only while its session is live, through a token the server keeps in memory, and every request it makes is checked
 against the session again.
@@ -636,7 +637,7 @@ narrower run.
 **What still waits for the person's tap.** The rights BotOps borrows are never a confirmation: only the person's own click
 on a Confirm card in their BotOps chat is, and it runs the stored request as them. So BotOps answers these with
 `needs_confirm` and a card, and nothing changes until the tap:
-- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/people/{id}`);
+- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/humans/{id}`);
 - a credential granted to a person or to every computer (a grant to a bot, and taking a grant back, stay direct);
 - placing a member's bot on a computer that does not take members' bots;
 - the routes in `botops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots
@@ -728,7 +729,7 @@ The commands (with MCP tools of the same names):
 | `tico credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
 | `tico credential grant <name> --to <bot>`, `tico credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
 | `tico credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
-| `tico support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
+| `tico support file "<message>"` | sends a requested support message to Tico support with the requester's rights |
 | `tico api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
 
 The server applies the requester's rights to every BotOps v2 call, including friendly tools and `tico api`.
@@ -750,6 +751,28 @@ cannot be copied.
 A bot's Instructions and the text it reads cannot select a human whose rights BotOps should borrow. The server resolves
 the requester from the run's message or task, checks that human is still on the roster, and applies only that identity's
 permissions. A requesting bot keeps its own narrower rights throughout the work.
+
+### The Tools Owner and the Assistant make Tools changes as the person
+
+Asking for access gets it done; it never bounces back. The Tools page's owner (the built-in Tools Owner) borrows the
+asking person's rights the way BotOps does, but only on Tools changes (`backend/tools_delegation.py`): giving a bot a
+key or a level, taking one back, adding or changing an API tool, its settings or an MCP server, sharing a website
+account, and a bot's bot.yaml `tools:` entries. The same checks decide whose rights a run carries: the person's own
+message in their chat with it, a task they filed for it, or a task their Assistant filed for it citing their message
+(`--request-id turn`). Each write is recorded as the person's, via `tools-owner`, with the Tools Owner named on the
+delegation (`by`). It never grants itself a key, and a run a bot started keeps that bot's rights.
+
+The Assistant already writes as its person; on their cited words it also makes those Tools changes for a bot (a
+person's own access and every computer's stay their tap), opens a key card for any bot they may manage, and hands the
+rest to the Tools Owner. Neither ever reads, stores or repeats a value: a key's value, its reveal and deleting a tool or
+key stay the person's own, in Tools.
+
+A bot.yaml `tools:` entry holds no secret, so registering, changing or removing one is open to the bot itself (its own
+entries, also when BotOps or the Tools Owner carries its request), BotOps and the Tools Owner with their own rights, a
+credential admin and anyone who may manage the bot. Acting for someone, that someone's rights decide. Its scope takes any short
+lowercase name (`page`, `ad_account`) with a short value or list; a name or value that looks like a credential is
+refused. A bot's Tools tab lists, beside its declared entries, every tool it can use through a grant (an API or MCP
+tool's key at its level, a key on no tool, a website account), one row per service.
 
 ### A computer for every active bot
 

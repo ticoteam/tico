@@ -126,8 +126,8 @@ def test_only_persistent_causes_become_blocked_and_transient_work_resets_them(tm
 def test_a_drain_that_never_finishes_defers_before_doing_any_checkout_work(tmp_path, monkeypatch, policy, expected):
     monkeypatch.setenv("TICO_UPDATE_RETRY", policy)
     now = [0.0]
-    monkeypatch.setattr(ru.time, "time", lambda: now[0])
-    monkeypatch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(ru, "_now", lambda: now[0])
+    monkeypatch.setattr(ru, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(ru, "in_flight", lambda directory: True)
     monkeypatch.setattr(ru, "apply", lambda *a, **kw: pytest.fail("drain timeout must not start Git work"))
     args = SimpleNamespace(state_dir=str(tmp_path), version="0.3.45")
@@ -378,7 +378,7 @@ def test_every_pre_apply_failure_defers_and_releases_claims(old_follower, monkey
                 patch.setattr(ru, "in_flight", original_in_flight)
             elif step == "drain_sleep":
                 patch.setattr(ru, "in_flight", lambda directory: True)
-                patch.setattr(ru.time, "sleep", fail)
+                patch.setattr(ru, "_sleep", fail)
             elif step in ("kind", "systemd_unit", "git_lookup"):
                 patch.setattr(ru, "git" if step == "git_lookup" else step, fail)
             elif step == "git_gate":
@@ -544,6 +544,34 @@ def test_update_switches_to_the_servers_tag_not_main(repos):
         head(checkout)
     ]  # the new tree's binary, before the restart
     assert ru.read_status(state)["state"] == "healthy" and ru.read_status(state)["target"] == "0.2.0"
+
+
+@pytest.mark.slow
+def test_with_no_runner_yet_the_checkout_moves_forward_only_and_nothing_restarts(repos, capsys):
+    """#648: a cloud machine's first boot (cloud_machine.py catch_up) runs the updater with no runner (`--pid 0`)."""
+    public, checkout, state = repos
+    calls = Calls()
+    args = SimpleNamespace(root=checkout, version="0.2.0", state_dir=state, pid=0)
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 0
+    assert ru.checkout_release(checkout) == "0.2.0" and calls.restarts == 0 and calls.checks == []
+    assert calls.prepared == [head(checkout)]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["state"] == "healthy"
+    # Never backwards: a checkout already past the hub's release stays where it is.
+    args.version = "0.1.0"
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 0
+    assert ru.checkout_release(checkout) == "0.2.0"
+
+
+@pytest.mark.slow
+def test_with_no_runner_yet_a_dirty_checkout_is_refused_as_always(repos, capsys):
+    _, checkout, state = repos
+    (checkout / "app.py").write_text("restoring")
+    args = SimpleNamespace(root=checkout, version="0.2.0", state_dir=state, pid=0)
+    calls = Calls()
+    assert ru.catch_up(args, install=calls.install, prepare=calls.prepare) == 1
+    out = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert out["state"] == "blocked" and out["error"].startswith("the checkout has 1 changed file")
+    assert ru.checkout_release(checkout) == "0.1.0"
 
 
 @pytest.mark.slow
@@ -1311,8 +1339,8 @@ def test_alternating_deferrals_release_old_runners_without_changing_the_checkout
                 patch.setattr(ru, "lock_path", lambda *a: None)
             elif cause == "checkout_lock":
                 held = hold(checkout)
-                patch.setattr(ru.time, "time", lambda: now[0])
-                patch.setattr(ru.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+                patch.setattr(ru, "_now", lambda: now[0])
+                patch.setattr(ru, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
             try:
                 result, calls = run_apply(
                     checkout,
@@ -1447,29 +1475,31 @@ def install_plists(agents, *labels):
         (agents / f"{label}.plist").write_text("<plist/>")
 
 
-def test_only_installed_helpers_are_restarted(tmp_path):
+def test_only_installed_helpers_are_restarted_and_the_retired_connectors_job_is_removed(tmp_path):
     agents = tmp_path / "agents"
     install_plists(agents, "team.tico.tico-bot", "team.tico.tico-connectors", "team.tico.tico-importers")
     launchctl, said = Launchctl(), []
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=said.append)
-    assert done == ["connectors", "importers"]  # close-calls has no plist; the bot job is not touched here
+    assert done == ["importers"]  # close-calls has no plist; the bot job is not touched here
     assert launchctl.calls == [
-        ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-connectors"],
+        ["launchctl", "bootout", "gui/501/team.tico.tico-connectors"],
         ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-importers"],
     ]
-    assert len(said) == 2 and "team.tico.tico-connectors" in said[0]
+    assert not (agents / "team.tico.tico-connectors.plist").exists()
+    assert (agents / "team.tico.tico-bot.plist").exists() and len(said) == 2
+    assert ru.restart_helpers({}, Launchctl(), agents, uid=501, say=lambda line: None) == ["importers"]
 
 
 def test_an_installed_helper_that_is_not_loaded_is_bootstrapped(tmp_path):
     agents = tmp_path / "agents"
-    install_plists(agents, "team.tico.tico-connectors")
-    launchctl = Launchctl(fail_kickstart={"team.tico.tico-connectors"})
+    install_plists(agents, "team.tico.tico-importers")
+    launchctl = Launchctl(fail_kickstart={"team.tico.tico-importers"})
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=lambda line: None)
-    assert done == ["connectors"] and launchctl.calls[-1] == [
+    assert done == ["importers"] and launchctl.calls[-1] == [
         "launchctl",
         "bootstrap",
         "gui/501",
-        str(agents / "team.tico.tico-connectors.plist"),
+        str(agents / "team.tico.tico-importers.plist"),
     ]
 
 
@@ -1508,18 +1538,20 @@ def test_a_failed_systemctl_falls_back_to_stopping_the_process(monkeypatch):
     assert killed[0] == ru.signal.SIGTERM  # Restart=always starts it again
 
 
-def test_only_installed_helper_units_are_restarted_through_systemctl(tmp_path):
+def test_only_installed_helper_units_are_restarted_through_systemctl_and_connectors_is_removed(tmp_path):
     units = tmp_path / "units"
     units.mkdir()
     for name in ("tico-bot.service", "tico-connectors.service", "tico-importers.service"):
         (units / name).write_text("[Service]\n")
     systemctl, said = Systemctl(), []
     done = ru.restart_helpers_systemd(SYSTEMD, systemctl, unit_dir=units, say=said.append)
-    assert done == ["connectors", "importers"]  # close-calls has no unit; the runner's own is not touched here
+    assert done == ["importers"]  # close-calls has no unit; the runner's own is not touched here
     assert systemctl.calls == [
-        ["systemctl", "--user", "restart", "tico-connectors.service"],
+        ["systemctl", "--user", "disable", "--now", "tico-connectors.service"],
+        ["systemctl", "--user", "daemon-reload"],
         ["systemctl", "--user", "restart", "tico-importers.service"],
     ]
+    assert not (units / "tico-connectors.service").exists() and len(said) == 2
     (units / "tico-acme-close-calls.service").write_text("[Service]\n")
     assert ru.restart_helpers_systemd(
         {"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units, say=lambda line: None

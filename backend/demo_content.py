@@ -112,6 +112,11 @@ PEOPLE = [
     },
 ]
 
+# The built-ins the demo's computers report ready beside the chart's bots: the ones whose routines the demo week runs
+# (backend/demo_sections/schedules.py). The Tools Owner is made by the start's complete_company and reviews the tools
+# each Monday.
+READY_BUILT_INS = ("librarian", "strategy-owner", "tools-owner")
+
 # slug, catalog template, reports to. Each department has a lead bot under the person who runs it (a `human:` parent),
 # and the Assistant (assistant) hangs under Ana.
 BOTS = [
@@ -2799,33 +2804,28 @@ TASKS = [
     ),
 ]
 
-# What an open task waits on, set by its owner when it last changed (TASKS). An ask names a person on the task:
-# (person, line, kind, choices); "ok" is a yes or a send back, "answer" a question. A snooze sets the task aside:
-# (why, days from the build until it ends).
+# What an open task waits on, set by its owner when it last changed (TASKS). A snooze sets the task aside: (why, days
+# from the build until it ends).
+# A bot's ❓ on its own open task (backend/question_marks.py): (person, message).
 TASK_ASKS = {
     "mobile-beta": (
         "human:eli",
         "Release the calibration screen to every owner? The beta with 200 owners is clean.",
-        "ok",
-        None,
     ),
     "video-cut": (
         "human:cara",
         "Can the 30-second install video go into the holiday ads? Say what to change if not.",
-        "answer",
-        None,
     ),
     "cloud-quote": (
         "human:ana",
         "Should the render cloud add two workers for the January peak, or stay at six?",
-        "answer",
-        ["Add two workers", "Stay at six"],
     ),
 }
 TASK_SNOOZES = {"pr-tests": ("The author is away for three days.", 3)}
 
-# Tasks a bot gives a person: (key, title, owner bot, target person, body, days ago created, status). Each body opens
-# with the question, then the reason in a line or two, so the person can answer from the task.
+# A bot's tasks that ask a person a question: (key, title, owner bot, target person, body, days ago created, status).
+# Each body opens with the question, the ask's line, then the reason in a line or two, so the person can answer from
+# the task.
 ASKS = [
     (
         "home-pro-price",
@@ -3218,10 +3218,10 @@ for _slug, _template, _parent in BOTS:
         USAGE[_slug] = ("claude-sonnet-5-5", "anthropic", "api")
 USAGE.update(
     {
-        "inbound-sales-owner": ("gpt-6.1-sol", "openai", "api"),
+        "inbound-sales-owner": ("gpt-6.2-sol", "openai", "api"),
         "sdr": ("gpt-6-luna", "openai", "api"),
-        "pricing-analyst": ("gpt-6.1-sol", "openai", "api"),
-        "librarian": ("gpt-6.1-sol", "openai", "subscription"),
+        "pricing-analyst": ("gpt-6.2-sol", "openai", "api"),
+        "librarian": ("gpt-6.2-sol", "openai", "subscription"),
     }
 )
 # The built-in helpers (not on the team chart) that still run turns: goal checks, task sorting and counsel reads.
@@ -4332,35 +4332,10 @@ MARKET_PAGES = [
     ),
 ]
 
-# The shared inbox: the address it reads, what its bot is told, and the mail that is already there:
-# (subject, body, labels, from, to).
-INBOX = "ben@acme.example"
+# What the shared inbox's bot is told. The demo holds no mail: mail is read from Gmail, and the demo connects none.
 INBOX_INSTRUCTIONS = (
     "# Instructions\n\nTriage mail and draft replies for review. Never send; file a draft for a person."
 )
-MAIL = [
-    (
-        "Projector will not pair after calibration",
-        "Our projector stops at step 4 of the calibration. Can you help us this afternoon?",
-        ["INBOX", "hub/needs-owner"],
-        "kim@homes.example",
-        INBOX,
-    ),
-    (
-        "Re: Projector will not pair after calibration",
-        "Draft: Hold the lens cap off, power the projector down for ten seconds, then start calibration again. Tell us which step fails.",
-        ["DRAFT", "hub/drafted"],
-        INBOX,
-        "kim@homes.example",
-    ),
-    (
-        "Second kit for the family room",
-        "Thanks for the walk-through. We are ready to order a second Home Pro kit.",
-        ["INBOX"],
-        "owner@homes.example",
-        INBOX,
-    ),
-]
 # The support channel the Slack connection reads: its name, a note, the thread already in it, and the bot's reply.
 SLACK = {
     "channel": "support",

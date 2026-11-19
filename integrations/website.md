@@ -67,6 +67,7 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
   else is refused and the value is dropped.
 - Never solve a captcha, a code sent by text or email, or a new-device check yourself. Run
   `tico browser needs-you <site> "<what to do>"`, end the turn, and read the page again when their Done wakes you.
+  The ask goes on your task; from a chat turn, name one of your open tasks with `--task <id>`.
 - One teammate at a time per account. Your commands hold it for 2 minutes after the last one; `tico browser close`
   when you are done. A busy answer names who has it: try again in a minute. While a person has taken control, wait
   until they give it back.
@@ -86,6 +87,12 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
   3. Read again. A 2FA box: `tico login fill <site> code --ref <box>`, then `tico browser press <site> Enter`.
   4. A texted or emailed code, a captcha or "is this you?": `tico browser needs-you`, then end the turn.
   5. Read again to check you are in.
+- A site that signs in with Google or SSO ("Sign in with Google"): the account has no password; leave it blank when
+  adding the account. The first time, run `tico browser needs-you <site> "Sign in to <site>"` and end the turn. The
+  person asked (or the bot's manager) opens the live browser from the ask, or from the account on the tool's page in
+  Tools, signs in once and taps Done. The sign-in stays in the browser on the bot's computer, so later turns are
+  already signed in; when it expires the site asks again and so do you, the same way. Give the bot a Google account
+  of its own (the mailbox it works from) rather than a person's, so the session never acts as someone.
 - A sign-in on two pages (username, then Next, then password): fill the username, click Next, read again (the refs
   change), fill the password.
 - Get a report: open its page, read, click the download link, then `tico browser download <site> --out reports/`.

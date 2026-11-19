@@ -2,7 +2,9 @@
 until it is live (#411): the ask on that task, opened by the one button for the person it is addressed to, whose it is
 for anyone else, else who is still making it. Never a Finish setup button that only opens the Info tab."""
 
+from backend import openapi_v2, question_marks
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import claim, get
 from backend.tests.helpers.member_bots import botops, call  # noqa: F401  (fixture)
 
@@ -40,28 +42,20 @@ def test_a_bot_made_on_a_general_task_names_the_task_not_finish_setup(api, botop
 def test_the_start_ok_is_the_button_for_the_person_asked_and_named_for_anyone_else(api, botops):  # noqa: F811
     task_id = made_on_a_task(api, botops)
     with api.app.state.store.transaction() as c:
-        asked = H.task_ask(
-            c,
-            "bot:botops",
-            task_id,
-            "human:ana",
-            ASK,
-            choices=["Yes start it", "No keep it off"],
-            seen_version=H.task(c, task_id)["version"],
-        )
+        question_marks.ask(c, "bot:botops", task_id, "human:ana", ASK)
     mine = top_line(api)
     assert mine["cause"] == "Builder 3 is waiting for your answer"
     assert mine["fix"] == "open_ask" and mine["task"]["id"] == task_id
     assert mine["ask"] == {"kind": "answer", "mine": True, "line": ASK}
+    ask_schema = openapi_v2.SCHEMAS["BotDetail"]["properties"]["cant_run"]["properties"]["ask"]["properties"]
+    assert mine["ask"]["kind"] in ask_schema["kind"]["enum"], "BotDetail says a ❓ is an answer"
 
     theirs = top_line(api, "ben-test")  # an Admin, not the one asked
     assert theirs["cause"].startswith("Builder 3 is waiting for ") and theirs["cause"].endswith("'s answer")
     assert "your" not in theirs["cause"] and theirs["fix"] is None and not theirs["ask"]["mine"]
 
     with api.app.state.store.transaction() as c:
-        H.task_answer(
-            c, "human:ana", task_id, asked["requirement_id"], "Yes start it", None, H.task(c, task_id)["version"]
-        )
+        H.task_comment(c, "human:ana", task_id, "Yes, start it.")  # her reply clears the ❓
     after = top_line(api)  # answered: it no longer waits on her
     assert after["cause"] == "BotOps is still setting up Builder 3" and after["fix"] is None
 
@@ -78,7 +72,16 @@ def test_a_planned_bot_nothing_is_making_says_what_finishes_it_with_no_info_butt
 def test_a_start_ok_reads_as_an_ok_with_its_button(api, botops):  # noqa: F811
     task_id = made_on_a_task(api, botops)
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:botops", task_id, "human:ana", ASK, kind="ok", seen_version=H.task(c, task_id)["version"])
+        H.task_ask(
+            c,
+            "bot:botops",
+            task_id,
+            "human:ana",
+            ASK,
+            kind="ok",
+            shows=X.shown(c),
+            seen_version=H.task(c, task_id)["version"],
+        )
     line = top_line(api)
     assert line["cause"] == "Builder 3 is waiting for your OK"
     assert line["fix"] == "open_ask" and line["ask"]["kind"] == "ok"
@@ -89,7 +92,7 @@ def test_a_viewer_who_may_not_read_the_making_task_gets_no_link_words_or_button(
     that the bot waits, never the task's title, the ask's words or a button into it."""
     task_id = made_on_a_task(api, botops)
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:botops", task_id, "human:ana", ASK, seen_version=H.task(c, task_id)["version"])
+        question_marks.ask(c, "bot:botops", task_id, "human:ana", ASK)
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
     hidden = top_line(api, "cara-test")
     assert hidden["cause"].startswith("Builder 3 is waiting for ") and hidden["fix"] is None

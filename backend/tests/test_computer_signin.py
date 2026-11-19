@@ -2,7 +2,13 @@
 
 from backend.tests.helpers.getting_started import add_bot, heartbeat  # noqa: F401
 from backend.tests.helpers.onboarding import environment, signed_in
+from backend.tests.helpers.model_keys import shared_before
 from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
+
+
+def on_shared(name):
+    """A runtime the computer reported signing in with the company's shared key `name`."""
+    return {"installed": True, "authenticated": "ready", "key": {"name": name, "source": "shared"}}
 
 
 def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment):
@@ -12,10 +18,12 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     team = store(api, "OPENAI_API_KEY", "sk-team-key-0123456789")
     private = store(api, "OPENAI_API_KEY", "sk-only-for-mailer-999999", name="Mailer's own key")
     other = store(api, "POSTHOG_API_KEY", "phx-mailer-secret-123456")
-    grant(api, team, "computers")
     grant(api, private, "bot:mailer")
     grant(api, other, "bot:mailer")
     machine = new_computer(api)
+    # Shared with every computer in Credentials before keys became subscriptions, and the computer said it ran on it.
+    heartbeat(api, machine["runner_id"], runtimes={"codex": on_shared("OPENAI_API_KEY")})
+    shared_before(api, team)
     got = computer_asks(api, machine["token"])
     assert got.status_code == 200
     assert got.json() == {
@@ -36,7 +44,7 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     assert "computer_signin" not in checks
 
 
-def test_only_a_model_key_can_go_to_every_computer_and_only_an_administrator_can_say_so(environment):
+def test_a_model_key_goes_to_computers_from_settings_models_not_a_grant(environment):
     api = environment()
     vault(api)
     grant(api, store(api, "POSTHOG_API_KEY", "phx-mailer-secret-123456"), "computers", expected=422)
@@ -45,11 +53,17 @@ def test_only_a_model_key_can_go_to_every_computer_and_only_an_administrator_can
     machine = new_computer(api)
     assert computer_asks(api, machine["token"]).json() == {"credentials": []}
     cid = store(api, "ANTHROPIC_API_KEY", "sk-ant-team-0123456789", name="Claude key")
-    grant(api, cid, "computers")
+    refused = grant(api, cid, "computers", expected=422).json()
+    assert refused["error"]["detail"] == "Give model keys to computers in Settings > Models"
+    assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
+    # Moved from a grant made before: taking it off the computer in Settings > Models takes the key back.
+    heartbeat(api, machine["runner_id"], runtimes={"claude": on_shared("ANTHROPIC_API_KEY")})
+    shared_before(api, cid)
     assert computer_asks(api, machine["token"], "claude").json()["credentials"][0]["env"] == "ANTHROPIC_API_KEY"
-    # Taking the grant back takes the key back.
-    listing = api.get("/api/v2/credentials", headers=signed_in()).json()["credentials"]
-    row = next(x for x in listing if x["id"] == cid)
-    gid = next(g["id"] for g in row["grants"] if g["subject"] == "computers")
-    assert api.post(f"/api/v2/credentials/{cid}/grants/{gid}/revoke", json={}, headers=signed_in()).status_code == 200
+    took = api.put(
+        "/api/v2/computer-subscriptions",
+        json={"runner_id": machine["runner_id"], "runtime": "claude", "subscription": None, "confirm": True},
+        headers=signed_in(),
+    )
+    assert took.status_code == 200, took.text
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}

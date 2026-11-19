@@ -92,6 +92,13 @@ def statuses(c, rows):
     return [status(c, row, gone=bool(row.get('computer_id') and row['computer_id'] not in live)) for row in rows]
 
 
+def finished_and_retired(row):
+    """A retired checkout of a done or closed task needs nothing: re-adding it helps nobody, and work left unpushed on
+    the retired computer cannot be fetched either way. Reopening the task restores the checkout. `row` carries the
+    task's status as `task_status`."""
+    return row['state'] == 'retired' and row.get('task_status') in ('done', 'closed')
+
+
 def recovery_prompt(c, task, bot):
     """The owner turn can recover a retired checkout without waiting for a person."""
     if task['owner_id'] != 'bot:' + bot or start_refusal(c, task):
@@ -378,10 +385,10 @@ def released_event(c, row, detail):
         and (detail.get('dirty_files') or detail.get('ahead'))
         and not detail.get('snapshot_skipped')
     ):
-        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]  # runner_support/worktrees.py wip_branch
+        data['wip_branch'] = 'wip/' + row['task_id'][:8] + '-' + row['id'][:6]  # runner-rs/src/worktrees.rs wip_branch
     if detail.get('stale_push_cleared'):
         data['reason'] += f" (stale push {detail['stale_push_cleared'][:12]} cleared)"
-    H.event(c, H.KEEPER, 'worktree.released', row['task_id'], data)
+    H.event(c, H.TICO_ACTOR, 'worktree.released', row['task_id'], data)
 
 
 def cancel_pending(c, row, detail, reason):
@@ -1608,12 +1615,12 @@ def install(app, store, auth, mutate):
                 raise Problem('forbidden', 'A registered computer is required', 403)
             out = []
             for item in body.sessions:
-                if item.task.startswith(sessions.PRIVATE_FOLDER):
-                    # A private meeting's own checkout (clients/sessions.py PRIVATE_LANE): done once the meeting ends.
-                    conv = item.task[len(sessions.PRIVATE_FOLDER) :]
+                if item.task.startswith(sessions.LEGACY_MEETING_FOLDER):
+                    # Older runners still need to clean up worktrees made before the hub upgrade.
+                    conv = item.task[len(sessions.LEGACY_MEETING_FOLDER) :]
                     if c.execute(
                         "SELECT 1 FROM attempts WHERE runner_id=? AND bot_id=? AND lane=?",
-                        (who.runner_id, item.bot, sessions.private_lane(conv)),
+                        (who.runner_id, item.bot, sessions.LEGACY_MEETING_LANE + conv),
                     ).fetchone():
                         room = c.execute("SELECT room_key FROM conversations WHERE id=?", (conv,)).fetchone()
                         key = (room["room_key"] if room else "") or ""

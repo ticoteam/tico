@@ -82,11 +82,10 @@ pub fn settings_file(model: &str, effort: Option<&str>, servers: &[Value]) -> Va
 
 /// The CLI loads `<home>/.gemini/GEMINI.md` into every prompt: the memory `save_memory` kept, out of the owner's sight.
 /// Before each turn it moves to MEMORY_UNREAD beside it, added to what is there unless that already holds it (two
-/// first turns at once set the same file aside), which the CLI never loads and crate::harness_memory copies into the
-/// bot's repository.
+/// first turns at once set the same file aside). The CLI never loads that file, and no turn reads it.
 pub fn set_aside_memory(home: &Path) -> std::io::Result<()> {
-    // As the bot (crate::harness_memory): the CLI writes `.gemini` as the bot, so a link there must reach nothing more.
-    use crate::harness_memory::{bot_read, bot_remove, bot_write};
+    // As the bot (crate::bot_files): the CLI writes `.gemini` as the bot, so a link there must reach nothing more.
+    use crate::bot_files::{bot_read, bot_remove, bot_write};
     let dir = home.join(".gemini");
     let saved = dir.join("GEMINI.md");
     if let Some(text) = bot_read(&saved)?.filter(|t| !t.trim().is_empty()) {

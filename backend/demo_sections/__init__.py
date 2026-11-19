@@ -12,11 +12,14 @@ from . import (
     budgets,
     directory,
     finance,
+    floor,
     growth,
     meeting_links,
     pages,
+    products,
     recruit,
     reach,
+    risk,
     schedules,
     services,
     skills,
@@ -45,7 +48,10 @@ SECTIONS = (
     alerts,
     skills,
     directory,
+    products,
+    risk,
     software,
+    floor,
 )
 
 

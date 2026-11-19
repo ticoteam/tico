@@ -1,6 +1,8 @@
 ---
 name: count-a-life-event-window
 description: Work out the close date and days left for a joiner, leaver or life-event change window from the plan document's own rule, with the event date, the page and the counting method written down.
+metadata:
+  function: people
 ---
 # Count a life-event window
 

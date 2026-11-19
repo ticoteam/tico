@@ -3,7 +3,9 @@ cohorts per channel (spend, bot cost, new customers, the share kept at 30, 90 an
 they add up to, and the sources each number's truth lives in.
 
 - Channels (`growth_channels`): a performance or brand track and a stage (idea, testing, scaling, paused), an owner, a
-  monthly budget, the source its numbers come from, and an optional guardrail (a KPI that must stay at or under a max).
+  monthly budget, the source its numbers come from, an optional guardrail (a KPI that must stay at or under a max) and
+  the optional input KPI it moves (backend/growth_line.py draws both), and the one segment its spend is for, or none
+  for company-wide spend (backend/growth_segments.py).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
   same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
@@ -13,17 +15,19 @@ they add up to, and the sources each number's truth lives in.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
 
 Who may: everyone signed in reads. The owner and admins (people) write channels, sources and settings; the bot that
-owns a channel may change its why, stage and budget; any bot or admin records cohorts.
+owns a channel may change its why, stage, budget and input KPI; any bot or admin records cohorts.
 """
 
 import asyncio
 import json
+import logging
 import math
 import secrets
 
 from fastapi import Request
 
 from . import growth_finance as GF
+from . import growth_segments as SEG
 from . import growth_sync as GS
 from . import hubdb as H
 from . import models as M
@@ -46,12 +50,21 @@ CHANNEL_FIELDS = (
     "why",
     "guardrail_kpi_id",
     "guardrail_max",
+    "input_kpi_id",
+    "segment",
     "sort",
     "retired_at",
 )
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
-OWNER_PATCH = {"why", "stage", "budget_month"}  # what the bot that owns a channel may change
-ROLES = ("north_star", "input", "guardrail")
+OWNER_PATCH = {"why", "stage", "budget_month", "input_kpi_id"}  # what the bot that owns a channel may change
+ROLES = (
+    "north_star",
+    "input",
+    "guardrail",
+    "check_signups",
+    "check_new_customers",
+    "check_cost",
+)  # check_*: an outside total health compares
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
 KPI_FIELDS = ("parent_kpi_id", "growth_role", "stage", "loop_name", "loop_step")
 
@@ -194,13 +207,19 @@ def channel_view(row):
     return {k: row.get(k) for k in CHANNEL_FIELDS}
 
 
+# A channel with the slug of the segment its spend is for (`segment`, null for company-wide spend).
+CHANNEL_SQL = (
+    "SELECT ch.*, sg.slug AS segment FROM growth_channels ch LEFT JOIN growth_segments sg ON sg.id=ch.segment_id"
+)
+
+
 def channels(c, include_retired=False):
-    sql = "SELECT * FROM growth_channels" + ("" if include_retired else " WHERE retired_at IS NULL")
-    return [channel_view(r) for r in H._rows(c.execute(sql + " ORDER BY sort, name COLLATE NOCASE"))]
+    sql = CHANNEL_SQL + ("" if include_retired else " WHERE ch.retired_at IS NULL")
+    return [channel_view(r) for r in H._rows(c.execute(sql + " ORDER BY ch.sort, ch.name COLLATE NOCASE"))]
 
 
 def channel(c, slug):
-    return H._one(c, "SELECT * FROM growth_channels WHERE slug=?", (slug,))
+    return H._one(c, CHANNEL_SQL + " WHERE ch.slug=?", (slug,))
 
 
 def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
@@ -527,7 +546,7 @@ def typed_beside(c, computed_rows, actor, is_admin):
 def ask_owners(c, month=None):
     """Tell each channel's owner, once per month and figure, of the numbers typed as actual that differ from the ones
     computed from customers: after a customers load (every month) and after a number is typed as actual (its month).
-    Every such number is on the Growth page to choose. A channel with no owner (Unknown, or none set) is an admin's
+    Each is kept with tico growth cohort resolve. A channel with no owner (Unknown, or none set) is an admin's
     there and is not marked asked, so an owner set later is told at the next load. Returns how many numbers were asked
     about."""
     from . import growth_computed as GX
@@ -575,10 +594,10 @@ def ask_owners(c, month=None):
         shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             ch["owner_ref"],
             f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
-            "Keep the typed number or the computed one on the Growth page.",
+            "Keep the typed number or the computed one: tico growth cohort resolve, or tell the Growth Manager.",
             refs={"growth_channel": slug},
         )
     return sum(len(lines) for lines in asked.values())
@@ -744,7 +763,7 @@ def _owner_ref(c, value):
     if value in (None, ""):
         return None
     actor = H.resolve_actor(c, value)
-    if not actor or actor == H.KEEPER:
+    if not actor or actor == H.TICO_ACTOR:
         raise Problem("not_found", f"No person or bot {value}", 404)
     return actor
 
@@ -781,6 +800,8 @@ def channel_create(c, actor, body):
         "why": body.why,
         "guardrail_kpi_id": _kpi_ref(c, body.guardrail_kpi_id, "guardrail_kpi_id"),
         "guardrail_max": body.guardrail_max,
+        "input_kpi_id": _kpi_ref(c, body.input_kpi_id, "input_kpi_id"),
+        "segment_id": SEG.ref(c, body.segment),
         "sort": body.sort,
         "created_at": H.now(),
     }
@@ -802,6 +823,10 @@ def channel_update(c, actor, slug, fields):
         fields["source_id"] = _source_ref(c, fields["source_id"])
     if "guardrail_kpi_id" in fields:
         fields["guardrail_kpi_id"] = _kpi_ref(c, fields["guardrail_kpi_id"], "guardrail_kpi_id")
+    if "input_kpi_id" in fields:
+        fields["input_kpi_id"] = _kpi_ref(c, fields["input_kpi_id"], "input_kpi_id")
+    if "segment" in fields:
+        fields["segment_id"] = SEG.ref(c, fields.pop("segment"))
     for required in ("name", "track", "stage", "why", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
@@ -1052,8 +1077,13 @@ def cohort_set(c, actor, body):
         c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=?", (channel_id or "", body.month)
     )
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
-    if "quality" in fields and fields["quality"] is None:
-        fields["quality"] = "actual"
+    # A month is actual only when someone says so: numbers typed with no mark (or a null one) are estimates. Unmarked,
+    # the call touches only the numbers it types; the row's mark then follows them (estimate while any is).
+    marked = fields.get("quality") is not None
+    if not marked:
+        fields.pop("quality", None)
+        if not row:
+            fields["quality"] = "estimate"
     GS.refuse_typed(c, row, [k for k in fields if k in GS.FIELDS], slug or UNKNOWN, body.month)
     sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
@@ -1063,6 +1093,16 @@ def cohort_set(c, actor, body):
             else:
                 sources.pop(key, None)
     fields.update(sources=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
+    if row and not marked and any(k in GS.FIELDS for k in fields):
+        # A number saved before origins were kept takes its row's mark. Pin that mark on it before the row's mark can
+        # follow a new unmarked number, so the old number keeps the mark it was saved with.
+        for field in GS.FIELDS:
+            if row.get(field) is not None and field not in fields:
+                c.execute(
+                    "INSERT OR IGNORE INTO growth_origins (cohort_id, field, origin, quality, by, at) "
+                    "VALUES (?,?,'typed',?,?,?)",
+                    (row["id"], field, row["quality"], row.get("updated_by"), row["updated_at"]),
+                )
     if row:
         c.execute(
             f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
@@ -1076,12 +1116,14 @@ def cohort_set(c, actor, body):
             f"INSERT INTO growth_cohorts ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
             list(fields.values()),
         )
-    if "quality" in fields:
+    if marked:
+        # Said outright: every typed number of the month takes the mark, as when an estimate is confirmed actual.
         c.execute("UPDATE growth_origins SET quality=? WHERE cohort_id=? AND origin='typed'", (fields["quality"], cid))
+    typed = {k: v for k, v in fields.items() if k in GS.FIELDS}
+    GS.record_typed(c, cid, typed, fields["quality"] if marked else "estimate", actor)
+    if not marked and typed:
+        GS.settle_quality(c, {"id": cid})
     saved = H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)) or {}
-    GS.record_typed(
-        c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
-    )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
     if (saved.get("quality") or "actual") == "actual" and (
         "quality" in fields or any(k in COMPUTED_FIELDS for k in fields)
@@ -1144,6 +1186,7 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
+    from . import growth_brief as BRIEF
     from . import growth_setup as SETUP
     from .goal_routes import _hidden_owners, kpi_editable
 
@@ -1157,15 +1200,32 @@ def install(app, store, auth, mutate):
         SETUP.record(c, who.actor)
         return {**result, "setup": SETUP.block(c, auth, who)}
 
-    from . import growth_computed, growth_customers
+    from . import growth_computed, growth_core, growth_customers, growth_proposals
 
     growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
+    SEG.install(app, store, auth, mutate)  # who the team sells to
     growth_computed.install(app, store, auth)  # cohorts computed from them
+    growth_core.install(app, store, auth, mutate)  # cohort rows, costs and the one read
 
     def reader(who):
         auth.domain(who)
 
-    def editor(who, what):
+    def counted(who, view):
+        """A channel or segment read counted for the spec's first measure; never fails the read."""
+        if getattr(who, "support", None):
+            return
+        try:
+            store.write(who, lambda w: BRIEF.count_read(w, who.actor, view))
+        except Exception:  # noqa: BLE001 - a count must never fail the read
+            logging.getLogger(__name__).warning("growth view read was not counted", exc_info=True)
+
+    def editor(c, who, what):
+        """The owner, an admin or the Growth Manager (backend/growth_setup.py editor): it writes what people tell it."""
+        auth.domain(who)
+        if not SETUP.editor(auth, who, c):
+            raise Problem("forbidden", f"Only the owner, an admin or the Growth Manager {what}", 403)
+
+    def retirer(who, what):
         auth.domain(who)
         if not admin(auth, who):
             raise Problem("forbidden", f"Only the owner or an admin {what}", 403)
@@ -1177,7 +1237,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+            out = {"channels": channels(c, include_retired), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.get("/api/v2/growth/channels/{slug}")
@@ -1190,8 +1250,33 @@ def install(app, store, auth, mutate):
             row = channel(c, slug)
             if not row:
                 raise Problem("not_found", f"No channel {slug}", 404)
-            out = {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+            out = {
+                **channel_view(row),
+                "tasks": channel_tasks(c, auth, who, slug),
+                **BRIEF.channel(c, auth, who, row, _hidden_owners(c, auth, who)),
+            }
+        counted(who, "channel")
         return answer(who, out, seen=True)
+
+    @app.get("/api/v2/growth/segments/{label}")
+    def growth_segment(request: Request, label: str):
+        """One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change
+        from the month before; a cohort under the minimum shows counts only. With segments, by slug or name: its rules,
+        channels, direct and loaded CAC, observed LTV and health (backend/growth_brief.py segment)."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            out = BRIEF.segment(c, auth, who, label)
+        counted(who, "segment")
+        return answer(who, out)
+
+    @app.get("/api/v2/growth/view-reads")
+    def growth_view_reads(request: Request, days: int = 30):
+        """How often each caller read a channel or segment view in the last `days` days, and in how many runs."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            return BRIEF.reads(c, max(1, min(int(days), 366)))
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):
@@ -1199,20 +1284,20 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "adds a channel")
+            editor(c, who, "adds a channel")
             return wrote(c, who, channel_create(c, who.actor, body))
 
         return mutate(request, body, work)
 
     @app.patch("/api/v2/growth/channels/{slug}")
     def growth_channel_update(request: Request, slug: str, body: M.GrowthChannelUpdate):
-        """Owner or admin: any field. The bot that owns the channel: its why, stage and budget."""
+        """Owner or admin: any field. The bot that owns the channel: its why, stage, budget and input KPI."""
         who = request.state.identity
 
         def work(c):
             auth.domain(who)
             fields = {k: getattr(body, k) for k in body.model_fields_set}
-            if not admin(auth, who):
+            if not SETUP.editor(auth, who, c):
                 row = channel(c, slug)
                 if not row:
                     raise Problem("not_found", f"No channel {slug}", 404)
@@ -1223,7 +1308,7 @@ def install(app, store, auth, mutate):
                 if set(fields) - OWNER_PATCH:
                     raise Problem(
                         "forbidden",
-                        "The bot that owns a channel changes its why, stage and budget_month; "
+                        "The bot that owns a channel changes its why, stage, budget_month and input_kpi_id; "
                         "an admin changes the rest",
                         403,
                     )
@@ -1237,8 +1322,21 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "retires a channel")
+            retirer(who, "retires a channel")
             return channel_retire(c, who.actor, slug)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/proposals")
+    def growth_propose(request: Request, body: M.GrowthProposal):
+        """A bot: a channel, a source or both that it will own, asked as an OK of the owner (or the admin `ask` names).
+        Nothing is added until that person OKs it from its preview; then Tico adds it as them and tells the bot
+        (backend/growth_proposals.py)."""
+        who = request.state.identity
+
+        def work(c):
+            reader(who)
+            return growth_proposals.propose(c, who, body, getattr(request.app.state, "integrations", None))
 
         return mutate(request, body, work)
 
@@ -1249,7 +1347,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**sources(c, include_retired), "may_edit": admin(auth, who)}
+            out = {**sources(c, include_retired), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.post("/api/v2/growth/sources")
@@ -1258,7 +1356,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "adds a source")
+            editor(c, who, "adds a source")
             return wrote(
                 c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who)
             )
@@ -1271,7 +1369,13 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "changes a source")
+            editor(c, who, "changes a source")
+            if {"sync_kind", "sync_map"} & body.model_fields_set:
+                row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+                if row and (GS.is_customers(row) or row.get("sync_kind") == "db_query"):
+                    # Remapping a customers source deletes its customer facts; switching a database source's kind
+                    # deletes its daily run, which may be another bot's automation.
+                    retirer(who, "changes what a customers or database source fetches")
             return wrote(
                 c,
                 who,
@@ -1293,7 +1397,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "retires a source")
+            retirer(who, "retires a source")
             return source_update(c, who.actor, sid, {}, retire=True)
 
         return mutate(request, body, work)
@@ -1364,7 +1468,7 @@ def install(app, store, auth, mutate):
                     text = raw.decode("utf-8-sig")
                 except UnicodeDecodeError:
                     raise Problem("validation", "The file is not UTF-8 text", 422) from None
-                return GS.run(c, row.get("owner_ref") or H.KEEPER, row, csv_text=text)
+                return GS.run(c, row.get("owner_ref") or H.TICO_ACTOR, row, csv_text=text)
 
         return await asyncio.to_thread(take)
 
@@ -1421,9 +1525,10 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/growth/cohorts/conflicts")
     def growth_cohort_conflict(request: Request, body: M.GrowthConflictResolve):
-        """The source's owner or an admin: a number someone typed as actual that a synced source disagrees with. Keep
+        """The source's owner, an admin or the Growth Manager (which asks whoever typed it): a number someone typed as
+        actual that a synced source disagrees with. Keep
         the typed number (the source's value is not raised again) or use the source's (it then belongs to it). With
-        `against: computed` (or `keep: computed`), the channel's owner or an admin: a typed actual that differs from the
+        `against: computed` (or `keep: computed`), the channel's owner, an admin or the Growth Manager: a typed actual that differs from the
         figure computed from customer facts; keep typed or computed, and the choice holds across later loads."""
         who = request.state.identity
 
@@ -1432,7 +1537,7 @@ def install(app, store, auth, mutate):
             slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
             if body.keep == "computed" or body.against == "computed":
                 # A typed actual beside the figure computed from customer facts: the channel's owner chooses.
-                return choose(c, who.actor, admin(auth, who), slug, body.month, body.field, body.keep)
+                return choose(c, who.actor, SETUP.editor(auth, who, c), slug, body.month, body.field, body.keep)
             channel_id = ""
             if slug:
                 found = channel(c, slug)
@@ -1444,7 +1549,7 @@ def install(app, store, auth, mutate):
             )
             if not row:
                 raise Problem("not_found", f"No numbers for {slug or UNKNOWN} in {body.month}", 404)
-            return GS.resolve(c, who.actor, admin(auth, who), row["id"], body.field, body.keep)
+            return GS.resolve(c, who.actor, SETUP.editor(auth, who, c), row["id"], body.field, body.keep)
 
         return mutate(request, body, work)
 
@@ -1465,7 +1570,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            out = {**settings(c), "may_edit": admin(auth, who)}
+            out = {**settings(c), "may_edit": SETUP.editor(auth, who, c)}
         return answer(who, out)
 
     @app.put("/api/v2/growth/settings")
@@ -1474,7 +1579,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(who, "changes the growth settings")
+            editor(c, who, "changes the growth settings")
+            if "key_readers" in body.model_fields_set:
+                retirer(who, "chooses who reads customer keys")
             return wrote(c, who, settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set}))
 
         return mutate(request, body, work)
@@ -1499,20 +1606,3 @@ def install(app, store, auth, mutate):
         answer(who, {})  # the first open, when it is one
         with store.read() as c:
             return SETUP.show(c, auth, who)
-
-    @app.post("/api/v2/growth/setup/shown")
-    def growth_setup_shown(request: Request, body: M.Empty):
-        """A person's Get started panel said "you're set up" (ui/app/growth-start.ts): it is said once per team, so the
-        panel does not come back. Before setup is done it records nothing. Answers as GET /api/v2/growth/setup."""
-        who = request.state.identity
-
-        def work(c):
-            reader(who)
-            if who.role == "bot":
-                raise Problem(
-                    "forbidden", "The Get started panel is a person's; a bot reads GET /api/v2/growth/setup", 403
-                )
-            SETUP.shown(c)
-            return SETUP.show(c, auth, who)
-
-        return mutate(request, body, work)

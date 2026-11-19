@@ -1,13 +1,18 @@
-"""The connection tools (clients/commands/connections.py) through the table and the `tico` CLI, with a stubbed API: the
-GitHub App steps, repository grants that keep a bot's other repositories, and whether a company can work now."""
+"""The connection tools (clients/commands/connections.py) through the table and the `tico` CLI: the GitHub App steps
+against a stubbed API, and repository grants, revokes and settings against a live hub, so that a grant that keeps a
+bot's other repositories is checked in what the hub stores. Whether a company can work now is stubbed."""
 
 import json
 
 import pytest
 
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.live import live  # noqa: F401 (the fixture)
 from clients import hubcli, hubtools, remotecli
+from clients.cli_spec import Command
 from clients.commands import connections as hubtools_connections
-from clients.tico import APIError
+from clients.tico import APIError, Client
 
 APP = {
     "connected": True,
@@ -83,7 +88,9 @@ def cli(monkeypatch, api, *argv):
 
 def test_every_connection_tool_is_registered_with_a_command_and_offered_to_people_not_the_assistant():
     names = {t["name"] for t in hubtools_connections.MINE}
-    commands = {*hubtools_connections.COMMANDS, "health ready"}  # `tico health ready` is a spec (computers.HEALTH)
+    specs = (*hubtools_connections.GITHUB, *hubtools_connections.GITHUB_AFTER_CONNECT, *hubtools_connections.REPO)
+    # `tico health ready` is a spec too (computers.HEALTH); `github connect` is the one the parser still builds.
+    commands = {*hubtools_connections.COMMANDS, "health ready", *(c.fn for c in specs if isinstance(c, Command))}
     assert names == {remotecli.tool_name(fn) for fn in commands}
     for name in names:
         entry = hubtools.BY_NAME[name]
@@ -156,9 +163,8 @@ def test_github_connect_writes_the_manifest_page_and_finish_and_installed_take_t
     made = tool("tico_github_connect", api)
     assert api.calls[-1] == ("GET", "github/app/manifest", None)
     assert made["next"][0].startswith("Open the page in a browser signed in to GitHub as the account the App is for")
-    assert "tico_github_connect" in hubtools.BY_NAME and "org" not in hubtools.BY_NAME["tico_github_connect"].get(
-        "required", ()
-    )
+    schema = hubtools.BY_NAME["tico_github_connect"]["inputSchema"]
+    assert "org" in schema["properties"] and "org" not in schema.get("required", [])
     code, printed = cli(monkeypatch, api, "github", "connect", "--html", str(out))
     assert code == 0 and api.calls[-1] == ("GET", "github/app/manifest", None)
     assert (
@@ -198,96 +204,111 @@ def test_github_disconnect_names_its_target_and_check_reads_permissions_again():
 
 
 # ----------------------------------------------------------------------------- repositories
+REPO_ROWS = (("acme/bot-builder", 0, 1), ("acme/bot-reviewer", 0, 1), ("acme/web", 1, 0), ("acme/docs", 0, 0))
+
+
 def access(mode, chosen=(), effective=(), all_access="write"):
     return {"mode": mode, "all_access": all_access, "chosen": list(chosen), "effective": list(effective)}
 
 
-def test_repo_grant_adds_one_repository_and_keeps_the_bots_other_chosen_ones(monkeypatch):
-    builder = access(
-        "chosen",
-        chosen=[{"full_name": "acme/docs", "access": "read"}, {"full_name": "acme/web", "access": "read"}],
-    )
-    api = Api(
+def seed_repos(api):
+    """The team's repository list as a refresh leaves it: two of the company's and the two bots' own repositories."""
+    api.app.state.store.settings.github_owner = "acme"
+    with api.app.state.store.transaction() as c:
+        for name, enabled, bot_repo in REPO_ROWS:
+            c.execute(
+                "INSERT INTO repositories(id,full_name,enabled,bot_repo,updated_at) VALUES(?,?,?,?,?)",
+                (H.new_id(), name, enabled, bot_repo, H.now()),
+            )
+
+
+def bot(api, slug):
+    """An active bot with its own repository, acme/bot-<slug>, and nowhere to run."""
+    with api.app.state.store.transaction() as c:
+        X.bot(c, slug, computer=False)
+        c.execute("UPDATE bot_config SET repo=? WHERE bot=?", (f"bot-{slug}", slug))
+
+
+def access_of(hub, bot):
+    """The bot's repository access as the hub reads it back: (mode, {repository: access} of its chosen ones)."""
+    got = hub.get(f"bots/{bot}/repositories")
+    return got["mode"], {r["full_name"]: r["access"] for r in got.get("chosen") or []}
+
+
+def repo(hub, name):
+    return next(r for r in hub.get("repositories")["repositories"] if r["full_name"] == name)
+
+
+def test_repo_grant_adds_one_repository_and_keeps_the_bots_other_chosen_ones(api, live, monkeypatch):
+    seed_repos(api)
+    bot(api, "builder")
+    hub = Client(live, "ana-test")
+    hub.call(
+        "PUT",
+        "bots/builder/repositories",
         {
-            ("GET", "repositories"): REPOS,
-            ("GET", "bots/builder/repositories"): builder,
-            ("PUT", "bots/builder/repositories"): lambda body: {"effective": body["chosen"]},
-        }
+            "mode": "chosen",
+            "chosen": [{"full_name": "acme/docs", "access": "read"}, {"full_name": "acme/web", "access": "read"}],
+        },
     )
-    code, got = cli(monkeypatch, api, "repo", "grant", "ACME/web", "builder", "write", "--actions")
+    code, got = cli(monkeypatch, hub, "repo", "grant", "ACME/web", "builder", "write", "--actions")
     assert code == 0 and got["changed"] and got["repository"] == "acme/web" and got["was"] == "chosen"
-    assert api.calls[-1] == (
+    assert access_of(hub, "builder") == ("chosen", {"acme/docs": "read", "acme/web": "write"})
+    granted = {r["full_name"]: r for r in hub.get("bots/builder/repositories")["chosen"]}
+    assert granted["acme/web"].get("run_workflows") is True and not granted["acme/docs"].get("run_workflows")
+
+
+def test_repo_grant_on_an_own_bot_switches_to_chosen_and_ticks_only_when_asked(api, live):
+    seed_repos(api)
+    bot(api, "reviewer")
+    hub = Client(live, "ana-test")
+    assert access_of(hub, "reviewer")[0] == "own"
+    got = tool("tico_repo_grant", hub, repository="acme/docs", bot="reviewer", access="read")
+    assert got["was"] == "own" and "not ticked" in got["warning"]
+    assert access_of(hub, "reviewer") == ("chosen", {"acme/docs": "read"})
+    assert repo(hub, "acme/docs")["enabled"] is False
+    got = tool("tico_repo_grant", hub, repository="acme/docs", bot="reviewer", access="read", tick=True)
+    assert got["ticked_now"] and "warning" not in got
+    assert repo(hub, "acme/docs")["enabled"] is True
+
+
+def test_repo_grant_refuses_to_narrow_an_all_repos_bot_and_an_unknown_repository(api, live):
+    seed_repos(api)
+    hub = Client(live, "ana-test")
+    hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})
+    assert tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read")["changed"] is False
+    with pytest.raises(APIError, match="tico bot repos ops --chosen acme/web:write"):
+        tool("tico_repo_grant", hub, repository="acme/web", bot="ops")
+    with pytest.raises(APIError, match="tico repo refresh"):
+        tool("tico_repo_grant", hub, repository="acme/nope", bot="ops")
+    with pytest.raises(ValueError, match="need write"):
+        tool("tico_repo_grant", hub, repository="acme/web", bot="ops", access="read", edit_workflows=True)
+    got = hub.get("bots/ops/repositories")
+    assert (got["mode"], got["all_access"]) == ("all", "read"), "a refused grant writes nothing"
+
+
+def test_repo_revoke_takes_one_away_and_says_when_there_is_nothing_to_take(api, live):
+    seed_repos(api)
+    bot(api, "builder")
+    hub = Client(live, "ana-test")
+    hub.call(
         "PUT",
         "bots/builder/repositories",
         {
             "mode": "chosen",
             "chosen": [
-                {"full_name": "acme/docs", "access": "read"},
                 {"full_name": "acme/web", "access": "write", "run_workflows": True},
+                {"full_name": "acme/docs", "access": "read"},
             ],
         },
     )
-
-
-def test_repo_grant_on_an_own_bot_switches_to_chosen_and_ticks_only_when_asked():
-    api = Api(
-        {
-            ("GET", "repositories"): REPOS,
-            ("GET", "bots/reviewer/repositories"): access("own", chosen=[{"full_name": "acme/web", "access": "write"}]),
-            ("PUT", "repositories/acme/docs"): {"enabled": True},
-            ("PUT", "bots/reviewer/repositories"): {"effective": []},
-        }
-    )
-    got = tool("tico_repo_grant", api, repository="acme/docs", bot="reviewer", access="read")
-    assert got["was"] == "own" and "not ticked" in got["warning"]
-    assert api.calls[-1][2] == {"mode": "chosen", "chosen": [{"full_name": "acme/docs", "access": "read"}]}
-    assert ("PUT", "repositories/acme/docs", {"enabled": True}) not in api.calls
-    got = tool("tico_repo_grant", api, repository="acme/docs", bot="reviewer", access="read", tick=True)
-    assert got["ticked_now"] and "warning" not in got
-    assert ("PUT", "repositories/acme/docs", {"enabled": True}) in api.calls
-
-
-def test_repo_grant_refuses_to_narrow_an_all_repos_bot_and_an_unknown_repository():
-    api = Api(
-        {
-            ("GET", "repositories"): REPOS,
-            ("GET", "bots/ops/repositories"): access("all", all_access="read"),
-        }
-    )
-    assert tool("tico_repo_grant", api, repository="acme/web", bot="ops", access="read")["changed"] is False
-    with pytest.raises(APIError, match="tico bot repos ops --chosen acme/web:write"):
-        tool("tico_repo_grant", api, repository="acme/web", bot="ops")
-    with pytest.raises(APIError, match="tico repo refresh"):
-        tool("tico_repo_grant", api, repository="acme/nope", bot="ops")
-    with pytest.raises(ValueError, match="need write"):
-        tool("tico_repo_grant", api, repository="acme/web", bot="ops", access="read", edit_workflows=True)
-    assert [c for c in api.calls if c[0] == "PUT"] == []
-
-
-def test_repo_revoke_takes_one_away_and_says_when_there_is_nothing_to_take():
-    api = Api(
-        {
-            ("GET", "bots/builder/repositories"): access(
-                "chosen",
-                chosen=[
-                    {"full_name": "acme/web", "access": "write", "run_workflows": True},
-                    {"full_name": "acme/docs", "access": "read"},
-                ],
-                effective=[{"full_name": "acme/bot-builder", "access": "write"}],
-            ),
-            ("PUT", "bots/builder/repositories"): {"effective": []},
-            ("GET", "bots/ops/repositories"): access("all"),
-        }
-    )
-    got = tool("tico_repo_revoke", api, repository="acme/web", bot="builder")
-    assert got["changed"] and api.calls[-1][2] == {
-        "mode": "chosen",
-        "chosen": [{"full_name": "acme/docs", "access": "read"}],
-    }
-    own = tool("tico_repo_revoke", api, repository="acme/bot-builder", bot="builder")
+    got = tool("tico_repo_revoke", hub, repository="acme/web", bot="builder")
+    assert got["changed"] and access_of(hub, "builder") == ("chosen", {"acme/docs": "read"})
+    own = tool("tico_repo_revoke", hub, repository="acme/bot-builder", bot="builder")
     assert own["changed"] is False and "own repository" in own["detail"]
+    hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "write"})
     with pytest.raises(APIError, match="All ticked repos"):
-        tool("tico_repo_revoke", api, repository="acme/web", bot="ops")
+        tool("tico_repo_revoke", hub, repository="acme/web", bot="ops")
 
 
 def test_repo_show_lists_who_reads_and_writes_a_repository(monkeypatch):
@@ -329,19 +350,20 @@ def test_repo_show_lists_who_reads_and_writes_a_repository(monkeypatch):
     assert ("GET", "bots/gone/repositories", None) not in api.calls
 
 
-def test_repo_refresh_default_and_setup_command_reach_their_routes():
-    api = Api(
-        {
-            ("POST", "repositories/refresh"): REPOS,
-            ("GET", "repositories"): REPOS,
-            ("PUT", "repositories/settings"): lambda body: body,
-            ("PUT", "repositories/acme/web"): lambda body: {"full_name": "acme/web", **body},
-        }
-    )
+def test_repo_default_and_setup_command_are_saved_on_the_hub(api, live):
+    seed_repos(api)
+    hub = Client(live, "ana-test")
+    assert tool("tico_repo_default", hub) == {"new_bot_default": "own"}
+    assert tool("tico_repo_default", hub, mode="all") == {"new_bot_default": "all"}
+    assert tool("tico_repo_default", hub) == {"new_bot_default": "all"}
+    got = tool("tico_repo_setup_command", hub, repository="acme/web", command="npm ci")
+    assert got["setup_command"] == "npm ci" and repo(hub, "acme/web")["setup_command"] == "npm ci"
+
+
+def test_repo_refresh_reaches_its_route():
+    # double: the refresh reads GitHub's repository list, which no live hub test here can reach
+    api = Api({("POST", "repositories/refresh"): REPOS, ("GET", "repositories"): REPOS})
     assert tool("tico_repo_refresh", api)["ticked"] == ["acme/web"]
-    assert tool("tico_repo_default", api) == {"new_bot_default": "own"}
-    assert tool("tico_repo_default", api, mode="all") == {"new_bot_default": "all"}
-    assert tool("tico_repo_setup_command", api, repository="acme/web", command="npm ci")["setup_command"] == "npm ci"
 
 
 # ----------------------------------------------------------------------------- is the company able to work

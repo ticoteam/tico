@@ -16,7 +16,7 @@ Go-live page. Nothing goes into an ad account in this playbook. It goes live onl
     tico task show <id>
 
 Find the segment, the goal, the budget, the date and who asked. If one of them is missing, ask once with
-`tico task ask <id> --to <person> "<question>" --version N` and stop.
+`tico task ask <id> --to <person> "<question>"` and stop.
 
 ## 2. Check it against the targets
 

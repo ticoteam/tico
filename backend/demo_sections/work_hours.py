@@ -38,7 +38,7 @@ def seed(b):
         kept = {row["id"]: row["last_turn_at"] for row in c.execute("SELECT id, last_turn_at FROM bots")}
         for index, (start, length, slug) in enumerate(sorted(runs)):
             b.clock.at = start
-            turn = hubdb.turn_start(c, hubdb.KEEPER, slug, trigger="task")
+            turn = hubdb.turn_start(c, hubdb.TICO_ACTOR, slug, trigger="task")
             b.clock.at = start + timedelta(hours=length)
             model = D.USAGE.get(slug, ("claude-sonnet-5-5", "anthropic", "api"))[0]
             provider = "openai" if model.startswith("gpt") else "anthropic"
@@ -46,7 +46,7 @@ def seed(b):
             cached, tokens_out = tokens_in * 4 // 5, int(length * 60 * 80)
             hubdb.turn_finish(
                 c,
-                hubdb.KEEPER,
+                hubdb.TICO_ACTOR,
                 turn["id"],
                 "completed",
                 SUMMARY,

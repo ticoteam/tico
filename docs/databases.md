@@ -33,7 +33,9 @@ Layers, in order of strength (MongoDB has its own list under [MongoDB Atlas](#mo
    statement. This turns mistakes into clear messages; do not rely on it alone.
 4. **Limits**: a row cap (default 500, ceiling 10,000) and a statement timeout (default 20 s,
    ceiling 120 s). A result that hit the cap says `truncated`.
-5. **The grant**: the bot must declare the database under `tools:` in its `bot.yaml`.
+5. **The grant**: the connection string granted to the bot (step 2) is its access. A `tools:` entry in its `bot.yaml`
+   is optional: it names a different variable, sets `max_rows` or `timeout_seconds`, or (with no `read` in `can:`)
+   refuses the database.
 6. **The audit**: each query is recorded in Tico as a `db.query` event (statement, row count,
    time, parameter names; never a value or a row) before the rows are shown. If Tico cannot
    record it the result is withheld.
@@ -80,7 +82,7 @@ SQLite: nothing to create; give the owner's user read access to the file. `tico 
 ### 2. Store a Credential and grant it
 
 The variable name is `DB_<NAME>_URL` for a database you will call `<name>` (`warehouse` gives
-`DB_WAREHOUSE_URL`; a `-` becomes `_`). In **Tools → Credentials → Add credential**, choose
+`DB_WAREHOUSE_URL`; a `-` becomes `_`). In **Tools → Add → Key**, choose
 **connection**, set **Bot variable name** to `DB_WAREHOUSE_URL`, and paste the read-only connection
 string into **Value**. Save, then use **Access → Grant access to** to grant it to each bot that needs it.
 BotOps can open the Credential card and grant it for you. Never paste the value into ordinary chat,
@@ -99,8 +101,10 @@ New runs do not load `secrets/<bot>.env` or `_shared.env` as a fallback.
 
 ### 3. Grant bots
 
-Add a `tools:` entry to each bot's `bot.yaml` ([creating-bots.md](creating-bots.md),
-"Access and credentials"). Not listed means not allowed, and the owner decides:
+The Credential grant in step 2 is the bot's access: `tico db warehouse ...` works for each bot granted
+`DB_WAREHOUSE_URL`, and `tico db list` lists it. A `tools:` entry in the bot's `bot.yaml`
+([creating-bots.md](creating-bots.md), "Access and credentials") is optional; add one to describe the database, use
+another variable, or lower the bot's limits:
 
 ```yaml
 tools:
@@ -114,7 +118,7 @@ tools:
     note: "revenue reporting only; counts, no customer rows"
 ```
 
-A bot without the entry is refused even when it has the Credential grant. Both are needed. A human who
+An entry without `read` in `can:` refuses the database to that bot even while it holds the grant. A human who
 runs `tico db` from their own shell (with their personal API token, see
 [how-it-works.md](how-it-works.md)) is granted by having the connection string in their own
 environment.
@@ -223,7 +227,7 @@ Network access, in one of two ways:
 In **Atlas, Database, Connect, Drivers**, copy the `mongodb+srv://` string and add the password, the
 database name in the path and `authSource=admin`:
 
-Store that string as a **connection** Credential in **Tools → Credentials**, set **Bot variable name**
+Store that string as a **connection** Credential in **Tools → Add → Key**, set **Bot variable name**
 to `DB_ATLAS_URL`, and grant it to each bot that needs Atlas (the same steps as SQL step 2).
 Its shape is `mongodb+srv://tico_readonly:<password>@<cluster-host>/app?authSource=admin&retryWrites=false`;
 put the actual value only in the Credential card.
@@ -236,6 +240,8 @@ for SRV and TXT records. Percent-encode special characters in the password (`@` 
 self-managed replica set works too: `mongodb://user:pass@host1:27017,host2:27017/app?replicaSet=rs0&tls=true`.
 
 ### 3. Grant bots
+
+The grant of `DB_ATLAS_URL` is the bot's access, as for SQL databases; an entry is optional:
 
 ```yaml
 tools:
@@ -330,14 +336,14 @@ audit records the entry with `{"$param": ...}` left in and the parameter names, 
 - **The statement checks are not a sandbox.** They catch the common mistake; a database
   function with side effects is only stopped by the role and the read-only session.
 - **Never share a writable URL** with a bot, and do not put the connection string in a repository,
-  a task or a chat. Rotate the password in the database and update the stored Credential's value in **Tools → Credentials**
+  a task or a chat. Rotate the password in the database and update the stored Credential's value (Tools, under the **Keys** filter)
   (step 2). Keep its name and grants; the next run receives the new value.
 
 ## Troubleshooting
 
 | You see | Usually |
 |---|---|
-| `grant: ... does not declare database` | the bot's `bot.yaml` has no `tools:` entry with `database: <name>` (step 3) |
+| `grant: ...'s entry for <name> does not carry read` | the bot's `bot.yaml` entry for the database leaves `read` out of `can:`; add it or remove the entry |
 | `credential: DB_X_URL is not set` | step 2: store the Credential with the exact Bot variable name and grant it to this bot; files and shell exports do not grant access |
 | `driver: the postgres driver is not installed` | `pip install 'psycopg[binary]'` (MySQL: `PyMySQL`) in the runner's environment; both are in `backend/requirements.txt` |
 | `timeout` | add a date window or an index, or lower the work; the limit is 20 s unless the entry raises `timeout_seconds` (ceiling 120 s) |
@@ -396,8 +402,8 @@ process, so restart the server after a change.
 **Deploying to the runners.** A runner needs three things and no query files:
 
 1. The Tico release (`tico db`, `clients/dbquery.py`), which is what the runner already runs.
-2. Each bot's repository with its `bot.yaml` `tools:` entries declaring the databases.
-3. A stored Credential for each `DB_<NAME>_URL`, granted to that bot and delivered for its run.
+2. A stored Credential for each `DB_<NAME>_URL`, granted to that bot and delivered for its run.
+3. Optionally, `tools:` entries in each bot's `bot.yaml` naming its databases' limits.
    Keep values out of git and out of the config repository.
 
 Named queries reach the runner over Tico's API at query time (`tico db <name> --query <id>` asks

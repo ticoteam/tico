@@ -48,8 +48,9 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     assert pushed["pushed"] and pushed["item"]["status"] == "pushed"
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
     assert task["owner_id"] == "human:ben" and task["title"] == "Send Dana the pricing sheet"
-    assert "From meeting: Weekly sync" in task["body"] and "> We agreed to ship on Friday." in task["body"]
-    assert f"#/meetings?meeting={rid}" in task["body"]
+    asked = task["request"]["text"]
+    assert "From meeting: Weekly sync" in asked and "> We agreed to ship on Friday." in asked
+    assert f"#/meetings?meeting={rid}" in asked
     # A second push is one result, not a second task.
     assert push(api, rid, iid)["pushed"] is False
     # A task with no owner is refused rather than guessed.
@@ -58,7 +59,7 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
 
 
 def test_the_v2_aliases_answer_what_the_old_paths_do(api):
-    """The runner hostname only routes /api/v2, so Tico Recorder's Send calls these; each answers as its old path does."""
+    """The runner hostname only routes /api/v2, so clients there call these; each answers as its old path does."""
     rid = record(api, {"title": "Old and new paths"})
     old_edit = api.post(f"/api/meetings/{rid}/edit", json={"title": "Via v1", "version": 1}, headers=headers())
     new_edit = api.post(f"/api/v2/meetings/{rid}/edit", json={"title": "Via v2", "version": 2}, headers=headers())
@@ -107,12 +108,12 @@ def test_a_doc_update_on_a_team_with_no_doc_bot_is_left_for_a_person_to_choose(a
     # A named owner the roster does not have is refused again, and nothing is created for it.
     change(api, rid, iid, {"detail": {**detail, "owner": "human:nobody"}})
     push(api, rid, iid, expected=422)
-    change(api, rid, iid, {"detail": {**detail, "owner": H.KEEPER}})
+    change(api, rid, iid, {"detail": {**detail, "owner": H.TICO_ACTOR}})
     push(api, rid, iid, expected=422)
     change(api, rid, iid, {"detail": {**detail, "owner": "human:ben"}})
     pushed = push(api, rid, iid)
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
-    assert task["owner_id"] == "human:ben" and "Document: docs/pricing.md" in task["body"]
+    assert task["owner_id"] == "human:ben" and "Document: docs/pricing.md" in task["request"]["text"]
 
 
 def test_a_doc_update_cannot_be_assigned_to_a_bot_the_sender_cannot_write(api):

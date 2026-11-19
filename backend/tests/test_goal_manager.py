@@ -2,12 +2,18 @@
 a required bootstrap card, routines that start paused, a company from before it gets it on update, nobody
 archives it, only the owner edits it, and its daily pass starts once the first KPI exists."""
 
+import yaml
 from fastapi.testclient import TestClient
 
 from backend import routines as R
 from backend.app import create_app
 from backend.tests.helpers.onboarding import as_person, draft, environment, machine, signed_in
-from backend.tests.helpers.goal_manager import BASE, with_goal_manager
+from backend.tests.helpers.goal_manager import BASE, TEMPLATE, with_goal_manager
+
+# The Strategy Owner's routines are the template's own, each under its bot's id (`strategy-owner:<id>`).
+TEMPLATE_ROUTINES = {
+    f"strategy-owner:{entry['id']}" for entry in yaml.safe_load((TEMPLATE / "bot.yaml").read_text())["routines"]
+}
 
 
 def routines(api):
@@ -28,7 +34,7 @@ def built(environment):
     with_goal_manager(api)
     machine(api)
     draft(api)
-    record = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
+    record = api.post("/api/v2/setup/complete", json={}, headers=signed_in()).json()
     return api, record
 
 
@@ -42,20 +48,20 @@ def test_it_is_built_for_every_company_with_its_two_pass_routines_paused(environ
         "strategy-owner:goals-review": 0,
         "strategy-owner:market-briefing": 1,
     }
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    assert len(routines(api)) == 3  # twice is still three
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
+    assert set(routines(api)) == TEMPLATE_ROUTINES  # twice is still the same set
 
 
 def test_a_company_from_before_gets_it_on_update_once_a_computer_and_model_exist(environment):
     api = environment(seed={}, cards=BASE)
     machine(api)
     draft(api)
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert "strategy-owner" not in states(api)  # this release's catalog has no card yet
     with_goal_manager(api)
     with TestClient(create_app(api.app.state.store.settings)):  # a restart is an update
         pass
-    assert states(api)["strategy-owner"] == "active" and len(routines(api)) == 3
+    assert states(api)["strategy-owner"] == "active" and set(routines(api)) == TEMPLATE_ROUTINES
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='strategy-owner'")
     with TestClient(create_app(api.app.state.store.settings)):

@@ -1,5 +1,4 @@
-//! GitHub credentials for a turn (`runner_support/git_credentials.py`, `runner_support/credential_socket.py`,
-//! `runner_support/credential_bin/gh`).
+//! GitHub credentials for a turn. This module owns them: the Python turn helper and gh wrapper it replaced are gone.
 //!
 //! The hub mints a repository-scoped GitHub App token that lasts an hour; a turn can run longer, so git
 //! does not keep one. Its credential helper is `tico-runner git-credential`, which asks this runner's
@@ -176,12 +175,51 @@ pub fn select_token(granted: &Value, repository: Option<&str>) -> String {
     granted["token"].as_str().unwrap_or_default().to_string()
 }
 
+/// Why a configured answer holds no token for `repository` ("" for the bot's own), in plain words, or "" when the
+/// answer does not say. The hub withholds a bot's own repository when the App is installed on chosen repositories and
+/// not it, or another company made it (backend/repositories.py Homes), and says which in `history`.
+pub fn no_token_reason(granted: &Value, repository: Option<&str>) -> String {
+    if !crate::util::truthy(granted.get("configured")) {
+        return String::new();
+    }
+    let what = match repository.filter(|r| !r.is_empty()) {
+        Some(r) => format!("for {r}"),
+        None => "for this bot's repository".to_string(),
+    };
+    let history = granted["history"].as_str().unwrap_or_default().trim();
+    let why = if !history.is_empty() {
+        history.to_string()
+    } else if let (Some(repo), Some(groups)) = (
+        repository.filter(|r| !r.is_empty()),
+        granted.get("tokens").and_then(|t| t.as_array()),
+    ) {
+        let held = groups.iter().any(|g| {
+            g["repositories"].as_array().is_some_and(|n| {
+                n.iter()
+                    .any(|n| n.as_str().is_some_and(|n| n.eq_ignore_ascii_case(repo)))
+            })
+        });
+        if held {
+            return String::new();
+        }
+        "it is outside this bot's repository access".to_string()
+    } else {
+        return String::new();
+    };
+    let said: String = why
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(240)
+        .collect();
+    crate::redact::scrub_credentials(&format!("Tico gives no GitHub token {what}: {said}"), &[])
+}
+
 // ----------------------------------------------------------------------------- the socket
 
 struct Registered {
     bot: String,
-    /// The mailboxes the hub named for this attempt (crate::mail_key::answer).
-    mailboxes: std::collections::BTreeSet<String>,
     issued: Vec<String>,
     redactor: Option<Arc<Redactor>>,
     /// A turn that asks for its GitHub tokens with its own token, and its own cache (register_as).
@@ -244,7 +282,7 @@ fn accept(
 }
 
 impl CredentialSocket {
-    /// Listen in a private temporary directory, as `credential_socket.serve` does without isolation.
+    /// Without isolation, listen in a private temporary directory.
     /// Under isolation (or with TICO_RUNNER_CRED_SOCKET) it is a fixed path the bot user owns.
     pub fn serve(client: Client, cache: Arc<TokenCache>) -> std::io::Result<CredentialSocket> {
         let named = std::env::var("TICO_RUNNER_CRED_SOCKET")
@@ -340,7 +378,6 @@ impl CredentialSocket {
             attempt_token.into(),
             Registered {
                 bot: bot.into(),
-                mailboxes: Default::default(),
                 issued: vec![],
                 redactor: None,
                 own: None,
@@ -353,7 +390,6 @@ impl CredentialSocket {
     pub fn register_as(&self, attempt_token: &str, bot: &str, own: Client) {
         let entry = Registered {
             bot: bot.into(),
-            mailboxes: Default::default(),
             issued: vec![],
             redactor: None,
             own: Some((own, Arc::new(TokenCache::new()))),
@@ -362,17 +398,6 @@ impl CredentialSocket {
             .lock()
             .unwrap()
             .insert(attempt_token.into(), entry);
-    }
-
-    /// The mailboxes this attempt may ask a mail token for.
-    pub fn set_mailboxes(
-        &self,
-        attempt_token: &str,
-        mailboxes: std::collections::BTreeSet<String>,
-    ) {
-        if let Some(r) = self.attempts.lock().unwrap().get_mut(attempt_token) {
-            r.mailboxes = mailboxes;
-        }
     }
 
     pub fn set_redactor(&self, attempt_token: &str, redactor: Arc<Redactor>) {
@@ -416,15 +441,16 @@ async fn answer(
         .lock()
         .unwrap()
         .get(token)
-        .map(|r| (r.bot.clone(), r.mailboxes.clone(), r.own.clone()));
-    let Some((bot, mailboxes, own)) = known else {
+        .map(|r| (r.bot.clone(), r.own.clone()));
+    let Some((bot, own)) = known else {
         return json!({"error": "unknown attempt"});
     };
     let (client, cache) = own
         .as_ref()
         .map_or((client, cache), |(c, k)| (c, k.as_ref()));
-    if let Some(mail) = asked.get("mail") {
-        return crate::mail_key::answer(&mailboxes, mail).await;
+    // Mail and calendar run on the server (docs/mail.md): a mail request never falls through to a GitHub token.
+    if asked.get("mail").is_some() {
+        return json!({"error": "mail access is on the server: use tico email"});
     }
     let repository = match asked.get("repository") {
         None | Some(Value::Null) => None,
@@ -445,8 +471,16 @@ async fn answer(
     } else {
         cache.get(client, json!({"bot": bot})).await
     };
+    let mut why = String::new();
     let granted = match granted {
-        Ok(g) => select_token(&g, repository.as_deref().filter(|r| !r.is_empty())),
+        Ok(g) => {
+            let wanted = repository.as_deref().filter(|r| !r.is_empty());
+            let token = select_token(&g, wanted);
+            if token.is_empty() {
+                why = no_token_reason(&g, wanted);
+            }
+            token
+        }
         Err(e) if e.status != 0 => {
             return json!({"error": format!("APIError: {}", token_problem(&e, repository.as_deref().unwrap_or("")))})
         }
@@ -472,7 +506,7 @@ async fn answer(
             .unwrap_or_else(|_| json!({"error": "ValueError"}));
     }
     if granted.is_empty() {
-        return json!({"error": "no token"});
+        return json!({"error": if why.is_empty() { "no token".to_string() } else { why }});
     }
     let mut map = attempts.lock().unwrap();
     let Some(entry) = map.get_mut(token) else {
@@ -653,9 +687,27 @@ pub async fn apply(
     socket: Option<&Path>,
     state_dir: &Path,
 ) -> bool {
+    let granted = cache.get(client, json!({"bot": bot})).await;
+    apply_granted(env, granted, bot, socket, state_dir)
+}
+
+/// `apply` with the token already asked for (`TokenCache::get` with `{"bot": bot}`), so the ask can run beside a
+/// turn's other preparation.
+pub fn apply_granted(
+    env: &mut Env,
+    granted: Result<Value, ApiError>,
+    bot: &str,
+    socket: Option<&Path>,
+    state_dir: &Path,
+) -> bool {
     let mut reason = String::new();
-    let granted = match cache.get(client, json!({"bot": bot})).await {
-        Ok(g) => g,
+    let granted = match granted {
+        Ok(g) => {
+            if g["token"].as_str().unwrap_or_default().is_empty() {
+                reason = no_token_reason(&g, None);
+            }
+            g
+        }
         Err(e) => {
             reason = token_problem(&e, "");
             log(&format!(
@@ -843,16 +895,18 @@ pub fn socket_request(
 }
 
 /// The token for `repository`: the bot's own for outside the App's organization, the turn's held one while
-/// it has ten minutes left, else a fresh one from the socket, else the turn's start-of-turn token.
-pub fn credential(socket: Option<&str>, repository: Option<&str>) -> String {
+/// it has ten minutes left, else a fresh one from the socket, else the turn's start-of-turn token. Err holds the
+/// socket's refusal ("" when there is none to tell), for the line git or gh shows the bot.
+pub fn credential(socket: Option<&str>, repository: Option<&str>) -> Result<String, String> {
     let other = outside_token(repository);
     if !other.is_empty() {
-        return other;
+        return Ok(other);
     }
     let held = held_token(repository);
     if !held.is_empty() {
-        return held;
+        return Ok(held);
     }
+    let mut refused = String::new();
     if let Some(s) = socket.filter(|s| !s.is_empty()) {
         match socket_request(
             Path::new(s),
@@ -861,11 +915,8 @@ pub fn credential(socket: Option<&str>, repository: Option<&str>) -> String {
             repository,
             "git",
         ) {
-            Ok(t) => return t,
-            Err(e) => eprintln!(
-                "Tico runner: no fresh GitHub App token (socket): {}",
-                e.chars().take(300).collect::<String>()
-            ),
+            Ok(t) => return Ok(t),
+            Err(e) => refused = e,
         }
     }
     let mut granted =
@@ -873,7 +924,29 @@ pub fn credential(socket: Option<&str>, repository: Option<&str>) -> String {
     if let Ok(t) = std::env::var(TOKENS_KEY) {
         granted["tokens"] = serde_json::from_str(&t).unwrap_or(json!([]));
     }
-    select_token(&granted, repository)
+    let token = select_token(&granted, repository);
+    if token.is_empty() {
+        Err(refused)
+    } else {
+        Ok(token)
+    }
+}
+
+/// The line git or gh shows when there is no token: the hub's reason when it gave one, else where to look.
+pub fn missing_token_line(refused: &str) -> String {
+    let refused: String = refused
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(300)
+        .collect();
+    if refused.is_empty() || refused == "no token" {
+        "Tico runner: no GitHub App token for this repository; check Settings > Tools > GitHub"
+            .to_string()
+    } else {
+        format!("Tico runner: no GitHub App token for this repository: {refused}")
+    }
 }
 
 /// `tico-runner git-credential --socket S --bot B`: git's credential helper protocol on stdin/stdout.
@@ -893,14 +966,12 @@ pub fn git_credential_main(socket: Option<String>) -> i32 {
         return 0;
     }
     let repo = wanted.get("path").and_then(|p| repository_name(p));
-    let token = credential(socket.as_deref(), repo.as_deref());
-    if token.is_empty() {
-        eprintln!(
-            "Tico runner: no GitHub App token for this repository; check Settings > Tools > GitHub"
-        );
-        println!("quit=true");
-    } else {
-        print!("username=x-access-token\npassword={token}\n");
+    match credential(socket.as_deref(), repo.as_deref()) {
+        Ok(token) => print!("username=x-access-token\npassword={token}\n"),
+        Err(refused) => {
+            eprintln!("{}", missing_token_line(&refused));
+            println!("quit=true");
+        }
     }
     0
 }
@@ -987,13 +1058,13 @@ pub fn gh_repository(argv: &[String], gh_repo: Option<&str>) -> Option<String> {
 pub fn gh_main(args: Vec<String>) -> i32 {
     use std::os::unix::process::CommandExt;
     let repo = gh_repository(&args, std::env::var("GH_REPO").ok().as_deref());
-    let token = credential(std::env::var(SOCKET_ENV).ok().as_deref(), repo.as_deref());
-    if token.is_empty() {
-        eprintln!(
-            "Tico runner: no GitHub App token for this repository; check Settings > Tools > GitHub"
-        );
-        return 1;
-    }
+    let token = match credential(std::env::var(SOCKET_ENV).ok().as_deref(), repo.as_deref()) {
+        Ok(token) => token,
+        Err(refused) => {
+            eprintln!("{}", missing_token_line(&refused));
+            return 1;
+        }
+    };
     let Ok(gh) = std::env::var("TICO_GITHUB_GH") else {
         eprintln!("Tico runner: gh is not installed on this computer");
         return 1;
@@ -1054,6 +1125,49 @@ mod tests {
             select_token(&json!({"configured": false, "token": "x"}), None),
             ""
         );
+    }
+
+    /// GitHub's stateless installation token (`ghs_<app id>_<JWT>`, ~520 characters with dots and dashes; the
+    /// default since Oct 2026), synthetic. backend/tests/helpers/github_app.py stateless_token makes the same shape.
+    fn stateless_token() -> String {
+        format!(
+            "ghs_4242_eyJhbGciOiJSUzI1NiJ9.eyJpaWQiOjc3LCJub25jZSI6InN5bnRoZXRpYyJ9.{}",
+            "S1g-n_aTuRe".repeat(40)
+        )
+    }
+
+    #[test]
+    fn a_stateless_token_reaches_git_exactly_as_the_socket_answers_it() {
+        let token = stateless_token();
+        let dir =
+            PathBuf::from("/tmp").join(format!("tico-cred-fmt-{}", uuid::Uuid::new_v4().simple())); // short
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("git-credential.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let answer = token.clone();
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut asked = String::new();
+            BufReader::new(&stream).read_line(&mut asked).unwrap();
+            (&stream)
+                .write_all(format!("{}\n", json!({ "token": answer })).as_bytes())
+                .unwrap();
+            asked
+        });
+        let got = socket_request(&path, "attempt-1", Some("Acme/emp-ops"), "git").unwrap();
+        let asked: Value = serde_json::from_str(&served.join().unwrap()).unwrap();
+        assert_eq!(
+            asked,
+            json!({"token": "attempt-1", "repository": "Acme/emp-ops", "purpose": "git"})
+        );
+        assert_eq!(
+            got, token,
+            "the token git is given is the one the socket answered"
+        );
+        let granted = json!({"configured": true, "token": token, "tokens": [{"token": token, "repositories": ["Acme/emp-ops"]}]});
+        assert_eq!(select_token(&granted, Some("acme/emp-ops")), token);
+        assert_eq!(select_token(&granted, None), token);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -1149,6 +1263,144 @@ mod tests {
         assert!(reply.contains("bad request"), "{reply}");
         drop(new);
         assert!(!own.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A hub that answers each POST github/token with `answer` (HTTP 200), however often it is asked.
+    async fn token_hub(answer: Value) -> Client {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut got = Vec::new();
+                let mut buf = vec![0u8; 8192];
+                loop {
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    got.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&got).to_string();
+                    let done = text.find("\r\n\r\n").is_some_and(|end| {
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        got.len() >= end + 4 + length
+                    });
+                    if done || n == 0 {
+                        break;
+                    }
+                }
+                let body = answer.to_string();
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(reply.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        Client::new(&format!("http://127.0.0.1:{port}"), "synthetic", 5, 0).unwrap()
+    }
+
+    const TAKEN: &str = "Bot history is not backed up to GitHub: a repository with the bot's name was already there, \
+                         made by someone else, so Tico leaves it alone";
+
+    fn withheld() -> Value {
+        // github_app.py token: the bot's own repository withheld (repositories.Homes) and nothing else granted.
+        json!({"configured": true, "token": "", "expires_at": null, "repository": "", "repositories": [],
+               "tokens": [], "hold": true, "history": TAKEN})
+    }
+
+    #[test]
+    fn an_empty_answer_says_why_when_the_hub_does() {
+        let said = no_token_reason(&withheld(), None);
+        assert!(
+            said.starts_with("Tico gives no GitHub token for this bot's repository: Bot history is not backed up")
+                && said.contains("made by someone else"),
+            "{said}"
+        );
+        assert!(no_token_reason(&withheld(), Some("Acme/emp-legal"))
+            .contains("for Acme/emp-legal: Bot history"));
+        // A repository the answer has no token group for, with no history to tell.
+        let granted = json!({"configured": true, "token": "t", "tokens": [{"token": "t", "repositories": ["Acme/emp-ops"]}]});
+        assert_eq!(
+            no_token_reason(&granted, Some("Acme/other")),
+            "Tico gives no GitHub token for Acme/other: it is outside this bot's repository access"
+        );
+        assert_eq!(no_token_reason(&granted, Some("acme/emp-ops")), "");
+        assert_eq!(no_token_reason(&json!({"configured": false}), None), "");
+        assert_eq!(
+            no_token_reason(&json!({"configured": true, "token": ""}), None),
+            ""
+        );
+    }
+
+    #[test]
+    fn git_and_gh_show_the_hubs_reason_or_where_to_look() {
+        assert_eq!(
+            missing_token_line(""),
+            "Tico runner: no GitHub App token for this repository; check Settings > Tools > GitHub"
+        );
+        assert_eq!(missing_token_line("no token"), missing_token_line(""));
+        let said = missing_token_line(&no_token_reason(&withheld(), Some("Acme/emp-legal")));
+        assert!(
+            said.starts_with("Tico runner: no GitHub App token for this repository: Tico gives no GitHub token for Acme/emp-legal: Bot history")
+                && !said.contains("Settings > Tools"),
+            "{said}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_withheld_repository_gives_git_the_hubs_reason_not_token_unavailable() {
+        let client = token_hub(withheld()).await;
+        let dir =
+            PathBuf::from("/tmp").join(format!("tico-withheld-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).unwrap();
+        // The start-of-turn helper: what `git push` runs when the turn has no token.
+        let mut env = Env::new();
+        let cache = TokenCache::new();
+        assert!(!apply(&mut env, &client, &cache, "legal-owner", None, &dir).await);
+        let helper = env
+            .iter()
+            .find(|(k, v)| k.starts_with("GIT_CONFIG_VALUE_") && v.contains("quit=true"))
+            .map(|(_, v)| v.clone())
+            .expect("a failed helper");
+        assert_ne!(
+            helper, FAILED_HELPER,
+            "the generic 'token unavailable' hides the hub's reason"
+        );
+        assert!(
+            helper.contains("made by someone else, so Tico leaves it alone"),
+            "{helper}"
+        );
+        // The credential socket's answer for a git call later in the turn says the same.
+        let attempts = Mutex::new(HashMap::from([(
+            "attempt-1".to_string(),
+            Registered {
+                bot: "legal-owner".into(),
+                issued: vec![],
+                redactor: None,
+                own: None,
+            },
+        )]));
+        let reply = answer(
+            &attempts,
+            &client,
+            &TokenCache::new(),
+            &json!({"token": "attempt-1", "repository": "Acme/emp-legal", "purpose": "git"})
+                .to_string(),
+        )
+        .await;
+        let error = reply["error"].as_str().unwrap_or_default();
+        assert!(
+            error.starts_with(
+                "Tico gives no GitHub token for Acme/emp-legal: Bot history is not backed up"
+            ),
+            "{reply}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

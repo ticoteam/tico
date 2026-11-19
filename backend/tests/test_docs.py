@@ -449,4 +449,5 @@ def test_upgrade_repairs_generated_docs_once_and_queues_a_map_refresh(api):
     with api.app.state.store.read() as c:
         tasks = c.execute("SELECT * FROM tasks WHERE owner_id='bot:librarian' AND title='Refresh the map'").fetchall()
         assert len(tasks) == 1 and tasks[0]["status"] == "open"
-        assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]
+        said = H.task_words(c, tasks[0]["id"])  # what Tico told the Librarian: its instructions
+        assert "unreadable" in said and "archived" in said

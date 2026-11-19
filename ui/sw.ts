@@ -10,7 +10,7 @@ worker.addEventListener('activate', event => event.waitUntil(worker.clients.clai
 worker.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/')) return;     // untouched: no interception, no cache
-  // The hashed script and stylesheet (backend/ui_bundle.py) are immutable at their URL: the browser's own cache serves them.
+  // The bundle's files are named by their content (scripts/build-ui.cjs), immutable at their URL: the browser's own cache serves them.
   if (url.pathname.startsWith('/tico/ui/app.bundle.')) return;
   // Scripts, styles, icons and images keep the server's own caching (ETag, an hour for /assets/): only the page
   // itself is fetched past every cache, so a deploy shows on the next load.

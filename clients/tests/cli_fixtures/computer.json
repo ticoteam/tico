@@ -110,7 +110,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"advice\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
   "stderr": "",
   "exit": 0
  },
@@ -139,7 +139,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"advice\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
   "stderr": "",
   "exit": 0
  },
@@ -151,7 +151,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico computer performance <computer>\ntico computer performance: error: the following arguments are required: computer",
+  "stderr": "Example: tico computer performance <computer>\ncomputer: The computer's label or id (tico computer list)\ntico computer performance: error: the following arguments are required: computer",
   "exit": 64
  },
  {
@@ -175,7 +175,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico computer turns-at-once <computer> <limit>\ntico computer turns-at-once: error: the following arguments are required: computer, limit",
+  "stderr": "Example: tico computer turns-at-once <computer> <limit>\ncomputer: Computer id\nlimit: 1-256 turns at once, or null (`automatic` on a command line) for its own capacity\ntico computer turns-at-once: error: the following arguments are required: computer, limit",
   "exit": 64
  },
  {
@@ -276,7 +276,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico computer browser-exit <computer> {on|off}\ntico computer browser-exit: error: the following arguments are required: computer",
+  "stderr": "Example: tico computer browser-exit <computer> {on|off}\ncomputer: Computer id\ntico computer browser-exit: error: the following arguments are required: computer",
   "exit": 64
  },
  {

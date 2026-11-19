@@ -237,6 +237,7 @@ fn flags() -> Arc<Flags> {
         done: AtomicBool::new(false),
         harness_allocated: Arc::new(AtomicBool::new(false)),
         start_acknowledged: AtomicBool::new(false),
+        granted: Mutex::new(None),
         done_notify: Notify::new(),
         deadline: Mutex::new(Instant::now() + Duration::from_secs(3600)),
     })

@@ -50,7 +50,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **Changing a matter's budget, scope or lead.**
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/billing-rules.md`,
    `knowledge/matters.md` and the playbook. A resumed turn already has them.
 
@@ -70,7 +70,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Invoices and letters arrive as tasks: `tico task show <id>`. Engagement letters: `tico doc search "<firm>
 engagement"`. Updates on a matter: `tico meeting search "<matter>"`. A question for the owner is
-`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A matter needing an update from its lead is `tico task create --owner <person>`.
+`tico task ask <id> --to <person> "<question>"`, one open question per task. A matter needing an update from its lead is `tico task create --owner <person>`.
 
 ## Quality standards
 - **Totals first.** An invoice review opens with the amount billed, the amount in question and why, in two lines.

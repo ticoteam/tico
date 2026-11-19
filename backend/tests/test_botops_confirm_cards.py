@@ -16,7 +16,7 @@ from backend.tests.helpers.botops_confirm_cards import card_in_chat, confirm
 def test_a_role_change_waits_for_the_owners_tap_and_then_runs(api, botops):
     auth = api.app.state.auth
     ana = turn(api, botops, person="ana-test", text="Make Cara an admin")
-    answer = act(api, ana, "POST", "access/people/cara", {"role": "admin"})
+    answer = act(api, ana, "POST", "access/humans/cara", {"role": "admin"})
     assert answer.status_code == 200 and answer.json()["needs_confirm"], answer.text
     card = answer.json()
     card_in_chat(api, card, "ana")
@@ -65,7 +65,7 @@ def test_routes_that_hand_back_a_secret_refuse_botops_acting_for_an_admin(api, b
         attempt = turn(api, botops, person=person, text="Show me the Jira key and make me a token")
         for path, body in (
             (f"credentials/{row['id']}/reveal", {}),
-            ("access/people/cara/password", {}),
+            ("access/humans/cara/password", {}),
             ("me/tokens", {"label": "laptop", "expires_in_days": 30}),
             ("directory/scim-token", {}),
         ):
@@ -424,7 +424,7 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
         ("POST", f"seats/{seat['id']}/hire", {"template": "support-owner"}),
         ("PUT", "providers", {"enabled": ["openai"], "expected_revision": revision}),
         ("PUT", "usage/limits/ops", {"daily_usd": 50}),
-        ("POST", "access/people/cara", {"role": "admin"}),
+        ("POST", "access/humans/cara", {"role": "admin"}),
         ("POST", f"credentials/{row['id']}/grants", {"subject": "human:cara"}),
     )
     for method, path, body in cards:
@@ -488,7 +488,7 @@ def test_botops_acting_for_a_person_puts_a_task_link_and_an_outside_requester_on
 def waiting_card(api, botops):
     """Ana asks BotOps to make Cara an admin: BotOps proposes it as a Confirm card in Ana's chat and it waits."""
     ana = turn(api, botops, person="ana-test", text="Make Cara an admin")
-    answer = act(api, ana, "POST", "access/people/cara", {"role": "admin"})
+    answer = act(api, ana, "POST", "access/humans/cara", {"role": "admin"})
     assert answer.status_code == 200 and answer.json()["needs_confirm"], answer.text
     card_in_chat(api, answer.json(), "ana")
     return ana, answer.json()

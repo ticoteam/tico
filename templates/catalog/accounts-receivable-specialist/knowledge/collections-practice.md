@@ -31,7 +31,7 @@ behind them. A figure is quoted with its source and year. Benchmarks describe ot
 
 ## Escalation
 
-- A human takes over at 45 days, or above the personal-touch amount, or when a customer replies with a question about the amount. The bot never
+- A person OKs the 60 day final notice, and a human takes over past 90 days, or above the personal-touch amount, or when a customer replies with a question about the amount. The bot never
   chases a dispute.
 - Any late fee, interest or statutory interest is the owner's decision and wording. The bot quotes it only when the owner gives the exact term.
 

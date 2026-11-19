@@ -103,6 +103,7 @@ declare var botTools: BtApi;
 .bt-list dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .bt-list dd .pill{margin:0 4px 2px 0}
 .bt-list .bt-problem{color:var(--fail)}
+.bt-list .bt-granted{flex:none;width:15px;font-size:15px;color:var(--muted)}
 `;
 
   const STATUS: Record<BtStatus, [string, string]> = {ready: ['ok', 'Ready'], problem: ['fail', 'Needs attention'], pending: ['', 'Pending'], unknown: ['', 'Not checked']};
@@ -129,6 +130,17 @@ declare var botTools: BtApi;
   const isRepo = (tool: BtTool): boolean => /^github(-app)?$/i.test(String(tool.service || '')) && !!(tool.scope?.repo || tool.url);
   const ownRepo = (tool: BtTool): boolean => tool.id === 'repo' || /own repository/i.test(tool.detail || '');
   const can = (tool: BtTool): string[] => (tool.can || []).map(String);
+  // Where the tool's grant opens in Tools, when the bot can use it through one (the server's `granted`), else ''.
+  const grantOf = (tool: BtTool): {href?: unknown; default?: unknown} | null => {
+    const grant: unknown = (tool as {granted?: unknown}).granted;
+    return grant && typeof grant === 'object' ? grant as {href?: unknown; default?: unknown} : null;
+  };
+  const grantHref = (tool: BtTool): string => {
+    const href = grantOf(tool)?.href;
+    return typeof href === 'string' ? href : '';
+  };
+  // Read because Everyone can read the tool (backend/default_read.py), with no grant of its own.
+  const byDefault = (tool: BtTool): boolean => grantOf(tool)?.default === true;
   function access(tool: BtTool): string {
     const write = can(tool).includes('write'), read = write || can(tool).includes('read');
     const level = write ? 'Read and write' : read ? 'Read only' : '';
@@ -299,7 +311,8 @@ declare var botTools: BtApi;
         : `${statusPill(tool.status)}${shownDetail(tool) ? ` <span class="muted">${esc(shownDetail(tool))}</span>` : ''}`;
       rows.push(['Status', status]);
       // Who else has it and its credentials live in Tools (ui/app/redesign-library.ts).
-      const open = tool.service ? `<a class="bt-open" href="#/tools/${encodeURIComponent(tool.service)}">Open in Tools</a>` : '';
+      const to = grantHref(tool) || (tool.service ? `#/tools/${encodeURIComponent(tool.service)}` : '');
+      const open = to ? `<a class="bt-open" href="${esc(to)}">Open in Tools</a>` : '';
       return `<div class="bt-body"><dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>${open}</div>`;
     }
     // The line's key values: the model and effort for the model, access for a repository, otherwise who it acts
@@ -314,8 +327,12 @@ declare var botTools: BtApi;
       : `<span class="bt-meta">${esc(keyValues(tool).filter(Boolean).join(' · '))}</span>`);
     const tip = (tool: BtTool): string => [summary(tool), shownDetail(tool)].filter(Boolean).join('. ');
     const icon = (tool: BtTool): string => `<span class="bt-icon-static${tint(tool)}">${icons().markup(tool)}</span>`;
+    // A tool the bot can use through a grant in Tools carries a key mark, whether or not bot.yaml declares it.
+    const grantMark = (tool: BtTool): string => (!grantHref(tool) ? '' : byDefault(tool)
+      ? '<span class="nav-icon bt-granted" role="img" aria-label="Everyone can read" title="Everyone can read" data-granted="default">groups</span>'
+      : '<span class="nav-icon bt-granted" role="img" aria-label="Granted in Tools" title="Granted in Tools" data-granted>key_vertical</span>');
     const line = (tool: BtTool): string => `<details class="bt-item" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">${icon(tool)}
-        <span class="bt-name">${esc(tool.name)}</span>${meta(tool)}<span class="bt-line-status">${linePill(tool.status)}</span></summary>${detail(tool, false)}</details>`;
+        <span class="bt-name">${esc(tool.name)}</span>${grantMark(tool)}${meta(tool)}<span class="bt-line-status">${linePill(tool.status)}</span></summary>${detail(tool, false)}</details>`;
     const repoLine = (tool: BtTool): string => `<details class="bt-repo" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">
         <span class="bt-name">${repoLink(tool)}</span>${meta(tool)}<span class="bt-line-status">${linePill(tool.status)}</span></summary>${detail(tool, true)}</details>`;
     // The repositories' line: how many, their access added up, and the most urgent status among them.

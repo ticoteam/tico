@@ -108,7 +108,7 @@ async function open(browser: import('playwright').Browser, hash: string, viewpor
     if (p === '/api/employees') return json([{name: 'eng', display_name: 'Engineer', status: 'active', can_manage: true},
       {name: 'ops', display_name: 'Ops', status: 'active', can_manage: true}]);
     if (p === '/api/issues') return json([]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/needs-you') return json({items: []});

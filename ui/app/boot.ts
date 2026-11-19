@@ -28,21 +28,26 @@ const BOOT_ROSTER_WAIT_MS = 10000;
 (async () => {
   bootMark('boot');
   let configVersion = nativeVisualVersion();
-  // What the first page needs goes out first: a browser opens only a few connections to one server, so the
-  // roster and the opening page's own read are not queued behind the sidebar's counts.
-  rdNavStart();                       // the sidebar memory's epoch, before /me goes out (redesign.js)
-  const employees = get('/employees'), meRead = get('/me');
+  const openingCall = callWindowJoining();
+  // The app's own session and roster go out before work that can wait for the opening page.
+  rdNavStart();
+  const meRead = get('/me'), employees = get('/employees'), humans = get('/humans').catch(() => ({people: []}));
+  if (openingCall) {
+    // The call window can load its code and media client while the session and roster reads are in flight.
+    void uiPartLoad('call-window').catch(() => {});
+    void callLib().catch(() => {});
+  }
   // A roster or /me that never answers (a stalled connection, a hub that hangs) ends in the error card below, with
   // Try again, rather than a page that waits for ever.
   const late = new Promise<never>((_, fail) => setTimeout(() => fail(Object.assign(new Error('Tico took too long to answer.'),
     {timedOut: true})), BOOT_ROSTER_WAIT_MS));
-  const roster = Promise.race([Promise.all([employees, meRead, get('/humans').catch(() => ({people: []}))]), late]);
+  // Bound the wait for boot, while letting a call window use the roster whenever it arrives.
+  const roster = Promise.all([employees, humans]);
+  if (openingCall) void roster.catch(() => {});
   bootSnapShow(meRead);              // the last screen, as soon as /me says it is this person's (boot-snap.js)
-  updPrefetch();
-  dashPrefetch();
+  if (!openingCall) { updPrefetch(); dashPrefetch(); }
   try {
-    const [emps, me, people] = await roster;
-    bootMark('roster');
+    const [me, peopleData] = await Promise.race([Promise.all([meRead, openingCall ? null : roster]), late]);
     rdNavWho(me);                      // the sidebar rows kept for someone else go before this config draws them (redesign.js)
     if (authenticatedConfigPerson(me)) {
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
@@ -60,7 +65,18 @@ const BOOT_ROSTER_WAIT_MS = 10000;
       if (SESSION.out || configVersion !== nativeVisualVersion()) return;
       applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
     }
-    S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    S.me = me;
+    const keepRoster = ([emps, people]: Awaited<typeof roster>): void => {
+      bootMark('roster');
+      S.emps = namedRoster(emps); setPeople(people);
+    };
+    if (peopleData) keepRoster(peopleData);
+    else void roster.then(data => {
+      if (SESSION.out || S.me !== me) return;
+      keepRoster(data);
+      renderTree(); renderAccount();
+      callWindowDraw();
+    }).catch(() => {});
     viewOnlyStart();                   // a bot's read-only view offers nothing that writes (view-only.ts)
     sessionReturn();                  // restore drafts only after the authenticated org and person are known
     renderVersionMessage();            // once per person, so it waits for who is signed in
@@ -81,7 +97,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
     $('#main').innerHTML = `<section class="card"><h2>Tico server not running</h2><p>Start it with <code>scripts/tico-computer server start</code> in the Tico repo, or install it with <code>scripts/tico-computer server install</code> so it runs at login.</p><p class="err">${esc(errorMessage(e, ''))}</p></section>`;
     return;
   }
-  if (S.me?.cloud) {
+  if (S.me) {
     // Its settings change seldom (an owner turning telemetry on or off): read again every ten minutes, and when a
     // tab that was hidden is shown, not every 30 s from every open tab.
     window.TicoObservability?.start();
@@ -108,10 +124,9 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
     botAlertDraw();
-    overviewRefresh();                 // a campus opened before the first status answer shows it now, not at the next poll
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   });
-  if (S.me?.cloud) void updUnreadRefresh();
+  if (S.me) void updUnreadRefresh();
   // Tasks, bot status and Needs you arrive as they change (ui/app/live.ts). The roster, computers and
   // Updates are not on that stream: they still refresh every 2 minutes. When the live stream is down the
   // previous 30 s poll multiplied /api/status load across tabs while the hub was already busy; visibility

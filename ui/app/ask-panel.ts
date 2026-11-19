@@ -192,8 +192,8 @@ async function askLoad(chat: AskChat) {
   // Your messages, on the edge (ui/app/chat-index.ts): the same index every other chat has; it mounts once per thread.
   askChatIndexMount(thread);
   const fail = (text: string) => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
-  let info: AskInfo | null = null, messages: ChatMessage[] = [], execution: AskExecution | null = null, rendered = '', es: (() => void) | null = null, poll: ReturnType<typeof setInterval> | null = null, tick: ReturnType<typeof setInterval> | null = null;
-  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; if (poll) clearInterval(poll); poll = null; };
+  let info: AskInfo | null = null, messages: ChatMessage[] = [], execution: AskExecution | null = null, rendered = '', es: (() => void) | null = null, tick: ReturnType<typeof setInterval> | null = null;
+  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; };
   chat.stop = () => { stopStream(); if (tick) clearInterval(tick); tick = null; };
   const isReply = (m: ChatMessage | undefined) => m?.sender_id === 'bot:' + info?.bot;
   let pending: AskPending[] = [];
@@ -233,7 +233,7 @@ async function askLoad(chat: AskChat) {
     else {
       stickScroll(thread).update(() => {
         thread.innerHTML = html;
-        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
+        if (thread.querySelector('[data-action-host]')) void assistantCards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered);
       rendered = agoStill(html);
@@ -257,8 +257,6 @@ async function askLoad(chat: AskChat) {
   const watch = () => {
     stopStream();
     if (!info?.room_id || !current()) return;
-    const fallback = liveFallback(snapshot, 5000);
-    if (fallback) { poll = fallback; return; }
     const cid = info.room_id, mine = (d: {conversation_id?: string}) => d.conversation_id === cid && current();
     const soon = () => liveSoon('ask:' + cid, () => void snapshot(), 150);
     const offs = [liveFollow(cid), liveOn('messages', (d: {conversation_id?: string}) => { if (mine(d)) soon(); }),
@@ -280,7 +278,7 @@ async function askLoad(chat: AskChat) {
       if (!messages.some(x => x.id === r.message.id)) messages.push(r.message);
       if (r.message?.conversation_id && r.message.conversation_id !== info?.room_id) { if (info) info.room_id = r.message.conversation_id; watch(); }
       pillAcknowledge(P, text, files, undefined); stickScroll(thread).toBottom(); draw();
-      if (!es && !poll) watch();
+      if (!es) watch();
       await snapshot();
     } catch (e) { fail(errorMessage(e, '')); }
     finally { P.sending = false; if (current()) pillButtons(P); }
@@ -293,7 +291,7 @@ async function askLoad(chat: AskChat) {
   thread.setAttribute('aria-label', askName() + ' conversation');
   if (!info.available) {
     if (!info.can_turn_on) { thread.innerHTML = `<p class="muted">${esc(askName())} is off. Ask the team owner to turn it on.</p>`; return; }
-    window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
+    assistantOff(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
     return;
   }
   messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];

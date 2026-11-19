@@ -2,11 +2,13 @@
 
 A bot owns its tools and its skills. To give one a service such as Jira or Linear, prefer the vendor's own
 MCP server to anything we write: the vendor keeps it current, and Tico passes it to the bot's harness. Ask
-BotOps ("connect Linear to Atlas") and it does the steps below; this page says what they are.
+the Tools Owner in the Tools page's chat ("connect Linear to Atlas") and it does the steps below, with a card for the key and
+a person's click for each grant; BotOps writes the bot's `bot.yaml`. This page says what the steps are.
 
-**Tico does not currently manage OAuth renewal for bots.** Prefer a vendor-supported API credential or a connection with
-supported automatic refresh. Some providers require renewed human consent; check their documentation. When Tico cannot
-maintain the MCP connection, a REST skill with a supported API credential is an option.
+**An MCP server added in Tools → Add → MCP server by OAuth sign-in is renewed by Tico.** Tico keeps the sign-in's tokens
+and refreshes the access token on the server before it ends, one refresh at a time; when the vendor will not refresh it,
+the tool's check says **Sign in again**. An OAuth connection declared in `bot.yaml` (the older way) is not renewed by
+Tico: use a supported API credential there, or a REST skill.
 
 | Service | Vendor MCP server | API token or key in a header? | For a bot |
 |---|---|---|---|
@@ -18,7 +20,11 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 
 ## How a tool is connected
 
-1. **The vendor's MCP server, if there is one.** Declare it in the bot's `tools:` in `bot.yaml`:
+1. **The vendor's MCP server, if there is one.** A credential administrator adds it in **Tools → Add → MCP server**
+   (its address, then a pasted token or a sign-in) and gives each bot that needs it a level. That grant is all a bot
+   needs: the server reaches its runs (through Tico's proxy when Tico holds the key) and shows on its Tools tab, with no
+   `bot.yaml` entry. A server Tools does not hold (an older `sse` one, say) can instead be declared in the bot's `tools:`
+   in `bot.yaml`, with its key granted as usual:
 
    ```yaml
    tools:
@@ -31,12 +37,14 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 
    - `url` is https (plain http only for localhost). `transport` is `http` (streamable HTTP, the default) or `sse`.
    - `headers` may use `${VAR}` for the entry's own `env` variable and nothing else. The value is never in the file.
-   - Store the value in **Tools → Credentials** or a Credential card and grant it to this bot.
+   - Store the value as a key (**Tools → Add → Key**) or on a Credential card and grant it to this bot.
      Its own secrets file and credential profiles are legacy migration sources; new runs do not load them.
      Nothing from the runner's own environment is used. A server whose variable is not
      granted is left out, and the run's log says which.
    - From a shell or a chat: `tico tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
-     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags.
+     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags. When Tools
+     also grants the bot an MCP tool under the same name, the bot.yaml server is used if its key reached the run, else
+     the granted one, and nothing is reported missing.
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
    `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
 3. **The credential.** `tico credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
@@ -56,21 +64,22 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
 | Muse Code | http only | `-c mcp_servers.<name>=...` for that run; a `${VAR}` header is read by the CLI from the run's environment, other shapes are filled into a variable only that run has |
 | Cursor, Antigravity, pi | no | they read MCP servers only from a config file in the operator's home, or have none, so the operator's own servers would reach every bot; the bot's readiness shows a warning naming the tool |
 
-A bot's turn gets the `hub` server, the servers its `bot.yaml` declares and its repository's own `.mcp.json` (Claude Code),
+A bot's turn gets the `hub` server, its granted MCP tools, the servers its `bot.yaml` declares and its repository's own `.mcp.json` (Claude Code),
 not the computer operator's own (`~/.claude.json`, plugins, claude.ai connectors, `~/.codex/config.toml`). Grok still loads
 servers in the operator's `~/.grok/config.toml` and plugins; Cursor reads `~/.cursor/mcp.json`; Antigravity its user config.
 
 ### When the vendor's server needs OAuth
 
-An OAuth connection may renew automatically when the provider and client support refresh. Tico does not currently
-manage that renewal for bots. Use a supported API Credential, or a connection that manages automatic refresh, and check
-whether the provider requires renewed human consent. [A REST skill](#a-rest-skill) below is the API Credential route.
+Add the server in **Tools → Add → MCP server** and choose the sign-in: Tico keeps the tokens and refreshes them, and a bot
+reaches the server through Tico's proxy. Some providers still require renewed human consent after a time; the tool's check
+then says **Sign in again**. A server declared in `bot.yaml` is not renewed by Tico: use a supported API Credential, or
+[a REST skill](#a-rest-skill) below.
 
 ## Jira and Confluence
 
 Atlassian's remote MCP server (Jira, Confluence, Bitbucket Cloud and more) is `https://mcp.atlassian.com/v2/mcp`, over
 HTTP. Use v2 for new connections; see [Atlassian's migration guidance](https://atlassian.github.io/atlassian-mcp-server/#how-it-works).
-Tico does not manage its OAuth renewal. An **API token works instead, if an organization admin has turned it on**, with no
+Added in Tools by sign-in, Tico renews its OAuth; declared in `bot.yaml`, it does not. An **API token works instead, if an organization admin has turned it on**, with no
 consent screen:
 
 ```yaml
@@ -87,7 +96,7 @@ consent screen:
 - Not verified here: the exact tool list, and whether a site needs the admin setting before a token is accepted. If the server answers
   `auth failed` on the Tools tab, ask the admin.
 
-Ask BotOps: "Connect Jira to `<bot>` with a service account key." / "Give `<bot>` read access to Confluence."
+Ask the Tools Owner: "Connect Jira to `<bot>` with a service account key." / "Give `<bot>` read access to Confluence."
 
 ## Linear
 
@@ -102,8 +111,11 @@ Settings, Security & access. `https://mcp.linear.app/mcp/readonly` is a read-onl
   env: LINEAR_API_KEY
 ```
 
-`can` declares intended operations; Tico does not filter the vendor's MCP tool list by it. The endpoint or credential scopes
-must enforce read-only access. [Linear's official guide](https://linear.app/docs/mcp) describes both options.
+For a server held in Tools, a bot's level is enforced at Tico's proxy: with only a read-and-write key, a bot at **Read**
+may call only the tools the server's own tool list marks `readOnlyHint`, plus the session's set-up and MCP's other read calls (listings, `resources/read`, `prompts/get`). The `can`
+line in `bot.yaml` (the older way) declares intent only; Tico does not filter a vendor's MCP tools by it, so there the
+endpoint or credential scopes must enforce read-only access. If `bot.yaml` names a server the same as a Tools one, the `bot.yaml` entry is used, so that server is
+neither renewed nor filtered. [Linear's official guide](https://linear.app/docs/mcp) describes both options.
 
 If you want writes, choose the write endpoint and declare that intent separately:
 
@@ -114,7 +126,7 @@ If you want writes, choose the write endpoint and declare that intent separately
   env: LINEAR_API_KEY
 ```
 
-Ask BotOps: "Connect Linear to `<bot>`; it may only read."
+Ask the Tools Owner: "Connect Linear to `<bot>`; it may only read."
 
 ## PostHog
 
@@ -201,10 +213,13 @@ they list different tools. Take the exact setup from TIDY's [MCP page](https://w
 Then prove it with one read-only call.
 
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
-Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and `can:` does not stop it:
-Tico does not filter a vendor's tools by `can:`. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
-bot ask a person to OK it (`tico task ask --kind ok`) and send a booking or anything that costs money only after the
-person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
+Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and in `bot.yaml`
+`can:` does not stop it. Added in Tools with only a read-and-write key and granted at Read, the bot may call only the
+tools TIDY's server marks `readOnlyHint`, so a booking tool the server does not mark is refused. A key added at Read goes
+to the bot as it is: Tico does not check its scopes, so it must be read-only at TIDY. Use a read-only key or endpoint if TIDY offers one.
+To let the bot book, grant the tool at Write and give it a limit Tico can't enforce for you: write it in the bot's
+instructions and the tool's `note:` (for example, "book up to $200 a job inside the month's cleaning budget; above that,
+ask a person with `tico task ask --kind ok`"). Inside the limit the bot books on its own and reports on the task.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
@@ -236,8 +251,10 @@ changes still need your normal review.
 To bring one into your work:
 
 1. Define the role and the result you expect, and name the person or bot that owns the relationship.
-2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
-   or payment your bot makes waits for a person's OK, as [with TIDY](#work-with-a-specialist-outside-tico).
+2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. Tico
+   can't see what a bot spends with an outside provider, so write the bot's limit into its instructions (for example,
+   up to $200 a booking inside the month's budget) and have it ask a person above that, as
+   [with TIDY](#work-with-a-specialist-outside-tico).
 3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
    the account, the access and how requests and results travel before you count on automation.
 4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico
@@ -269,8 +286,14 @@ The Owner can still delete a learning there.
 
 **Tools** (`#/tools`) lists every way the company reaches the outside world: API tools (a service bots call with a key),
 mailboxes, Tico addresses and numbers, physical mail, Slack, the GitHub App, meeting importers, Listening, outgoing
-webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows its status, how it is reached,
-who can use it, and whether it needs you. Incoming webhooks and triggers live in Automations, not here.
+webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows who can use it and, only when
+something is wrong, a pill; a lock means Tico holds the key (the proxy adds it to each call and bots never see it), an
+eye-off that only those listed can see the tool. The list has one row a vendor: Raygun's website login, its MCP token
+and its API key are one **Raygun** row, its pill its worst tool's. The row opens the vendor's page
+(`#/tools/vendor/<vendor>`, one read: `GET /api/v2/tool-vendors/<vendor>`), a card for each tool with its keys at their
+levels, who can use it and its settings, each opening the tool's own page. A vendor with one tool, and anything that is
+no vendor's (a mailbox, a Tico number, Tico's own tools), is its own row under its own name. Search reads tool and
+vendor names. Incoming webhooks and triggers live in Automations, not here.
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
 they may read: an API tool they were given a level on, Slack and GitHub once connected, Tico addresses and numbers in
@@ -278,8 +301,10 @@ their audience, meeting importers if they read meetings, physical mail, and List
 The Listening row shows its worst source's state. Bots named are only those you may see.
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
-who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
-`tico tool index`; MCP: `tico_tool_index` (BotOps reads it with the rights of the person who asked).
+who_total, needs_you, href, vendor, vendor_name}], counts, next}` (an API tool's row adds `service` and `delivery`), at most
+500 rows and 192 KB a page; follow `next` with `cursor`. CLI: `tico tool index`; MCP: `tico_tool_index` (BotOps reads
+it with the rights of the person who asked; the Tools page's owner bot reads every tool the company sees, with who holds
+which level, never a key).
 
 ### API tools
 
@@ -289,7 +314,77 @@ and write**, each a vault credential, and **Who can use it** gives a person or b
 there is one, else the full key at Read. Only credential administrators add keys or set levels; a person with a level
 reads the tool's page.
 
-Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
-**Not checked**, or **Key on computers** (the key still goes to each run's environment, as every key stored before API
-tools did; move it to the proxy on the tool's page). Tico checks each proxied tool every 30 minutes; `tico tool check
+Status: **Working** (the check got 2xx, or a real call through the proxy did in the last 24 hours), **Works (limited)**
+(the check got 403: the key works, the check path needs a scope it lacks), **Key rejected** (the check got 401 that does not say a permission is missing, or 3 real
+calls in a row did with no 2xx since), **Check failed**, **Expires in N days** (14 or fewer), or **Not checked**. Only a real problem puts a tool under Needs you: how its key reaches runs never does (a key on
+computers goes to each run's environment, as every key stored before API tools did; Move to proxy on the tool's page
+changes that).
+
+A tool's **vendor** is its `service` when one is set (a credential administrator types it on the tool's Edit; a known
+service sets it itself; `aws-production` is AWS's and `google-ads` Google's), else a known vendor any word of its name or
+its keys' variables names (`TIDY_AWS_READONLY` is AWS's, `GH_TOKEN` GitHub's, `GSC_*` Google's), else its address's,
+MCP server's or site's domain (`raygun.com`), else its name's first word ("Raygun production"). The GitHub App and Slack rows are
+GitHub's and Slack's.
+
+**Settings** are a tool's non-secret values: a host, a region, a profile, a project id, a bucket. Each is a variable and
+its plain value, shown in the clear on the tool's page, changed by credential administrators
+(`POST /api/v2/api-tools/<id>/settings {name, value}`, `PATCH|DELETE …/settings/<setting id>`), and set in the
+environment of every run that holds any level on the tool, on the proxy or on computers. A setting is never a key: a
+value that looks like one (a key shape, a URL with a password or a token in it) is refused, and a name with TOKEN,
+SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each tool with a check path every 30 minutes, on the proxy or on computers; `tico tool check
 <id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.
+
+A tool's **Activity** (`GET /api/v2/api-tools/<id>/activity?since=&result=&limit=&cursor=`) lists its calls through the
+proxy (who, method, path with the query's keys only, status, result: `sent` reached the vendor, `refused` was stopped
+by Tico, `failed` never reached it) and, for keys on computers, each caller's last use, newest first, never a value.
+`since` is `24h`, `7d` or an ISO time. A credential administrator and the Tools page's owner bot see every caller;
+anyone else sees their own rows and those of the bots they may see. CLI: `tico tool activity <id> [--since 24h]
+[--result refused]`; MCP: `tico_tool_activity`, which adds a summary of repeated calls and errors (ids in paths folded
+to `:id`) and who added the tool's keys. The Tools Owner reads it daily to learn how each tool is used.
+
+## Every Tools change from the CLI and MCP
+
+Nothing on the Tools page needs the page: each change is a `tico` command and a Tico MCP tool of the same name
+(`tico tool setting add` is `tico_tool_setting_add`) that calls the route the page calls, with the caller's rights.
+BotOps acts as the person who asked it, the Tools Owner as that person on the changes `backend/tools_delegation.py`
+lends it, and everyone else as themselves; `backend/tool_access.py` (`may_change_access`) decides every write, and a
+refusal names who can. A value is never an argument: `--from-env VAR` names a variable and `--from-file PATH` a file on
+the computer that runs the command, read there (those MCP tools run only in a bot's own `tico` MCP server, never the
+server's endpoint), and no answer carries a value or its preview. `backend/tests/test_tools_parity.py` fails when a Tools
+write route has no command, or a command calls another route.
+
+| Action | Route | CLI | MCP |
+|---|---|---|---|
+| List tools, status, who can use each | `GET tool-index` | `tico tool index` | `tico_tool_index` |
+| One tool: keys, levels, settings | `GET api-tools/{id}` | `tico tool detail` | `tico_tool_detail` |
+| One vendor's tools | `GET tool-vendors/{vendor}` | `tico tool vendor` | `tico_tool_vendor` |
+| Add an API tool | `POST api-tools` | `tico tool create` | `tico_tool_create` |
+| Rename; address, auth, check path; vendor (`service`); delivery (Move to proxy); Everyone can read; Only listed | `PATCH api-tools/{id}` | `tico tool edit` | `tico_tool_edit` |
+| Delete a tool | `DELETE api-tools/{id}` | `tico tool delete` | `tico_tool_delete` |
+| Check now | `POST api-tools/{id}/check` | `tico tool check` | `tico_tool_check` |
+| A bot's level | `PUT api-tools/{id}/access/{subject}` | `tico tool level` | `tico_tool_level` |
+| Add a key to a tool | `POST api-tools/{id}/keys` | `tico credential add --tool` | `tico_credential_add` |
+| Change a tool's key (level, name, end date, value) | `PATCH api-tools/{id}/keys/{key}` | `tico credential update` | `tico_credential_update` |
+| Delete a tool's key | `DELETE api-tools/{id}/keys/{key}` | `tico credential delete` | `tico_credential_delete` |
+| Settings | `POST`, `PATCH`, `DELETE api-tools/{id}/settings` | `tico tool setting add`, `change`, `remove` | `tico_tool_setting_*` |
+| Auth templates: list, set, ungroup | `GET tool-templates`, `PUT api-tools/{id}/template`, `POST api-tools/{id}/ungroup` | `tico tool templates`, `tico tool template`, `tico tool ungroup` | `tico_tool_templates`, `tico_tool_template_set`, `tico_tool_ungroup` |
+| A vendor account's values: classify, store in one step (read from a variable or file) | `POST tool-templates/classify`, `POST api-tools/{id}/paste` | `tico tool classify`, `tico tool paste` | `tico_tool_classify`, `tico_tool_paste` |
+| MCP server: probe, add, start its sign-in | `POST mcp-tools/probe`, `POST mcp-tools`, `POST api-tools/{id}/sign-in` | `tico tool mcp probe`, `tico tool mcp add`, `tico tool sign-in` | `tico_tool_mcp_probe`, `tico_tool_mcp_add`, `tico_tool_sign_in` |
+| Website tool | `GET`, `POST`, `PATCH`, `DELETE website-tools` | `tico tool website show`, `add`, `edit`, `delete` | `tico_tool_website_*` |
+| Website account: add, change, delete | `POST`, `PATCH`, `DELETE website-tools/{id}/accounts` | `tico credential login add`, `edit`, `delete` | `tico_credential_login_*` |
+| Share a website account | `PUT website-tools/{id}/accounts/{a}/access/{subject}` | `tico credential login share` | `tico_credential_login_share` |
+| Keys and their grants | `GET credentials`, `POST credentials/{id}/grants`, `…/revoke`, `DELETE credentials/{id}` | `tico credential list`, `grant`, `revoke`, `delete` | `tico_credential_*` |
+| Store a key a caller holds (a bot: as its own key) | `POST credentials`, `POST credential-set` (`--for-bot`) | `tico credential add` | `tico_credential_add` |
+| Change a key on no tool | `POST credentials/{id}` | `tico credential update` | `tico_credential_update` |
+| A person's key: open a card, withdraw it | `POST credential-requests`, `…/{id}/cancel` | `tico credential request`, `cancel` | `tico_credential_request`, `tico_credential_cancel` |
+| A value a person pasted in chat | `POST credential-set` | `tico credential set` | `tico_credential_set` |
+| Move a bot's file secret into the vault | `POST credential-imports` | `tico credential import` | `tico_credential_import` |
+| Propose where dropped keys go | `POST tools-chat/proposals` | `tico tool propose-grant` | `tico_tools_propose_grant` |
+| A bot's `bot.yaml` tool notes | `POST bots/{bot}/tools`, `…/update`, `…/delete` | `tico tool add`, `update`, `remove` | `tico_tool_add`, `tico_tool_update`, `tico_tool_remove` |
+| Learnings | `POST tools/{service}/learnings`, `…/{id}/delete` | `tico tool learn`, `tico tool forget` | `tico_tool_learn`, `tico_tool_forget` |
+| A tool's calls and last uses | `GET api-tools/{id}/activity` | `tico tool activity` | `tico_tool_activity` |
+
+Only a person does these, in the app: reveal a value (`POST credentials/{id}/reveal`), type a value into a key card
+(`…/save`), tap Grant on a key card (`POST tools-chat/proposals/{id}/grant`), and watch or drive a website sign-in's live
+view (`…/accounts/{a}/browser`). The OAuth sign-in itself happens in the person's browser at the address
+`tico tool sign-in` prints.

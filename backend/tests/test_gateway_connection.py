@@ -10,12 +10,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from backend import login_holds
 from backend.credentials import CredentialCipher
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
 from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
 from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 from clients import gateway as G
 from backend import bot_settings as BS
 
@@ -192,13 +194,13 @@ def test_one_key_saves_seals_and_clears_and_is_never_read_back(api, monkeypatch,
         assert saved["connected"] and saved["source"] == "settings" and saved["preview"] == "tgw…042"
         assert saved["state"] == "connected" and saved["working"] and saved["message"] == "Connected."
         assert fake.calls == [("/v1/gateway/key", KEY)]
-        # Never in a read, a stored row, an event, a receipt or a log line: only sealed, and only its preview shown.
+        # Never in a read, a stored row, an event, a receipt or a log line: only in the vault, and only its preview shown.
         assert KEY not in json.dumps(get(api, "providers/gateway")) and KEY not in json.dumps(saved)
         assert KEY not in everything(api) and KEY not in caplog.text
         with api.app.state.store.read() as c:
             from backend import gateway_connection
 
-            assert gateway_connection._row(c)["key"].startswith("sealed:v1:")
+            assert gateway_connection._row(c)["key"].startswith("vault:")  # a service row of the vault (D11-11)
             assert gateway_connection.key(c, api.app.state.vault) == KEY
         # The URL alone changes with the key kept; a stale editor is refused.
         again = put(api, "providers/gateway", {"url": fake.url, "expected_revision": _revision(api)})
@@ -491,7 +493,7 @@ def test_opening_the_page_asks_the_gateway_at_most_once_a_minute(api, monkeypatc
     from backend import gateway_connection
 
     clock = [1000.0]
-    monkeypatch.setattr(gateway_connection.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gateway_connection, "_monotonic", lambda: clock[0])
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
         save(api, fake)  # the save's own check
@@ -895,9 +897,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     assert "{" not in status["focus"] and "usage limit" not in status["focus"] and "cap" not in status["focus"]
     with api.app.state.store.read() as c:
         # The Tico login waits only the Gateway's minute, never the 30-minute backoff.
-        holds = [
-            json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")
-        ]
+        holds = login_holds.every(c)
         assert all(hold["until"] <= H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 1) for hold in holds), holds
         assert G.OUT_OF_CREDIT_WAIT <= limit_cooldown(c, "ops") <= G.OUT_OF_CREDIT_WAIT + 1
         # Not an API key's plan or billing: Health doesn't send the person to check one.
@@ -950,9 +950,7 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        holds = [
-            json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")
-        ]
+        holds = login_holds.every(c)
     assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
     at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
     with api.app.state.store.transaction() as c:
@@ -1097,7 +1095,7 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
+        wait_over(c)  # the fast failure's wait is over
     refused = claim(api, machine, "ops")
     assert refused and refused["id"] != ordinary["id"]
     error = (
@@ -1146,11 +1144,50 @@ def test_an_unavailable_gateway_says_try_again(api, monkeypatch, acted):
     assert (job, "back in the queue" in status["focus"]) == (("uncertain", False) if acted else ("queued", True))
 
 
+# The Gateway's Cloudflare edge answering for it (Tico Team, Nov 18), as pi printed it and an older runner sent it on:
+# `limit` set, because its boilerplate says the origin "is overloaded".
+CLOUDFLARE_502 = "502 " + json.dumps(
+    {
+        "type": "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/"
+        "error-502/",
+        "title": "Error 502: Bad gateway",
+        "status": 502,
+        "detail": "The origin web server returned an invalid or incomplete response to Cloudflare. This typically "
+        "indicates the origin is overloaded or misconfigured.",
+        "error_name": "origin_bad_gateway",
+        "ray_id": "a5c90c403eed9ea1",
+        "zone": "updates.tico.team",
+        "cloudflare_error": True,
+        "retryable": True,
+        "retry_after": 60,
+    }
+)
+
+
+def test_a_cloudflare_502_is_the_gateway_unavailable_not_a_usage_limit(api, monkeypatch):
+    from backend import run_diagnostics, run_failures
+
+    assert G.run_code(CLOUDFLARE_502) == G.UNAVAILABLE
+    assert not login_holds.capacity(CLOUDFLARE_502) and not run_failures.is_limit(CLOUDFLARE_502)
+    assert login_holds.capacity("HTTP 503 overloaded")  # a busy model is still a busy model
+    machine, attempt = tico_run(api, monkeypatch)
+    finish(api, machine, attempt, CLOUDFLARE_502, limited=True)
+    status, job = ended(api, attempt)
+    assert job == "queued" and status["focus"].startswith("Tico AI Gateway is unavailable, try again"), status
+    assert "retries after" in status["focus"] and "try 1 of 3" in status["focus"]
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT usage_reason FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert row["usage_reason"] != "usage_limited"
+        result = c.execute("SELECT result FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        assert json.loads(result).get("limited") is False
+        reason = run_diagnostics.metadata(c, attempt["id"])["end_reason"]
+    assert reason == "Model error: 502 Bad gateway from updates.tico.team (Cloudflare ray a5c90c403eed9ea1)"
+
+
 def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api, monkeypatch):
     """An outage can't loop a run forever: each retry waits longer (and the bot's other work waits with it), and the
     last try ends the run with the Gateway's plain words."""
-    from backend import execution
-    from backend.repositories import metadata
+    from backend import execution, login_holds
 
     machine, attempt = tico_run(api, monkeypatch)
     waits = []
@@ -1162,13 +1199,11 @@ def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api,
         assert job == "queued" and "retries after" in status["focus"] and f"try {n} of 3" in status["focus"]
         assert claim(api, machine, "ops") is None, "the bot waits before it asks the Gateway again"
         with api.app.state.store.transaction() as c:
-            wait = metadata(c, execution.GATEWAY_WAIT + "ops")
+            # The Gateway's one login waits (login_holds.GATEWAY), not the bot alone.
+            wait = login_holds.get(c, "", login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
             waits.append((H.parse_ts(wait["until"]) - H.parse_ts(wait["since"])).total_seconds())
             # The wait has passed.
-            c.execute(
-                "UPDATE registry_metadata SET value=? WHERE key=?",
-                (json.dumps({**wait, "until": H.shift(H.now(), seconds=-1)}), execution.GATEWAY_WAIT + "ops"),
-            )
+            login_holds._save(c, {**wait, "until": H.shift(H.now(), seconds=-1)})
         attempt = claim(api, machine, "ops")
         assert attempt, "after the wait the run is tried again"
     assert waits == [execution.GATEWAY_BACKOFF, 2 * execution.GATEWAY_BACKOFF]

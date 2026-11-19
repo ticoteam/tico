@@ -1,0 +1,5 @@
+{
+  "scripts/tests/test_image_pins.py": {
+    "no-fixed-sleep-py": 1
+  }
+}

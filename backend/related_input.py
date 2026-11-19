@@ -1,5 +1,5 @@
 # pyright: strict
-"""Related input: a requirement kind, `related_input` (docs/pipelines-v3.md, "Related input").
+"""Related input: a requirement kind, `related_input` (docs/dev/pipelines-v3.md, "Related input").
 
 Jev reads a task's pitch and spec page against the company's bots (name, job, team) and scores how much the work
 touches each bot's area, 0 to 1. The top MOST (2) at or over the bar (0.8) are each woken once on the task: "comment
@@ -7,13 +7,13 @@ from your area, one round". The requirement is met when each picked bot has comm
 or when `wait_hours` (4) have passed since the task entered the stage. It never blocks: a timeout is met, with a note.
 
     standing(conn, task, requirement)   where it stands, from tables only (task_requirements.KINDS)
-    candidates(conn, task)              the bots Jev is asked about
+    candidates(conn, task, auth)        the bots Jev is asked about
     run(store, now) -> int              the Heartbeat step: owe, score, ask, and close what is met
 
 Never candidates: the task's owner and assignee, the pipeline's manager, every bot that holds one of the pipeline's
 stages (its fixed owner, or one it picks from: the reviewers and QA), the General Manager and the helpers, a bot that
-cannot run, and on a private task a bot that cannot read it already. The engine never adds a reader (task_wakes.add),
-so a private task asks only bots who can see it.
+cannot run, and a bot that could not comment on the task: one that cannot read it (the engine never adds a reader,
+task_wakes.add), or one the task's bot refuses (task_reads.refuse_comment). A pick is asked for a comment it can post.
 
 The requirement waits on Jev (waiting_on state `jev`) while Jev scores and while the picked bots comment: nobody is
 chased and no ladder runs. Each step is a row in `related_inputs`, one per visit and requirement. Jev writes no prose,
@@ -54,8 +54,8 @@ PICKED, NONE, FAILED = "picked", "none", "failed"
 # The engine a test sets: (state, questions, label) -> {"answers": {...}, ...}. None asks the server's Jev.
 ENGINE: "Callable[[Row, Row, str], Row] | None" = None
 ASK = (
-    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task and its spec page, '
-    "then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
+    'Related input: The decision model picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
+    "documents, then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
     'tico task comment {task} "<your comment>". One round only: don\'t move, take or edit the task.'
 )
 
@@ -156,10 +156,10 @@ def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Ro
     row = _row(conn, str(visit["id"]), str(requirement["id"]))
     if not row or not row.get("scored_at"):
         if over:
-            return R.Standing(requirement, R.MET, line=f"{_hours(wait)} passed before Jev picked anyone")
-        return R.Standing(requirement, R.WAITING, R.JEV, "Jev is picking related bots")
+            return R.Standing(requirement, R.MET, line=f"{_hours(wait)} passed before the Decision model picked anyone")
+        return R.Standing(requirement, R.WAITING, R.JEV, "Decision model is picking related bots")
     if row["outcome"] == FAILED:
-        return R.Standing(requirement, R.MET, line="Jev couldn't pick related bots, so nobody was asked")
+        return R.Standing(requirement, R.MET, line="Decision model couldn't pick related bots, so nobody was asked")
     picks: list[str] = [str(bot) for bot in row["picks"]]
     if not picks:
         return R.Standing(requirement, R.MET, line=str(row.get("done_line") or f"No bot cleared the bar ({bar:g})"))
@@ -220,8 +220,25 @@ def _teams(conn: "sqlite3.Connection") -> dict[str, str]:
         return {}
 
 
-def candidates(conn: "sqlite3.Connection", task: Row) -> list[Row]:
-    """The bots Jev is asked about, by slug: [{actor, name, job, team}]."""
+def _may_comment(conn: "sqlite3.Connection", auth: Any, actor: str, row: Row) -> bool:
+    """Whether `actor` may comment on the task, as `POST /api/v2/tasks/{id}/comments` decides (task_reads.comment_rights):
+    it reads the task, and the task's bot takes its comments. Run inside a read snapshot, so no check opens its own."""
+    from . import auth as A
+    from . import task_reads
+    from .store import Problem
+
+    TR: Any = task_reads
+    who = A.Identity(actor, "bot")
+    try:
+        auth.task_row(conn, who, row)
+        TR.refuse_comment(conn, auth, who, row)
+    except Problem:
+        return False
+    return True
+
+
+def candidates(conn: "sqlite3.Connection", task: Row, auth: Any) -> list[Row]:
+    """The bots Jev is asked about, by slug: [{actor, name, job, team}]. `auth` is the server's Auth."""
     from . import task_engine as E
     from . import task_wakes
     from .statuses import PARKED_SQL
@@ -232,6 +249,7 @@ def candidates(conn: "sqlite3.Connection", task: Row) -> list[Row]:
     skip |= _held(conn, str(task.get("pipeline_id") or ""))
     skip |= {H.GENERAL_MANAGER, *HELPERS}
     teams = _teams(conn)
+    row: Row | None = H.task(conn, str(task["id"]))
     seen: dict[str, str | None] = {}
     out: list[Row] = []
     for bot_id, slug, name, job in conn.execute(
@@ -242,8 +260,8 @@ def candidates(conn: "sqlite3.Connection", task: Row) -> list[Row]:
         actor = str(H.bot_actor(bot_id))
         if actor in skip or task_wakes.cannot_run(conn, actor, seen):
             continue
-        if not H.task_private_readable(conn, actor, task):
-            continue  # the engine never adds a reader: a private task asks only bots who can see it
+        if row is None or not _may_comment(conn, auth, actor, row):
+            continue  # a pick is asked for a comment, so only a bot that can post one is a candidate
         out.append(
             {
                 "actor": actor,
@@ -302,7 +320,7 @@ def questions_for(qset: Row, bots: list[Row]) -> Row:
 def _state(task: Row, spec: str, cut: bool, bots: list[Row]) -> Row:
     work: Row = {
         "title": " ".join(str(task.get("title") or "").split()),
-        "pitch": str(task.get("body") or "")[:PITCH_CHARS],
+        "pitch": str(task.get("request") or "")[:PITCH_CHARS],
         "spec": spec,
     }
     if cut:
@@ -405,8 +423,11 @@ def run(store: Any, now: str | None = None) -> int:
                 "INSERT OR IGNORE INTO related_inputs (visit_id, requirement_id, task_id, owed_at) VALUES (?,?,?,?)",
                 (visit_id, requirement_id, task_id, at),
             )
+    from .auth import Auth
+
+    auth: Any = Auth(store)
     jobs: list[tuple[Row, Row, list[Row], str, bool]] = []
-    with store.read() as c:
+    with store.read_transaction() as c:  # one snapshot: the comment checks in candidates open none of their own
         for visit_id, requirement_id, task_id in c.execute(_OWED, (at, BATCH)).fetchall():
             task = E.task(c, str(task_id))
             requirement = R.get(c, str(requirement_id))
@@ -415,8 +436,9 @@ def run(store: Any, now: str | None = None) -> int:
             if standing(c, task, requirement).met:
                 continue  # its time ran out before Jev answered: closed below, and nobody is asked late
             spec, cut = _spec_text(c, task)
+            task["request"] = _h().task_request_text(c, str(task_id))  # its pitch: the task's first message
             jobs.append(
-                ({"visit_id": visit_id, "requirement_id": requirement_id}, task, candidates(c, task), spec, cut)
+                ({"visit_id": visit_id, "requirement_id": requirement_id}, task, candidates(c, task, auth), spec, cut)
             )
     done = 0
     qset: Row | None = None
@@ -430,7 +452,7 @@ def run(store: Any, now: str | None = None) -> int:
         if why:
             detail["error"] = why
         with store.transaction() as c:
-            call_id = str(H.event(c, H.KEEPER, "judge.call", detail.get("label"), detail)["id"]) if bots else None
+            call_id = str(H.event(c, H.TICO_ACTOR, "judge.call", detail.get("label"), detail)["id"]) if bots else None
             if scores is None:
                 _failed(c, key, why or "error", at)
             else:
@@ -525,7 +547,7 @@ def _scored(
     )
     said = "; ".join(f"{s['name']} {float(s['score']):.2f}" for s in ranked[:SHOWN])
     named = ", ".join(f"{s['name']} ({float(s['score']):.2f})" for s in picks)
-    note = f"Related input: Jev picked {named}" if picks else f"Related input: {line}"
+    note = f"Related input: Decision model picked {named}" if picks else f"Related input: {line}"
     data: Row = {"requirement": key["requirement_id"], "picks": actors, "bar": bar, "scores": ranked[:SHOWN]}
     E._event(conn, str(task["id"]), E.SYSTEM, "related_input", None, PICKED if picks else NONE, note, data)  # pyright: ignore[reportPrivateUsage]
     LOG.info("related input for task %s: %s", task["id"], said or "no bots")

@@ -106,7 +106,7 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
     opened = service.opened(r)
     with service.websocket(opened["ws_path"]) as browser:
         with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
-            post(service.api, f"runners/{rid}/revoke", {})
+            post(service.api, f"computers/{rid}/revoke", {})
             with pytest.raises(ConnectionClosed) as closed:
                 browser.recv(timeout=5)
             assert closed.value.rcvd.code == 4403

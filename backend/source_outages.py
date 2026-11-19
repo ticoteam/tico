@@ -77,7 +77,7 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             continue
         H.say(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             target,
             text,
             kind='notice',
@@ -91,7 +91,11 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
             },
         )
     H.event(
-        c, H.KEEPER, 'source_outage.' + transition, key, {k: record[k] for k in ('kind', 'since', 'waiting', 'until')}
+        c,
+        H.TICO_ACTOR,
+        'source_outage.' + transition,
+        key,
+        {k: record[k] for k in ('kind', 'since', 'waiting', 'until')},
     )
 
 
@@ -126,18 +130,18 @@ def sync(c, settings):
             counts[key] = counts.get(key, 0) + row['n']
     for row in queued:
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
-        if execution.cooling_off(c, row['bot_id']):
+        if execution.cooling_off(c, settings, row['bot_id']):
             batch_waiters(c, row['bot_id'])
-    for (raw,) in c.execute(
-        'SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)
-    ).fetchall():
-        hold = H._json(raw, {}) or {}
-        if not isinstance(hold, dict) or not hold.get('runner_id') or not hold.get('runtime'):
+    for hold in login_holds.every(c):
+        if not hold.get('runner_id') or not hold.get('runtime'):
             continue
         source = login_holds.key(hold['runner_id'], hold.get('profile'), hold['runtime'])
         count = counts.get((hold['runner_id'], hold.get('profile') or '', hold['runtime']), 0)
-        kind = f"{hold['runtime'].capitalize()} " + (
-            'provider capacity' if hold.get('capacity') else 'subscription quota'
+        kind = (
+            'Tico AI Gateway'
+            if hold.get('profile') == login_holds.GATEWAY
+            else f"{hold['runtime'].capitalize()} "
+            + ('provider capacity' if hold.get('capacity') else 'subscription quota')
         )
         observe(c, source, kind, waiting=count, until=hold.get('until'), since=hold.get('since'))
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
@@ -170,7 +174,7 @@ def batch_waiters(c, bot):
         "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
         "AND m.ref_quiet=0 AND m.ref_command=0 "
         "ORDER BY j.created_at,j.rowid",
-        (bot, H.KEEPER),
+        (bot, H.TICO_ACTOR),
     ).fetchall():
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):

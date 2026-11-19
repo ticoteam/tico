@@ -1,5 +1,5 @@
 """A bot out of quota with no fallback of its own runs on another provider: the company setting that sends the
-runner its choices, and the Overview line (GET /api/v2/health `on_fallback`, `limited`)."""
+runner its choices, and Health's line (GET /api/v2/health `on_fallback`, `limited`)."""
 
 from backend.store import H
 from backend.tests.helpers.api import claim, get, post, setup_attempt  # noqa: F401
@@ -38,7 +38,7 @@ def test_the_runner_hears_one_model_per_provider_until_the_owner_turns_it_off(ap
     assert '"auto_fallback": false' in event[0]
 
 
-def test_overview_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them(api):
+def test_health_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them(api):
     machine, _, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "limited"}, machine["token"])
     post(

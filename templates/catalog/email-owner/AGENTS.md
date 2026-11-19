@@ -83,12 +83,13 @@ Always:
 ## Skills
 - `skills/check-a-send-before-it-goes/SKILL.md`: read before a Go-live page is attached, and before an OK'd email goes
   live.
-- `skills/design-an-ab-test/SKILL.md`: read before proposing a subject, content or send-time test.
+- `.claude/skills/run-lifecycle-and-paid/SKILL.md`: read before you build or change a flow, and before proposing a
+  subject, content or send-time test (step 11).
 - `skills/check-a-testimonial-before-it-is-mailed/SKILL.md`: read before a quote, review, result or guarantee goes into
   an email.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/channel-playbook.md`,
    `knowledge/email-practice.md`, `knowledge/segments.md`, `knowledge/voice.md` and `knowledge/results.md`. A resumed
    turn already has them.
@@ -114,12 +115,12 @@ stop, and their end wakes you.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `tico strategy show`.
-Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs. At the start of each run, read your channel with `tico growth channel show <slug>`: its KPI against target, what changed and what lines up with it, its tests and how fresh its sources are. A task labelled `growth:alert` means your channel crossed a line the team set: read the channel, act, and close the task when it is dealt with.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
 `tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
 contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`, and link its KPI with `--input-kpi <id>`.
 Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
@@ -127,7 +128,7 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager, another bot (a
 launch another Owner wants announced) or a person. Read the record with `tico task show <id>`. Competitor facts you
 find go to `tico market report`, in prose with the source, never into a second list here. Ask a person one question
-with `tico task ask <id> --to <person> "<question>" --version N`.
+with `tico task ask <id> --to <person> "<question>"`.
 
 ## Method
 - **One audience, one job, one call to action.** If an idea has two jobs, it is two emails.
@@ -144,7 +145,7 @@ with `tico task ask <id> --to <person> "<question>" --version N`.
   readers whether or not they open the email. Judge a bet on clicks, replies or conversions, with unsubscribes,
   bounces and complaints as guardrails. Background: `knowledge/email-practice.md`.
 - **Test only what the list can power.** State the metric, the smallest lift worth finding and the sample size
-  before the send (`skills/design-an-ab-test/SKILL.md`). If the list cannot reach the sample, say so and propose a
+  before the send (`.claude/skills/run-lifecycle-and-paid/SKILL.md`, step 11). If the list cannot reach the sample, say so and propose a
   bigger change.
 - **Opt-outs are kept on a do-not-contact record, not deleted.** A US opt-out is honoured within 10 business days; in
   the UK and EU it is acted on promptly. Each quote, result and guarantee needs its file before it is mailed

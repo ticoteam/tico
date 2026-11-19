@@ -12,7 +12,7 @@ declare var THREADS: {gen: number; cu: Set<string> | null};
 declare function threadsLoad(): Promise<void>;
 interface Me {member: boolean; following: boolean; notify: string; last_read_seq: number; unread: number; activity: boolean; can_post: boolean; can_manage: boolean; pinned: boolean}
 interface Chat {id: string; title: string; audience: string; dm_with?: {actor: string; name: string}[]; dm_with_count?: number; home_actor?: string | null;
-  task_id?: string | null; new_count: number; mention: boolean; at: number; read?: boolean}
+  task_id?: string | null; new_count: number; new_count_partial?: boolean; mention: boolean; at: number; read?: boolean}
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -33,11 +33,11 @@ const chats = (): Chat[] => [
   {id: 't-task', title: 'Pricing review', audience: 'task', task_id: 'task-9', new_count: 1, mention: true, at: 50},
   botChat('growth', 'Growth Manager', 3, 1),
   {id: 'dm-ben', title: '', audience: 'personal', dm_with: [{actor: 'human:ben', name: 'Ben'}], dm_with_count: 1, new_count: 1, mention: false, at: 2},
-  {id: 'home-seo', title: '', audience: 'home', home_actor: 'bot:seo', new_count: 2, mention: false, at: 3},
+  {id: 'home-seo', title: '', audience: 'home', home_actor: 'bot:seo', new_count: 2, new_count_partial: true, mention: false, at: 3},
 ];
 const twelve = (): Chat[] => Array.from({length: 12}, (_, i) => botChat('b' + i, 'Bot ' + i, i + 1, i + 1));
 const item = (c: Chat) => ({id: c.id, title: c.title, name: c.title, audience: c.audience, dm_with: c.dm_with || [], dm_with_count: c.dm_with_count || 0,
-  home_actor: c.home_actor ?? null, new_count: c.new_count, mention: c.mention, task_id: c.task_id ?? null, last_message_at: at(c.at)});
+  home_actor: c.home_actor ?? null, new_count: c.new_count, new_count_partial: !!c.new_count_partial, mention: c.mention, task_id: c.task_id ?? null, last_message_at: at(c.at)});
 const view = (c: Chat) => ({id: c.id, title: c.title, audience: c.audience, root_id: c.id, path: [c.id], parent_id: null, last_seq: 3, last_unread_seq: 3,
   last_message_at: at(c.at), me: me({unread: c.read ? 0 : c.new_count}), members: [], pinned_for_everyone: false, task_id: c.task_id ?? null,
   dm_with: c.dm_with, dm_with_count: c.dm_with_count, ...(c.home_actor ? {home: {actor: c.home_actor}} : {})});
@@ -122,7 +122,7 @@ let browser: Browser = null!;
     assert.equal(await page.locator('[data-sec="unread"]').isVisible(), true);
     assert.deepEqual(await rows(page), ['t-task', 'dm-growth', 'dm-ben', 'home-seo'], 'the mention first, then newest');
     assert.deepEqual(await names(page), ['Pricing review', 'Growth Manager', 'Ben', 'SEO Owner']);
-    assert.deepEqual(await page.locator('[data-list="unread"] .tr-count').allTextContents(), ['@', '3', '1', '2']);
+    assert.deepEqual(await page.locator('[data-list="unread"] .tr-count').allTextContents(), ['@', '3', '1', '2+'], 'a count cut short at the server\'s budget reads 2+');
     assert.equal(await badge(page), '5', 'the badge counts the thread on the rail and the four chats under Unread');
     // A bot's and a person's chat show their avatar; the task's thread its mark.
     assert.equal(await page.locator('[data-thread="dm-growth"] .tr-mark .nav-icon').count(), 0);
@@ -157,6 +157,7 @@ let browser: Browser = null!;
     // Opening a row: current, no count, and it keeps its place once read, until another row is opened.
     await page.locator('[data-list="unread"] [data-thread="dm-growth"]').click();
     await page.waitForFunction(() => location.hash === '#/thread/dm-growth');
+    await page.locator('#threads-shell').waitFor();
     const opened = page.locator('[data-list="unread"] [data-thread="dm-growth"]');
     await until(async () => (await opened.getAttribute('class'))?.includes('cur'), 'the opened row is current');
     assert.equal(await opened.locator('.tr-count').count(), 0, 'its count goes');
@@ -231,7 +232,7 @@ let browser: Browser = null!;
     const {page, seen} = await open(browser, {viewport: {width: 1024, height: 768}, phone: true});
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('[data-list="unread"] .tr-row').first().waitFor();
-    assert.deepEqual(await page.locator('[data-list="unread"] .tr-count').allTextContents(), ['@', '3', '1', '2']);
+    assert.deepEqual(await page.locator('[data-list="unread"] .tr-count').allTextContents(), ['@', '3', '1', '2+']);
     const covered = await page.locator('[data-list="unread"] .tr-count').evaluateAll(els => els.map(el => {
       const box = el.getBoundingClientRect(), top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
       return top === el || el.contains(top) ? '' : String(top?.className || top?.tagName);
@@ -246,6 +247,7 @@ let browser: Browser = null!;
   for (const opts of [{world: []}, {unreadField: false}]) {
     const {page, seen} = await open(browser, opts);
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#threads-shell').waitFor();
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('[data-sec="unread"]').isVisible(), false);
     assert.equal(await page.locator('[data-list="unread"] .tr-row').count(), 0);

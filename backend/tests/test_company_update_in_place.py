@@ -1,7 +1,7 @@
 """A running company is updated in place: this code starts on the database the last release made, and the company is
 the one it was.
 
-The database is a hosted company a day old, made by v0.6.0-rc.7's own code (scripts/make_company_upgrade_fixture.py):
+The database is a hosted company a day old, made by v0.6.0's own code (scripts/make_company_upgrade_fixture.py):
 HQ's starting chart applied at the first start, setup complete, one shared cloud computer, 21 bots (the 11 seat bots
 taken live by BotOps), two reporting lines a person set by hand, tasks at different stages of Product and Engineering,
 one snoozed, one waiting on a person's sign-off, a routine and an automation.
@@ -29,13 +29,14 @@ from backend.observability import Observability
 from backend.store import H
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import OWNER_EMAIL, settings_for, signed_in
+from backend.tests.helpers.fresh_install import OWNER_EMAIL, settings_for, signed_in
 from backend.tests.helpers.template_renames import CHARTS, employees_file
 from backend.tests.helpers.upgrade import FIXTURES
 from clients.environments import seed_registry
 
-RELEASES = ["v0.6.0-rc.7"]
+RELEASES = ["v0.6.0"]
 HAND_SET = {"botops": "general-manager", "design-owner": "growth-manager"}
+BUILD_STAGES = ("product-build", "product-fixes-1", "product-fixes-2")  # stage_rules.OWNER_ON_TEAM_ON, Product
 
 
 def rows(path, sql, args=()):
@@ -147,9 +148,7 @@ def seen(path):
 def intended(before):
     """The company as this release means to leave it: the one change an update makes on purpose. The Finance Owner sees
     the books by default, so the owner's open "Let the Finance Owner see the books" to-do is closed for them
-    (backend/bookkeeper.py grant_view) and leaves their Needs you. Product's Ideas is no longer a stage tasks leave by
-    hand: an idea moves on to Spec by itself (migration ideas_say_it_once, docs/tasks.md "Product's Ideas"). Only a
-    stage still in the preset's shape is changed."""
+    (backend/bookkeeper.py grant_view) and leaves their Needs you."""
     from backend.bookkeeper import VIEW_TITLE
 
     after = copy.deepcopy(before)
@@ -159,35 +158,27 @@ def intended(before):
     return migrated(after)
 
 
-def ideas_move_on(reading):
-    """The reading with Product's Ideas no longer left by hand, as migration ideas_say_it_once leaves it (a copy)."""
+def pitch_removed(reading):
+    """The reading as migration stage_approvals_documents leaves it (a copy): a stage's OK only a person gives becomes a
+    page approving a document, Product's Pitch is retired with its requirements, and each open task there moves on to
+    Spec."""
     after = copy.deepcopy(reading)
-    product = after.get("pipelines", {}).get("product")
-    if product:
-        product["stages"] = [
-            (name, kind, owner, 0 if name == "Ideas" else by_hand) for name, kind, owner, by_hand in product["stages"]
+    for pipeline in after.get("pipelines", {}).values():
+        pipeline["stages"] = [stage for stage in pipeline["stages"] if stage[0] != "Pitch"]
+        pipeline["requirements"] = [
+            {**r, "kind": "page"} if r["kind"] == "ok" and r["who_oks"] == "people_only" else r
+            for r in pipeline["requirements"]
+            if r["stage"] != "Pitch"
         ]
-    return after
-
-
-def picks_at_release(reading):
-    """The reading as migration engineering_picks_at_release leaves it (a copy): with two Reviewers, Review 1 and
-    Review 2 become "One of several" (owner `pick`). Builders' stages change only with two Builders, which this
-    company's fixture lacks (On deck and Build stay the assignee's)."""
-    after = copy.deepcopy(reading)
-    engineering = after.get("pipelines", {}).get("engineering")
-    reviewers = [slug for slug in after.get("bots", {}) if slug.startswith("reviewer")]
-    if engineering and len(reviewers) >= 2:
-        engineering["stages"] = [
-            (name, kind, "pick" if name in ("Review 1", "Review 2") and owner in reviewers else owner, by_hand)
-            for name, kind, owner, by_hand in engineering["stages"]
-        ]
+    for task in after.get("tasks", {}).values():
+        if task["status"] == "open" and task["stage"] == "product-ideas":
+            task["stage"] = "product-spec"
     return after
 
 
 def migrated(reading):
     """The reading with every pending migration's one intended change (a copy)."""
-    return picks_at_release(ideas_move_on(reading))
+    return pitch_removed(reading)
 
 
 def changes(before, after, path=""):
@@ -241,6 +232,30 @@ def updated(before):
         if not any(r["stage"] == "Fixes 2" and r["kind"] == "owner_done" for r in requirements):
             requirements.insert(first, {**rule, "stage": "Fixes 2", "kind": "owner_done"})
         engineering["requirements"] = requirements
+    # stage_rules.sweep_owners: the update makes Owner on the team on Product's Build and Fixes stages, and an open task
+    # there owned by a bot of another team (the Builder, on Engineering) loses its owner; Product's manager picks one.
+    for task in after["tasks"].values():
+        team = after["bots"].get(task["owner"], {}).get("team")
+        if task["status"] == "open" and task["stage"] in BUILD_STAGES and team not in (None, "product"):
+            task["owner"] = ""
+    # onboarding.ensure_tools_owner: a company from before the Tools Owner was built in gets it once, under the General
+    # Manager, on BotOps' computer and the shared cloud machine like the other built-ins, with its weekly review.
+    if "tools-owner" not in after["bots"]:
+        after["bots"]["tools-owner"] = {
+            "name": "Tools Owner",
+            "state": "active",
+            "manager": "general-manager",
+            "team": "built-in",
+            "setup": None,
+        }
+        after["automations"] = sorted([*after["automations"], ("Review the tools", "tools-owner", "schedule", 1)])
+        botops = next(runner for bot, runner in after["placed"] if bot == "botops")
+        after["placed"] = sorted([*after["placed"], ("tools-owner", botops)])
+        after["cloud"] = sorted([*after["cloud"], ("tools-owner", "cloud", "shared", None, None)])
+    # onboarding.ensure_builtin_routines: the Tools Owner's daily learn-from-use reaches one from before it, once, on.
+    learn = ("Learn from how tools are used", "tools-owner", "schedule", 1)
+    if learn not in after["automations"]:
+        after["automations"] = sorted([*after["automations"], learn])
     return after
 
 
@@ -264,7 +279,10 @@ class Company:
         self.needs_you = set(json.loads((FIXTURES / f"company-{release}.json").read_text())["needs_you"])
         from backend.bookkeeper import VIEW_TITLE
 
-        self.needs_you_after = self.needs_you - {VIEW_TITLE}  # closed for the owner by the update (intended)
+        # Closed for the owner by the update (intended), and the pitches whose OK migration stage_approvals_documents
+        # dropped when it moved them on to Spec.
+        pitched = {t["title"] for t in self.before["tasks"].values() if t["stage"] == "product-ideas"}
+        self.needs_you_after = self.needs_you - {VIEW_TITLE} - pitched
         shared = next(m for m in self.before["cloud"] if m[0] == "_shared")
         self.hq = FakeHQ()
         self.hq.machines[shared[3]] = {
@@ -318,13 +336,10 @@ def test_the_fixture_is_the_company_the_journey_needs(company):
     """The file is the company described above; a refresh that loses part of it would make the tests below say less."""
     before = company.before
     assert len(before["bots"]) == 21 and {b["state"] for b in before["bots"].values()} == {"active"}
-    assert len(before["pipelines"]) == 12
+    assert len(before["pipelines"]) == 11
     assert {slug: before["bots"][slug]["manager"] for slug in HAND_SET} == HAND_SET
     stages = {t["title"]: t["stage"] for t in before["tasks"].values()}
-    assert (
-        stages["Export invoices as CSV"] == "product-spec"
-        and stages["Rate limit the public API"] == "engineering-build"
-    )
+    assert stages["Export invoices as CSV"] == "product-spec" and stages["Rate limit the public API"] == "product-build"
     assert [t for t in before["tasks"].values() if t["snoozed_until"]]
     assert [t for t in before["tasks"].values() if any(a["kind"] == "ok" and a["person_id"] for a in t["asks"])]
     assert "Ship the pricing page" in company.needs_you  # the sign-off waits on the person

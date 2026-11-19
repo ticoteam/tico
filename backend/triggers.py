@@ -31,7 +31,7 @@ trigger's `type_from` (a header name, or a JSON pointer starting with /).
 A trigger whose `consumer` is `finance` is Finance's (it becomes one when a Finance preset, `mercury`, is set;
 trigger_presets.FINANCE): its calls go to Finance, never to rules or automations; only a finance admin makes one,
 changes, signs, replays, recovers or deletes it, whoever made it;
-and its kept calls are read only in Finance (GET /api/v2/finance/webhook-deliveries), never here.
+and its kept calls are Finance's, never listed here.
 """
 
 import asyncio
@@ -54,7 +54,7 @@ from . import tico_notices
 from . import trigger_presets as P
 from .models import Contract
 from .store import Problem
-from .triggers_schema import SCHEMA  # noqa: F401  (hubdb.MIGRATIONS applies it)
+from .api_contract import api_v2
 
 PATH = "/api/v2/hooks/"  # under /api/v2: the runner hostname routes only that prefix
 EVENT = "webhook."  # a routine runs `on: webhook.<id>`
@@ -644,7 +644,7 @@ def _judge(c, ctx, event=RECEIVED):
     except Exception as exc:
         c.execute("ROLLBACK TO trigger_rules")
         c.execute("RELEASE trigger_rules")
-        H.event(c, H.KEEPER, "trigger.rules_error", ctx["trigger"], {"error": type(exc).__name__})
+        H.event(c, H.TICO_ACTOR, "trigger.rules_error", ctx["trigger"], {"error": type(exc).__name__})
         return []
     c.execute("RELEASE trigger_rules")
     return out
@@ -719,7 +719,7 @@ def _unheard(c, found, delivery, type_):
     what = f"{found['name']} ({type_})" if type_ else found["name"]
     H.notice(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         found["created_by"],
         f"A call to the webhook {what} reached no routine or rule. Add a routine on {event_of(found['id'])} "
         f"or a rule on {RECEIVED}. Call {delivery}.",
@@ -1010,7 +1010,7 @@ def given_to(c, bot, trigger_id, base):
     if c.execute(
         "SELECT 1 FROM messages m JOIN automation_runs r ON r.id=json_extract(m.refs,'$.automation_run') "
         "WHERE m.recipient_id=? AND m.sender_id=? AND " + on + " LIMIT 1",
-        (bot, H.KEEPER, *params),
+        (bot, H.TICO_ACTOR, *params),
     ).fetchone():
         return True
     on, params = _delivery_match("json_extract(refs,'$.delivery')", base)
@@ -1020,7 +1020,7 @@ def given_to(c, bot, trigger_id, base):
             "SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? AND json_extract(refs,'$.trigger')=? AND "
             + on
             + " LIMIT 1",
-            (bot, H.KEEPER, trigger_id, *params),
+            (bot, H.TICO_ACTOR, trigger_id, *params),
         ).fetchone()
     )
 
@@ -1031,7 +1031,7 @@ def read(c, who, trigger_id, delivery, part=1):
     (a task made from it, or a notice from Tico naming it). Anyone else finds nothing."""
     found = _row(c, trigger_id)
     if finance_owned(found):
-        # Bank payloads: read in Finance, by a finance admin who sees sources (GET /api/v2/finance/webhook-deliveries).
+        # Bank payloads are Finance's: kept for finance admins who see sources, never shown here.
         raise Problem("forbidden", "This trigger belongs to Finance: read its calls in Finance", 403)
     base = _base(c, trigger_id, delivery)
     allowed = (who.role in ("human", "owner") and manages(who, found)) or (
@@ -1136,7 +1136,10 @@ def install(app, settings, store, auth, mutate):
             raise Problem("forbidden", "Only people and bots read triggers", 403)
         return who
 
-    @app.get("/api/v2/triggers")
+    @app.get(
+        "/api/v2/triggers",
+        **api_v2("Triggers", "listTriggers", "Every trigger with its address (no secret), settings and routines"),
+    )
     def trigger_list(request: Request):
         """Every trigger, its address without the secret, its settings, and the automations that listen for it."""
         who = readers(request)
@@ -1146,12 +1149,17 @@ def install(app, settings, store, auth, mutate):
                 rows = [r for r in rows if r["consumer"] != "finance"]  # Finance's calls are read in Finance
             return {"triggers": rows}
 
-    @app.post("/api/v2/triggers")
+    @app.post(
+        "/api/v2/triggers",
+        **api_v2(
+            "Triggers", "createTrigger", "Make a trigger (a person or a bot); the address with its secret is shown once"
+        ),
+    )
     def trigger_create(request: Request, body: TriggerCreate):
         """A new webhook trigger (a person or a bot may make one). The answer's `url` carries the secret and is shown only now."""
         return once(request, body, lambda c: create(c, request.state.identity, settings, body))
 
-    @app.get("/api/v2/triggers/{trigger_id}")
+    @app.get("/api/v2/triggers/{trigger_id}", **api_v2("Triggers", "getTrigger", "One trigger"))
     def trigger_show(request: Request, trigger_id: str):
         """One trigger: address without the secret, settings, 24-hour counts and its automations."""
         who = readers(request)
@@ -1160,7 +1168,14 @@ def install(app, settings, store, auth, mutate):
                 _finance_only(c, who, "read")  # a Finance trigger is shown to finance admins only (spec 3.4)
             return {"trigger": show(c, settings, trigger_id)}
 
-    @app.post("/api/v2/triggers/{trigger_id}")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}",
+        **api_v2(
+            "Triggers",
+            "updateTrigger",
+            "Change its name, preset, type source, hourly limit, keep days or unheard setting",
+        ),
+    )
     def trigger_update(request: Request, trigger_id: str, body: TriggerUpdate):
         """Change a trigger's name, preset, type source, hourly limit, keep days, or what an unheard call does."""
         return mutate(
@@ -1173,31 +1188,54 @@ def install(app, settings, store, auth, mutate):
             },
         )
 
-    @app.post("/api/v2/triggers/{trigger_id}/rotate")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/rotate",
+        **api_v2("Triggers", "rotateTrigger", "A new address secret; the old one stops at once"),
+    )
     def trigger_rotate(request: Request, trigger_id: str, body: M.Empty):
         """A new secret; the old address stops working at once."""
         return once(request, body, lambda c: rotate(c, request.state.identity, settings, trigger_id))
 
-    @app.post("/api/v2/triggers/{trigger_id}/signing")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/signing",
+        **api_v2(
+            "Triggers",
+            "signTrigger",
+            "Verify calls with a preset (hmac, github, standard, stripe, slack, mercury) or stop; the signing secret is shown once",
+        ),
+    )
     def trigger_signing(request: Request, trigger_id: str, body: TriggerSigning):
         """Verify each delivery with a preset (hmac, github, standard, stripe, slack), or stop with `off`. The secret is shown only now."""
         return once(request, body, lambda c: sign(c, request.state.identity, request.app.state.vault, trigger_id, body))
 
-    @app.get("/api/v2/triggers/{trigger_id}/deliveries")
+    @app.get(
+        "/api/v2/triggers/{trigger_id}/deliveries",
+        **api_v2("Triggers", "listTriggerDeliveries", "The latest calls, newest first"),
+    )
     def trigger_deliveries(request: Request, trigger_id: str):
         """The latest calls to this trigger, accepted and refused, newest first."""
         who = readers(request)
         with store.read() as c:
             return {"deliveries": deliveries(c, trigger_id, who)}
 
-    @app.post("/api/v2/triggers/{trigger_id}/deliveries/{delivery:path}/replay")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/deliveries/{delivery:path}/replay",
+        **api_v2("Triggers", "replayTriggerDelivery", "Run a kept call again as a new occurrence"),
+    )
     def trigger_replay(request: Request, trigger_id: str, delivery: str, body: M.Empty):
         """Run one stored delivery again, as a new occurrence. Refused once its body has expired."""
         return mutate(
             request, body, lambda c: {"replay": replay(c, request.state.identity, auth, trigger_id, delivery)}
         )
 
-    @app.get("/api/v2/triggers/{trigger_id}/deliveries/{delivery:path}")
+    @app.get(
+        "/api/v2/triggers/{trigger_id}/deliveries/{delivery:path}",
+        **api_v2(
+            "Triggers",
+            "getTriggerDelivery",
+            "One kept call: redacted headers and body (a bot reads fenced 20,000-character parts, only of a call it was given)",
+        ),
+    )
     def trigger_delivery(request: Request, trigger_id: str, delivery: str, part: int = 1):
         """One stored call with redacted headers. People who manage the trigger get the whole body; a bot gets
         20,000-character fenced parts (`part`), only for a call it was given."""
@@ -1205,7 +1243,14 @@ def install(app, settings, store, auth, mutate):
         with store.read() as c:
             return {"delivery": read(c, who, trigger_id, delivery, part)}
 
-    @app.post("/api/v2/triggers/{trigger_id}/recover")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/recover",
+        **api_v2(
+            "Triggers",
+            "recoverTrigger",
+            "Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id",
+        ),
+    )
     def trigger_recover(request: Request, trigger_id: str, body: TriggerRecover):
         """Run again, under the current secret and preset, every refused call of the last `since_hours` that is still kept."""
         return mutate(
@@ -1223,7 +1268,10 @@ def install(app, settings, store, auth, mutate):
             },
         )
 
-    @app.post("/api/v2/triggers/{trigger_id}/delete")
+    @app.post(
+        "/api/v2/triggers/{trigger_id}/delete",
+        **api_v2("Triggers", "deleteTrigger", "Delete a trigger and its kept calls"),
+    )
     def trigger_delete(request: Request, trigger_id: str, body: M.Empty):
         """Routines that listened for it stay, and fire again if the same id is made again."""
         return mutate(request, body, lambda c: {"trigger": remove(c, request.state.identity, trigger_id)})

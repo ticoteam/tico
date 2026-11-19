@@ -12,6 +12,17 @@
 /* Short of room the name gives way first, down to half the cell; past that the pill ends in … */
 .tt-au .au-tn .pill{flex:none;max-width:calc(50% - 10px);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .tt-lock{flex:none;font-size:14px!important;width:14px!important;height:14px!important;color:var(--muted)}
+.tt-eye{display:inline-flex;align-items:center}
+.tt-warn{flex:none;font-size:16px!important;width:16px!important;height:16px!important;color:var(--wait-ink);margin-left:4px;vertical-align:middle}
+/* One vendor's page: a card a tool, its keys, who can use it and its settings as short lists. */
+.tt-vendor-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:12px}
+.tt-vendor-card header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tt-vendor-card h2{display:flex;align-items:center;gap:6px;margin:0;font-size:var(--t-md, 1rem);min-width:0}
+.tt-vendor-card h2 a{display:inline-flex;align-items:center;gap:6px;color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.tt-vendor-list{list-style:none;margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px;font-size:var(--t-sm)}
+.tt-vendor-list li{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;overflow-wrap:anywhere}
+.tt-vendor-list .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
+.tt-vendor-who{margin-top:8px}
 .tt-au .au-fb .av{flex:none}
 .tt-au .tt-who{overflow:hidden}
 .tt-au .tt-more{font-size:var(--t-sm);font-variant-numeric:tabular-nums}
@@ -178,6 +189,10 @@ section.card.tt-soon>header .pill{margin-left:auto}
 .tw-ses[data-state=signed_in]{background:var(--ok)}
 .tw-ses[data-state=needs_you]{background:var(--wait)}
 .tw-ses[data-state=signed_out]{background:var(--fail)}
+/* While it needs the viewer the dot is a button: a 24 px target around the same 8 px dot. */
+button.tw-ses{box-sizing:content-box;min-height:0;margin:-8px;padding:8px;border:0;background-clip:content-box;cursor:pointer}
+button.tw-ses:focus-visible,button.tw-ask:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+button.tw-ask{display:inline-flex;min-height:0;padding:0;border:0;border-radius:999px;background:none;font:inherit;cursor:pointer}
 .tw-recent{list-style:none;margin:0;padding:0}
 .tw-rec{display:grid;grid-template-columns:60px 22px minmax(0,1fr);align-items:center;gap:8px;padding:6px 0;font-size:var(--t-sm)}
 .tw-rec>.tnum{white-space:nowrap}

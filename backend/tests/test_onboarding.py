@@ -47,8 +47,8 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     # The owner's edits to the instructions are the duties and limits recruiting must see; the template's text is not.
     edited = "# Help\n\nYou answer Acme's support inbox.\n\nRefund up to $40 without asking.\nNever phone a customer.\n"
     draft(api, selected={"support": {"template": "support-owner", "display_name": "Help", "instructions": edited}})
-    first = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
-    again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    first = api.post("/api/v2/setup/complete", json={}, headers=signed_in()).json()
+    again = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     record = again.json()
     assert record["completed"] == first["completed"] and record["seats"] == first["seats"]
@@ -90,7 +90,7 @@ def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_t
         },
     }
     assert draft(api, selected=picks).status_code == 200
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     (head,) = [seat for seat in seats(api) if seat["title"] == "Head of Marketing"]
     (writer,) = [seat for seat in seats(api) if seat["title"] == "Content Owner"]
@@ -155,7 +155,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
             "support": {"template": "support-owner", "display_name": "Help"},
         },
     )
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops", "inbox"]
     assert set(done.json()["seats"]) == {"support"}
@@ -178,7 +178,7 @@ def test_direct_signup_with_no_chosen_chart_is_the_built_ins_and_an_empty_chart(
     api = environment()
     machine(api)
     draft(api)
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert done.json()["completed"] and done.json()["company_import_failed"] is None
     assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops"]
@@ -219,7 +219,7 @@ def test_a_new_company_starts_with_nothing_new_in_whats_new(environment):
         )
     assert unread(signed_in()) == 2 and unread(riley) == 2
     draft(api)
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     assert unread(signed_in()) == 0
     assert api.get("/api/v2/config", headers=signed_in()).json()["changelog"] == {"unread_count": 0}
     # Only the owner who set it up was caught up, and a later update is still news to them.
@@ -232,24 +232,21 @@ def test_a_new_company_starts_with_nothing_new_in_whats_new(environment):
     )
     assert unread(signed_in()) == 1
     # Completing again catches up nothing more.
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     assert unread(signed_in()) == 1
 
 
 def test_only_the_owner_sets_the_company_up(environment):
     api = environment()
     riley = as_person(api, "riley")  # a bot administrator, not the owner
-    assert api.get("/api/v2/onboarding", headers=riley).status_code == 200
-    assert (
-        api.put("/api/v2/onboarding", json={"names": {}, "answers": {}, "selected": {}}, headers=riley).status_code
-        == 403
-    )
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=riley).status_code == 403
+    assert api.get("/api/v2/setup", headers=riley).status_code == 200
+    assert api.put("/api/v2/setup", json={"names": {}, "answers": {}, "selected": {}}, headers=riley).status_code == 403
+    assert api.post("/api/v2/setup/complete", json={}, headers=riley).status_code == 403
 
     quinn = as_person(api, "quinn")  # neither the owner nor a bot administrator
-    assert api.get("/api/v2/onboarding", headers=quinn).status_code == 403
+    assert api.get("/api/v2/setup", headers=quinn).status_code == 403
     # The catalog itself is readable by anyone who is signed in; it names no company records.
-    assert api.get("/api/v2/catalog", headers=quinn).status_code == 200
+    assert api.get("/api/v2/templates", headers=quinn).status_code == 200
 
 
 def test_the_owner_saves_a_revisioned_choice_and_a_stale_editor_is_refused(environment):
@@ -382,18 +379,18 @@ def test_the_librarian_is_always_built_with_its_daily_routine_seeded_once(enviro
     (folder / "employee.yaml").write_text(yaml.safe_dump(LIBRARIAN_MANIFEST))
     (folder / "playbooks/refresh-the-map.md").write_text("Refresh {{company_name}}'s map of the docs.\n")
     draft(api)
-    record = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
+    record = api.post("/api/v2/setup/complete", json={}, headers=signed_in()).json()
     assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops", "librarian"]
     assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not BotOps
     assert _states(api)["librarian"] == "active"
     (routine,) = _routines(api)
     assert routine["id"] == "librarian:refresh-the-map" and routine["cron"] == "30 3 * * *"
     assert routine["playbook"].strip() == "Refresh Acme's map of the docs."  # the company's words, filled in
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert len(_routines(api)) == 1  # twice is still one
     with api.app.state.store.transaction() as c:  # a person deleted it
         c.execute("UPDATE schedules SET deleted_at=? WHERE bot='librarian'", (H.now(),))
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert [r["deleted_at"] is not None for r in _routines(api)] == [True]  # and it stays deleted
 
 
@@ -478,7 +475,7 @@ def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counse
     before = theirs()
     machine(api)
     draft(api)
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     with api.app.state.store.transaction() as c:
         api.app.state.onboarding.ensure_counsel(c)
     assert theirs() == before
@@ -516,14 +513,51 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
     assert config["model"] == "claude-opus-5-5"
 
 
+def test_the_assistant_turned_on_or_off_reaches_each_persons_live_stream(environment):
+    """A page learns the Assistant went on or off from the stream, not by reading `GET /api/v2/assistant` again: the
+    Assistant's state change is a `bots` event that names it, sent to the owner and to a teammate."""
+    from backend import events as E
+    from backend.auth import Identity
+
+    api = environment(seed={**SEED, "assistant": {**SEED["assistant"], "template": "assistant"}})
+    machine(api)
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.read() as c:
+        owner = auth.owner_identity(c)
+        after = E.latest(c)
+    riley = Identity("human:riley", "human", "riley@acme.example")
+
+    def sent(who, since):
+        with store.read() as c:
+            events, cursor, _, _ = E.read(
+                c, auth, who, since, topics=("bots",), task_views=lambda *a, **k: [], task_view=None
+            )
+        return [data for _, _, data in events if data["bot"] == "assistant"], cursor
+
+    turned = api.post("/api/v2/assistant/turn-on", json={}, headers=signed_in())
+    assert turned.status_code == 200 and turned.json()["state"] == "active", turned.text
+    assert api.get("/api/v2/assistant", headers=signed_in()).json()["available"] is True
+    assert sent(owner, after)[0] and sent(riley, after)[0]
+    after = sent(owner, after)[1]
+    revision = api.get("/api/v2/bots/assistant", headers=signed_in()).json()["revision"]
+    off = api.post(  # built in, so paused rather than archived
+        "/api/v2/bots/assistant/definition",
+        json={"status": "paused", "expected_revision": revision},
+        headers=signed_in(),
+    )
+    assert off.status_code == 200, off.text
+    assert api.get("/api/v2/assistant", headers=signed_in()).json()["available"] is False
+    assert sent(owner, after)[0] and sent(riley, after)[0]
+
+
 def test_a_save_that_names_no_places_keeps_the_saved_ones_and_an_empty_list_clears_them(environment):
     api = environment()
     machine(api)
     assert draft(api, answers={"what_we_do": "Kits.", "regions": ["Worldwide", "Texas"]}).status_code == 200
     assert draft(api, answers={"what_we_do": "Kits and parts."}).status_code == 200
-    assert api.get("/api/v2/onboarding", headers=signed_in()).json()["answers"]["regions"] == ["Worldwide", "Texas"]
+    assert api.get("/api/v2/setup", headers=signed_in()).json()["answers"]["regions"] == ["Worldwide", "Texas"]
     assert draft(api, answers={"what_we_do": "Kits.", "regions": []}).status_code == 200
-    assert api.get("/api/v2/onboarding", headers=signed_in()).json()["answers"]["regions"] == []
+    assert api.get("/api/v2/setup", headers=signed_in()).json()["answers"]["regions"] == []
 
 
 def test_the_places_a_company_serves_are_held_to_the_company_file_rule():

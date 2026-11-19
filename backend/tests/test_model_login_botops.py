@@ -13,7 +13,8 @@ from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401
 from backend.tests.helpers.model_logout import online, pending, report
 from backend.store import H, Problem
 
-ALIASES = ("runners", "computers")
+# The removed runners/{rid}/... spelling is gone (rc.1 calls none of these); the canonical computers/ path only.
+ALIASES = ("computers",)
 PROFILE = "work"  # a named subscription left from before one login per computer: signed out only
 SWITCHES = (True, 1, "true", "1", "on", "yes")  # what the typed `switch: bool` reads as a switch
 NOTHING = {"logins": [], "cleared": [], "invalidated": False, "events": []}
@@ -142,7 +143,7 @@ def test_botops_never_switches_or_signs_out_for_the_person_it_works_for(api, bot
     finish(api, botops, ana)
     finish(api, botops, claim(api, botops, "botops"))  # the task's own "new task" notice
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
+        H.say(c, H.TICO_ACTOR, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
     later = claim(api, botops, "botops")
     for alias in ALIASES:
         for how in (task_id, ("query", task_id)):

@@ -10,8 +10,8 @@ type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_a
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
   efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
-type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsIssue = {kind?: string; title: string; detail: string; more?: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
+type SettingsHistory = {changes: SettingsChange[]; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; own_compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
 // GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
@@ -34,7 +34,7 @@ type SettingsOperations = {machines: SettingsMachine[]; cloud_coming?: SettingsC
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
 type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
 type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; cloudComing?: SettingsCloudComing[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
-type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
+type SettingsPresence = {interval: number; retry: number; timeout: number; limit: number; at: number; checking: boolean; failed: boolean; slow: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
 type StoppedKind = 'read' | 'restarted' | 'timeout' | 'changed' | 'twice' | 'unknown';
@@ -61,31 +61,47 @@ function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTI
   SETTINGS_DATA.machines = machines;
   SETTINGS_DATA.cloudComing = coming;
 }
+// A slow answer is kept, never thrown away: past `timeout` the list says it is still reading, and the answer is drawn
+// when it lands (Chris, Nov 16: a read over 10 s was dropped at 10 s and asked again 25 s later, so Computers never
+// filled in). The rest of Settings waits for it no longer than `timeout` (loadSettings, settingsMachinesWait). A read
+// with no answer by `limit` (a connection dropped as a laptop slept, a proxy holding it through a restart) ends as
+// failed, so the watch tries again in `retry` instead of waiting on it until a reload.
 async function settingsMachinesRead() {
   const request = ++SETTINGS_PRESENCE.request;
-  let timer: number | undefined;
+  const timer = setTimeout(() => {
+    if (SETTINGS_PRESENCE.applied >= request) return;
+    SETTINGS_PRESENCE.slow = true;
+    if (settingsMachinesVisible()) renderSettingsMachines();
+  }, SETTINGS_PRESENCE.timeout);
+  let cap: number | undefined;
   try {
-    const operations = await Promise.race([
-      get('/v2/operations', {fresh: true}),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
-    ]);
+    const operations = await Promise.race([get<SettingsOperations>('/v2/operations', {fresh: true}), new Promise<never>((_, reject) => {
+      cap = setTimeout(() => reject(new Error('Presence unavailable: no answer')), SETTINGS_PRESENCE.limit);
+    })]);
     if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
     settingsMachinesSnapshot(operations.machines, request, Array.isArray(operations.cloud_coming) ? operations.cloud_coming : []);
     return operations;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); clearTimeout(cap); if (SETTINGS_PRESENCE.request === request) SETTINGS_PRESENCE.slow = false; }
+}
+/** The read for loadSettings: the rest of Settings is drawn after `timeout` at most; a later answer still goes in. */
+function settingsMachinesWait(read: Promise<SettingsOperations>): Promise<SettingsOperations | null> {
+  let timer: number | undefined;
+  return Promise.race([read, new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), SETTINGS_PRESENCE.timeout); })])
+    .finally(() => clearTimeout(timer));
 }
 const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'devices' && !!$('#set-machines');
 function settingsMachinesWatch() {
   clearTimeout(SETTINGS_PRESENCE.timer ?? undefined);
   SETTINGS_PRESENCE.timer = null;
-  if (!settingsMachinesVisible() || !S.me?.cloud) return;
+  if (!settingsMachinesVisible() || !S.me) return;
+  // A failed read is tried again in a few seconds (a release restarting the server, a dropped connection), not 25.
   SETTINGS_PRESENCE.timer = setTimeout(() => {
     if (!settingsMachinesVisible()) return;
     void settingsMachinesRefresh().finally(settingsMachinesWatch);
-  }, SETTINGS_PRESENCE.interval);
+  }, SETTINGS_PRESENCE.failed ? SETTINGS_PRESENCE.retry : SETTINGS_PRESENCE.interval);
 }
 function settingsMachinesRefresh() {
-  if (!S.me?.cloud) return Promise.resolve();
+  if (!S.me) return Promise.resolve();
   if (SETTINGS_PRESENCE.pending) return SETTINGS_PRESENCE.pending;
   SETTINGS_PRESENCE.checking = true;
   if (settingsMachinesVisible()) renderSettingsMachines();
@@ -212,7 +228,7 @@ function pageSettings() {
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       <section class="card settings-health" id="settings-health-line" aria-label="Health"></section>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
-        ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
+        ${S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
           <div><strong>Team icon</strong>
             <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
@@ -400,7 +416,7 @@ function settingsShow(tab: string) {
       window.hlSummaryDraw?.();
       void Promise.all([
         // The owner's one click when the team has no Assistant (ui/assistant.ts): restore it or add it.
-        owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
+        owner && assistantSettingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
         company && settingsIsAdmin() && renderSettingsCompany(), settingsIsAdmin() && renderSettingsPageOwners(), owner && renderSettingsBotReports(),
         !formBusy($('#settings-notifications')) && settingsNotificationsRender()])
@@ -468,8 +484,8 @@ async function renderSettingsBotReports() {
   try { rules = (await get('/v2/access')).rules || {}; }
   catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
   if (!host.isConnected) return;
-  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to the Tico team without asking">
-    <span>Bots send reports to the Tico team without asking</span></label>`;
+  host.innerHTML = `<label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="bot-reports-direct"${rules.bot_reports_direct !== false ? ' checked' : ''} aria-label="Bots send reports to Tico support without asking">
+    <span>Bots send reports to Tico support without asking</span></label>`;
   host.querySelector('#bot-reports-direct').onchange = async (ev: Event) => {
     const box = ev.target;
     if (!(box instanceof HTMLInputElement)) return;
@@ -592,7 +608,7 @@ async function renderSettingsPrivacy() {
 // Models draws its cards when shown; Computers reads the subscriptions and the Gateway toggle for its pickers.
 function settingsModelsRender() {
   if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); void renderSettingsTurnLevels(); }
-  else if (SETTINGS_TAB === 'devices' && S.me?.cloud) {
+  else if (SETTINGS_TAB === 'devices' && S.me) {
     void Promise.all([subsLoad(), providersViewLoad().catch(() => null)]).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   }
 }
@@ -629,31 +645,38 @@ async function renderSettingsTurnLevels() {
 }
 async function loadSettings() {
   try {
-    const [people, operations, catalog, employees, history, limits] = await Promise.all([
+    const kept = (): SettingsOperations => ({machines: SETTINGS_DATA.machines, services: SETTINGS_DATA.services, issues: SETTINGS_DATA.issues,
+      ...(SETTINGS_DATA.runnable ? {runnable: SETTINGS_DATA.runnable} : {}), ...(SETTINGS_DATA.agents ? {agents: SETTINGS_DATA.agents} : {}),
+      ...(SETTINGS_DATA.schedulerEnabled !== undefined ? {scheduler_enabled: SETTINGS_DATA.schedulerEnabled} : {})});
+    const read = S.me ? settingsMachinesRead() : null;
+    // Past `timeout` the rest of Settings is drawn with what was kept; the answer, when it lands, fills in Computers,
+    // Services and the checks (settingsOperationsLate).
+    // An answer that lands before the other reads finish is the one drawn below, not the copy kept at `timeout`.
+    const landed: {ops?: SettingsOperations} = {};
+    if (read) void read.then(ops => { landed.ops = ops; settingsOperationsLate(ops); }, () => { SETTINGS_PRESENCE.failed = true; if (settingsMachinesVisible()) { renderSettingsMachines(); settingsMachinesWatch(); } });
+    const [people, waited, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me?.cloud ? settingsMachinesRead().catch(() => {
-        SETTINGS_PRESENCE.failed = true;
-        return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
-      }) : Promise.resolve({machines: [], services: []}),
-      S.me?.cloud ? get('/v2/models') : Promise.resolve({models: []}),
+      read ? settingsMachinesWait(read).then(ops => ops || kept(), () => kept()) : Promise.resolve<SettingsOperations>({machines: [], services: []}),
+      S.me ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
-      S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
-      S.me?.cloud ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
+      S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: []}),
+      S.me ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
       loadHarnessRows(),
       // The Computers table's pickers: the company's subscriptions, and whether the Gateway runs a tool without one.
-      S.me?.cloud ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
+      S.me ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
     ]);
+    const operations: SettingsOperations = landed.ops || waited;
     S.emps = namedRoster(employees);
     setPeople(people);
-    SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
-      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing || [] : [],
+    SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me ? SETTINGS_DATA.machines : [],
+      cloudComing: S.me ? SETTINGS_DATA.cloudComing || [] : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],
       harnesses: catalog.harnesses || [], gateway: catalog.gateway || null,
       enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '',
       issues: operations.issues || [], history, limits,
-      schedulerEnabled: operations.scheduler_enabled, loaded: true};
+      ...(operations.scheduler_enabled !== undefined ? {schedulerEnabled: operations.scheduler_enabled} : {}), loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
     renderTree();
     if (S.route !== SETTINGS) return;
@@ -673,6 +696,24 @@ async function loadSettings() {
     }
   }
 }
+// A card is one line (Chris, Nov 14: "remove 75% of the words … I'm okay with the tooltip"): the rest of what it says,
+// and its steps, are the line's tooltip on hover and open under it on a tap. Out of credit carries Add credit.
+function settingsIssueLine(issue: SettingsIssue): string {
+  const credit = issue.kind === 'cloud_credit' && S.me?.role === 'owner' ? cloudCreditLinkHTML() : '';
+  if (issue.more) return `<details class="settings-issue-more"><summary title="${esc(issue.more)}">${esc(issue.detail)}</summary><p>${esc(issue.more)}</p></details>${credit ? `<p>${credit}</p>` : ''}`;
+  return `<p>${esc(issue.detail)}${credit}</p>${issue.action && issue.action !== 'review' ? `<p>${esc(issue.action)}</p>` : ''}`;
+}
+/** The operations answer once it lands, when it came after loadSettings had drawn without it. */
+function settingsOperationsLate(operations: SettingsOperations) {
+  if (!SETTINGS_DATA.loaded) return;   // loadSettings has not drawn yet: it takes this answer itself
+  const next: SettingsData = {...SETTINGS_DATA, services: operations.services || SETTINGS_DATA.services, issues: operations.issues || SETTINGS_DATA.issues};
+  if (operations.runnable) next.runnable = operations.runnable;
+  if (operations.agents) next.agents = operations.agents;
+  if (operations.scheduler_enabled !== undefined) next.schedulerEnabled = operations.scheduler_enabled;
+  SETTINGS_DATA = next;
+  if (S.route !== SETTINGS) return;
+  renderSettingsIssues(); renderSettingsMachines(); renderSettingsServices();
+}
 function renderSettingsIssues() {
   const el = $('#settings-issues'); if (!el) return;
   // What needs a person heads the Health page (General's Health line counts it as urgent); the rest is listed under
@@ -680,7 +721,7 @@ function renderSettingsIssues() {
   const issues = (SETTINGS_DATA.issues || []).filter(needsPerson);
   const urgent = issues.length > 0;
   el.innerHTML = issues.length ? `<details class="card settings-issues" open><summary><span class="dot ${urgent ? 'failed' : ''}" aria-hidden="true"></span><strong>System checks <span class="tnum">${issues.length}</span></strong></summary>
-    <div>${issues.map(issue => `<div class="settings-issue"><div><strong>${esc(issue.title)}</strong>${needsPerson(issue) ? '' : ` <span class="tag">${issue.kind === 'uncertain_work' ? 'review later' : 'not urgent'}</span>`}<p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p>${esc(issue.action)}</p>` : ''}</div>${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div>`).join('')}</div></details>` : '';
+    <div>${issues.map(issue => `<div class="settings-issue"><div><strong>${esc(issue.title)}</strong>${needsPerson(issue) ? '' : ` <span class="tag">${issue.kind === 'uncertain_work' ? 'review later' : 'not urgent'}</span>`}${settingsIssueLine(issue)}</div>${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div>`).join('')}</div></details>` : '';
   el.querySelectorAll('[data-execution-review]').forEach((button: HTMLElement) => {
     button.onclick = () => executionReview(String(button.dataset.executionReview));
   });

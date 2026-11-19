@@ -1,6 +1,8 @@
 ---
 name: estimate-a-job-length-from-history
 description: Set the planned length of a job type from completed jobs in past exports, not the booking default, so the plan's times match what crews actually take and the buffers before fixed-time jobs are real.
+metadata:
+  function: operations
 ---
 # Estimate a job length from history
 

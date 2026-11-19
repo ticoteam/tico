@@ -49,7 +49,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a credential, a tax id or a bank detail into a file; name where it is kept instead.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/register.md`, `knowledge/proof.md` and
    the playbook. A resumed turn already has them.
 3. Check `tico calendar list` for filing dates already booked and for owners who are away.

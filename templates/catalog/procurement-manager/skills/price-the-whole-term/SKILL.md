@@ -1,6 +1,8 @@
 ---
 name: price-the-whole-term
 description: Work out what a vendor costs over the full contract term, with each figure dated and sourced, before two quotes are compared or a total is stated.
+metadata:
+  function: operations
 ---
 # Price the whole term
 

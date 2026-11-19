@@ -105,7 +105,7 @@ function renderAccount(): void {
   if (!me) { if (email) email.textContent = 'Not signed in'; return; }
   // A bot's read-only view of the app (backend/app_view.py) has no email: it is named, and said to be read only.
   const who = me.email || (me.read_only_view ? `${me.name || 'Bot'} · read-only view` : '');
-  el.title = `Signed in as ${who}${me.local ? ' (local app)' : ''}`;
+  el.title = `Signed in as ${who}`;
   if (email) email.textContent = who || 'Not signed in';
   renderAccountFace();
   // A read-only view changes nothing, so it is not offered Settings (ui/app/view-only.ts).
@@ -149,7 +149,7 @@ async function renderDownloadLink(): Promise<void> {
   const nudgeText = nudge?.querySelector<HTMLElement>('.app-nudge-text') ?? null;
   const nudgeClose = nudge?.querySelector<HTMLElement>('.app-nudge-close') ?? null;
   const os = visitorOS();
-  const eligible = (): boolean => !S.me?.local && !!os && visitorOS() === os && !document.body.classList.contains('native');
+  const eligible = (): boolean => !!os && visitorOS() === os && !document.body.classList.contains('native');
   if (a) { a.hidden = true; a.removeAttribute('href'); }
   if (nudge) { nudge.hidden = true; nudgeGet?.removeAttribute('href'); }
   if (!a || !eligible()) return;
@@ -161,7 +161,8 @@ async function renderDownloadLink(): Promise<void> {
     // manifest again, and never turn a non-web URL into an executable link.
     const url = new URL(d.url, location.href);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return;
-    const label = `Download Tico for ${companyName()}`;
+    // Short, per OS (Chris, Nov 13: "Just say 'Download Mac App'"); the nudge's sentence still names the team.
+    const label = `Download ${OS_WORDS[os]} app`;
     a.href = d.url;
     a.textContent = '';
     a.insertAdjacentHTML('beforeend', `<span class="nav-icon" aria-hidden="true">download</span>${esc(label)}${os === 'mac' ? betaPill('mac_app') : ''}`);

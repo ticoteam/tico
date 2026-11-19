@@ -56,3 +56,8 @@ first_routine:
 example_output: knowledge/examples/contract-summary.md
 reasoning_effort: high
 recommend_when: [sells_to_businesses, uses_docs, uses_email]
+shared_files:
+  - .claude/skills/count-a-notice-deadline
+  - .claude/skills/manage-leases-and-real-estate
+  - .claude/skills/review-a-contract
+  - .claude/skills/send-a-cease-and-desist

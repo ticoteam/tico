@@ -15,7 +15,7 @@ source, the report is published, and the task is closed with the next deadline.
 ## 1. Refresh the dates
 
 For each line of `knowledge/tax-calendar.md` falling in the next 90 days, confirm the due date on the authority's page if it
-was last checked more than a year ago, using `skills/build-a-filing-calendar-line/SKILL.md`. Add any deadline from a notice
+was last checked more than a year ago, using `.claude/skills/stay-on-top-of-taxes/SKILL.md` (`references/tax-calendar.md`). Add any deadline from a notice
 received since the last run.
 
 ## 2. Status of the inputs
@@ -26,13 +26,13 @@ the owners of "due now" inputs on their tasks.
 
 ## 3. Threshold watch
 
-For every place the team sells into and is not registered, follow `skills/check-a-sales-tax-threshold/SKILL.md`. Show the
+For every place the team sells into and is not registered, follow the monthly watch in `.claude/skills/stay-on-top-of-taxes/SKILL.md` (`references/sales-tax.md`). Show the
 amount against the threshold and the percent. Mark anything over 80 percent, and anything whose threshold changed, with the
 official source.
 
 ## 4. Contractors (monthly, and weekly in December and January)
 
-Follow `skills/gather-contractor-tax-forms/SKILL.md`: contractors paid over the reporting amount this year with no tax form on
+Follow `.claude/skills/stay-on-top-of-taxes/SKILL.md` (`references/1099-season.md`): contractors paid over the reporting amount this year with no tax form on
 file, and new contractors with no form collected during setup.
 
 ## 5. Write and hand over

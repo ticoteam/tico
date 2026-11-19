@@ -8,18 +8,20 @@
 //! Code loads the skills in an added directory's `.claude/skills`); Codex gets its `.claude/skills` (`skills_root`)
 //! as the app server's extra skill root (hosts/codex.rs), never a folder under the operator's CODEX_HOME. It then
 //! reports what it staged (`POST attempts/{aid}/skills/receipt`) and remembers the staged skills for the bot's `/`
-//! menu (`menu`).
+//! menu (`menu`). A turn that will likely run Claude or Codex starts the reads (listing and bundles) while it is still
+//! being placed (`early`); a read older than 15 s when the host is up is done again.
 //!
 //! Nothing here may fail a turn: any failure is logged and the turn runs without company skills (a skill that fails
 //! alone is left out). Staged files are readable by everyone on the computer, so a turn run as its own leased user
 //! can read them; they are the company's approved skills, which every bot may read anyway, and nobody but the runner
 //! can write them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde_json::{json, Value};
@@ -443,7 +445,80 @@ fn wanted(listing: &Value) -> Vec<(String, String)> {
 
 /// Stages the bot's company skills for this attempt and returns the folder to add, or None to run without them.
 pub async fn prepare(client: &Client, state_dir: &Path, aid: &str, bot: &str) -> Option<PathBuf> {
-    match tokio::time::timeout(DEADLINE, prepare_within(client, state_dir, aid, bot)).await {
+    prepare_with(client, state_dir, aid, bot, None).await
+}
+
+/// A read of the bot's installed skills and their bundles begun before its harness starts (`early`): only the reads,
+/// which change nothing; staging and the receipt still happen in `prepare_with`, once the turn's host is up.
+pub struct Early {
+    began: Instant,
+    /// When the read finished, and what it read.
+    task: tokio::task::JoinHandle<(Instant, Result<Option<Bundles>, String>)>,
+}
+
+impl Drop for Early {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// How old an early read may be when the turn uses it; an older one is read again.
+const EARLY_FRESH: Duration = Duration::from_secs(15);
+
+/// Starts reading the bot's skills now, for a turn that will likely run Claude or Codex.
+pub fn early(client: &Client, state_dir: &Path, aid: &str, bot: &str) -> Early {
+    let (client, state_dir, aid, bot) = (
+        client.clone(),
+        state_dir.to_path_buf(),
+        aid.to_string(),
+        bot.to_string(),
+    );
+    Early {
+        began: Instant::now(),
+        task: tokio::spawn(async move {
+            let read = read_skills(&client, &state_dir, &aid, &bot).await;
+            (Instant::now(), read)
+        }),
+    }
+}
+
+/// `prepare`, using an early read when it succeeded and is still recent once awaited; otherwise the skills are read
+/// now, as before. One DEADLINE covers the reading and staging: the time the early read ran counts against it, so a
+/// stalled early read and the read after it never take longer than one.
+pub async fn prepare_with(
+    client: &Client,
+    state_dir: &Path,
+    aid: &str,
+    bot: &str,
+    early: Option<Early>,
+) -> Option<PathBuf> {
+    let mut spent = Duration::ZERO;
+    let mut read = None;
+    if let Some(mut e) = early {
+        let limit = tokio::time::Instant::from_std(e.began + DEADLINE);
+        match tokio::time::timeout_at(limit, &mut e.task).await {
+            Ok(Ok((at, result))) => {
+                spent = at.saturating_duration_since(e.began);
+                // Its age is taken once it is awaited: an older read, or a failed one, is done again.
+                if at.elapsed() < EARLY_FRESH {
+                    read = result.ok();
+                }
+            }
+            // Stalled past the deadline, or lost: all its time counts.
+            _ => spent = e.began.elapsed().min(DEADLINE),
+        }
+    }
+    let work = async {
+        let bundles = match read {
+            Some(bundles) => bundles,
+            None => read_skills(client, state_dir, aid, bot).await?,
+        };
+        match bundles {
+            Some(bundles) => stage_and_report(client, state_dir, aid, bot, bundles).await,
+            None => Ok(None),
+        }
+    };
+    match tokio::time::timeout(DEADLINE.saturating_sub(spent), work).await {
         Ok(Ok(dir)) => dir,
         Ok(Err(e)) => {
             log(&format!(
@@ -461,12 +536,16 @@ pub async fn prepare(client: &Client, state_dir: &Path, aid: &str, bot: &str) ->
     }
 }
 
-async fn prepare_within(
+/// The skills one turn stages: (name, sha, files) for each.
+type Bundles = Vec<(String, String, Vec<File>)>;
+
+/// The bot's installed skills and their bundles (from the cache when kept), or None when there is nothing to stage.
+async fn read_skills(
     client: &Client,
     state_dir: &Path,
     aid: &str,
     bot: &str,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<Bundles>, String> {
     if !id_ok(aid) {
         return Ok(None);
     }
@@ -506,6 +585,16 @@ async fn prepare_within(
         };
         bundles.push((name, sha, files));
     }
+    Ok(Some(bundles))
+}
+
+async fn stage_and_report(
+    client: &Client,
+    state_dir: &Path,
+    aid: &str,
+    bot: &str,
+    bundles: Bundles,
+) -> Result<Option<PathBuf>, String> {
     let staged = stage(state_dir, bot, &bundles);
     remember_menu(
         state_dir,
@@ -520,15 +609,46 @@ async fn prepare_within(
         "skills-receipt:{aid}:{}",
         &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]
     );
-    if let Err(e) = client
-        .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
-        .await
-    {
-        log(&format!(
-            "Tico runner: {bot}: could not report its staged company skills: {e}"
-        ));
-    }
+    // The receipt is the Skills page's record of what was staged: it goes out beside `started` instead of before it,
+    // and the turn waits for it before its harness runs (`receipt_landed`), so a skill's use is never recorded against
+    // the previously staged copy (skill_runtime.py record_runner_usage). Its failure was only ever logged.
+    let (client, owner, bot) = (client.clone(), aid.to_string(), bot.to_string());
+    let sent = tokio::spawn(async move {
+        if let Err(e) = client
+            .post(
+                &format!("attempts/{owner}/skills/receipt"),
+                &body,
+                Some(&key),
+            )
+            .await
+        {
+            log(&format!(
+                "Tico runner: {bot}: could not report its staged company skills: {e}"
+            ));
+        }
+    });
+    RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(aid.to_string(), sent);
     Ok(Some(dir))
+}
+
+/// Skills receipts still on their way, by attempt (`stage_and_report`).
+static RECEIPTS: OnceLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = OnceLock::new();
+
+/// Waits for the turn's skills receipt, if one is on its way: called once the hub has accepted `started`, before the
+/// harness runs. It went out a round trip earlier, so it has usually landed.
+pub async fn receipt_landed(aid: &str) {
+    let sent = RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(aid);
+    if let Some(sent) = sent {
+        let _ = sent.await;
+    }
 }
 
 #[cfg(test)]
@@ -803,7 +923,21 @@ mod tests {
         ])
         .await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+        // The receipt goes in the background: wait for it, so the hub's replies stay in order.
+        let posted = |n: usize| {
+            let seen = seen.clone();
+            async move {
+                for _ in 0..500 {
+                    if seen.lock().unwrap().len() >= n {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("no receipt posted");
+            }
+        };
         let dir = prepare(&client, &state, "a-7", "ops").await.unwrap();
+        posted(3).await;
         assert!(dir.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert!(state
             .join("skill-bundles")
@@ -811,6 +945,7 @@ mod tests {
             .is_file());
         // The next turn reads the bundle from the cache: no second bundle fetch.
         let again = prepare(&client, &state, "a-8", "ops").await.unwrap();
+        posted(5).await;
         assert!(again.join(".claude/skills/acme-brief/SKILL.md").is_file());
         assert_eq!(again, dir, "the bot's next turn adds the same folder");
         let seen = seen.lock().unwrap();

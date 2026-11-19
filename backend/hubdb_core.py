@@ -1,6 +1,8 @@
 """Who is acting: the actor helpers the hub modules share. Imports nothing from the hub."""
 
-KEEPER = "keeper"
+from typing import Any
+
+TICO_ACTOR = "keeper"
 
 
 def bot_actor(slug):
@@ -16,8 +18,8 @@ def human_actor(pid):
 def actor_kind(actor):
     """`bot`, `human`, `keeper`, or None for anything else."""
     a = str(actor or "").strip()
-    if a == KEEPER:
-        return KEEPER
+    if a == TICO_ACTOR:
+        return TICO_ACTOR
     if a.startswith("bot:"):
         return "bot"
     if a.startswith("human:"):
@@ -26,7 +28,7 @@ def actor_kind(actor):
 
 
 def actor_id(actor):
-    """The slug or person id inside an actor string; `keeper` for the keeper."""
+    """The slug or person id inside an actor string; `keeper` for Tico."""
     a = str(actor or "").strip()
     return a.split(":", 1)[1] if ":" in a else a
 
@@ -35,5 +37,12 @@ def is_bot(actor):
     return actor_kind(actor) == "bot"
 
 
-def is_human(actor):
+def is_human(actor: Any) -> bool:
     return actor_kind(actor) == "human"
+
+
+def run_notice(sender, recipient):
+    """Whether a message is Tico telling a bot something: its run's input, never a line in a chat a person reads. The
+    stamp trigger gives it no seq (migration 20261116234549_run_notices_out_of_chats), so no timeline or unread count
+    holds it; the bot reads it as the message its run starts from and in its own reads of the room."""
+    return sender == TICO_ACTOR and is_bot(recipient)

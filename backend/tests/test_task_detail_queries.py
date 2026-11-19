@@ -6,64 +6,18 @@ import contextlib
 import pytest
 
 from backend import task_privacy
-from backend.store import H
 from backend.tests.helpers import api as T
 from backend.tests.helpers.api_app import api_client
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.helpers.bot_list_reads import add_bots
-
-# Tool calls each run streams. Every step names its own call id, so a run of N steps used to cost about N queries.
-STEPS = 10
-
-
-def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
-    """A task owned by bot `ops` with `comments` bot replies, each from its own run that the runner claimed, streamed
-    STEPS tool calls and completed; `people_comments` notes from Ben that each name a child task; `events` history
-    rows; `children` child tasks; and `bots` more bots in the company. Ana is the requester."""
-    add_bots(api, {f"x{n:02d}": {} for n in range(bots)})
-    machine = runner(api, "ana")
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    tid = post(api, "tasks", {"owner": "ops", "title": "Grow the task", "body": "Do it."})["id"]
-    for k in range(max(comments, 1)):
-        if k:
-            post(api, f"tasks/{tid}/comments", {"text": f"@ops step {k}"})
-        aid = claim(api, machine)["id"]
-        post(api, f"attempts/{aid}/started", {"thread_id": f"run {k}"}, machine["token"])
-        rows = [{"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}}]
-        for j in range(STEPS):
-            call = {"tool": "Read", "item_id": f"r{k}-{j}"}
-            rows += [
-                {"seq": 2 + 2 * j, "kind": "tool", "payload": {**call, "status": "started"}},
-                {"seq": 3 + 2 * j, "kind": "tool", "payload": {**call, "status": "completed"}},
-            ]
-        post(api, f"attempts/{aid}/events", {"events": rows}, machine["token"])
-        post(
-            api,
-            f"attempts/{aid}/complete",
-            {"outcome": "completed", "text": f"Reply {k}.", "last_seq": len(rows)},
-            machine["token"],
-        )
-    # The child tasks come after the runs: a parent waits on its sub-tasks, so its own wakes would have no turn left.
-    with api.app.state.store.transaction() as c:
-        kids = [
-            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
-            for k in range(max(children, comments, people_comments))
-        ]
-        for k in range(people_comments):
-            H.task_comment(c, "human:ben", tid, f"Ben note {k}", wake=False, extra_refs={"task": [kids[k]]})
-        for k in range(events):
-            c.execute(
-                "INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
-                "VALUES(?,'task',?,?,?,?,?,?,?)",
-                (f"ev{k}", tid, H.now(), "human:ana", "status", "open", "doing", ""),
-            )
-    return tid
+from backend.tests.helpers.participants_audience import on_roster
+from backend.tests.helpers.task_detail_queries import build
 
 
 def page_statements(api, monkeypatch, tid, token):
     """The task page as `token` gets it, and how many statements it ran. Each request starts from cold roster and row
     caches."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -72,7 +26,7 @@ def page_statements(api, monkeypatch, tid, token):
         @contextlib.contextmanager
         def borrowed(*args, **kwargs):
             with opened(*args, **kwargs) as c:
-                c.set_trace_callback(seen.append)
+                c.set_trace_callback(recorder(seen))
                 try:
                     yield c
                 finally:
@@ -83,7 +37,8 @@ def page_statements(api, monkeypatch, tid, token):
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
-        response = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
+        with measuring(seen):
+            response = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 
@@ -123,3 +78,36 @@ def test_priming_the_task_reads_does_not_change_the_page(api, monkeypatch):
         unbatched, _ = page_statements(api, monkeypatch, tid, "cara-test")
     assert batched == unbatched
     assert len(batched["comments"]) >= 5 and any(m.get("run") for m in batched["comments"])
+
+
+def test_the_run_line_alone_is_the_task_pages_own(api):
+    """GET /api/v2/tasks/{tid}/execution, which the task page reads as a run's steps come in, answers the page's own
+    `execution` while the run works and once it ends, to whoever may read the task, and nothing to anyone else."""
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid = post(api, "tasks", {"owner": "ops", "title": "Watch the run", "body": "Do it."})["id"]
+    aid = claim(api, machine)["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t1"}, machine["token"])
+    steps = [{"seq": 1, "kind": "tool", "payload": {"tool": "Read", "item_id": "r1", "status": "started"}}]
+    steps.append({"seq": 2, "kind": "message", "payload": {"text": "Reading the spec.", "final": False}})
+    post(api, f"attempts/{aid}/events", {"events": steps}, machine["token"])
+
+    def both(token):
+        page = api.get(f"/api/v2/tasks/{tid}", headers=T.headers(token))
+        alone = api.get(f"/api/v2/tasks/{tid}/execution", headers=T.headers(token))
+        return page, alone
+
+    page, alone = both("ana-test")
+    assert page.status_code == alone.status_code == 200, (page.text, alone.text)
+    working = page.json()["execution"]
+    assert working and working["state"] == "running" and working["parts"], working
+    assert alone.json() == {"execution": working}
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 2}, machine["token"])
+    page, alone = both("ana-test")
+    assert alone.json() == {"execution": page.json()["execution"]}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (tid,))
+    on_roster(api, "eve")
+    page, alone = both("eve-test")
+    assert page.status_code == alone.status_code and page.status_code in (403, 404), (page.text, alone.text)

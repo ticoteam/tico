@@ -1,93 +1,46 @@
-"""API tools (backend/api_tools.py): the data migration keeps every grant and leaves each key on its computers, a level
-picks its key, a check tells a rejected key from a working one, a member sees only what they hold, and no key value is
-ever in an answer except the vault's reveal.
+"""API tools (backend/api_tools.py): a level picks its key, a check tells a rejected key from a working one, a member
+sees only what they hold, and no key value is ever in an answer except the vault's reveal.
 
 Ana owns the company and Ben is an admin (both credential administrators); Cara is a member."""
 
+import base64
+import ipaddress
 import json
-import sqlite3
-from pathlib import Path
-from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from backend import api_tools
-from backend.config import Settings
-from backend.store import Problem, Store
-from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.credentials import setup
+from backend import api_tools, egress
+from backend.credentials import FILE_MIGRATION
+from backend.store import Problem
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner
+from backend.tests.helpers.credentials import explicit_only, setup
 from backend.tests.helpers.api_tools import key, level, tool
 
-FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 SECRET_RW = "acme-close-synthetic-rw-0011223344"
 SECRET_R = "acme-close-synthetic-ro-5566778899"
+PUBLIC = "93.184.215.14"
 
 
-def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_grant(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    now = "2026-10-01T00:00:00Z"
-    rows = (
-        ("c-close", "Close API key", "api_key", "CLOSE_API_KEY", ""),
-        ("c-own", "Acme internal", "token", "ACME_TOKEN", ""),
-        ("c-model", "OpenAI", "api_key", "OPENAI_API_KEY", ""),
-        ("c-computer", "Claude on the Mac", "api_key", "ANTHROPIC_API_KEY", "computers:r1"),
-        ("c-bank", "Bank login", "password", "", "finance"),
-        ("c-empty", "Stripe", "api_key", "STRIPE_API_KEY", ""),
-    )
-    for cid, name, kind, env, source in rows:
-        conn.execute(
-            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,"
-            "updated_by,created_by) VALUES(?,?,?,?,'',?,?,?,?,?,'human:ana','human:ana')",
-            (
-                cid,
-                name,
-                kind,
-                env,
-                None if cid == "c-empty" else b"x",
-                None if cid == "c-empty" else b"n",
-                source,
-                now,
-                now,
-            ),
-        )
-    grants = (
-        ("g1", "c-close", "bot:ops", None),
-        ("g2", "c-close", "human:cara", "2026-10-02T00:00:00Z"),
-        ("g3", "c-own", "bot:assistant", None),
-        ("g4", "c-model", "computers", None),
-    )
-    for gid, cid, subject, revoked in grants:
-        conn.execute(
-            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created,revoked) "
-            "VALUES(?,?,?,'human:ana',?,?)",
-            (gid, cid, subject, now, revoked),
-        )
-    conn.commit()
-    conn.close()
-    Store(Settings(db_path=path)).initialize()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    tools = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tools")}
-    keys = {r["id"]: dict(r) for r in conn.execute("SELECT id, tool_id, access_level FROM credentials")}
-    after = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM credential_grants")}
-    conn.close()
-    assert set(tools) == {"close-crm", "acme-internal"}
-    close = tools["close-crm"]
-    assert (close["delivery"], close["base_url"], close["auth_scheme"], close["check_path"]) == (
-        "computer",
-        "https://api.close.com",
-        "basic_user",
-        "/api/v1/me/",
-    )
-    assert tools["acme-internal"]["delivery"] == "computer" and tools["acme-internal"]["base_url"] == ""
-    assert keys["c-close"] == {"id": "c-close", "tool_id": "close-crm", "access_level": "read_write"}
-    assert all(keys[k]["tool_id"] is None for k in ("c-model", "c-computer", "c-bank", "c-empty"))
-    # Every grant is there, revoked or not, at the level it always had.
-    assert set(after) == {"g1", "g2", "g3", "g4"}
-    assert after["g2"]["revoked_at"] == "2026-10-02T00:00:00Z" and after["g1"]["revoked_at"] is None
-    assert {g["access_level"] for g in after.values()} == {"read_write"}
+class Close:
+    """Close's API at the network edge: answers every request with the status it is set to, and records each one."""
+
+    def __init__(self):
+        self.status, self.seen = 200, []
+
+    def __call__(self, request):
+        self.seen.append(request)
+        body = {"id": "synthetic"} if self.status == 200 else {"error": "synthetic"}
+        return httpx.Response(self.status, json=body)
+
+
+@pytest.fixture
+def close(monkeypatch):
+    """Close's name resolves to a public address, and checks go to a fake Close at that address."""
+    vendor = Close()
+    monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(PUBLIC)])
+    monkeypatch.setattr(api_tools, "TRANSPORT", httpx.MockTransport(vendor))
+    return vendor
 
 
 def choose(api, tid, subject):
@@ -102,6 +55,7 @@ def test_a_level_picks_its_key_and_setting_one_takes_the_others_away(api):
     tid = made["id"]
     assert (made["base_url"], made["delivery"]) == ("https://api.close.com", "proxy")
     full = key(api, tid, SECRET_RW)["id"]
+    explicit_only(api)  # what explicit grants alone give
     # One key: Read is that key held at Read (the proxy then allows only reads).
     level(api, tid, "bot:ops", "read")
     assert choose(api, tid, "bot:ops") == (full, "read", "read")
@@ -133,7 +87,7 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     tid = tool(api)["id"]
     key(api, tid, SECRET_RW)
     level(api, tid, "bot:ops", "read_write")
-    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731
+    rows = lambda token: {r["id"]: r for r in get(api, "tool-index", token)["rows"]}  # noqa: E731 - a lookup used 3 times
     assert "api:" + tid in rows("ben-test")
     assert "api:" + tid not in rows("cara-test")
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
@@ -148,42 +102,92 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     assert len(get(api, f"api-tools/{tid}")["access"]) == 2
 
 
-def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
+def test_a_demoted_key_adder_can_remove_a_rotated_key_only_while_the_tool_is_visible(api):
+    setup(api)
+    tid = tool(api)["id"]
+    cid = key(api, tid, SECRET_RW, token="ben-test")["id"]
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    assert api.patch(path, headers=headers(), json={"value": SECRET_RW + "rotated"}).status_code == 200
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    assert api.delete(path, headers=headers("ben-test")).status_code == 404
+    assert api.delete(f"/api/v2/credentials/{cid}", headers=headers("ben-test")).status_code == 403
+
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"] and not page["keys"][0]["preview"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert get(api, f"api-tools/{tid}")["keys"][0]["id"] == cid
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
+def test_a_person_whose_computer_brought_a_key_over_can_remove_it_like_one_they_added(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")  # Ben's bot, on Ben's computer
+    machine = runner(api, operator="ben")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(["ops"]), FILE_MIGRATION))
+    values = {"bot": "ops", "credentials": [{"env": "QA_MOVED_KEY", "value": "fixture-moved-value-123456"}]}
+    post(api, "runner-credential-migration", values, machine["token"])
+    with api.app.state.store.read() as c:
+        cid, tid = c.execute("SELECT id,tool_id FROM credentials WHERE env='QA_MOVED_KEY'").fetchone()
+    path = f"/api/v2/api-tools/{tid}/keys/{cid}"
+    # As in the rotated-key case above: Ben no longer manages credentials, and sees the tool through its audience.
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)
+    r = api.patch(f"/api/v2/api-tools/{tid}", headers=headers(), json={"audience": {"people": ["ben", "cara"]}})
+    assert r.status_code == 200, r.text
+    page = get(api, f"api-tools/{tid}", "ben-test")
+    assert not page["can_manage"] and page["keys"][0]["can_remove"]
+    assert not get(api, f"api-tools/{tid}", "cara-test")["keys"][0]["can_remove"]
+    assert api.delete(path, headers=headers("cara-test")).status_code == 403
+    assert api.delete(path, headers=headers("ben-test")).json()["deleted"]
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM credentials WHERE id=?", (cid,)).fetchone()
+        assert (
+            c.execute("SELECT actor FROM events WHERE action='tool.key_deleted' AND target=?", (tid,)).fetchone()[0]
+            == "human:ben"
+        )
+
+
+def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, close):
     setup(api)
     tid = tool(api)["id"]
     key(api, tid, SECRET_RW)
     level(api, tid, "bot:ops", "read_write")
-    sent = []
-
-    def answer(url, hdrs, params):
-        sent.append((url, hdrs, params))
-        return answer.code
-
-    monkeypatch.setattr(api_tools, "send_check", answer)
-    answer.code = 401
+    close.status = 401
     got = post(api, f"api-tools/{tid}/check", {})
     assert (got["ok"], got["status_code"], got["detail"]) == (False, 401, "Key rejected")
-    assert sent[0][0] == "https://api.close.com/api/v1/me/" and sent[0][1]["Authorization"].startswith("Basic ")
+    sent = close.seen[0]
+    assert sent.url.host == PUBLIC and sent.url.path == "/api/v1/me/" and sent.headers["Host"] == "api.close.com"
+    assert base64.b64decode(sent.headers["Authorization"][len("Basic ") :]).decode().partition(":")[0] == SECRET_RW
     row = {r["id"]: r for r in get(api, "tool-index")["rows"]}["api:" + tid]
     assert row["status"] == {"tone": "fail", "text": "Key rejected"} and row["needs_you"]
-    answer.code = 200
+    close.status = 200
     assert post(api, f"api-tools/{tid}/check", {})["detail"] == "Working"
     assert get(api, f"api-tools/{tid}")["status"] == {"tone": "ok", "text": "Working"}
-    answer.code = 500
+    close.status = 500
     assert post(api, f"api-tools/{tid}/check", {})["detail"].startswith("Check failed")
-    # The background loop checks a proxied tool once its last check is old; a computer tool never.
+    # The background loop checks a tool once its last check is old, its key on the proxy or on computers alike.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tool_checks SET checked_at='2000-01-01T00:00:00Z'")
     with api.app.state.store.read() as c:
         assert api_tools.due(c) == [tid]
     api.patch(f"/api/v2/api-tools/{tid}", json={"delivery": "computer"}, headers=headers())
     with api.app.state.store.read() as c:
-        assert api_tools.due(c) == []
+        assert api_tools.due(c) == [tid]
 
 
-def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
+def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, close):
     setup(api)
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: 200)
     seen = []
     tid = tool(api)["id"]
     seen.append(json.dumps(key(api, tid, SECRET_RW)))
@@ -216,9 +220,25 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
 
 
+def test_a_webhook_or_signing_secret_of_a_known_service_gets_no_tool(api):
+    """A bot checks a delivery's signature with the secret itself: put on GitHub's or Stripe's proxied tool, the run
+    would hold a proxy token in its place and every signature would fail."""
+    setup(api)
+    made = [
+        post(api, "credentials", {"name": "GitHub webhook secret", "env": "GITHUB_WEBHOOK_SECRET", "secret": SECRET_R}),
+        post(api, "credentials", {"name": "Stripe", "env": "STRIPE_WEBHOOK_SECRET", "secret": SECRET_R + "-2"}),
+        post(api, "credentials", {"name": "Slack signing secret", "env": "ACME_SLACK", "secret": SECRET_R + "-3"}),
+    ]
+    with api.app.state.store.read() as c:
+        assert [c.execute("SELECT tool_id FROM credentials WHERE id=?", (m["id"],)).fetchone()[0] for m in made] == [
+            None
+        ] * 3
+        assert c.execute("SELECT count(*) FROM tools").fetchone()[0] == 0
+
+
 def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_service(api):
-    """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
-    tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""
+    """Settings' vault and a chat card store through the vault: each tool key lands on a tool in the same write. A known
+    service's key fills that service's tool while it has no Read and write key."""
     setup(api)
     tid = tool(api)["id"]  # Close CRM, no key yet
     close = post(api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET_RW})["id"]
@@ -241,16 +261,22 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     assert len(tools) == 3  # the password and the model keys are no tool's
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
-    assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
-    # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
+    assert rows["api:" + keys[own]]["status"]["text"] == "Not checked" and not rows["api:" + keys[own]]["needs_you"]
+
+
+def test_a_key_a_computer_migrates_from_its_files_stays_on_computers(api):
+    """A key a bot already uses from its computer's files moves into the vault through the migration, and its tool
+    stays on computers, a known service or not."""
+    setup(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
-            "updated_by) VALUES('c-file','STRIPE_API_KEY (ops)','api_key','STRIPE_API_KEY','',x'01',x'01',"
-            "'Computer migration','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z','runner:r1')"
-        )
-        filed = api_tools.ensure_tool(c, SimpleNamespace(actor="runner:r1"), "c-file", from_computer=True)
-        assert tuple(c.execute("SELECT service, delivery FROM tools WHERE id=?", (filed,)).fetchone()) == (
-            "stripe",
-            "computer",
-        )
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(["ops"]), FILE_MIGRATION))
+    values = {"bot": "ops", "credentials": [{"env": "STRIPE_API_KEY", "value": SECRET_R + "-stripe"}]}
+    post(api, "runner-credential-migration", values, machine["token"])
+    with api.app.state.store.read() as c:
+        service, delivery = c.execute(
+            "SELECT t.service, t.delivery FROM credentials k JOIN tools t ON t.id = k.tool_id "
+            "WHERE k.env = 'STRIPE_API_KEY'"
+        ).fetchone()
+    assert (service, delivery) == ("stripe", "computer")

@@ -6,7 +6,7 @@
 // The hub's answers: who sees which tool (Omar only the one he holds, and only his own row on it; Priya none), and no
 // key value in any answer. The page: the old Library › Connections address lands on Tools; the list, its Needs you
 // and Mail filters (in the phone's folded rail); Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
-// Ledger export's Move to proxy; the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
+// Ledger export's Move to proxy (its key ends soon: Needs you); the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
 import type {Page} from 'playwright';
 import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -82,7 +82,8 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assert.ok(crm && ledger, `${where}: both API tools listed: ${index.rows.map(r => r.id)}`);
   assert.deepEqual([crm.way, crm.status.text, crm.needs_you, crm.href], ['Proxy', 'Working', false, '#/tools/api/close-crm']);
   assert.deepEqual(crm.who.map(w => [w.kind, w.id]).sort(), [['bot', 'engineering-manager'], ['person', 'omar']]);
-  assert.deepEqual([ledger.way, ledger.status.text, ledger.needs_you], ['On computers', 'Key on computers', true]);
+  // Its key ends in five days: that is under Needs you; being on computers is not.
+  assert.deepEqual([ledger.way, ledger.status.text, ledger.needs_you], ['On computers', 'Expires in 5 days', true]);
   const mailRow = index.rows.find(r => r.id === 'mailbox:' + MAILBOX);
   assert.ok(mailRow && mailRow.href === '#/tools/mailbox/' + MAILBOX && mailRow.mailbox_id === box.id, `${where}: the mailbox row`);
   assert.ok(index.counts.needs_you >= 1 && index.counts.api >= 2 && index.counts.mail >= 1, JSON.stringify(index.counts));
@@ -175,14 +176,17 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await page.locator('#tool-keys [data-ta-delivery="computer"]').waitFor({timeout: t(10000)});
   assert.equal(await page.locator('#tool-keys [data-ta-proxy]').count(), 1, `${where}: Move to proxy`);
   assert.equal(await page.locator('[data-ta-check]').count(), 0, `${where}: no Check now without a check path`);
-  assert.match(await page.locator('#tool-api .tt-title').innerText(), /Key on computers/, `${where}: its status`);
+  assert.match(await page.locator('#tool-api .tt-title').innerText(), /Expires in 5 days/, `${where}: its status`);
   assertClean(page, `${where}: Ledger export`);
   await shots(page, `computer-${where}`);
 
-  // The mailbox's page under Tools.
+  // The mailbox's page under Tools. The mailbox is not connected to Google on this hub, so the page must not ask for its
+  // mail at all: a refused mail read is a bug, and assertClean below catches it.
   await go(page, '#/tools/mailbox/' + MAILBOX);
   await page.locator('[data-ib-detail="mailbox"] [data-ib-detail-body] h1, [data-ib-detail="mailbox"] [data-ib-detail-body] h2')
     .first().waitFor({timeout: t(15000)});
+  // Wait for Recent's line, so assertClean below runs after the page has drawn everything it reads.
+  await page.locator('#tools-inbox [data-mb-recent] p.muted').waitFor({timeout: t(15000)});
   assert.match(await page.locator('#tools-inbox').innerText(), new RegExp(MAILBOX.replace('.', '\\.')), `${where}: the mailbox page`);
   assert.equal(await sideways(page), false, `${where}: the mailbox page has no sideways scroll`);
   assertClean(page, `${where}: mailbox`);

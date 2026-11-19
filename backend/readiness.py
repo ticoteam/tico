@@ -22,12 +22,11 @@ sign-in for that runtime. Another bot's missing key or another profile's sign-in
 Callers refuse only on can_run False; None never blocks.
 """
 
-from . import models_preset, read_cache
+from . import models_preset, read_cache, runner_online
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
 from . import bot_settings as BS
 
-ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
@@ -163,7 +162,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             "link": "#/bot/" + bot + "/more",
         }
     label = row["label"] or "its computer"
-    online = bool(row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
+    online = runner_online.is_online(row["last_seen_at"])
     readiness = readiness_document(row["readiness"])
     detail = readiness.get("bots", {}).get(bot)
     detail = models_preset.as_served(c, bot, readiness, detail) if isinstance(detail, dict) else {}
@@ -271,10 +270,10 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         return verdict(True)
     # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
     # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes
-    # there; nor for a bot delivered through a desktop app, which signs in its own way.
+    # there.
     from . import model_subscriptions
 
-    if not config.get("app_delivery") and model_subscriptions.in_effect(c, row["id"], runtime):
+    if model_subscriptions.in_effect(c, row["id"], runtime):
         return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
     shared = computer_login(readiness, runtime)
@@ -299,6 +298,21 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
         out["gateway"] = line
         return verdict(True)
+    if signed in SIGNED_OUT and (held := model_subscriptions.plan_hold(c, row["id"], runtime)):
+        # Every plan this computer is given for it is at its usage limit: that, its reset and the plan to give it
+        # instead, never "login required" or "has no plan" (it has one).
+        problem, fix, _ = model_subscriptions.hold_words(held, label, runtime)
+        out["bot_problems"] = [problem[0].upper() + problem[1:]]
+        return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings")
+    if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):
+        # The company has a plan for it and this computer was given none: giving it one is the fix, not a sign-in.
+        return verdict(
+            False,
+            label + " has no " + plan,
+            "Give it one in Settings > Computers",
+            "#/settings",
+            sign_in=True,
+        )
     if signed in SIGNED_OUT:
         return verdict(
             False,

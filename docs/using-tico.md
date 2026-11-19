@@ -124,8 +124,7 @@ in the address, so a filtered view can be shared; whoever opens it sees only the
 Admins get **Export CSV**: time, actor, kind, subject, result and link for up to the newest 20,000 rows the filters
 show in one file. Narrow the dates when more remain.
 
-Not in the Log, because Tico does not record them in one place: a bot's mail send that the mail connector turned into a
-draft (kept in that connector's own log on the bot's computer), and a webhook send refused while the send switch is off.
+Not in the Log, because Tico does not keep it in one place: a webhook send refused while the send switch is off.
 
 **What does the line on a task mean?**
 An open task always says whose turn it is: a bot working, a person asked, Paused (a bot that can't run, with the fix),
@@ -134,9 +133,9 @@ a red dot when it can't run. *Needs you*, or *Needs <Name>* for someone else: a 
 [Whose turn it is](tasks.md#whose-turn-it-is).
 
 **How do I answer a bot's question?**
-Open **Tasks › You**. Each ask is one sentence with its buttons: the choices for a question, **Approve** or **Send
-back**
-for an OK. The play button (Catch up) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
+A bot's question is a ❓ on its message, in the task's chat or in a direct chat. Reply there, and your reply is the answer.
+An OK waits in **Tasks › You** with its buttons, **Approve** or **Send back**. Flow (its mark, two play shapes; on a phone,
+the Flow tab) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
 
 **Marked a task Done by mistake?**
 Choose **Undo** in the toast, or open the finished task under **Done** (the archive button) and choose **Reopen**.
@@ -333,9 +332,6 @@ for that thread (up to ten files of 10 MB). A file a bot produces for you is att
 task the same way (`tico task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
-
-When someone finishes or closes a task you requested, Tico DMs your linked Slack account; turn off **Task results in
-Slack** on your human page under **Profile → Notifications**.
 
 **How do I review message bots?**
 Choose a mailbox or Slack channel under **Message bots** in the sidebar. The bot's instructions and

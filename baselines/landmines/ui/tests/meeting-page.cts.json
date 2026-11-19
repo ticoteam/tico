@@ -1,0 +1,5 @@
+{
+  "ui/tests/meeting-page.cts": {
+    "no-fixed-wait-ui": 1
+  }
+}

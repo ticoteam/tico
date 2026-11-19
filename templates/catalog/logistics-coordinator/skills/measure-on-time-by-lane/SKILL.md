@@ -1,6 +1,8 @@
 ---
 name: measure-on-time-by-lane
 description: Measure on-time and in-full delivery for the last week by carrier and by lane from a shipment export, using the promised date and the full-order definition, group small lanes, and flag any lane below the agreed level so that a carrier's average cannot hide it.
+metadata:
+  function: operations
 ---
 # Measure on time by lane
 

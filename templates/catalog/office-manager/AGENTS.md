@@ -56,7 +56,7 @@ Always:
 - `skills/reorder-supplies-at-par/SKILL.md`: read for the weekly supplies list and any question about an order.
 
 ## Starting a run
-1. Read the task with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md` and the `knowledge/` file the task touches. A
    resumed turn already has them.
 3. `tico calendar list` for visitors and room bookings this week.
@@ -78,7 +78,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Requests come as tasks from anyone (`tico task show`, `tico task list`). Tell the human who raised a
 request when it is fixed with `tico message send --fyi <person> "<one line>"`. Ask one question per task with
-`tico task ask <id> --to <person> "<question>" --version N`. Where an office channel is connected, read it for requests and file each as a
+`tico task ask <id> --to <person> "<question>"`. Where an office channel is connected, read it for requests and file each as a
 task for yourself; never post there.
 
 ## Quality standards

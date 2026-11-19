@@ -1,92 +1,46 @@
-// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (backend/ui_bundle.py, ui/parts.json):
-// - a cold open of Home, Tasks or Threads downloads the shell only;
-// - every page opens on a cold first visit, its address typed straight in, with no error on the page, and downloads
-//   the shell and that page's part (with the parts it needs) and nothing else;
+// Page parts on a real hub (support/real-hub.cts), the bundle served as in production (scripts/build-ui.cjs, ui/parts.json):
+// - a cold open of Home or Tasks downloads the shell only, and so does an owner's first visit and Home's refresh;
 // - a part that cannot load leaves Retry in the main area while the sidebar still works, and Retry opens the page once
 //   the network is back;
 // - a tab open from before a release, whose part address the server no longer has, reloads to the current release and
 //   opens the page.
-import type {Browser, Page} from 'playwright';
+// Every other page's first visit is parts-every-page.cts: together they ran too close to the browser-script cap.
+import type {Browser} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
+import type * as PartsSupport from './support/parts.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {startHub, DESKTOP} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {startHub} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
-const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, who: string, method: string, path: string, body?: unknown) => Promise<{id?: string; task?: {id: string}}>};
+const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, who: string, method: string, path: string, body?: unknown) => Promise<unknown>};
+const {PART, cold, drawn, table} = require('./support/parts.cts') as PartsSupport.Api;
 
 // The page's own globals the background refresh and the live stream go through.
 declare const S: {v2: {status: Record<string, unknown>}};
 declare function refresh(quiet: boolean): void;
 declare function liveEmit(topic: string, data: unknown): void;
-declare function decideTabPages(): {page: string}[];
+declare function decideOpen(id: string): boolean;
+declare function uiPartLoad(name: string): Promise<void>;
 
-interface PartsTable { build: string; parts: Record<string, {url: string; load: string[]}> }
-const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
 // Pages a cold open draws from the shell alone.
-const SHELL = ['#/home', '#/tasks', '#/threads'];
-// What a link straight to a task, a thread or Settings downloads besides the shell.
-const ONLY: Record<string, string[]> = {'#/task/': ['task'], '#/thread/': [], '#/settings/general': ['settings'], '#/settings': ['settings']};
-// Every page in the sidebar, the account menu, Company, Library and Settings. A bot's, a person's, a task's and a
-// thread's page are added from the seeded hub.
-const ROUTES = [
-  '#/overview', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
-  '#/roadmap', '#/tags', '#/finance', '#/growth', '#/growth/sources', '#/strategy', '#/strategy/goals', '#/strategy/org',
-  '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/automations', '#/listening',
-  '#/rules', '#/company-page', '#/library/contacts', '#/library/skills', '#/library/files', '#/tools', '#/docs',
-  '#/learnings', '#/usage', '#/replay', '#/sql', '#/mail', '#/messaging', '#/changelog', '#/settings',
-  ...['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history', 'health', 'billing'].map(tab => '#/settings/' + tab),
-];
-
-async function cold(browser: Browser, hub: RealHubSupport.Hub) {
-  const context = await browser.newContext({...DESKTOP, serviceWorkers: 'block', extraHTTPHeaders: {Authorization: 'Bearer ' + hub.tokens.dana!}});
-  const page = await context.newPage();
-  const errors: string[] = [], parts: string[] = [];
-  page.on('pageerror', e => { errors.push(String(e)); });
-  page.on('console', m => { if (m.type() === 'error' && /is not defined|is not a function|before initialization/.test(m.text())) errors.push(m.text()); });
-  page.on('request', r => { const m = PART.exec(r.url()); if (m) parts.push(m[1]!); });
-  return {page, errors, parts, close: () => context.close()};
-}
-
-// The page drawn: something in the main area, no Retry, and a moment for what it loads next.
-async function drawn(page: Page, route: string) {
-  await page.waitForFunction(() => (document.querySelector('#main')?.children.length || 0) > 0, null, {timeout: t(20000)});
-  await page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
-  await page.waitForTimeout(500);
-  assert.equal(await page.locator('#main [data-part-retry]').count(), 0, route + ': the page did not load its code');
-}
-
-const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.locator('#ui-parts').textContent() || '{}') as PartsTable;
+const SHELL = ['#/home', '#/tasks'];
 
 (async () => {
   const hub = await startHub({seeds: ['org', 'toured']});     // toured: no first-visit tour over Home
   let browser: Browser | undefined;
   try {
-    const made = await must(hub, 'dana', 'POST', 'tasks', {title: 'Parts', body: 'A task to open by its link.', owner: 'dana'});
-    const taskId = made.task?.id || made.id;
     browser = await chromium.launch();
 
     // A cold open of a shell page downloads no page part.
-    let groups: string[][] = [];
-    const routes = [...ROUTES, '#/task/' + taskId];
     for (const route of SHELL) {
       const open = await cold(browser, hub);
       await open.page.goto(hub.url + '/' + route);
       await drawn(open.page, route);
-      if (route === '#/home') {
-        const parts = await table(open.page);
-        assert.ok(Object.keys(parts.parts).length >= 10, 'the page lists its parts');
-        groups = Object.values(parts.parts).map(p => p.load);
-        // A bot's and a person's page, from the sidebar's links.
-        for (const sel of ['a[href^="#/bot/"]', 'a[href^="#/person/"]', 'a[href^="#/thread/"]']) {
-          const href = await open.page.locator(sel).first().getAttribute('href').catch(() => null);
-          if (href) routes.push(href);
-        }
-      }
+      if (route === '#/home') assert.ok(Object.keys((await table(open.page)).parts).length >= 10, 'the page lists its parts');
       assert.deepEqual(open.errors, [], route + ': errors on the page');
       assert.deepEqual(open.parts, [], route + ': a cold open of a shell page downloads only the shell');
       await open.close();
     }
-    assert.ok(routes.some(r => r.startsWith('#/bot/')), 'the sidebar links a bot');
 
     // An owner's first visit, the tour not seen yet: the first-visit tour starts from the shell, and the welcome's code
     // (with Settings') loads only for a team that came in from the company file, which this one did not.
@@ -111,9 +65,6 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.page.addInitScript(() => { Object.defineProperty(Notification, 'permission', {get: () => 'granted'}); });
       await open.page.goto(hub.url + '/#/home');
       await drawn(open.page, '#/home');
-      // A "Page → Tab" phrase in Needs you links Rules' and Settings' tabs before either page has been opened.
-      assert.deepEqual(await open.page.evaluate(() => decideTabPages().map(p => p.page).filter(p => p !== 'Finance')), ['Rules', 'Settings'],
-        "a cold Home knows Rules' and Settings' tabs");
       await open.page.evaluate(() => {
         refresh(false);
         const bot = Object.keys(S.v2.status)[0] || 'ops';
@@ -123,29 +74,12 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await open.page.waitForLoadState('networkidle', {timeout: t(15000)}).catch(() => {});
       assert.deepEqual(open.errors, [], 'Home after a refresh: errors on the page');
       assert.deepEqual(open.parts, [], "Home's refresh, a bot's status change and notifications download no page part");
+      // The ask screen (Needs you's own part since P05b): loading its code downloads that part, not the pages it links to.
+      assert.equal(await open.page.evaluate(async () => { await uiPartLoad('decide'); return typeof decideOpen; }), 'function', "the ask screen's code loads");
+      assert.deepEqual([...new Set(open.parts)].sort(), ['browser-view', 'decide', 'task-docs'], "the ask screen's code downloads its own part, the browser view and a task's documents only");
       await must(hub, 'dana', 'POST', 'humans/dana', {notify_browser: false});
       await open.close();
     }
-
-    // Every page on its first visit, a few at a time: it opens, and it downloads one page's group of parts at most.
-    const queue = [...routes];
-    const visit = async () => {
-      for (let route = queue.shift(); route; route = queue.shift()) {
-        const open = await cold(browser!, hub);
-        try {
-          await open.page.goto(hub.url + '/' + route);
-          await drawn(open.page, route);
-          assert.deepEqual(open.errors, [], route + ': errors on the page');
-          const got = [...new Set(open.parts)].sort();
-          // A page may call into another page's part (Settings › Contacts draws Library's contacts settings), but a
-          // link to a task, a thread or Settings downloads that page's own code only.
-          const own = ONLY[route.replace(/^#\/(task|thread)\/.*$/, '#/$1/')];
-          if (own) assert.deepEqual(got, own, route + ': downloads only its own part');
-          assert.ok(got.length < groups.length, route + ': downloads only some of the parts: ' + got.join(', '));
-        } finally { await open.close(); }
-      }
-    };
-    await Promise.all([visit(), visit(), visit(), visit()]);
 
     // No network for a page's code: Retry in the main area, the sidebar still works, Retry opens it once it is back.
     {
@@ -196,7 +130,7 @@ const table = async (page: Page): Promise<PartsTable> => JSON.parse(await page.l
       await drawn(page, '#/growth after the reload');
       await open.close();
     }
-    console.log(`parts first visit: ok (${routes.length} pages, ${groups.length} parts)`);
+    console.log('parts first visit: ok');
   } finally {
     await browser?.close();
     await hub.stop();

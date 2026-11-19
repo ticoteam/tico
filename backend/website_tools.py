@@ -36,9 +36,12 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import api_tools as api_tools_module
 from . import credentials as credentials_module
+from . import tool_access as TA
+from . import tool_services as TS
 from . import totp as T
 from .models import ID, AccessAudience, Contract
 from .store import H as hubdb, Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -51,8 +54,9 @@ KIND = "website"
 LOGIN = "login"
 HTTP = "http://"
 MAX_SITES = 50
-# Activity verbs (`tool_calls.method`): the contract's, and the browser commands' download and upload.
-VERBS = ("open", "fill", "copy", "code", "needs_you", "control", "sign_in", "download", "upload")
+# Activity verbs (`tool_calls.method`): the contract's, and the browser commands' type, download and upload. A typed
+# action keeps only its verb and page path (browser_commands.LOGGED), never the text typed.
+VERBS = ("open", "type", "fill", "copy", "code", "needs_you", "control", "sign_in", "download", "upload")
 RESULTS = ("sent", "refused", "failed", "use")
 WHERE = ("central", "own")
 RECENT = 5
@@ -238,8 +242,21 @@ def _admin(c: Any, who: Any, admins: Iterable[str] | None = None) -> bool:
 
 
 def _require_admin(c: Any, who: Any, admins: Iterable[str]) -> None:
-    if not _admin(c, who, admins):
-        raise Problem("forbidden", "Ask a credential administrator to make this change in Tools.", 403)
+    """Changing a website tool, or a group's access: the one rule (backend/tool_access.py), in this page's words."""
+    TA.require(
+        c,
+        who,
+        TA.tool(),
+        action=TA.EDIT,
+        admins=admins,
+        refused="Ask a credential administrator to make this change in Tools.",
+    )
+
+
+def _may_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = None, auth: Any = None) -> bool:
+    """Replace this account (backend/tool_access.py): a credential administrator, or its holder (a person, or
+    a person who manages the bot that holds it)."""
+    return TA.may_change_access(c, who, TA.account(account), action=TA.EDIT, admins=_admins(admins), auth=_auth(auth))
 
 
 def _person(who: Any) -> bool:
@@ -398,13 +415,6 @@ def _manages(c: Any, who: Any, subject: str, auth: Any = None) -> bool:
     )
 
 
-def can_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = None, auth: Any = None) -> bool:
-    """A credential administrator, or (an own account) its holder or a person who manages the bot that holds it."""
-    if _admin(c, who, admins):
-        return True
-    return bool(account["holder"]) and _manages(c, who, account["holder"], auth)
-
-
 def _bot_user_managed(c: Any, who: Any, account: Any, auth: Any = None) -> bool:
     """`who` manages a bot that uses the account, directly, through a granted group or through All bots."""
     users = set(_users(c, account))
@@ -514,15 +524,32 @@ def picked_account(
         )
     tool = _readable(conn, who, tool_id, admins, auth)
     account = _account(conn, tool_id, account_id)
-    if not (
-        can_use(conn, who.actor, account)
-        or can_manage(conn, who, account, admins, auth)
-        or (_bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, tool["id"], account["id"]))
-    ):
+    if not may_view(conn, who, account, admins, auth):
         raise Problem(
             "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
         )
     return _picked(tool, account)
+
+
+def may_view(
+    conn: Any,
+    who: Any,
+    account: Any,
+    admins: Iterable[str] | None = None,
+    auth: Any = None,
+    uses: bool | None = None,
+    manages: bool | None = None,
+) -> bool:
+    """The one rule for a person's live view of an account's browser (picked_account, and `can_open` on the tool's
+    page): a signed-in person who uses it or may manage it (a credential administrator, its holder, or one who manages
+    the bot that holds it), or who manages a bot it is granted to while a "needs you" ask for it waits on them."""
+    if not _person(who):
+        return False
+    if can_use(conn, who.actor, account) if uses is None else uses:
+        return True
+    if _may_manage(conn, who, account, admins, auth) if manages is None else manages:
+        return True
+    return _bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, account["tool_id"], account["id"])
 
 
 def _asked(conn: Any, person: str, tool_id: str, account_id: str) -> bool:
@@ -749,12 +776,30 @@ def _access(c: Any, account: Any, users: list[str], label: dict[str, str], group
 def _account_view(
     c: Any, who: Any, account: Any, admin: bool, label: dict[str, str], admins: Iterable[str] | None, auth: Any
 ) -> dict[str, Any] | None:
-    """An account as the caller may see it, or None: a non-admin sees only the accounts they use or manage."""
+    """An account as the caller may see it, or the minimum needed to remove one they added."""
     uses = can_use(c, who.actor, account)
-    manages = can_manage(c, who, account, admins, auth)
-    if not (admin or uses or manages):
-        return None
+    manages = _may_manage(c, who, account, admins, auth)
+    removes = bool(vaults.may_remove(who, account["created_by"], manages=manages))
     holder = account["holder"] or None
+    if not (admin or uses or manages):
+        return (
+            {
+                "id": account["id"],
+                "kind": "own" if holder else "shared",
+                "has_password": False,
+                "has_totp": False,
+                "all_bots": False,
+                "holder": None,
+                "access": [],
+                "session": {"state": "unknown"},
+                "can_use": False,
+                "can_manage": False,
+                "can_open": False,
+                "can_remove": True,
+            }
+            if removes
+            else None
+        )
     users = _users(c, account)
     if not admin and not holder:
         # A member sees themselves and the grants they made, as on an API tool.
@@ -779,6 +824,8 @@ def _account_view(
         "session": _session(c, account["id"]),
         "can_use": uses,
         "can_manage": manages,
+        "can_open": may_view(c, who, account, admins, auth, uses=uses, manages=manages),
+        "can_remove": removes,
     }
     if _machine(who):
         del out["username"]  # a bot signs in with `tico login fill`; it never needs to read the username
@@ -889,7 +936,7 @@ def detail(c: Any, who: Any, tool_id: str, admins: Iterable[str] | None = None, 
         "private": tool["audience"] is not None,
         "can_set_audience": False,
     }
-    if api_tools.may_set_audience(c, who, tool, list(_admins(admins)), auth):
+    if TA.may_change_access(c, who, TA.tool(tool), action=TA.AUDIENCE, admins=list(_admins(admins)), auth=auth):
         out.update(
             can_set_audience=True,
             audience=api_tools.audience_of(tool),
@@ -943,6 +990,7 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
                 p for p in listed if p["kind"] != "bot" or cast(dict[str, Any], seen.get(p["id"]) or {}).get("see")
             ]
         sites = sites_of(tool)
+        vendor = TS.vendor_of(tool["service"], tool["name"], host=sites[0] if sites else "")
         out.append(
             api_tools._index_row(
                 "website:" + tool["id"],
@@ -956,6 +1004,8 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
                 who_total=len(listed),
                 needs_you=state["tone"] == "fail" or state["label"] == "Needs you",
                 private=tool["audience"] is not None,
+                service=tool["service"],
+                vendor=vendor,
             )
         )
     return out
@@ -1095,12 +1145,15 @@ def add_account(
     themselves or a bot they manage. One own account per holder per tool."""
     tool = _readable(c, who, tool_id, admins, auth)
     holder = _holder(c, body.holder)
-    if not (_admin(c, who, admins) or (holder and _manages(c, who, holder, auth))):
-        raise Problem(
-            "forbidden",
-            "Ask a credential administrator to add a shared account, or add your own account or one for a bot you manage.",
-            403,
-        )
+    TA.require(
+        c,
+        who,
+        TA.Resource(TA.ACCOUNT, "", {"holder": holder}),
+        action=TA.CREATE,
+        admins=admins,
+        auth=_auth(auth),
+        refused="Ask a credential administrator to add a shared account, or add your own account or one for a bot you manage.",
+    )
     if (
         holder
         and c.execute(
@@ -1157,8 +1210,15 @@ def update_account(
     Whoever may manage the account."""
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
-    if not can_manage(c, who, account, admins, auth):
-        raise Problem("forbidden", "Ask a credential administrator or the account's holder to replace this login.", 403)
+    TA.require(
+        c,
+        who,
+        TA.account(account),
+        action=TA.EDIT,
+        admins=admins,
+        auth=_auth(auth),
+        refused="Ask a credential administrator or the account's holder to replace this login.",
+    )
     totp_set = "totp" in body.model_fields_set
     changed_secret = body.password is not None or totp_set
     username = account["username"] if body.username is None else body.username.strip()
@@ -1203,7 +1263,7 @@ def update_account(
 def delete_account(c: Any, who: Any, tool_id: str, account_id: str, admins: Iterable[str], auth: Any) -> dict[str, Any]:
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
-    if not can_manage(c, who, account, admins, auth):
+    if not vaults.may_remove(who, account["created_by"], manages=_may_manage(c, who, account, admins, auth)):
         raise Problem(
             "forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403
         )
@@ -1235,16 +1295,30 @@ def set_access(
             409,
         )
     if subject == vaults.BOTS:
-        if not _admin(c, who, admins):
-            raise Problem("forbidden", "Ask a credential administrator to change All bots access.", 403)
+        TA.require(
+            c,
+            who,
+            TA.account(account),
+            subject,
+            TA.GRANT,
+            admins=admins,
+            refused="Ask a credential administrator to change All bots access.",
+        )
     else:
         subject = str(api_tools.subject_of(c, subject))
     if subject != vaults.BOTS and not subject.startswith(("human:", "bot:", GROUP)):
         raise Problem("subject", "Choose a registered person, bot or group.", 422)
     if subject.startswith(GROUP):
         # Only a credential administrator gives a group a login or takes it away, either way before anything changes.
-        if not _admin(c, who, admins):
-            raise Problem("forbidden", "Ask a credential administrator to change access to this account.", 403)
+        TA.require(
+            c,
+            who,
+            TA.account(account),
+            subject,
+            TA.GRANT,
+            admins=admins,
+            refused="Ask a credential administrator to change access to this account.",
+        )
         if subject[len(GROUP) :] not in _org_groups(c):
             raise Problem("subject", "Choose a registered person, bot or group.", 422)
     if not on and subject.startswith("bot:") and all_bots(c, account):
@@ -1258,7 +1332,7 @@ def set_access(
                 (account["id"], subject),
             ).fetchall()
             for grant in grants:
-                vault.revoke_authority(c, who, account["id"], grant)
+                TA.require(c, who, TA.key(account["id"], grant), action=TA.REVOKE, admins=admins, auth=_auth(auth))
             api_tools._revoke(c, who, account["id"], subject)
             if grants:
                 _close(str(account["id"]))
@@ -1370,29 +1444,69 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             vaults.validate_identity(c, request.state.identity)
             return fn(c, request.state.identity)
 
-    @app.post("/api/v2/website-tools")
+    @app.post(
+        "/api/v2/website-tools",
+        **api_v2(
+            "Tools",
+            "createWebsiteTool",
+            "Add a website tool (credential administrators): its sites (hostnames; a subdomain matches; http://host allows plain http) and whether only the browser host opens it. The name defaults to the first site",
+            "WebsiteToolCreated",
+        ),
+    )
     def create_website_tool(request: Request, body: WebsiteToolCreate) -> Any:
         """Add a website tool (credential administrators): its sites and whether only the browser host opens it."""
         who = request.state.identity
         return change(request, body, manager, lambda c: create_tool(c, who, body, admins()))
 
-    @app.get("/api/v2/website-tools/groups")
+    @app.get(
+        "/api/v2/website-tools/groups",
+        **api_v2(
+            "Tools",
+            "listWebsiteToolGroups",
+            "Each group with its member count and its people and bots (actors), nested groups included, for Who can use it (credential administrators)",
+            "WebsiteToolGroups",
+        ),
+    )
     def website_tool_groups(request: Request) -> Any:
         """Each group with its member count, for the Who can use it picker (credential administrators)."""
         with store.read_transaction() as c:
             return groups_view(c, request.state.identity, admins())
 
-    @app.get("/api/v2/website-tools/{tool_id}")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "getWebsiteTool",
+            "One website tool: its accounts the caller uses or manages (never a password or a 2FA key), each account's browser session, the browser host, the newest Activity; to whoever may change it, who can see it. A tool the caller may not see is a 404",
+            "WebsiteTool",
+        ),
+    )
     def get_website_tool(request: Request, tool_id: str) -> Any:
         with store.read_transaction() as c:
             return detail(c, request.state.identity, tool_id, admins(), auth)
 
-    @app.patch("/api/v2/website-tools/{tool_id}")
+    @app.patch(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "updateWebsiteTool",
+            "Rename it, change its sites or Central only (credential administrators), or who can see it: audience null for Everyone, or an audience for Only listed",
+            "WebsiteToolSettings",
+        ),
+    )
     def update_website_tool(request: Request, tool_id: str, body: WebsiteToolUpdate) -> Any:
         who = request.state.identity
         return change(request, body, setter, lambda c: update_tool(c, who, tool_id, body, admins(), auth))
 
-    @app.delete("/api/v2/website-tools/{tool_id}")
+    @app.delete(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "deleteWebsiteTool",
+            "Remove a website tool with its accounts, their grants and its Activity (credential administrators)",
+            "WebsiteDeleted",
+        ),
+    )
     def delete_website_tool(request: Request, tool_id: str) -> Any:
         """The tool, its accounts and their grants, and its Activity."""
 
@@ -1407,7 +1521,15 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
 
         return plain(request, work)
 
-    @app.post("/api/v2/website-tools/{tool_id}/accounts")
+    @app.post(
+        "/api/v2/website-tools/{tool_id}/accounts",
+        **api_v2(
+            "Tools",
+            "addWebsiteAccount",
+            "Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. username and password may be left out for a site a person signs in to by hand. Shared accounts default to all_bots: true, including future bots; set false for selected teammates only. Own accounts stay private",
+            "WebsiteAccountSaved",
+        ),
+    )
     def add_website_account(request: Request, tool_id: str, body: WebsiteAccountCreate) -> Any:
         who = request.state.identity
         return change(
@@ -1417,7 +1539,15 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: add_account(c, who, vault(), tool_id, body, admins(), auth),
         )
 
-    @app.patch("/api/v2/website-tools/{tool_id}/accounts/{account_id}")
+    @app.patch(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}",
+        **api_v2(
+            "Tools",
+            "updateWebsiteAccount",
+            "Replace login: the username, the password, or the 2FA key (totp null removes it)",
+            "WebsiteAccountSaved",
+        ),
+    )
     def update_website_account(request: Request, tool_id: str, account_id: str, body: WebsiteAccountUpdate) -> Any:
         who = request.state.identity
         receipt = api_tools._Receipt(body, totp_set="totp" in body.model_fields_set)
@@ -1428,11 +1558,27 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: update_account(c, who, vault(), tool_id, account_id, body, admins(), auth),
         )
 
-    @app.delete("/api/v2/website-tools/{tool_id}/accounts/{account_id}")
+    @app.delete(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}",
+        **api_v2(
+            "Tools",
+            "deleteWebsiteAccount",
+            "Remove an account and its grants (its adder or anyone who can manage the account)",
+            "WebsiteDeleted",
+        ),
+    )
     def delete_website_account(request: Request, tool_id: str, account_id: str) -> Any:
         return plain(request, lambda c, who: delete_account(c, who, tool_id, account_id, admins(), auth))
 
-    @app.put("/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}")
+    @app.put(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}",
+        **api_v2(
+            "Tools",
+            "setWebsiteAccountAccess",
+            "Give a shared account to a person, a bot, a group (group:<id>, credential administrators; every person and bot in it and in the groups under it uses it) or All bots (subject: bots, credential administrators; every bot, including later ones), or take it away (on: false). Turn off All bots before removing a bot. Answers the account's whole access list",
+            "WebsiteAccountAccessSet",
+        ),
+    )
     def set_website_account_access(
         request: Request, tool_id: str, account_id: str, subject: str, body: WebsiteAccountAccess
     ) -> Any:
@@ -1444,14 +1590,30 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: set_access(c, who, vault(), tool_id, account_id, subject, body.on, admins(), auth),
         )
 
-    @app.get("/api/v2/website-tools/{tool_id}/accounts/{account_id}/code")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}/code",
+        **api_v2(
+            "Tools",
+            "getWebsiteAccountCode",
+            "The current 2FA code, to a signed-in person who uses the account (never a bot, a token or an assistant). Logged, without the code",
+            "WebsiteCode",
+        ),
+    )
     def website_account_code(request: Request, tool_id: str, account_id: str) -> Any:
         """The current 2FA code, to a signed-in person who uses the account. Logged, without the code."""
         with store.transaction() as c:
             vaults.validate_identity(c, request.state.identity)
             return current_code(c, request.state.identity, vault(), tool_id, account_id, admins(), auth)
 
-    @app.get("/api/v2/website-tools/{tool_id}/activity")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}/activity",
+        **api_v2(
+            "Tools",
+            "listWebsiteToolActivity",
+            "Who opened, filled, copied or asked for a code, on which page (host and path), with which account and where, newest first. Follow next with cursor",
+            "WebsiteToolActivity",
+        ),
+    )
     def website_tool_activity(
         request: Request,
         tool_id: str,

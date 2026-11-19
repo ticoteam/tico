@@ -44,6 +44,9 @@ pub struct Runner {
     /// runner.json as last read well, for its profiles while the file can't be read.
     profiles_read: Mutex<Map<String, Value>>,
     pub client: Client,
+    /// The runner's hub over a pool kept for turns' `credential-runtime` reads, whose answers may each take 15 s
+    /// (env::turn_environment): every turn reuses its connections instead of opening one of its own.
+    pub(crate) credentials: Client,
     pub state: State,
     pub events: Arc<Events>,
     pub stop: AtomicBool,
@@ -94,6 +97,8 @@ pub struct Runner {
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<i64>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
+    /// Voice call attempts: their text goes up as it is written, never paced (speech waits on it).
+    pub unpaced: Mutex<HashSet<String>>,
     /// Turns streaming on this runner and recent upload times: how long later text waits (crate::upload_pace).
     pub upload_load: crate::upload_pace::Load,
     pub upload_bounds: crate::upload_pace::Bounds,
@@ -183,6 +188,7 @@ impl Runner {
         Runner {
             profiles_read: Mutex::new(config.data.clone()),
             config,
+            credentials: client.with_read_timeout(15),
             client,
             events: Events::new(),
             stop: AtomicBool::new(false),
@@ -212,6 +218,7 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
+            unpaced: Mutex::new(HashSet::new()),
             upload_load: crate::upload_pace::Load::default(),
             upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
@@ -461,6 +468,7 @@ impl Runner {
         self.flush_locks.lock().unwrap().remove(aid);
         self.state.outbox.forget(aid);
         self.first_posted.lock().unwrap().remove(aid);
+        self.unpaced.lock().unwrap().remove(aid);
     }
 
     /// Send a result under `complete:{aid}`. This runner's server floor takes every field it sends, so
@@ -648,14 +656,8 @@ impl Runner {
         let assignments = self.assignments_seen();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
-        // A bot delivered through an app has no repository to fetch.
-        let with_repositories: Vec<Value> = candidates
-            .iter()
-            .filter(|e| crate::appdriver::delivery(&e["config"]).is_none())
-            .cloned()
-            .collect();
-        crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
-        self.fetch_missing(&with_repositories).await;
+        crate::product_files::bootstrap_missing(&self.config, &candidates).await;
+        self.fetch_missing(&candidates).await;
         // A checkout fetched just now is closed to other bots' leased turns before any turn of its own runs.
         let workspace = self.config.projects_dir();
         let _ =
@@ -705,16 +707,13 @@ impl Runner {
         let (agent_instructions, versions) =
             readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
-        let mut capabilities = crate::lanes::capabilities();
+        // Every advertised capability, less what an older server refused in the last ten minutes (lanes.rs).
+        let capabilities = crate::lanes::capabilities(computer_logins);
         if computer_logins {
             readiness_doc["computer_profile"] =
                 json!(crate::profiles::computer_login(&config.data)
                     .map(|p| p.name)
                     .unwrap_or_default());
-            capabilities.push("computer_logins_v1");
-        }
-        if crate::mail_key::status(&self.config) == Some("exposed") {
-            readiness_doc["mail_key"] = json!("exposed"); // Health warns while bots can read the company's mail key
         }
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
@@ -723,9 +722,6 @@ impl Runner {
         // to a server that takes it (`readiness_browser`): an older one refuses the whole heartbeat.
         if crate::fallback::server_takes_browser() {
             readiness_doc["browser"] = crate::browser::readiness();
-        }
-        if let Some(apps) = crate::appdriver::readiness(&candidates) {
-            readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
         }
         if full {
             // A low workspace volume starts the safe clean-up in the background; its last run is reported.
@@ -960,6 +956,11 @@ impl Runner {
         };
         let beat = beat.and_then(decode::<HeartbeatAnswer>);
         if let Ok(reply) = &beat {
+            // A server that took voice_inputs_v1 pushes voice hints; one that refused it leaves voice on its poll.
+            let pushes = body["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|c| c == crate::lanes::VOICE_INPUTS));
+            self.events.voice_push(pushes);
             // Absent or null is automatic: the machine's own capacity is the limit.
             let owner = reply.turns_at_once.map(|n| n as usize);
             self.turn_limit.store(
@@ -1029,13 +1030,22 @@ impl Runner {
             .unwrap()
             .take()
             .filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
+        let replayed = pending.is_some();
         let (key, body, at) =
             pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
         }
-        result.and_then(decode)
+        let mut answer: ClaimAnswer = result.and_then(decode)?;
+        // A replayed answer's start place was granted when the first claim was: too long ago to keep (execute.rs
+        // keep_start_place), so the turn asks for it again.
+        if replayed {
+            if let Some(attempt) = answer.attempt.as_mut() {
+                attempt.remove("start_reserved");
+            }
+        }
+        Ok(answer)
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
@@ -1249,8 +1259,7 @@ impl Runner {
         tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
-        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
-        tokio::spawn(crate::appdriver::run_loop(self.clone()));
+        tokio::spawn(crate::fetch_fresh::run_loop(self.clone()));
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
@@ -1553,6 +1562,59 @@ mod tests {
             "{}",
             seen[3]
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the holds lock is held only to keep other tests' holds out of this one
+    async fn a_new_runner_checks_in_with_a_floor_hub_that_refuses_plan_usage_and_the_browser_report(
+    ) {
+        let _turn = crate::lanes::holding();
+        let capabilities = crate::lanes::capabilities(true);
+        let index = capabilities
+            .iter()
+            .position(|c| *c == "plan_usage_v1")
+            .unwrap();
+        // What a 0.6.0 hub (backend/app.py validation_error) answers each, word for word but for the long enum.
+        let plan_usage: &'static str = Box::leak(
+            format!(
+                r#"{{"error":{{"code":"validation","detail":"body.capabilities.{index}: Input should be 'assignment_instances_v1', 'task_lanes_v2' or 'make_page'"}}}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (url, seen) = crate::client::tests::serve(vec![
+            (422, plan_usage),
+            (422, r#"{"error":{"code":"validation","detail":"body.readiness.StructuredReadiness.browser: Extra inputs are not permitted; body.readiness.dict[constrained-str,bool].schema_version: Input should be a valid boolean"}}"#),
+            (200, r#"{"ok": true}"#),
+        ])
+        .await;
+        let dir =
+            std::env::temp_dir().join(format!("tico-floor-hub-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let mut body = json!({"version": "test", "platform": "linux", "capabilities": capabilities,
+                              "readiness": {"schema_version": 1, "browser": {"found": true}}});
+        let (beat, tries) = runner.post_heartbeat(&mut body).await;
+        let next = crate::lanes::capabilities(true);
+        crate::lanes::release("plan_usage_v1");
+        crate::lanes::release("readiness.browser");
+        assert_eq!((beat.is_ok(), tries), (true, 3));
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains("\"plan_usage_v1\"") && !seen[1].contains("\"plan_usage_v1\""));
+        assert!(
+            seen[1].contains("\"browser\":{") && !seen[2].contains("\"browser\":{"),
+            "{}",
+            seen[2]
+        );
+        // Every other capability goes on, and the next heartbeat leaves plan usage out from the start.
+        for c in capabilities.iter().filter(|c| **c != "plan_usage_v1") {
+            assert!(seen[2].contains(&format!("\"{c}\"")), "{c}: {}", seen[2]);
+        }
+        assert!(!next.contains(&"plan_usage_v1") && next.contains(&"computer_logins_v1"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

@@ -1,6 +1,8 @@
 ---
 name: compare-plans-on-total-cost
 description: Build a plain comparison table of two or more benefit plans on what a person pays in a year at three levels of use, with every figure cited to its plan document and every assumption written in, and no recommendation.
+metadata:
+  function: people
 ---
 # Compare plans on total cost
 

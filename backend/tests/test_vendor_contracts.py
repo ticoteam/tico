@@ -13,19 +13,18 @@ Finance's core layer, are in test_finance_vendor_contracts.py. No network: block
 import contextlib
 import hashlib
 import hmac
+import io
 import json
-from datetime import timezone
 from pathlib import Path
 
 import httpx
 import pytest
 
-from backend import company_billing, github, tico_storage
+from backend import company_billing, github, slack_gateway, slack_requests, tico_storage
 from backend.finance import stripe_sync
 from backend.finance.mercury import Answer
 from backend.github_app import GitHubApp
 from backend.tests.live import block_outside_network
-from connectors import slack
 
 FIXTURES = Path(__file__).parent / "fixtures" / "vendors"
 
@@ -143,41 +142,45 @@ def test_a_stripe_refusal_is_said_without_echoing_the_body():
     assert "sk_test" not in why
 
 
-# -- Slack: the Web API call and its error (connectors/slack.py call, slack_error) ------------------------------------
+# -- Slack: the gateway's Web API call and its error (backend/slack_gateway.py SlackAPI; bots' reads, slack_requests) --
 
 
-class FakeHTTP:
-    """slack._request: answers with the recorded payload and keeps each URL asked for."""
+class FakeUrlopen:
+    """urllib.request.urlopen for SlackAPI.call: answers with the recorded payload and keeps each URL asked for."""
 
     def __init__(self, payload):
         self.payload, self.urls = payload, []
 
-    def __call__(self, url, data, headers, timeout):
-        self.urls.append(url)
-        return 200, {}, json.dumps(self.payload).encode()
+    def __call__(self, request, timeout):
+        self.urls.append(request.full_url)
+        response = io.BytesIO(json.dumps(self.payload).encode())
+        response.status, response.headers = 200, {}
+        return response
 
 
 def test_slack_history_is_read_by_its_message_fields(monkeypatch):
-    http = FakeHTTP(recorded("slack_answers.json")["history"])
-    monkeypatch.setattr(slack, "_request", http)
-    data = slack.call(
-        "conversations.history", {"channel": "C012ABCDEFG", "limit": 200}, token="xoxb-contract", sleep=lambda s: None
-    )
-    assert http.urls == [slack.API + "conversations.history?channel=C012ABCDEFG&limit=200"]
-    [message] = data["messages"]
-    assert data["response_metadata"]["next_cursor"] == ""
-    shaped = slack.shape(message, "C012ABCDEFG", {"U012ABCDEF": "ana-test"}, "https://acme.slack.com", timezone.utc)
+    opened = FakeUrlopen(recorded("slack_answers.json")["history"])
+    monkeypatch.setattr(slack_gateway.urllib.request, "urlopen", opened)
+    page, cursor = slack_gateway.SlackAPI("xoxb-contract", "").history_range("C012ABCDEFG", "1.0", "2.0")
+    assert opened.urls == [
+        slack_gateway.API
+        + "conversations.history?channel=C012ABCDEFG&oldest=1.0&latest=2.0&inclusive=true&limit="
+        + str(slack_gateway.HISTORY_PAGE)
+    ]
+    [message] = page
+    assert cursor == ""
+    shaped = slack_requests._shape(message, "C012ABCDEFG", {"U012ABCDEF": "ana-test"}, "https://acme.slack.com")
     assert (shaped["author"], shaped["ts"]) == ("ana-test", "1730419200.000100")
     assert "Kickoff notes" in shaped["text"]
 
 
-def test_a_slack_missing_scope_names_the_scope_to_add(monkeypatch):
-    monkeypatch.setattr(slack, "_request", FakeHTTP(recorded("slack_answers.json")["missing_scope"]))
-    with pytest.raises(slack.Failure) as caught:
-        slack.call("conversations.history", {"channel": "C012ABCDEFG"}, token="xoxb-contract", sleep=lambda s: None)
-    assert caught.value.msg == "Slack conversations.history failed: missing_scope"
-    assert "channels:history" in caught.value.hint
-    assert "channels:read" in caught.value.hint
+def test_a_slack_missing_scope_is_slacks_own_error_code(monkeypatch):
+    monkeypatch.setattr(
+        slack_gateway.urllib.request, "urlopen", FakeUrlopen(recorded("slack_answers.json")["missing_scope"])
+    )
+    with pytest.raises(slack_gateway.SlackError) as caught:
+        slack_gateway.SlackAPI("xoxb-contract", "").history_range("C012ABCDEFG", "1.0", "2.0")
+    assert (caught.value.method, caught.value.code) == ("conversations.history", "missing_scope")
 
 
 # -- GitHub: the App's installations (backend/github_app.py installation) and the webhook signature --------------------

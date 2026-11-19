@@ -10,13 +10,10 @@ list the database enforces. Two kinds of enforcement, both refusing a value outs
 
 Changing a list is a code change here. `enforce` compares what is installed with what this module says and replaces
 it when they differ, so the next start applies a new list without a separate migration. A stored value outside a list
-never stops the server: `upgrade` (backend/migrations/0002_status_values.py) and every later `enforce` keep the rows,
-log them, still install a trigger column's triggers (they check new writes only), and leave a CHECK column as it was
-until its rows are fixed. So a list change that drops a value still in use needs a migration that maps or refuses the
-stored rows first. docs/status-and-state.md has the table, generated from COLUMNS (scripts/build_status_docs.py).
-
-Retired spellings are rewritten by `upgrade` (one spelling per meaning). Each retired value is accepted by the
-precheck and mapped to its replacement, never kept as a second spelling.
+never stops the server: `enforce` keeps the rows, logs them, still installs a trigger column's triggers (they check new
+writes only), and leaves a CHECK column as it was until its rows are fixed. So a list change that drops a value still in
+use needs a migration that maps or refuses the stored rows first. docs/status-and-state.md has the table, generated from
+COLUMNS (scripts/build_status_docs.py).
 """
 
 import logging
@@ -56,29 +53,15 @@ PAYMENT_STATUSES = (
     "unknown",
 )
 TRANSFER_STATUSES = ("queued", "submitted", "unknown", "failed", "posted", "canceled")
-GOOGLE_CONNECT_STATUSES = (
-    "signing_in",
-    "ready",
-    "finishing",
-    "revoking",
-    "disconnecting",
-    "connected",
-    "disconnected",
-    "failed",
-)
+GOOGLE_CONNECT_STATUSES = ("signing_in", "finishing", "connected", "disconnected", "failed")
 
 
 class Column:
-    """One stored status or state column. `values` is the list; `retired` maps old spellings to the current one."""
+    """One stored status or state column. `values` is the list."""
 
-    def __init__(self, table, column, values, *, nullable=False, enforce="trigger", retired=()):
+    def __init__(self, table, column, values, *, nullable=False, enforce="trigger"):
         self.table, self.column, self.values = table, column, tuple(values)
-        self.nullable, self.enforce, self.retired = nullable, enforce, tuple(retired)
-
-    @property
-    def accepted(self):
-        """What the upgrade's precheck lets through: the list plus the retired spellings it maps."""
-        return self.values + tuple(old for old, _new in self.retired)
+        self.nullable, self.enforce = nullable, enforce
 
     def in_list(self, values):
         return ", ".join("'" + v.replace("'", "''") + "'" for v in values)
@@ -94,26 +77,16 @@ class Column:
 
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
-    # A task is open, done or closed, never without a status (docs/pipelines-v3.md). What it waits on is read, not
+    # A task is open, done or closed, never without a status (docs/dev/pipelines-v3.md). What it waits on is read, not
     # stored (backend/waiting_on.py).
     Column("tasks", "status", TASK_STATUSES),
-    # "done" is the spelling older hubs stored for a finished job (seen on Tico Team, Nov 2).
-    Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"), ("done", "completed"))),
-    # NULL for a run recorded with no lease (backend/migrations/0072_turns_into_attempts.py); attempts' CHECK keeps a
-    # leased run's state set.
+    Column("jobs", "state", JOB_STATES),
+    # NULL for a run recorded with no lease; attempts' CHECK keeps a leased run's state set.
     Column("attempts", "state", ATTEMPT_STATES, nullable=True),
     Column("automation_runs", "status", RUN_STATUSES),
-    Column("webhook_sends", "state", WEBHOOK_SEND_STATES, retired=(("cancelled", "canceled"),)),
+    Column("webhook_sends", "state", WEBHOOK_SEND_STATES),
     Column("bots", "state", BOT_STATES, nullable=True, enforce="check"),
-    # needs_onboarding is the spelling migration 45 rewrote (backend/statuses.py); a stale row maps, it does not abort.
-    Column(
-        "bot_config",
-        "onboarding_state",
-        ("needs_setup", "onboarded"),
-        nullable=True,
-        enforce="check",
-        retired=(("needs_onboarding", "needs_setup"),),
-    ),
+    Column("bot_config", "onboarding_state", ("needs_setup", "onboarded"), nullable=True, enforce="check"),
     Column("bot_status", "state", BOT_STATUS_STATES, nullable=True, enforce="check"),
     Column("automation_versions", "status", ("active", "pending"), enforce="check"),
     Column("goals", "status", COLOURS + ("gray", "done", "dropped"), nullable=True, enforce="check"),
@@ -131,11 +104,9 @@ COLUMNS = (
     Column("strategy_actions", "state", ("proposed", "done", "undone"), enforce="check"),
     Column("google_connects", "status", GOOGLE_CONNECT_STATUSES, enforce="check"),
     Column("google_workspaces", "status", ("pending", "connected", "failing"), enforce="check"),
-    Column(
-        "fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)
-    ),
-    Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
-    Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
+    Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check"),
+    Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check"),
+    Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check"),
 )
 
 
@@ -149,10 +120,10 @@ def present(conn):
 
 
 def unknown_values(conn, specs=None):
-    """(table, column, value, rows) for every stored value outside the accepted list, NULL included where refused."""
+    """(table, column, value, rows) for every stored value outside its list, NULL included where refused."""
     found = []
     for spec in present(conn) if specs is None else specs:
-        accepted = spec.in_list(spec.accepted)
+        accepted = spec.in_list(spec.values)
         rows = conn.execute(
             f"SELECT {spec.column}, COUNT(*) FROM {spec.table} WHERE {spec.column} NOT IN ({accepted}) "
             f"{'AND ' + spec.column + ' IS NOT NULL' if spec.nullable else ''} GROUP BY {spec.column}"
@@ -163,22 +134,6 @@ def unknown_values(conn, specs=None):
                 found.append((spec.table, spec.column, None, nulls))
         found.extend((spec.table, spec.column, value, n) for value, n in rows)
     return found
-
-
-def upgrade(conn):
-    """Migration 0002. Rewrite retired spellings and install the constraints. A stored value outside a list is kept as
-    it is and logged, never a reason to stop the server: a trigger column still gets its triggers (they check new
-    writes only), and a CHECK column is left without its CHECK until its rows are fixed (enforce adds it then).
-    Runs inside the migration's transaction, with foreign keys already off."""
-    problems = unknown_values(conn)
-    _log(problems)
-    for spec in present(conn):
-        # CHECK columns are mapped while their table is copied (_rebuild_with_check), not by an UPDATE the old CHECK
-        # would refuse.
-        if spec.enforce == "trigger":
-            for old, new in spec.retired:
-                conn.execute(f"UPDATE {spec.table} SET {spec.column}=? WHERE {spec.column}=?", (new, old))
-    _enforce(conn, problems)
 
 
 def _log(problems):
@@ -270,7 +225,7 @@ def _foreign_keys_off(conn):
 
 
 def _rebuild_with_check(conn, spec, constraint):
-    """Rebuild `spec.table` with `constraint` added, copying every row with retired spellings mapped. The table is
+    """Rebuild `spec.table` with `constraint` added, copying every row. The table is
     renamed aside rather than dropped first, with legacy ALTER TABLE rules, so tables that refer to it (foreign keys,
     triggers) keep their text and nothing cascades; the new table takes the old one's SQL, columns, indexes and
     triggers. The row count must match before the old table goes."""
@@ -309,20 +264,11 @@ def _rebuild_with_check(conn, spec, constraint):
                 (spec.table,),
             ).fetchall()
             cols = _columns(conn, spec.table)
-            select, params = [], []
-            for c in cols:
-                if c == spec.column and spec.retired:
-                    cases = " ".join("WHEN ? THEN ?" for _ in spec.retired)
-                    select.append(f"CASE {c} {cases} ELSE {c} END")
-                    for old, new in spec.retired:
-                        params.extend((old, new))
-                else:
-                    select.append(c)
             before = conn.execute(f"SELECT COUNT(*) FROM {spec.table}").fetchone()[0]
             old = f"{spec.table}__status_old"
             conn.execute(f"ALTER TABLE {spec.table} RENAME TO {old}")
             conn.execute(new_sql)
-            conn.execute(f"INSERT INTO {spec.table} ({', '.join(cols)}) SELECT {', '.join(select)} FROM {old}", params)
+            conn.execute(f"INSERT INTO {spec.table} ({', '.join(cols)}) SELECT {', '.join(cols)} FROM {old}")
             after = conn.execute(f"SELECT COUNT(*) FROM {spec.table}").fetchone()[0]
             if after != before:
                 raise RuntimeError(f"{spec.table}: rebuild copied {after} of {before} rows")

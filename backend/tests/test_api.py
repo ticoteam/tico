@@ -89,7 +89,8 @@ def test_schema_rejects_forged_actor_and_missing_fields(api):
         {"owner": "assistant", "title": "Create something", "body": "Do it", "requester": "human:ben"},
         expected=422,
     )
-    post(api, "tasks", {"owner": "assistant", "title": "Missing body"}, expected=422)
+    # A task is a title and a chat: a title alone is a task with no request yet.
+    assert post(api, "tasks", {"owner": "assistant", "title": "Title alone"})["request"] is None
     r = api.post(
         "/api/v2/tasks",
         json={"owner": "assistant", "title": "Create report", "body": "A report"},
@@ -246,7 +247,7 @@ def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     assert run["state"] == "expired" and "attempt_id" not in run
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers()).status_code == 200
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers("ben-test")).status_code == 404
-    issue = next(i for i in get(api, "fleet/check")["issues"] if i["kind"] == "failing_runs")
+    issue = next(i for i in get(api, "health/issues")["issues"] if i["kind"] == "failing_runs")
     assert "expired attempt" in issue["text"] and "last 24 hours" in issue["text"]
 
 

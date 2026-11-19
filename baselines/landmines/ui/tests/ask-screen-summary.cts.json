@@ -1,0 +1,5 @@
+{
+  "ui/tests/ask-screen-summary.cts": {
+    "no-fixed-wait-ui": 3
+  }
+}

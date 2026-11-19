@@ -41,12 +41,17 @@ def job_state(api, job_id):
         return c.execute('SELECT state FROM jobs WHERE id=?', (job_id,)).fetchone()[0]
 
 
-def restarted_mid_turn(api, calls, *, reported=True, hop=False, restart=True, stopped=False, reply=None):
+def restarted_mid_turn(
+    api, calls, *, reported=True, hop=False, restart=True, stopped=False, reply=None, capabilities=()
+):
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
     by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
     does not report its calls (`tool_events: false`, runner-rs execute.rs). `stopped`: the computer's clean stop
-    (its saved "Runner stopped during execution" diagnostic, with an empty reply) instead of a restart."""
+    (its saved "Runner stopped during execution" diagnostic, with an empty reply) instead of a restart. `capabilities`:
+    what the runner advertises, when the run's runner is an rc.1 one."""
     machine, message, attempt = setup_attempt(api)
+    if capabilities:
+        ready(api, machine, ['ops'], capabilities)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'restarted'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
     for n, (name, parent) in enumerate(calls):

@@ -67,6 +67,7 @@ class Setting:
     why: str = ""  # person-only: the one-line reason
     confirm_when: tuple = ()  # ((dotted body place, values), ...): a direct entry whose body holds one is `when_held`
     when_held: str = "confirm"
+    bot_card: str = ""  # (last: entries pass the fields before it by position) the link once the bot is named, `{bot}` filled (its own page's row): else `card`
 
     @property
     def target(self):
@@ -139,7 +140,17 @@ def body_shape(e):
     return body
 
 
-def public(e, base=""):
+def link_for(e, base="", target=None):
+    """The card's link: the bot's own page (`bot_card`) when the entry has one and `target` names the bot, else `card`;
+    with the server's public URL `base` in front when there is one."""
+    from urllib.parse import quote
+
+    bot = (target or {}).get("bot")
+    card = e.bot_card.replace("{bot}", quote(str(bot), safe="")) if e.bot_card and bot else e.card
+    return (base.rstrip("/") + "/" + card) if base else card
+
+
+def public(e, base="", target=None):
     return {
         "key": e.key,
         "name": e.name,
@@ -152,7 +163,7 @@ def public(e, base=""):
         "method": e.method,
         "route": "/api/v2/" + e.route,
         "body": body_shape(e),
-        "card": (base.rstrip("/") + "/" + e.card) if base else e.card,
+        "card": link_for(e, base, target),
         **({"why": e.why} if e.why else {}),
         **(
             {"class_when": {"class": e.when_held, "body": {place: list(values) for place, values in e.confirm_when}}}
@@ -281,22 +292,9 @@ def kind_for(e, body):
     return e.kind
 
 
-def _bot_target(c, e, target):
-    """Resolve id-addressed bot settings to their owning bot before checking manager rights."""
-    target = target or {}
-    if target.get("bot"):
-        return target["bot"]
-    object_id = target.get("id")
-    if not object_id:
-        return ""
-    if e.route.startswith("routines/{id}"):
-        table = "schedules"
-    elif e.route.startswith("settings/transitions/{id}/"):
-        table = "bot_transitions"
-    else:
-        return ""
-    found = c.execute(f"SELECT bot FROM {table} WHERE id=?", (object_id,)).fetchone()
-    return found["bot"] if found else ""
+def _bot_target(target):
+    """The bot a bot setting names: every bot entry is addressed by its bot, none by another object's id."""
+    return (target or {}).get("bot") or ""
 
 
 def _whose(c, e, target):
@@ -334,7 +332,7 @@ def may(c, auth, who, e, target=None):
 
         return who.role == "human" and H.can_move(c, who.actor)
     if e.who == "bot":
-        return auth.bot_manager(c, who, _bot_target(c, e, target))
+        return auth.bot_manager(c, who, _bot_target(target))
     if e.who == "self":
         return who.role == "human" and (
             e.target != "person" or who.actor == "human:" + str((target or {}).get("person"))
@@ -342,8 +340,8 @@ def may(c, auth, who, e, target=None):
     return False
 
 
-def refusal(e, base=""):
-    link = (base.rstrip("/") + "/" + e.card) if base else e.card
+def refusal(e, base="", target=None):
+    link = link_for(e, base, target)
     return Problem(
         "forbidden",
         f"Only {WHO[e.who]} {'changes' if e.who != 'self' else 'change'} {e.name} "
@@ -358,9 +356,9 @@ def raw_refusal(c, auth, who, method, path, body=None, base=""):
     `tico settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
     (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
     person too (so a refusal for another reason keeps the route's words); else None."""
-    from .route_renames import new_path
+    from .legacy_spellings import canonical
 
-    path = new_path(path) or path  # `/runners/<id>/revoke` is `computers/{computer}/revoke`
+    path = canonical(path) or path  # a kept old spelling (`/api/v2/runners/<id>/inbox-only`) is checked as its route
     found = matched(method, path, body)
     rows = [found[:2]] if found else routed(method, path)
     if not rows or len({e.who for e, _ in rows}) != 1 or rows[0][0].who in ("anyone", "self"):
@@ -368,7 +366,7 @@ def raw_refusal(c, auth, who, method, path, body=None, base=""):
     e, target = rows[0]
     if may(c, auth, who, e, target):
         return None
-    said = refusal(e, base)
+    said = refusal(e, base, target)
     return {"fix": said.detail, "link": said.extra["link"], "who_may": said.extra["who_may"]}
 
 
@@ -393,7 +391,7 @@ def plan(
     card can carry the route. `card_words(c, auth, who, e, body, target)`: for an entry whose class rests on what the
     change does to stored state, the change tried as the person's own click: (needs a card, the card's plain words),
     or the refusal that click would get (then no card is made); None for any other entry."""
-    link = (base.rstrip("/") + "/" + e.card) if base else e.card
+    link = link_for(e, base, target)
     acting_for = who.via in ACTING_FOR
     # `direct_ok`: the Assistant's own turn cites the person's words and the owner's rule allows it, so a direct or a confirm
     # entry runs here on that citation. A person-only entry is refused above; a change that needs a card by what it does to
@@ -406,7 +404,7 @@ def plan(
     if e.kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
     if not may(c, auth, who, e, target):
-        raise refusal(e, base)
+        raise refusal(e, base, target)
     if e.value == "upload":
         raise Problem(
             "validation", f"{e.name} is a file you upload in Settings: open {link}", 422, extra={"link": link}
@@ -464,7 +462,7 @@ def plan(
         return propose(
             c, who, e.method, "/api/v2/" + request["path"], body, f"Change {e.name} ({e.where}) to {json.dumps(parsed)}"
         )
-    return {"run": request, "setting": public(e, base), "value": parsed}
+    return {"run": request, "setting": public(e, base, target), "value": parsed}
 
 
 # An `{id}` that is more than one path segment, by the route it starts: a repository's full name (`owner/name`) and a
@@ -591,7 +589,7 @@ def install(app, store, auth, settings):
         if e.read and (not e.target or target.get(e.target)):
             route, _, pointer = e.read.partition("#")
             read = {"path": path_for(e, target, route), "pointer": path_for(e, target, pointer)}
-        return {"setting": public(e, settings.public_url), "you_may": allowed, "read": read}
+        return {"setting": public(e, settings.public_url, target), "you_may": allowed, "read": read}
 
     def words(c, auth, who, e, body, target):
         if e.key == "bot.repositories":

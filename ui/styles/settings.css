@@ -51,11 +51,10 @@ input.people-switch:checked{background:var(--ink)}input.people-switch:checked::b
 input.people-switch:checked::before{transform:translateX(14px)}
 input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-list-card>header{align-items:center}
-.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 72px 36px;align-items:center;gap:var(--s3)}
+.people-head,.people-row{display:grid;grid-template-columns:minmax(0,1fr) 120px 100px 36px;align-items:center;gap:var(--s3)}
 .people-head{padding:0 0 6px;border-bottom:1px solid var(--line);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .people-list{list-style:none;margin:0;padding:0}
 .people-head>span{white-space:nowrap}
-@media (min-width:761px){.people-no-recorder :is(.people-head,.people-row):not(.is-left){grid-template-columns:minmax(0,1fr) 120px 100px 36px}}
 .people-row{padding:10px 0;border-bottom:1px solid var(--line)}
 .people-row:last-child{border-bottom:0}
 .people-who{display:flex;align-items:center;gap:10px;min-width:0}
@@ -66,8 +65,6 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
-.people-cell-recorder{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}.people-cell-recorder.is-old{color:var(--wait-ink)}
-.people-recorder-label{display:none}
 .people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
 .people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;overflow:hidden;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .people-more .nav-icon{width:20px;height:20px;font-size:20px}
@@ -97,8 +94,7 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-mode{align-self:stretch}.people-mode button{flex:1;padding:8px 6px}
   .people-add{flex-wrap:wrap}.people-add input[name=email]{flex:1 1 100%}
   .people-head{display:none}
-  .people-row{grid-template-areas:"who who more" "role signin signin" "recorder recorder recorder";row-gap:6px}
-  .people-cell-recorder{grid-area:recorder;padding-left:42px}.people-cell-recorder:empty{display:none}.people-recorder-label{display:inline}
+  .people-row{grid-template-areas:"who who more" "role signin signin";row-gap:6px}
   .people-who{grid-area:who}.people-cell-role{grid-area:role;padding-left:42px}.people-cell-signin{grid-area:signin}.people-cell-more{grid-area:more}
   .people-row{grid-template-columns:auto minmax(0,1fr) 44px}.people-more{width:44px;height:44px}
   .people-row.is-left{grid-template-areas:"who more"}
@@ -130,7 +126,8 @@ p:empty{display:none}
 .tl-pop.sb-choice-pop{width:min(360px,calc(100vw - 16px));max-height:min(80vh,620px);padding:12px 14px 14px;overflow-x:hidden}
 @media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;max-height:86vh;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
 .sb-choice-head{margin:0 0 10px;font-size:var(--t-sm);font-weight:600;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The model picker's panel: Harness, Model, Effort and Compact read top to bottom, each with a short visible label. */
+/* The model picker's panel: Harness, Model and Effort read top to bottom, each with a short visible label; More folds
+   Compact, Output style and Verbosity under them. */
 .mp-panel{display:grid;gap:10px;min-width:0}
 .mp-row{display:grid;gap:4px;min-width:0;margin:0;padding:0;border:0}
 .mp-row[hidden]{display:none}
@@ -154,16 +151,21 @@ p:empty{display:none}
 .mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mp-mark{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:400}
 .mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.mp-more{min-width:0}
+.mp-more[hidden]{display:none}
+.mp-more>summary{width:max-content;font-size:var(--t-xs);font-weight:600;color:var(--muted);cursor:pointer}
+.mp-more>summary:hover{color:var(--ink)}
+.mp-more-rows{display:grid;gap:10px;min-width:0;margin-top:8px}
 .mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .mp-note:empty{display:none}
 .mp-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 .mp-foot .primary{padding:6px 14px}
 .settings-bulk-pick{display:flex;min-width:0}
-/* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
-   the same box, height and type; only the bots table keeps it as text. */
-#bot-editor .settings-choice>.sb-pick,.sb-task-under .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
-#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
-#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret{opacity:1}
+/* In a form (the bot editor, Add bot, bulk change, Hire, a step's Runs on) the picker's button is a dropdown like the selects beside it:
+   the same box, height and type; the bots table and a task's Runs on fact keep it as text. */
+#bot-editor .settings-choice>.sb-pick,.sb-task-under .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick,div[data-run-picker] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
+#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover,div[data-run-picker] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
+#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret,div[data-run-picker] .sb-pick .sb-pick-caret{opacity:1}
 /* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
@@ -177,19 +179,18 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .sb-task-mark.on{opacity:1;color:var(--ink)}
 .sb-task-mark:disabled{cursor:default}
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
-.sb-task-under{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,150px) minmax(0,1.4fr) auto;align-items:end;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.sb-task-under{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;align-items:end;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sb-task-under .settings-choice{display:block;min-width:0}
 .sb-task-under .settings-choice>.sb-pick{width:100%;justify-content:space-between}
 .sb-task-l{display:block}
 .sb-task-x{align-self:end}
-/* Task effort: labelled and drawn beside the Task model picker. */
+/* Task model and Fallback, each under its small label. */
 .sb-task-part{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
-.sb-task-part select{width:100%;min-width:0;max-width:100%;height:var(--ctl);padding:0 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
 .sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
 @media (max-width:760px){
   .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
   .settings-bots-table tr.sb-task-row td{display:block}
-  .sb-task-under{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .sb-task-under{grid-template-columns:minmax(0,1fr)}
   .sb-task-under .sb-task-model{grid-column:1/-1}
   .sb-task-x{grid-column:1/-1;justify-self:end;width:44px;height:44px}
   .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:44px}
@@ -320,6 +321,9 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo input.who-pick-q{width:100%;min-width:0;padding:7px 10px 7px 32px;font-size:var(--t-base);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237f8a96' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center;color:var(--ink)}
 .settings-combo-list[popover]{position:fixed;inset:auto;right:auto;bottom:auto;margin:0;box-sizing:border-box;max-height:234px;color:var(--ink)}
 .settings-combo-list[popover]:popover-open{display:block}
+/* An inline who picker's list (who-picker.ts inline): part of the form under its field, about five rows, no card of its own. */
+.who-pick-inline .who-pick-list{display:block;position:static;max-height:200px;overflow:auto;margin:4px 0 0;padding:0;border:0;border-radius:0;background:none;box-shadow:none}
+.who-pick-inline .who-pick-list[hidden]{display:none}
 .settings-combo-opt{display:flex;align-items:center;gap:8px;min-height:32px;box-sizing:border-box;padding:4px 8px;border-radius:4px;font-size:var(--t-base);cursor:pointer}
 .settings-combo-opt[aria-selected=true],.settings-combo-opt:hover{background:var(--surface2)}
 .settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
@@ -361,6 +365,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .stopped-run h3{margin:0 0 4px}.stopped-run p{margin:4px 0}.stopped-run [data-details]{margin-top:8px}.stopped-run+.stopped-run{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
 .settings-issue:last-child{border-bottom:0}.settings-issue p{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .settings-issue .tag{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 6px;vertical-align:middle}
+.settings-issue-more summary{margin:2px 0 0;color:var(--muted);font-size:var(--t-sm);cursor:help;list-style:none;text-decoration:underline dotted;text-underline-offset:3px}.settings-issue-more summary::-webkit-details-marker{display:none}.settings-issue-more[open] summary{color:var(--ink)}
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .machine-head{display:flex;align-items:center;gap:10px}
@@ -461,9 +466,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-usage-bar{width:64px;height:8px;flex-shrink:0}
 /* Desktop apps: the same rows as AI tools (app | installed version | state and its detail). On a phone the head row
    keeps only its title, so the rows still say they are desktop apps. */
-.machine-apps{grid-template-columns:minmax(90px,max-content) minmax(0,110px) minmax(160px,1fr);margin-top:6px}
-.machine-app-detail{flex-basis:100%;font-size:var(--t-xs);overflow-wrap:anywhere}
-@media (max-width:900px){.machine-apps{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.machine-apps .machine-tool-name,.machine-apps .machine-tool-signin{grid-column:1/-1}.machine-apps .machine-tool-head{display:contents}.machine-apps .machine-tool-head>[role=columnheader]{display:none}.machine-apps .machine-tool-head>:first-child{display:flex;grid-column:1/-1}}
 .settings-services summary{cursor:pointer;font-weight:600}
 .settings-services-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:6px 14px;margin-top:12px;font-size:var(--t-sm)}
 /* Team icon: one row like the card's others, the icon, its name, then Change icon at the right edge */
@@ -604,7 +606,7 @@ dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
 }
 .settings-history-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
 .settings-history-row:last-child{border-bottom:0}.settings-history-row p{margin:2px 0 0;font-size:var(--t-sm);color:var(--muted)}
-.settings-history-row .history-action{display:flex;gap:6px;align-items:center}.settings-history-row details{grid-column:2/-1;font-size:var(--t-sm)}
+.settings-history-row .history-action{display:flex;gap:6px;align-items:center}
 .transition-dialog{width:min(580px,92vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .transition-body{padding:16px 18px 18px}.transition-progress{margin:12px 0;padding:10px;border-radius:7px;background:var(--bg)}
 .transition-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
@@ -1208,7 +1210,7 @@ section.card>header .settings-head-act{margin-left:auto}
   .settings-machines .machine-name{display:inline-flex;align-items:center;min-height:44px}
   #settings-token-form button{min-height:44px}   /* chat.css still sets this form's button to 40px on a phone */
 }
-/* A form's forward button (Save, Add bot, Prepare change) is last at the right, Cancel at the left (style guide, Button order) */
+/* A form's forward button (Save, Add bot, Change) is last at the right, Cancel at the left (style guide, Button order) */
 .settings-go{margin-left:auto}
 /* Computers: a tool signed in with nothing wrong reads as quiet text, not a pill (style guide, Status: "a row with
    nothing wrong has no pill"); it stays the button that opens the computer. */

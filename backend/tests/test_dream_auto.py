@@ -18,6 +18,7 @@ from backend import dream_auto as DA
 from backend import hubdb as H
 from backend import maintenance as M
 from backend import maintenance_limits as L
+from backend import task_wakes
 from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
@@ -187,9 +188,10 @@ def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_i
     assert started == [verdict(api, "ops", now()).name]
     [row] = dream_rows(api, "ops")
     assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"] and row["title"] == "Dream"
-    first_line, _, _ = row["body"].partition("\n")
-    assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
     with api.app.state.store.read() as c:
+        first_line, _, _ = task_wakes.instructions(c, row["id"]).partition("\n")
+        assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
+        assert H.task_request(c, row["id"]) is None  # Tico's steps, not Ben's words: nothing on the chat
         assert dream.auto_event(c, row)["reason"] == first_line
     view = get(api, "bots/ops/dream", token="ben-test")["dream"]
     assert view["auto"] is True and view["reason"] == first_line
@@ -213,7 +215,7 @@ def test_a_bot_gets_one_dream_per_48_hours_and_none_while_one_is_open(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE events SET created_at=? WHERE actor=? AND action=?",
-            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+            (H.shift(H.now(), hours=-49), H.TICO_ACTOR, L.BOT_ACTION),
         )
     later = now() + timedelta(hours=49)
     assert verdict(api, "ops", later).status == "due"
@@ -253,16 +255,7 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     plate(api, 15)  # a plate full enough that ingest would send a question back
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
-    r = api.post(
-        f"/api/v2/tasks/{row['id']}/asks",
-        json={
-            "to": "human:ben",
-            "line": QUESTIONS,
-            "version": row["version"],
-            "why": "It sets what goes out on launch day.",
-        },
-        headers=headers(token),
-    )
+    r = api.post(f"/api/v2/tasks/{row['id']}/questions", json={"to": "ben", "text": QUESTIONS}, headers=headers(token))
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and [x for x in model.calls if x["label"] != "rule-check@1"] == []
     with api.app.state.store.read() as c:
@@ -626,7 +619,7 @@ def _waiting(api, bot):
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
             "VALUES(?,?,?,?,'say','Dream',?,?)",
-            (mid, conv, H.KEEPER, "bot:" + bot, json.dumps({"release_kind": "dream"}), H.now()),
+            (mid, conv, H.TICO_ACTOR, "bot:" + bot, json.dumps({"release_kind": "dream"}), H.now()),
         )
         c.execute(
             "INSERT INTO jobs(id,message_id,bot_id,state,created_at,held,wake_class) VALUES(?,?,?,'queued',?,1,'dream')",
@@ -649,7 +642,7 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
         c.execute("UPDATE tasks SET done_at=? WHERE id=?", (H.shift(H.now(), hours=-48), first["id"]))
         c.execute(
             "UPDATE events SET created_at=? WHERE actor=? AND action=?",
-            (H.shift(H.now(), hours=-49), H.KEEPER, L.BOT_ACTION),
+            (H.shift(H.now(), hours=-49), H.TICO_ACTOR, L.BOT_ACTION),
         )
     with api.app.state.store.read() as c:
         read_from = dream.since(c, owner_of(c, "ops"))
@@ -658,7 +651,7 @@ def test_a_dream_skipped_before_it_ran_is_not_the_last_dream(api):
     with api.app.state.store.transaction() as c:  # skipped at the deadline, as the hold closes it: no run on it
         owner = owner_of(c, "ops")
         row = dream._open(c, [owner])
-        H.task_close(c, H.KEEPER, row["id"], "Skipped: no warm window in 48 hours.")
+        H.task_close(c, H.TICO_ACTOR, row["id"], "Skipped: no warm window in 48 hours.")
     v = verdict(api, "ops", now())
     assert (v.status, v.turns) == ("due", 12), "the skipped dream's work still counts"
     with api.app.state.store.read() as c:

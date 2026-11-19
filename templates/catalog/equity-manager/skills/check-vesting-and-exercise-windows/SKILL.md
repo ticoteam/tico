@@ -1,6 +1,8 @@
 ---
 name: check-vesting-and-exercise-windows
 description: Work out how many options each grant has vested on a check date, which tranches vest in the next 90 days, and how long a leaver can still exercise. Use before reporting what vests next, or what a former employee can still do with their options.
+metadata:
+  function: finance
 ---
 
 # Check vesting and exercise windows

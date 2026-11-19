@@ -8,7 +8,7 @@
 //! One command, on any machine with both CLIs: `scripts/cli_contract.sh` (docs/harnesses.md, Contract check).
 //! They are `#[ignore]`d so no ordinary test run starts a real CLI or reaches a provider.
 //!
-//! No sign-in is ever finished: `claude setup-token` gets a made-up code, `codex login --device-auth` is stopped
+//! No sign-in is ever finished: `claude setup-token` and `claude auth login` get a made-up code, `codex login --device-auth` is stopped
 //! as soon as it has shown its link and code. A failure never prints a link, a code or a token: only `parse`'s
 //! scrubbed lines.
 //!
@@ -275,6 +275,27 @@ impl Drop for Screen {
     }
 }
 
+/// The code the runner typed never leaves this computer, whether the CLI masks it or draws it (Claude Code 2.1.327
+/// draws `auth login`'s pasted code): not in the lines or the code `parse` reads with the code hidden, and not in
+/// the screen it logs after the code (`login::screen_digest`). The message names the command, never the screen.
+fn typed_code_stays_here(raw: &str, command: &str) {
+    let pieces = ["not-a-code", "not-a-state"];
+    let (_, code, lines, _) = parse(raw, MADE_UP_CODE);
+    assert!(
+        !lines.iter().any(|l| pieces.iter().any(|p| l.contains(p))),
+        "the code typed into `{command}` is in the lines a sign-in reports"
+    );
+    assert!(
+        !pieces.iter().any(|p| code.contains(p)),
+        "the code typed into `{command}` is in the code a sign-in reports"
+    );
+    let digest = crate::login::screen_digest(raw, MADE_UP_CODE);
+    assert!(
+        !pieces.iter().any(|p| digest.contains(p)),
+        "the code typed into `{command}` is in the screen the runner logs after it"
+    );
+}
+
 /// `oauth_retry`'s reading of a screen, from `parse`'s lines: no spaces, lower case.
 fn squeezed(raw: &str, hide: &str) -> String {
     let (_, _, lines, _) = parse(raw, hide);
@@ -316,11 +337,12 @@ fn both_clis_report_a_version_the_runner_can_read() {
             out.trim()
         );
         println!("cli contract: {} {found}", m.executable);
-        // A CLI that takes a message for the running turn (`steer`) may need a minimum version for it.
-        if m.capabilities.steer {
+        // Claude Code turns steering on from its own version line (hosts/claude.rs read_features); no other host
+        // gates steering on `--version`, so only Claude Code's output is read for that line.
+        if m.capabilities.steer && m.host == "claude" {
             assert!(
-                crate::hosts::claude::version_tuple(&out).is_some(),
-                "`{} --version` decides steering; its three numbers could not be read from {:?}",
+                crate::hosts::claude::own_version(&out).is_some(),
+                "`{} --version` decides steering; Claude Code's own version line could not be read from {:?}",
                 m.executable,
                 out.trim()
             );
@@ -514,10 +536,7 @@ fn claude_connect_shows_a_link_and_a_code_prompt_and_a_wrong_code_gives_the_retr
     let before = screen.raw().len();
     screen.type_in(MADE_UP_CODE);
     std::thread::sleep(Duration::from_millis(1200));
-    assert!(
-        !screen.raw().contains(MADE_UP_CODE),
-        "`claude setup-token` now shows the pasted code in the clear: it would reach the runner's log"
-    );
+    typed_code_stays_here(&screen.raw(), "claude setup-token");
     assert!(
         screen.raw().len() > before,
         "`claude setup-token` drew nothing when the code was typed: it may no longer be reading the terminal"
@@ -546,6 +565,54 @@ fn claude_connect_shows_a_link_and_a_code_prompt_and_a_wrong_code_gives_the_retr
     assert!(
         !lines.iter().any(|l| l.contains("https://")),
         "a line of `claude setup-token` still carries a link after scrubbing"
+    );
+}
+
+#[test]
+#[ignore = "runs the real claude and codex CLIs: scripts/cli_contract.sh"]
+fn claude_full_login_shows_a_link_with_the_manual_code_callback_and_a_code_prompt() {
+    // A full login's Connect (backend/claude_login.py) runs the CLI's own sign-in on the side, not `setup-token`.
+    let home = Home::new();
+    let login = manifest("claude-code").login.unwrap();
+    assert!(
+        login.files.iter().any(|f| f.ends_with(".credentials.json")),
+        "Claude Code's login files no longer name .credentials.json, which a full login's Connect reads"
+    );
+    let mut screen = Screen::start(&home, "claude", &login.command, true);
+    let ready = screen.wait(60, |raw| {
+        let (url, _, _, prompt) = parse(raw, "");
+        !url.is_empty() && prompt
+    });
+    let (url, _, _, prompt) = parse(&screen.raw(), "");
+    assert!(
+        ready,
+        "`claude auth login --claudeai` showed {} within 60 s, so Connect never gets to ask for the code. It shows: {}",
+        match (url.is_empty(), prompt) {
+            (true, true) => "a prompt for the code but no link the runner can read",
+            (false, false) => "a link but no prompt for a code the runner knows",
+            _ => "neither a link nor a prompt for a code",
+        },
+        screen.shown("")
+    );
+    // The page the link opens must show the person a code to paste back, not send it to a local port.
+    let plain = url.replace("%2F", "/").replace("%3A", ":");
+    assert!(
+        url.starts_with("https://") && !url.contains(char::is_whitespace) && plain.contains("code/callback"),
+        "the link `claude auth login --claudeai` shows no longer returns to the manual-code page ({} characters)",
+        url.len()
+    );
+    let before = screen.raw().len();
+    screen.type_in(MADE_UP_CODE);
+    std::thread::sleep(Duration::from_millis(1200));
+    typed_code_stays_here(&screen.raw(), "claude auth login");
+    assert!(
+        screen.raw().len() > before,
+        "`claude auth login` drew nothing when the code was typed: it may no longer be reading the terminal"
+    );
+    let (_, _, lines, _) = parse(&screen.raw(), MADE_UP_CODE);
+    assert!(
+        !lines.iter().any(|l| l.contains("https://")),
+        "a line of `claude auth login` still carries a link after scrubbing"
     );
 }
 

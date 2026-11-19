@@ -1,17 +1,18 @@
-"""Workspace reads work with no synced messages; stored personal and legacy reads stay intact."""
+"""Mail reads ask Gmail every time: Workspace reads work with no copy, and an old copy is never read."""
 
 import json
 
 import jwt
 import pytest
 
-from backend import google_workspace, mailbox_access
+from backend import google_connect, google_workspace, mailbox_access
+from backend.store import H
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
+from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
 from backend.tests.helpers.google_workspace import personal
 from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.helpers.mail_api import put_mail
 from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens
 
 
@@ -24,6 +25,8 @@ def read(api, path, token="ana-test", **params):
 def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_copy(
     api, live, workspace_key, assistant_token
 ):
+    with api.app.state.store.transaction() as c:  # a key authorized for the read-only scopes reads with them
+        c.execute("UPDATE google_workspaces SET authorized_scopes=?", (json.dumps(google_workspace.scope_urls()),))
     for token, mailbox in (("ana-test", BOX), (assistant_token, BOX), (assistant_token, SHARED)):
         page = read(
             api,
@@ -38,6 +41,7 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
             limit=999,
         )
         assert page["messages"][0]["mailbox"] == mailbox and "body" not in page["messages"][0]
+        assert page["messages"][0]["has_attachment"] and page["messages"][0]["attachment_count"] == 1
         assert page["next_cursor"] == NEXT
         nxt = read(api, "messages", token, mailbox=mailbox, cursor=NEXT)
         assert nxt["messages"][0]["msg_id"] == "m1" and nxt["next_cursor"] is None
@@ -49,10 +53,6 @@ def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_c
         == google_workspace.READ_ONLY_SCOPES["gmail"][0]
         for call in workspace_key
     )
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
-        assert c.execute("SELECT COUNT(*) FROM mail_fts").fetchone()[0] == 0
-        assert c.execute("SELECT COUNT(*) FROM mail_mailboxes").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("mailbox", [BOX, SHARED])
@@ -71,7 +71,6 @@ def test_opening_live_mail_keeps_the_public_shape_and_audits_every_open(api, liv
         assert [item["kind"] for item in details] == ["message", "thread", "message"]
         assert all(item["mailbox"] == mailbox and item["via"] == "assistant" for item in details)
         assert "Live contract body" not in json.dumps(details)
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_member_is_refused_before_gmail_and_a_grant_is_checked_each_time(api, live):
@@ -104,26 +103,39 @@ def test_workspace_lists_require_a_mailbox_and_gmail_failures_are_not_empty(api,
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='mail.read'").fetchone()[0] == 0
 
 
-def test_live_personal_grants_still_use_the_stored_path_even_with_workspace_connected(api, live):
-    personal(api, "ana", BOX)
-    put_mail(api, BOX, msg_id="stored", thread_id="stored-thread", subject="Stored invoice", body="Stored body")
+@pytest.fixture
+def ana_connected(api, monkeypatch):
+    """Ana's own Connect Google grant, read only, kept on the server; Google refreshes it to `ya29.ana`."""
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
+    personal(api, "ana", BOX, client=CLIENT)
+    google = FakeGoogle({"access_token": "ya29.ana", "expires_in": 3599})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    return google
+
+
+def test_a_personal_grant_is_read_live_through_its_own_grant_even_with_workspace_connected(
+    api, live, workspace_key, ana_connected
+):
+    minted = len(workspace_key)
+    page = read(api, "messages", mailbox=BOX, q="from:sender")
+    assert page["messages"][0]["msg_id"] == "m2" and page["messages"][0]["mailbox"] == BOX
+    assert read(api, "messages/m1", mailbox=BOX)["body"] == "Live contract body."
+    assert [item["msg_id"] for item in read(api, "threads/t1", mailbox=BOX)["messages"]] == ["m1", "m2"]
+    assert live["calls"] and all(token == "ya29.ana" for _, _, token in live["calls"])
+    assert len(workspace_key) == minted  # the key never mints for a mailbox a person's grant covers
+    assert ana_connected.calls[-1]["refresh_token"] == "1//g1"
+
+
+def test_every_mailbox_reads_gmail_and_never_an_old_copy(api, gmail_http, monkeypatch):
+    from backend import google_tokens
+
+    monkeypatch.setattr(google_tokens, "token", lambda c, mailbox, service, write=False: "door-token")
     page = read(api, "messages", mailbox=BOX, q="invoice")
-    assert page["messages"][0]["msg_id"] == "stored" and page["q"] == '"invoice"'
-    assert read(api, "messages/stored", mailbox=BOX)["body"] == "Stored body"
-    assert read(api, "threads/stored-thread", mailbox=BOX)["messages"][0]["body"] == "Stored body"
-    assert live["calls"] == []
-
-
-def test_legacy_reads_keep_fts_and_the_stored_cursor(api, gmail_http):
-    put_mail(api, BOX, msg_id="old1", thread_id="old-thread", epoch=100, subject="Old invoice")
-    put_mail(api, BOX, msg_id="old2", thread_id="old-thread", epoch=200, subject="Old invoice")
-    first = read(api, "messages", q="invoice", limit=1)
-    assert first["next_cursor"] == "200|" + BOX + "|old2"
-    second = read(api, "messages", q="invoice", limit=1, cursor=first["next_cursor"])
-    assert second["messages"][0]["msg_id"] == "old1" and second["next_cursor"] is None
-    assert read(api, "messages/old1", mailbox=BOX)["subject"] == "Old invoice"
-    assert len(read(api, "threads/old-thread", mailbox=BOX)["messages"]) == 2
-    assert gmail_http["calls"] == []
+    assert [item["msg_id"] for item in page["messages"]] == ["m2"] and page["next_cursor"] == NEXT
+    assert [item["msg_id"] for item in read(api, "threads/t1", mailbox=BOX)["messages"]] == ["m1", "m2"]
+    assert all(token == "door-token" for _, _, token in gmail_http["calls"])
 
 
 def organize(api, token="ana-test", expected=200, **body):
@@ -169,7 +181,6 @@ def test_organizing_explicit_ids_is_live_and_audits_only_action_facts(
             assert detail["via"] == "assistant"
         assert not {"subject", "body", "snippet", "query"} & detail.keys()
         assert "Live contract body" not in rows[0]["detail"]
-        assert c.execute("SELECT COUNT(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_query_resolves_ids_with_default_and_explicit_caps_before_modifying(api, live):
@@ -236,10 +247,10 @@ def test_a_bot_organizes_only_with_its_own_current_grant(api, live):
     assert len(live["writes"]) == 1
 
 
-def test_a_personal_grant_cannot_be_organized_live(api, live):
-    personal(api, "ana", BOX)
-    result = organize(api, expected=422, mailbox=BOX, action="archive", ids=["m1"])
-    assert result["error"]["detail"] == "Live organizing needs Whole Workspace" and not live["calls"]
+def test_a_read_only_personal_grant_is_not_organized_and_google_is_not_asked(api, live, ana_connected):
+    result = organize(api, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+    assert result["error"]["code"] == "read_only" and not live["writes"]
+    assert google_connect.REVOKE_URI not in ana_connected.uris and not ana_connected.calls
 
 
 def test_label_unlabel_and_empty_queries_do_not_create_unwanted_labels(api, live):

@@ -29,30 +29,13 @@ from html.parser import HTMLParser
 from fastapi import Request
 
 from . import manual
+from . import page_links
 from . import names
 from . import visuals
 from .store import H, Problem
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.files")
-
-SCHEMA = [
-    # Which version of each file the index holds; `doc` is the file's row id in file_text.
-    "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
-    "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
-    # One row per hard-deleted file: who and when, never what it held.
-    "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "
-    "created_at TEXT NOT NULL)",
-    # Bytes a deletion left unused, removed from storage after the write commits and retried until gone.
-    "CREATE TABLE IF NOT EXISTS blob_purges(digest TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '', "
-    "queued_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
-    # Versions are immutable, except that a hard delete (a file_deletions row, written first) removes them.
-    "DROP TRIGGER IF EXISTS bot_file_versions_no_delete",
-    "CREATE TRIGGER bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions "
-    "WHEN NOT EXISTS (SELECT 1 FROM file_deletions WHERE file_id=OLD.file_id) "
-    "BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END",
-]
-# Created apart so a SQLite built without FTS5 still starts: search then matches titles only.
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS file_text USING fts5(title, text, tokenize='porter unicode61')"
 
 LIST_MAX = 100
 SEARCH_MAX = 50
@@ -101,7 +84,11 @@ def kind_filter(kind):
     if not kind:
         return "1", []
     if kind not in KINDS:
-        raise Problem("validation", "kind is " + ", ".join(KINDS), 422)
+        # A stored kind (a file's `kind`) is not a filter word; say which one is (its `library_kind`).
+        hint = next(
+            (f"{kind} is a stored kind; filter with {name}. " for name, group in STORED.items() if kind in group), ""
+        )
+        raise Problem("validation", hint + "kind is " + ", ".join(KINDS), 422)
     if kind == "page":
         return "p.file_id IS NOT NULL", []
     stored = [k for group in STORED.values() for k in group] if kind == "other" else list(STORED[kind])
@@ -112,22 +99,12 @@ def kind_filter(kind):
     ), stored
 
 
-def ensure(c):
-    """Unversioned, like the trash: runs inside initialize's transaction at every start."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        pass
-
-
 def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='file_text'").fetchone() is not None
 
 
 def own_place(who):
-    """The reader's My dashboard (backend/cards.py person places), or '' for anyone who has none."""
+    """The reader's Company page (backend/cards.py person places), or '' for anyone who has none."""
     actor = str(who.actor or "")
     return "person:" + actor[6:] if who.role in ("owner", "human") and actor.startswith("human:") else ""
 
@@ -415,7 +392,7 @@ class Library:
         out = []
         for r in c.execute("SELECT DISTINCT place FROM pins WHERE item=?", ("page:" + fid,)):
             place = str(r["place"])
-            if place.startswith("person:") and place != own_place(who):  # someone's My dashboard is theirs alone
+            if place.startswith("person:") and place != own_place(who):  # someone's Company page is theirs alone
                 continue
             if place.startswith("task:") and not self.files.task_info(c, who, place[5:], cache):
                 continue
@@ -423,8 +400,8 @@ class Library:
         return out
 
     def row_view(self, c, who, r, caches, known):
-        value = self.files.view(c, who, r, caches)
         page = r["page_cadence"] is not None
+        value = self.files.view(c, who, r, caches, page=page)
         value.update(
             kind_label=KINDS[library_kind(r["kind"], page)],
             library_kind=library_kind(r["kind"], page),
@@ -434,9 +411,20 @@ class Library:
             archived=bool(r["archived"] or (page and r["page_archived"])),
             pins=self._pins(c, who, r["id"], caches["task"]),
         )
+        if page:
+            value.update(self.page_info(c, who, r))
         for key in ("poster_blob_id", "thumb_blob_id"):
             value.pop(key, None)
         return value
+
+    def page_info(self, c, who, row):
+        links = page_links.links_of(c, self.auth, who, row["id"])
+        return {
+            "links": links[:5],
+            "links_more": max(0, len(links) - 5),
+            "writers": page_links.writers_of(c, row["id"]),
+            "may_write": page_links.may_write(c, self.auth, who, row),
+        }
 
     def listing(
         self,
@@ -446,6 +434,9 @@ class Library:
         bot="",
         team="",
         task="",
+        linked="",
+        role="",
+        writer="",
         since="",
         until="",
         pinned=False,
@@ -476,7 +467,7 @@ class Library:
         if until:
             where.append("f.last_activity_at<?")
             params.append(until)
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:
             if team:
                 sql, args = self._team_where(c, who, team)
                 where.append(sql)
@@ -497,18 +488,20 @@ class Library:
                 spent[0] += 900 + len(r["title"] or "") * 2
                 return spent[0] <= LIST_BYTES
 
-            rows, nxt = scan(
-                c,
-                "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
-                "LEFT JOIN pages p ON p.file_id=f.id",
-                where,
-                params,
-                limit,
-                cursor,
-                lambda r: self.files.visible(c, who, r, cache),
-                budget,
-                cursor_key=visuals.key_for(self.app, self.store.settings),
-            )
+            with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
+                rows, nxt = scan(
+                    c,
+                    "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
+                    "LEFT JOIN pages p ON p.file_id=f.id",
+                    [*where, *sql],
+                    [*params, *args],
+                    limit,
+                    cursor,
+                    lambda r: self.files.visible(c, who, r, cache),
+                    budget,
+                    cursor_key=visuals.key_for(self.app, self.store.settings),
+                )
+            page_links.prime(c, rows)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
@@ -516,7 +509,7 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20, *, kind=""):
+    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer=""):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
         files are left out, as Docs leaves out archived docs."""
         if who.role not in ("owner", "human", "bot"):
@@ -525,8 +518,9 @@ class Library:
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
-        with self.store.read() as c:
-            candidates = self._candidates(c, tokens, kind_sql, kind_args)
+        with self.store.read_transaction() as c:
+            with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
+                candidates = self._candidates(c, tokens, " AND ".join([f"({kind_sql})", *sql]), [*kind_args, *args])
             from .files import prime_visible
 
             cache, out = {}, []
@@ -553,6 +547,7 @@ class Library:
                     break
             out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
             out = out[:limit]
+            page_links.prime(c, [r for _, r in out])
             known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
             return {
                 "results": [
@@ -569,6 +564,7 @@ class Library:
                         "page": r["page_cadence"] is not None,
                         "excerpt": excerpt(r["text"] or "", tokens),
                         "score": round(score, 3),
+                        **(self.page_info(c, who, r) if r["page_cadence"] is not None else {}),
                     }
                     for score, r in out
                 ]
@@ -585,8 +581,8 @@ class Library:
         if bot:
             kind_sql, kind_args = "(" + kind_sql + ") AND f.bot_id=?", (*kind_args, bot)
         select = (
-            "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
-            "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
+            "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM {source} "
+            "WHERE f.state<>'deleted' AND f.archived=0 "
             "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?"
         )
         if has_fts(c):
@@ -594,7 +590,9 @@ class Library:
 
             query = select.format(
                 text="file_text.text",
-                join="JOIN file_text_state s ON s.file_id=f.id JOIN file_text ON file_text.rowid=s.doc",
+                # FTS drives the search: otherwise an IN filter may put a complete MATCH inside every file lookup.
+                source="file_text CROSS JOIN file_text_state s ON s.doc=file_text.rowid "
+                "CROSS JOIN bot_files f ON f.id=s.file_id LEFT JOIN pages p ON p.file_id=f.id",
                 match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)",
             )
             seen, rows = set(), []
@@ -613,7 +611,11 @@ class Library:
             return rows
         like = " AND ".join("f.title LIKE ?" for _ in tokens)
         return c.execute(
-            select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
+            select.format(
+                text="''",
+                source="bot_files f LEFT JOIN pages p ON p.file_id=f.id",
+                match="AND " + like + " ORDER BY f.last_activity_at DESC",
+            ),
             (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX),
         ).fetchall()
 
@@ -844,13 +846,24 @@ def install_library(app, store, auth, files):
     library = Library(app, store, auth, files)
     app.state.library = library
 
-    @app.get("/api/v2/files")
+    @app.get(
+        "/api/v2/files",
+        **api_v2(
+            "Files",
+            "listFiles",
+            "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, pinned or archived; paged and byte-capped, no totals",
+            "FileLibrary",
+        ),
+    )
     def listing(
         request: Request,
         kind: str = "",
         bot: str = "",
         team: str = "",
         task: str = "",
+        linked: str = "",
+        role: str = "",
+        writer: str = "",
         since: str = "",
         until: str = "",
         pinned: bool = False,
@@ -865,6 +878,9 @@ def install_library(app, store, auth, files):
             bot=bot,
             team=team,
             task=task,
+            linked=linked,
+            role=role,
+            writer=writer,
             since=since,
             until=until,
             pinned=pinned,
@@ -873,12 +889,44 @@ def install_library(app, store, auth, files):
             cursor=cursor,
         )
 
-    @app.get("/api/v2/files/search")
-    def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
+    @app.get(
+        "/api/v2/files/search",
+        **api_v2(
+            "Files",
+            "searchFiles",
+            "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
+            "FileSearch",
+        ),
+    )
+    def search(
+        request: Request,
+        q: str = "",
+        limit: int = 20,
+        kind: str = "",
+        linked: str = "",
+        role: str = "",
+        writer: str = "",
+    ):
         """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
-        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
+        return library.search(
+            request.state.identity,
+            q[:500],
+            max(1, min(limit, SEARCH_MAX)),
+            kind=kind,
+            linked=linked,
+            role=role,
+            writer=writer,
+        )
 
-    @app.delete("/api/v2/files/{fid}")
+    @app.delete(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "deleteFile",
+            "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when",
+            "FileDeleted",
+        ),
+    )
     async def delete(request: Request, fid: str):
         """The owner deletes a file for good: every version's bytes leave storage. Its activity keeps that it was
         deleted, by whom and when."""

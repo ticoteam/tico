@@ -14,7 +14,7 @@ own rules belong in `knowledge/rhythm.md`. This file gives the mechanics and the
 
 - A key result's grade is the fraction of the way from its baseline to its target, read from the final dated reading.
   A result that reaches or passes its target is 1.0. When the target is below the baseline, the fraction is worked out the same
-  way and then clamped to 0 to 1 (`skills/grade-a-key-result-from-readings/SKILL.md`). A binary result is 0 or 1.
+  way and then clamped to 0 to 1 (`.claude/skills/run-the-operating-cadence/SKILL.md`, step 13). A binary result is 0 or 1.
 - A result with no reading is "ungraded", never 0 and never 1. Say what was missing.
 - The total averages graded results only, and says how many were left out.
 - Google's public OKR guidance grades from 0.0 to 1.0, as one summary of its ReWork guide describes it. A Tability article

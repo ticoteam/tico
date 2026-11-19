@@ -9,6 +9,7 @@ its append-only triggers are migration 0010 (backend/migrations).
 import json
 
 from .store import H, encode
+from .api_contract import api_v2
 
 LIMIT = 50
 LIST_BYTES = 262_144  # as the automations list: a page stays under 256 KB
@@ -72,15 +73,25 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
 def install(app, store, auth):
     from fastapi import Request
 
-    @app.get("/api/v2/audit")
+    @app.get(
+        "/api/v2/audit",
+        **api_v2(
+            "Team",
+            "listAudit",
+            "Who changed caps, spend, groups and automations, newest first (owner: all; others: their own)",
+            "AuditPage",
+        ),
+    )
     def audit_view(request: Request, object: str | None = None, limit: int = LIMIT, before: str | None = None):
         """Who changed what. The owner reads every row; anyone else reads only their own changes."""
         who = request.state.identity
         auth.domain(who)
         from .org_rules import redact_audit
+        from . import risk
 
         with store.read() as c:
             mine = None if who.role == "owner" else who.actor
             page = rows(c, obj=object, actor=mine, limit=limit, before=before)
             redact_audit(c, auth, who, page["rows"])
+            risk.redact_audit(c, auth, who, page["rows"])  # a matter's facts follow its task's privacy
             return page

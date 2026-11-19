@@ -1,6 +1,8 @@
 ---
 name: design-a-practice-block
 description: Design the practice for one skill in a role plan as a block of named work, practice with feedback, spaced review dates and the manager's check, so the plan says how the skill gets built and how anyone will know it worked.
+metadata:
+  function: people
 ---
 # Design a practice block
 

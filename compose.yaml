@@ -31,6 +31,10 @@ services:
       TICO_TOKEN_ALERT_INPUT:
       TICO_CREDENTIAL_ADMINS:
       TICO_CREDENTIAL_KMS_KEY:
+      TICO_CREDENTIAL_KMS_CONTEXT:
+      TICO_CREDENTIAL_KMS_ACCESS_KEY_ID:
+      TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY:
+      TICO_CREDENTIAL_KMS_REGION:
       TICO_PROCESSING_OPERATORS:
       TICO_ALB_ARN:
       TICO_ALB_REGION:
@@ -111,7 +115,6 @@ services:
       # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
       TICO_GATEWAY_INVITE:
       TICO_INSTALL_PRESET:
-      TICO_SAMPLE_COMPANY:
       TICO_COMPANY_FILE_B64:
       # A starter plan too big for the env (Tico's hosted servers): the file setup copied to ./company-file, mounted below.
       TICO_COMPANY_FILE:
@@ -126,6 +129,10 @@ services:
       TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT:
       TICO_RULES_CHECK_DAILY:
       TICO_RULE_CHECK_CONCURRENCY:
+      TICO_FAIR_SHARE_TOKEN_CONCURRENT:
+      TICO_FAIR_SHARE_TOKEN_PER_MINUTE:
+      TICO_FAIR_SHARE_BOT_CONCURRENT:
+      TICO_FAIR_SHARE_BOT_PER_MINUTE:
       TICO_TOPIC_FRESH:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
@@ -194,6 +201,10 @@ services:
       TICO_BLOCK_EXTERNAL_INVITES:
       TICO_CREDENTIAL_ADMINS:
       TICO_CREDENTIAL_KMS_KEY:
+      TICO_CREDENTIAL_KMS_CONTEXT:
+      TICO_CREDENTIAL_KMS_ACCESS_KEY_ID:
+      TICO_CREDENTIAL_KMS_SECRET_ACCESS_KEY:
+      TICO_CREDENTIAL_KMS_REGION:
       TICO_PROCESSING_OPERATORS:
       TICO_ALB_ARN:
       TICO_ALB_REGION:
@@ -242,8 +253,6 @@ services:
       TICO_SLACK_ROUTE_THRESHOLD:
       TICO_SLACK_ASK_THRESHOLD:
       TICO_SLACK_MAX_RECIPIENTS:
-      TICO_SLACK_DIGEST_MINUTES:
-      TICO_SLACK_DIGEST_CAP:
       TICO_SLACK_UNFURL_HOSTS:
       TICO_SLACK_OPEN_LABEL:
       TICO_SLACK_OPEN_URL:
@@ -268,7 +277,7 @@ services:
     <<: *hardening
     profiles: [caddy]
     cpu_shares: 4096
-    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     entrypoint: ["/bin/sh", "/generated/supervisor.sh"]
     command: []
     tmpfs: [/tmp]
@@ -303,7 +312,7 @@ services:
     <<: *hardening
     profiles: [cloudflared]
     cpu_shares: 4096
-    image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    image: cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d
     command: tunnel --no-autoupdate --config /tunnel/ingress.yml run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
@@ -328,7 +337,7 @@ services:
     <<: *hardening
     profiles: [cloudflared]
     cpu_shares: 4096
-    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     entrypoint: ["/bin/sh", "-c", "printf '%s' \"$$TICO_HOLD_CADDYFILE\" > /tmp/Caddyfile && exec caddy run --config /tmp/Caddyfile --adapter caddyfile"]
     read_only: true
     tmpfs: [/tmp, /data, /config]
@@ -364,7 +373,7 @@ services:
   livekit:
     <<: *hardening
     profiles: [meet]
-    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af}
+    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.13.11@sha256:25cd902de7cacbd5f1f779f6a6ac1eae20ba8f56b0935934ce6b0ab80d1e3d20}
     read_only: true
     tmpfs: [/tmp]
     networks:

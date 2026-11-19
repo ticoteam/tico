@@ -38,16 +38,16 @@ Note what each pull request body says a release needs: data changes, settings, f
 
 Then look across the batch for the same files or screens changed twice, one change undoing another, an order one
 needs (a back end before the screen that calls it), and a data change that locks a large table or cannot be undone
-(`skills/find-hidden-breaking-changes/SKILL.md`, `skills/judge-whether-a-release-can-roll-back/SKILL.md`). Write
+(`.claude/skills/find-hidden-breaking-changes/SKILL.md`, `.claude/skills/ship-a-release/SKILL.md` step 3). Write
 "None found" only after checking.
 
 ## 3. Write the page
 
-Follow `skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom:
+Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom:
 
 1. **Changelog.** Written for customers, good enough to publish as the company's changelog as it is. One entry per
    change people will notice: its kind (New, Improved, Fixed), a short plain headline, one or two sentences on what
-   they can now do or what no longer goes wrong (`skills/write-release-notes-for-users/SKILL.md`), and the after
+   they can now do or what no longer goes wrong (`.claude/skills/ship-a-release/SKILL.md`, `references/release-notes.md`), and the after
    picture from its QA page. The change people will like most comes first. No task or pull request numbers, no
    internal names, no jargon. Changes nobody will notice go in one closing line: "Plus 3 fixes behind the scenes."
 2. **Why we're confident.** Short: each task's QA page and its approval, what was checked live, anything unusual.
@@ -65,11 +65,11 @@ suggested version with its reason (`knowledge/versioning.md`); a person records 
 The release task lives in the pipeline where releases wait for their OK (`<release pipeline id>`): its first stage
 needs this report with a person's OK.
 
-    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --body "<the tasks, one line each>"
-    python3 skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
-    python3 skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
+    tico task create --pipeline <release pipeline id> --owner <you> --title "Release YYYY-MM-DD.N" --label release:YYYY-MM-DD.N --message "<the tasks, one line each>"
+    python3 .claude/skills/build-the-page/page.py build reports/releases/YYYY-MM-DD.N-draft.html --out reports/releases/YYYY-MM-DD.N.html
+    python3 .claude/skills/build-the-page/page.py check reports/releases/YYYY-MM-DD.N.html --kind release
     tico page publish reports/releases/YYYY-MM-DD.N.html --task <release task id> --title "Release YYYY-MM-DD.N"
-    python3 skills/build-the-page/page.py render <file id> --kind release
+    python3 .claude/skills/build-the-page/page.py render <file id> --kind release
     tico task attach <release task id> page:<file id> --req "<requirement>" --version N
 
 Look at both pictures `render` names before you attach. The requirement's name is the one `tico task show` lists;

@@ -2,8 +2,8 @@
 
 import json
 import re
+from typing import TypedDict
 
-from .rows import AttemptRow
 from .store import H
 from . import bot_settings as BS
 
@@ -23,10 +23,77 @@ HANDED_BACK = 'Its computer handed the run back before starting it'
 # the run's final_text (execution.expire), as hand_back saves HANDED_BACK.
 LAPSED = 'Its computer took the run and never started it, renewed its lease or handed it back'
 # Why a run never started, as one word for logs and events: told apart by the text above (run_diagnostics.reason,
-# execution.handed_back_until).
+# execution.wait_unstarted).
 UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
 # A silent lapse as Runs says it: the computer by its name, so a person sees which machine to look at.
 LAPSED_NAMED = '{computer} took it and never started it'
+
+# One job's runs its computer could not start, SAME in a row: handed back for one reason (its `runner_error`), or taken
+# and dropped in silence on one computer. No wait clears that, so the job fails and BotOps gets it (bot_stops.cant_start).
+# On Acme (Nov 11) a computer handed back every run of a task for one reason and the task read "Queued"; on Tico Team
+# (Nov 12) one took ~344 runs in a day and never started them, and nobody was told.
+SAME = 3
+BOTOPS_HAS_IT = 'BotOps is checking why.'  # ends the failed run's text: no person is asked (execution.last_stop)
+# The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
+LAPSED_WHY = 'it took each run and never started it, renewed its lease or handed it back'
+# The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent
+# lapses in a row: some of those runs may have been handed back or cut, so silence is not claimed.
+MISSED_WHY = 'it never started the run on any try before its lease ran out'
+
+
+class AttemptRow(TypedDict):
+    """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
+    recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
+
+    id: str
+    job_id: str | None
+    bot_id: str
+    runner_id: str | None
+    generation: int | None
+    token_hash: str | None
+    state: str | None
+    lease_until: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    thread_id: str | None
+    result: str | None
+    final_text: str | None
+    last_seq: int
+    stop_requested_at: str | None
+    gateway_key_id: str | None
+    handed_runtime: str | None
+    handed_model: str | None
+    acting_person: str | None
+    lane: str
+    wake: str | None
+    model: str | None
+    settled_at: str | None
+    trigger: str | None
+    message_id: str | None
+    task_id: str | None
+    exit: str | None
+    summary: str | None
+    trigger_kind: str | None
+    trigger_source: str | None
+    purpose: str | None
+    rule_id: str | None
+    writes: int | None
+    outcome: str | None
+    did_nothing: int | None
+    rotated: str | None
+    session_kind: str | None
+    session_why: str | None
+    input_tokens: int | None
+    cached_tokens: int | None
+    cache_write_tokens: int | None
+    output_tokens: int | None
+    prompt_tokens: int | None
+    usage_model: str | None
+    provider: str | None
+    est_cost_usd: float | None
+    billing: str | None
+    usage_reason: str | None
 
 
 def clean_stop_reported(c, attempt_id):
@@ -45,7 +112,7 @@ TAIL_BYTES = 64 * 1024
 TAIL_LINES = 200
 # Defense in depth after the runner's literal/encoded granted-secret redactor.
 SECRET = re.compile(
-    r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+"
+    r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat|xox[a-z]|xapp)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?i:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+"
 )
 
 
@@ -54,7 +121,7 @@ FAILED_TEXT = {'item_id': 200, 'tool': 200, 'command': 4000, 'output_tail': 8192
 FAILED_KEPT = 20
 
 
-def scrub(text):
+def scrub(text: object) -> str:
     return SECRET.sub('[redacted]', str(text or ''))
 
 
@@ -86,7 +153,11 @@ def keep(c, row: AttemptRow, body):
     both."""
     kept: dict[str, object] = dict(keep_stderr(c, row, body.tail)) if body.tail is not None else {'kept': False}
     if body.failed_tools:
-        kept['failed_tools'] = keep_failed_tools(c, row, [t.model_dump() for t in body.failed_tools])
+        calls = [t.model_dump() for t in body.failed_tools]
+        kept['failed_tools'] = keep_failed_tools(c, row, calls)
+        from . import reconnect_tasks
+
+        reconnect_tasks.diagnosed(c, row, calls)  # a key the vendor refused gets its tool's Reconnect task
     return kept
 
 
@@ -144,11 +215,44 @@ def stop_supersedes(stop_requested_at, outcome):
     return bool(stop_requested_at) and outcome != 'completed'
 
 
+# What a run that gave its place up for an update says when the runner's own line is missing.
+PAUSED = "Paused while its computer updated; continues right after it"
+
+
+def paused(c, aid, state, result_json, stop_requested_at):
+    """Why a run paused for an update (runner-rs/src/drain.rs), including a hand-back reported after lease expiry: the
+    runner's `status` `{"yielded": line}` event, else PAUSED when its completion says it yielded."""
+    from .turns import clip
+
+    if state not in ("interrupted", "expired") or stop_supersedes(stop_requested_at, state):
+        return None
+    try:
+        result = json.loads(result_json or "{}") or {}
+    except (TypeError, ValueError):
+        result = {}
+    # A completion can withdraw the earlier pause when its fallback session cannot resume. Without a completion,
+    # the saved event still explains a lease that expired before the runner could hand the turn back.
+    if isinstance(result, dict) and ("yielded" in result or "outcome" in result) and not result.get("yielded"):
+        return None
+    row = c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind='status' "
+        "AND json_extract(payload,'$.yielded') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        (aid,),
+    ).fetchone()
+    try:
+        line = (json.loads(row[0]) if row else {}).get("yielded")
+    except (TypeError, ValueError, AttributeError):
+        line = None
+    if isinstance(line, str) and line.strip():
+        return clip(line, 200)
+    return PAUSED if isinstance(result, dict) and result.get("yielded") else None
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
     if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
 
-        # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
+        # A quarantine's Stop reads as the quarantine, never as a lost computer or Tico (Dev 573).
         return stopped_by(c, row) or f"Canceled by {row['stop_requested_at']}"
     if outcome in ('completed', 'ok'):
         return 'Finished'
@@ -160,8 +264,6 @@ def reason(c, row: AttemptRow, outcome, summary=''):
     if result.get('text') == RESTART_TEXT:
         return RESTART_TEXT
     # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
-    from .login_waits import paused
-
     yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
     if yielded:
         return scrub(yielded)[:500]
@@ -179,7 +281,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
     if row['state'] == 'failed' and not row['started_at'] and row['final_text'] and not row['result']:
         # Failed by the server before its computer started it (execution.expire, settle_unstarted, after
-        # PRE_START_TRIES or start_holds.SAME): the text it saved says why, where a fallback would say a process failed.
+        # PRE_START_TRIES or SAME): the text it saved says why, where a fallback would say a process failed.
         return scrub(row['final_text'])[:500]
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute(
@@ -205,6 +307,10 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             if isinstance(err, dict):
                 err = json.dumps(err, ensure_ascii=False)
             code = p.get('code') or ''
+            from clients.gateway import edge_summary
+
+            # A Cloudflare 5xx page says only its status, host and ray id worth keeping (what support looks it up by).
+            err = edge_summary(err) or err
             return scrub('Model error' + (' (' + str(code) + ')' if code else '') + ': ' + str(err))[:500]
     for ev in events:
         p = json.loads(ev['payload'])
@@ -324,7 +430,7 @@ def cap(c, at, listening_since=None):
         )
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             CAP_EVENT,
             row['id'],
             {'bot': row['bot_id'], 'max_run_minutes': minutes, 'silent_since': seen, 'reason': reason},
@@ -347,3 +453,65 @@ def stalled_runs(c, who, auth):
             continue
         rows.append({'run': r['id'], 'bot': r['bot_id'], **metadata(c, r['id'])})
     return rows
+
+
+def runner_error(c, aid):
+    """What run `aid`'s computer said stopped it from starting the run (its `runner_error` diagnostic), or '' when it
+    said nothing: a hand-back with no reason (Tico unreachable for a moment, a person's Stop) is a hiccup, never
+    counted."""
+    for row in c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' ORDER BY seq DESC LIMIT 20", (aid,)
+    ):
+        try:
+            payload = json.loads(row[0])
+        except ValueError:
+            continue
+        said = payload.get('runner_error') if isinstance(payload, dict) else None
+        if said:
+            return scrub(' '.join(str(said).split()))[:500]
+    return ''
+
+
+def stuck(c, row):
+    """The reason this handed-back run (its attempt already expired) is the SAME'th in a row on its job, or ''."""
+    if not row['job_id'] or row['stop_requested_at']:
+        return ''
+    why = runner_error(c, row['id'])
+    if not why:
+        return ''
+    for count, run in enumerate(
+        c.execute(
+            "SELECT id,state,started_at,final_text FROM attempts WHERE job_id=? "
+            "ORDER BY created_at DESC,rowid DESC LIMIT ?",
+            (row['job_id'], SAME),
+        ).fetchall()
+    ):
+        if (
+            run['started_at']
+            or run['state'] != 'expired'
+            or not str(run['final_text'] or '').startswith(HANDED_BACK)
+            or runner_error(c, run['id']) != why
+        ):
+            return ''
+        if count + 1 >= SAME:
+            return why
+    return ''
+
+
+def lapsed_in_a_row(c, job_id):
+    """How many of the job's latest runs in a row (up to SAME) its computer took and went silent on before starting
+    them (execution.expire saves LAPSED on each). A run that started, a hand-back, a lapse Tico excused (its own cut,
+    a planned yield: no LAPSED) or a lapse on another computer ends the row: BotOps is told one computer took them."""
+    count, computer = 0, None
+    for row in c.execute(
+        "SELECT state,started_at,final_text,runner_id FROM attempts WHERE job_id=? "
+        "ORDER BY created_at DESC,rowid DESC LIMIT ?",
+        (job_id, SAME),
+    ):
+        if row['started_at'] or row['state'] != 'expired' or not str(row['final_text'] or '').startswith(LAPSED):
+            break
+        if count and row['runner_id'] != computer:
+            break
+        computer = row['runner_id']
+        count += 1
+    return count

@@ -16,7 +16,9 @@ from the reader never shows, nor does its existence. Each list is paged and byte
 
 import base64
 import json
+import logging
 
+from . import task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -30,13 +32,16 @@ CATCH_UP_THREADS = 1000  # threads of one subtree an item reads its new messages
 CATCH_UP_BODY = 4000  # a shown message's text is cut here (`clipped`); the thread has it whole
 CATCH_UP_CLIP = 500  # a message too big for what is left of the page goes without refs, its text cut here
 CATCH_UP_READS = 5  # batches of candidate messages one item reads whole, at most
-CATCH_UP_HIDDEN = 200  # messages that can hide, read whole to count one batch of roots' new messages
+CATCH_UP_HIDDEN = 2000  # messages that can hide, read whole in one walk to prove each root has a new one to show
+CATCH_UP_COUNTED = 2000  # messages that can hide, read whole to count the new messages of the items one load shows
+COUNT_ROUNDS = 4  # rounds `_count_exact` shares CATCH_UP_COUNTED over, at most
 CATCH_UP_SCAN = 1000  # roots one Catch up looks at, over all its pages
 CATCH_UP_BATCH = 100  # roots read and checked together
 CATCH_UP_SHOWN = 99  # `count` stops here (the sidebar badge), and the rail's `unread` with it
 ATTENTION_SCAN = 500  # open mentions and asks read for one Catch up
 DONE = 0  # a rail cursor's list that has no more rows
 EVERYONE_REFUSED = ("home", "task", "meeting")
+log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------- shared SQL
@@ -74,13 +79,29 @@ PINNED_SQL = (
 )
 
 
-def root_open(c, v):
+DM_MATCH_AUDIENCES = f"{_audience()} IN ('company','team','members','personal','participants')"
+OPEN_ROOT = "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL"
+# The open roots a thread list can hold, read from the index of exactly these (migration
+# 20261118222618_open_thread_titles) in the rail's title order: a few hundred roots, not every task thread. Its terms
+# are the index's WHERE, so a query naming the index must AND them in.
+OPEN_THREADS = f"{OPEN_ROOT} AND {DM_MATCH_AUDIENCES}"
+OPEN_THREADS_FROM = "conversations r INDEXED BY conversations_open_thread_titles"
+
+
+def root_open(c, v, within=None, args=None):
     """The roots the rail, Browse and Catch up list for this reader: not archived or closed, and not hidden for a
-    finished task (T.task_open_sql, which a post the reader reads brings back)."""
-    return (
-        "r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND "
-        f"{T.task_open_sql(c, v, 'r', T.revived_roots(c, v))}"
-    )
+    finished task (T.task_open_sql, which a post the reader reads brings back). `within` (SQL over `r`, with `args`) is
+    the rest of the caller's filter, or a looser one: only the finished-task roots it admits have their posts checked
+    (T.revived_within), so a query that can return no task thread checks none. Without it, every finished task's."""
+    return f"{OPEN_ROOT} AND {task_open(c, v, within, args)}"
+
+
+def task_open(c, v, within=None, args=None, source="conversations r", per_row=False):
+    """root_open's task half alone (`within` and `args` as there; `source` the FROM its revival check reads), for a
+    query that puts it after its cheaper terms: SQLite tests a WHERE's correlated subqueries in the order written.
+    `per_row`: T.task_open_sql's, for a query that reaches the check for few rows."""
+    revived = T.revived_roots(c, v) if within is None else T.revived_within(c, v, within, args, source=source)
+    return T.task_open_sql(c, v, "r", revived, per_row=per_row)
 
 
 ACTIVITY = (
@@ -143,11 +164,14 @@ def _views(c, v, rows, *, summaries=None):
     if v._members is None:
         v._members = {}
     v._members.update(T._prefetch_members(c, v, ids))
+    if not (v.is_person and v.admin(c)):  # an admin manages every thread without the owner check
+        T.prime_owners(c, v, rows)
     summaries = T.subtree_summaries(c, v, ids) if summaries is None else summaries
     followers = T._followers_of(c, v, ids)
     dms = T.dm_with(c, v, rows)
     pins = T.pin_rows(c, v.actor, ids)
     calls = T.live_calls(c, ids)
+    _prime_names(c, v, rows)
     out = {}
     for r in rows:
         summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
@@ -244,7 +268,7 @@ def set_pinned_for_everyone(c, principal, thread_id, value):
 _TITLE_ORDER = ("CASE WHEN TRIM(COALESCE(r.subject,''))='' THEN 1 ELSE 0 END", "lower(COALESCE(r.subject,''))")
 
 
-def _title_page(c, v, where, args, after, limit):
+def _title_page(c, v, where, args, after, limit, source="conversations r"):
     """Up to `limit` readable roots in title order (unnamed last) after `after`, and whether more follow. Rows the read
     check refuses are skipped, so a batch is read again past them."""
     rows, position = [], after
@@ -257,11 +281,13 @@ def _title_page(c, v, where, args, after, limit):
             )
             at = {"at_blank": int(position[0]), "at_key": str(position[1]), "at_id": str(position[2])}
         sql = (
-            f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM conversations r "
+            f"SELECT * FROM (SELECT r.*, {_TITLE_ORDER[0]} AS t_blank, {_TITLE_ORDER[1]} AS t_key FROM {source} "
             f"WHERE {where}){cond} ORDER BY t_blank, t_key, id LIMIT :fetch"
         )
-        found = [T.thread_row(c, dict(r)) for r in c.execute(sql, {**args, **at, "fetch": fetch})]
+        page = c.execute(sql, {**args, **at, "fetch": fetch})
+        found = [row for r in page if (row := T.thread_row(c, dict(r))) is not None]  # never None: a stored row
         T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
+        task_privacy.prime_rooms(c, [r["id"] for r in found])  # each readable check's room and meeting provenance
         dms, members = [r["id"] for r in found if T.audience_of(r) in ("personal", "participants")], {}
         if dms:
             members = T._member_rows(c, v, dms)
@@ -294,6 +320,24 @@ def _rail_next(rows, items, more):
     return [last["t_blank"], last["t_key"], last["id"]]
 
 
+_RAIL_KIND = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"  # a thread or a group DM
+
+
+def _rail_lists(c, v, marks):
+    """(FROM, Pinned's WHERE, Threads' WHERE) for the rail's two title-ordered lists: open threads and group DMs the
+    reader reads, pinned for them or (Threads) not pinned and theirs (`marks`: their member names). Both read the
+    open-thread index (_RAIL_KIND admits only its audiences, so its terms change no answer) and test the finished-task
+    check last, after every cheaper term."""
+    readable = T.readable_sql(c, v, "r", per_row=True)  # the index's few hundred rows, each looked up by id
+    base = [OPEN_THREADS, _RAIL_KIND, readable]
+    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM, per_row=True)
+    return (
+        OPEN_THREADS_FROM,
+        " AND ".join([*base, PINNED_SQL, open_task]),
+        " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}", open_task]),
+    )
+
+
 def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     """The reader's threads by title: {"pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"}.
     `pinned` holds the ones pinned for them (threads pinned for everyone they read but never joined among them), at most
@@ -307,19 +351,14 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
     pinned_at, threads_at = (None, None) if first else _rail_cursor(cursor)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
-    base = [root_open(c, v), kind, T.readable_sql(c, v, "r")]
+    source, pinned_where, threads_where = _rail_lists(c, v, marks)
     v._members = {}
     try:
         pinned_rows, pinned_more = (
-            ([], False)
-            if pinned_at == DONE
-            else _title_page(c, v, " AND ".join([*base, PINNED_SQL]), args, pinned_at, PINNED_MAX)
+            ([], False) if pinned_at == DONE else _title_page(c, v, pinned_where, args, pinned_at, PINNED_MAX, source)
         )
         threads_rows, threads_more = (
-            ([], False)
-            if threads_at == DONE
-            else _title_page(c, v, " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}"]), args, threads_at, limit)
+            ([], False) if threads_at == DONE else _title_page(c, v, threads_where, args, threads_at, limit, source)
         )
         rows = pinned_rows + threads_rows
         pairs = T._one_dm_pairs(c, v) if first else {}
@@ -339,7 +378,7 @@ def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
         "threads": thread_items,
         "catch_up": len(found) if first else None,
         "catch_up_ids": [it["row"]["id"] for it in found],
-        "unread": _unread_items(c, v, found, kind, args, marks),
+        "unread": _unread_items(c, v, found, _RAIL_KIND, args, marks),
         "dms": T.one_dm_unread(c, v, pairs=pairs, summaries=summaries) if first else {},
         "next_cursor": None if position == [DONE, DONE] else _encode(position),
     }
@@ -368,7 +407,9 @@ def _unread_items(c, v, found, kind, args, marks):
         members = T._member_rows(c, v, [r["id"] for r in dms])
         held -= {r["id"] for r in dms if len(_others(c, v, r, members[r["id"]])) < 2}
     off = [it for it in found if it["row"]["id"] not in held]
+    _count_exact(c, v, off)
     with_dm = T.dm_with(c, v, [it["row"] for it in off])
+    _prime_names(c, v, [it["row"] for it in off])
     out = []
     for it in off:
         r = it["row"]
@@ -385,12 +426,29 @@ def _unread_items(c, v, found, kind, args, marks):
                 "dm_with_count": int(dm.get("dm_with_count") or 0),
                 "home_actor": T.home_owner(r) if audience == "home" else None,
                 "new_count": it["new_count"],
+                "new_count_partial": not it.get("exact", True),
                 "mention": it["mention"],
                 "task_id": r.get("task_id"),
                 "last_message_at": r.get("last_message_at"),
             }
         )
     return out
+
+
+def _prime_names(c, v, rows):
+    """Read together the names `T._name` gives these rows one at a time: each untitled root's members, or its owner for
+    a Home, so naming them reads no bot or person again (names.lookup keeps them for the snapshot). A row named by its
+    title or task needs neither; one missed here is still named, by its own read."""
+    from . import names
+
+    untitled = [r for r in rows if not r.get("subject") and not r.get("task_id")]
+    homes = [r for r in untitled if T.audience_of(r) == "home"]
+    others = [r for r in untitled if T.audience_of(r) != "home"]
+    members = T._member_rows(c, v, [r["id"] for r in others])
+    actors = {a for r in homes if (a := T.home_owner(r))}
+    actors.update(a for r in others for a in T._dm_members(c, r, members[r["id"]]))
+    if actors:
+        names.lookup(c, sorted(actors))
 
 
 # ----------------------------------------------------------------------------- browse
@@ -402,7 +460,8 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     after = _decode(cursor, 2)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    where = [root_open(c, v), f"{_audience()} IN ('company','team')", T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
+    company = f"{_audience()} IN ('company','team')"
+    where = [root_open(c, v, company), company, T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
     text = str(q or "").strip()
     if text:
         args["q"] = "%" + text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -526,11 +585,29 @@ def _readable_ids(c, v, light):
     out, whole = set(), []
     for m in light:
         (out.add if m["plain"] and m["conversation_id"] not in legacy else whole.append)(m["id"])
-    for part in H.chunks(whole):
-        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part):
-            if T.message_readable(c, v, dict(r), thread_checked=True):
-                out.add(r["id"])
+    rows = [
+        dict(r)
+        for part in H.chunks(whole)
+        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part)
+    ]
+    _prime(c, rows)
+    out.update(r["id"] for r in rows if T.message_readable(c, v, r, thread_checked=True))
     return out
+
+
+def _prime(c, rows):
+    """Before the per-message check of these stored rows: their lookups, reply chains, refs and runs read together
+    (threads.prime_checks), and each room's conversation and meeting provenance, so a reader with hundreds of bot
+    replies waiting costs a fixed number of statements."""
+    if not rows:
+        return
+    from . import read_cache, task_privacy
+
+    T.prime_checks(c, rows)
+    rooms = {r["conversation_id"] for r in rows}
+    H.prime_conversations(c, rooms)
+    if read_cache.cache(c) is not None:  # each room's meeting provenance, kept only while this snapshot's cache lives
+        task_privacy.meeting_sources(c).prime_conversations(rooms)
 
 
 def _readable_rows(c, v, rows):
@@ -555,10 +632,11 @@ def _bot_home(cv):
 
 def _flags(c, v):
     """({root id: [message ids]}, {root ids}, {root id: count}): the roots that mention the reader, with their open
-    mentions' and asks' messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN); the roots of
-    writes held for their review; and the bots' Homes with a reply or mention for them past their mark (`_home_replies`).
-    Every message passes the thread and the per-message check; only one that can hide is read whole. A bot's reply in its
-    own Home is not an open item: it counts while unread (`_home_replies`), so reading it clears it."""
+    mentions' and asks' messages (Catch up's own rule, wider than Needs attention's open_mentions; ids only, the newest
+    ATTENTION_SCAN); the roots of writes held for their review; and the bots' Homes with a reply or mention for them
+    past their mark (`_home_replies`). Every message passes the thread and the per-message check; only one that can
+    hide is read whole. A bot's reply in its own Home is not an open item: it counts while unread (`_home_replies`), so
+    reading it clears it."""
     from . import thread_attention
 
     me = v.actor
@@ -640,11 +718,12 @@ def _mentioned(c, v):
     return {r["root"] for r in _readable_rows(c, v, rows)}
 
 
-def _readable_new(c, v, roots):
-    """{root id: how many new messages of its open subtree the reader may read}: subtree_summaries' unread, through the
-    thread check for each sub-thread (at most CATCH_UP_THREADS a root) and the per-message check for each message that
-    can hide (at most CATCH_UP_HIDDEN read whole a call; past that they are not counted)."""
-    mark, subtree, legacy = T._subtree_mark(c, v), T._SUBTREE.format(me="?"), T._legacy_homes(c)
+def _unread_groups(c, v, roots):
+    """({root id: new messages the reader surely may read}, {root id: {thread id: messages that can hide}}) for these
+    roots' open subtrees: subtree_summaries' unread, through the thread check for each sub-thread (at most
+    CATCH_UP_THREADS a root). A plain message counts here in SQL; a restricted one, or any in a migrated Home, can hide
+    and waits for the per-message check (`_hidden_checks`)."""
+    legacy = T._legacy_homes(c)
     groups = []
     for part in H.chunks(list(roots)):
         unread_sql, args = T._subtree_unread_sql(c, v, part)
@@ -659,28 +738,139 @@ def _readable_new(c, v, roots):
             )
         ]
     found, _ = T.read_threads(c, v, [g["thread"] for g in groups if g["thread"] != g["root"]])
-    out, hidden = {}, []
+    sure, hidden = {}, {}
     for g in groups:
         if g["thread"] != g["root"] and not (found.get(g["thread"]) and T.thread_readable(c, v, found[g["thread"]])):
             continue
-        sure = 0 if g["thread"] in legacy else int(g["plain"] or 0)
-        out[g["root"]] = out.get(g["root"], 0) + sure
-        if int(g["n"]) > sure:
-            hidden.append(g)
-    budget = CATCH_UP_HIDDEN
-    for g in hidden:
-        if budget <= 0:
+        plain = 0 if g["thread"] in legacy else int(g["plain"] or 0)
+        sure[g["root"]] = sure.get(g["root"], 0) + plain
+        if int(g["n"]) > plain:
+            hidden.setdefault(g["root"], {})[g["thread"]] = int(g["n"]) - plain
+    return sure, hidden
+
+
+def _hidden_window(c, v, hidden, low, high, most):
+    """The messages that can hide at places low < k <= high (oldest first) of each thread in `hidden` ({root id: {thread
+    id: ...}}), at most `most` in all, the nearest places first so every thread gets its share: [(root id, row)]. One
+    statement a chunk of roots for the places, then the rows read whole in chunks, primed for the per-message check."""
+    if most <= 0 or not hidden:
+        return []
+    legacy = T._legacy_homes(c)
+    places = []
+    for part in H.chunks(list(hidden)):
+        unread_sql, args = T._subtree_unread_sql(c, v, part)
+        wanted = [t for r in part for t in hidden[r]]
+        places += [
+            (r["root"], r["id"])
+            for r in c.execute(
+                f"WITH unread AS ({unread_sql}) SELECT root, id FROM (SELECT root, id, ROW_NUMBER() OVER "
+                "(PARTITION BY thread ORDER BY seq) AS k FROM unread WHERE thread IN (SELECT value FROM "
+                "json_each(:wanted)) AND (NOT plain OR thread IN (SELECT value FROM json_each(:legacy)))) "
+                "WHERE k>:low AND k<=:high ORDER BY k, root, id LIMIT :most",
+                {
+                    **args,
+                    "wanted": json.dumps(wanted),
+                    "legacy": json.dumps(sorted(t for t in wanted if t in legacy)),
+                    "low": low,
+                    "high": high,
+                    "most": most - len(places),
+                },
+            )
+        ]
+        if len(places) >= most:
             break
-        maybe = "" if g["thread"] in legacy else f" AND NOT {PLAIN}"
-        for r in c.execute(
-            f"SELECT m.* FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
-            f"WHERE s.id=? AND {T.unread_message_sql()}{maybe} ORDER BY m.seq LIMIT ?",
-            (v.actor, g["thread"], v.actor, v.actor, budget),
-        ).fetchall():
-            budget -= 1
-            if T.message_readable(c, v, dict(r), thread_checked=True):
-                out[g["root"]] += 1
+    root_of = dict((mid, root) for root, mid in places)
+    rows = [
+        dict(r)
+        for part in H.chunks(list(root_of))
+        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part)
+    ]
+    _prime(c, rows)
+    return [(root_of[r["id"]], r) for r in rows]
+
+
+def _after_round(waiting, low, rows, found=()):
+    """`waiting` ({root id: {thread id: messages that can hide}}) after a round that read `rows` from place `low` on:
+    the threads that still hold unread places, under the roots not yet `found`, and whether every thread read its whole
+    share (False when the round's budget cut it short)."""
+    got = {}
+    for _, r in rows:
+        got[r["conversation_id"]] = got.get(r["conversation_id"], 0) + 1
+    out = {}
+    for root, ts in waiting.items():
+        if root in found:
+            continue
+        rest = {t: n for t, n in ts.items() if n > low + got.get(t, 0)}
+        if rest:
+            out[root] = rest
+    return out, got
+
+
+def _readable_new(c, v, roots, left, later=0):
+    """{root id: (new messages the reader may read, at least; whether that is every one)} for Catch up's walk, which
+    only asks whether a root has one. A root with a plain new message has it; any other is checked a message at a time,
+    oldest first, in rounds of 1, 4, 16, ... places a sub-thread, every root having its turn before any has more, until
+    one passes or every message that can hide has been checked. `left` ([checks left]) is the walk's budget,
+    CATCH_UP_HIDDEN over all its batches, and `later` the roots a later batch could still bring: past a root's first check
+    one check each is kept for them, so every root of the walk gets its first check before any root gets more. A root still unproved when the budget runs out is left
+    out and recorded (`catch_up_unchecked`, in the flight recorder's events)."""
+    sure, hidden = _unread_groups(c, v, roots)
+    out = {r: (n, r not in hidden) for r, n in sure.items()}
+    waiting = {r: dict(t) for r, t in hidden.items() if not sure.get(r)}
+    found, low, size = set(), 0, 1
+    while waiting:
+        # A root's first check always goes; a further round keeps one check for each root a later batch could bring.
+        spend = left[0] - (later if low else 0)
+        if spend <= 0:
+            break
+        rows = _hidden_window(c, v, waiting, low, low + size, spend)
+        left[0] -= len(rows)
+        for root, r in rows:
+            if root not in found and T.message_readable(c, v, r, thread_checked=True):
+                found.add(root)
+        if len(rows) >= spend:  # the budget ran out inside this round: what is still waiting stays unproved
+            waiting = {r: t for r, t in waiting.items() if r not in found}
+            break
+        waiting, _ = _after_round(waiting, low, rows, found)
+        low, size = low + size, size * 4
+    for root in found:
+        out[root] = (1, sum(hidden[root].values()) == 1)
+    if waiting:
+        log.warning("catch_up_unchecked reader=%s roots=%d", v.actor, len(waiting))
+        from . import flight
+
+        flight.note(c, "catch_up_unchecked", {"reader": v.actor, "roots": len(waiting)})
     return out
+
+
+def _count_exact(c, v, items):
+    """Give these Catch up items (the cards on a page, the rail's Unread rows) their whole count: every new message of
+    the subtree the reader may read, each message that can hide read whole for its check, CATCH_UP_COUNTED in all,
+    shared out evenly over the threads. An item whose count stops there keeps what was found and `exact` false."""
+    todo = {it["row"]["id"]: it for it in items if not it.get("exact", True)}
+    if not todo:
+        return
+    sure, hidden = _unread_groups(c, v, list(todo))
+    counts, low, left, rounds = dict(sure), 0, CATCH_UP_COUNTED, 0
+    waiting = {r: dict(t) for r, t in hidden.items()}
+    while waiting and left > 0 and rounds < COUNT_ROUNDS:
+        rounds += 1
+        high = low + max(1, left // sum(len(t) for t in waiting.values()))
+        rows = _hidden_window(c, v, waiting, low, high, left)
+        left -= len(rows)
+        for root, r in rows:
+            if T.message_readable(c, v, r, thread_checked=True):
+                counts[root] = counts.get(root, 0) + 1
+        before = waiting
+        waiting, got = _after_round(waiting, low, rows)
+        # A thread the budget cut short read fewer than its share: the round's places are not all read, so stop.
+        if any(got.get(t, 0) < min(n, high) - low for ts in before.values() for t, n in ts.items()):
+            break
+        low = high
+    for root, it in todo.items():
+        n = counts.get(root, 0)
+        it["unread"], it["exact"] = n, root not in waiting
+        it["new_count"] = n or 1
 
 
 def _walk(c, v, flags, after=None):
@@ -703,17 +893,22 @@ def _walk(c, v, flags, after=None):
     is_flagged = "r.id IN (SELECT value FROM json_each(:flagged))"
     is_mention = "r.id IN (SELECT value FROM json_each(:mentions))"
     audience = _audience()
-    where = [
-        root_open(c, v),
-        T.readable_sql(c, v, "r"),
+    # Cheapest first, as SQLite tests a WHERE's correlated subqueries in the order written: something new (an index
+    # seek or two), then readable (each root looked up by id), then the reader being in the root (its members,
+    # followers and participants).
+    rest = [
+        f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
+        T.readable_sql(c, v, "r", per_row=True),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
-        f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
         # A muted root shows only for a mention.
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
+    where, open_task, more = _walk_where(c, v, rest, args)
+    args.update(more)
     scanned = int(after[3]) if after else 0
+    left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):
         if after and int(after[0]) > rank:
             continue
@@ -728,13 +923,19 @@ def _walk(c, v, flags, after=None):
                 T.thread_row(c, dict(r))
                 for r in c.execute(
                     f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
-                    f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
+                    f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
                     {**args, **at, "batch": batch},
                 )
             ]
-            T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
+            ids = [r["id"] for r in found if r]
+            T.prime_members(c, v, ids, roots=ids)
+            task_privacy.prime_rooms(c, ids)  # their meeting provenance too, not one room at a time
             readable = {r["id"] for r in found if T.thread_readable(c, v, r)}
-            counts = _readable_new(c, v, [i for i in readable if i not in history])
+            # A bot's Home counts only `_home_replies`, already checked: counting its messages again would spend the
+            # per-message checks (and CATCH_UP_HIDDEN) on a number that is never used.
+            bot_homes = {r["id"] for r in found if r and _is_bot_home(r, v)}
+            later = max(0, CATCH_UP_SCAN - scanned - len(found))  # roots a later batch could still bring
+            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes], left, later)
             for r in found:
                 scanned += 1
                 position = [int(r["activity"] or 0), r["id"]]
@@ -743,7 +944,7 @@ def _walk(c, v, flags, after=None):
                 mention = r["id"] in mentions
                 # In a bot's Home only its replies and mentions for the reader count (`_home_replies`).
                 rid = str(position[1])
-                unread = homes.get(rid, 0) if _is_bot_home(r, v) else counts.get(rid, 0)
+                unread, exact = (homes.get(rid, 0), True) if _is_bot_home(r, v) else counts.get(rid, (0, True))
                 # An item has a new message the reader may read, or an open attention item they read.
                 if not unread and r["id"] not in held and not mention:
                     continue
@@ -754,11 +955,30 @@ def _walk(c, v, flags, after=None):
                     "mention": mention,
                     "new_count": unread or 1,
                     "unread": unread,
+                    "exact": exact,
                     "attention": mentions.get(r["id"]) or [],
                     "scanned": scanned,
                 }
             if len(found) < batch:
                 break
+
+
+def _walk_where(c, v, rest, args):
+    """(the walk's WHERE terms, its finished-task check, their args): open roots that pass `rest`, the check to be
+    tested last, after every cheaper term. Only the finished-task roots this walk could list have their posts checked:
+    the reader's, with something new (T.revival_scope, one read of every finished task's root). The batches then pass
+    over every other finished-task root by its task's status, before any other per-row term: most of a company's roots
+    are finished tasks', and only those `rest` admits could be listed."""
+    roots, revived = T.revival_scope(c, v, " AND ".join(rest), args)
+    finished = (
+        "(r.task_id IS NULL OR r.id IN (SELECT value FROM json_each(:finished_in_scope)) OR NOT EXISTS (SELECT 1 "
+        f"FROM tasks ft WHERE ft.id=r.task_id AND ft.status IN ({T.FINISHED_TASKS})))"
+    )
+    return (
+        [OPEN_ROOT, finished, *rest],
+        T.task_open_sql(c, v, "r", revived, per_row=True),
+        {"finished_in_scope": json.dumps(sorted(roots))},
+    )
 
 
 def _is_bot_home(row, v):
@@ -806,6 +1026,7 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
         count = min(len(found), CATCH_UP_SHOWN)
     page, more = found[:limit], len(found) > limit
+    _count_exact(c, v, page)
     v._members = {}
     try:
         shown = _views(c, v, [it["row"] for it in page])
@@ -813,7 +1034,12 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         v._members = None
     items, budget, tail = [], T.MAX_PAGE_BYTES, None
     for it in page:
-        head = {"thread": shown[it["row"]["id"]], "new_count": it["new_count"], "mention": it["mention"]}
+        head = {
+            "thread": shown[it["row"]["id"]],
+            "new_count": it["new_count"],
+            "new_count_partial": not it.get("exact", True),
+            "mention": it["mention"],
+        }
         head_size = len(json.dumps(head, default=str)) + 32
         if items and head_size > budget:
             more = True
@@ -824,6 +1050,8 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         if items and not messages and rest:
             more = True
             break
+        if head["new_count_partial"]:  # a count cut short is at least the messages the card shows
+            head["new_count"] = max(head["new_count"], len(messages))
         items.append({**head, "messages": messages, "more": rest})
         budget -= head_size + used
         tail = it
@@ -960,6 +1188,7 @@ def _new_messages(c, v, root, attention_ids, unread, budget, *, force=False):
             r["id"]: dict(r)
             for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(chunk))})", chunk)
         }
+        _prime(c, list(found.values()))
         marks = T.reactions(c, chunk)
         for mid in chunk:
             m = found.get(mid)

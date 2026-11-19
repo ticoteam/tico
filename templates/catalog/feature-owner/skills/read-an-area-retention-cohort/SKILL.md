@@ -1,10 +1,12 @@
 ---
 name: read-an-area-retention-cohort
 description: Read an area's activation and retention from a cohort export without calling an immature cohort a result, naming its window, its size and its definition, and showing counts when a rate is too small to trust.
+metadata:
+  function: product
 ---
 # Read an area's retention cohort
 
-When to use: before any activation or retention figure goes into a review, a pitch, a spec or a question, and before a change in either is called a trend.
+When to use: before any activation or retention figure goes into a review, a spec or a question, and before a change in either is called a trend.
 
 Steps:
 1. Write the export's header: the area's label, the cohort dates (first and last sign-up day), the export date, the file or view name, and the activation and "active" definitions from `knowledge/area.md`.

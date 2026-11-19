@@ -10,6 +10,10 @@ even while a runner still checks in. Enrollment and subsequent heartbeats finish
 pending `starting` transition, so the next heartbeat repairs an old record too. A heartbeat does not cancel a stop
 already reserved by the scheduler.
 
+When HQ refuses a heartbeat because the machine is no longer running, the scheduler refreshes its machine list
+on the next look. If HQ lists the machine as stopped, work can resume the same machine and disk. An HQ report
+that the machine failed or was deleted allows a replacement.
+
 A stopped machine stays asleep while its queued tasks wait for a person, a snooze, a prerequisite or a check.
 Health and Computers show those waits. With no other reason, Computers says **asleep; starts when work can run**.
 Samples and load from the last boot do not mean an asleep machine is failing to report. They still hold new starts
@@ -91,7 +95,15 @@ cloud machine" under Computer).
 ## Size and Grow storage automatically
 
 HQ offers four sizes: Small and Default have a 51 GB disk, Large 111 GB and XLarge 251 GB. Settings shows each size's
-disk. A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
+disk and price.
+
+**Large is the size Tico recommends.** XLarge stays on offer but costs about as much as three Large machines, which
+also spread the load and the risk, so it reads "XLarge (not recommended)" in Settings, with the reason and both prices
+under it when picked. `GET /api/v2/cloud-machines` gives every size `recommended`, and XLarge a `note` saying why;
+setting it (Settings, `tico cloud set`, `tico settings set`, the API) works and the answer carries the same `note`.
+When a machine needs more room, give its busiest bots their own Large machine (the bot's Settings, Computer: Own cloud
+machine, Size: Large) rather than a bigger one. A shared machine's Performance page says which bots: the one or two
+that ran in every overload in the window ("Give A its own Large machine."). A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
 in Settings; replace the machine to start smaller. HQ resizes a machine only when it starts it, so a size chosen while
 the machine runs (by a person, or by growing) drains it first: its runner takes no new turn ("restarts at a new size
 once its turns finish"), and once no turn is out and no update is under way it stops, Always on too, and starts again
@@ -102,12 +114,14 @@ runs on at its size, takes work again, and the new size is tried again an hour l
 **Grow storage** (Settings, next to Always on) is on by default. The company sets it for the shared machine
 (`grow_storage` on `POST /api/v2/cloud-machines/shared`); an own machine follows the company until its bot chooses
 (`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading shows
-under 15% or under 10 GB free, the machine is set to the next size with more disk (Default to Large to XLarge) and
+under 15% or under 10 GB free, the machine is set to the next size with more disk (Small or Default to Large) and
 restarts at it as above (event `cloud_machine.grew`). Only a reading taken since the machine last started counts (one
 from before a restart is of the old disk), at most 10 minutes old.
 
-It never goes past the largest size or the company's CPU cap at HQ (counting the size other machines are restarting
-at). When it cannot grow (the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
+It never grows past Large by itself (a person may still pick XLarge, and an XLarge machine grows on if a bigger size
+is listed), nor past the company's CPU cap at HQ (counting the size other machines are restarting at). At Large it
+says what to do instead: "Disk 92% full at Large. Give its busiest bots their own Large machine." for the shared
+machine, "… Free space on it." for a bot's own. When it cannot grow (Large, the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
 "disk not resized"), the machine is marked **Disk nearly full** with the reason, on Health, until the disk has room
 again (`cloud_machine.grow_blocked`). A size HQ refuses at the start goes back to the size the machine runs at. HQ's
 CPU cap, or HQ starting it at another size, is tried again after an hour; any other refusal waits until a person
@@ -200,8 +214,13 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
-   runner once with `tico-runner enroll`, and runs `scripts/tico-computer install`, which starts the runner and its helper jobs
-   as systemd user units.
+   moves the checkout to the server's release (the `release` its public `/healthz` names, through
+   `python -m runner_support.release_update` with no runner yet: forward only, nothing restarted), so nothing below
+   the server's release enrolls. Then it enrolls the runner once with `tico-runner enroll` and runs
+   `scripts/tico-computer install`, which starts the runner and its helper jobs as systemd user units. A disk still
+   restoring from the snapshot can show checkout files as changed for a few minutes, so a refused update is tried
+   again every 30 seconds, 12 times (six minutes, inside the code's 15). A refusal that outlasts that, or any other
+   failure, is left to the runner, which follows the server by itself.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
    the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns
@@ -211,10 +230,14 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
 again (systemd reruns a failed boot step every 30 seconds). A machine has until its code expires (plus a minute) to
 enroll, and is not idle-stopped meanwhile. One that has not by then never can (a resume brings no new code), so the
-server deletes it and the next work makes a new one with a fresh code; after three such machines in a row it makes no
-more ("Made, but it never connected to this server", in Health). A successful enrollment clears the count. Otherwise,
-a person must choose **Replace machine** to try again, or delete the shared machine to replace it. That explicit
-request resets the count once, even if its reply is lost; retrying the same request does not reset it again.
+server deletes it and the next work makes a new one with a fresh code. After three failed attempts in a row, it
+waits for a person to replace the machine. Health names the shared machine when it reaches that limit because
+its member bots cannot run. A successful enrollment clears the count, and a machine that already enrolled uses
+none of its replacement's tries. A temporary HQ create refusal (`busy`, `removing` or `version_conflict`) uses
+the normal retry backoff, even if HQ lists the machine as failed. It uses no enrollment tries.
+
+Choose **Replace machine** to try again after the limit, or delete the shared machine to replace it. That explicit
+request resets the count once, even if its reply is lost. Retrying the same request keeps the new count.
 Changing size, Always on, Pause after or placement keeps the count. The replacement button stays available after
 the failed disk is gone. Without the marker `/etc/tico/cloud-machine.json` the
 boot step does nothing, and without a code it does nothing either: that is the base sandbox itself.
@@ -241,8 +264,10 @@ no capabilities, where `sudo` can never work. The base step writes `/etc/sudoers
 (`user ALL=(ALL) NOPASSWD:ALL`); no other install path writes it, so no other computer gets it. boat already gives
 `user` passwordless sudo; the file keeps that true if boat's default changes.
 
-The runner follows the server's release by itself, like any checkout runner (docs/updates.md), so a machine made from
-an older base updates on its first heartbeat. Refreshing the base per release only saves that first update.
+The first boot moves the checkout to the server's release before the runner starts (step 3), so a machine made from
+an older base does not enroll below the server's minimum runner version. That step is in bases built from a release
+that has it; a base built earlier still starts its runner on its own release, which then updates on its first
+heartbeat (docs/updates.md). Refreshing the base per release only saves that first update.
 
 A stopped machine whose runner is behind the server's release is started once to update. That wake waits a fixed
 0-10 minutes per runner and release after the server first ran the release (`update_due`: a hash of the runner id and
@@ -303,32 +328,60 @@ Re-running the step is safe. A failed install stops `base` with the step's outpu
 
 ## Build the base snapshot
 
-Once per release, from a computer with the boat CLI signed in to the account HQ uses. `--no-env` keeps the account's
-stored secrets out of the sandbox, and so out of the snapshot. Never pass `-e` secrets to the build sandbox: a saved
-snapshot hands its variables to every machine made from it.
-`base` also removes boat's box-scoped `export ASCII_TOKEN=` line from the user's `~/.bashrc`, so the snapshot carries no token.
+After each minor release, from a computer with the boat CLI signed in to the account HQ uses, in a checkout of tico.
+The Release Owner, or anyone with that boat account, can run it. Give it the release the servers run and the stem
+of the new name:
 
 ```sh
-V=v0.5.7   # the release the servers run
-id=$(boat new --no-env --name "tico-runner-base-$V" --json | jq -r 'select(.event == "ready") | .id')
-boat exec "$id" --timeout 1200 -- bash -lc "
-  set -euo pipefail
-  git clone --quiet --branch $V https://github.com/ticoteam/tico.git ~/tico
-  cd ~/tico && sudo python3 -m runner_support.cloud_machine base --user user"
-# not enrolled, service enabled, linger on
-boat exec "$id" -- bash -lc 'test ! -e ~/.config/tico/runner.json && systemctl is-enabled tico-cloud-machine.service && loginctl show-user user -p Linger'
-boat snapshot "$id" "tico-runner-base-$(echo "${V#v}" | tr . -)"   # a fixed version to pin or roll back to (no dots in names)
-boat snapshot "$id" tico-runner-base            # the name HQ uses by default; reusing a name replaces it
-boat delete "$id"
+python3 -m runner_support.base_snapshot --release v0.6.81 --name tico-runner-base-0-6-81
 ```
+
+It publishes under the stem plus a random suffix, such as `tico-runner-base-0-6-81-3f9a1c2e`, and prints that name.
+`boat snapshot <id> <name>` replaces a snapshot that already has the name, and boat has no create-only save, so two
+runs given the same name would otherwise both find it free and the second would replace the first one's image. It
+also looks the name up before the build and again just before the save, and refuses a name that exists or an answer
+from boat that does not say clearly that the name is free. The snapshot HQ boots from stays as it was until a person
+switches it, and a bad image rolls back by switching back. Stems take lowercase letters, digits and hyphens, no dots,
+at most 54 characters. The script:
+
+1. Makes a build sandbox with `boat new --no-env`. `--no-env` keeps the account's stored secrets out of the sandbox,
+   and so out of the snapshot: a saved snapshot hands its variables to every machine made from it. Never pass `-e`
+   secrets to it.
+2. Clones the release there and runs `sudo python3 -m runner_support.cloud_machine base --user user`: the runner is
+   installed, not enrolled. `base` also removes boat's box-scoped `export ASCII_TOKEN=` line from `~/.bashrc`. The
+   script writes a random stamp of this run to `/etc/tico/base-snapshot.stamp`.
+3. Checks the sandbox: the marker names the release, the stamp is this run's, the checkout is on its tag, the
+   runner's Python is there, no `runner.json` (not enrolled), `tico-cloud-machine.service` enabled, lingering on, no
+   `/.dockerenv`, and no `ASCII_TOKEN` or `TICO_ENROLL_TOKEN` line on the disk. Any failure stops it before anything
+   is saved.
+4. Looks at the name again, saves the snapshot under it, and makes a second sandbox from the saved snapshot, again
+   with no secrets and no enroll code, so its boot service does nothing. It runs the same check there, stamp
+   included: what HQ will boot is the image this run built. boat gives that sandbox a box token of its own, so there
+   the check is that none of its token lines is the build sandbox's (compared by hash, never by value). When this
+   step fails the snapshot is saved but unusable: the script says so, and says not to point HQ at it.
+5. Deletes both sandboxes (`--keep` leaves them to look at), each on its own even when another delete fails or times
+   out, and names any it could not delete with the command that does. A create that did not answer in time is
+   named by its sandbox name, to look for in `boat list`. Then it prints the person's step below.
 
 `base` refuses a computer that is already enrolled (every machine made from it would be that one runner) and a
 checkout that is not on a release tag. It builds the venv and the release's Rust runner as `user` (the same steps as
 `scripts/setup-runner.sh`), writes the sudoers file, turns on lingering so the user's systemd starts at boot, writes
 the marker and enables the boot service.
 
-To pin HQ to one build, set `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-5-7` on HQ; to roll back, point it at the
-previous version's name. Machines that exist keep running whatever they have.
+### Point HQ at the new snapshot (a person's step)
+
+HQ boots new machines from `HQ_BOAT_BASE_SNAPSHOT` (default `tico-runner-base`), set on HQ in tico-services. The
+script does not change it.
+
+1. Write down the current value of `HQ_BOAT_BASE_SNAPSHOT` on HQ (unset means `tico-runner-base`).
+2. Set it to the name the script printed, for example
+   `HQ_BOAT_BASE_SNAPSHOT=tico-runner-base-0-6-81-3f9a1c2e`, and apply it the way HQ's settings are applied.
+3. Watch the next new or replaced machine: it enrolls and shows its computer in Settings > Computers within a few
+   minutes (see the checks below).
+4. To roll back, set it to the value from step 1. Machines that exist keep running whatever they have; only new and
+   replaced machines start from the snapshot.
+
+Delete an old snapshot (`boat snapshot rm <name>`) only once HQ no longer points at it and a newer one has booted.
 
 ## Verify on the first live machine
 

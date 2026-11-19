@@ -87,9 +87,9 @@ const PROVIDER_LINE: Record<string, string> = {openai: 'Codex, ChatGPT or API ke
 // The company's models choice (backend/models_preset.py), first in the form. Plain words only: no provider logos, and
 // nothing that says Tico partners with, or is approved by, a model provider.
 const PROVIDER_PRESETS: SettingsProviderPreset[] = [
-  {id: 'subscriptions-gateway', label: 'Your Claude and ChatGPT subscriptions, plus Tico Gateway', recommended: true,
+  {id: 'subscriptions-gateway', label: 'Your Claude and ChatGPT subscriptions, plus Tico Gateway',
    line: "Sign in with your own Claude and ChatGPT accounts. Don't share one login across your team. Until you sign in, and when a plan runs out, bots run on Tico Gateway."},
-  {id: 'subscriptions', label: 'Your Claude and ChatGPT subscriptions only',
+  {id: 'subscriptions', label: 'Your Claude and ChatGPT subscriptions only', recommended: true,
    line: 'Bots wait until a Claude or ChatGPT account is signed in on their computer.'},
   {id: 'gateway', label: 'Tico Gateway only', line: 'Bots run on Tico models with the company\'s gateway key below.'},
   {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Tools.'},

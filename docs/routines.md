@@ -29,8 +29,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
   ```
 
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
-  `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved off
-  unless the flow sends `"enabled": true`.
+  `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved on
+  unless the flow sends `"enabled": false`. What BotOps or Assistant drafts is saved off and waits for a person to
+  turn it on.
 
 ## Before a due date
 
@@ -161,7 +162,7 @@ task for the first bot that takes one. A destination no bot can reach goes, with
 it. A group owner gets Sort (a choice over the destinations, one route each and a default) where a person or a bot gets
 choose. A bot gets choose only if it can run its own turn: an onboarding bot, one whose profile is Responder, or one on a
 synced harness gets Sort instead. The choose's prompt names the message (its subject and body by mail, its text in
-Slack), and so does each task body and wake text the template hands on. A wake's text is quoted as data; a task body is
+Slack), and so does each task's first message and wake text the template hands on. A wake's text is quoted as data; a task's first message is
 substituted as plain text, so the message reaches it unquoted. In Slack, a bot that cannot take a non-routine task (a
 draft is one) gets no draft actions, and its choose becomes Sort. A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
 in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `tico automation create --file -` saves it.

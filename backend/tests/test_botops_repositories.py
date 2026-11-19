@@ -36,7 +36,7 @@ def test_botops_acting_for_a_person_cannot_take_another_bots_access_away(api, bo
         ).fetchone()
         assert (row["owner"], row["method"], row["path"]) == ("human:ana", "PUT", "/api/v2/bots/ops/repositories")
         # Plain words on the card: who, and what it loses; no method, path or mode word ("own", "chosen").
-        assert row["description"] == row["summary"] == "ops: loses access to product."
+        assert row["summary"] == "ops: loses access to product." and row["description"].startswith(row["summary"] + " ")
         assert json.loads(row["body"]) == {"mode": "own"}
         assert not c.execute("SELECT 1 FROM events WHERE action='bot.repos_changed' AND target='ops'").fetchone()
     # Write turned to read is taken away too.
@@ -48,7 +48,7 @@ def test_botops_acting_for_a_person_cannot_take_another_bots_access_away(api, bo
         {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "read"}]},
     )
     assert lowered.json()["needs_confirm"] is True and effective(api) == before
-    assert lowered.json()["action"]["description"] == "ops: read-only on product (was write)."
+    assert lowered.json()["action"]["description"].startswith("ops: read-only on product (was write). ")
     # Giving access goes through at once, with her rights.
     added = act(
         api,
@@ -82,7 +82,7 @@ def test_a_person_in_settings_still_narrows_and_is_told_what_stops(api, botops, 
 
 
 def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
-    from clients.remotecli import chosen_grant
+    from clients.commands.bots import chosen_grant
     from clients.tico import APIError
 
     assert chosen_grant("Acme/product:write") == {"full_name": "Acme/product", "access": "write"}
@@ -142,7 +142,7 @@ def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_ca
     assert effective(api) == [{"full_name": "Acme/product", "access": "write"}]
     row = _stored_card(api, card.json())
     assert (row["owner"], row["method"], row["path"]) == ("human:" + name, "PUT", "/api/v2/bots/ops/repositories")
-    assert row["description"] == "ops: " + words + ".", row
+    assert row["description"].startswith("ops: " + words + ". "), row
     done = post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token=person)
     assert done["action"]["status"] == "done", done
     assert effective(api) == [FLAG]
@@ -166,7 +166,7 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
     card = act(api, ana, "PUT", "bots/ops/repositories", body)
     assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
     assert effective(api) == before
-    assert _stored_card(api, card.json())["description"] == "ops: " + words + "."
+    assert _stored_card(api, card.json())["description"].startswith("ops: " + words + ". ")
     err, shown = mcp(api, "tico_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
     assert not err and shown["needs_confirm"] is True, shown
     post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token="ana-test")
@@ -190,9 +190,8 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
         {"mode": "chosen", "all_repos": [{"full_name": "Acme/docs", option: True}]},
     )
     assert later.json()["needs_confirm"] is True, later.text
-    assert (
-        _stored_card(api, later.json())["description"]
-        == "ops: " + words.replace(" in product:", " in docs once All ticked repos is on with Write:") + "."
+    assert _stored_card(api, later.json())["description"].startswith(
+        "ops: " + words.replace(" in product:", " in docs once All ticked repos is on with Write:") + ". "
     ), later.text
     # The kept tick coming back with All ticked repos is a card too, though the body holds no tick.
     back = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "all"})
@@ -406,8 +405,8 @@ def test_turning_product_repositories_back_on_is_the_owners_card_and_an_admin_is
     finish(api, botops, ben)
     ana = turn(api, botops, person="ana-test", text="Let ops create product repositories again")
     card = act(api, ana, "PUT", "bots/ops/repositories", on).json()
-    assert (
-        card["needs_confirm"] is True and card["action"]["description"] == "ops: may create product repositories again."
+    assert card["needs_confirm"] is True and card["action"]["description"].startswith(
+        "ops: may create product repositories again. "
     ), card
     assert get(api, "bots/ops/repositories", "ana-test")["create_product_repositories"] is False
     done = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")

@@ -980,7 +980,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             account_id=V.opt_text(p, "account_id", 80) or "",
             catch_all=V.flag(p, "catch_all"),
             team=V.opt_text(p, "team", 80) or "",
-            teammate=V.opt_text(p, "teammate", 120) or "",
+            teammate=tico.teammate(ctx.c, V.opt_text(p, "teammate", 120) or ""),
             vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, L.vendor_text(p, "vendor")),
             parent_id=V.opt_text(p, "parent_id", 80) or "",
             owner=who,
@@ -1014,6 +1014,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if route is not None:
             _raise_parent(ctx, route, effective, who)
         ctx.changed()
+        _tell_bot(ctx, who, made, amount, effective)
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
 
     if hidden:
@@ -1037,6 +1038,26 @@ def _budget(ctx: Ctx, budget_id: str) -> B.Budget:
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
     return b
+
+
+def _tell_bot(ctx: Ctx, who: str, b: B.Budget, amount: int | None, effective: str) -> None:
+    """A budget made or changed for a teammate bot (by someone else): one note for its next turn, so the bot knows it
+    has a budget and where to read it. Any kind of budget, not only an ad budget (ad_warnings tells it of crossings)."""
+    bot = b.teammate
+    if not b.active or bot == who or not bot.startswith("bot:") or bot not in ctx.org.bots:
+        return
+    if not reads_budget(ctx, bot, b):
+        return
+    if amount is None:
+        amount = B.amount_at(SB.versions(ctx.c, [b.id])[b.id], dates.day(ctx.today))
+    figure = "no amount yet" if amount is None else f"{amount / 100:,.2f} {ctx.book.base_currency}/{b.period}"
+    if amount is not None and dates.day(effective) > dates.day(ctx.today):
+        figure += f" from {effective}"
+    tico.bot_note(
+        ctx.c,
+        bot,
+        f"You have a budget: {b.name} {figure}; read it with tico_finance_report kind=budget_vs_actual",
+    )
 
 
 def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -1112,6 +1133,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             from .cards import unfreeze_with_room  # a raise that leaves room lifts the freezes under it
 
             unfreeze_with_room(ctx, old.id, aid)
+        _tell_bot(ctx, who, new, amount, effective)
         return {"budget_id": old.id, "version": version}
 
     if hidden:
@@ -1230,6 +1252,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     b = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, b)
     kind, target = V.choice(p, "target_kind", B.TARGETS), V.text(p, "target_id", 120)
+    target = tico.teammate(ctx.c, target) if kind == "teammate" else target
     amount = V.amount(p)
     if amount < 0:
         raise invalid("an allocation is 0 or more")
@@ -1356,6 +1379,7 @@ def view_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("subject_kind", "subject", "what", "whose", "whose_team", "account_ids", "new_members", "expires_at"))
     kind = V.choice(p, "subject_kind", ("teammate", "team"), "teammate")
     subject = V.text(p, "subject", 120)
+    subject = tico.teammate(ctx.c, subject) if kind == "teammate" else subject
     ids = frozenset(V.texts(p, "account_ids")) if p.get("account_ids") else frozenset[str]()
     members = (
         ctx.org.members(ctx.org.below(subject)) if kind == "team" and subject in ctx.org.teams else frozenset[str]()
@@ -1470,7 +1494,7 @@ def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right", "expires_at"))
-    mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
+    mate, right = tico.teammate(ctx.c, V.text(p, "teammate", 120)), V.choice(p, "right", R.RIGHTS)
     if mate not in ctx.org.humans | ctx.org.bots:
         raise invalid("no such teammate")
     if mate == who:
@@ -1489,7 +1513,7 @@ def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def right_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right"))
-    mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
+    mate, right = tico.teammate(ctx.c, V.text(p, "teammate", 120)), V.choice(p, "right", R.RIGHTS)
     if right not in SA.rights_of(ctx.c, mate, ctx.at):
         raise FinanceError(CONFLICT, f"{mate} does not hold {right}")
     if right == R.ADMIN and who != ctx.org.owner:

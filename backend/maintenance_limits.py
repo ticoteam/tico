@@ -8,7 +8,7 @@ The limits, enforced together:
 A wake is written as events rows when it is recorded. One wake is one list: a `maintenance.wake` event against the bot,
 however many tasks the list names, and one `maintenance.wake.task` event against each distinct task in it. So a list of
 ten tasks is one wake toward the fleet cap and one wake against each of its tasks. The events are the ledger, so a restart
-or a second process sees the same counts. Every count is by actor (Keeper). A target count reads the events_task_origin index
+or a second process sees the same counts. Every count is by actor (Tico). A target count reads the events_task_origin index
 (actor, action, target, created_at); the fleet count names no target, so it reads events_actor_action_created
 (actor, action, created_at), which seeks its hour.
 """
@@ -31,7 +31,7 @@ COUNT_FLEET = (
 
 
 def _count(c, action, target, since):
-    return c.execute(COUNT_TARGET, (H.KEEPER, action, target, since)).fetchone()[0]
+    return c.execute(COUNT_TARGET, (H.TICO_ACTOR, action, target, since)).fetchone()[0]
 
 
 def allow(c, bot_id, task_id=None):
@@ -45,7 +45,7 @@ def allow(c, bot_id, task_id=None):
         return False
     if task_id and _count(c, TASK_ACTION, task_id, H.shift(now, days=-1)) >= WAKES_PER_TASK_DAY:
         return False
-    fleet = c.execute(COUNT_FLEET, (H.KEEPER, BOT_ACTION, H.shift(now, hours=-1))).fetchone()[0]
+    fleet = c.execute(COUNT_FLEET, (H.TICO_ACTOR, BOT_ACTION, H.shift(now, hours=-1))).fetchone()[0]
     return fleet < WAKES_PER_HOUR
 
 
@@ -53,6 +53,6 @@ def record(c, bot_id, task_ids=()):
     """Write down one Maintenance wake: one `maintenance.wake` event against the bot (one wake, however many tasks it
     names), and one `maintenance.wake.task` event per distinct task id, so each task's own cap counts its wakes."""
     task_ids = list(dict.fromkeys(task_ids))
-    H.event(c, H.KEEPER, BOT_ACTION, bot_id, {"task_ids": task_ids} if task_ids else None)
+    H.event(c, H.TICO_ACTOR, BOT_ACTION, bot_id, {"task_ids": task_ids} if task_ids else None)
     for task_id in task_ids:
-        H.event(c, H.KEEPER, TASK_ACTION, task_id, {"bot_id": bot_id})
+        H.event(c, H.TICO_ACTOR, TASK_ACTION, task_id, {"bot_id": bot_id})

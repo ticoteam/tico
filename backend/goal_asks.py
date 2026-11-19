@@ -25,7 +25,7 @@ the bot on the org chart, as only a person decides one."""
 import logging
 
 from .batch_work import isolated
-from . import needs_shape, strategy_bot
+from . import needs_shape, person_asks, question_marks, strategy_bot
 from . import goals as G
 from . import kpis as K
 from . import strategy as S
@@ -252,8 +252,8 @@ def _change(p, kpi_name):
 
 
 def urgent(item):
-    """A card a tripped bet or a publish brought: filed now, at every level, outside the Strategy Owner's 5 a day. Trips
-    are rare (once per bet per version) and a wrong bet should not wait a day."""
+    """A card a tripped bet or a strategy save brought: filed now, at every level, outside the Strategy Owner's 5 a
+    day. Trips are rare (once per bet per wrong-if) and a wrong bet should not wait a day."""
     p = item.get("proposal") or {}
     return item.get("kind") == "proposal" and (
         p.get("kind") == S.REALIGN
@@ -293,8 +293,8 @@ def _ask(conn, item, manager=strategy_bot.NAME):
     closes = "This closes by itself once "
     if item["kind"] == "vision":
         body = (
-            f"The {manager} asks {H.actor_name(conn, item['owner'])} what this team is for, as a question with no "
-            f"choices: they write the vision (one or two sentences: where the team is going, and what it sells to "
+            f"The {manager} asks {H.actor_name(conn, item['owner'])} what this team is for, in the task's chat: "
+            f"they write the vision (one or two sentences: where the team is going, and what it sells to "
             f"whom). A reply that is a vision is saved as the team's vision in their words (`tico strategy vision`) "
             f"and this closes; a reply that is a question is answered here and the question stays open. {closes}a "
             f"vision is saved."
@@ -347,7 +347,7 @@ def _ask(conn, item, manager=strategy_bot.NAME):
         count = len(payload["goals"])
         title = f"Choose what happens to {count} goal{'s' if count != 1 else ''} after strategy v{payload['n']}"
         body = (
-            f"{title}. Publishing v{payload['n']} retired or reworded the bets these goals serve:\n{lines}\n"
+            f"{title}. Strategy v{payload['n']} retired or reworded the bets these goals serve:\n{lines}\n"
             f"For each one choose Keep as it is, Retire goal, or Move to a bet, then press the one button under "
             f"Needs you on the Goals page. Nothing changes until you press it. {closes}it is decided."
         )
@@ -360,9 +360,8 @@ def _ask(conn, item, manager=strategy_bot.NAME):
             f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it"
             + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
             + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
-            + f": {_change(p, name)}. Add to draft writes it to your draft; publishing stays your click on the "
-            f"Strategy page (#/strategy). No, leave it changes nothing. Decide it under Needs you on the Goals "
-            f"page. {closes}it is decided."
+            + f": {_change(p, name)}. Add to strategy makes it live on the Strategy page (#/strategy). No, leave it "
+            f"changes nothing. Decide it under Needs you on the Goals page. {closes}it is decided."
         )
         return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
@@ -384,8 +383,10 @@ VISION_REASKED = "Asked as a question by the {manager} now, on its own task: the
 
 
 def _vision_question(conn, item, title, body):
-    """The vision ask: a task the Strategy Owner holds, with its question to the person (a typed answer, no choices),
-    so their list has the question and Write to the Strategy Owner, not a to-do."""
+    """The vision ask: a task the Strategy Owner holds, with its ❓ to the person on the task's chat (backend/
+    question_marks.py), so their list has the question and their reply goes to the Strategy Owner, not a to-do."""
+    from . import question_marks
+
     made = H.task_create(
         conn,
         G.AUTO_ACTOR,
@@ -395,16 +396,19 @@ def _vision_question(conn, item, title, body):
         lint=False,
         lane="company",
     )
-    H.task_ask(
-        conn,
-        G.AUTO_ACTOR,
-        made["id"],
-        item["owner"],
-        VISION_LINE,
-        seen_version=made["version"],
-        brief={"why": VISION_WHY, "details": None, "recommend": None},
-    )
-    return made
+    question_marks.ask(conn, G.AUTO_ACTOR, made["id"], item["owner"], f"{VISION_LINE}\n\n{VISION_WHY}", checked=False)
+    return H.task(conn, made["id"]) or made
+
+
+# Why each ask matters to the person, said under its question.
+WHYS = {
+    "kpi_red": "A measure on your goal is off track, and you own what happens next.",
+    "kpi_stale": "Goals are judged on their numbers, and these have no current reading.",
+    "proposal": "It changes a goal or a measure you decide.",
+    "why": "Each goal says why it matters, so everyone knows what it serves.",
+    "recovery": "Your goal has fallen behind, and this is how your bots could recover it.",
+}
+WHY_DEFAULT = "It keeps the team's goals current."
 
 
 def _old_vision(task):
@@ -442,7 +446,7 @@ def _reword(conn, task, item):
     longer starts with them."""
     if not str(task["title"]).startswith(OLD_WORDS):
         return
-    title, body = _ask(conn, item, strategy_bot.name(conn))
+    title, _ = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"], private=True):
@@ -451,11 +455,22 @@ def _reword(conn, task, item):
             G.AUTO_ACTOR,
             task["id"],
             title=_free_title(conn, task["owner_id"], title),
-            body=body,
             private=True if item.get("private") else None,
             quiet=True,
             seen_version=task.get("version"),
         )
+
+
+def said(conn, task_id):
+    """What the Strategy Owner's task says now: its last word on the task's chat (what it was filed with, or the list a
+    relist said there), "" when none. Its ❓ to the person is the question, not what the task says, so it is skipped."""
+    asked = {row[0] for row in conn.execute("SELECT message_id FROM question_marks WHERE task_id=?", (task_id,))}
+    words = [
+        m["body"]
+        for m in H.task_comments(conn, task_id)
+        if m.get("sender_id") == G.AUTO_ACTOR and m.get("body") and m.get("id") not in asked
+    ]
+    return words[-1] if words else ""
 
 
 def _relist(conn, task, item):
@@ -463,8 +478,10 @@ def _relist(conn, task, item):
     them too (a measure's name, or how many), so it follows the list."""
     title, body = _ask(conn, item, strategy_bot.name(conn))
     changes = {}
-    if task["body"] != body:
-        changes["body"] = body
+    # The list, as the Strategy Owner said it last on the task's chat: a new one is said there (no description).
+    if said(conn, task["id"]) != body:
+        with isolated(conn, "goal_ask_relist_said", task["id"], private=True):
+            H.task_comment(conn, G.AUTO_ACTOR, task["id"], body, wake=False)
     # The title the Strategy Owner wrote follows the list; a title a person wrote stays.
     ours = str(task["title"]).startswith(BUNDLED_TITLES)
     if ours and task["title"] != title and not (H.TITLE_LINT == "refuse" and H.lint_title(title)):
@@ -556,7 +573,8 @@ def sync(conn, owner_id, at=None, reads=None):
             with isolated(conn, "goal_ask_reshape", row["task_id"], private=True):
                 if task["status"] in LIVE:
                     note = VISION_REASKED.format(manager=strategy_bot.name(conn))
-                    H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
+                    with question_marks.settled():  # its question is moot now
+                        H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
                     closed.append(task["id"])
                 conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
                 del have[key]
@@ -584,7 +602,8 @@ def sync(conn, owner_id, at=None, reads=None):
                     note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
-                H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
+                with question_marks.settled():  # its question is moot now
+                    H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
                 closed.append(task["id"])
             conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
             if again:
@@ -603,6 +622,22 @@ def sync(conn, owner_id, at=None, reads=None):
                 continue
             if item["kind"] == "vision":
                 made = _vision_question(conn, item, title, body)
+            elif H.is_human(item["owner"]):
+                # A person's ask is the Strategy Owner's task with its question to them: Needs you holds only what is
+                # asked of a person (backend/person_asks.py).
+                mine = person_asks.owner_bot(conn, G.AUTO_ACTOR) or item["owner"]
+                made = person_asks.ask(
+                    conn,
+                    G.AUTO_ACTOR,
+                    item["owner"],
+                    _free_title(conn, mine, title),
+                    body,
+                    title,
+                    WHYS.get(item["kind"], WHY_DEFAULT),
+                    bot=G.AUTO_ACTOR,
+                    lane="company",
+                    private=True if item.get("private") else None,
+                )
             else:
                 made = H.task_create(
                     conn,

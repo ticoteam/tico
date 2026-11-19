@@ -13,6 +13,7 @@ from pathlib import Path
 from . import hubdb
 from .blobs import Blobs
 from .config import Settings
+from . import replication
 from . import sources as SRC
 
 
@@ -129,9 +130,12 @@ def record_verified_blobs(source, bucket, items):
         )
 
 
-# The local key files beside the database (backend/credentials.py, github_app.py, slack_app.py): a database restored
-# without them cannot open the credentials, the GitHub App and directory sync secrets, or the Slack tokens.
-KEY_FILES = ("credential.key", "github-app.key", "slack.key")
+# The local key files beside the database (backend/credentials.py, github_app.py): a database restored
+# without them cannot open the credentials, or the GitHub App and directory sync secrets.
+KEY_FILES = ("credential.key", "github-app.key")
+# An older server's Slack key: put back from an older bundle, and carried only while the row it opens is left in the
+# database (replication.old_key_files); the gateway moves that row into the vault (backend/slack_app.py `load`).
+OLD_KEY_FILES = replication.OLD_KEY_FILES
 KEY_BYTES = 32
 
 
@@ -139,11 +143,16 @@ def key_file_copy(key, name):
     return key + ".keys/" + name
 
 
-def read_key_files(key_dir):
-    """{name: bytes} for the key files present in `key_dir`. One that is not 32 bytes is not a key: refused by name,
-    never carried, so a bundle never holds a copy that opens nothing."""
+def read_key_files(key_dir, db=None, env=None):
+    """{name: bytes} for the key files present in `key_dir` (with slack.key while the database at `db` still holds the
+    row it opens). One that is not 32 bytes is not a key: refused by name, never carried, so a bundle never holds a copy
+    that opens nothing. Once AWS KMS holds the data key (TICO_CREDENTIAL_KMS_KEY in `env`, default the process's) and the
+    database records the key files as retired (replication.key_files_retired), credential.key and github-app.key are
+    never carried, present or not: they open nothing a newer backup holds."""
+    env = os.environ if env is None else env
+    retired = db is not None and replication.kms_key_set(env) and replication.key_files_retired(db)
     found = {}
-    for name in KEY_FILES:
+    for name in (() if retired else KEY_FILES) + (replication.old_key_files(db) if db is not None else ()):
         path = Path(key_dir) / name
         if not path.is_file():
             continue
@@ -169,7 +178,7 @@ def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
     """
     if not key.startswith("backups/") or not key.endswith(".sqlite"):
         raise ValueError("Use a unique backups/*.sqlite object key")
-    keys = read_key_files(key_dir) if key_dir is not None else {}
+    keys = read_key_files(key_dir, source) if key_dir is not None else {}
     recovery = RecoveryBlobs(Settings(db_path=Path(source), blob_bucket=bucket), s3)
     # Keep the snapshot workspace beside the source database on the retained data
     # volume instead of relying on the instance's small PrivateTmp filesystem.
@@ -300,7 +309,7 @@ def fetch_key_files(manifest, bucket, key, s3, directory):
     restored. A different key already in `directory` is refused by name: it may open another database, and it is never
     overwritten."""
     listed = manifest.get("key_files") or {}
-    if not isinstance(listed, dict) or not set(listed) <= set(KEY_FILES):
+    if not isinstance(listed, dict) or not set(listed) <= set(KEY_FILES + OLD_KEY_FILES):
         raise ValueError("The backup manifest lists unexpected key files")
     found = {}
     for name, entry in sorted(listed.items()):
@@ -515,7 +524,11 @@ def restore_snapshot(source, destination):
             (now,),
         )
         H.event(
-            c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active}
+            c,
+            H.TICO_ACTOR,
+            "recovery.fenced",
+            "database",
+            {"source_sha256": report["sha256"], "active_attempts": active},
         )
     return {
         "source": report,

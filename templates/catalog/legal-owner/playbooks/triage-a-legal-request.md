@@ -33,16 +33,16 @@ Log it in `knowledge/requests.md` and record its stage there: Intake until it is
 4. **Answered by a documented position**: answer in three lines and cite the source and its date.
 5. **A rule check.** A question about what a rule allows (a contract term against the team's rules, or a "can we...?"
    that the documented positions do not settle) goes to the Rules Owner (`rules-owner`). Set the request to Rules check,
-   ask once with `tico task create --owner rules-owner --parent <id> --title "Rule check: <request>" --body "<the rule,
+   ask once with `tico task create --owner rules-owner --parent <id> --title "Rule check: <request>" --message "<the rule,
    the facts with dates, the question and the deadline>"`, and wait. You do not decide the rule check yourself.
 
 ## 4. Hand over
 
-Put the outcome on the task. Ask once with `tico task ask <id> --to <person> "<question>" --version N` if the scope or lawyer is missing. Route requested work: `tico task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
+Put the outcome on the task. Ask once with `tico task ask <id> --to <person> "<question>"` if the scope or lawyer is missing. Route requested work: `tico task create --owner <slug> --title "<what>" --message "<request and source>" --parent <id>`.
 End with the not-legal-advice line, update `knowledge/requests.md`, and `tico task done <id> -m "..." --version N`.
 
 ## Done when
 - The request has one of the three outcomes, on the task and in `knowledge/requests.md`.
 - Its stage in `knowledge/requests.md` matches its state, and no rule check was decided by you.
-- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`skills/check-a-legal-deadline`).
-- Anything that meets `knowledge/escalation.md` has a counsel brief (`skills/write-a-counsel-brief`) on the task.
+- Any deadline in it is sourced, or marked "not confirmed" with what you checked (`.claude/skills/check-a-legal-deadline`).
+- Anything that meets `knowledge/escalation.md` has a counsel brief (`.claude/skills/write-a-counsel-brief`) on the task.

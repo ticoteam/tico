@@ -2,9 +2,11 @@
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import time_machine
+import yaml
 from fastapi.testclient import TestClient
 
 from backend import demo, demo_content as D
@@ -13,6 +15,23 @@ from backend.demo_sections.schedules import SETTLE
 from backend.scheduler import next_due
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+# The routines the Tools Owner starts with: each is an enabled schedule in the demo, named by its title.
+TOOLS_OWNER_BOT = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "tools-owner" / "bot.yaml"
+TOOLS_OWNER_ROUTINES = [entry["title"] for entry in yaml.safe_load(TOOLS_OWNER_BOT.read_text())["routines"]]
+# The enabled schedules on main, by source: the demo's own routines (D.ROUTINES; the Inbox's is the one the demo keeps
+# off), the Tools Owner's, and the built-in ones, whose titles live in routines.py, the catalog (Librarian, Strategy
+# Owner, Assistant) and demo_sections (nightly and weekly), with no registry to read them from.
+DEMO_ROUTINES_ON = [title for bot, _key, title, *_ in D.ROUTINES if bot != "inbox-manager"]
+BUILT_IN_ON = {
+    "Sweep stuck tasks",
+    "Curate the market",
+    "Refresh the map of the docs",
+    "KPI pass",
+    "Morning message",
+    "Nightly orders to bookkeeping",
+    "Weekly numbers",
+}
+EXPECTED_ON = {*DEMO_ROUTINES_ON, *TOOLS_OWNER_ROUTINES, *BUILT_IN_ON}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -185,8 +204,9 @@ def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        # 16 on main, and the Assistant's daily sweep is the one new enabled schedule (backend/onboarding.py).
-        assert len(schedules) == 17
+        # The Tools Owner's routines are made by the start's complete_company (onboarding.ensure_tools_owner).
+        assert {row["name"] for row in schedules} == EXPECTED_ON
+        assert len(schedules) == len(EXPECTED_ON), "a schedule name is used twice"
         sweep = sweep_automation_id(settings)
         week_start = NOW - timedelta(days=7)
         for row in schedules:

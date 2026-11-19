@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 
@@ -15,7 +15,19 @@ use crate::util::text_of;
 pub const FORK_SESSION: &str = "fork_session_v1";
 /// The runner starts a claim marked `fresh_session` on a new thread and keeps the conversation's saved one (execute.rs).
 pub const FRESH_SESSION: &str = "fresh_session_v1";
+/// A Claude thread is keyed by no one plan, so a move between plans resumes it (model_subscriptions::Delivered::binding);
+/// without it the server starts a computer's Claude sessions fresh on each move.
+pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
+const VOICE_SESSIONS: &str = "voice_sessions_v1";
+const VOICE_SESSION_RESUME: &str = "voice_session_resume_v1";
+/// The server pushes `voice_inputs` hints to a resident voice session (events.rs VoiceInputs); without them it polls.
+pub const VOICE_INPUTS: &str = "voice_inputs_v1";
+/// Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py
+/// `request_plan_read`).
+const PLAN_USAGE: &str = "plan_usage_v1";
+/// The computer's own logins are the ones readiness reads for these bots (runner.rs `computer_logins_for`).
+const COMPUTER_LOGINS: &str = "computer_logins_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -28,8 +40,10 @@ pub const CAPABILITIES: &[&str] = &[
     crate::login::REMOVE_CAPABILITY,
     crate::login::SWITCH_TO_KEY_CAPABILITY,
     crate::login::CONNECT_CAPABILITY,
+    // Full Claude logins: a turn's own credentials file, refreshes and usage reads (claude_login.rs).
+    crate::claude_login::CAPABILITY,
     "turns_at_once_v1",
-    // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
+    // A previous hub release can still send the retired meeting lane (sessions.rs).
     "private_lanes_v1",
     "model_subscriptions_v1",
     "model_subscription_activation_v1",
@@ -37,13 +51,18 @@ pub const CAPABILITIES: &[&str] = &[
     "browser_exit_v1",
     // Chats of a bot keep their own provider threads: a public thread never resumes a direct message's (execute.rs session_key).
     "threads_v1",
-    "memory_tidy_keep_v1",
     // Report the process allocation boundary so the hub can recheck memory on unused grants.
     "harness_allocation_v1",
     // Make page uses a fresh provider session in disposable scratch, apart from the private Assistant's session.
     "make_page",
     FORK_SESSION,
     FRESH_SESSION,
+    PLAN_SWITCH_RESUME,
+    VOICE_SESSIONS,
+    // A push to a bot's repository is heard at once, so its chat turns never start on an older fetch (fetch_fresh.rs).
+    crate::fetch_fresh::PUSH_HINTS,
+    VOICE_SESSION_RESUME,
+    VOICE_INPUTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -112,8 +131,52 @@ pub fn release(name: &str) {
     dropped().lock().unwrap().remove(name);
 }
 
-/// The capabilities this heartbeat advertises.
-pub fn capabilities() -> Vec<&'static str> {
+/// Capability holds are process-wide: tests that set them take turns, so one never drops another's.
+#[cfg(test)]
+pub fn holding() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
+/// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
+const NEWEST_FIRST: &[&str] = &[
+    VOICE_INPUTS,
+    VOICE_SESSION_RESUME,
+    crate::fetch_fresh::PUSH_HINTS,
+    VOICE_SESSIONS,
+    PLAN_SWITCH_RESUME,
+    crate::claude_login::CAPABILITY,
+    PLAN_USAGE,
+    FRESH_SESSION,
+    FORK_SESSION,
+    crate::browser::CAPABILITY,
+    "make_page",
+    "harness_allocation_v1",
+    "threads_v1",
+    "model_subscription_activation_v1",
+    "browser_exit_v1",
+    "model_subscriptions_v1",
+    "private_lanes_v1",
+    "turns_at_once_v1",
+    "capacity_continue_v1",
+    "source_continue_v1",
+    crate::login::CONNECT_CAPABILITY,
+    crate::login::SWITCH_TO_KEY_CAPABILITY,
+    crate::login::REMOVE_CAPABILITY,
+    crate::login::SWITCH_TYPE_CAPABILITY,
+    crate::login::KEYS_CAPABILITY,
+    crate::login::SIGN_OUT_CAPABILITY,
+    COMPUTER_LOGINS,
+    crate::screen::CAPABILITY,
+    "task_goals_v1",
+    "session_roots_v1",
+    "task_lanes_v2",
+];
+
+/// The capabilities this heartbeat advertises, less any a server refused in the last ten minutes. `computer_logins`:
+/// the computer's own logins are the ones readiness reads for its bots (runner.rs `computer_logins_for`).
+pub fn capabilities(computer_logins: bool) -> Vec<&'static str> {
     let screen = crate::screen::offers(crate::screen::readiness().as_ref())
         .then_some(crate::screen::CAPABILITY);
     // Website tools' browser sessions run here only while Google Chrome can show a window (crate::browser).
@@ -123,6 +186,8 @@ pub fn capabilities() -> Vec<&'static str> {
         .copied()
         .chain(screen)
         .chain(browser)
+        .chain([PLAN_USAGE])
+        .chain(computer_logins.then_some(COMPUTER_LOGINS))
         .filter(|c| !held_back(c))
         .collect()
 }
@@ -149,7 +214,8 @@ fn has_in_profiles(body: &Value, key: &str) -> bool {
 }
 
 /// What to leave out after a heartbeat's 422 (service.py _report_heartbeat), as a hold name: only `weekly` of the
-/// profile report, the worktree reports' `record_updated` stamp, the newest refused capability, else a root field
+/// profile report, the worktree reports' `record_updated` stamp, the capability it names by position (any of them; the
+/// newest sent when it names none), else a root field
 /// the detail names (or, for a bare "extra" with no path, the first one present). None: the refusal stands.
 pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     let extra = detail.to_lowercase().contains("extra");
@@ -180,46 +246,24 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
     }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
-    if detail.contains("capabilities") {
-        // Pydantic names the rejected element: preserve every other negotiated capability on rollback.
-        if let Some(index) = regex::Regex::new(r"capabilities[.\[]([0-9]+)")
-            .ok()?
-            .captures(detail)
-            .and_then(|m| m[1].parse::<usize>().ok())
-        {
-            if let Some(name) = caps.get(index) {
-                if CAPABILITIES.contains(&name.as_str()) || name == crate::browser::CAPABILITY {
-                    return Some(name.clone());
-                }
-            }
+    // Only an error at the top-level `capabilities` or one of its elements: a bot or field named "capabilities"
+    // further down (say readiness.bots.capabilities) is not about them.
+    static CAPS: OnceLock<regex::Regex> = OnceLock::new();
+    let refused = CAPS
+        .get_or_init(|| {
+            regex::Regex::new(r"(?:^|; )(?:body\.)?capabilities(?:[.\[]([0-9]+)\]?)?:").unwrap()
+        })
+        .captures(detail);
+    if let Some(refused) = refused {
+        // Pydantic names the rejected element: drop that one, whatever it is, and keep every other negotiated one.
+        let index = refused
+            .get(1)
+            .and_then(|i| i.as_str().parse::<usize>().ok());
+        if let Some(name) = index.and_then(|i| caps.get(i)).filter(|n| !n.is_empty()) {
+            return Some(name.clone());
         }
-        for name in [
-            crate::browser::CAPABILITY,
-            FRESH_SESSION,
-            FORK_SESSION,
-            "make_page",
-            "harness_allocation_v1",
-            "model_subscription_activation_v1",
-            "browser_exit_v1",
-            "model_subscriptions_v1",
-            "private_lanes_v1",
-            "turns_at_once_v1",
-            "capacity_continue_v1",
-            "source_continue_v1",
-            crate::login::CONNECT_CAPABILITY,
-            crate::login::SWITCH_TO_KEY_CAPABILITY,
-            crate::login::REMOVE_CAPABILITY,
-            crate::login::SWITCH_TYPE_CAPABILITY,
-            crate::login::KEYS_CAPABILITY,
-            crate::login::SIGN_OUT_CAPABILITY,
-            crate::screen::CAPABILITY,
-            "task_goals_v1",
-            "session_roots_v1",
-            "task_lanes_v2",
-        ] {
-            if caps.iter().any(|c| c == name) {
-                return Some(name.into());
-            }
+        if let Some(name) = NEWEST_FIRST.iter().find(|n| caps.iter().any(|c| c == *n)) {
+            return Some(name.to_string());
         }
     }
     let present = ROOT_FIELDS.iter().filter(|f| body.get(**f).is_some());
@@ -287,6 +331,244 @@ pub fn drop_held(body: &mut Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    /// Everything a heartbeat can advertise, in the order `capabilities` builds it on a computer that offers its
+    /// screen and a browser and reads its own logins.
+    fn sendable() -> Vec<&'static str> {
+        CAPABILITIES
+            .iter()
+            .copied()
+            .chain([
+                crate::screen::CAPABILITY,
+                crate::browser::CAPABILITY,
+                PLAN_USAGE,
+                COMPUTER_LOGINS,
+            ])
+            .collect()
+    }
+
+    fn release_all() {
+        for name in sendable() {
+            release(name);
+        }
+    }
+
+    fn contract() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/runner")
+    }
+
+    fn read(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// A server's Heartbeat `capabilities` (backend/models.py, as its requests.json has it): the values it takes and
+    /// how many at most.
+    fn takes(requests: &Path) -> (Vec<String>, usize) {
+        let caps = &read(requests)["$defs"]["Heartbeat"]["properties"]["capabilities"];
+        let known = caps["items"]["enum"].as_array().unwrap();
+        let max = caps["maxItems"].as_u64().unwrap() as usize;
+        (known.iter().map(text_of).collect(), max)
+    }
+
+    /// The current server, then every kept release (contracts/runner/releases/<version>, the supported floor 0.6.0).
+    fn servers() -> Vec<(String, Vec<String>, usize)> {
+        let mut found = vec![("current".to_string(), contract().join("requests.json"))];
+        let mut kept: Vec<PathBuf> = std::fs::read_dir(contract().join("releases"))
+            .unwrap()
+            .map(|e| e.unwrap().path().join("requests.json"))
+            .filter(|p| p.exists())
+            .collect();
+        kept.sort();
+        assert!(
+            !kept.is_empty(),
+            "no kept release under contracts/runner/releases"
+        );
+        for path in kept {
+            let version = path.parent().unwrap().file_name().unwrap();
+            found.push((version.to_string_lossy().into(), path));
+        }
+        found
+            .into_iter()
+            .map(|(name, path)| {
+                let (known, max) = takes(&path);
+                (name, known, max)
+            })
+            .collect()
+    }
+
+    /// What that server's validation answers a heartbeat with (backend/app.py `validation_error`: each Pydantic
+    /// error as `loc: msg`, joined by "; "), or None when it takes it. `indexed`: the refusal names each element.
+    fn refusal(known: &[String], max: usize, body: &Value, indexed: bool) -> Option<String> {
+        let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
+        if caps.len() > max {
+            return Some(format!(
+                "body.capabilities: List should have at most {max} items after validation, not {}",
+                caps.len()
+            ));
+        }
+        let quoted: Vec<String> = known.iter().map(|k| format!("'{k}'")).collect();
+        let errors: Vec<String> = caps
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !known.contains(c))
+            .map(|(i, _)| match indexed {
+                true => format!(
+                    "body.capabilities.{i}: Input should be {}",
+                    quoted.join(", ")
+                ),
+                false => "body.capabilities: Input should be a valid list".into(),
+            })
+            .collect();
+        (!errors.is_empty()).then(|| errors.join("; "))
+    }
+
+    /// runner.rs `post_heartbeat` against that server: post, and on a 422 hold back what `refused_field` names and
+    /// post again, at most 12 times. The capabilities it got through with, and how many posts it took.
+    fn negotiate(known: &[String], max: usize, indexed: bool) -> (Vec<String>, u32) {
+        let mut body = json!({"capabilities": sendable()});
+        drop_held(&mut body);
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            let Some(detail) = refusal(known, max, &body, indexed) else {
+                return (rows(&body, "capabilities").map(text_of).collect(), tries);
+            };
+            assert!(tries < 12, "still refused after {tries} posts: {detail}");
+            let field = refused_field(&detail, &body)
+                .unwrap_or_else(|| panic!("the runner gives up on: {detail}"));
+            hold_back(&field);
+            drop_held(&mut body);
+        }
+    }
+
+    #[test]
+    fn newest_first_lists_every_capability_the_runner_sends() {
+        let mut all = sendable();
+        all.sort();
+        let mut listed = NEWEST_FIRST.to_vec();
+        listed.sort();
+        listed.dedup();
+        assert_eq!(
+            listed.len(),
+            NEWEST_FIRST.len(),
+            "a capability is listed twice"
+        );
+        assert_eq!(listed, all);
+        let _turn = holding();
+        release_all();
+        // What runner.rs advertises comes only from here, plan usage and computer logins included.
+        let advertised = capabilities(true);
+        assert!(advertised.iter().all(|c| all.contains(c)));
+        assert!(advertised.contains(&PLAN_USAGE) && advertised.contains(&COMPUTER_LOGINS));
+        assert!(!capabilities(false).contains(&COMPUTER_LOGINS));
+    }
+
+    /// The hubs between the floor and today, by what each added to the floor's Heartbeat capabilities (git tags).
+    fn releases_since_floor(floor: &[String]) -> Vec<(String, Vec<String>)> {
+        let mut known = floor.to_vec();
+        let mut found = vec![];
+        for (release, added) in [
+            ("0.6.0-rc.23", &[crate::browser::CAPABILITY][..]),
+            ("0.6.0-rc.30", &[FORK_SESSION, FRESH_SESSION][..]),
+            ("0.6.16", &[PLAN_USAGE][..]),
+            (
+                "0.6.37",
+                &[crate::claude_login::CAPABILITY, PLAN_SWITCH_RESUME][..],
+            ),
+            ("0.6.71", &[VOICE_SESSIONS][..]),
+            ("0.6.76", &[crate::fetch_fresh::PUSH_HINTS][..]),
+            // Merged after 0.6.79 and before voice_inputs_v1, which only today's hub (current) knows.
+            ("0.6.79+", &[VOICE_SESSION_RESUME][..]),
+        ] {
+            known.extend(added.iter().map(|c| c.to_string()));
+            found.push((release.to_string(), known.clone()));
+        }
+        found
+    }
+
+    #[test]
+    fn a_new_runner_checks_in_with_every_supported_server_and_keeps_what_it_knows() {
+        let _turn = holding();
+        let mut servers = servers();
+        let floor = servers[1].1.clone(); // the oldest kept release: the supported floor
+        for (release, known) in releases_since_floor(&floor) {
+            servers.push((release, known, 32));
+        }
+        for (server, known, max) in servers {
+            assert!(sendable().len() <= max, "{server} takes at most {max}");
+            for indexed in [true, false] {
+                release_all();
+                let (kept, tries) = negotiate(&known, max, indexed);
+                let expected: Vec<String> = sendable()
+                    .into_iter()
+                    .filter(|c| known.iter().any(|k| k == c))
+                    .map(String::from)
+                    .collect();
+                assert_eq!(kept, expected, "{server} (indexed: {indexed})");
+                let unknown = sendable().len() - expected.len();
+                assert_eq!(tries as usize, unknown + 1, "{server} (indexed: {indexed})");
+                if server == "current" {
+                    assert_eq!(
+                        tries, 1,
+                        "today's server takes everything today's runner sends"
+                    );
+                }
+                // The next heartbeat inside ten minutes goes straight through: what runner.rs advertises already
+                // leaves out every hold, plan usage and computer logins included.
+                let next = json!({"capabilities": capabilities(true)});
+                assert_eq!(refusal(&known, max, &next, true), None, "{server}");
+            }
+        }
+        // A server that takes fewer than the runner offers: the newest go first, until the rest fit.
+        release_all();
+        let current = takes(&contract().join("requests.json")).0;
+        let (kept, tries) = negotiate(&current, sendable().len() - 2, true);
+        let expected: Vec<String> = sendable()
+            .into_iter()
+            .filter(|c| !NEWEST_FIRST[..2].contains(c))
+            .map(String::from)
+            .collect();
+        assert_eq!((kept, tries), (expected, 3));
+        release_all();
+    }
+
+    #[test]
+    fn only_a_refusal_of_the_capabilities_themselves_drops_one() {
+        let body = json!({"capabilities": ["task_lanes_v2", "threads_v1"], "readiness": {}});
+        // A bot named "capabilities" is not the capability list.
+        let bot =
+            "body.readiness.StructuredReadiness.bots.capabilities.commands.0.name: Field required";
+        assert_eq!(refused_field(bot, &body), None);
+        let both = format!("{bot}; body.capabilities.1: Input should be 'task_lanes_v2'");
+        assert_eq!(refused_field(&both, &body).as_deref(), Some("threads_v1"));
+        assert_eq!(
+            refused_field("capabilities.0: Input should be 'x'", &body).as_deref(),
+            Some("task_lanes_v2")
+        );
+    }
+
+    #[test]
+    fn every_capability_an_older_server_refuses_is_gated_in_the_contract_both_ways() {
+        let wire = read(&contract().join("wire.json"));
+        let gated = wire["gated"].as_object().unwrap();
+        let servers = servers();
+        let (_, current, _) = &servers[0];
+        for (server, known, _) in &servers[1..] {
+            // New runner, old server: each capability that server refuses is one the runner drops (above), and the
+            // contract says so, so scripts/check_wire_contract.py does not wave a new one through unlisted.
+            for name in sendable() {
+                if !known.iter().any(|k| k == name) {
+                    let key = format!("heartbeat.request.capabilities[]=\"{name}\"");
+                    assert!(gated.contains_key(&key), "{server}: {key} is not gated");
+                }
+            }
+            // Old runner, new server: today's server takes every capability that release's runner may send.
+            for name in known {
+                assert!(current.contains(name), "{server}'s {name} is refused today");
+            }
+        }
+    }
 
     #[test]
     fn task_turns_get_their_own_lane() {
@@ -374,6 +656,7 @@ mod tests {
 
     #[test]
     fn an_older_server_can_drop_make_page_without_losing_ordinary_work() {
+        let _turn = holding();
         let mut body = json!({"capabilities": ["task_lanes_v2", "threads_v1", "make_page"]});
         assert!(CAPABILITIES.contains(&"make_page"));
         // A server from before website tools refuses the browser first, by position or not.
@@ -411,7 +694,18 @@ mod tests {
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != FRESH_SESSION)
+            .filter(|c| {
+                ![
+                    VOICE_INPUTS,
+                    crate::fetch_fresh::PUSH_HINTS,
+                    VOICE_SESSION_RESUME,
+                    VOICE_SESSIONS,
+                    FRESH_SESSION,
+                    crate::claude_login::CAPABILITY,
+                    PLAN_SWITCH_RESUME,
+                ]
+                .contains(c)
+            })
             .collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
@@ -433,10 +727,58 @@ mod tests {
 
     #[test]
     fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
+        let _turn = holding();
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
+        // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
+            Some(VOICE_INPUTS)
+        );
+        let older: Vec<&str> = CAPABILITIES
+            .iter()
+            .copied()
+            .filter(|c| *c != VOICE_INPUTS)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_SESSION_RESUME)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
+            .filter(|c| *c != VOICE_SESSION_RESUME)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::fetch_fresh::PUSH_HINTS)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
+            .filter(|c| *c != crate::fetch_fresh::PUSH_HINTS)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_SESSIONS)
+        );
+        let older: Vec<&str> = older.into_iter().filter(|c| *c != VOICE_SESSIONS).collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(PLAN_SWITCH_RESUME)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
+            .filter(|c| *c != PLAN_SWITCH_RESUME)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::claude_login::CAPABILITY)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
+            .filter(|c| *c != crate::claude_login::CAPABILITY)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(FRESH_SESSION)
         );
         let index = CAPABILITIES

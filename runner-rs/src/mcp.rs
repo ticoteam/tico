@@ -6,14 +6,14 @@
 //! configured. Where the harness reads `${VAR}` itself (Claude Code, Gemini CLI, Codex's env headers) the
 //! placeholder goes through untouched, so no value lands on a command line or in a file.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
-use crate::env::Env;
+use crate::env::{Env, ProxiedTool};
 use crate::util::{text_of, truthy};
 
 pub const REACH_TIMEOUT_S: u64 = 4;
@@ -52,6 +52,17 @@ fn entropy(token: &str) -> f64 {
         .sum::<f64>()
 }
 
+/// A public identifier with a random-looking body, never a secret (access_entry.ID_SHAPES): a Twilio SID, two
+/// capitals and 32 lowercase hex digits.
+fn id_shape(token: &str) -> bool {
+    let b = token.as_bytes();
+    b.len() == 34
+        && b[..2].iter().all(|c| c.is_ascii_uppercase())
+        && b[2..]
+            .iter()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+}
+
 /// A reason when `text` looks like a credential value, else "" (access_entry.secret_in).
 pub fn secret_in(text: &str) -> String {
     if secret_shapes().is_match(text) {
@@ -60,6 +71,7 @@ pub fn secret_in(text: &str) -> String {
     for token in text.split(|c: char| c.is_whitespace() || ",;()\"'<>".contains(c)) {
         let long = token.chars().count() >= 24;
         if long
+            && !id_shape(token)
             && token
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "_+/=-".contains(c))
@@ -274,9 +286,33 @@ pub fn server_name(service: &str) -> String {
     }
 }
 
+/// The address a declared MCP server is reached by when Tico holds its key: the run's variable holds a proxy token,
+/// which the vendor would refuse, so the call goes to the tool's proxy address with the rest of the server's path
+/// under the tool's API address. None when the server is not under that address.
+pub fn through_proxy(url: &str, tool: &ProxiedTool) -> Option<String> {
+    let base = tool.base.trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    let rest = url.strip_prefix(base)?;
+    if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('?')) {
+        return None;
+    }
+    Some(format!(
+        "{}/{}",
+        tool.url.trim_end_matches('/'),
+        rest.trim_start_matches('/')
+    ))
+}
+
 /// (servers, problems) for one run. A server is {name, service, url, transport, headers, env}; one whose
-/// variable is not in `env` is left out and named in `problems`.
-pub fn servers_for_run(tools: &Value, env: &Env) -> (Vec<Value>, Vec<String>) {
+/// variable is not in `env` is left out and named in `problems`. A server whose key Tico holds (`proxied`) is
+/// reached through the proxy (`through_proxy`), or left out and named when it cannot be.
+pub fn servers_for_run(
+    tools: &Value,
+    env: &Env,
+    proxied: &[ProxiedTool],
+) -> (Vec<Value>, Vec<String>) {
     let (mut servers, mut problems, mut used) = (vec![], vec![], HashSet::new());
     for (entry, mcp) in declared(tools) {
         let service = service_of(&entry);
@@ -298,16 +334,119 @@ pub fn servers_for_run(tools: &Value, env: &Env) -> (Vec<Value>, Vec<String>) {
             ));
             continue;
         }
+        let mut url = mcp["url"].clone();
+        if let Some(tool) = proxied.iter().find(|t| needs.contains(&t.env)) {
+            match through_proxy(&text_of(&url), tool) {
+                Some(via) => url = json!(via),
+                None => {
+                    problems.push(format!(
+                        "{service}: MCP server not passed. Tico holds its key, so it is reached through Tico, and its \
+                         address {} is not under {}'s API address{}. Set that address to the MCP server's in Tools > {}",
+                        text_of(&url),
+                        tool.name,
+                        if tool.base.is_empty() { String::new() } else { format!(" {}", tool.base) },
+                        tool.name
+                    ));
+                    continue;
+                }
+            }
+        }
         let (mut name, mut n) = (server_name(&service), 1);
         while used.contains(&name) {
             n += 1;
             name = format!("{}_{n}", server_name(&service));
         }
         used.insert(name.clone());
-        servers.push(json!({"name": name, "service": service, "url": mcp["url"], "transport": mcp["transport"],
+        servers.push(json!({"name": name, "service": service, "url": url, "transport": mcp["transport"],
                             "headers": mcp.get("headers").cloned().unwrap_or(json!({})), "env": entry_env(&entry)}));
     }
     (servers, problems)
+}
+
+/// The MCP servers a run's grants bring (credential-runtime's `mcp_servers`, backend/mcp_connect.py): one per granted
+/// MCP tool, with no bot.yaml entry. Each is held to bot.yaml's rules (clean_mcp: its header uses only its own `env`
+/// as a placeholder), and passed only when that variable reached this turn (`held`). A proxied one's address is the
+/// tool proxy's path on the address this runner reaches the server by, as a proxied key's (env.rs `proxied_tool`).
+/// (servers, problems), servers shaped as `servers_for_run`'s.
+pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Value>, Vec<String>) {
+    let (mut servers, mut problems) = (vec![], vec![]);
+    for item in items.as_array().into_iter().flatten() {
+        let label = text_of(&item["tool"]);
+        let service = text_of(&item["name"]).trim().to_lowercase();
+        let env = text_of(&item["env"]);
+        if service.is_empty() {
+            continue;
+        }
+        let label = if label.is_empty() {
+            service.clone()
+        } else {
+            label
+        };
+        if env.is_empty() || !held.contains(&env) {
+            problems.push(format!(
+                "{label}: MCP server not passed, its key did not reach this turn"
+            ));
+            continue;
+        }
+        let url = text_of(&item["url"]);
+        let proxied = item["proxied"] == true;
+        let (checked, url) = if proxied {
+            let Some(at) = url.find("/api/v2/tool-proxy/") else {
+                problems.push(format!(
+                    "{label}: MCP server not passed, its address is not Tico's tool proxy"
+                ));
+                continue;
+            };
+            let path = &url[at..];
+            let base = if server.is_empty() {
+                &url[..at]
+            } else {
+                server.trim_end_matches('/')
+            };
+            // The proxy is Tico's own address (plain http inside a Docker network, say): its path is what is checked.
+            (
+                format!("https://tico.invalid{path}"),
+                format!("{base}{path}"),
+            )
+        } else {
+            (url.clone(), url)
+        };
+        let block =
+            json!({"url": checked, "transport": item["transport"], "headers": item["headers"]});
+        match clean_mcp(&block, &env) {
+            Ok(m) => servers.push(json!({"name": server_name(&service), "service": service, "url": url,
+                                         "transport": m["transport"], "headers": m.get("headers").cloned().unwrap_or(json!({})),
+                                         "env": env})),
+            Err(why) => problems.push(format!("{label}: MCP server not passed. {why}")),
+        }
+    }
+    (servers, problems)
+}
+
+/// `problems` without the bot.yaml servers left out for a variable the bot does not hold whose name a granted MCP
+/// tool's server takes: `merge` passes the granted one, so a grant alone is enough and nothing is missing.
+pub fn drop_covered(problems: Vec<String>, tools: &Value, granted: &[Value]) -> Vec<String> {
+    let names: HashSet<String> = granted.iter().map(|s| text_of(&s["name"])).collect();
+    let covered: Vec<String> = declared(tools)
+        .iter()
+        .map(|(entry, _)| service_of(entry))
+        .filter(|service| names.contains(&server_name(service)))
+        .map(|service| format!("{service}: MCP server not passed, "))
+        .collect();
+    problems
+        .into_iter()
+        .filter(|p| !covered.iter().any(|c| p.starts_with(c.as_str())))
+        .collect()
+}
+
+/// bot.yaml's servers, then each granted one whose name bot.yaml does not already use: bot.yaml wins on a name.
+pub fn merge(mut servers: Vec<Value>, granted: &[Value]) -> Vec<Value> {
+    for s in granted {
+        if !servers.iter().any(|d| d["name"] == s["name"]) {
+            servers.push(s.clone());
+        }
+    }
+    servers
 }
 
 /// (name, transports, why) for a harness (mcp_servers.SUPPORT): its manifest's `mcp_transports` and
@@ -669,17 +808,107 @@ mod tests {
         assert!(err(json!({"url": "https://x.com/?k=${K}"}), "K").contains("holds no credential"));
         assert_eq!(secret_in("a normal sentence"), "");
         assert!(!secret_in("token Zq8vR2mXk4Lp9Wn3Ts7Yb1Cd6Fg").is_empty());
+        // A Twilio SID is an id, however random its hex looks.
+        assert_eq!(
+            secret_in(&format!("AC{}", "0123456789abcdef".repeat(2))),
+            ""
+        );
+    }
+
+    #[test]
+    fn a_server_whose_key_tico_holds_goes_through_the_proxy_or_is_named() {
+        let tool = |base: &str| ProxiedTool {
+            name: "Linear".into(),
+            env: "LINEAR_API_KEY".into(),
+            url_env: "TICO_TOOL_LINEAR_URL".into(),
+            url: "http://tico.internal/api/v2/tool-proxy/linear".into(),
+            base: base.into(),
+        };
+        let held = env(&[("LINEAR_API_KEY", "tpx1.a.b")]);
+        let (servers, problems) =
+            servers_for_run(&tools(), &held, &[tool("https://mcp.linear.app")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            text_of(&servers[0]["url"]),
+            "http://tico.internal/api/v2/tool-proxy/linear/mcp"
+        );
+        assert_eq!(
+            through_proxy("https://mcp.linear.app/", &tool("https://mcp.linear.app/")).as_deref(),
+            Some("http://tico.internal/api/v2/tool-proxy/linear/")
+        );
+        // Another host, a look-alike prefix, or no address: not passed, and the line says what to set.
+        assert_eq!(
+            through_proxy(
+                "https://mcp.linear.app.evil/mcp",
+                &tool("https://mcp.linear.app")
+            ),
+            None
+        );
+        assert_eq!(through_proxy("https://mcp.linear.app/mcp", &tool("")), None);
+        let (servers, problems) =
+            servers_for_run(&tools(), &held, &[tool("https://api.linear.app")]);
+        assert_eq!(servers.len(), 1, "only docs");
+        assert!(
+            problems[0].starts_with("linear: MCP server not passed. Tico holds its key"),
+            "{problems:?}"
+        );
+        assert!(problems[0].ends_with("in Tools > Linear"));
+    }
+
+    #[test]
+    fn a_granted_server_reaches_the_run_on_this_runners_address_and_bot_yaml_wins_a_name() {
+        let items = json!([
+            {"name": "acme-errors", "tool": "Acme Errors", "transport": "http", "env": "ACME_ERRORS_MCP_TOKEN",
+             "url": "https://tico.acme.example/api/v2/tool-proxy/acme-errors/mcp", "proxied": true,
+             "headers": {"Authorization": "Bearer ${ACME_ERRORS_MCP_TOKEN}"}},
+            {"name": "acme-docs", "tool": "Acme Docs", "transport": "http", "env": "ACME_DOCS_MCP_TOKEN",
+             "url": "https://docs.acme.example/mcp", "proxied": false, "headers": {"X-Key": "${ACME_DOCS_MCP_TOKEN}"}},
+            {"name": "acme-sneaky", "tool": "Acme Sneaky", "transport": "http", "env": "ACME_SNEAKY_MCP_TOKEN",
+             "url": "https://sneaky.acme.example/mcp", "headers": {"X-Key": "${HOME}"}},
+            {"name": "acme-missing", "tool": "Acme Missing", "transport": "http", "env": "ACME_MISSING_MCP_TOKEN",
+             "url": "https://missing.acme.example/mcp", "headers": {}}
+        ]);
+        let held: BTreeSet<String> = [
+            "ACME_ERRORS_MCP_TOKEN",
+            "ACME_DOCS_MCP_TOKEN",
+            "ACME_SNEAKY_MCP_TOKEN",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (servers, problems) = granted(&items, "http://server:8080/", &held);
+        assert_eq!(
+            servers
+                .iter()
+                .map(|s| text_of(&s["url"]))
+                .collect::<Vec<_>>(),
+            [
+                "http://server:8080/api/v2/tool-proxy/acme-errors/mcp",
+                "https://docs.acme.example/mcp"
+            ]
+        );
+        assert_eq!(text_of(&servers[0]["name"]), "acme_errors");
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].starts_with("Acme Sneaky: MCP server not passed."));
+        assert_eq!(
+            problems[1],
+            "Acme Missing: MCP server not passed, its key did not reach this turn"
+        );
+        let declared = vec![json!({"name": "acme_errors", "url": "https://from.bot.yaml/mcp"})];
+        let merged = merge(declared, &servers);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(text_of(&merged[0]["url"]), "https://from.bot.yaml/mcp");
     }
 
     #[test]
     fn servers_for_a_run_need_their_granted_variable_and_each_harness_takes_its_transports() {
-        let (servers, problems) = servers_for_run(&tools(), &env(&[]));
+        let (servers, problems) = servers_for_run(&tools(), &env(&[]), &[]);
         assert_eq!(servers.len(), 1, "linear needs LINEAR_API_KEY");
         assert_eq!(
             problems,
             ["linear: MCP server not passed, LINEAR_API_KEY is not granted to this bot"]
         );
-        let (servers, problems) = servers_for_run(&tools(), &env(&[("LINEAR_API_KEY", "v")]));
+        let (servers, problems) = servers_for_run(&tools(), &env(&[("LINEAR_API_KEY", "v")]), &[]);
         assert!(problems.is_empty());
         assert_eq!(
             servers

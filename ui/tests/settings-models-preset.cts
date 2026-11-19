@@ -63,7 +63,7 @@ declare function providersCollect(root: HTMLElement): {preset: string; enabled: 
         url: 'https://updates.tico.team/v1/gateway', default_url: 'https://updates.tico.team/v1/gateway', preview: '', revision: 0,
         state: 'none', working: false, message: 'No gateway key saved.'});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -87,7 +87,7 @@ declare function providersCollect(root: HTMLElement): {preset: string; enabled: 
       'Tico Gateway only', "Your company's plans or API keys"]);
     const recommended = choices.locator('label', {has: page.locator('.pill')});
     assert.equal(await recommended.count(), 1);
-    assert.match(await recommended.innerText(), /^Your Claude and ChatGPT subscriptions, plus Tico Gateway/);
+    assert.match(await recommended.innerText(), /^Your Claude and ChatGPT subscriptions only/);
     const words = await choices.innerText();
     assert.match(words, /Sign in with your own Claude and ChatGPT accounts\./);
     assert.match(words, /Don't share one login across your team\./);
@@ -95,7 +95,7 @@ declare function providersCollect(root: HTMLElement): {preset: string; enabled: 
     assert.equal(await choices.locator('img, svg').count(), 0, 'no provider logos');
     for (const claim of [/partner/i, /approved/i, /official/i, /endorse/i, /token/i, /password/i, /\bstor/i, /never see/i])
       assert.doesNotMatch(words, claim);
-    // Nothing ticked: the recommended choice ticks Claude and ChatGPT and offers their models; Save sends the choice.
+    // Nothing ticked: the subscriptions-plus-Gateway choice ticks Claude and ChatGPT and offers their models; Save sends the choice.
     assert.equal(await page.locator('#onb-prov [data-provider]:checked').count(), 0);
     await choices.locator('[data-provider-preset][value=subscriptions-gateway]').check();
     assert.deepEqual(await page.locator('#onb-prov [data-provider]:checked').evaluateAll((boxes: HTMLInputElement[]) => boxes.map(b => b.value)), ['anthropic', 'openai']);

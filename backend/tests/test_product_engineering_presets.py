@@ -1,4 +1,4 @@
-"""The Product and Engineering pair (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
+"""The Product and Engineering pair (docs/dev/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
 company set up before 0.6 has it (pipeline_settings.LEGACY; Product replaced it for new companies,
 test_product_pipeline.py): who fills each role (backend/pipeline_seats.py), its upkeep and retiring
 (pipeline_settings.ensure_presets), the
@@ -170,12 +170,12 @@ def test_the_pair_has_its_roles_and_a_start_keeps_it_with_no_product_made_beside
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
-    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_only")
+    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec", ANA, "people_only")
     assert "acceptance criteria someone can check" in spec["settings"]["rubric"]
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     qa = stages["engineering-qa"]["requirements"][1]
-    assert (qa["line"], qa["person_id"], qa["who_oks"]) == ("QA page", ANA, "people_only")
+    assert (qa["line"], qa["person_id"], qa["who_oks"]) == ("QA report", ANA, "people_only")
     assert "the checks at the newest commit" in qa["settings"]["rubric"]
     assert "what Reviewer 1 and Reviewer 2 each found" in qa["settings"]["rubric"]
     # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
@@ -289,9 +289,38 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
 
 
 # ----------------------------------------------------------------------------- the handoff
+def _linked_document(c, task, requirement_id, file_id, version):
+    """The synthetic approval uses a real page identity and task-role link, as document submission does."""
+    from backend import page_links as L
+    from backend import task_documents as TD
+
+    actor = task["owner_id"]
+    now = H.now()
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,current_version,"
+        "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',?,?,?,?)",
+        (file_id, H.actor_id(actor), "task:" + task["id"], file_id, "Spec", task["id"], version, now, now),
+    )
+    blob = H.new_id()
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,16,'spec.html','text/html',?)",
+        (blob, actor, "0" * 64, now),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES(?,?,?,?,16,'spec.html','text/html',?,?)",
+        (file_id, version, blob, "0" * 64, actor, now),
+    )
+    document = R.document_of(R.get(c, requirement_id))
+    if document:
+        TD.record(c, task["id"], document, file_id, actor)
+        L.link(c, file_id, actor, "writer", actor)
+
+
 def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
+    _linked_document(c, task, rid, "f-spec", version)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -331,7 +360,7 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
         "bot:builder",
     )
     assert eng["title"] == "Saved carts"
-    assert eng["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-spec@3"
+    assert H.task_request_text(c, eng["id"]) == "Let a shopper keep a cart.\n\nSpec: page:f-spec@3"
     assert eng["requester_id"] == "bot:pm"
     assert "handoff_filed" in X.events(c, row["id"])
     standing = R.standings(c, E.task(c, row["id"]))[0]
@@ -547,7 +576,7 @@ def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
     filed = _filed(c, row["id"])
     assert len(filed) == 1
-    assert E.task(c, filed[0][0])["requester_id"] == H.KEEPER
+    assert E.task(c, filed[0][0])["requester_id"] == H.TICO_ACTOR
 
 
 def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):
@@ -703,6 +732,7 @@ def _sign_off(c, stage_id):
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
     row = E.move(c, row["id"], stage_id, ANA, "Straight to the sign-off for this test")
     rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (stage_id,)).fetchone()[0]
+    _linked_document(c, row, rid, "f-page", 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -730,7 +760,7 @@ def test_when_review_2_found_nothing_the_builder_says_done_and_qa_asks_it_for_th
     qa = E.task(c, row["id"])
     assert (qa["stage_id"], qa["owner_id"]) == ("engineering-qa", "bot:builder")
     (page,) = R.standings(c, qa)
-    assert (R.name_of(page.requirement), page.state, page.on) == ("QA page", R.NOT_MET, "bot:builder")
+    assert (R.name_of(page.requirement), page.state, page.on) == ("QA report", R.NOT_MET, "bot:builder")
     assert all(w.state == W.BOT and w.who == "bot:builder" for w in W.of(c, qa))
     assert not c.execute("SELECT 1 FROM requirements WHERE visit_id IS NOT NULL").fetchone()  # no ask was added
 
@@ -750,12 +780,12 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
             A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
         with pytest.raises(H.Refused, match="task_needs_person"):
             E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
-    # Late: no bot is woken, since none can give or push past a people-only OK, and the manager still cannot push
-    # past. The task stays the person's, whom it reads.
+    # Past the stage's expected time: a person's turn is never Late, no bot is woken, since none can give or push past
+    # a people-only OK, and the manager still cannot push past. The task stays the person's, whom it reads.
     minutes = row["stage"]["expected_minutes"]
     X.settled(c)
     time_machine.shift(timedelta(minutes=minutes + 1))
-    assert N.check(c)["late"] == 1
+    assert N.check(c)["late"] == 0
     late = E.task(c, row["id"])
     assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == []
     with pytest.raises(H.Refused, match="task_needs_person"):
@@ -799,7 +829,7 @@ def test_the_engineering_task_carries_what_the_person_said_with_their_spec_ok(c)
     ((filed, kind),) = _filed(c, row["id"])
     assert kind == "handoff"
     name = H.actor_name(c, ANA)
-    assert E.task(c, filed)["body"] == (
+    assert H.task_request_text(c, filed) == (
         f"Let a shopper keep a cart.\n\nSpec: page:f-page@1\n\n{name}'s notes on the spec, given with their OK:\n"
         + SPEC_NOTES
     )
@@ -812,7 +842,7 @@ def test_an_ok_with_no_notes_adds_nothing_to_the_engineering_task(c):
     row, rid = _sign_off(c, "product-spec")
     A.answer(c, row["id"], rid, ANA, "ok")
     ((filed, _),) = _filed(c, row["id"])
-    assert E.task(c, filed)["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
+    assert H.task_request_text(c, filed) == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
     assert "notes" not in TW.body(c, E.task(c, row["id"]), to="bot:pm")
 
 
@@ -1063,20 +1093,24 @@ def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
     assert (row["owner_id"], row["assignee_id"]) == (None, None)
 
 
-def _engineering_at_release(c):
-    """A Product task in Spec, with Engineering set as the release migration sets it: On deck and Build pick from two
-    Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
-    import importlib
+BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
 
+
+def _engineering_at_release(c):
+    """A Product task in Spec, with Engineering set as the release migration engineering_picks_at_release set it: On
+    deck and Build pick from two Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
     _role_bot(c, "builder-2", "builder")
     row = _product_task(c)
     _seat(c, "Builder 2", "builder", "builder-2")
     X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
-    importlib.import_module("backend.migrations.20261113033639_engineering_picks_at_release").up(c)
+    for stages, bots, prefer, owns in (
+        (("engineering-on-deck", "engineering-build"), BUILDERS, "anyone", True),
+        (("engineering-review-1", "engineering-review-2"), REVIEWERS, "new", False),
+    ):
+        pick = {"bots": list(bots), "how": "turns", "limit_each": None, "prefer": prefer, "owns_task": owns}
+        for stage in stages:
+            c.execute("UPDATE stages SET owner='pick', pick=? WHERE id=?", (json.dumps(pick, sort_keys=True), stage))
     return row
-
-
-BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
 
 
 def test_a_handoff_into_picking_stages_gets_a_builder_and_review_1_a_reviewer(c):

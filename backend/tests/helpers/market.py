@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from backend import market as M
-from backend.blobs import Blobs
 from backend.store import H
 from backend import bot_settings as BS
 
@@ -13,7 +12,7 @@ FIXTURE_REGISTRY = Path(__file__).parents[1] / "fixtures" / "registry"
 def _seed(api, tmp_path):
     store = api.app.state.store
     with store.transaction() as c:
-        M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
+        M.seed(c, document=M.load_snapshot(FIXTURE_REGISTRY))
         if not H.bot(c, "social-media-manager"):
             c.execute(
                 "INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",

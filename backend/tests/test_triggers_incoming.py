@@ -201,33 +201,6 @@ def test_each_preset_verifies_over_http_and_the_type_is_kept(api):
     assert off["signed"] is False and get(api, "triggers/billing")["trigger"]["preset"] == "none"
 
 
-def test_a_signed_trigger_made_before_presets_is_checked_as_hmac():
-    from backend import hubdb as H
-    from backend.triggers_incoming_schema import SCHEMA
-    import sqlite3
-    from backend.triggers_schema import SCHEMA as T1, SIGNING_SCHEMA
-
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    for script in (T1, SIGNING_SCHEMA):
-        H._apply(conn, script)
-    now = "2026-01-01T00:00:00.000000Z"
-    conn.execute(
-        "INSERT INTO triggers(id,name,secret_hash,created_by,created_at,updated_at,signing_secret) VALUES('a','A','h','human:ana',?,?,'sealed')",
-        (now, now),
-    )
-    conn.execute(
-        "INSERT INTO triggers(id,name,secret_hash,created_by,created_at,updated_at) VALUES('b','B','h','human:ana',?,?)",
-        (now, now),
-    )
-    conn.execute(
-        "INSERT INTO trigger_deliveries(trigger_id,delivery,received_at,outcome) VALUES('a','d1',?,'accepted')", (now,)
-    )
-    H._apply(conn, SCHEMA)
-    assert [r["preset"] for r in conn.execute("SELECT preset FROM triggers ORDER BY id")] == ["hmac", "none"]
-    assert conn.execute("SELECT delivery FROM trigger_seen").fetchone()[0] == "d1"  # old ids stay duplicates
-
-
 def test_the_gateway_door_skips_the_address_secret_and_the_cap_but_not_the_signature(api, monkeypatch):
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     aid = routine(api)
@@ -380,7 +353,7 @@ def test_who_may_read_a_stored_body(api):
         H.notice(c, "human:ben", "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     get(api, path, token="assistant-test", expected=404)
     with api.app.state.store.transaction() as c:
-        H.notice(c, H.KEEPER, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+        H.notice(c, H.TICO_ACTOR, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     assert get(api, path, token="assistant-test")["delivery"]["part"] == 1
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE trigger_bodies SET expires_at='2000-01-01T00:00:00.000000Z'")

@@ -97,7 +97,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     old = next(c for c in computer.prompts() if c["harness"] == "claude")
     old_thread = old["argv"][old["argv"].index("--session-id") + 1]
     set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
-    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the task model."})
+    post(api, "chat/ops", {"text": "Continue on the task model.", "refs": {"task": task["id"]}})
     grok = completed(2)
     assert grok["ran_on"]["task_model"]["source"] == "task"
     assert "grok-4.6" in grok["ran_on"]["task_model"]["note"]
@@ -110,7 +110,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
             (checkpoint, H.now(), task["id"]),
         )
     company(api, "anthropic")
-    post(api, f"tasks/{task['id']}/chat", {"text": "Continue after the task model became unavailable."})
+    post(api, "chat/ops", {"text": "Continue after the task model became unavailable.", "refs": {"task": task["id"]}})
     fallback = completed(3)
     assert fallback["ran_on"]["task_model"]["source"] == "fallback"
     assert fallback["ran_on"]["segments"][0]["runtime"] == "claude"
@@ -124,7 +124,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     with api.app.state.store.read() as c:
         latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
     assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
-    post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
+    post(api, "chat/ops", {"text": "Continue while the task model is still unavailable.", "refs": {"task": task["id"]}})
     completed(4)
     last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
     side = call["argv"][call["argv"].index("--session-id") + 1]
@@ -138,7 +138,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     # Back on the bot's own model, the next turn resumes the thread it had before any of that, and is told a side
     # session ran in between.
     set_task_model(api, None)
-    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the bot's own model."})
+    post(api, "chat/ops", {"text": "Continue on the bot's own model.", "refs": {"task": task["id"]}})
     completed(5)
     primary = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
     assert primary["argv"][primary["argv"].index("--resume") + 1] == old_thread, "the primary thread was not kept"
@@ -164,7 +164,7 @@ def test_returning_task_model_receives_the_completed_fallback_checkpoint(api, co
 
     completed(1)
     set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
-    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the task model."})
+    post(api, "chat/ops", {"text": "Continue on the task model.", "refs": {"task": task["id"]}})
     assert completed(2)["ran_on"]["task_model"]["source"] == "task"
     grok = computer.prompts()[-1]
     assert grok["harness"] == "grok"
@@ -174,14 +174,14 @@ def test_returning_task_model_receives_the_completed_fallback_checkpoint(api, co
 
     company(api, "anthropic")
     work = "Acme_fallback_verified_build_43_and_completed_the_release_checklist"
-    post(api, f"tasks/{task['id']}/chat", {"text": f"RECALL code word is {work}"})
+    post(api, "chat/ops", {"text": f"RECALL code word is {work}", "refs": {"task": task["id"]}})
     assert completed(3)["ran_on"]["task_model"]["source"] == "fallback"
     with api.app.state.store.read() as c:
         latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
     assert work in latest["checkpoint"] and older not in latest["checkpoint"]
 
     company(api, "anthropic", "xai")
-    post(api, f"tasks/{task['id']}/chat", {"text": "Resume on the recovered task model."})
+    post(api, "chat/ops", {"text": "Resume on the recovered task model.", "refs": {"task": task["id"]}})
     recovered = completed(4)["ran_on"]
     assert recovered["task_model"]["source"] == "task"
     final = computer.prompts()[-1]
@@ -962,6 +962,15 @@ def runtime_row(api, computer):
     return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {})
 
 
+def last_heartbeat(api, computer):
+    """When the computer last reported in: each heartbeat moves it."""
+    with api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT last_seen_at FROM runners_with_state WHERE id=?", (computer.registration["runner_id"],)
+        ).fetchone()
+    return row[0] if row else None
+
+
 # The computer's own login's usage windows reach the heartbeat with their percentages: Claude's from its turns'
 # rate_limit_event (`unifiedWindows`), Codex's from the idle app-server read, with no turn spent to read them.
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -997,7 +1006,10 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
         "the API-key account",
         timeout=40,
     )
-    time.sleep(2)  # a later heartbeat
+    beat = last_heartbeat(api, computer)
+    until(
+        lambda: last_heartbeat(api, computer) not in (None, beat), "a heartbeat after the API-key account", timeout=40
+    )
     row = runtime_row(api, computer)
     assert "weekly" not in row and "five_hour" not in row
     assert not any(c.get("method") == "account/rateLimits/read" for c in computer.calls())
@@ -1286,7 +1298,8 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     )
 
     def certified():
-        # Each config change is a full readiness pass, which inspects the computer's worktrees.
+        # Each config change is a full readiness pass, which inspects the computer's worktrees. The pause paces the
+        # checks, so each one gets a pass to finish before the next change starts another.
         with api.app.state.store.transaction() as c:
             BS.update(c, 'ops', {'touched': time.monotonic()})
             row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
@@ -1295,7 +1308,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
 
     until(certified, "the attached worktree reported ready", timeout=60)
 
-    post(api, f"tasks/{task['id']}/chat", {"text": "REMEMBER what the build taught you"})
+    post(api, "chat/ops", {"text": "REMEMBER what the build taught you", "refs": {"task": task["id"]}})
     second = until(
         lambda: next((a for a in computer.attempts()[1:] if a["state"] == "completed"), None),
         "the turn with the worktree",

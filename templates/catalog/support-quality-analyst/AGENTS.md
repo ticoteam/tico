@@ -59,7 +59,7 @@ Always:
 - `skills/draft-a-coaching-note/SKILL.md`: read before you draft coaching for a human.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/scorecard.md`,
    `knowledge/calibration.md` and `knowledge/patterns.md`, then the playbook the task names. A resumed turn already has
    them.
@@ -83,8 +83,8 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Sent replies come from Support Agent's
 sent replies (the done rows of `tico task list --owner support-owner --updated-since <ISO-8601 time>`) or an export a human attaches. Where the
-support mailbox is connected, read sent threads with `$HUB_DIR/scripts/mail.sh search "in:sent newer_than:7d"` and one
-thread with `mail.sh thread <id> --format md` (docs/mail.md). Ask the owner one question with `tico task
+support mailbox is connected, find sent threads with `tico email search <address> "in:sent newer_than:7d"` and read one
+with `tico email thread <address> <thread-id>` (docs/mail.md). Ask the owner one question with `tico task
 ask <id> --to <owner> "<question>" --version N`. A coaching conversation a human should have is a draft in the report, not a task for them.
 Finish every task, quiet week or not.
 

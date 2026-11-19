@@ -6,7 +6,7 @@ This page explains how they fit together. [Tasks](tasks.md#sub-tasks) has the ex
 
 ## The main chat and task sessions
 
-- **Home**: the bot's thread on its page. Its session reads only Home messages and short task reports.
+- **Home**: the bot's thread on its page. Its session reads only Home messages and the quiet "Started task" lines.
 - **Thread session**: every other thread with the bot keeps a session of its own, shared by its sub-threads. A private
   thread's session (a DM, a members-only thread, a meeting, a private task's thread) never serves a public one, and
   the other way round.

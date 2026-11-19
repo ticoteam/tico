@@ -13,11 +13,13 @@ from backend.sql import schema_columns
 
 
 def store(tmp_path):
-    s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
-    with s.transaction() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS t(x)")
+    """A store on a file of its own small schema: a file that already has tables is not given the baseline."""
+    path = tmp_path / "hub.sqlite"
+    with closing(sqlite3.connect(path)) as c:
+        c.execute("CREATE TABLE t(x)")
         c.execute("INSERT INTO t VALUES(1)")
-    return s
+        c.commit()
+    return Store(Settings(db_path=path))
 
 
 def test_reads_reuse_a_connection_left_clean(tmp_path):

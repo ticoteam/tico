@@ -5,7 +5,6 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from clients import preflight as PF
 
@@ -26,6 +25,32 @@ class Manifest(unittest.TestCase):
         self.assertEqual(m, {"name": "someone-else"})
         self.assertEqual(r.counts["FAIL"], 1)
         self.assertTrue(any("expected 'seo'" in l for l in out))
+
+
+class RetiredMailCli(unittest.TestCase):
+    """`mail.sh` is gone: a bot told to run it fails every mail step."""
+
+    PATTERN = next(pattern for pattern, why in PF.STALE if "mail.sh" in why)
+
+    def test_no_template_or_policy_tells_a_bot_to_run_it(self):
+        root = Path(__file__).resolve().parents[2]
+        hits = [
+            f"{path.relative_to(root)}:{n}"
+            for base in ("templates", "policies")
+            for path in sorted((root / base).rglob("*"))
+            if path.is_file() and path.suffix in (".md", ".yaml", ".yml", ".json", ".txt")
+            for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1)
+            if self.PATTERN.search(line)
+        ]
+        self.assertEqual(hits, [])
+
+    def test_a_bot_repo_that_still_names_it_is_warned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "AGENTS.md").write_text("Read the inbox: `$HUB_DIR/scripts/mail.sh inbox --untriaged`.\n")
+            r, out, _ = lines(PF.check_stale, d)
+        self.assertEqual(r.counts["WARN"], 1)
+        self.assertIn("tico email", out[0])
 
 
 if __name__ == "__main__":

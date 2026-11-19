@@ -153,13 +153,13 @@
     - match: '^settings find'
       out:
         matches:
-          - {key: "team.rules.bots_go_ahead", label: "Bots go ahead on their recommendation when nobody answers", value: false, where: "Settings > Humans > Team rules", who_may_change: "the owner", class: "confirm"}
+          - {key: "team.rules.bots_go_ahead", label: "Bots decide when nobody replies", value: false, where: "Settings > Humans > Team rules", who_may_change: "the owner", class: "confirm"}
     - match: '^settings show team\.rules\.bots_go_ahead'
-      out: {key: "team.rules.bots_go_ahead", name: "Bots go ahead on their recommendation when nobody answers", value: false, who_may_change: "the owner", you_may: true, class: "confirm", card: "#/settings/people"}
+      out: {key: "team.rules.bots_go_ahead", name: "Bots decide when nobody replies", value: false, who_may_change: "the owner", you_may: true, class: "confirm", card: "#/settings/people"}
     - match: '^settings set team\.rules\.bots_go_ahead\b'
       out:
-        card: {id: prop_go_ahead_1, status: waiting_for_confirm, summary: "Bots go ahead on their recommendation when nobody answers: on"}
-        setting: {key: "team.rules.bots_go_ahead", name: "Bots go ahead on their recommendation when nobody answers", where: "Settings > Humans > Team rules"}
+        card: {id: prop_go_ahead_1, status: waiting_for_confirm, summary: "Bots decide when nobody replies: on"}
+        setting: {key: "team.rules.bots_go_ahead", name: "Bots decide when nobody replies", where: "Settings > Humans > Team rules"}
         value: true
         note: "Confirm card in the chat. Nothing changes until Dana taps it."
   must:

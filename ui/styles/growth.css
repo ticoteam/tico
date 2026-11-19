@@ -1,31 +1,16 @@
-/* Growth and Brand (ui/app/growth-page.ts: the Growth cards, growth-charts.js, growth-channels.js, growth-sources.js, brand-page.js), and
-   the Brand strip on the Strategy page. Each works at phone width; the Growth cards' tables stack on a narrow card. */
+/* Growth and Brand (ui/app/growth-page.ts: the Growth page and what Brand shares, growth-charts.ts, brand-page.ts), and the
+   Brand strip on the Strategy page. Each works at phone width; a wide table scrolls sideways in its own box. */
 
 /* ---------- shared */
 .gr-body{display:flex;flex-direction:column;gap:14px;min-width:0}
 :where(.gr-body) .card{display:block;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);margin:0;min-width:0;box-sizing:border-box}
 .gr-body section.card{margin:0}
 .gr-k{margin:0;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.gr-meta{font-size:var(--t-sm)}
-.gr-crumbs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
-.gr-crumbs>a{color:var(--muted);text-decoration:none;font-size:var(--t-base)}
-.gr-crumbs>a:hover{color:var(--ink)}
-.gr-crumbs h2{margin:0;font-size:var(--t-lg);line-height:1.2}
-.gr-crumbs .spacer,.gr-bar .spacer,.br-strip .spacer{flex:1}
-.gr-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-a.gr-btn{display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl);border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 12px;line-height:20px;color:var(--ink);background:transparent;text-decoration:none;font-size:var(--t-base);font-weight:600;white-space:nowrap}
-a.gr-btn[hidden]{display:none}
-a.gr-btn:hover{background:var(--surface2);text-decoration:none}
+.br-strip .spacer{flex:1}
 .gr-seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
 .gr-seg button{white-space:nowrap}
-.gr-tabs{display:flex;gap:2px;flex-wrap:wrap}
-.gr-tabs a{padding:4px 10px;border-radius:6px;color:var(--muted);font-size:var(--t-base);text-decoration:none}
-.gr-tabs a:hover{background:var(--surface2);color:var(--ink)}
-.gr-tabs a[aria-current]{background:var(--surface2);color:var(--ink);font-weight:600}
 .gr-note{margin:0}
 .gr-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
-.gr-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-radius:var(--radius);font-size:var(--t-sm)}
-.gr-amber{background:var(--wait-bg);border:1px solid color-mix(in srgb,var(--wait) 35%,transparent)}
 
 /* forms and dialogs */
 .gr-dlg{width:min(520px,calc(100vw - 32px))}
@@ -35,17 +20,11 @@ a.gr-btn:hover{background:var(--surface2);text-decoration:none}
 .gr-form{display:flex;flex-direction:column;gap:10px}
 .gr-f{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .gr-f>:is(input,select,textarea){color:var(--ink)}
-.gr-pair,.gr-trio{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.gr-trio{grid-template-columns:repeat(3,minmax(0,1fr))}
-.gr-fs{border:0;margin:0;padding:0;min-width:0}
-.gr-fs>legend,.gr-rows>legend{padding:0;margin:0 0 6px;font-size:var(--t-sm);color:var(--muted)}
+.gr-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.gr-rows>legend{padding:0;margin:0 0 6px;font-size:var(--t-sm);color:var(--muted)}
 .gr-rows>legend.gr-k{font-size:var(--t-label)}
-.gr-checks{display:flex;flex-wrap:wrap;gap:6px 14px}
-.gr-check{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--ink)}
 .gr-foot{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:4px}
 .gr-dlg .err{color:var(--fail);margin:0;font-size:var(--t-sm)}
-.gr-retire{align-self:flex-start}
-.gr-retire[data-armed]{color:var(--fail);border-color:var(--fail)}
 
 /* list editors (brand sections) */
 .gr-rows{border:0;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:6px}
@@ -60,17 +39,11 @@ a.gr-btn:hover{background:var(--surface2);text-decoration:none}
 .gr-x:hover{background:var(--surface2);color:var(--ink)}
 .gr-rows>[data-row-add]{align-self:flex-start}
 
-/* ---------- shared rows (a channel's detail) */
+/* ---------- shared rows (a Brand section) */
 .gr-sec{display:flex;flex-direction:column;gap:2px;min-width:0}
 .gr-sec>h3{margin-bottom:6px}
-.gr-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:7px 0;border-top:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:var(--t-sm)}
-.gr-sec>h3+.gr-row{border-top:0}
-a.gr-row:hover .gr-row-t{text-decoration:underline}
-.gr-row-t{flex:1 1 160px;min-width:0}
-.gr-row .pill{margin:0}
-.gr-num{font-variant-numeric:tabular-nums;white-space:nowrap}
 
-/* ---------- Sources: the shared header (page-head.ts, "Growth › Sources") over the list, both as wide as the list */
+/* ---------- the shared header and the body as wide as the page reads well; trend lines and bars (growth-charts.ts) */
 .growth-layout>.gr-head,.growth-layout>.gr-body{max-width:1080px}
 .gr-d{color:var(--muted);white-space:nowrap}
 .gr-d-good{color:var(--ok)}
@@ -79,22 +52,33 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .gr-spark path{fill:none;stroke:var(--g5);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .gr-spark-one{fill:var(--g5)}
 .gr-spark-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}
+.gr-bars{display:block;max-width:100%;flex:none}
+.gr-bars rect{fill:var(--g5)}
+.gr-bars rect.gr-bar-on{fill:var(--accent)}
 
-/* ---------- the Growth page: the Dashboard's grid (ui/styles/dashboard.css) under the shared header (page-head.css).
-   Its tools: the month picker, and the Growth board as a quiet tool (an icon and its words, the words giving way first). */
-.grh-month[hidden]{display:none}
-/* the Funnel's North Star line, when no stage measures it: one quiet line under the stages that opens its KPI */
-.grc-ns{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;margin-top:10px;font-size:var(--t-sm);color:var(--ink);text-decoration:none}
-.grc-ns:hover span:nth-child(2){text-decoration:underline}
-.grc-ns-k{font-weight:600}
-.grc-ns b{font-weight:600;font-variant-numeric:tabular-nums}
-.grh-month select{width:auto;min-width:0;height:var(--ctl);padding-top:0;padding-bottom:0}
-.ph a.gr-btn.grh-btn{gap:6px;height:var(--ctl);padding:0 10px;border-color:transparent;font-weight:400;color:var(--ink)}
-.ph a.gr-btn.grh-btn:hover{background:var(--surface2)}
-.ph a.gr-btn.grh-btn svg{color:var(--muted)}
-/* folded into ⋯ (a phone, or a tight row), the tools stand one under another at the menu's width */
-.ph-menu .grh-month select{width:100%}
-.ph-menu a.gr-btn.grh-btn{display:flex;justify-content:flex-start}
+/* ---------- the Growth page: headline tiles, then cards for channels, trends, retention and KPIs, then a health line */
+.gp-month select{width:auto;min-width:0;height:var(--ctl);padding-top:0;padding-bottom:0}
+.ph-menu .gp-month select{width:100%}
+.gp-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.gp-tile{display:flex;flex-direction:column;gap:4px;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.gp-v{font-size:var(--t-lg);font-weight:600;line-height:var(--lh-tight);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gp-word{font-size:var(--t-base);font-weight:400}
+.gp-s{font-size:var(--t-xs);line-height:1.35}
+.gp-sec{display:flex;flex-direction:column;gap:8px}
+.gp-h{margin:0;font-size:var(--t-card);font-weight:600}
+.gp-scroll{position:relative;overflow-x:auto;min-width:0}
+.gp-ch{min-width:640px}
+.gp-ch small,.grc-ret-t small{font-size:var(--t-xs)}
+.gp-over{color:var(--fail)}
+.gp-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px 20px}
+.gp-chart{margin:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.gp-chart svg{width:100%;height:auto}
+.gp-none{margin:0;min-height:48px;display:flex;align-items:center}
+.gp-axis{display:flex;justify-content:space-between;margin:0;font-size:var(--t-xs)}
+.gp-kpis{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 20px;font-size:var(--t-sm)}
+.gp-kpis li{min-width:0;overflow-wrap:anywhere}
+.gp-kpis b{font-weight:600;font-variant-numeric:tabular-nums}
+.gp-health{margin:0;font-size:var(--t-xs)}
 .grc-table{width:100%;border-collapse:collapse;font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .grc-table th,.grc-table td{padding:5px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}
 .grc-table thead th{border-top:0;border-bottom:0;padding-top:0}
@@ -102,128 +86,13 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .grc-table :is(th,td):first-child{padding-left:0}
 .grc-table :is(th,td):last-child{padding-right:0}
 .grc-table .grc-n{text-align:right;white-space:nowrap}
-.grc-old{color:var(--muted)}
-.grc-more{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
-.grc-more:hover{color:var(--ink)}
-/* a task's stage: On deck grey, In development amber, Live blue, Working green */
-.grc-sq{display:inline-block;flex:none;width:8px;height:8px;border-radius:2px;background:var(--g5)}
-.grc-sq[data-stage=building]{background:var(--wait)}
-.grc-sq[data-stage=testing]{background:var(--run)}
-.grc-sq[data-stage=scaling]{background:var(--ok)}
+.grc-table .num{text-align:right;white-space:nowrap}
 
-/* a Number: the value, its trend, its change */
-.grc-num{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;min-width:0}
-.grc-num-v{font-size:var(--t-lg);font-weight:600;line-height:var(--lh-tight);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.grc-num-d{display:flex;align-items:baseline;gap:6px;margin-top:4px;min-height:16px;font-size:var(--t-sm);line-height:16px}
-
-/* the Funnel: five cells split by hairlines, the North Star's raised */
-/* five across on a wide card; two on a narrow one, Refer across the bottom */
-.grc-fun{container-type:inline-size;min-width:0}
-.grc-funnel{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px 16px}
-.grc-st{display:flex;min-width:0}
-@container (max-width:700px){.grc-funnel{grid-template-columns:repeat(2,minmax(0,1fr))}.grc-st:last-child:nth-child(odd){grid-column:1/-1}}
-.grc-st-in{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;padding:4px 0;color:var(--ink);text-decoration:none}
-a.grc-st-in:hover{text-decoration:none}
-a.grc-st-in:hover .grc-st-n{text-decoration:underline}
-.grc-st-h{display:flex;align-items:baseline;gap:6px}
-.grc-st-k{font-size:var(--t-sm);font-weight:600;color:var(--ink)}
-.grc-st-c{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
-.grc-st-n{font-size:var(--t-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.grc-st-v{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;font-size:var(--t-sm)}
-.grc-st-v b{font-size:var(--t-lg);font-weight:600;font-variant-numeric:tabular-nums}
-.grc-st-s{display:block;min-height:22px}
-.grc-st-t{font-size:var(--t-xs);color:var(--muted);min-height:16px}
-.grc-st-ns .grc-st-t{color:var(--ink);font-weight:600}
-
-/* Channels: a table on a wide card, a stack of rows on a narrow one */
-.grc-ch{container-type:inline-size;min-width:0}
-.grc-ch .grc-sp{width:72px}
-.grc-tasks{min-width:0}
-.grc-ch td.grc-tasks{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
-.grc-chip{display:inline-flex;align-items:center;gap:6px;max-width:220px;min-width:0;height:24px;padding:0 9px;border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-xs);text-decoration:none;box-sizing:border-box}
-.grc-chip:hover{background:var(--hover);text-decoration:none}
-.grc-chip-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@container (max-width:560px){
-  .grc-ch .grc-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  /* the hidden header's cells stack as blocks: as table cells they lay out at their min-content width (the 12 px label) and run past the phone's edge */
-  .grc-ch .grc-table thead :is(tr,th){display:block;padding:0}
-  .grc-ch .grc-table,.grc-ch tbody{display:block}
-  .grc-ch tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:8px 0;border-top:1px solid var(--line)}
-  .grc-ch tbody tr:first-child{border-top:0;padding-top:0}
-  .grc-ch tbody :is(th,td){display:block;padding:0;border:0;min-width:0}
-  .grc-ch tbody th{overflow:hidden;text-overflow:ellipsis}
-  /* the six months' trend keeps its place on a phone: a line of its own under the name and figures */
-  .grc-ch td.grc-sp{grid-column:1/-1}
-  .grc-ch td.grc-tasks{display:flex;grid-column:1/-1}
-  .grc-ch td.grc-tasks:empty{display:none}
-  .grc-ch td.grc-n::before{content:attr(data-k) " ";color:var(--muted);font-size:var(--t-xs)}
-  .grc-ch td.grc-n:empty::before{content:none}
-}
-
-/* Retention: cells shaded by the share kept, from the page's ink to jade; the text stays dark on the light cells */
+/* Retention: cells tinted by the share kept, at most a third of the accent over the card, so the ink reads in both themes */
 .grc-ret{overflow-x:auto;min-width:0}
-.grc-ret{--grr-hi:var(--accent);--grr-lo:var(--g8);--grr-ink:var(--accent-ink)}
-:root[data-theme="light"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}
-@media (prefers-color-scheme:light){:root[data-theme="system"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}}
 .grc-ret-t td.grc-k,.grc-ret-t th.grc-k-h{text-align:center;white-space:nowrap}
-.grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--grr-ink);background:color-mix(in srgb,var(--grr-hi) calc(var(--k,0) * 1%),var(--grr-lo))}
+.grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--ink);background:color-mix(in srgb,var(--accent) calc(var(--k,0) * .3%),var(--surface))}
 .grc-ret-t td.grc-k-none{background:var(--surface2)}
-/* computed retention (growth-retention.ts): Cut by and Weekly / Monthly over the cohorts; a figure opens its customers */
-.grx{display:flex;flex-direction:column;gap:8px}
-.grx-bar{display:flex;flex-wrap:wrap;gap:6px 10px}
-.grx-t td.grx-not,.grx-t td.grx-few{text-align:center;white-space:nowrap;font-size:var(--t-sm)}
-.grx-t tr.grx-wk th{padding-top:8px;font-size:var(--t-xs);color:var(--muted);font-weight:600;text-align:left}
-.grx-open{all:unset;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;border-radius:3px}
-.grx-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.grx-foot,.grc-foot{margin:0;font-size:var(--t-xs);line-height:1.4}
-.grx-up{align-self:flex-start}
-.grx-tag{font-size:var(--t-xs);font-weight:400}
-/* A typed actual beside a computed retention figure (growth-retention.ts grxKept): under the figure, centred. */
-.grx-t td .grx-beside{display:flex;justify-content:center;align-items:baseline;gap:4px;margin-top:2px;font-size:var(--t-xs);font-weight:400}
-.grc-comp{text-decoration:underline dotted;text-underline-offset:3px}
-.grc-origin{font-size:var(--t-xs)}
-.grx-rule{margin:0 0 8px}
-.grx-keys{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 12px;max-height:220px;overflow-y:auto;font-size:var(--t-sm)}
-.grx-keys code{overflow-wrap:anywhere}
-.grx-refused{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:6px;background:var(--surface2);border-left:3px solid var(--fail)}
-
-/* the Growth board: a lane per stage, its newest tasks */
-.grc-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-.grc-lane{display:flex;flex-direction:column;gap:4px;min-width:0}
-.grc-lane-h{display:flex;align-items:center;gap:6px;margin:0;font-size:var(--t-sm);font-weight:600}
-.grc-lane-h .muted{font-weight:500}
-.grc-cards{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
-.grc-card{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"t f" "c f";align-items:center;gap:0 8px;padding:6px 8px;border-radius:6px;background:var(--surface2);color:var(--ink);text-decoration:none;font-size:var(--t-sm)}
-.grc-card:hover{background:var(--hover);text-decoration:none}
-.grc-card-t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.grc-card-c{grid-area:c;min-width:0;font-size:var(--t-xs);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.grc-slip{color:var(--wait-ink)}
-.grc-face{grid-area:f;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--g3);color:var(--ink);font-size:var(--t-2xs);font-weight:600}
-
-/* ---------- Settings: the channels and their months */
-.gs-sec{margin-top:14px}
-.gs-ch .muted{font-size:var(--t-xs)}
-.gs-add{align-self:flex-start;margin-top:8px}
-.gs-src{display:inline-block;margin-top:14px;font-size:var(--t-sm)}
-.gc-months{max-height:min(420px,60vh);overflow:auto}
-.gc-add{margin-top:8px}
-.gc-kept{display:inline-flex;gap:4px}
-.gc-h{display:inline-block;min-width:38px;padding:1px 4px;border-radius:4px;text-align:center;font-size:var(--t-xs);font-variant-numeric:tabular-nums;background:color-mix(in srgb,var(--ok) calc(var(--k,0) * .35%),transparent)}
-
-/* ---------- Sources */
-.gr-body .card.gsrc-list{padding:0;overflow:hidden}
-.gsrc-ul{list-style:none;margin:0;padding:0}
-.gsrc-ul>li+li{border-top:1px solid var(--line)}
-button.gsrc-row{cursor:pointer}
-button.gsrc-row:hover{background:var(--surface2)}
-.gsrc-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) minmax(0,.9fr);align-items:center;gap:4px 14px;width:100%;padding:10px var(--s4);border:0;border-radius:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;box-sizing:border-box}
-.gsrc-row>span{min-width:0;overflow-wrap:anywhere}
-.gsrc-t{font-weight:600}
-.gsrc-ref{overflow-wrap:anywhere}
-.gsrc-who{display:inline-flex;align-items:center;gap:6px;min-width:0;vertical-align:middle}
-/* the list's heads: the same columns as a row, in the table heads' small uppercase label */
-.gsrc-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr) minmax(0,.9fr);gap:4px 14px;padding:10px var(--s4) 6px;color:var(--muted);font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps)}
-.gsrc-sync:empty{display:none}
 
 /* ---------- Brand */
 .br-dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 14px;margin:0;font-size:var(--t-sm)}
@@ -294,8 +163,7 @@ button.gsrc-row:hover{background:var(--surface2)}
 .br-hit .pill{margin:0}
 
 /* Strategy page: Brand strip */
-#strat-brand:empty,#strat-setup:empty{display:none}
-.strat-setup{display:flex;flex-wrap:wrap;gap:8px}
+#strat-brand:empty{display:none}
 .br-strip{display:flex;align-items:stretch;min-height:92px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface);color:var(--ink);text-decoration:none}
 .br-strip:hover{border-color:var(--muted);text-decoration:none}
 .br-strip-hero{display:flex;flex-direction:column;justify-content:center;gap:4px;flex:0 1 44%;padding:14px 18px;background:var(--surface2);min-width:0}
@@ -315,9 +183,7 @@ button.gsrc-row:hover{background:var(--surface2)}
 }
 @media (max-width:760px){
   #main.growth-layout{padding-left:16px;padding-right:16px}
-    .gr-crumbs h2{font-size:var(--t-card)}
-  .gr-crumbs .spacer{flex-basis:100%;height:0}
-  .gr-pair,.gr-trio{grid-template-columns:minmax(0,1fr)}
+  .gr-pair{grid-template-columns:minmax(0,1fr)}
   .br-edit{grid-template-columns:minmax(0,1fr)}
   .br-subs{position:static;flex-direction:row;overflow-x:auto;scrollbar-width:none}
   .br-subs button{flex:none}
@@ -333,95 +199,5 @@ button.gsrc-row:hover{background:var(--surface2)}
   .gr-rowed>.gr-x{grid-column:2;grid-row:1}
   .gr-rowed .gr-cap{position:static!important;width:auto!important;height:auto!important;clip:auto!important}
   .gr-rowed+.gr-rowed{padding-top:8px;border-top:1px solid var(--line)}
-  .gr-f>:is(input,select,textarea),.br-check textarea,.grh-month select{font-size:16px}
+  .gr-f>:is(input,select,textarea),.br-check textarea,.gp-month select{font-size:16px}
 }
-@media (max-width:640px){
-  .gsrc-head{display:none}
-  .gsrc-ul>.gsrc-head+li{border-top:0}
-  .gsrc-row{display:flex;flex-wrap:wrap;gap:2px 10px}
-  .gsrc-t{flex:1 1 auto}
-  .gsrc-r,.gsrc-m,.gsrc-o{flex-basis:100%;font-size:var(--t-xs)}
-  .gsrc-m:empty,.gsrc-o:empty{display:none}
-  .gsrc-row>[data-k]::before{content:attr(data-k) ' ';color:var(--muted);font-weight:400}
-}
-
-/* ---------- Get started (ui/app/growth-start.ts): the four steps over the cards while Growth is not set up, the next
-   one lit with its button; a done step's tick pops and the bar fills; all four done says so once. Empty cards name the
-   step that fills them. */
-.grs{margin:4px 28px 14px;padding:var(--s4);border:1px solid var(--line);border-radius:var(--radius);
-  background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 7%,var(--surface)),var(--surface) 55%);animation:tico-pop var(--dur) var(--ease-out)}
-.grs[hidden]{display:none}
-.grs .spacer{flex:1}
-.grs-head,.grs-yay{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
-.grs-h{margin:0;font-size:var(--t-lg);line-height:1.2}
-.grs-sub{margin:2px 0 0;color:var(--muted);font-size:var(--t-base);max-width:60ch}
-.grs-prog{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:140px}
-.grs-prog-t{font-size:var(--t-sm);color:var(--muted)}
-.grs-prog-t b{color:var(--ink)}
-.grs-bar{display:block;width:140px;height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
-.grs-bar i{display:block;height:100%;width:100%;border-radius:3px;background:var(--ok);transform-origin:left;transform:scaleX(var(--p));
-  transition:transform calc(var(--dur) * 3) var(--ease-out);animation:grs-fill calc(var(--dur) * 3) var(--ease-out)}
-@keyframes grs-fill{from{transform:scaleX(0)}}
-.grs-steps{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;counter-reset:grs}
-.grs-step{position:relative;display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);min-width:0}
-.grs-n{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);color:var(--muted);font-size:var(--t-sm);font-weight:600;font-variant-numeric:tabular-nums}
-.grs-b{display:flex;flex-direction:column;gap:3px;min-width:0}
-.grs-k{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.grs-t{font-size:var(--t-base);color:var(--ink);line-height:1.3}
-.grs-l{font-size:var(--t-sm);color:var(--muted);line-height:1.4;overflow-wrap:anywhere}
-.grs-go{align-self:flex-start;margin-top:8px}
-.grs-who{margin:8px 0 0;font-size:var(--t-sm);color:var(--ink)}
-/* done: a green tick, and what was set */
-.grs-done .grs-n{border-color:var(--ok);background:var(--ok);color:var(--surface)}
-.grs-done .grs-k{color:var(--ok)}
-.grs-done .grs-l{color:var(--ink)}
-.grs-just .grs-tick{display:inline-block;animation:grs-tick calc(var(--dur) * 2.5) var(--ease-out)}
-@keyframes grs-tick{0%{transform:scale(0) rotate(-30deg)}60%{transform:scale(1.35)}100%{transform:none}}
-/* next: lit, with a soft ring that breathes twice */
-.grs-next{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
-.grs-next .grs-n{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);animation:grs-ring 1.6s var(--ease) 2}
-.grs-next .grs-k{color:var(--accent)}
-@keyframes grs-ring{50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--accent) 20%,transparent)}}
-.grs-step:not(.grs-done):not(.grs-next){opacity:.72}
-/* all done: said once */
-.grs-won{background:linear-gradient(135deg,var(--ok-bg),var(--surface) 70%);border-color:color-mix(in srgb,var(--ok) 35%,var(--line))}
-.grs-yay{align-items:center}
-.grs-yay .grs-go{margin-top:0}
-.grs-burst{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--ok);color:var(--surface);font-size:var(--t-lg);font-weight:700;
-  animation:grs-tick calc(var(--dur) * 3) var(--ease-out),grs-burst 1.2s var(--ease-out) calc(var(--dur) * 2)}
-@keyframes grs-burst{from{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 45%,transparent)}to{box-shadow:0 0 0 18px transparent}}
-/* "this one": a step pointed at from an empty card, or the channel's numbers after setup */
-.grs-flash{animation:grs-flash 1.4s var(--ease-out)}
-@keyframes grs-flash{0%,40%{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 55%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
-tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
-@keyframes grs-row{0%,40%{background:color-mix(in srgb,var(--accent) 16%,transparent)}}
-/* empty cards: the step that fills them */
-.grs-fill button.linkish,.grs-fill a{color:var(--link);text-decoration:none;font-weight:600;white-space:nowrap}
-.grs-fill button.linkish:hover,.grs-fill a:hover{text-decoration:underline}
-/* Reduced motion: the panel and its steps change state at once, with no ring, pop, burst or flash. */
-@media (prefers-reduced-motion:reduce){
-  .grs,.grs *,.grs-flash,tr.grs-flash>*{animation:none!important;transition:none!important}
-}
-@media(max-width:1100px){.grs-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:760px){
-  .grs{margin:4px 12px 10px;padding:var(--s3)}
-  .grs-steps{grid-template-columns:minmax(0,1fr);gap:8px}
-  .grs-prog{align-items:flex-start;width:100%}
-  .grs-bar{width:100%}
-  .grs-step:not(.grs-done):not(.grs-next) .grs-l{display:none}
-}
-/* Where each number came from (ui/app/growth-page.ts grOriginLine, spec AC-9/AC-10/AC-12): one quiet line under a Number,
-   a source that disagrees with a typed number and its Keep / Use, and the banner over the cards for a stale or failing source. */
-.gr-health{margin:0 28px 12px}
-.gr-health>span:first-child{flex:1 1 24em;min-width:0}
-@media(max-width:760px){.gr-health{margin:0 12px 10px}}
-.gr-origin{margin-top:6px;font-size:var(--t-xs);line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gr-origin .pill{font-size:var(--t-2xs);padding:0 6px;vertical-align:1px}
-.gr-conflict{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:6px;font-size:var(--t-xs);line-height:16px}
-.gr-c-acts{display:inline-flex;gap:4px}
-.gr-conflicts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.gc-origin{font-size:var(--t-xs)}
-.gc-synced{font-size:var(--t-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:14em}
-.gsrc-sync{grid-column:1/-1;font-size:var(--t-xs);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
-.gsrc-map{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.gsrc-skip{margin:0;padding-left:18px;font-size:var(--t-sm)}

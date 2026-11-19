@@ -8,8 +8,7 @@
 # (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
-# and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
-# its own updater manifest (recorder-latest.json). See docs/releasing.md.
+# and a desktop failure leaves the server release in place. See docs/releasing.md.
 # Linux jobs run on RunsOn Spot VMs in Tico's own AWS account: an interrupted job is rerun automatically, and every upload
 # uses --clobber with the manifest last, so a rerun finishes the same release. The three jobs between the tag and the
 # published release (validated, runner-changes, release) run on GitHub-hosted Ubuntu, which starts faster and is never
@@ -112,7 +111,7 @@ jobs:
       build: ${{ steps.diff.outputs.build }}
       previous: ${{ steps.diff.outputs.previous }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validated.outputs.sha }}
           fetch-depth: 0
@@ -173,7 +172,7 @@ jobs:
       DRY_RUN: ${{ needs.validated.outputs.dry_run }}
       LATEST: ${{ github.event_name != 'workflow_dispatch' || inputs.latest }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validated.outputs.sha }}
           persist-credentials: false
@@ -216,7 +215,7 @@ jobs:
           grep -q "Baked = '$VERSION'" dist/install/install-wsl.ps1
       # The public API spec, generated from this tag: the docs link to releases/latest/download/openapi-v2.json. It is the
       # document GET /api/v2/openapi.json serves, built with the runtime requirements the image installs (Dockerfile).
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.15'
       - name: Generate the API spec from the tag
@@ -299,14 +298,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validated.outputs.sha }}
           persist-credentials: false
       - name: Install Rust
         env:
           TARGET: ${{ matrix.target }}
-        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal --target "$TARGET" && rustup default 1.99
       - name: Build tico-runner and tico-screen-relay
         env:
           TARGET: ${{ matrix.target }}
@@ -323,7 +322,7 @@ jobs:
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-runner-${{ matrix.name }}
           path: dist/*.gz
@@ -344,7 +343,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.validated.outputs.version }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: macos-runner-*
           path: dist/mac
@@ -384,7 +383,7 @@ jobs:
       build: ${{ steps.diff.outputs.build }}
       previous: ${{ steps.diff.outputs.previous }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -415,12 +414,10 @@ jobs:
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
       && needs.desktop-changes.outputs.build == 'true' }}
     uses: ./.github/workflows/app.yml
-    # inherit + id-token as main's app.yml expects (it declares no secrets and asks for id-token). Narrowing these
-    # needs app.yml and company-app.yml to declare them first: the follow-up hardening batch, not this one.
+    # app.yml declares no secrets, so it inherits them. It uses no OIDC, so it gets no id-token.
     secrets: inherit
     permissions:
       contents: read
-      id-token: write
 
   # Adds the desktop files and latest.json to the already published release: new builds, or the previous release's
   # files carried forward. latest.json goes last, so a desktop updater never sees a manifest whose files are missing.
@@ -434,10 +431,10 @@ jobs:
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: needs.desktop-changes.outputs.build == 'true'
         with:
           pattern: app-*
@@ -465,9 +462,6 @@ jobs:
           mkdir -p dist/desktop
           bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
             --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
-          # Tico-Recorder's files match the patterns above. They belong to recorder-assets, and a copy here could
-          # overwrite a newer recorder build of this tag.
-          rm -f dist/desktop/Tico-Recorder*
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
       - name: Add the desktop files to the release
         env:
@@ -475,135 +469,6 @@ jobs:
         run: |
           find dist/desktop -type f ! -name latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
           gh release upload "$GITHUB_REF_NAME" dist/desktop/latest.json --clobber
-
-  # Tico Recorder, the same way as the desktop app: built only when recorder/ (or the manifest script) changed since the
-  # previous release, otherwise its files are carried forward. Its own jobs, so a failure here never touches the
-  # desktop or server release.
-  recorder-changes:
-    needs: [validated, release]
-    if: >-
-      ${{ !cancelled() && needs.validated.result == 'success'
-      && (needs.release.result == 'success' || needs.release.result == 'skipped')
-      && needs.validated.outputs.dry_run != 'true' }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
-    permissions:
-      contents: read
-    outputs:
-      build: ${{ steps.diff.outputs.build }}
-      previous: ${{ steps.diff.outputs.previous }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: diff
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}
-        run: |
-          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" \
-            | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
-          build=true
-          # These Rust modules are cfg(test)-only; preview assets are outside the bundled ui/app. The root npm files pin
-          # esbuild, which builds the window (recorder/build-ui.cjs).
-          # Check CHANGES.md separately because it feeds updater notes and must survive the Markdown exclusion.
-          if [ "$FORCE" != true ] && [ -n "$previous" ] \
-             && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder scripts/app_release.py .github/workflows/recorder.yml \
-                  package.json package-lock.json \
-                  ':!recorder/tests/**' ':!recorder/bench/**' ':!recorder/ui/preview/**' ':!recorder/*.md' \
-                  ':!recorder/src/network_tests.rs' ':!recorder/src/stream_tests.rs' ':!recorder/src/app/tests.rs' \
-             && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder/CHANGES.md \
-             && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx recorder-latest.json; then
-            build=false
-          fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "Recorder build: $build (previous release $previous)"
-
-  recorder:
-    needs: recorder-changes
-    if: >-
-      ${{ !cancelled() && needs.recorder-changes.result == 'success'
-      && needs.recorder-changes.outputs.build == 'true' }}
-    uses: ./.github/workflows/recorder.yml
-    secrets: inherit   # recorder.yml reads the desktop app's signing secrets (see the desktop job)
-    permissions:
-      contents: read
-
-  # Adds the recorder files and recorder-latest.json to the published release, new or carried forward. The manifest
-  # goes last, so the recorder's updater never sees a manifest whose files are missing.
-  recorder-assets:
-    needs: [release, recorder-changes, recorder]
-    if: >-
-      ${{ !cancelled() && needs.recorder-changes.result == 'success'
-      && (needs.release.result == 'success' || needs.release.result == 'skipped')
-      && (needs.recorder.result == 'success' || needs.recorder.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
-    permissions:
-      contents: write   # uploads the recorder files to the published release
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: needs.recorder-changes.outputs.build == 'true'
-        with:
-          name: recorder
-          path: dist/recorder
-      - name: Build the recorder's updater manifest
-        if: needs.recorder-changes.outputs.build == 'true'
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          GH_TOKEN: ${{ github.token }}
-          PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
-        run: |
-          flags=()
-          [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
-          [ -n "$APPLE_ID" ] && flags+=(--notarized)
-          # The newest recorder/CHANGES.md line shows once: unless the last shipped recorder (carried-forward releases
-          # keep its manifest) already carried it. The updater banner shows it.
-          shown=""
-          [ -n "$PREVIOUS" ] && shown="$(gh release download "$PREVIOUS" --pattern recorder-latest.json --output - 2>/dev/null \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("notes",""))' 2>/dev/null || true)"
-          flags+=(--shown "$shown")
-          python3 scripts/app_release.py --github --kind recorder --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
-            --output dist/recorder/recorder-latest.json --notes "Built from ${GITHUB_SHA::7}" \
-            --changes recorder/CHANGES.md "${flags[@]}" dist/recorder
-      - name: Carry the previous release's recorder files forward
-        if: needs.recorder-changes.outputs.build != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIOUS: ${{ needs.recorder-changes.outputs.previous }}
-        run: |
-          mkdir -p dist/recorder
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/recorder --clobber --pattern 'Tico-Recorder*' \
-            --pattern recorder-latest.json
-          sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/recorder/recorder-latest.json
-      - name: Add the recorder files to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          find dist/recorder -type f ! -name recorder-latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
-          gh release upload "$GITHUB_REF_NAME" dist/recorder/recorder-latest.json --clobber
-      # The Recorder follows release candidates too: installed Recorders read the latest release's manifest, so a
-      # candidate's manifest also goes there when it is newer than what that manifest offers. The files stay on the
-      # candidate's own release, where the manifest points.
-      - name: Offer the recorder to installed Recorders
-        if: contains(github.ref_name, '-')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name)
-          [ -n "$latest" ] && [ "$latest" != "$GITHUB_REF_NAME" ] || exit 0
-          offered=$(gh release download "$latest" --pattern recorder-latest.json --output - 2>/dev/null \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)
-          if python3 scripts/ci/semver_newer.py "${GITHUB_REF_NAME#v}" "$offered"; then
-            gh release upload "$latest" dist/recorder/recorder-latest.json --clobber
-            echo "Installed Recorders are offered ${GITHUB_REF_NAME#v} (was ${offered:-none}) through $latest."
-          else
-            echo "$latest already offers $offered; left as is."
-          fi
 
   # A prerelease (any '-' in the tag, as the release job marks it) builds no company app: a company's installed apps
   # update from its own bucket's latest.json, which a prerelease must never move (scripts/company_apps.py refuses too).
@@ -619,7 +484,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       enabled: ${{ steps.matrix.outputs.enabled }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Read private company list

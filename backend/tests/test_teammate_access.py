@@ -110,6 +110,23 @@ def test_a_bot_may_answer_a_person_who_narrowed_write(acme):
     assert levels(api, "counsel", "human:cara")["write"]
 
 
+def test_replies_answers_as_may_reply_for_every_target(acme):
+    """bot_levels asks `replies` once for all the bots a bot may not write to, not may_reply per bot: each target's
+    answer is the same, a person, a bot, `person:` spelled out and a group (never) included."""
+    api, tokens = acme
+    post(api, "chat/counsel", {"text": "Can you check this NDA?"}, token="cara-test")
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "bot:analyst", "Look at this", "x", "bot:counsel")  # open work Analyst asked Counsel for
+    targets = ["human:cara", "person:cara", "human:dee", "bot:analyst", "bot:counsel", "group:legal", "human:eve"]
+    with api.app.state.store.read() as c:
+        for name in ("counsel", "analyst"):
+            viewer = who(api, name)
+            expected = {"%s:%s" % TA.parse_target(t) for t in targets if TA.may_reply(c, viewer, t)}
+            assert TA.replies(c, viewer, targets) == expected, name
+        assert TA.replies(c, who(api, "counsel"), targets) >= {"human:cara", "bot:analyst"}
+        assert TA.replies(c, who(api, "counsel"), []) == set()
+
+
 def test_see_hides_a_person_everywhere_people_are_shown(acme):
     """The privacy matrix for people: the chart, lists, the @mention roster, person reads and hub sql."""
     api, tokens = acme
@@ -549,13 +566,13 @@ def test_the_people_list_carries_the_callers_access_and_a_manager_edits_their_re
     api, tokens = acme
 
     def row(token, pid):
-        return next(p for p in api.get("/api/people", headers=headers(token)).json()["people"] if p["id"] == pid)
+        return next(p for p in api.get("/api/humans", headers=headers(token)).json()["people"] if p["id"] == pid)
 
     def group(token, gid):
-        return next(g for g in api.get("/api/people", headers=headers(token)).json()["org_groups"] if g["id"] == gid)
+        return next(g for g in api.get("/api/humans", headers=headers(token)).json()["org_groups"] if g["id"] == gid)
 
     assert row("dee-test", "cara")["my_access"]["manage"] and not row("eve-test", "cara")["my_access"]["manage"]
     assert group("fay-test", "legal")["my_access"]["write"] and not group("eve-test", "legal")["my_access"]["write"]
     # The list says what the server does: her manager edits Cara's profile and a peer does not.
-    assert api.post("/api/v2/people/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
-    assert api.post("/api/v2/people/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403
+    assert api.post("/api/v2/humans/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
+    assert api.post("/api/v2/humans/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403

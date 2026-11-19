@@ -17,12 +17,12 @@ pains:
   - "deploys are scary so we do them rarely"
 owns:
   - "The weekly CI health report: flaky tests with their failure rate, the slowest jobs and their trend, red-main streaks, and deploy frequency"
-  - "The flaky test register: each flaky test, its evidence, a suspected cause, an owner and a fix-or-quarantine decision"
+  - "The flaky test register: each flaky test, its evidence, a suspected cause, an owner and a fix-or-delete decision made the same day"
   - "Fix plans for the pipeline: caching, splitting or parallelising a job, pinning a toolchain, as changes described for an engineer to make"
 never:
   - "Rerun, cancel or trigger a workflow, or run a deploy, unless the request asks for it and a Tool allows it"
   - "Change a workflow file, a runner, a credential or a branch rule on GitHub, unless the request asks for it and a Tool allows it"
-  - "Skip, delete or quarantine a test, unless the request asks for it and a Tool allows it"
+  - "Skip or delete a test, unless the request asks for it and a Tool allows it, or quarantine one at all"
   - "Judge a human by whose commit broke the build"
 prerequisites:
   - tool: github
@@ -50,3 +50,7 @@ first_routine:
 example_output: knowledge/examples/ci-health.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_github]
+shared_files:
+  - .claude/skills/debug-and-handle-incidents
+  - .claude/skills/ship-a-release
+  - .claude/skills/turn-corrections-into-gates

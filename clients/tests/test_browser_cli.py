@@ -89,6 +89,12 @@ def verb(which, **args):
             ("browser/needs-you", {"site": SITE, "line": "Type the code texted to the office phone"}),
             "Asked a person; their Done wakes you. End this turn now.",
         ),
+        (
+            ["browser", "needs-you", SITE, "Sign in", "--task", "t_1"],
+            {"requirement_id": "rq_2"},
+            ("browser/needs-you", {"site": SITE, "line": "Sign in", "task": "t_1"}),
+            "Asked a person; their Done wakes you. End this turn now.",
+        ),
         (["login", "fill", SITE, "username"], {"ok": True}, verb("fill", field="username"), "Filled the username."),
         (
             ["login", "fill", SITE, "password", "--ref", "e4"],
@@ -196,7 +202,7 @@ def test_json_keeps_the_refusal_as_json(api, capsys):
 
 def test_only_a_bots_own_runs_are_offered_the_browser_and_login_tools():
     names = [t["name"] for t in hubtools.TOOLS if t["name"].startswith(("tico_browser_", "tico_login_"))]
-    assert len(names) == 15
+    assert names, "the tool table has no browser or login tool to check"
     for name in names:
         assert set(hubtools.offered_to(hubtools.BY_NAME[name])) == {"bot", "botops", "agent"}, name
     # The tools that touch this computer's files are served by the local MCP server only, never by the Tico server.

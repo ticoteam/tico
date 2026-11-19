@@ -35,17 +35,17 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // Company is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
-// so a second environment shows its own application, team and assistant names. The defaults keep
-// an older server working, and strings built before /api/me answers read the names lazily.
+// so a second environment shows its own application, team and assistant names. The defaults show until /api/me
+// answers, and strings built before then read the names lazily.
 const CONFIG_DEFAULTS: AppConfig = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
                          assistant_bot: 'assistant', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
 const S: AppState = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
-            // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
+            // What each main page last read (Tasks, Strategy, Automations, a dashboard): a
             // return visit paints it in the same task as the page's shell, then reads again and patches what changed,
             // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.ts).
             lastRead: {} };
@@ -63,11 +63,11 @@ const RULES_OWNER_BOT = 'rules-owner';
 // The General Manager's team, the group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own.
 const BUILT_IN_GROUP = 'built-in';
 // The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner, the Design Owner and the
-// Updates and Automations Owners are built in to every team: pause and rename them, never archive or delete. They sit in
+// Updates, Automations and Tools Owners are built in to every team: pause and rename them, never archive or delete. They sit in
 // the General group of the team chart, which nobody drags them out of; their settings are Settings > Bots and their bot
 // page's Settings.
 const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'strategy-owner' || slug === 'general-manager' || slug === 'finance-owner' || slug === RULES_OWNER_BOT || slug === 'design-owner'
-  || slug === 'updates-owner' || slug === 'automations-owner';
+  || slug === 'updates-owner' || slug === 'automations-owner' || slug === 'tools-owner';
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
 const ASSISTANT_HELPERS = ['botops', 'strategy-owner', 'librarian', RULES_OWNER_BOT];
@@ -88,10 +88,6 @@ const strategyBotName = (): string => {
 const myChatBot = (): string => assistantBot();
 const myChatName = (): string => assistantName();
 const companyName = (): string => S.config.company_name || appName();
-// Tico's own wordmark, only while the app is called Tico; a team that named its app gets that name as text.
-const brandLogo = (): string => appName() === CONFIG_DEFAULTS.app_name
-  ? `<img class="brand-logo on-light" src="assets/tico/tico-wordmark.svg" alt="${esc(appName())}"><img class="brand-logo on-dark" src="assets/tico/tico-wordmark-reversed.svg" alt="${esc(appName())}">`
-  : `<span class="brand-name">${esc(appName())}</span>`;
 const publicUrl = (): string => S.config.public_url || location.origin;
 const runnerUrl = (): string => S.config.runner_url || location.origin;
 // Only a successful authenticated workspace config may grant native visual navigation.
@@ -102,7 +98,7 @@ const NATIVE_VISUAL_WAIT_MS = 5000, NATIVE_VISUAL_TIMEOUT = Symbol('native visua
 let NATIVE_VISUAL_VERSION = 0, NATIVE_VISUAL_PENDING: Promise<unknown> = Promise.resolve(), NATIVE_VISUAL_ORIGIN = '', NATIVE_VISUAL_FILES = '';
 const nativeVisualVersion = (): number => NATIVE_VISUAL_VERSION;
 const authenticatedConfigPerson = (me: SelfPerson | null | undefined): boolean => !!(me && typeof me.id === 'string' && me.id.trim()
-  && me.cloud === true && ['owner', 'viewer'].includes(me.role));
+  && ['owner', 'viewer'].includes(me.role));
 function nativeVisualOrigin(config: Partial<AppConfig> | null | undefined, field: 'visual_origin' | 'visual_files' = 'visual_origin'): string {
   const raw = config?.[field];
   if (typeof raw !== 'string' || !raw || /[^\x21-\x7e]|[@\\%?#]/.test(raw)) return '';
@@ -185,7 +181,7 @@ function applyConfig(config: unknown): AppConfig {
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);
   document.documentElement.classList.toggle('demo', strip);
-  document.documentElement.classList.toggle('strip', strip || document.documentElement.classList.contains('cloud-frozen'));
+  document.documentElement.classList.toggle('strip', strip || ['cloud-frozen', 'cloud-low'].some(c => document.documentElement.classList.contains(c)));
   $('#demo-banner').hidden = !strip;
   if (S.config.rehearsal && !S.config.demo) $('#demo-banner').innerHTML = '<strong>Rehearsal: nothing runs or leaves this server</strong>';
   if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
@@ -193,7 +189,7 @@ function applyConfig(config: unknown): AppConfig {
   renderNewVersion();
   renderAdministration();
   if (typeof nativeOrgSync === 'function') nativeOrgSync();
-  window.renderChangelogNotice?.();
+  renderChangelogNotice();
   noticeUpdatedServer();
   void renderAppUpdate();
   renderUsageNotice();
@@ -233,7 +229,7 @@ function needsBotOf(it: NeedsEntry): string | null {
   const ask = it.ask as {asked_by?: string | null} | null | undefined;
   const options = it.kind === 'paused' ? (it.bots || []).slice(0, 1)
     : it.kind === 'ask' ? [ask?.asked_by, task?.owner_id, task?.requester_id]
-      : it.kind === 'task' ? [task?.requester_id] : [];
+      : it.kind === 'task' ? [task?.requester_id] : it.kind === 'question' ? [it.from_id] : [];
   return options.find((a): a is string => typeof a === 'string' && a.startsWith('bot:') && a !== me) || null;
 }
 // What needs you from that bot. The org tree's number is a fixed attention count matching the default Needs you tab,

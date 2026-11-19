@@ -265,9 +265,11 @@ def feed_page(
     q: str = "",
     card_ids: Sequence[str] | None = None,
     entry_ids: Sequence[str] | None = None,
+    line_account_ids: Sequence[str] | None = None,
 ) -> list[Any]:
     """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
-    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore."""
+    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore. With
+    `line_account_ids`, only rows whose entry has a line on one of those accounts."""
     where: list[str] = ["1=1"]
     args: list[object] = []
     scopes: list[str] = []
@@ -301,6 +303,14 @@ def feed_page(
     if end:
         where.append("txn_date<=?")
         args.append(end)
+    if line_account_ids:
+        # EXISTS keeps the cost flat (a probe per row read) where an IN list grows with the line: ~20 ms at 50k rows
+        # for a line on 2 rows or on all of them, against 0-70 ms for IN.
+        where.append(
+            "EXISTS (SELECT 1 FROM fin_lines l WHERE l.entry_id=fin_feed_txns.entry_id"
+            f" AND l.account_id IN ({_marks(line_account_ids)}))"
+        )
+        args += list(line_account_ids)
     if q:
         where.append("(counterparty LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')")
         args += [like(q)] * 2
@@ -1568,6 +1578,45 @@ def stripe_waiting(c: sqlite3.Connection, money_account_id: str, kinds: Sequence
     ).fetchall()
 
 
+def stripe_unsettled(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], most: int) -> list[Any]:
+    """Stripe rows of these kinds left new, posted nowhere and not marked for a day's summary, oldest first."""
+    return c.execute(
+        f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND status='new' AND "
+        "entry_id IS NULL AND json_extract(raw, '$.summary') IS NULL ORDER BY txn_date, id LIMIT ?",
+        (money_account_id, *kinds, most),
+    ).fetchall()
+
+
+def rule_candidates(c: sqlite3.Connection, book_id: str, start: str, most: int) -> list[Any]:
+    """Settled bank and card rows dated from `start` that may still want a category, oldest first: new with no entry,
+    or posted (whether its entry is only the Other expenses default is the caller's check). Never a reconciled row, nor
+    a Stripe balance row (it posts in its day's summary)."""
+    return c.execute(
+        "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE m.book_id=? AND "
+        "m.kind!='stripe' AND f.txn_date>=? AND f.pending=0 AND f.reconciliation_id IS NULL AND "
+        "((f.status='new' AND f.entry_id IS NULL) OR (f.status='posted' AND f.entry_id IS NOT NULL)) "
+        "ORDER BY f.txn_date, f.id LIMIT ?",
+        (book_id, start, most),
+    ).fetchall()
+
+
+def asked(c: sqlite3.Connection, name: str, subject: str) -> bool:
+    """Whether the plain `name` ask (no period key) was ever raised about `subject`, sent on or not."""
+    return (
+        c.execute(
+            "SELECT 1 FROM fin_events WHERE name=? AND subject=? AND period_key='' LIMIT 1", (name, subject)
+        ).fetchone()
+        is not None
+    )
+
+
+def withdraw_asks(c: sqlite3.Connection, name: str, subject: str) -> int:
+    """Drop the `name` events about `subject` not yet sent on to Tico's rules (drained): what they asked is settled."""
+    return c.execute(
+        "DELETE FROM fin_events WHERE name=? AND subject=? AND drained_at IS NULL", (name, subject)
+    ).rowcount
+
+
 # A posted entry that is the bank side of a Stripe payout's clearing: its source id is `stripe:clear:<feed row id>`,
 # and `fresh_source` may add `:<when>` after it. `f` is the feed row of the payout.
 _CLEARED = (
@@ -1592,12 +1641,12 @@ def stripe_transit(
     c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
 ) -> list[Any]:
     """Stripe payouts still in transit: posted, not returned, and not cleared by a bank deposit. `amount` is the
-    payout's own (negative) amount when given."""
+    payout's own (negative) gross when given: what the bank receives, before an instant payout's fee."""
     return c.execute(
         "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
         "WHERE m.book_id=? AND m.kind='stripe' AND f.kind='payout' AND f.status='posted' AND "
-        "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR f.amount=?) AND NOT EXISTS (SELECT 1 FROM fin_feed_txns g "
-        "WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
+        "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR json_extract(f.raw, '$.amount')=?) AND NOT EXISTS (SELECT 1 FROM "
+        "fin_feed_txns g WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
         "json_extract(g.raw, '$.link')=json_extract(f.raw, '$.link')) AND NOT EXISTS (SELECT 1 FROM "
         f"fin_entries e WHERE e.book_id=m.book_id AND {_CLEARED}) ORDER BY f.txn_date, f.id LIMIT ?",
         (book_id, start, end, amount, amount, most),
@@ -1608,12 +1657,15 @@ def stripe_deposits(
     c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
 ) -> list[Any]:
     """Bank deposits that look like Stripe's (STRIPE in the counterparty or description) and wait for their payout:
-    new, settled, and not a card's or a request's."""
+    new, settled, not a card's or a request's, and not a Brex cash row still waiting for its connection's sign check
+    (banking._awaiting_sign: its amount is not trusted yet)."""
     return c.execute(
         "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "LEFT JOIN fin_connections cn ON cn.id=m.connection_id "
         "WHERE m.book_id=? AND m.kind='bank' AND f.status='new' AND f.pending=0 AND f.entry_id IS NULL AND "
         "f.card_id IS NULL AND f.request_id IS NULL AND f.amount>0 AND f.txn_date BETWEEN ? AND ? AND "
         "(? IS NULL OR f.amount=?) AND (UPPER(f.counterparty) LIKE '%STRIPE%' OR UPPER(f.description) LIKE '%STRIPE%') "
+        "AND NOT (m.provider='brex' AND COALESCE(json_extract(cn.settings, '$.sign'), '')='unverified') "
         "ORDER BY f.txn_date, f.id LIMIT ?",
         (book_id, start, end, amount, amount, most),
     ).fetchall()

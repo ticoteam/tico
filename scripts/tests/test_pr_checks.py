@@ -1,6 +1,8 @@
 """CI selection cannot omit uncertain work or turn an empty/red test run green."""
 
+import ast
 from collections import Counter
+from contextlib import nullcontext
 from functools import partial
 import json
 import math
@@ -17,10 +19,28 @@ import pytest
 import yaml
 
 from backend import test_receipts
-from scripts import flake_quarantine as quarantine
+from scripts import flake_detect
 from scripts import pr_checks as checks
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_import_roots_include_nested_suites_and_exclude_relative_imports():
+    tree = ast.parse("""
+class Worker:
+    async def run(self, event):
+        try:
+            match event:
+                case True:
+                    import example.one as one, another
+        except Exception:
+            from recovery.handlers import retry
+        else:
+            from .relative import helper
+        finally:
+            from cleanup import finish
+""")
+    assert checks.imported_roots(tree) == {"example", "another", "recovery", "cleanup"}
 
 
 @pytest.fixture(scope="module")
@@ -33,6 +53,15 @@ def mapped(monkeypatch, repo_map):
     """Selections on this checkout reuse one measured map; temporary trees build their own."""
     build = checks.DependencyMap
     monkeypatch.setattr(checks, "DependencyMap", lambda root: repo_map if root == ROOT else build(root))
+
+
+def test_diff_facts_change_selects_its_tests(repo_map):
+    changed = ["scripts/diff_facts.py"]
+    test = "scripts/tests/test_diff_facts.py"
+    assert test in repo_map.run_by[changed[0]]
+    picked = checks.selection(changed, graph=repo_map)
+    assert test in picked["python"]
+    assert test in checks.narrow(picked, changed, "pull_request", graph=repo_map)["python"]
 
 
 def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_map(tmp_path, mapped):
@@ -85,6 +114,94 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
         '</testsuite></testsuites>'
     )
     assert checks.durations([xml]) == {"a.py": 4, "b.py": 3}
+
+
+def test_durations_use_only_the_initial_python_report(tmp_path, monkeypatch):
+    report = '<testsuite><testcase file="a.py" time="2"/></testsuite>'
+    for suffix in ("", "-retry", "-base"):
+        source(tmp_path, f"ci-results/python-1{suffix}.xml", report)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "durations"])
+    assert checks.main() == 0
+    assert json.loads((tmp_path / "durations.json").read_text()) == {"a.py": 2}
+
+
+def test_a_plan_packs_by_the_seconds_the_last_green_queue_groups_measured_averaged_per_file(tmp_path, monkeypatch):
+    """One group's seconds for a file swing by 2x, so the plan averages the groups it restored (a file one group did not
+    run keeps the others' figure), and the queue's own timings job saves what the next plans read."""
+    a, b = "backend/tests/test_a.py", "backend/tests/test_b.py"
+    picked = {"python": [a, b], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *args, **kwargs: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "collect", lambda: Counter({a: 1, b: 1}))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    for run, seconds in (("101", {a: 100.0, b: 10.0}), ("102", {a: 300.0, b: "text"}), ("103", {})):
+        (tmp_path / "previous" / run).mkdir(parents=True)
+        (tmp_path / "previous" / run / "durations.json").write_text(json.dumps(seconds))
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", tmp_path / "previous", head="head")
+    assert plan["timed_files"] == 2 and sum(plan["estimated_seconds"]) == 210.0  # a: (100 + 300) / 2, b: 10
+
+    jobs = workflow_jobs()["jobs"]
+    restore = next(s for s in jobs["plan"]["steps"] if s.get("name", "").startswith("Restore measured timings"))
+    for part in ("--workflow pr-checks.yml", "--event merge_group", "--status success", "--name queue-timings"):
+        assert part in restore["run"], part
+    select = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
+    assert "--timings previous-timings --light" in select["run"]
+    saved = {step.get("name") or step.get("uses", ""): step for step in jobs["timings"]["steps"]}
+    assert saved["Per-file seconds for the next plans"]["run"] == "python3 scripts/pr_checks.py durations"
+    upload = next(step for name, step in saved.items() if name.startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == "queue-timings" and upload["with"]["path"] == "durations.json"
+    assert all(step.get("continue-on-error") for step in (saved["Per-file seconds for the next plans"], upload))
+
+
+def test_the_cli_plan_collects_tests_beside_the_dependency_map_and_stops_a_collection_it_does_not_need(
+    tmp_path, monkeypatch
+):
+    """On a hosted runner the collection and the map take about a minute each, so the CLI's plan starts the collection
+    first and reads it after the selection. A plan that selects no Python test stops it rather than waiting."""
+    from scripts import release_checks
+
+    order = []
+
+    class Collection:
+        returncode = 0
+        killed = False
+
+        def communicate(self):
+            order.append("read")
+            return "backend/tests/test_a.py::test_one\nbackend/tests/test_a.py::test_two\n", ""
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self):
+            order.append("stopped")
+
+    started = Collection()
+    monkeypatch.setattr(checks, "start_collect", lambda root=None: order.append("start") or started)
+    monkeypatch.setattr(release_checks, "validate_shard_coverage", lambda counts, selection, root: None)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: order.append("map") or "graph")
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "narrow", lambda picked, *args, **kwargs: picked)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    picked = {"python": ["backend/tests/test_a.py"], "browser": [], "caddy": False, "conformance": False, "rust": []}
+    monkeypatch.setattr(checks, "selection", lambda *args, **kwargs: {**picked, "contracts": False})
+    plan = checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "read"] and plan["python"] == ["backend/tests/test_a.py"]
+
+    order.clear()
+    picked["python"] = []
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True, prefetch=True)
+    assert order == ["start", "map", "stopped"] and started.killed
+    # Without prefetch (and for a change that needs no map) nothing starts early.
+    order.clear()
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_a.py": 1}))
+    picked["python"] = ["backend/tests/test_a.py"]
+    checks.prepare("merge_group", "base", tmp_path / "plan.json", head="head", light=True)
+    assert order == ["map"]
 
 
 def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pytest(tmp_path, monkeypatch, mapped):
@@ -191,7 +308,8 @@ def test_contract_job_survives_default_deselection_and_runs_slow_tests_in_parall
     assert plan["python"] == [checks.CONTRACT_TESTS[0]]
     assert jobs == [
         {"suite": "python-1", "files": [checks.CONTRACT_TESTS[0]]},
-        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)},
+        # The contracts include test_e2e_cli, which reads history: that VM checks out all of it (HISTORY_TESTS).
+        {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True},
     ]
     # Even a plan with no default tests must retain the contracts job.
     monkeypatch.setattr(checks, "collect", Counter)
@@ -253,7 +371,12 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
     )
     target = tmp_path / "plan.json"
     jobs = checks.prepare("pull_request", "base", target)["matrix"]["include"]
-    assert {"suite": "conformance", "files": [checks.CONFORMANCE], "crates": ["relay-rs", "runner-rs"]} in jobs
+    assert {
+        "suite": "conformance",
+        "files": [checks.CONFORMANCE],
+        "crates": ["relay-rs", "runner-rs"],
+        "history": True,
+    } in jobs
 
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     (tmp_path / "runner_support/tests").mkdir(parents=True)
@@ -314,24 +437,48 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
     (venv / "python").chmod(0o755)
     for name in ("sudo", "npm", "npx"):
         stub(name, f'echo "{name} $*" >> "$CALL_LOG"')
+    stub("dpkg-query", "")  # the snapshot's before/after package lists; empty under the stubs
     cache = tmp_path / "playwright-system"
     cache.mkdir()
-    (cache / "complete").touch()
-    for suite in ("python", "browser"):
+    (cache / "installed.tar").touch()
+    for suite in ("python", "browser", "types"):
         log.write_text("")
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", suite], env=env, capture_output=True
         )
         assert result.returncode == 0, result.stderr.decode()
         calls = log.read_text()
-        assert "update" not in calls and "--download-only" not in calls and "--with-deps" not in calls
-        if suite == "python":
+        assert "apt-get" not in calls and "--with-deps" not in calls  # a restored snapshot never contacts apt
+        if suite == "types":
+            assert calls == ""  # the venv alone: no npm, no UI build, no system packages
+        elif suite == "python":
             assert calls.splitlines() == [
                 "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
                 "npm run --silent build:ui",
             ]
         else:
-            assert "--no-download install" in calls and "playwright install chromium webkit" in calls
+            lines = calls.splitlines()
+            unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
+            # The snapshot unpacks beside pip and npm (so their lines interleave in any order), and is in place
+            # before the browsers install.
+            assert lines.index("sudo ldconfig") > unpack
+            assert unpack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
+    # A cold cache: apt installs the packages (dpkg without fsync), and the snapshot is made from what changed and
+    # moved into the cache folder the job saves.
+    (cache / "installed.tar").unlink()
+    log.write_text("")
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/ci_install.sh"), "--once", "browser"], env=env, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    lines = log.read_text().splitlines()
+    update = next(i for i, line in enumerate(lines) if line.startswith("sudo apt-get") and line.endswith(" update"))
+    install = next(i for i, line in enumerate(lines) if "--force-unsafe-io install -y --no-install-recommends" in line)
+    assert install > update and lines[install].endswith("liba libb")
+    pack = next(i for i, line in enumerate(lines) if line.startswith("sudo tar --no-recursion -cf "))
+    work = tmp_path / "playwright-system-work"
+    assert lines[pack + 1] == f"sudo mv {work}/installed.tar {cache}/installed.tar"
+    assert install < pack < next(i for i, line in enumerate(lines) if "playwright install chromium webkit" in line)
 
 
 def test_cached_system_packages_match_the_locked_browser_version():
@@ -396,7 +543,13 @@ def test_free_disk_removes_the_unused_sdks_only_under_the_space_a_job_needs(tmp_
 def test_a_route_change_selects_the_contract_tests(repo_map):
     # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
     # The route's module reaches it through the app's imports, and the generator reaches it directly.
-    for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
+    for changed in (
+        "backend/computers_routes.py",
+        "backend/openapi_v2.py",
+        "backend/api_contract.py",
+        "backend/api_schemas/bots.py",
+        "backend/calendar_api.py",  # declares its routes with **api_v2(...) but is not a *_routes.py
+    ):
         picked = checks.selection([changed], graph=repo_map)
         assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
         # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.
@@ -434,14 +587,18 @@ def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_ke
     monkeypatch.setattr(checks, "collect", Counter)
     target = tmp_path / "plan.json"
     for sweeps, job in (
-        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}),
-        ([TEMPLATES_SWEEP], {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP]}),
+        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS), "history": True}),
+        (
+            [TEMPLATES_SWEEP],
+            {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP], "history": True},
+        ),
         (
             [CLI_SWEEP, TEMPLATES_SWEEP],
             {
                 "suite": "contracts",
                 "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP],
                 "env": {"TICO_E2E_CLI_ALL": "1"},
+                "history": True,
             },
         ),
     ):
@@ -484,6 +641,8 @@ def test_a_ui_change_runs_the_release_only_browser_scripts_it_picks_before_it_me
         assert set(light(["ui/tests/support/page.cts"], event)["browser"]) >= every
         # UI source outside UI_MAP runs the scripts named after it, beside the smoke set.
         assert {"tools", "bot-tools", "redesign-e2e-tools"} <= set(light(["ui/app/tools.ts"], event)["browser_direct"])
+        # And the scripts UI_ALSO adds for it: the big board's flood check for the board's live drawing.
+        assert "board-flood" in light(["ui/app/task-pipelines.ts"], event)["browser_direct"]
         # A change outside ui/ picks none: its plan is what it was.
         assert light(["backend/health.py"], event)["browser_direct"] == []
     assert light(["backend/health.py"])["browser"] == []
@@ -514,9 +673,7 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
 
 
 def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
-    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
-    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
-    # one that names only an unchanged global of the same file does not.
+    # Diff hints find callers of changed definitions. The dependency map also links callers of the file's other globals.
     def git(*args):
         return subprocess.check_output(
             ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
@@ -544,13 +701,16 @@ def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_pa
     line = modal[body : modal.index("\n", body) + 1]
     picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
     assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
-    assert "other" not in picked["browser_direct"]
+    assert "other" in picked["browser_direct"]
     assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
         "ui/app/task-modal.ts": {"taskModalOpen"}
     }
     git("reset", "-q", "--hard", base)
     picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
-    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    assert {"other", "task-code"} <= set(picked["browser_direct"])
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalLoadFailed"}
+    }
     # A deleted UI file names its old functions: a script still calling one runs.
     git("reset", "-q", "--hard", base)
     git("rm", "-q", "ui/app/task-modal.ts")
@@ -626,6 +786,180 @@ def source(root, name, text):
 def smoke_tree(root):
     """A temporary tree reads its own copy of the smoke set (rules 2 to 4 run it)."""
     source(root, checks.SMOKE_FILE, (ROOT / checks.SMOKE_FILE).read_text())
+
+
+def test_browser_links_globals_selectors_styles_and_typescript_imports(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "ui/app/widget.ts",
+        'function widgetOpen() {}\nconst html = `<div class="widget-card" data-widget-open></div>`;\n',
+    )
+    source(tmp_path, "ui/styles/widget.css", '.widget-card { color: red; }\n')
+    source(tmp_path, "ui/app/dependency.ts", 'export const value = 1;\n')
+    source(tmp_path, "ui/app/entry.ts", "import {value} from './dependency.js';\n")
+    source(tmp_path, "ui/tests/call.cts", 'await page.evaluate(() => widgetOpen());\n')
+    source(tmp_path, "ui/tests/layout.cts", "await page.locator('.widget-card [data-widget-open]').click();\n")
+    source(tmp_path, "ui/tests/import.cts", "import '../app/entry';\n")
+    source(tmp_path, "ui/tests/unrelated.cts", "await page.locator('.other-card').click();\n")
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/dependency.ts" in graph.runs["ui/app/entry.ts"]
+    assert "ui/app/entry.ts" in graph.runs["ui/tests/import.cts"]
+    for changed, expected in (
+        ("ui/app/widget.ts", {"call", "layout"}),
+        ("ui/styles/widget.css", {"layout"}),
+        ("ui/app/dependency.ts", {"import"}),
+    ):
+        plan = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(plan, [changed], "pull_request", root=tmp_path, graph=graph)
+        assert expected <= set(light["browser_direct"]) <= set(light["browser"])
+        assert "unrelated" not in light["browser"]
+    assert not checks.ui_selectors('.button #fff .value')
+
+
+def test_typescript_source_guards_follow_their_walked_folder(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/app/new.ts", 'function openNew() {}\n')
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        "const walk = (dir: string) => fs.readdirSync(dir).flatMap(entry => walk(entry));\nfor (const f of walk('ui/app')) fs.readFileSync(f);\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    picked = checks.selection(["ui/app/new.ts"], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, ["ui/app/new.ts"], "pull_request", root=tmp_path, graph=graph)
+    assert "guard" in light["browser"]
+
+
+def test_ui_links_skip_oversized_and_binary_sources_and_browser_scripts(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(tmp_path, "ui/app/large.ts", "function openLarge() {}\n" + " " * (512 * 1024))
+    source(tmp_path, "ui/app/binary.ts", "\0function openBinary() {}\n")
+    calls = "openPage(); openLarge(); openBinary();\n"
+    walk = "const walk = dir => fs.readdirSync(dir);\nwalk('ui/app');\n"
+    source(tmp_path, "ui/tests/page.cts", calls)
+    source(tmp_path, "ui/tests/large.cts", calls + walk + " " * (512 * 1024))
+    source(tmp_path, "ui/tests/binary.cts", "\0" + calls + walk)
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    for script in ("large", "binary"):
+        assert not graph.runs[f"ui/tests/{script}.cts"]
+        assert not graph.reads[f"ui/tests/{script}.cts"]
+
+
+def test_ui_walk_helpers_use_only_a_bounded_binding_before_each_listing(tmp_path):
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    declarations = "\n".join(f"const value{i} = {i}" for i in range(2000))
+    source(
+        tmp_path,
+        "ui/tests/guard.cts",
+        declarations + "\nconst walk = dir => fs.readdirSync(dir)\nwalk('ui/app')\n",
+    )
+    source(
+        tmp_path,
+        "ui/tests/unrelated.cts",
+        "const unrelated = 1\n" + " " * 301 + "fs.readdirSync(dir)\nunrelated('ui/app')\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert "ui/app/" in graph.reads["ui/tests/guard.cts"]
+    assert "ui/app/" not in graph.reads["ui/tests/unrelated.cts"]
+
+
+def test_browser_comments_do_not_run_the_python_modules_they_describe(tmp_path):
+    source(tmp_path, "backend/health.py", "VALUE = 1\n")
+    source(tmp_path, "ui/app/page.ts", "function openPage() {}\n")
+    source(
+        tmp_path,
+        "ui/tests/page.cts",
+        "// backend/health.py serves this shape.\n/* backend.health.VALUE */\n"
+        "const url = 'https://acme.example'; openPage(); // backend.health\n",
+    )
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.runs["ui/tests/page.cts"] == {"ui/app/page.ts"}
+    assert "https://acme.example" in checks.without_js_comments((tmp_path / "ui/tests/page.cts").read_text())
+
+
+def test_command_names_and_table_sweeps_link_to_defining_modules(tmp_path):
+    smoke_tree(tmp_path)
+    source(
+        tmp_path,
+        "clients/commands/widgets.py",
+        '@tool("tico_widget_add")\ndef add(): pass\nCLI = [Command("widget add", "add a widget")]\n',
+    )
+    source(tmp_path, "clients/commands/other.py", '@tool("tico_other_list")\ndef listing(): pass\n')
+    source(tmp_path, "clients/tests/test_mcp_widget.py", 'def test_x(): assert tools["tico_widget_add"]\n')
+    source(tmp_path, "clients/tests/test_cli_widget.py", 'def test_x(): run(["widget", "add", "--name", "sample"])\n')
+    source(tmp_path, "clients/tests/test_tree.py", 'def test_x(): hubcli.parser()\n')
+    source(tmp_path, "clients/tests/test_other.py", 'def test_x(): assert tools["tico_other_list"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    tests = {"clients/tests/test_mcp_widget.py", "clients/tests/test_cli_widget.py", "clients/tests/test_tree.py"}
+    assert graph.run_by["clients/commands/widgets.py"] == tests - {"clients/tests/test_tree.py"}
+    assert graph.command_sweeps_for("clients/commands/widgets.py") == {"clients/tests/test_tree.py"}
+    changed = ["clients/commands/widgets.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert tests <= set(light["python"])
+    assert "clients/tests/test_other.py" not in light["python"]
+
+
+def test_command_sweeps_do_not_change_hub_counts_or_propagate_from_dependencies(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "clients/dbquery.py", "def query(): pass\n")
+    source(
+        tmp_path,
+        "clients/commands/strategy.py",
+        'from clients.dbquery import query\n@tool("tico_growth_source_run")\ndef run(): query()\n',
+    )
+    test = "backend/tests/test_growth_db_query.py"
+    source(tmp_path, test, "from clients.commands import strategy\ndef test_x(): strategy.run()\n")
+    sweeps = {f"clients/tests/test_sweep{i}.py" for i in range(checks.HUB_TEST_USERS + 1)}
+    for sweep in sweeps:
+        source(tmp_path, sweep, 'def test_x(): hubcli.parser(); tools["tico_growth_source_run"]\n')
+    graph = checks.DependencyMap(tmp_path)
+    assert graph.run_by["clients/commands/strategy.py"] == {test}
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "merge_group", root=tmp_path, graph=graph)
+    assert test in light["python"] and light["narrow"]["tier"][test] == 5
+    assert not sweeps & set(picked["python"])
+    for module in ("clients/commands/strategy.py", "clients/commands/gone.py"):
+        changed = [module]
+        picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+        light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+        assert sweeps <= set(light["python"])
+
+
+def test_dbquery_keeps_its_growth_query_coverage_in_the_merge_queue(repo_map):
+    changed = ["clients/dbquery.py"]
+    picked = checks.selection(changed, "merge_group", graph=repo_map)
+    light = checks.narrow(picked, changed, "merge_group", graph=repo_map)
+    assert "backend/tests/test_growth_db_query.py" in light["python"]
+
+
+def test_the_explicit_upgrade_checks_exist():
+    assert all((ROOT / test).is_file() for test in checks.UPGRADE_TESTS)
+
+
+def test_package_initialization_reaches_tests_through_one_helper_but_still_stops_at_hubs(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    source(tmp_path, "backend/sections/__init__.py", "from . import growth\n")
+    source(tmp_path, "backend/sections/growth.py", "VALUE = 1\n")
+    source(tmp_path, "backend/sections/finance.py", "VALUE = 2\n")
+    source(tmp_path, "backend/tests/helpers/demo.py", "from backend.sections import finance\n")
+    source(tmp_path, "backend/tests/test_demo.py", "from backend.tests.helpers import demo\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_direct.py", "from backend.sections import finance\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_other.py", "def test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+    changed = ["backend/sections/growth.py"]
+    picked = checks.selection(changed, root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" in light["python"]
+    assert light["narrow"]["tier"]["backend/tests/test_demo.py"] == 6
+    assert "backend/tests/test_other.py" not in light["python"]
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    capped = checks.narrow(picked, changed, "pull_request", root=tmp_path, graph=graph)
+    assert "backend/tests/test_demo.py" not in capped["python"]
 
 
 def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other(tmp_path, mapped):
@@ -1087,7 +1421,6 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "pr-rust-lint",
             "pr-desktop",
             "pr-conformance",
-            "pr-recorder",
             "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
             "playwright-system-ubuntu24-x64-${{ steps.image.outputs.version }}-${{ hashFiles('package-lock.json', "
@@ -1113,7 +1446,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 4  # plan, tests, static, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 6  # plan, tests, static, types, merge, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1252,7 +1585,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     # PR checks and the merge queue take no RunsOn label and no repository variable: every job is GitHub-hosted.
     expected = {name: "ubuntu-24.04" for name in jobs}
     expected |= {
-        "recorder": "macos-latest",
         "caddy-linux": "${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}",
     }
     assert {name: job["runs-on"] for name, job in jobs.items()} == expected
@@ -1262,30 +1594,35 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+    for name in ("tests", "rust-lint", "desktop-app", "caddy-linux", "advisories"):
         assert ready in jobs[name]["if"], name
     for name, output in (
         ("rust-lint", "rust_lint"),
+        ("advisories", "advisories"),
         ("desktop-app", "desktop"),
-        ("recorder", "recorder"),
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
-    # Only the cosmetic timing receipt runs in the merge queue alone; nothing waits on it.
-    assert "github.event_name == 'merge_group'" in jobs["timings"]["if"]
-    assert "github.event_name == 'pull_request'" not in jobs["timings"]["if"]
+    # Only the cosmetic timing receipt (nothing waits on it) and the merge commit checks (a pull request's own static
+    # checks and types jobs run the same list on its head) run in the merge queue alone.
+    for name in ("timings", "merge-checks", "release-owner"):
+        assert "github.event_name == 'merge_group'" in jobs[name]["if"], name
+        assert "github.event_name == 'pull_request'" not in jobs[name]["if"], name
     queue_only = {name for name, job in jobs.items() if "pull_request" not in str(job.get("if", "pull_request"))}
-    assert queue_only == {"timings"}
+    assert queue_only == {"timings", "merge-checks", "release-owner"}
     assert set(jobs) == {
         "plan",
         "static",
+        "types",
+        "merge-checks",
         "tests",
         "checks",
         "rust-lint",
         "desktop-app",
-        "recorder",
         "caddy-linux",
+        "advisories",
         "timings",
+        "release-owner",
     }
 
 
@@ -1301,11 +1638,12 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
         queue_only = "github.event_name == 'merge_group'" in condition and "pull_request" not in condition
         assert queue_only or "!github.event.pull_request.draft" in condition, name
     # On a ready pull request nothing but the draft flag holds back the plan, the static checks and the gate. The static
-    # checks run on pull requests only: the merge queue runs them in the plan's merge commit checks.
+    # checks run on pull requests only: the merge queue runs them in its merge commit checks job.
     assert doc["jobs"]["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    assert (
-        doc["jobs"]["static"]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
-    )
+    for name in ("static", "types"):
+        assert (
+            doc["jobs"][name]["if"] == "${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}"
+        ), name
     assert doc["jobs"]["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     # Every other workflow that runs on a pull request holds its jobs back on a draft too (a push to main still runs).
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -1340,7 +1678,7 @@ def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
 
 def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
     """vars.TICO_CI_HOSTED == 'true' moves a RunsOn job to a GitHub-hosted runner. Unset, each RunsOn label is the
-    default, and only a hosted job frees the preinstalled SDKs. The macOS recorder job stays on macos-latest."""
+    default, and only a hosted job frees the preinstalled SDKs."""
     import yaml
 
     for name in RUNSON_WORKFLOWS:
@@ -1359,15 +1697,13 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
             for step in job.get("steps", []):
                 if "/opt/ghc" in str(step.get("run", "")):
                     assert step.get("if", "").startswith("vars.TICO_CI_HOSTED == 'true'"), (name, job_name)
-    recorder = yaml.safe_load((ROOT / ".github" / "workflows" / "pr-checks.yml").read_text())["jobs"]["recorder"]
-    assert recorder["runs-on"] == "macos-latest"
 
 
 def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes(tmp_path):
     gate = workflow_jobs()["jobs"]["checks"]
     assert gate["name"] == "checks" and "always()" in gate["if"]
     needs = set(gate["needs"])
-    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
+    assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings", "release-owner"}  # the last two follow it
     env = gate["steps"][0]["env"]
     names = {
         key: found.group(1) for key, value in env.items() if (found := re.search(r"needs\.([\w-]+)\.result", value))
@@ -1392,7 +1728,7 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
 
     passing = dict.fromkeys(needs, "success")
     assert exit_code(passing) == 0
-    assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
+    assert exit_code({**passing, "tests": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
@@ -1508,7 +1844,7 @@ def test_a_ui_file_outside_the_map_runs_its_readers_its_linked_scripts_and_the_s
 
 
 def test_index_html_script_urls_map_to_the_files_the_server_serves():
-    # The page names scripts by URL (backend/ui_bundle.py): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
+    # The page names scripts by URL (scripts/build-ui.cjs): /tico/ui/x is ui/x, /vendor/x is ui/vendor/x.
     diff = (
         '+<script src="/tico/ui/app/b.ts"></script>\n'
         '+<script src="/vendor/marked.min.js"></script>\n'
@@ -1805,21 +2141,31 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
         checks.QUEUE_JOB_PATHS, False
     )
     # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
-    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "recorder": False}
+    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "advisories": False}
     assert checks.selection(["relay-rs/src/main.rs"])["caddy"]
     for name in ("runner-rs/src/sessions.rs", "tools/release-command/src/main.rs", "contracts/runner/schema.json"):
         assert checks.queue_jobs([name])["rust_lint"], name
     assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
-    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert checks.queue_jobs(["recorder/src/lib.rs"]) == {"rust_lint": False, "desktop": False, "recorder": True}
-    # esbuild builds the recorder's window: the root npm files run its job, a package.json deeper in the tree does not.
-    for name in ("package.json", "package-lock.json"):
-        assert checks.queue_jobs([name]) == {"rust_lint": False, "desktop": False, "recorder": True}, name
-    assert not checks.queue_jobs(["ui/vendor/x/package.json"])["recorder"]
-    # Anchored at the root: a folder named app/ or recorder/ deeper in the tree is not the desktop app or the recorder.
-    assert checks.queue_jobs(
-        ["backend/app/x.py", "docs/recorder/x.md", "scripts/tests/rust_checks.sh"]
-    ) == dict.fromkeys(checks.QUEUE_JOB_PATHS, False)
+    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "advisories": False}
+    # The advisory scan starts for a dependency input: a lock, a vendored library, an inventory or the gate itself.
+    for name in (
+        "backend/requirements-dev.txt",
+        "package-lock.json",
+        "ui/package-lock.json",
+        "runner-rs/Cargo.lock",
+        "app/tests/glib-backport/Cargo.lock",
+        "ui/vendor/marked.min.js",
+        "templates/employee-repo/ui/vendor/js-yaml.min.js",
+        "scripts/advisories/allowlist.json",
+        "scripts/osv_gate.py",
+        "scripts/pinned_tool.sh",
+    ):
+        assert checks.queue_jobs([name])["advisories"], name
+    assert not checks.queue_jobs(["backend/requirements.in", "ui/app/vendor.ts", "Cargo.toml"])["advisories"]
+    # Anchored at the root: a folder named app/ deeper in the tree is not the desktop app.
+    assert checks.queue_jobs(["backend/app/x.py", "docs/app/x.md", "scripts/tests/rust_checks.sh"]) == dict.fromkeys(
+        checks.QUEUE_JOB_PATHS, False
+    )
     # A diff that could not be read (or is empty) never skips a job.
     assert checks.queue_jobs([]) == dict.fromkeys(checks.QUEUE_JOB_PATHS, True)
 
@@ -1837,53 +2183,60 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     plan = checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
     lines = output.read_text().splitlines()
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(lines)
+    assert {"rust_lint=false", "desktop=true"} <= set(lines)
     # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
     # the same outputs from its own diff.
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     output.write_text("")
     plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "recorder": False}
-    assert {"rust_lint=false", "desktop=true", "recorder=false"} <= set(output.read_text().splitlines())
+    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
+    assert {"rust_lint=false", "desktop=true"} <= set(output.read_text().splitlines())
 
     jobs = workflow_jobs()["jobs"]
     outputs = jobs["plan"]["outputs"]
-    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("recorder", "recorder")):
+    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("advisories", "advisories")):
         assert outputs[output_name] == f"${{{{ steps.plan.outputs.{output_name} }}}}", job
         assert jobs[job]["needs"] == "plan", job
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
         # The plan decided: no step inside the job diffs the branch again.
         assert not any("git diff" in str(step.get("run", "")) for step in jobs[job]["steps"]), job
-    # The static checks VM runs on pull requests only; a queue group's plan checks its merge commit in its place.
+    # The static checks VM runs on pull requests only; a queue group's merge commit checks job runs in its place.
     assert "github.event_name == 'pull_request'" in jobs["static"]["if"]
 
 
-def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_selection(tmp_path):
+def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_beside_its_tests(tmp_path):
     """Two pull requests can pass their own static checks and break a whole-tree one together (a route one removes and
-    the other calls), so a queue group runs those on its merge commit. The plan job starts them before the selection and
-    reports them after it, so they cost no VM and little wall time."""
+    the other calls), so a queue group runs those on its merge commit. They run on their own VM beside the plan and the
+    tests: nothing waits for them but the gate, so they hold no test VM back."""
     jobs = workflow_jobs()["jobs"]
-    steps = jobs["plan"]["steps"]
+    job = jobs["merge-checks"]
+    assert job["if"] == "${{ github.event_name == 'merge_group' }}" and "needs" not in job
+    assert "merge-checks" in jobs["checks"]["needs"]
+    assert "merge-checks" not in str(jobs["tests"]["needs"])
+    assert "merge_commit_checks" not in str(jobs["plan"])
+    steps = job["steps"]
     names = [str(step.get("name", "")) for step in steps]
-    start = names.index("Start the merge commit checks")
-    select = names.index("Select affected tests and size measured Python and browser groups")
-    report = names.index("Merge commit checks")
-    assert names.index("Install (five minutes per attempt, one retry)") < start < select < report
-    for index in (start, report):
-        assert steps[index]["if"] == "github.event_name == 'merge_group'"
-    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[start]["run"]
-    assert "set +e" in steps[start]["run"] and steps[start]["run"].rstrip().endswith("&")
-    assert steps[report]["timeout-minutes"] <= 10 and 'exit "$(cat' in steps[report]["run"]
+    install = names.index("Install (five minutes per attempt, one retry)")
+    run = names.index("Merge commit checks")
+    assert install < names.index("Cache pinned tools") < run == len(steps) - 1
+    assert 'merge_commit_checks.sh "$BASE_SHA" "$QUEUE_HEAD"' in steps[run]["run"]
+    assert steps[run]["env"]["QUEUE_HEAD"] == "${{ github.event.merge_group.head_sha }}"
+    assert job["timeout-minutes"] <= 12
     script = (ROOT / "scripts/ci/merge_commit_checks.sh").read_text()
     # Every static check runs on the merge commit too, the per-file ones included: they share configuration (a lint rule
     # one pull request turns on can fail the other's new code).
-    static = [str(step.get("run", "")) for step in jobs["static"]["steps"] if step.get("run")]
+    static = [str(step.get("run", "")) for job in ("static", "types") for step in jobs[job]["steps"] if step.get("run")]
     found = {re.search(r"scripts/[\w/]+\.(?:py|sh)", run).group(0) for run in static if "scripts/" in run}
-    found -= {"scripts/ci_install.sh"}  # the static job's install, which the plan job has already done
+    found -= {"scripts/ci_install.sh"}  # the static job's install, which the merge commit checks job has already done
     found |= {"-m backend.openapi_v2 --check", "npm ci --ignore-scripts", "pinned_tool.sh actionlint"}
-    assert found >= {"scripts/check_migration_order.py", "scripts/lint.sh", "scripts/check_ui_lint.sh"}
+    assert found >= {
+        "scripts/check_migration_order.py",
+        "scripts/lint.sh",
+        "scripts/check_ui_lint.sh",
+        "scripts/check_types.sh",
+    }
     for name in found:
         assert name in script, name
     assert 'LINT_BASE_REF="$base"' in script and 'PYRIGHT_BASE_REF="$base"' in script
@@ -2011,6 +2364,16 @@ def branch(tmp_path, monkeypatch):
         return dict(seen.get("plan", LOCAL_PLAN))
 
     monkeypatch.setattr(checks, "selection", select)
+
+    def narrow(picked, changed, event, **kwargs):
+        seen.update(narrowed=event)
+        return seen["narrow"](picked) if "narrow" in seen else picked
+
+    monkeypatch.setattr(checks, "narrow", narrow)
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.setattr(
+        checks, "collected", lambda files, root=None: seen.get("counts", Counter(dict.fromkeys(files, 1)))
+    )
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
     monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
     commands = []
@@ -2040,6 +2403,60 @@ def branch(tmp_path, monkeypatch):
         envs=envs,
         run=lambda **kw: checks.local(base="main", root=tmp_path, execute=execute, **kw),
     )
+
+
+def test_a_local_run_picks_what_the_light_pull_request_run_picks(branch, capsys, monkeypatch):
+    # Nov 17: the whole pull_request selection picked 988 test files for a CLAUDE.md-only change and ran past 15 minutes
+    # on a builder's computer, while the pull request run (plan --light) is capped at ten VMs. Local runs the light plan.
+    (branch.root / "tests" / "test_far.py").write_text("def test_y(): pass\n")
+    (branch.root / "tests" / "test_slow_only.py").write_text("def test_z(): pass\n")
+    local_git(branch.root, "add", "-A")
+    local_git(branch.root, "commit", "-qm", "More tests")
+    branch.seen["plan"] = {
+        **LOCAL_PLAN,
+        "python": ["tests/test_app.py", "tests/test_far.py", "tests/test_slow_only.py"],
+    }
+    monkeypatch.setattr(
+        checks, "committed_timings", lambda root=None: {"tests/test_app.py": 5, "tests/test_far.py": 50}
+    )
+
+    def narrow(picked):
+        record = {"budget_seconds": 10, "smoke": False, "smoke_unless_capped": [], "left_transitive": []}
+        record["tier"] = {"tests/test_app.py": 0, "tests/test_far.py": 2, "tests/test_slow_only.py": 2}
+        return {**picked, "narrow": record}
+
+    branch.seen["narrow"] = narrow
+    # test_slow_only holds no default test, so the plan drops it, as prepare does from collect()'s counts.
+    branch.seen["counts"] = Counter({"tests/test_app.py": 1, "tests/test_far.py": 3})
+    assert branch.run() == 0
+    assert branch.seen["narrowed"] == "pull_request"
+    test, _ = pytest_leg(branch.commands[0])
+    assert test[-1] == "tests/test_app.py" and "tests/test_far.py" not in test  # over the light run's time budget
+    assert "light pull request plan" in capsys.readouterr().out
+    # When collection cannot say what a file holds, nothing is capped: when unsure, run more.
+    branch.commands.clear()
+    branch.seen["counts"] = None
+    assert branch.run() == 0
+    assert pytest_leg(branch.commands[0])[0][-3:] == [
+        "tests/test_app.py",
+        "tests/test_far.py",
+        "tests/test_slow_only.py",
+    ]
+    # --full keeps the old, whole selection, without narrowing.
+    branch.commands.clear()
+    del branch.seen["narrowed"]
+    assert branch.run(full=True) == 0
+    assert "narrowed" not in branch.seen
+    assert "tests/test_far.py" in pytest_leg(branch.commands[0])[0]
+
+
+def test_local_collection_counts_every_selected_file_whatever_pytest_addopts_says(tmp_path, monkeypatch):
+    # Review of #4086: an inherited PYTEST_ADDOPTS filter made collection leave a selected file uncounted, so the cap
+    # dropped it and its failing test never ran. The real collector, as the run, ignores it.
+    (tmp_path / "test_a.py").write_text("def test_keep(): pass\n")
+    (tmp_path / "test_b.py").write_text("def test_other(): assert False\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k keep")
+    assert checks.collected(["test_a.py", "test_b.py"], root=tmp_path) == Counter({"test_a.py": 1, "test_b.py": 1})
 
 
 def pytest_leg(command):
@@ -2151,6 +2568,9 @@ def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch,
         '<testsuite><testcase classname="backend.tests.test_thread_halfway" name="test_bounded"><failure message="x"/>'
         '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
         '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
+    )
+    (tmp_path / "python-7-base.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_base" name="test_unrelated"><error/></testcase></testsuite>'
     )
     (tmp_path / "broken.xml").write_text("<testsuite")
     assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
@@ -2283,7 +2703,7 @@ def test_the_command_line_runs_local_without_the_ci_only_plan_guard(monkeypatch)
     monkeypatch.setattr(checks, "local", lambda **kwargs: calls.append(kwargs) or 0)
     monkeypatch.setattr("sys.argv", ["pr_checks.py", "local", "--base", "origin/main", "--jobs", "3", "--ready"])
     assert checks.main() == 0
-    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True}]
+    assert calls == [{"base": "origin/main", "jobs": 3, "ready": True, "full": False}]
 
 
 def junit(*skips):
@@ -2296,11 +2716,9 @@ def junit(*skips):
     return f'<?xml version="1.0"?><testsuites><testsuite name="pytest">{cases}</testsuite></testsuites>'
 
 
-def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_skipped_one_does_not(
-    tmp_path, monkeypatch
-):
-    """pr_checks.run fails a Python suite that skipped every test. A quarantined test that failed ran: it is an xfail,
-    which JUnit writes as a skipped element too, and must not make the suite fail."""
+def test_a_suite_whose_only_tests_are_xfail_failures_passes_but_an_all_skipped_one_does_not(tmp_path, monkeypatch):
+    """pr_checks.run fails a Python suite that skipped every test. An xfail test that failed ran: JUnit writes it as a
+    skipped element too, and it must not make the suite fail."""
     plan = {"matrix": {"include": [{"suite": "python-1", "files": ["fixture_tests/test_x.py"]}]}}
     (tmp_path / "fixture_tests").mkdir(parents=True)
     (tmp_path / "fixture_tests/test_x.py").touch()
@@ -2313,12 +2731,12 @@ def test_a_suite_whose_only_tests_are_quarantined_failures_passes_but_an_all_ski
 
     monkeypatch.setattr(checks.subprocess, "run", fake)
     report["xml"] = junit("pytest.xfail")
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", None)
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 0
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 0
     report["xml"] = junit("pytest.skip", "pytest.skip")
     with pytest.raises(RuntimeError, match="skip every test"):
-        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True)
+        checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True)
 
 
 def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does(tmp_path, monkeypatch, capsys):
@@ -2331,17 +2749,340 @@ def test_the_queue_and_pr_suites_pass_the_flag_and_release_validation_never_does
         checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
     )
     assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path) == 1
-    assert "--quarantine" not in calls[-1]  # the release gate's incremental VMs call run() without it
-    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, quarantine=True) == 1
-    assert "--quarantine" in calls[-1] and calls[-1][-1] == "fixture_tests/test_x.py"
+    assert len(calls) == 1  # the release gate's incremental VMs call run() without a retry
+    assert checks.run(tmp_path / "plan.json", "python-1", root=tmp_path, retry=True) == 1
+    assert calls[-1][-1] == "fixture_tests/test_x.py"
     # The job log names the files a leg ran: the pass evidence detection needs for a test in it.
-    assert quarantine.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
+    assert flake_detect.test_files(capsys.readouterr().out) == ["fixture_tests/test_x.py"]
     workflows = ROOT / ".github/workflows"
     tests = yaml.safe_load((workflows / "pr-checks.yml").read_text())["jobs"]["tests"]
     step = next(s for s in tests["steps"] if s.get("name") == "Run selected tests")
-    assert "scripts/pr_checks.py run --quarantine" in step["run"]
+    assert "scripts/pr_checks.py run --retry" in step["run"]
     for name in ("ci.yml", "release.yml", "hotfix.yml", "train.yml"):
-        assert "quarantine" not in (workflows / name).read_text(), name
+        assert not re.search(r"pr_checks\.py run\b[^\n]*--retry", (workflows / name).read_text()), name
+
+
+@pytest.fixture
+def python_retry_leg(tmp_path, monkeypatch):
+    test_file = "backend/tests/test_x.py"
+    source(tmp_path, test_file, "")
+    monkeypatch.delenv("BASE_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n")
+
+    def run(
+        first,
+        retry=None,
+        *,
+        retrying=True,
+        suite="python-1",
+        first_status=1,
+        retry_status=0,
+        base=None,
+        base_status=1,
+        base_file_exists=True,
+        **extra,
+    ):
+        plan = {"matrix": {"include": [{"suite": suite, "files": [test_file]}]}, **extra}
+        target = tmp_path / "plan.json"
+        target.write_text(json.dumps(plan))
+        calls = []
+
+        def fake(command, cwd, env=None, *, check=False, timeout=None):
+            calls.append((command, env))
+            if command[0] == "git":
+                assert cwd == tmp_path and check
+                if command[1] == "cat-file" and not base_file_exists:
+                    raise subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=0)
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            if report.endswith("-base.xml"):
+                assert timeout == 300 and cwd != tmp_path and Path(report).is_absolute()
+                if base_status is None:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                xml, status = base, base_status
+            elif report.endswith("-retry.xml"):
+                xml, status = retry, retry_status
+            else:
+                xml, status = first, first_status
+            if xml is not None:
+                (cwd / report).write_text(xml)
+            return SimpleNamespace(returncode=status)
+
+        monkeypatch.setattr(checks.subprocess, "run", fake)
+        return checks.run(target, suite, root=tmp_path, retry=retrying), calls
+
+    return run
+
+
+def retry_junit(*cases):
+    return (
+        "<testsuite>"
+        + "".join(
+            f'<testcase classname="backend.tests.test_x" name="{name}">{outcome}</testcase>' for name, outcome in cases
+        )
+        + "</testsuite>"
+    )
+
+
+def test_a_python_retry_passes_only_the_failed_ids_and_preserves_the_first_report_and_coverage(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    from scripts import diff_coverage
+
+    results = tmp_path / "ci-results"
+    first = retry_junit(("test_ok", ""), ("test_a[case one]", "<failure/>"), ("test_b", "<error/>"))
+    retry = retry_junit(("test_a[case one]", ""), ("test_b", ""))
+    extracted = []
+
+    def extract(plan, data, out):
+        assert (results / "python-1.xml").read_text() == first
+        assert not (results / "python-1-retry.xml").exists()
+        extracted.append((data, out))
+
+    monkeypatch.setattr(diff_coverage, "extract", extract)
+    status, ((initial, env), (again, retry_env)) = python_retry_leg(
+        first, retry, coverage={"lines": {"backend/example.py": [1]}}
+    )
+    assert status == 0
+    assert "--cov=backend" in initial and env["COVERAGE_FILE"] == str(results / "coverage-python-1.data")
+    assert extracted == [(results / "coverage-python-1.data", results / "coverage-python-1.json")]
+    assert "-n" in again and again[again.index("-n") + 1] == "0"
+    assert set(checks.PYTEST_FLAGS) <= set(again)
+    assert not any(arg.startswith("--cov") for arg in again) and retry_env is None
+    assert again[-2:] == ["backend/tests/test_x.py::test_a[case one]", "backend/tests/test_x.py::test_b"]
+    assert (results / "python-1.xml").read_text() == first
+    assert (results / "python-1-retry.xml").read_text() == retry
+    assert json.loads((results / "flaky-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": again[-2:],
+        "commit": "a" * 40,
+    }
+    log = capsys.readouterr().out
+    for test in again[-2:]:
+        assert f"Flaky (failed, then passed on retry): {test}" in log.splitlines()
+
+
+def test_a_python_retry_that_still_fails_names_the_remaining_test_and_leaves_no_flake(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+    capsys.readouterr()
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path / "ci-results")])
+    assert checks.main() == 0
+    assert capsys.readouterr().out.strip() == "test_x.py::test_b"
+
+
+def test_a_python_leg_passes_when_the_base_matches_and_records_a_flaky_retry_pass(
+    python_retry_leg, tmp_path, monkeypatch, capsys
+):
+    base_sha = "b" * 40
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    failure = ("test_a", '<failure message="bad  value at 0x7fa100&#10;head detail"/>')
+    first = retry_junit(failure, ("test_b", "<failure/>"))
+    retry = retry_junit(failure, ("test_b", ""))
+    base = retry_junit(("test_a", '<error message="bad value at 0x7fa200&#10;base detail"/>'))
+    status, calls = python_retry_leg(first, retry, retry_status=1, base=base)
+    assert status == 0
+    cat, add, test, remove = [command for command, _ in calls[2:]]
+    worktree = add[-2]
+    test_id = "backend/tests/test_x.py::test_a"
+    results = tmp_path / "ci-results"
+    assert cat == ["git", "cat-file", "-e", f"{base_sha}:backend/tests/test_x.py"]
+    assert add == ["git", "worktree", "add", "--detach", worktree, base_sha]
+    assert remove == ["git", "worktree", "remove", "--force", worktree]
+    assert test == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-n",
+        "0",
+        *checks.PYTEST_FLAGS,
+        "-o",
+        "junit_family=xunit1",
+        f"--junitxml={(results / 'python-1-base.xml').resolve()}",
+        test_id,
+    ]
+    assert (results / "python-1-base.xml").read_text() == base
+    assert json.loads((results / "base-broken-python-1.json").read_text()) == {
+        "suite": "python-1",
+        "tests": [test_id],
+        "base": base_sha,
+        "commit": "a" * 40,
+    }
+    assert json.loads((results / "flaky-python-1.json").read_text())["tests"] == ["backend/tests/test_x.py::test_b"]
+    warning = (
+        f"{test_id} fails the same way on {base_sha[:10]}; this change did not break it. "
+        "Release validation and main-red track the fix."
+    )
+    assert f"::warning title=Already failing underneath this change::{warning}" in capsys.readouterr().out.splitlines()
+    assert summary.read_text() == warning + "\n"
+
+
+@pytest.mark.parametrize("base_outcome, base_status", [("", 0), ('<failure message="wrong value"/>', 1)])
+def test_a_python_leg_stays_red_when_the_base_does_not_match(
+    python_retry_leg, tmp_path, monkeypatch, base_outcome, base_status
+):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    base = retry_junit(("test_a", base_outcome))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=base, base_status=base_status)
+    assert status == 1 and len(calls) == 6
+    assert not (tmp_path / "ci-results/base-broken-python-1.json").exists()
+
+
+def test_a_missing_test_file_on_the_base_stops_before_worktree_add(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_file_exists=False)
+    assert status == 1 and len(calls) == 3
+    assert calls[-1][0][:3] == ["git", "cat-file", "-e"]
+
+
+def test_a_base_missing_from_a_one_commit_checkout_is_fetched_before_it_is_read(python_retry_leg, monkeypatch):
+    base_sha = "b" * 40
+    monkeypatch.setenv("BASE_SHA", base_sha)
+
+    def output(command, *args, **kwargs):
+        if command[:2] == ["git", "rev-parse"] and "--verify" in command:
+            raise subprocess.CalledProcessError(1, command)
+        return "a" * 40 + "\n"
+
+    monkeypatch.setattr(checks.subprocess, "check_output", output)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base=head)
+    assert status == 0
+    fetch, cat = calls[2][0], calls[3][0]
+    assert fetch == ["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]
+    assert cat[:3] == ["git", "cat-file", "-e"]
+
+
+@pytest.mark.parametrize("base_sha", ["a" * 40, "z" * 40])
+def test_an_equal_or_invalid_base_does_not_run_base_tests(python_retry_leg, monkeypatch, base_sha):
+    monkeypatch.setenv("BASE_SHA", base_sha)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1)
+    assert status == 1 and len(calls) == 2
+
+
+def test_a_base_timeout_removes_the_worktree_and_keeps_the_leg_red(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    head = retry_junit(("test_a", '<failure message="assert False"/>'))
+    status, calls = python_retry_leg(head, head, retry_status=1, base_status=None)
+    assert status == 1 and len(calls) == 6
+    worktree = calls[3][0][-2]
+    assert calls[-1][0] == ["git", "worktree", "remove", "--force", worktree]
+
+
+def test_a_python_retry_that_skips_a_failed_test_leaves_the_leg_red(python_retry_leg, tmp_path):
+    first = retry_junit(("test_a", "<failure/>"), ("test_b", "<failure/>"))
+    retry = retry_junit(("test_a", ""), ("test_b", "<skipped/>"))
+    status, calls = python_retry_leg(first, retry)
+    assert status == 1 and len(calls) == 2
+    assert not list((tmp_path / "ci-results").glob("flaky-*.json"))
+
+
+def test_a_python_leg_with_more_than_five_failures_does_not_retry(python_retry_leg):
+    first = retry_junit(*[(f"test_{n}", "<failure/>") for n in range(flake_detect.MAX_FAILURES_PER_JOB + 1)])
+    status, calls = python_retry_leg(first)
+    assert status == 1 and len(calls) == 1
+
+
+def test_release_contracts_and_conformance_keep_the_first_failure_without_a_retry(python_retry_leg, monkeypatch):
+    monkeypatch.setenv("BASE_SHA", "b" * 40)
+    first = retry_junit(("test_a", '<failure message="assert False"/>'))
+    for suite, enabled in (("python-1", False), ("contracts-1", True), ("conformance", True)):
+        status, calls = python_retry_leg(first, suite=suite, retrying=enabled)
+        assert status == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "report",
+    [None, "<testsuite", '<testsuite><testcase name="backend/tests/test_x.py"><error/></testcase></testsuite>'],
+)
+def test_a_python_leg_without_a_report_of_failed_test_ids_does_not_retry(python_retry_leg, report):
+    status, calls = python_retry_leg(report)
+    assert status == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize("retry_status", [0, 1])
+def test_browser_retry_streams_the_log_and_runs_only_the_failed_scripts(tmp_path, monkeypatch, capsys, retry_status):
+    target = tmp_path / "plan.json"
+    target.write_text(json.dumps({"jobs": [{"name": "browser-1", "files": ["ok", "broken", "also-broken"]}]}))
+    first = ["ok    ok.cts (1.0s)\n", "FAIL  broken.cts (1.0s)\n", "      FAIL  ok.cts\n", "FAIL  also-broken.cjs\n"]
+    second = ["ok    broken.cts (1.0s)\n", "FAIL  also-broken.cjs\n" if retry_status else "ok    also-broken.cjs\n"]
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs["env"]))
+        output, status = (first, 1) if len(calls) == 1 else (second, retry_status)
+        return nullcontext(SimpleNamespace(stdout=output, wait=lambda: status))
+
+    monkeypatch.setattr(checks.subprocess, "Popen", popen)
+    monkeypatch.setattr(checks.subprocess, "check_output", lambda *args, **kwargs: "b" * 40 + "\n")
+    assert checks.run(target, "browser-1", root=tmp_path, retry=True) == retry_status
+    (initial, env), (again, retry_env) = calls
+    assert again == [*initial[:4], "broken.cts", "also-broken.cjs"]
+    results = tmp_path / "ci-results"
+    assert env["TICO_UI_TIMINGS"] == str(results / "browser-1.json")
+    assert retry_env == {**env, "TICO_UI_TIMINGS": str(results / "browser-1-retry.json")}
+    assert capsys.readouterr().out.startswith("".join(first + second))
+    flaky = results / "flaky-browser-1.json"
+    if retry_status:
+        assert not flaky.exists()
+        monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(results)])
+        assert checks.main() == 0
+        assert capsys.readouterr().out.strip() == "also-broken.cjs"
+    else:
+        assert json.loads(flaky.read_text()) == {
+            "suite": "browser-1",
+            "tests": ["broken.cts", "also-broken.cjs"],
+            "commit": "b" * 40,
+        }
+
+
+def test_the_flaky_command_combines_leg_reports_and_only_the_queue_uploads_them(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "flaky"])
+    output = tmp_path / "flaky.json"
+    assert checks.main() == 0 and not output.exists()
+    reports = [
+        {"suite": "browser-1", "tests": ["chat.cts"], "commit": "b" * 40},
+        {"suite": "python-1", "tests": ["backend/tests/test_x.py::test_a"], "commit": "b" * 40},
+    ]
+    for report in reports:
+        source(tmp_path, f"ci-results/flaky-{report['suite']}.json", json.dumps(report))
+    assert checks.main() == 0
+    assert json.loads(output.read_text()) == reports
+
+    jobs = workflow_jobs()["jobs"]
+    leg_upload = next(
+        s for s in jobs["tests"]["steps"] if s.get("with", {}).get("name") == "results-${{ matrix.suite }}"
+    )
+    assert leg_upload["with"]["path"] == "ci-results/*" and "always()" in leg_upload["if"]
+    timings = jobs["timings"]
+    assert "github.event_name == 'merge_group'" in timings["if"]
+    download, collect, upload = (
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("pattern") == "results-*"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("run") == "python3 scripts/pr_checks.py flaky"),
+        next(i for i, s in enumerate(timings["steps"]) if s.get("with", {}).get("name") == "queue-flaky"),
+    )
+    assert download < collect < upload
+    assert timings["steps"][download]["with"]["merge-multiple"] is True
+    assert timings["steps"][collect]["continue-on-error"] and timings["steps"][upload]["continue-on-error"]
+    assert timings["steps"][upload]["with"] == {
+        "name": "queue-flaky",
+        "path": "flaky.json",
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+    }
 
 
 def light_tree(root):
@@ -2415,7 +3156,6 @@ def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, r
         light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
         assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
         assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
-    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
     # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
     other = ["backend/health.py"]
     tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
@@ -2427,24 +3167,30 @@ def light_plan(changed, event, repo_map, added):
     return checks.narrow(picked, changed, event, added=added, graph=repo_map)
 
 
-@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 @pytest.mark.parametrize(
-    "changed",
+    ("changed", "test"),
     [
-        # Nov 13: #3335 added tools columns and #3604 listening_items.delivered without backend/rows.py; neither plan
-        # picked test_rows_schema.py and main went red twice (fixed by #3603 and #3625).
-        ["backend/migrations/20261111145540_website_tools.py", "backend/website_tools.py", "backend/api_tools.py"],
-        ["backend/migrations/20261113030739_listening_items_delivered.py", "backend/listening.py"],
+        ("backend/mail.py", "ui/tests/e2e-tools.cts"),
+        ("backend/mail_actions.py", "ui/tests/redesign-e2e-automations.cts"),
+        ("backend/model_subscriptions.py", "ui/tests/computers-shared.cts"),
+        ("backend/threads.py", "backend/tests/test_sql_parity.py"),
+        ("templates/catalog/example/card.yaml", "backend/tests/test_recruiting.py"),
     ],
 )
-def test_a_migration_runs_the_rows_schema_test_even_in_a_light_plan(event, changed, repo_map):
-    light = light_plan(changed, event, repo_map, added=changed[:1])
-    assert checks.ROWS_SCHEMA in light["python"] and light["narrow"]["tier"][checks.ROWS_SCHEMA] == 0
-    assert checks.ROWS_SCHEMA in light["guards"] and (ROOT / checks.ROWS_SCHEMA).is_file()
-    # The same modules without the migration leave it to the map: it is not lifted to always run.
-    rest = changed[1:]
-    tier = light_plan(rest, event, repo_map, added=[])["narrow"]["tier"]
-    assert tier.get(checks.ROWS_SCHEMA) != 0
+def test_light_plans_keep_checks_with_an_explicit_input_link(tmp_path, changed, test):
+    smoke_tree(tmp_path)
+    for path in (changed, test, "backend/other.py"):
+        source(tmp_path, path, "")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)
+
+    suite, name = ("browser", Path(test).stem) if checks.is_browser(test) else ("python", test)
+    for event in checks.NARROW:
+        assert name in selected(changed, event)[suite]
+        assert name not in selected("backend/other.py", event)[suite]
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
@@ -2472,52 +3218,43 @@ def test_a_cli_command_change_runs_the_cli_spec_test_even_in_a_light_plan(event,
     assert checks.CLI_SPEC not in light_plan(["backend/growth.py"], event, repo_map, added=[])["guards"]
 
 
-def test_a_schema_line_in_a_backend_module_runs_the_rows_schema_test(tmp_path):
-    # A column added to a CREATE TABLE string (hubdb.py, store.py) or to the column list an ALTER TABLE loop reads
-    # changes the hub's schema without a migration: rows.py must follow, so test_rows_schema.py runs.
-    def git(*args):
-        return subprocess.check_output(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
-        ).strip()
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan(event, repo_map):
+    # Nov 18: #3798 added `advice` to `tico computer performance` in clients/commands/computers.py; its plan never ran
+    # test_cli_fixtures.py, whose cases are argv lists in JSON, and release validation for v0.6.66 went red (#4303).
+    changed = ["clients/commands/computers.py", "backend/performance.py"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert checks.CLI_FIXTURES in light["python"] and light["narrow"]["tier"][checks.CLI_FIXTURES] == 0
+    assert checks.CLI_FIXTURES in light["guards"] and (ROOT / checks.CLI_FIXTURES).is_file()
+    assert checks.CLI_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
 
-    hubdb = 'SCHEMA = """\nCREATE TABLE IF NOT EXISTS kpis(\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL\n);\n"""\n'
-    loop = 'COLUMNS = (("slug", "TEXT"),)\n\n\ndef add(c):\n    for name, kind in COLUMNS:\n'
-    loop += '        c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")\n'
-    git("init", "-q", "-b", "main")
-    smoke_tree(tmp_path)
-    source(tmp_path, checks.ROWS_SCHEMA, "def test_rows():\n    pass\n")
-    source(tmp_path, "backend/hubdb.py", hubdb + "\n\ndef count():\n    return 1\n")
-    source(tmp_path, "backend/lifecycle.py", loop)
-    git("add", "-A")
-    git("commit", "-qm", "Start")
-    base = git("rev-parse", "HEAD")
 
-    def change(name, old, new):
-        text = (tmp_path / name).read_text()
-        assert old in text
-        source(tmp_path, name, text.replace(old, new, 1))
-        git("commit", "-qam", "Change")
-        found = checks.schema_changes(base, "HEAD", [name], tmp_path)
-        picked = checks.selection([name], root=tmp_path, base=base, head="HEAD", core=[], added=[])
-        git("reset", "-q", "--hard", base)
-        assert (checks.ROWS_SCHEMA in picked["guards"]) == bool(found)
-        assert (checks.ROWS_SCHEMA in picked["python"]) == bool(found)
-        return found
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ui/app/sidebar.ts",
+        "ui/parts.json",
+        "ui/index.html",
+        "ui/vendor/marked.min.js",
+        "backend/ui_build.py",
+        "scripts/build-ui.cjs",
+        "package-lock.json",
+    ],
+)
+def test_a_change_that_can_grow_the_shell_runs_the_size_ceiling_even_in_a_light_plan(event, path, repo_map):
+    # P05b: between P05's two pull requests the code a cold open of Home downloads crept from 341 to 383 KB, and no
+    # check noticed. Every path that can move that number runs the ceiling, in a light plan too.
+    light = light_plan([path], event, repo_map, added=[])
+    assert checks.UI_SHELL_SIZE in light["guards"] and checks.UI_SHELL_SIZE in light["python"]
+    assert light["narrow"]["tier"][checks.UI_SHELL_SIZE] == 0 and (ROOT / checks.UI_SHELL_SIZE).is_file()
 
-    assert change("backend/hubdb.py", "  name TEXT NOT NULL\n", "  name TEXT NOT NULL,\n  slug TEXT\n")
-    assert change("backend/lifecycle.py", '(("slug", "TEXT"),)', '(("slug", "TEXT"), ("rank", "INTEGER"))')
-    assert not change("backend/hubdb.py", "return 1", "return 2")  # code beside the schema: the map decides
-    # A deleted module drops its tables.
-    git("rm", "-q", "backend/hubdb.py")
-    git("commit", "-qm", "Delete")
-    assert checks.schema_changes(base, "HEAD", ["backend/hubdb.py"], tmp_path) == {"backend/hubdb.py"}
-    git("reset", "-q", "--hard", base)
-    # Without a base (no diff to read), a module that holds a CREATE or ALTER TABLE counts; tests and migrations never.
-    assert checks.schema_changes(None, "HEAD", ["backend/hubdb.py", "backend/lifecycle.py"], tmp_path) == {
-        "backend/hubdb.py",
-        "backend/lifecycle.py",
-    }
-    assert not checks.schema_changes(None, "HEAD", [checks.ROWS_SCHEMA, "ui/app/x.ts"], tmp_path)
+
+@pytest.mark.parametrize(
+    "path", ["ui/tests/thread-redraw.cts", "ui/baselines/home.png", "ui/README.md", "backend/growth.py"]
+)
+def test_a_change_that_cannot_grow_the_shell_leaves_the_size_ceiling_out(path, repo_map):
+    assert checks.UI_SHELL_SIZE not in light_plan([path], "pull_request", repo_map, added=[])["guards"]
 
 
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
@@ -2535,15 +3272,68 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     )
 
 
+@pytest.mark.parametrize(
+    ("changed", "reader"),
+    [
+        ("backend/leaf.py", "from backend import leaf\ndef test_x(): pass\n"),
+        (
+            "backend/data/input.json",
+            'from pathlib import Path\ndef test_x(name): (Path("backend/data") / name).read_text()\n',
+        ),
+    ],
+)
+def test_the_budget_keeps_a_specific_dependency_ahead_of_a_broad_read(tmp_path, changed, reader):
+    smoke_tree(tmp_path)
+    linked = "backend/tests/test_linked.py"
+    broad = "backend/tests/test_broad.py"
+    source(tmp_path, changed, "")
+    source(tmp_path, linked, reader)
+    source(tmp_path, broad, "import subprocess\ndef test_x(): subprocess.run(['git', 'ls-files'])\n")
+    graph = checks.DependencyMap(tmp_path)
+    picked = checks.selection([changed], root=tmp_path, graph=graph, core=[])
+    light = checks.narrow(picked, [changed], "pull_request", root=tmp_path, graph=graph)
+    assert {broad, linked} <= set(light["python"])
+    kept, left = checks.cap_tests([broad, linked], light["narrow"]["tier"], {broad: 1, linked: 10}, budget=10)
+    assert kept == [linked] and left == [broad]
+
+
+def test_the_queue_reaches_a_third_hop_only_for_the_named_hub_and_input(tmp_path, monkeypatch):
+    smoke_tree(tmp_path)
+    monkeypatch.setattr(checks, "HUB_TEST_USERS", 0)
+    threads = "backend/threads.py"
+    other = "backend/other.py"
+    store_test = "backend/tests/test_store_path.py"
+    sibling_test = "backend/tests/test_sibling_path.py"
+    source(tmp_path, threads, "")
+    source(tmp_path, other, "")
+    source(tmp_path, "backend/bridge.py", "from backend import threads, other\n")
+    for hub, test in (("store", store_test), ("sibling", sibling_test)):
+        source(tmp_path, f"backend/{hub}.py", "from backend import bridge\n")
+        source(tmp_path, test, f"from backend import {hub}\ndef test_x(): pass\n")
+    graph = checks.DependencyMap(tmp_path)
+
+    def selected(path, event):
+        picked = checks.selection([path], event, root=tmp_path, graph=graph, core=[])
+        return checks.narrow(picked, [path], event, root=tmp_path, graph=graph)["python"]
+
+    group = selected(threads, "merge_group")
+    assert store_test in group and sibling_test not in group
+    assert store_test not in selected(other, "merge_group")
+    assert store_test not in selected(threads, "pull_request")
+
+
 def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_it_left(tmp_path, monkeypatch):
     files = {f"backend/tests/test_{i:02}.py": 1 for i in range(40)}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
-    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0))  # ten minutes each
-    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
+    # Ten minutes each; the depth drop has a time of its own.
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(files, 600.0) | {far: 12.0})
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    # The tier ranks by link kind as well as distance (#4093), so it is not the level: odd files are two levels away.
+    levels = {name: 0 if name.endswith("_00.py") else 1 + int(name[-5:-3]) % 2 for name in files}
 
     def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
@@ -2556,7 +3346,8 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
         tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
         record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
         record["smoke_unless_capped"] = []
-        return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
+        record |= {"left_transitive": [far], "tier": tier, "level": levels}
+        return {**picked, "python": sorted(files), "narrow": record}
 
     monkeypatch.setattr(checks, "selection", fake_selection)
     monkeypatch.setattr(checks, "narrow", fake_narrow)
@@ -2570,9 +3361,21 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     assert 1 <= len(python) <= 4
     assert len(kept) == int(checks.narrow_budget(4) // 600) and "backend/tests/test_00.py" in kept
     left = plan["narrow"]["left_over_budget"]
-    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"]
+    assert sorted(left + kept) == sorted(files) and "tier" not in plan["narrow"] and "level" not in plan["narrow"]
     text = summary.read_text()
     assert all(f"`{name}`" in text for name in left) and f"`{far}`" in text and "merge queue group" in text
+    # Each left file says why it did not run: past the depth, or within reach but over the time budget.
+    dropped = {entry["file"]: entry for entry in plan["narrow"]["dropped"]}
+    assert set(dropped) == {*left, far}
+    assert dropped[far] == {"file": far, "reason": "depth", "level": None, "seconds": 12.0}
+    assert all(dropped[name]["reason"] == "budget" and dropped[name]["level"] == levels[name] for name in left)
+    assert {dropped[name]["level"] for name in left} == {1, 2} and all(dropped[name]["seconds"] == 600 for name in left)
+    assert f"- `{far}`: reached only past level 1 (12 s)" in text
+    two = next(name for name in left if levels[name] == 2)
+    assert f"`{two}`: level 2 (600 s)" in text
+    # Nearest cut tests first.
+    budget = [entry["level"] for entry in plan["narrow"]["dropped"] if entry["reason"] == "budget"]
+    assert budget == sorted(budget)
     # Without --light, or for main, nothing is narrowed: the full selection runs.
     narrowed.clear()
     for event, light in (("pull_request", False), ("push", True)):
@@ -2595,7 +3398,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
         record["left_transitive"] == ["backend/tests/test_outer.py"]
         and record["shards"] == checks.NARROW["merge_group"]["shards"]
     )
-    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
+    assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 5
     # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
     assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
     assert "browser_left" not in record
@@ -2604,7 +3407,7 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
     hub = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
     assert "backend/tests/test_helper.py" not in hub["python"]
     # A light queue group's summary says where the rest runs.
-    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": []})
+    assert "release validation" in checks.narrow_summary({**record, "left_over_budget": [], "dropped": []})
 
 
 def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_group_leaves_out():
@@ -2799,3 +3602,73 @@ def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_p
     timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
     checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
     assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out
+
+
+def test_every_checkout_gives_up_in_three_minutes_and_is_tried_once_more():
+    # A stalled fetch at the queue head once held five green groups for its job's whole 25-minute timeout.
+    for name, job in workflow_jobs()["jobs"].items():
+        steps = job.get("steps", [])
+        at = [i for i, step in enumerate(steps) if "actions/checkout@" in step.get("uses", "")]
+        if not at:
+            continue
+        assert len(at) == 2 and at[1] == at[0] + 1, name
+        first, retry = steps[at[0]], steps[at[1]]
+        assert first["id"] == "checkout_first" and first["continue-on-error"] is True, name
+        assert retry["if"] == "${{ steps.checkout_first.outcome == 'failure' }}", name
+        assert first["timeout-minutes"] == retry["timeout-minutes"] == 3, name
+        assert first["uses"] == retry["uses"] and first["with"] == retry["with"], name
+
+
+def test_cli_does_not_accept_abbreviated_options(monkeypatch, capsys):
+    # `run --ret` could silently turn the retry on in a release workflow.
+    monkeypatch.setattr(sys, "argv", ["pr_checks.py", "run", "unit", "--ret"])
+    with pytest.raises(SystemExit) as stop:
+        checks.main()
+    assert stop.value.code == 2
+    assert "unrecognized arguments: --ret" in capsys.readouterr().err
+
+
+# A git command that reads history (beyond the one commit a shallow checkout has), run in this checkout: "git" in a call
+# whose cwd is the repository root, or a test's git() helper bound to it. A temporary repository's git is not counted.
+GIT_CALL = re.compile(r'\[\s*"git",(?:[^\]]|\n)*?\][^\n]*(?:\n[^\n]*){0,2}')
+AT_ROOT = re.compile(r"cwd=(ROOT|REPO|REPO_ROOT|ROOT_DIR)\b")
+READS_HISTORY = re.compile(r'"(rev-list|merge-base|log|describe|blame|show|diff)"|HEAD~|HEAD\^|origin/main')
+ROOT_HELPER = re.compile(r"def git\(\*args\)[^\n]*\n(?:[^\n]*\n){0,3}[^\n]*cwd=ROOT\b")
+
+
+def test_every_test_that_reads_this_checkouts_history_gets_a_full_checkout(tmp_path, monkeypatch):
+    """A test VM checks out only the commit it tests unless its plan entry says "history" (pr_checks.HISTORY_TESTS): a
+    test that counts commits or diffs against origin/main would otherwise see one commit and quietly run less."""
+    names = subprocess.check_output(["git", "ls-files", "*.py"], cwd=ROOT, text=True).split()
+    tests = [n for n in names if Path(n).name.startswith("test_") or n.endswith("_test.py")]
+    found = set()
+    for name in tests:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        if '"git"' not in text:
+            continue
+        calls = (m.group(0) for m in GIT_CALL.finditer(text))
+        if ROOT_HELPER.search(text) or any(AT_ROOT.search(c) and READS_HISTORY.search(c) for c in calls):
+            found.add(name)
+    assert found == checks.HISTORY_TESTS, "list a test that reads history in pr_checks.HISTORY_TESTS, or drop it there"
+
+    history = sorted(checks.HISTORY_TESTS)[0]
+    picked = {"python": [history, "backend/tests/test_other.py"], "browser": [], "caddy": False}
+    picked |= {"conformance": False, "rust": [], "contracts": False}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", lambda: Counter({history: 1, "backend/tests/test_other.py": 1}))
+    monkeypatch.setattr(checks, "CEILING", {"pull_request": 2, "merge_group": 2})
+    monkeypatch.setattr(checks, "size_groups", lambda counts, *a, **kw: _two_groups(counts))
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    marked = {job["suite"]: job.get("history", False) for job in jobs}
+    assert marked == {"python-1": True, "python-2": False}
+
+    # The conformance VM always keeps full history: the Rust updater test reads main's parser from origin/main.
+    picked |= {"conformance": True, "rust": ["runner-rs"]}
+    jobs = checks.prepare("pull_request", "base", tmp_path / "plan.json")["matrix"]["include"]
+    assert {job["suite"]: job.get("history", False) for job in jobs}["conformance"] is True
+
+
+def _two_groups(counts):
+    split = [[name] for name in sorted(counts)]
+    return {"split": split, "loads": [1.0] * len(split), "target": 330}

@@ -16,6 +16,7 @@ attempts, then a few reads per listed bot.
 
 import json
 
+from . import runner_online
 from .store import H, bot_readiness, readiness_document
 
 MAX_BOTS = 5
@@ -29,6 +30,9 @@ SIGN_IN_STATES = ("missing", "failed", "rejected", "unknown")
 OFFLINE = "Its computer is offline"
 PAUSED = "Paused"
 OUT_OF_BUDGET = "Out of budget"
+OUT_OF_CREDIT = "Out of credit: its cloud machine can't start until credit is added"
+OUT_OF_CREDIT_MODELS = "Out of credit: its Tico model waits until credit is added"
+BILLING = "#/settings/billing"
 CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
@@ -70,11 +74,11 @@ _NEWEST_STEP_SQL = (
     "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought')) ORDER BY seq DESC LIMIT 1"
 )
 _LAST_STATUS_SQL = "SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?"
-_QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')"
+_QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds')"
 
 
 def trailing_roots(c):
-    """The roots whose running turn took a step after their last `bot_status` change, once that one is 5 s old: a step
+    """The roots whose running turn took a step after their last `bot_status` change, once that one is 1 s old: a step
     the throttle (events.py changes_threads_bot_status_steps) held back. A read: a few indexed lookups per running
     turn, whatever its length."""
     quiet = c.execute(f"SELECT {_QUIET}").fetchone()[0]
@@ -99,7 +103,7 @@ def send_trailing(c, roots=None):
     roots = trailing_roots(c) if roots is None else roots
     wrote = 0
     for root in roots:
-        # The triggers' own clock (events._NOW), and again quiet for 5 s: a trigger may have sent one since the read.
+        # The triggers' own clock (events._NOW), and again quiet for 1 s: a trigger may have sent one since the read.
         wrote += c.execute(
             "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
             "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
@@ -335,7 +339,7 @@ def _blocked(c, bot, location, refusal):
     """(detail, fix) when something stops the bot, else None; `refusal` is the claim's latest recorded refusal."""
     from .health import BOT_SETTINGS, COMPUTERS, HELD
     from .models_preset import LOGIN_NAMES
-    from .cloud_machines import resting
+    from .cloud_machines import OUT_OF_CREDIT_WAIT, resting
 
     row = H.bot(c, bot) or {}
     slug = row.get("slug") or bot
@@ -355,6 +359,9 @@ def _blocked(c, bot, location, refusal):
         from .views import cloud_machine_wait
 
         cloud = cloud_machine_wait(c, bot)
+        if cloud == OUT_OF_CREDIT_WAIT:
+            # Not "starting for this turn": nothing starts until credit lands, so the chat says so.
+            return OUT_OF_CREDIT, _fix(BILLING)
         if computer and cloud:
             if asleep:
                 return cloud[0].upper() + cloud[1:], None
@@ -367,6 +374,8 @@ def _blocked(c, bot, location, refusal):
         return None
     if reason == "draining":
         return PAUSED, _fix("#/bot/" + slug + "/more")
+    if reason == "out_of_credit":
+        return OUT_OF_CREDIT_MODELS, _fix(BILLING)
     if reason in BUDGET_REASONS:
         return OUT_OF_BUDGET, _fix("#/finance")
     label = machine.get("label") or "its computer"
@@ -396,13 +405,7 @@ def _location(c, bot):
     ).fetchone()
     if not row:
         return {"online": False, "machine": None, "readiness": {}}
-    from .readiness import ONLINE_SECONDS
-
-    online = bool(
-        not row["revoked_at"]
-        and row["last_seen_at"]
-        and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    )
+    online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     return {
         "online": online,
         "machine": {"runner_id": row["runner_id"], "label": row["label"]},

@@ -132,8 +132,7 @@ function pageCalendar(r: string): void {
         <input type="search" id="cal-q" placeholder="Find a person, event or question" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-keyshortcuts="/" aria-controls="cal-dd" aria-autocomplete="list">
         <div class="cal-dd" id="cal-dd" role="listbox" hidden></div></div>
       <div class="theme-seg cal-views" role="radiogroup" aria-label="View" data-cal-views></div>
-      ${pageChatSlot()}<div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
-        <div class="cal-menu" role="menu" data-cal-menu hidden><button type="button" role="menuitemcheckbox" data-cal-record aria-checked="true">Record calls I join</button></div></div>
+      ${pageChatSlot()}
     </header>
     <div class="cal-strip" data-cal-strip></div>
     <div class="cal-body" data-cal-body>${skelRows(6)}</div>
@@ -143,7 +142,6 @@ function pageCalendar(r: string): void {
   calBind();
   calHead(); calWrite(CALP);
   void calLoad();
-  void calSettingsRead();
 }
 async function calLoad(): Promise<void> {
   const p = CALP; if (!p) return;
@@ -171,12 +169,6 @@ function calHues(p: CalPage): void {
   for (const o of p.data?.occurrences || []) if (!p.hues.has(o.calendar.ref)) p.hues.set(o.calendar.ref, p.hues.size);
 }
 const calHue = (ref: string) => CAL_HUES[(CALP?.hues.get(ref) ?? 0) % CAL_HUES.length] ?? 152;
-async function calSettingsRead(): Promise<void> {
-  try {
-    const s = await get<CalSettings>(`${CAL_API}/settings`);
-    if (typeof s?.record_on_join === 'boolean') { calRecordSet(s.record_on_join); calMenuDraw(); }
-  } catch { /* the browser's own choice stands */ }
-}
 
 // ----------------------------------------------------------------- the header
 function calHead(): void {
@@ -193,7 +185,6 @@ function calHead(): void {
   // Phone: a week strip over the list.
   const [s] = calWindow('week', p.date);
   set('[data-cal-strip]', Array.from({length: 7}, (_, i) => calAddDays(s, i)).map(d => `<button type="button" data-cal-date="${calDay(d)}" aria-pressed="${calDay(d) === p.date}"${calDay(d) === calDay(new Date()) ? ' class="today"' : ''}><span>${esc(d.toLocaleDateString(undefined, {weekday: 'narrow'}))}</span><b>${d.getDate()}</b></button>`).join(''));
-  calMenuDraw();
 }
 // A calendar named by its ref before the server answers: the roster's name for a person or bot.
 function calRefName(ref: string): string {
@@ -202,10 +193,6 @@ function calRefName(ref: string): string {
   if (type === 'bot') return botDisplayName(id);
   if (type === 'human') return personDisplay(id);
   return id;
-}
-function calMenuDraw(): void {
-  const b = document.querySelector<HTMLElement>('#cal-root [data-cal-record]');
-  if (b) b.setAttribute('aria-checked', String(calRecordOn()));
 }
 
 // Chips past the header's one line fold into "+N", which opens Add (where each can be unticked). A phone scrolls them.
@@ -727,7 +714,7 @@ function calBind(): void {
     const at = (sel: string) => t.closest<HTMLElement>(sel);
     const moved = () => { calCardClose(); calWrite(p); calHead(); void calLoad(); };
     const view = at('[data-cal-view]'), step = at('[data-cal-step]'), date = at('[data-cal-date]'), rm = at('[data-cal-rm]');
-    const lay = at('[data-cal-lay]'), more = at('[data-cal-more]'), item = at('[data-cal-item]'), quick = at('[data-cal-quick]');
+    const lay = at('[data-cal-lay]'), item = at('[data-cal-item]'), quick = at('[data-cal-quick]');
     if (at('[data-cal-add]')) { calAddOpen(!p.add.open); return; }
     if (at('[data-cal-chips-more]')) { calAddOpen(true); return; }
     if (quick) {
@@ -753,15 +740,6 @@ function calBind(): void {
       if (k) { calKindsSet(k, !calKinds()[k]); calCardClose(); calAddDraw(); calBody(); }
       return;
     }
-    if (more) {
-      const menu = root.querySelector<HTMLElement>('[data-cal-menu]'); if (!menu) return;
-      menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); calMenuDraw(); return;
-    }
-    if (at('[data-cal-record]')) {
-      const on = !calRecordOn(); calRecordSet(on); calMenuDraw();
-      void put(`${CAL_API}/settings`, {record_on_join: on}).catch(() => {});
-      return;
-    }
     if (item) {
       const it = p.items.get(item.dataset.calItem || '');
       if (it && p.card === it.key) calCardClose(); else if (it) calCard(it, item);
@@ -772,15 +750,11 @@ function calBind(): void {
 document.addEventListener('click', ev => {
   const t = eventElement(ev), card = document.getElementById('cal-card');
   if (!t || !CALP) return;
-  const join = t.closest<HTMLElement>('#cal-card [data-cal-join]');
-  if (join) { const it = [...CALP.items.values()].find(x => x.o.occurrence_id === join.dataset.calJoin); if (it) calRecorder(it.o); return; }
   const child = t.closest<HTMLElement>('#cal-card [data-cal-child]');
   if (child) { const it = CALP.items.get(child.dataset.calChild || ''); if (it) calCard(it, card); return; }
   if (t.closest('#cal-card [data-cal-x]')) { calCardClose(); return; }
   if (card && !card.contains(t) && !t.closest('[data-cal-item]')) calCardClose();
   if (CALP.add.open && !t.closest('.cal-add, [data-cal-chips-more]') && t.isConnected) calAddOpen(false);
-  const menu = document.querySelector<HTMLElement>('#cal-root [data-cal-menu]');
-  if (menu && !menu.hidden && !t.closest('.cal-more')) { menu.hidden = true; document.querySelector('#cal-root [data-cal-more]')?.setAttribute('aria-expanded', 'false'); }
 });
 document.addEventListener('keydown', ev => {
   if (!CALP || !document.getElementById('cal-root')) return;

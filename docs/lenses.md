@@ -2,8 +2,8 @@
 
 A **lens** is a short set of questions about your strategy or your market, from a well-known framework, answered once.
 The server sends the answers and the strategy to one model call and returns a result you can read: a summary, a few
-sections, a chart, findings that point at your bets, what it assumed, and changes you may add to your draft. A lens
-never publishes anything and never changes the draft by itself.
+sections, a chart, findings that point at your bets, what it assumed, and changes you may add to your strategy. A lens
+never changes the strategy by itself.
 
 Lenses are on the [Strategy](strategy.md) page, under **Lenses**. Market lenses are also under the Market tab.
 
@@ -30,8 +30,8 @@ older guide files kept for reference; they are not listed.
 
 1. Pick a lens. Answer its questions, or skip any of them. A skipped question is told to the model, which says in the
    result what it assumed instead.
-2. Choose what it reads: the **published** strategy (the default) or your **draft** (owner only; the run is private
-   to you). A strategy lens needs a published version unless you run it on the draft. A market lens reads the market
+2. Choose what it reads: the **published** strategy (the default, the live version) or your **draft** (owner only; the run is private
+   to you). A strategy lens needs a saved strategy unless you run it on the draft. A market lens reads the market
    pages and the strategy, and ignores the choice. Startup idea check also reads the market's sizes.
 3. The run answers at once with `running`, then finishes in under a minute. The page and `tico lens show` poll it.
 
@@ -58,14 +58,14 @@ the code `empty`.
 
 ## Acting on it
 
-- **Add to draft** (owner only): puts one change into your draft, as you, with the revision you were looking at. If
-  the draft moved, it answers 409 and nothing is written. A change can be added once. A run that was sent as a proposal
+- **Add to strategy** (owner only): puts one change into your strategy, as you, live at once, with the revision you were looking at. If
+  the strategy moved, it answers 409 and nothing is written. A change can be added once. A run that was sent as a proposal
   answers 409 `proposed`: decide it on its card.
 - **Sharpen** (owner only): files one research task for the Librarian for one item, once. Its findings go to the
   market page Open questions.
 - A run the **Strategy Owner** starts files one `strategy_draft` proposal with the changes, marked as from the lens. It
-  reaches you as a task, "Confirm or reject a change to the strategy from the Blue Ocean lens". Confirming writes the
-  draft as you; publishing stays your click. The Strategy Owner suggests a lens when a bet trips and in its weekly note, and
+  reaches you as a task, "Confirm or reject a change to the strategy from the Blue Ocean lens". Confirming writes it as
+  you, live at once. The Strategy Owner suggests a lens when a bet trips and in its weekly note, and
   never runs one unasked.
 
 ## `tico` and the API
@@ -85,9 +85,9 @@ The answers file is `{"<step key>": answer}`: a list step is a list of short str
 | Route | Who | What it does |
 |---|---|---|
 | `GET /lenses?applies_to=` | any reader | the listed lenses, strategy first |
-| `POST /lenses/{id}/runs` | owner, Strategy Owner, Librarian (market) | `{answers, on?: published|draft}`; answers `202` with the run; `422 invalid` for a bad answer, `422 no_published` with nothing published, `403` for anyone else |
+| `POST /lenses/{id}/runs` | owner, Strategy Owner, Librarian (market) | `{answers, on?: published|draft}`; answers `202` with the run; `422 invalid` for a bad answer, `422 no_published` with no strategy yet, `403` for anyone else |
 | `GET /lenses/runs`, `/lenses/runs/{id}` | any reader | runs the caller may see; a draft run is `404` to everyone but the owner |
-| `POST /lenses/runs/{id}/apply` | the owner only | `{index, revision}`; `409` if the draft moved, `409 applied` if added already |
+| `POST /lenses/runs/{id}/apply` | the owner only | `{index, revision}`; `409` if the strategy moved, `409 applied` if added already |
 | `POST /lenses/runs/{id}/sharpen/{i}` | the owner only | files the research task once and returns its id |
 
 Runs are rows in `lens_runs`, readable in [Hub SQL](hub-sql.md) by the same rule: a draft run only for the owner.

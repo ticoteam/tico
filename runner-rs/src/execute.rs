@@ -20,7 +20,11 @@ use crate::drive::{from_person, tries, Drive, GoalRun, Segment};
 use crate::env::{Env, EnvContext, Vault};
 use crate::goals;
 use crate::hosts::{
-    self, antigravity::AntigravityHost, claude::ClaudeHost, codex::CodexHost, gemini::GeminiHost,
+    self,
+    antigravity::AntigravityHost,
+    claude::{ClaudeHost, ClaudeProcess, TurnUsage},
+    codex::CodexHost,
+    gemini::GeminiHost,
     Host, HostError, Settings,
 };
 use crate::profiles::{Profile, Unavailable};
@@ -29,9 +33,13 @@ use crate::runner::{describe, Runner};
 use crate::util::{log, mark, text_of, truthy};
 use crate::wire::{decode, StartPlaceAnswer};
 
+mod voice;
+use voice::{voice_answer, voice_question};
+
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
+const VOICE_CONTEXT_TOKENS: i64 = 24_000;
+const VOICE_INTERRUPT_WAIT: Duration = Duration::from_secs(2);
 const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
-const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
 /// `started` answered `start_wait` this many times in a row: the server will not start this lease (a refused start
 /// stays refused, backend/execution.py refuse_start), so the turn gives up and reports itself interrupted, which the
 /// server settles as skipped. A fresh wake comes on a new lease.
@@ -128,6 +136,11 @@ pub(crate) struct Meter {
     /// The part of `input` written to the prompt cache (Claude, Cursor and pi report it); 0 from a host that reports
     /// none (Codex, Gemini, Antigravity, Muse Code).
     cache_write: i64,
+    /// The part of `cache_write` written with the 1-hour TTL, when a host reports the split (Claude); None from one
+    /// that does not, so the server guesses it from the sign-in.
+    cache_write_1h: Option<i64>,
+    /// An event wrote to the cache without a split: the segment's split is unknown and is not reported.
+    cache_write_unsplit: bool,
     output: i64,
     model: String,
     requests: Option<Vec<Value>>,
@@ -155,6 +168,12 @@ impl Meter {
             self.input += count(&u["input"]);
             self.cached += count(&u["cached"]);
             self.cache_write += count(&u["cache_write"]);
+            if !u["cache_write_1h"].is_null() {
+                self.cache_write_1h =
+                    Some(self.cache_write_1h.unwrap_or(0) + count(&u["cache_write_1h"]));
+            } else if count(&u["cache_write"]) > 0 {
+                self.cache_write_unsplit = true;
+            }
             self.output += count(&u["output"]);
             if let Some(more) = u["requests"].as_array() {
                 let requests = self.requests.get_or_insert_with(Vec::new);
@@ -205,6 +224,9 @@ impl Meter {
         );
         m.insert("cached_tokens".into(), json!(cached));
         m.insert("cache_write_tokens".into(), json!(cache_write));
+        if let Some(hour) = self.cache_write_1h.filter(|_| !self.cache_write_unsplit) {
+            m.insert("cache_write_1h_tokens".into(), json!(hour.min(cache_write)));
+        }
         m.insert("output_tokens".into(), json!(self.output));
         m.insert(
             "model".into(),
@@ -224,7 +246,8 @@ impl Meter {
 
 /// A segment's usage as this server takes it (`feature`: what the server said it takes, follow::feature): without
 /// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count, without
-/// `usage_cache_writes` no `cache_write_tokens`, counted in `input_tokens` as before (an older server refuses each).
+/// `usage_cache_writes` no `cache_write_tokens`, counted in `input_tokens` as before, and without
+/// `usage_cache_write_1h` no `cache_write_1h_tokens`, whose split the server then guesses (an older server refuses each).
 fn served(
     meter: &Meter,
     model: &str,
@@ -233,6 +256,9 @@ fn served(
     feature: impl Fn(&str) -> bool,
 ) -> Option<Map<String, Value>> {
     let mut part = meter.report(model, runtime, billing)?;
+    if !feature("usage_cache_writes") || !feature("usage_cache_write_1h") {
+        part.remove("cache_write_1h_tokens");
+    }
     if !feature("usage_cache_writes") {
         let writes = part
             .remove("cache_write_tokens")
@@ -280,22 +306,6 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
     } else {
         runtime.to_string()
     }
-}
-
-/// Where a thread records what its cache was last written for (`warm_identity`), read by a keep-warm turn.
-fn warm_key(thread: &str) -> String {
-    format!("keep-warm:{thread}")
-}
-
-/// What a session's cache is for: its harness, model, effort and plan (the subscription the turn runs on). A turn on
-/// any other writes the whole context again, so a keep-warm turn runs only when this is the same as its last turn's.
-fn warm_identity(runtime: &str, config: &Value, plan: Option<&Profile>) -> String {
-    format!(
-        "{runtime}\n{}\n{}\n{}",
-        text_of(&config["model"]),
-        text_of(&config["reasoning_effort"]),
-        plan.map_or("", |p| p.name.as_str())
-    )
 }
 
 /// The provider thread this turn continues (clients/sessions.py session_key).
@@ -489,12 +499,34 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
         Some(_) => return String::new(),
         None => return "timed out".into(),
     }
-    match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
-        Some((true, _, _)) => {}
-        Some((false, _, err)) => return git_reason(&err, &env),
-        None => return "timed out".into(),
+    // A turn's second refresh of this repository and upstream merges what its first fetch brought, and a chat turn
+    // merges what the runner's fetch from moments ago brought, then fetches again in the background (crate::fetch_fresh).
+    let upstream = crate::fetch_fresh::upstream(path, &env).await;
+    let fresh = upstream.as_ref().is_some_and(|u| u.fresh());
+    let mut behind = None;
+    if let Some(u) = upstream.as_ref().filter(|u| !fresh && u.recent()) {
+        if u.take_behind(path, &env).await {
+            behind = Some(u);
+        }
     }
-    match git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 45).await {
+    if let Some(u) = behind {
+        crate::util::mark("fetch_skipped", u.turn());
+    } else if !fresh {
+        let began = Instant::now();
+        match git(path, &env, &["fetch", "--quiet", "--no-tags"], 45).await {
+            Some((true, _, _)) => {
+                if let Some(u) = &upstream {
+                    u.fetched(began);
+                    if u.chat() {
+                        crate::util::mark("fetched_first", u.turn());
+                    }
+                }
+            }
+            Some((false, _, err)) => return git_reason(&err, &env),
+            None => return "timed out".into(),
+        }
+    }
+    let merged = match git(path, &env, &["merge", "--ff-only", "--quiet", "@{u}"], 45).await {
         Some((true, _, _)) => String::new(),
         Some((false, _, err)) => {
             let lower = err.to_lowercase();
@@ -508,7 +540,12 @@ pub async fn pull_repo(path: &Path, env: &Env) -> String {
             }
         }
         None => "timed out".into(),
+    };
+    // After the fast-forward, so the turn's tree is settled before anything fetches beside it.
+    if let Some(u) = behind {
+        u.refresh_behind(path, &env);
     }
+    merged
 }
 
 /// Push the turn's commits to the checkout's upstream (service.py push_repo): never forces or pulls; a
@@ -558,8 +595,12 @@ pub async fn push_repo(path: &Path, env: &Env) -> (i64, String) {
         args.push(&remote);
         args.push(&dest);
     }
+    let began = Instant::now();
     match git(path, &env, &args, 60).await {
-        Some((true, _, _)) => (ahead, String::new()),
+        Some((true, _, _)) => {
+            crate::fetch_fresh::note(path, &env, began).await;
+            (ahead, String::new())
+        }
         Some((false, _, err)) => {
             let err = err.trim();
             if !err.contains("[remote rejected]")
@@ -787,10 +828,29 @@ impl Runner {
     }
 }
 
-/// Give a bot's local history its first home on GitHub (git_credentials.publish_history): a checkout with commits
+/// Give a bot's local history its first home on GitHub: a checkout with commits
 /// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
 /// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.
+/// Whether `publish_history` would find the checkout's history already published ("current"): a branch with commits
+/// that tracks an upstream. Read without the push lock; anything else goes the whole way, under it.
+pub(crate) async fn published_already(path: &Path, env: &Env) -> bool {
+    if crate::repo_safety::outside_installation(path).is_err() || !path.join(".git").exists() {
+        return false;
+    }
+    let env = git_env(env);
+    // An upstream means a branch is checked out: a detached HEAD has none.
+    for args in [
+        &["rev-parse", "--verify", "-q", "HEAD"][..],
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    ] {
+        if !matches!(git(path, &env, args, 15).await, Some((true, _, _))) {
+            return false;
+        }
+    }
+    true
+}
+
 pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'static str, String) {
     if let Err(problem) = crate::repo_safety::outside_installation(path) {
         return ("failed", problem);
@@ -975,6 +1035,9 @@ pub(crate) struct Flags {
     pub(crate) harness_allocated: Arc<AtomicBool>,
     /// After the hub accepts /started, fallback admission checks only local memory.
     pub(crate) start_acknowledged: AtomicBool,
+    /// When the hub granted this turn the start place it still holds (at its claim, `start_reserved`, or a start-place
+    /// answer); None once it is given back or refused. A place kept this way is not asked for again (`keep_start_place`).
+    pub(crate) granted: Mutex<Option<Instant>>,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
 }
@@ -994,9 +1057,8 @@ pub(crate) struct Drove {
     pub(crate) retryable: bool,
     /// The turn running when the drive ended (a goal's continuation, a carried input's turn).
     pub(crate) turn: String,
-    /// The turn stopped at the shared login's hold cap so a waiting turn could have it (crate::login_turns): its
-    /// job goes back in the queue to continue, not to review. `outcome` is "completed" when it reached a safe point
-    /// itself and "interrupted" when the grace ran out.
+    /// The turn gave its place up for an update drain (crate::drain): its job goes back in the queue to continue, not
+    /// to review.
     pub(crate) yielded: bool,
 }
 
@@ -1072,37 +1134,42 @@ fn unstopped(flags: &Flags) -> Result<(), Fail> {
     Ok(())
 }
 
-/// A turn as the login queue knows it (crate::login_turns): its bot, its task as a person reads it, the class the
-/// server gave it (`login_class`), the work it is for (its task, else its chat) and its attempt.
-fn login_turn(attempt: &Value) -> crate::login_turns::Turn {
-    let task = &attempt["task"];
-    let label = match (text_of(&task["number"]), text_of(&task["title"])) {
-        (n, t) if !n.is_empty() && !t.is_empty() => format!("#{n} {t}"),
-        (_, t) => t,
-    };
-    let work = [
-        &task["session_task_id"],
-        &task["id"],
-        &attempt["conversation"]["id"],
-    ]
-    .into_iter()
-    .map(text_of)
-    .find(|w| !w.is_empty())
-    .unwrap_or_default();
-    let class = crate::login_turns::Class::parse(&text_of(&attempt["login_class"]));
-    crate::login_turns::Turn::new(&text_of(&attempt["bot"]), &label, class)
-        .of(&work, &text_of(&attempt["id"]))
+/// How long a granted start place is kept without asking the hub again (`keep_start_place`). The hub holds it for
+/// start_reservation_seconds (180 s); a turn whose preparation took longer than this asks again, as before.
+const KEEP_GRANT_FOR: Duration = Duration::from_secs(30);
+
+/// Whether the turn holds a start place the hub granted it less than KEEP_GRANT_FOR ago and has not given back.
+fn grant_kept(flags: &Flags) -> bool {
+    flags
+        .granted
+        .lock()
+        .unwrap()
+        .is_some_and(|at| at.elapsed() < KEEP_GRANT_FOR)
 }
 
-/// The login a turn may give up at the cap: only a server that names the turn's `login_class` takes a `yielded`
-/// turn back into the queue (an older one refuses the field).
-fn yields(
-    attempt: &Value,
-    held: &Option<crate::login_turns::Held>,
-) -> Option<crate::login_turns::Cap> {
-    held.as_ref()
-        .filter(|_| attempt.get("login_class").is_some())
-        .map(|h| h.cap())
+/// The place is given back, refused or lost: the next ask goes to the hub.
+fn grant_gone(flags: &Flags) {
+    *flags.granted.lock().unwrap() = None;
+}
+
+/// A host that allocates nothing before the turn's `started` (Claude: no process until `start_turn` spawns it), so an
+/// ask before `started` learns nothing that `started`'s own admission (backend start_places.reserve) does not.
+fn allocates_at_spawn(runtime: &str, session_runtime: &str) -> bool {
+    runtime == "claude" && session_runtime == runtime
+}
+
+/// Whether a turn takes the cold sign-in path (one at a time on this computer, `claude_cold_start`): its runtime renews
+/// a stale login on its first call, and the login it reads (the profile's, else the computer's own) is stale. A turn
+/// that a company plan signs in (`plan_signs_in`: a setup-token in its environment, or a full login whose token the
+/// plan's refresher keeps fresh in the turn's own config home) reads neither, so it never waits.
+fn cold_sign_in(
+    runtime: &str,
+    profile: Option<&crate::profiles::Profile>,
+    plan_signs_in: bool,
+) -> bool {
+    !plan_signs_in
+        && crate::harness_tools::caps(runtime, "").serial_cold_start
+        && crate::hosts::token_cold(runtime, profile)
 }
 
 /// One cold Claude sign-in renewal at a time on this computer (service.py claude_cold_start).
@@ -1111,6 +1178,21 @@ fn claude_cold_start() -> &'static tokio::sync::Mutex<()> {
     L.get_or_init(Default::default)
 }
 const CLAUDE_COLD_START_HOLD_S: u64 = 45;
+
+/// How long pre-start work may run on a granted place before it gives the place back (`pre_start_lock`).
+#[cfg_attr(test, allow(dead_code))] // tests choose their own grace (tests::GRACE_OVERRIDE)
+const PRE_START_GRACE: Duration = Duration::from_millis(1500);
+
+fn pre_start_grace() -> Duration {
+    // Tests keep the immediate release unless they set a grace of their own.
+    #[cfg(test)]
+    let grace = tests::GRACE_OVERRIDE
+        .with(|v| v.get())
+        .unwrap_or(Duration::ZERO);
+    #[cfg(not(test))]
+    let grace = PRE_START_GRACE;
+    grace
+}
 
 impl Runner {
     /// A delivery lease keeps waiting work alive; only a short server reservation permits a new start.
@@ -1121,8 +1203,23 @@ impl Runner {
         Ok(())
     }
 
+    /// `wait_start_place` for a turn that may still hold the place the hub granted it moments ago (KEEP_GRANT_FOR):
+    /// only the local checks run (stop, lease, this computer's memory and turn limit), with no start-place round
+    /// trip. Used only where no harness is allocated before `started`, which asks the hub's same admission
+    /// (start_places.reserve) again; a place given back, refused or older asks the hub as before.
+    async fn keep_start_place(&self, attempt: &Value, flags: &Flags) -> Result<(), Fail> {
+        while !self.place(attempt, flags, true).await? {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Ok(())
+    }
+
     /// One ask for a computer place: false while this computer is full or the server says wait.
     async fn try_start_place(&self, attempt: &Value, flags: &Flags) -> Result<bool, Fail> {
+        self.place(attempt, flags, false).await
+    }
+
+    async fn place(&self, attempt: &Value, flags: &Flags, keep: bool) -> Result<bool, Fail> {
         #[cfg(not(test))]
         let memory = if cfg!(target_os = "linux") && !flags.harness_allocated.load(Ordering::SeqCst)
         {
@@ -1145,16 +1242,29 @@ impl Runner {
                     }
                 }),
         );
-        self.start_place_with_memory(attempt, flags, memory, crate::runner::platform())
+        self.place_with_memory(attempt, flags, memory, crate::runner::platform(), keep)
             .await
     }
 
+    #[cfg(test)]
     async fn start_place_with_memory(
         &self,
         attempt: &Value,
         flags: &Flags,
         memory: Option<f64>,
         platform: &str,
+    ) -> Result<bool, Fail> {
+        self.place_with_memory(attempt, flags, memory, platform, false)
+            .await
+    }
+
+    async fn place_with_memory(
+        &self,
+        attempt: &Value,
+        flags: &Flags,
+        memory: Option<f64>,
+        platform: &str,
+        keep: bool,
     ) -> Result<bool, Fail> {
         let aid = text_of(&attempt["id"]);
         unstopped(flags)?;
@@ -1179,6 +1289,7 @@ impl Runner {
             if !flags.start_acknowledged.load(Ordering::SeqCst) {
                 self.wait_before_start(
                     attempt,
+                    flags,
                     &format!("computer busy: memory {:.0}%", memory.unwrap()),
                 )
                 .await?;
@@ -1203,30 +1314,40 @@ impl Runner {
         if !local_free {
             return Ok(false);
         }
+        if keep && grant_kept(flags) {
+            return Ok(true);
+        }
         let mut body = json!({});
         if flags.harness_allocated.load(Ordering::SeqCst) {
             body["harness_allocated"] = json!(true);
         }
+        mark("start_asked", &aid);
+        let asked = Instant::now();
         let place = self
             .post_allocated(&format!("attempts/{aid}/start-place"), &body, None)
             .await;
         let answer = match place.and_then(decode::<StartPlaceAnswer>) {
             Ok(answer) => answer,
             Err(e) => {
+                grant_gone(flags);
                 self.places.lock().unwrap().remove(&aid);
                 return Err(e.into());
             }
         };
         if answer.stop == Some(true) {
+            grant_gone(flags);
             self.places.lock().unwrap().remove(&aid);
             return Err(Fail::runtime(
                 "Execution interrupted after stop before the turn started",
             ));
         }
         if answer.reserved {
+            // Timed from the ask: never kept longer than the hub's own grant.
+            flags.granted.lock().unwrap().get_or_insert(asked);
             self.places.lock().unwrap().insert(aid.clone());
             return Ok(true);
         }
+        grant_gone(flags);
         self.places.lock().unwrap().remove(&aid);
         Ok(false)
     }
@@ -1268,7 +1389,13 @@ impl Runner {
         Ok(())
     }
 
-    async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
+    async fn wait_before_start(
+        &self,
+        attempt: &Value,
+        flags: &Flags,
+        reason: &str,
+    ) -> Result<(), Fail> {
+        grant_gone(flags);
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
             let path = format!("attempts/{aid}/start-place");
@@ -1322,9 +1449,12 @@ impl Runner {
             {
                 Ok(_) => {
                     flags.start_acknowledged.store(true, Ordering::SeqCst);
+                    mark("acknowledged", &aid);
+                    crate::company_skills::receipt_landed(&aid).await;
                     return Ok(());
                 }
                 Err(e) if e.code == "start_wait" => {
+                    grant_gone(flags);
                     self.places.lock().unwrap().remove(&aid);
                     tries += 1;
                     self.after_start_wait(tries).await?;
@@ -1335,7 +1465,7 @@ impl Runner {
     }
 
     /// A Gateway turn's leased OS user. While every user is busy the turn gives its computer place back and
-    /// waits, as for a busy login, rather than failing before it starts: an unstarted failure is refused by the
+    /// waits rather than failing before it starts: an unstarted failure is refused by the
     /// server (only `not_isolated` settles before a start), and a hand-back spends one of its pre-start tries.
     async fn take_turn_user<T>(
         &self,
@@ -1359,7 +1489,8 @@ impl Runner {
                 }
                 Err(_) => {}
             }
-            self.wait_before_start(attempt, "Docker turn user").await?;
+            self.wait_before_start(attempt, flags, "Docker turn user")
+                .await?;
             tokio::time::sleep(if cfg!(test) {
                 Duration::from_millis(5)
             } else {
@@ -1414,7 +1545,9 @@ impl Runner {
         e
     }
 
-    /// Release capacity only if preparation really blocks; subsequent preparation needs a fresh grant.
+    /// Release capacity only if preparation really blocks: work still running after PRE_START_GRACE gives the place
+    /// back and needs a fresh grant once it is done. Ordinary git (a fetch, a push) finishes inside the grace and
+    /// keeps the place, with no `waiting` post and no second ask; the server holds a place for start_reservation_seconds.
     async fn pre_start_lock<T>(
         &self,
         attempt: &Value,
@@ -1424,11 +1557,21 @@ impl Runner {
         let mut waiting = std::pin::pin!(waiting);
         let first =
             std::future::poll_fn(|cx| std::task::Poll::Ready(waiting.as_mut().poll(cx))).await;
+        let grace = pre_start_grace();
+        let first = match first {
+            std::task::Poll::Pending if !grace.is_zero() => {
+                match tokio::time::timeout(grace, waiting.as_mut()).await {
+                    Ok(result) => std::task::Poll::Ready(result),
+                    Err(_) => std::task::Poll::Pending,
+                }
+            }
+            other => other,
+        };
         match first {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => {
                 if let Err(error) = self
-                    .wait_before_start(attempt, "pre-start requirements")
+                    .wait_before_start(attempt, flags, "pre-start requirements")
                     .await
                 {
                     // The first poll may have started git; finish it with its locks before returning an API error.
@@ -1457,7 +1600,8 @@ impl Runner {
             if let Ok(guard) = claude_cold_start().try_lock() {
                 return Ok(guard);
             }
-            self.wait_before_start(attempt, "shared login").await?;
+            self.wait_before_start(attempt, flags, "shared login")
+                .await?;
             let lock = claude_cold_start().lock();
             tokio::pin!(lock);
             let guard = loop {
@@ -1511,7 +1655,9 @@ impl Runner {
                 return;
             }
             let waiting = self.state.outbox.waiting(&aid);
-            let shown = self.first_posted.lock().unwrap().contains(&aid);
+            // A voice call's text is never paced: speech waits on each sentence.
+            let shown = !self.unpaced.lock().unwrap().contains(&aid)
+                && self.first_posted.lock().unwrap().contains(&aid);
             let now = Instant::now();
             // Counted in before the window is taken, so a turn that starts streaming paces with itself included.
             let recheck = active.update(now, waiting.count > 0, pacer.last_post());
@@ -1535,6 +1681,187 @@ impl Runner {
             pacer.posted(Instant::now(), ok);
             due = Some(Instant::now());
         }
+    }
+
+    async fn voice_inputs(&self, aid: &str, phase: &str) -> Result<Value, Fail> {
+        let key = format!("voice-input:{}", uuid::Uuid::new_v4());
+        let path = format!("attempts/{aid}/inputs?voice={phase}");
+        let mut answer = self.client.post(&path, &json!({}), Some(&key)).await?;
+        Ok(answer["call_voice"].take())
+    }
+
+    async fn claude_voice_session(
+        &self,
+        d: &Drive<'_>,
+        claude: &ClaudeHost,
+        call_id: &str,
+        primer: &str,
+        mut notes_stamp: String,
+        meter: &mut Meter,
+    ) -> Result<(), Fail> {
+        let mut inputs = self.events.voice_inputs();
+        let state = self.voice_inputs(d.aid, "busy").await?;
+        if state.is_null() || state["closed"] == true {
+            return Ok(());
+        }
+        unstopped(d.flags)?;
+        let mut resident =
+            ClaudeProcess::spawn(claude, d.thread, d.effort, d.aid, "voice session")?;
+        resident.send_turn(primer).await?;
+        let mut warming = true;
+        let mut active: Option<String> = None;
+        let mut last = String::new();
+        let mut interrupt_at: Option<tokio::time::Instant> = None;
+        let mut restart = None;
+        let mut spoken = String::new();
+        let mut model = String::new();
+        let mut text_block = false;
+        let mut clock = voice::VoiceClock::default();
+        // The poll runs beside the session's output, so a slow poll never holds back a frame.
+        let mut input_poll = None;
+        let mut poll_began = Instant::now();
+        loop {
+            if let Some(grace) = restart.take() {
+                input_poll = None;
+                resident.stop(grace).await?;
+                let state = self.voice_inputs(d.aid, "restart").await?;
+                if state.is_null() || state["closed"] == true {
+                    return Ok(());
+                }
+                let fresh = state["primer"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| Fail::runtime("The call did not supply a fresh primer"))?;
+                notes_stamp = text_of(&state["notes_stamp"]);
+                unstopped(d.flags)?;
+                resident.restart(Some(fresh)).await?;
+                warming = true;
+            }
+            tokio::select! {
+                frame = resident.next_event() => {
+                    let frame = match frame {
+                        Ok(frame) => frame,
+                        Err(_) if interrupt_at.take().is_some() => {
+                            meter.add(&resident.take_usage().tokens);
+                            active = None;
+                            restart = Some(Duration::ZERO);
+                            continue;
+                        }
+                        Err(error) => {
+                            meter.add(&resident.take_usage().tokens);
+                            return Err(error.into());
+                        }
+                    };
+                    if hosts::claude::ends_turn(&frame) {
+                        let TurnUsage { context_tokens: context, tokens } = resident.take_usage();
+                        meter.add(&tokens);
+                        let canceled = interrupt_at.take().is_some();
+                        if frame["is_error"] == true && !canceled {
+                            return Err(Fail::runtime(text_of(&frame["result"])));
+                        }
+                        // The busy read leaves pending utterances for the first ready read.
+                        if warming || canceled {
+                            inputs.refresh();
+                        }
+                        warming = false;
+                        let Some(turn) = active.take() else { continue };
+                        if !canceled {
+                            clock.text();
+                            let answer = text_of(&frame["result"]);
+                            let answer = voice_answer(&spoken, &answer);
+                            self.voice_event(d, "message", json!({
+                                "voice_turn": turn, "text": answer, "model": model, "final": true,
+                                "timing": clock.json(),
+                            })).await?;
+                        }
+                        if context >= VOICE_CONTEXT_TOKENS {
+                            restart = Some(Duration::from_millis(250));
+                        }
+                    } else if let Some(turn) = active.as_ref().filter(|_| interrupt_at.is_none()) {
+                        clock.frame();
+                        if frame["type"] == "assistant" && frame["parent_tool_use_id"].is_null() {
+                            model = text_of(&frame["message"]["model"]);
+                        }
+                        if let Some(text) = hosts::claude::voice_delta(&frame) {
+                            clock.text();
+                            text_block = true;
+                            spoken.push_str(text);
+                            self.voice_event(d, "delta", json!({"voice_turn": turn, "text": text})).await?;
+                        } else if frame["type"] == "stream_event" && frame["parent_tool_use_id"].is_null()
+                            && frame["event"]["type"] == "content_block_stop" && std::mem::take(&mut text_block)
+                            && voice::needs_sentence_boundary(&spoken)
+                        {
+                            spoken.push(' ');
+                            self.voice_event(d, "delta", json!({"voice_turn": turn, "text": " "})).await?;
+                        }
+                    }
+                }
+                _ = async {
+                    match interrupt_at {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    meter.add(&resident.take_usage().tokens);
+                    interrupt_at = None;
+                    active = None;
+                    restart = Some(Duration::ZERO);
+                }
+                _ = inputs.wait(d.aid, call_id), if input_poll.is_none() && interrupt_at.is_none() => {
+                    if d.flags.lost.load(Ordering::SeqCst) || d.flags.stopped.load(Ordering::SeqCst) {
+                        meter.add(&resident.take_usage().tokens);
+                        return Err(Fail::runtime("Voice session lease ended"));
+                    }
+                    let phase = if warming || active.is_some() { "busy" } else { "ready" };
+                    poll_began = Instant::now();
+                    input_poll = Some(Box::pin(self.voice_inputs(d.aid, phase)));
+                }
+                input = voice::in_flight(&mut input_poll) => {
+                    input_poll = None;
+                    let input = input?;
+                    let poll_ms = u64::try_from(poll_began.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    if input.is_null() || input["closed"] == true {
+                        meter.add(&resident.take_usage().tokens);
+                        return Ok(());
+                    }
+                    let turn = text_of(&input["turn"]["id"]);
+                    if let Some(in_progress) = &active {
+                        if *in_progress != turn && interrupt_at.is_none() {
+                            let at = tokio::time::Instant::now() + VOICE_INTERRUPT_WAIT;
+                            let sent = tokio::time::timeout_at(at, resident.cancel_turn()).await;
+                            interrupt_at = Some(match sent {
+                                Ok(Ok(())) => at,
+                                _ => tokio::time::Instant::now(),
+                            });
+                        }
+                        continue;
+                    }
+                    if warming || turn.is_empty() || turn == last {
+                        continue;
+                    }
+                    let question = voice_question(&input["turn"], &mut notes_stamp);
+                    resident.send_turn(&question).await?;
+                    clock = voice::VoiceClock::sent(Some(poll_ms));
+                    spoken.clear();
+                    model.clear();
+                    text_block = false;
+                    last.clone_from(&turn);
+                    active = Some(turn);
+                }
+            }
+        }
+    }
+
+    async fn voice_event(&self, d: &Drive<'_>, kind: &str, payload: Value) -> Result<(), Fail> {
+        let payload = d
+            .redactor
+            .map_or_else(|| payload.clone(), |r| r.scrub_json(&payload).into_owned());
+        let (aid, kind) = (d.aid.to_owned(), kind.to_owned());
+        self.state
+            .off(move |s| s.append(&aid, &kind, &payload))
+            .await?;
+        d.wake.notify_one();
+        Ok(())
     }
 
     async fn ack_input(&self, aid: &str, mid: &str) -> Result<(), ApiError> {
@@ -1681,19 +2008,26 @@ impl Runner {
         .await;
     }
 
-    /// The bot's own bot.yaml MCP servers this harness can reach (crate::perbot::mcp_for_run); each problem is a
-    /// diagnostic on the turn.
+    /// The bot's own bot.yaml MCP servers and its granted MCP tools' (`vault.mcp`) this harness can reach
+    /// (crate::perbot::mcp_for_run); each problem is a diagnostic on the turn.
     fn mcp_servers(
         &self,
         aid: &str,
         path: &Path,
         env: &Env,
-        granted: &std::collections::BTreeSet<String>,
+        vault: &crate::env::Vault,
         runtime: &str,
         config: &Value,
     ) -> Vec<Value> {
-        let (servers, problems) =
-            crate::perbot::mcp_for_run(path, env, granted, runtime, &text_of(&config["harness"]));
+        let (servers, problems) = crate::perbot::mcp_for_run(
+            path,
+            env,
+            &vault.names,
+            runtime,
+            &text_of(&config["harness"]),
+            &vault.tools,
+            &vault.mcp,
+        );
         for line in problems {
             self.diagnose(aid, &line);
         }
@@ -1736,6 +2070,13 @@ impl Runner {
         if repository.is_empty() {
             return Ok(("skipped", String::new()));
         }
+        // Most turns: the history is on GitHub already, and nothing waits for the computer's push lock to say so.
+        if published_already(path, env).await {
+            return Ok(self.published(bot, &repository, ("current", String::new())));
+        }
+        // A push cannot be taken back: the hub is asked first, never a place kept since the claim (keep_start_place).
+        // Boxed: keeps the turn's future no larger for a rare ask.
+        Box::pin(self.wait_start_place(attempt, flags)).await?;
         let result = self
             .pre_start_lock(attempt, flags, async {
                 let _one = self
@@ -1777,12 +2118,11 @@ impl Runner {
     }
 
     /// The host for `runtime` on this turn: Claude Code runs the installed (or tools-dir) `claude`, Codex its app
-    /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
+    /// server on the profile's CODEX_HOME.
     fn make_host(
         &self,
         bot: &str,
         runtime: &str,
-        config: &Value,
         env: &Env,
         profile: Option<&Profile>,
         tx: hosts::Events,
@@ -1805,27 +2145,6 @@ impl Runner {
         #[cfg(test)]
         if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
             return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
-        }
-        if let Some(delivery) = crate::appdriver::delivery(config) {
-            let app = crate::appdriver::label(&delivery.app);
-            if !cfg!(target_os = "macos") {
-                return Err(Fail::runtime(format!(
-                    "{app} app delivery runs only on a Mac, and this computer is not one"
-                )));
-            }
-            let driver = crate::appdriver::driver().ok_or_else(|| {
-                Fail::runtime(format!(
-                    "{app} can't be reached on this Mac: {} is not installed beside tico-runner",
-                    crate::appdriver::EXECUTABLE
-                ))
-            })?;
-            return Ok(Host::AppDriver(
-                crate::hosts::appdriver::AppDriverHost::new(
-                    bot,
-                    crate::hosts::appdriver::command(&driver, &delivery),
-                    tx,
-                ),
-            ));
         }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(
@@ -1937,123 +2256,6 @@ impl Runner {
         .map_err(Fail::unavailable)
     }
 
-    /// The login a turn of `runtime` (`harness`) on `profile` holds while its host runs, when that CLI serves one turn
-    /// per login (`one_turn_per_login`) and the login is a subscription: the profile's
-    /// own login or the computer's (crate::fallback::login). None for a key login or a CLI that opts out (including Codex).
-    pub(crate) fn serial_login(
-        &self,
-        runtime: &str,
-        harness: &str,
-        profile: Option<&Profile>,
-    ) -> Option<crate::login_turns::Login> {
-        if !crate::harness_tools::caps(runtime, harness).one_turn_per_login
-            || self.billing(runtime, profile) != "subscription"
-        {
-            return None;
-        }
-        crate::fallback::login(runtime, harness, profile)
-            .map(|login| crate::login_turns::Login::new(runtime, &login))
-    }
-
-    /// Whether a turn whose login another turn holds can run on the bot's own fallback now instead of waiting: one is
-    /// set, it is signed in and ready here, and its own login is not busy too.
-    fn busy_fallback(&self, attempt: &Value, config: &Value) -> bool {
-        let Some(hop) = crate::fallback::configured(config) else {
-            return false;
-        };
-        let mut hop_attempt = attempt.clone();
-        hop_attempt["config"] = hop.config(config);
-        hop_attempt["fallback"] = json!(hop.harness);
-        let Ok(profile) = self.turn_profile(&hop_attempt) else {
-            return false;
-        };
-        self.fallback_ready(&hop.runtime, profile.as_ref(), &text_of(&attempt["bot"]))
-            && self
-                .serial_login(&hop.runtime, &hop.harness, profile.as_ref())
-                .is_none_or(|l| crate::login_turns::holder(&l.key).is_none())
-    }
-
-    /// Why a turn that wants `login` must not run any more: its lease is lost or past its deadline (a renewal that
-    /// keeps failing never sets `lost`), a person stopped it, or this computer is stopping at once. A graceful stop or
-    /// an update drain is not one: the turns already taken still run, in their turn.
-    fn login_wait_over(&self, flags: &Flags, login: &crate::login_turns::Login) -> Option<String> {
-        if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
-            Some(format!(
-                "Lease expired while waiting for {} to be free",
-                login.label
-            ))
-        } else if flags.stopped.load(Ordering::SeqCst) {
-            Some(format!(
-                "Execution interrupted after stop while waiting for {} to be free",
-                login.label
-            ))
-        } else if self.stopping() {
-            Some(format!("Execution interrupted after stop: this computer stopped while waiting for {} to be free", login.label))
-        } else {
-            None
-        }
-    }
-
-    /// Whether a turn whose login another turn holds runs on the bot's own fallback instead of waiting. Never for a
-    /// command, nor for a turn under an active native goal: those belong to this harness, so they wait their turn.
-    fn moves_off_busy_login(
-        &self,
-        attempt: &Value,
-        config: &Value,
-        chat_goal: Option<&Value>,
-    ) -> bool {
-        let control = truthy(attempt["message"]["refs"].get("command"))
-            || chat_goal.is_some_and(|g| g["status"] == "active");
-        !control && self.busy_fallback(attempt, config)
-    }
-
-    /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
-    /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
-    /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
-    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn canceled just as the
-    /// login came free never starts on it (crate::login_turns::wait_for).
-    async fn take_login(
-        &self,
-        aid: &str,
-        turn: &crate::login_turns::Turn,
-        login: &crate::login_turns::Login,
-        flags: &Flags,
-        wake: &Notify,
-    ) -> Result<crate::login_turns::Held, Fail> {
-        let mut waited = false;
-        let bot = &turn.bot;
-        let say = |w: &crate::login_turns::Waiting| {
-            waited = true;
-            let line = login.waiting(w, bot);
-            log(&format!("Tico runner: {bot}: {line}"));
-            // The server words it for each reader (backend/login_waits.py): the event goes out raw to whoever reads
-            // this run, so it names the holder's run, never its task, and the line here names neither.
-            let _ = self.state.append(aid, "status", &json!({
-                "waiting": format!("Waiting for {} to be free", login.label), "login": login.label, "holder": w.holder,
-                "holder_attempt": w.attempt, "since": w.since, "position": w.position,
-            }));
-            wake.notify_one();
-        };
-        self.drain.register(aid);
-        let got = tokio::select! {
-            biased;
-            line = self.drain.wait(aid) => {
-                let _ = self.state.append(aid, "status", &json!({"yielded": line}));
-                Err(line.to_string())
-            }
-            result = crate::login_turns::wait_for(&login.key, turn, || self.login_wait_over(flags, login), say, Duration::from_secs(1)) => result,
-        };
-        if got.is_err() && flags.stopped.load(Ordering::SeqCst) {
-            // Stopped, or its task was done or closed meanwhile (the server's `stop`): the work keeps no place.
-            crate::login_turns::forget(&login.key, turn);
-        }
-        if waited {
-            let _ = self.state.append(aid, "status", &json!({"waiting": ""}));
-            wake.notify_one();
-        }
-        got.map_err(Fail::runtime)
-    }
-
     /// The pushes this turn made from its task's worktrees on this computer: those the claim named, and any the
     /// turn added (`tico task worktree add`), which this computer's worktree list names by now.
     async fn task_pushes(&self, attempt: &Value, bot: &str, since: i64) -> Vec<Value> {
@@ -2115,6 +2317,7 @@ impl Runner {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
         });
@@ -2135,10 +2338,16 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
+        // The key a thread of this turn's subscription was saved under before every Claude plan shared one
+        // (model_subscriptions::Delivered::legacy_binding).
+        let mut legacy_conv: Option<String> = None;
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
-        let fresh_chat = stateless_chat(&attempt);
+        let voice_call = attempt["message"]["sender_id"] == "keeper"
+            && attempt["message"]["refs"]["live_meeting"]["voice_call"].is_string();
+        let voice_reply = voice_call || config["voice_requires_subscription"] == true;
+        let fresh_chat = voice_call || stateless_chat(&attempt);
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
@@ -2158,6 +2367,7 @@ impl Runner {
         let mut drove = Drove::interrupted();
         let mut fresh: Option<Fresh> = None;
         let mut redactor: Option<Arc<Redactor>> = None;
+        let mut voice_scope = None;
         let mut capture: Option<Arc<crate::capture::Capture>> = None;
         let mut started_at = String::new();
         let mut memory_before = String::new();
@@ -2173,10 +2383,6 @@ impl Runner {
         // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own:
         // it keeps its own, per model, under `side_conv` (crate::continuity::side_session).
         let mut side_run = false;
-        // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
-        // went to its fallback instead when another bot's turn had it.
-        let mut login_held: Option<crate::login_turns::Held> = None;
-        let mut busy: Option<(crate::login_turns::Login, String)> = None;
         // The server holds the bot's own login after a usage limit and let this turn through for its fallback
         // (backend/execution.py login_refusal): when the hold ends. The held login is never tried.
         let held = Some(text_of(&config["primary_held"])).filter(|u| !u.is_empty());
@@ -2204,8 +2410,17 @@ impl Runner {
         }
         crate::harness_tools::turn_runtimes(&aid, &uses);
 
+        // A hub that granted the turn its place at the claim says so (`start_reserved`, backend start_places.admit):
+        // the place is kept, not asked for again a moment later. An older hub omits it and is asked, as before.
+        if attempt.get("start_reservation_seconds").is_some()
+            && truthy(attempt.get("start_reserved"))
+        {
+            *flags.granted.lock().unwrap() = Some(Instant::now());
+        }
+        // Where no harness is allocated before `started` (Claude), an ask before it is kept too.
+        let late_allocation = allocates_at_spawn(&runtime, &session_runtime);
         let mut ran: Result<(), Fail> = async {
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
             selected = self.turn_profile(&attempt)?;
             // A lane runs one turn at a time. A main-lane turn holds the bot's checkout for the whole turn; a task
@@ -2215,23 +2430,12 @@ impl Runner {
             })).await?;
             let p = place.insert(lanes);
             execution_path = p.main_path.clone();
-            if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent && held.is_none()) {
-                // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
-                // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
-                // for a command or a native goal, which belong to this harness), else the turn waits its turn.
-                if let Some(why) = self.login_wait_over(&flags, &login) {
-                    return Err(Fail::runtime(why));
-                }
-                match crate::login_turns::try_take(&login.key, &login_turn(&attempt)) {
-                    Ok(held) => login_held = Some(held),
-                    Err(holder) if self.moves_off_busy_login(&attempt, &config, goal.chat_goal.as_ref()) => busy = Some((login, holder)),
-                    Err(_) => {
-                        self.during_drain(&aid, self.wait_before_start(&attempt, "shared login")).await?;
-                        login_held = Some(self.take_login(&aid, &login_turn(&attempt), &login, &flags, &wake).await?);
-                    },
-                }
-            }
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // Lanes taken within PRE_START_GRACE kept the place; a longer wait gave it back and asks again.
+            self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
+            // A turn that will run Claude or Codex reads its company skills while it is placed (company_skills::early);
+            // dropped unused if it runs on anything else.
+            let mut early_skills = (held.is_none() && session_runtime == runtime && matches!(runtime.as_str(), "claude" | "codex"))
+                .then(|| crate::company_skills::early(&self.client, &self.state.directory, &aid, &bot));
             segments.push(Segment {
                 meter: Meter::default(),
                 config: config.clone(),
@@ -2260,7 +2464,19 @@ impl Runner {
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
             }
-            env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
+            // A hub that sends the retired meeting lane still scopes GitHub tokens to that turn.
+            let own = if p.disposable { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
+            let own_tokens = crate::gitcred::TokenCache::new();
+            let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
+            let separation = crate::gateway_relay::separation();
+            // Three independent asks at once: the turn's credentials (over connections the runner keeps for them), its
+            // GitHub token and its Gateway key. Each is applied below in the order it always was.
+            let (built, granted, pinned) = tokio::join!(
+                crate::env::turn_environment(&ctx, &attempt, &mut vault, &self.credentials),
+                tokens.get(client, json!({"bot": bot})),
+                crate::gateway_relay::prefetch(&self.client, &attempt, separation),
+            );
+            env = built.map_err(Fail::runtime)?;
             if attempt["make_page"]["task"].is_object() {
                 // Captured in base_env too, so every fallback keeps the same disposable workspace.
                 for key in ["HUB_WORKSPACE", "TICO_PROJECTS_DIR"] {
@@ -2272,35 +2488,36 @@ impl Runner {
             if let Some(p) = &selected {
                 env = p.environment(&runtime, &env);
             }
-            // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
-            let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
             // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
-            // when it will run: a busy or held login's turn goes to its fallback, which is signed in when it starts.
-            if busy.is_none() && held.is_none() {
+            // when it will run: a held login's turn goes to its fallback, which is signed in when it starts.
+            if held.is_none() {
                 let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
                 vault.values.extend(placed);
             }
             if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
                 s.billing = d.billing;
-                // The turn signs in with it only when it was started with it (above): a busy or held login's turn does not.
-                if busy.is_none() && held.is_none() {
+                // The turn signs in with it only when it was started with it (above): a held login's turn does not.
+                if held.is_none() {
                     s.subscription = Some(d.id.clone());
                 }
+            }
+            if voice_reply && (held.is_some()
+                || voice_call && !crate::harness_tools::caps_of(&config).voice_session
+                || !crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
+                    .is_some_and(|plan| plan.billing == "subscription")) {
+                return Err(Fail::runtime("Voice requires a company subscription for its model"));
             }
             let socket_path = self.socket.as_ref().map(|s| {
                 match &own {
                     Some(client) => s.register_as(&token, &bot, client.clone()),
                     None => s.register(&token, &bot),
                 }
-                s.set_mailboxes(&token, crate::mail_key::mailboxes(&attempt));
                 s.path.clone()
             });
             if let Some(p) = &socket_path {
                 env.insert(crate::gitcred::SOCKET_ENV.into(), p.display().to_string());
             }
-            let own_tokens = crate::gitcred::TokenCache::new();
-            let (client, tokens) = own.as_ref().map_or((&self.client, &*self.tokens), |c| (c, &own_tokens));
-            crate::gitcred::apply(&mut env, client, tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
+            crate::gitcred::apply_granted(&mut env, granted, &bot, socket_path.as_deref(), &self.state.directory);
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
                 if crate::model_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
@@ -2313,8 +2530,7 @@ impl Runner {
                 }
             }
             // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
-            let separation = crate::gateway_relay::separation();
-            if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, separation).await {
+            if let Err(why) = crate::gateway_relay::hand_to_turn_with(&self.client, &attempt, &mut env, &mut vault, separation, pinned).await {
                 // A failed turn whose error carries its code: the server settles it unstarted (`not_isolated`), so it
                 // is said once and not retried.
                 let _ = self.state.append(&aid, "error", &json!({"error": why}));
@@ -2345,38 +2561,62 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
-            if let Some(b) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
-                conv.push_str(&b);      // nor across the computer's login and its subscriptions
+            if let Some(d) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime) {
+                // nor across the computer's login and its subscriptions; one Claude plan's thread resumes on another
+                legacy_conv = d.legacy_binding().map(|old| format!("{conv}{old}"));
+                if let Some(b) = d.binding() {
+                    conv.push_str(&b);
+                }
             }
             let start_attempt = attempt.clone();
-            if p.has_checkout() {
-                // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
-                crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
-                // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
-                // run no turn on a copy that shares no history with GitHub's.
-                let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
-                if published == "failed" && detail.contains("unrelated history") {
-                    return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
+            mark("prepared", &aid);
+            // The turn's refreshes share their fetches (crate::fetch_fresh): a repository fetched a moment ago by this
+            // turn is not fetched again for its worktree, and a chat turn starts on the runner's fetch from moments ago.
+            let chat = crate::sessions::chat_refresh(p, &attempt);
+            let placed = crate::fetch_fresh::in_turn(&aid, chat, async {
+                if p.has_checkout() {
+                    // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
+                    crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
+                    // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
+                    // run no turn on a copy that shares no history with GitHub's.
+                    let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
+                    if published == "failed" && detail.contains("unrelated history") {
+                        return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
+                    }
+                    // A task refresh that may push product files asks the hub first: a push cannot be taken back.
+                    if !p.task.is_empty()
+                        && !p.disposable
+                        && (crate::product_files::unpushed(&bot)
+                            || crate::product_files::refresh_due(&bot, &attempt["config"]))
+                    {
+                        Box::pin(self.during_drain(&aid, self.wait_start_place(&start_attempt, &flags))).await?;
+                    }
+                    let refresh = async {
+                        self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
+                        Ok(())
+                    };
+                    if p.task.is_empty() {
+                        refresh.await?;
+                    } else {
+                        // A task refresh can wait on the shared git lock before pushing product files.
+                        self.pre_start_lock(&start_attempt, &flags, refresh).await?;
+                    }
                 }
-                let refresh = async {
-                    self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
-                    Ok(())
-                };
-                if p.task.is_empty() {
-                    refresh.await?;
-                } else {
-                    // A task refresh can wait on the shared git lock before pushing product files.
-                    self.pre_start_lock(&start_attempt, &flags, refresh).await?;
-                }
+                mark("refreshed", &aid);
+                // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
+                // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
+                self.pre_start_lock(&start_attempt, &flags, async {
+                    self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
+                }).await
+            }).await?;
+            conv.push_str(placed);
+            if let Some(old) = legacy_conv.as_mut() {
+                old.push_str(placed);
             }
-            // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
-            // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
-            conv.push_str(self.pre_start_lock(&start_attempt, &flags, async {
-                self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
-            }).await?);
             if source_resume.is_some() {
                 // Save and lookup share the actual login binding and confirmed checkout placement.
                 conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
+                legacy_conv = None;
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
@@ -2388,23 +2628,11 @@ impl Runner {
                 Ok(false) => {}
                 Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
             }
-            memory_before = redact::head(&execution_path);
-            // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
-            // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.
-            if crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
-                // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
-                let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
-                let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                let day: String = text_of(&crate::util::iso(&json!(secs))).chars().take(10).collect();
-                let moved = crate::harness_memory::move_for_turn(Path::new(&home), &p.main_path, &execution_path,
-                    &self.state.directory.join("gemini").join(&bot), &self.state.directory.join("harness-memory").join(&bot), &day);
-                match moved {
-                    Ok(crate::harness_memory::Moved::Copied(n)) if n > 0 => log(&format!("Tico runner: {bot}: copied {n} memories from its AI tool's own memory on this computer into memory/learnings.md")),
-                    Ok(_) => {}
-                    Err(e) => log(&format!("Tico runner: {bot}: could not copy its AI tool's own memory into memory/learnings.md: {e}")),
-                }
-            }
+            // git off the async threads: it can take a moment on a large checkout.
+            memory_before = {
+                let path = execution_path.clone();
+                tokio::task::spawn_blocking(move || redact::head(&path)).await.unwrap_or_default()
+            };
             if redactor.is_some() {
                 started_at = memory_before.clone();
             }
@@ -2428,7 +2656,7 @@ impl Runner {
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
             release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
             if release_run {
-                let adopted = if conv == key { adopted_key(&key) } else { None };
+                let adopted = if conv == key { adopted_key(&key) } else { legacy_conv.clone() };
                 one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
                     || match adopted {
                         Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
@@ -2449,9 +2677,25 @@ impl Runner {
                     }
                 }
             }
+            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) {
+                // A Claude plan's thread an older runner saved under the plan's own key is taken over once, unless a
+                // Clear (or a person's change of sign-in) moved its epoch since.
+                if let Some(old) = legacy_conv.as_deref() {
+                    let moved = match clear_epoch(&attempt, &key) {
+                        Some((conversation_id, epoch)) => self.state.epoch_moved(&bot, &conversation_id, old, epoch)?,
+                        None => false,
+                    };
+                    if !moved {
+                        previous = self.state.session(&bot, old, &session_runtime)?;
+                        if let Some(thread) = previous.as_ref() {
+                            self.state.save_session(&bot, &conv, &session_runtime, thread)?;
+                        }
+                    }
+                }
+            }
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
-            if busy.is_some() || held.is_some() {
+            if held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
             }
             // A saved thread that cannot be resumed or compacted is left for a new one, told only what the room said
@@ -2473,7 +2717,12 @@ impl Runner {
                 self.turn_git(&mut vault, &mut env, &paths)?;
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
-            self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            // The ask before a harness is allocated. Claude allocates at its spawn, after `started`.
+            if late_allocation {
+                self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
+            } else {
+                self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            }
             if crate::turn_limits::active() {
                 // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
                 env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
@@ -2489,13 +2738,18 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
+                self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
             let h = host.insert(made);
-            h.track_allocation(flags.harness_allocated.clone());
-            if let Some(held) = login_held.as_mut() {
-                held.bind(h.clone()); // kept until this host stops, however the turn ends
+            if voice_call && matches!(h, Host::Codex(_)) {
+                let call_id = text_of(&refs["live_meeting"]["voice_call"]);
+                let job = text_of(&attempt["job_id"]);
+                let scope = format!("call-voice:{call_id}:{job}:{conv}");
+                previous = self.state.session(&bot, &scope, &session_runtime)?;
+                voice_scope = Some(scope);
             }
+            h.track_allocation(flags.harness_allocated.clone());
+            h.set_attempt(&aid);
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
@@ -2504,10 +2758,12 @@ impl Runner {
             // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir and Codex as
             // its extra skill root. A failure runs the turn without them.
             let company_skills = if matches!(h, Host::Claude(_) | Host::Codex(_)) {
-                crate::company_skills::prepare(&self.client, &self.state.directory, &aid, &bot).await
+                crate::company_skills::prepare_with(&self.client, &self.state.directory, &aid, &bot, early_skills.take()).await
             } else {
                 None
             };
+            drop(early_skills.take());
+            mark("skills_ready", &aid);
             let settings = Settings {
                 identity: turn_identity,
                 cwd: execution_path.display().to_string(),
@@ -2519,18 +2775,27 @@ impl Runner {
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                 add_dirs: crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()),
                 company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
-                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
+                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
+                output_style: hosts::output_style(&config),
+                verbosity: hosts::verbosity(&config),
             };
             let mut resumed = false;
             if side_run && previous.is_none() {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
-                // computer does not have, or a second refusal, gives it up.
-                match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                // computer does not have, or a second refusal, gives it up. One whose transcript the provider refused
+                // (continuity::transcript_refused, after a move to another plan) is not tried again.
+                let refused = self.state.repo_rules(&crate::continuity::refused_key(prev), None)?.as_deref() == Some("1");
+                let tried = if refused {
+                    Err((false, crate::continuity::TRANSCRIPT_REFUSED.to_string()))
+                } else {
+                    self.resume_saved(h, prev, &settings, &attempt, &flags, late_allocation).await
+                };
+                match tried {
                     Ok(t) => {
                         thread = Some(t);
                         resumed = true;
@@ -2549,7 +2814,7 @@ impl Runner {
                 // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
                 // continuation compacts only the thread it continues; another one is left as it is for CONTINUE_LOST.
                 let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
-                if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                if resumed && !voice_call && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
@@ -2571,25 +2836,12 @@ impl Runner {
                 let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
                 session = Some(crate::continuity::Session::new(why, None));
             }
-            // A keep-warm turn (crate::prompt::keep_warm) only reads a session's cache. With no saved session here to
-            // read, or one cached for another model, effort or plan, there is nothing warm to keep: it ends done, with
-            // no model started, no session made or saved, and the thread's records as they were.
-            let warm = crate::prompt::keep_warm(&attempt);
-            let identity = warm_identity(&session_runtime, &config, selected.as_ref());
-            let skip_warm = warm
-                && (!resumed
-                    || !thread.as_deref().is_some_and(|t| h.session_saved(t))
-                    || self.state.repo_rules(&warm_key(thread.as_deref().unwrap_or_default()), None)?.as_deref() != Some(identity.as_str()));
-            if skip_warm {
-                log(&format!("Tico runner: {bot}: keep-warm turn {aid} ends with nothing to do: no warm session here"));
-                one_off = true;
-                session = None;
-                if thread.is_none() {
-                    thread = Some(previous.clone().unwrap_or_else(|| format!("keep-warm-{aid}")));
-                }
-            }
             if thread.is_none() {
-                self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                if late_allocation {
+                    self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
+                } else {
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+                }
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
                 // A one-off thread the server named a session for starts on a fork of it.
@@ -2627,13 +2879,18 @@ impl Runner {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
                 }
             }
-            let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
+            // A turn a company plan signs in (placed above, not held) never reads the computer's own login, so that
+            // login's age is no reason to wait for the cold sign-in path.
+            let plan_signs_in = held.is_none() && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_some();
+            let cold = cold_sign_in(&runtime, selected.as_ref(), plan_signs_in);
             let mut cold_guard = if cold { Some(self.during_drain(&aid, self.wait_cold_start(&attempt, &flags)).await?) } else { None };
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
             }
             unstopped(&flags)?;
-            if !cold { self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?; }
+            // `started` asks the hub's same admission (start_places.reserve): a place kept from moments ago is not asked
+            // for again just before it.
+            if !cold { self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?; }
             // Acknowledge before execution. Any later crash is explicitly uncertain.
             let active = self.active.lock().unwrap().len();
             // The thread the task has until the new one is confirmed (Fresh::told).
@@ -2651,6 +2908,7 @@ impl Runner {
                         },
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
+                            grant_gone(&flags);
                             self.places.lock().unwrap().remove(&aid);
                             self.after_start_wait(start_try + 1).await?;
                             if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
@@ -2662,6 +2920,9 @@ impl Runner {
                 }
                 Ok(())
             }).await?;
+            mark("acknowledged", &aid);
+            // The skills receipt went out beside `started`; it lands before the harness can use a skill.
+            crate::company_skills::receipt_landed(&aid).await;
             // A rejected start can wait for another grant; it is still unstarted during that wait.
             if !self.drain.start(&aid) {
                 return Err(Fail::runtime(crate::drain::WAITING));
@@ -2670,6 +2931,41 @@ impl Runner {
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
                 return Err(Fail::runtime(CONTINUE_LOST));
+            }
+            if voice_call {
+                self.unpaced.lock().unwrap().insert(aid.clone());
+                let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: None };
+                let primer = text_of(&attempt["message"]["body"]);
+                let meeting = &attempt["message"]["refs"]["live_meeting"];
+                let call_id = meeting["voice_call"].as_str().unwrap_or_default();
+                let stamp = text_of(&meeting["notes_stamp"]);
+                let segment = segments.last_mut().expect("the primary segment was added");
+                self.during_drain(&aid, async {
+                    tokio::time::timeout_at(d.limit.into(), async {
+                        match (&*h, voice_scope.as_deref()) {
+                            (Host::Claude(claude), _) => {
+                                self.claude_voice_session(&d, claude, call_id, &primer, stamp, &mut segment.meter).await?;
+                                drove.outcome = "completed".into();
+                            }
+                            (Host::Codex(codex), Some(scope)) => {
+                                let start = voice::Start { primer: &primer, call: call_id, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
+                                match self.codex_voice_session(&d, codex, rx, start, segment).await? {
+                                    voice::End::Closed => {
+                                        drop_session(&self.state, &bot, scope, &session_runtime, &th).await?;
+                                        if let Some(old) = previous.as_deref().filter(|old| *old != th) {
+                                            drop_session(&self.state, &bot, scope, &session_runtime, old).await?;
+                                        }
+                                        drove.outcome = "completed".into();
+                                    }
+                                    voice::End::Restart => drove.yielded = true,
+                                }
+                            }
+                            _ => return Err(Fail::runtime("The voice session host is unavailable")),
+                        }
+                        Ok(())
+                    }).await.map_err(|_| Fail::runtime(format!("Timeout: {}", d.limit_name)))?
+                }).await?;
+                return Ok(());
             }
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
             // compaction first may have taken them out.
@@ -2694,9 +2990,7 @@ impl Runner {
             // It must also have clear room before the harness compacts it, so this turn is unlikely to compact the
             // short form's standing lines away before it acts on them: its last turn's context and the whole prompt
             // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
-            // A keep-warm turn is its one line and leaves the thread's records as they were: what it was given, the room
-            // cursor, what the next turn is sent.
-            let prompt_turn = !warm && !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
+            let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
             let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
@@ -2708,11 +3002,8 @@ impl Runner {
                 crate::prompt::Seen::default()
             };
             // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
-            // A keep-warm turn gives it nothing new: the records stay unless it compacts (below).
             for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
-                if !warm {
-                    self.state.repo_rules(&key, Some(""))?;
-                }
+                self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
             let agent = match crate::regular_file::read(crate::instructions::path(&execution_path).unwrap_or_else(|| execution_path.join(crate::instructions::FILE)), crate::regular_file::CONTENT) {
@@ -2735,21 +3026,18 @@ impl Runner {
                 built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
-            if let Some(note) = session.as_ref().filter(|_| !warm).and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
+            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
                 tail = format!("{tail}\n\n{note}");
             }
-            if side_ran && !warm {
+            if side_ran {
                 let after = if side_run { crate::continuity::SIDE_RESUMED } else { crate::continuity::AFTER_SIDE };
                 tail = format!("{tail}\n\n{after}");
             }
-            if after_interrupt && !warm {
+            if after_interrupt {
                 tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
-            if let Some(line) = crate::afterwatch::still_running(&bot, &key).filter(|_| !warm) {
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 tail = format!("{tail}\n\n{line}");
-            }
-            if warm && !skip_warm {
-                h.one_turn(&th);
             }
             let prompt = format!("{}{tail}", built.text);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
@@ -2764,12 +3052,7 @@ impl Runner {
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
-            let t = if skip_warm {
-                // Nothing to run: the turn ends at once, done, as a superseded goal control does.
-                let id = format!("keep-warm-{aid}");
-                let _ = own.send(hosts::event("turn_completed", Some(&th), Some(&id), json!({"status": "completed"})));
-                id
-            } else if let Some(_one) = cold_guard {
+            let t = if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
                 let t = self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?;
@@ -2785,30 +3068,32 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
-            if (side_ran || after_interrupt) && !warm {
+            if side_ran || after_interrupt {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
                     let _ = self.state.repo_rules(&key, Some("0"));
                 }
             }
             turn = Some(t.clone());
-            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
+            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
             h.compaction_refresh(&th, None);
+            if resumed && drove.outcome == "failed" && !drove.acted
+                && [goal.failure.as_deref().unwrap_or_default(), drove.reply.as_str()].iter().any(|e| crate::continuity::transcript_refused(e))
+            {
+                // The provider will not take this session's transcript (a plan moved to another account it does not
+                // accept it from): never silently, the next turn starts a new session told what the room said since.
+                for thread in [th.clone(), h.session_id(&th)] {
+                    self.state.repo_rules(&crate::continuity::refused_key(&thread), Some("1"))?;
+                }
+                let line = "The provider refused this session's transcript; the next turn starts a new session, told what was said since.";
+                log(&format!("Tico runner: {bot}: {line}"));
+                self.diagnose(&aid, line);
+            }
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
-            if drove.outcome == "completed" && !warm {
-                // What this session's cache is for: a keep-warm turn reads it only on the same model, effort and plan.
-                self.state.repo_rules(&warm_key(&th), Some(&identity))?;
-            }
-            if warm && !kept && !skip_warm {
-                // The keep-warm turn compacted it or began it anew: the next turn is given everything again.
-                for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
-                    self.state.repo_rules(&key, Some(""))?;
-                }
-            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
@@ -2849,6 +3134,10 @@ impl Runner {
                 self.note_session(&aid, &bot, session.as_ref());
             }
             let persisted = async {
+                // Resident calls keep their provider state under the call's own job, outside ordinary conversation history.
+                if voice_call {
+                    return Ok(());
+                }
                 if let Some(f) = fresh
                     .as_ref()
                     .filter(|f| f.confirmed.lock().unwrap().is_none())
@@ -2887,7 +3176,7 @@ impl Runner {
                 }
             }
         }
-        if (busy.is_some() || held.is_some()) && ran.is_ok() {
+        if held.is_some() && ran.is_ok() {
             unavailable = true;
         }
 
@@ -2913,7 +3202,7 @@ impl Runner {
                     &token,
                     "execution interrupted",
                 );
-                // No fallback for a private meeting with no copy of its own: it would have none either.
+                // On an older hub, a fallback cannot run without the same isolated checkout.
                 unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p))
                     && !e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED);
             }
@@ -2940,11 +3229,8 @@ impl Runner {
         } else {
             config.clone()
         };
-        let mut pending = if unavailable
-            && drove.outcome != "completed"
-            && !native_control
-            && continuing.is_empty()
-        {
+        let fallback_allowed = !voice_reply && !native_control && continuing.is_empty();
+        let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
                 &self.sign_in,
@@ -2956,12 +3242,7 @@ impl Runner {
             None
         };
         let turn_env = base_env.clone().unwrap_or_default();
-        if pending.is_none()
-            && (hit_limit || held.is_some())
-            && !native_control
-            && prepared
-            && continuing.is_empty()
-        {
+        if pending.is_none() && (hit_limit || held.is_some()) && fallback_allowed && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
@@ -3007,7 +3288,6 @@ impl Runner {
             if let Some(h) = &host {
                 h.stop().await;
             }
-            login_held = None; // the primary's host is stopped: its login is free for the next turn
             fallback = Some(hop.harness.clone());
             drove = Drove::interrupted();
             let primary = Some(text_of(&config["harness"]))
@@ -3066,10 +3346,8 @@ impl Runner {
                 let turn_identity = vault.for_model(&mut hop_env, Some(&hop.model), own).map_err(Fail::runtime)?;
                 env = hop_env.clone();
                 // Named with the harness it moved to, so the task's Runs say where the turn went and why.
-                let note = match (&left, &busy) {
-                    (None, Some((login, holder))) => json!({"text": crate::fallback::busy_diagnostic(&login.busy(holder, &bot), &hop),
-                                                             "fallback": hop.harness, "busy": {"login": login.label, "holder": holder}}),
-                    (None, None) if held.is_some() => {
+                let note = match &left {
+                    None if held.is_some() => {
                         json!({"text": crate::fallback::held_note(&primary, held.as_deref().unwrap_or_default(), Some(&hop)), "fallback": hop.harness})
                     }
                     _ => {
@@ -3078,9 +3356,6 @@ impl Runner {
                     }
                 };
                 let _ = self.state.append(&aid, "diagnostic", &note);
-                if let Some(login) = self.serial_login(&hop.runtime, &hop.harness, selected.as_ref()) {
-                    login_held = Some(self.take_login(&aid, &login_turn(&attempt), &login, &flags, &wake).await?);
-                }
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
                 let (tx, rx) = self.attempt_events(&aid, redactor.clone());
@@ -3096,11 +3371,9 @@ impl Runner {
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_env, selected.as_ref(), tx)?);
                 h.track_allocation(flags.harness_allocated.clone());
-                if let Some(held) = login_held.as_mut() {
-                    held.bind(h.clone());
-                }
+                h.set_attempt(&aid);
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
@@ -3122,10 +3395,12 @@ impl Runner {
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
+                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
-                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
+                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
+                    output_style: hosts::output_style(&config),
+                    verbosity: hosts::verbosity(&config),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -3152,7 +3427,7 @@ impl Runner {
                 };
                 // One that cannot be resumed (gone, or refused twice) is begun again, from the checkpoint and the replay.
                 let resumed_side = match &saved_side {
-                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags, false).await {
                         Ok(t) => Some(t),
                         Err((missing, error)) => {
                             let why = if missing { "is not on this computer" } else { "was refused" };
@@ -3176,8 +3451,8 @@ impl Runner {
                     crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None)
                 });
                 self.note_session(&aid, &bot, session.as_ref());
-                if busy.is_some() || held.is_some() {
-                    // The primary never started (its login was busy, or held by the server), so this host
+                if held.is_some() {
+                    // The primary never started (its login was held by the server), so this host
                     // acknowledges the turn instead, before it acts.
                     unstopped(&flags)?;
                     self.during_drain(&aid, self.start_fallback(&attempt, &flags, &th)).await?;
@@ -3187,10 +3462,10 @@ impl Runner {
                 }
                 let names = self.names().await;
                 let replay = crate::fallback::replay(&attempt, crate::fallback::REPLAY_TOKENS);
-                let because = match &busy {
-                    Some(_) => format!("{primary}'s ChatGPT login was busy with another turn"),
-                    None if hit_limit || held.is_some() => format!("{primary} hit its usage limit"),
-                    None => format!("{primary} was unavailable"),
+                let because = if hit_limit || held.is_some() {
+                    format!("{primary} hit its usage limit")
+                } else {
+                    format!("{primary} was unavailable")
                 };
                 let note = crate::fallback::prompt_note(&because, &primary, &hop);
                 let fresh_text = format!("{}\n\n{note}", crate::prompt::replayed(&attempt, &names, None, false, &replay));
@@ -3249,7 +3524,6 @@ impl Runner {
                     runtime: &hop.runtime,
                     bot: &bot,
                     session: &key,
-                    login: yields(&attempt, &login_held),
                     // Its confirmed thread belongs to the job, never to the primary conversation.
                     fresh: fallback_fresh.as_ref(),
                 };
@@ -3296,10 +3570,7 @@ impl Runner {
                 }
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
-                let why = match &busy {
-                    Some((login, holder)) => login.busy(holder, &bot),
-                    None => format!("{primary} {}", if hit_limit { "hit its usage limit" } else { "unavailable" }),
-                };
+                let why = format!("{primary} {}", if hit_limit { "hit its usage limit" } else { "unavailable" });
                 log(&format!("Tico runner: {bot}: {why}; ran the turn on {}{how}", hop.harness));
                 Ok(())
             }.await;
@@ -3378,15 +3649,13 @@ impl Runner {
         let continues = drove.continues
             && (fallback.is_none() && !side_run || source_saved.is_some())
             && capacity_continue();
-        // Generic drain/login interruptions resume the primary. Other fallback interruptions need the explicit
+        // Generic drain interruptions resume the primary. Other fallback interruptions need the explicit
         // saved-source contract; the primary session does not contain their work.
         let resumable = fallback.is_none() && !side_run;
-        // An interrupted turn queued to continue (an update drain's cap, or the end of a shared login's grace) ran and
-        // may have acted; when it cannot resume, a fresh thread could repeat that, so it is held for review like any
-        // interrupt. A claim the drain returned before it started did nothing and still goes back in the queue.
-        let login_cut =
-            drove.yielded && drove.outcome != "completed" && !self.drain.returning(&aid);
-        if !resumable && (self.drain.capped(&aid) || login_cut) {
+        // An interrupted turn queued to continue at an update drain's cap ran and may have acted; when it cannot
+        // resume, a fresh thread could repeat that, so it is held for review like any interrupt. A claim the drain
+        // returned before it started did nothing and still goes back in the queue.
+        if !resumable && self.drain.capped(&aid) {
             drove = Drove {
                 outcome: "interrupted".into(),
                 yielded: false,
@@ -3394,14 +3663,7 @@ impl Runner {
                 retryable: false,
                 ..drove
             };
-            self.diagnose(
-                &aid,
-                if login_cut {
-                    HELD_AT_LOGIN_CAP
-                } else {
-                    crate::drain::HELD
-                },
-            );
+            self.diagnose(&aid, crate::drain::HELD);
             auth_rejected = None;
             subscription_unavailable = None;
         } else if self.drain.returning(&aid) {
@@ -3455,6 +3717,12 @@ impl Runner {
                 if ev["kind"] == "_diagnostics_drained" {
                     break;
                 }
+                if voice_scope.is_some()
+                    && ev["kind"] == "tokens"
+                    && ev["thread_id"].as_str() == thread.as_deref()
+                {
+                    segments.last_mut().unwrap().meter.add(&ev);
+                }
                 if ev["process_exit"] == true {
                     let clean = redactor
                         .as_ref()
@@ -3467,6 +3735,18 @@ impl Runner {
         // The Gateway's reset, read before a kept pi takes the relay with it.
         let gateway_reset = vault.relay.as_ref().and_then(|relay| relay.limit_reset());
         if let Some(h) = &host {
+            if drove.outcome == "interrupted" && !drove.yielded {
+                // A deadline or drain can cancel the voice loop while a turn is still active.
+                if let (Some(_), Host::Codex(codex), Some(th)) = (&voice_scope, h, &thread) {
+                    if let Some(active) = codex.active_turn(th) {
+                        let _ = tokio::time::timeout(
+                            VOICE_INTERRUPT_WAIT,
+                            codex.interrupt(th, &active),
+                        )
+                        .await;
+                    }
+                }
+            }
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
                     let _ = h.interrupt(th, t).await;
@@ -3509,20 +3789,14 @@ impl Runner {
                 if ev["kind"] == "_diagnostics_drained" {
                     break;
                 }
+                if voice_scope.is_some()
+                    && ev["kind"] == "tokens"
+                    && ev["thread_id"].as_str() == thread.as_deref()
+                {
+                    segments.last_mut().unwrap().meter.add(&ev);
+                }
             }
         }
-        // The host has stopped: the next turn waiting for this ChatGPT login starts now, and one that gave it up at
-        // the cap continues right after it.
-        if let Some(held) = login_held
-            .as_ref()
-            .filter(|_| drove.yielded && !self.drain.returning(&aid))
-        {
-            held.give_way();
-            let _ = self
-                .state
-                .append(&aid, "status", &json!({"yielded": held.yielded()}));
-        }
-        drop(login_held.take());
         // A stopped harness may leave detached descendants. Revoke the relay, kill the whole leased UID,
         // and hand workspace ownership back before bot-user scrubbing, history and publication.
         if let Some(relay) = &mut vault.relay {
@@ -3538,9 +3812,6 @@ impl Runner {
         mask(&aid, &mut redactor, &mut vault, refreshed);
         let user = vault.turn_user.take();
         let _ = tokio::task::spawn_blocking(move || drop(user)).await;
-        if self.drain.returning(&aid) {
-            let _ = self.state.append(&aid, "status", &json!({"waiting": ""}));
-        }
         // What the next turn on the primary session is told: that this one was cut off, or that a side session ran.
         if host.is_some() && (side_run || fallback.is_some() || drove.outcome == "interrupted") {
             let kept = if side_run || fallback.is_some() {
@@ -3783,12 +4054,19 @@ impl Runner {
             );
         }
         let active = self.active.lock().unwrap().len();
-        let completion = crate::perf::with_snapshot(Value::Object(completion), active)
+        let mut completion = crate::perf::with_snapshot(Value::Object(completion), active)
             .await
             .as_object()
             .unwrap()
             .clone();
         mark("finished", &aid);
+        // Where the turn's time went, up to here, kept with its result: saved before sending, so a resent result is
+        // the same. An older server refuses the field (`run_timings`).
+        if crate::follow::feature("run_timings") {
+            if let Some(timings) = crate::flight::timings(&aid) {
+                completion.insert("timings".into(), timings);
+            }
+        }
         // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
         // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
         if crate::continuity::memory_pass(&attempt["config"]) {
@@ -3819,9 +4097,8 @@ impl Runner {
             .await;
             match sent {
                 Ok(()) => {
-                    if drove.outcome == "completed" && !crate::prompt::keep_warm(&attempt) {
-                        // The next turn on this thread forwards only what the room said after this. Not after a
-                        // keep-warm turn: it was given none of the room.
+                    if drove.outcome == "completed" {
+                        // The next turn on this thread forwards only what the room said after this.
                         if let Some(th) = &thread {
                             let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
                             self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
@@ -3829,10 +4106,7 @@ impl Runner {
                     }
                     let id = aid.clone();
                     self.state.off(move |s| s.phase(&id, "synced")).await?;
-                    // A bot delivered through an app has no repository here: its work lives in the app.
-                    let repository = crate::appdriver::delivery(&config).is_none();
-                    // A private meeting's copy is never committed, pushed, published or reported (sessions.rs).
-                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && repository && !p.private) {
+                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && !p.disposable) {
                         if !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
                             self.publish(&bot, &execution_path, &env).await;
                         }
@@ -3881,6 +4155,8 @@ impl Runner {
         self.lanes.keep_vault(&bot, vault.values.clone());
         vault.remove_files();
         crate::harness_tools::turn_done(&aid);
+        // A turn that never started still drops its skills receipt's handle.
+        crate::company_skills::receipt_landed(&aid).await;
         flags.done.store(true, Ordering::SeqCst);
         flags.done_notify.notify_waiters();
         renewer.abort();
@@ -3920,12 +4196,19 @@ impl Runner {
         settings: &Settings,
         turn: &Value,
         flags: &Flags,
+        late_allocation: bool,
     ) -> Result<String, (bool, String)> {
         let mut last = String::new();
         for attempt in 0..2 {
-            self.during_drain(&text_of(&turn["id"]), self.wait_start_place(turn, flags))
-                .await
-                .map_err(|e| (false, e.text))?;
+            // A host that allocates at its spawn (Claude) resumes a thread without one: a kept place is not asked for.
+            let placed = if late_allocation && attempt == 0 {
+                self.during_drain(&text_of(&turn["id"]), self.keep_start_place(turn, flags))
+                    .await
+            } else {
+                self.during_drain(&text_of(&turn["id"]), self.wait_start_place(turn, flags))
+                    .await
+            };
+            placed.map_err(|e| (false, e.text))?;
             match h.resume_thread(thread, settings).await {
                 Ok(t) => return Ok(t),
                 Err(e) => {
@@ -4131,7 +4414,7 @@ impl Runner {
         };
         let mut said = json!({"runner_error": cause, "error_type": e.kind});
         if e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED) {
-            said["code"] = json!("private_checkout"); // the server ends the meeting turn: retrying fails the same way
+            said["code"] = json!("private_checkout"); // older hubs recognize the terminal placement failure
         }
         let _ = self.state.append(aid, "diagnostic", &said);
         self.diagnose(
@@ -4163,6 +4446,7 @@ mod tests {
         pub(super) static MEMORY_OVERRIDE: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
         pub(super) static MEMORY_RISES_AFTER_ALLOCATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RENEW_EVERY: RefCell<Option<Duration>> = const { RefCell::new(None) };
+        pub(super) static GRACE_OVERRIDE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
@@ -4181,6 +4465,7 @@ mod tests {
         fn drop(&mut self) {
             crate::sessions::WORKTREE_WAIT.with(|v| v.set(None));
             RENEW_EVERY.with(|v| v.borrow_mut().take());
+            GRACE_OVERRIDE.with(|v| v.set(None));
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
@@ -4220,6 +4505,20 @@ mod tests {
             assert_eq!(crate::profiles::claude_token_cold(None), !warm);
             PrivateHome(home)
         }
+    }
+
+    #[test]
+    fn a_turn_a_plan_signs_in_skips_the_cold_sign_in_path() {
+        let stale = PrivateHome::claude(false);
+        // The computer's own Claude login is stale: a turn on it waits its turn to renew it.
+        assert!(cold_sign_in("claude", None, false));
+        // A turn signed in by a company plan never reads that login, so the stale file holds it up for nothing.
+        assert!(!cold_sign_in("claude", None, true));
+        drop(stale);
+        let _warm = PrivateHome::claude(true);
+        assert!(!cold_sign_in("claude", None, false));
+        // Other runtimes renew nothing on a first call.
+        assert!(!cold_sign_in("codex", None, false));
     }
 
     impl Drop for PrivateHome {
@@ -4607,6 +4906,7 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         };
@@ -4617,7 +4917,7 @@ mod tests {
             .extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
         runner
-            .wait_before_start(&turn, "shared login")
+            .wait_before_start(&turn, &flags, "shared login")
             .await
             .unwrap();
         assert_eq!(runner.active.lock().unwrap().len(), 2);
@@ -4628,7 +4928,7 @@ mod tests {
         runner.wait_start_place(&turn, &flags).await.unwrap();
         assert!(runner.places.lock().unwrap().contains("a1"));
         runner
-            .wait_before_start(&turn, "pre-start requirements")
+            .wait_before_start(&turn, &flags, "pre-start requirements")
             .await
             .unwrap();
         assert!(runner
@@ -4674,9 +4974,72 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         }
+    }
+
+    #[tokio::test]
+    async fn a_kept_start_place_is_not_asked_for_again_until_it_is_given_back_or_old() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+            (200, r#"{"reserved":true}"#),
+        ])
+        .await;
+        let (runner, dir) = lease_runner(&url, "kept-place");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let asks = || seen.lock().unwrap().len();
+        let flags = lease_flags();
+        // Granted at its claim (`start_reserved`): no ask, and the local place is taken.
+        *flags.granted.lock().unwrap() = Some(Instant::now());
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 0);
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        // An ask before a harness allocation still asks.
+        runner.wait_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 1);
+        // Given back (a wait before start): the next keep asks, and its grant is then kept.
+        runner
+            .wait_before_start(&turn, &flags, "pre-start requirements")
+            .await
+            .unwrap();
+        assert_eq!(asks(), 2, "the wait is posted");
+        assert!(flags.granted.lock().unwrap().is_none());
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 3);
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 3);
+        // A grant older than KEEP_GRANT_FOR is asked for again.
+        *flags.granted.lock().unwrap() = Some(Instant::now() - KEEP_GRANT_FOR);
+        runner.keep_start_place(&turn, &flags).await.unwrap();
+        assert_eq!(asks(), 4);
+        // No grant at all (an older hub's claim): asked.
+        let fresh = lease_flags();
+        runner.keep_start_place(&turn, &fresh).await.unwrap();
+        assert_eq!(asks(), 5);
+        // A stop heard on the event stream ends the wait without an ask, kept place or not.
+        fresh.stopped.store(true, Ordering::SeqCst);
+        assert!(runner
+            .keep_start_place(&turn, &fresh)
+            .await
+            .unwrap_err()
+            .text
+            .contains("stop"));
+        assert_eq!(asks(), 5);
+        // A hub with no start places (no start_reservation_seconds) is never asked.
+        runner
+            .keep_start_place(&json!({"id": "a2"}), &lease_flags())
+            .await
+            .unwrap();
+        assert_eq!(asks(), 5);
+        assert!(allocates_at_spawn("claude", "claude"));
+        assert!(!allocates_at_spawn("claude", "antigravity"));
+        assert!(!allocates_at_spawn("codex", "codex"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -5191,6 +5554,7 @@ mod tests {
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
         };
@@ -5225,6 +5589,60 @@ mod tests {
         );
         assert_eq!(seen.lock().unwrap().len(), 3);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preparation_inside_the_grace_keeps_its_place_and_longer_work_gives_it_back() {
+        let _controls = RunControls;
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":true}"#),
+        ])
+        .await;
+        let (runner, dir) = lease_runner(&url, "pre-start-grace");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = lease_flags();
+        runner.places.lock().unwrap().insert("a1".into());
+        // A fetch that takes a moment: the work waits, but ends inside the grace.
+        GRACE_OVERRIDE.with(|v| v.set(Some(Duration::from_secs(60))));
+        runner
+            .pre_start_lock(&turn, &flags, async {
+                tokio::task::yield_now().await;
+                tokio::task::yield_now().await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "work inside the grace posted a wait or asked again"
+        );
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        // Work still running past the grace gives the place back, and goes on only after a new grant.
+        GRACE_OVERRIDE.with(|v| v.set(Some(Duration::from_millis(1))));
+        runner
+            .pre_start_lock(&turn, &flags, async {
+                while runner.places.lock().unwrap().contains("a1") {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(
+            seen[0].contains("/start-place") && seen[0].contains("waiting"),
+            "{}",
+            seen[0]
+        );
+        assert!(
+            seen[1].contains("/start-place") && !seen[1].contains("waiting"),
+            "{}",
+            seen[1]
+        );
+        assert!(runner.places.lock().unwrap().contains("a1"));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
@@ -5424,6 +5842,31 @@ mod tests {
     }
 
     /// A server that answers `{}` to every request (events: acknowledged) and keeps each one: (method, path, JSON body).
+    /// What `credential-runtime` answers a turn whose run token is the key: its grants and subscriptions.
+    fn grants() -> &'static Mutex<std::collections::HashMap<String, Value>> {
+        static GRANTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Value>>> =
+            std::sync::OnceLock::new();
+        GRANTS.get_or_init(Default::default)
+    }
+
+    /// The grants of the turn whose run token a request's head carries.
+    fn granted(head: &str) -> Option<Value> {
+        let grants = grants().lock().unwrap();
+        grants
+            .iter()
+            .find(|(token, _)| head.contains(token.as_str()))
+            .map(|(_, answer)| answer.clone())
+    }
+
+    /// A turn signed in with the Claude plan `id` (a setup-token subscription): its `attempt` fields for the rig.
+    fn on_plan(id: &str) -> Value {
+        let token = format!("run-{id}-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(token.clone(), json!({"subscriptions": [{
+            "id": id, "runtime": "claude", "kind": "claude_token", "env": "CLAUDE_CODE_OAUTH_TOKEN",
+            "value": format!("sk-ant-oat01-synthetic-{id}-0123456789abcdef"), "revision": 1, "billing": "subscription"}]}));
+        json!({"attempt": {"token": token, "credential_vault": true}})
+    }
+
     async fn recording_server() -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -5450,7 +5893,7 @@ mod tests {
         Arc<Mutex<Vec<(String, String, Value)>>>,
         tokio::task::JoinHandle<()>,
     ) {
-        recording_server_start_window(hold, revoke_start, None).await
+        recording_server_start_window(hold, revoke_start, None, None).await
     }
 
     /// A synthetic server clock: renewals keep the delivery alive but cannot extend a hard start deadline.
@@ -5511,10 +5954,25 @@ mod tests {
         }
     }
 
+    struct VoiceFixture {
+        turns: Arc<[Value]>,
+        stream: Option<Arc<VoiceStreamFixture>>,
+    }
+
+    #[derive(Default)]
+    struct VoiceStreamFixture {
+        idle_attempt: &'static str,
+        held: AtomicBool,
+        busy_poll: Notify,
+        first_sentence: Notify,
+        release_poll: Notify,
+    }
+
     async fn recording_server_start_window(
         hold: Option<Arc<Notify>>,
         revoke_start: Option<bool>,
         window: Option<Arc<Mutex<StartWindow>>>,
+        voice: Option<Arc<VoiceFixture>>,
     ) -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -5525,6 +5983,8 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::<(String, String, Value)>::new()));
         let kept = seen.clone();
+        // Voice turns a ready poll has claimed, in order.
+        let claimed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let server = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else {
@@ -5533,6 +5993,8 @@ mod tests {
                 let kept = kept.clone();
                 let hold = hold.clone();
                 let window = window.clone();
+                let voice = voice.clone();
+                let claimed = claimed.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 8192];
@@ -5584,21 +6046,74 @@ mod tests {
                                 .any(|(_, p, _)| p.ends_with("/started"))
                     });
                     // Events are acknowledged up to the last one sent, as the server does.
-                    let answer = match body["events"].as_array().and_then(|e| e.last()) {
-                        Some(last) => json!({"ack_seq": last["seq"]}),
-                        None if model.is_some() => model.unwrap().1,
-                        None if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
-                        None if path.ends_with("/start-place") => json!({"reserved": !waiting}),
-                        None => json!({}),
+                    let answer = match (body["events"].as_array().and_then(|e| e.last()), voice.as_deref()) {
+                        (Some(last), _) => json!({"ack_seq": last["seq"]}),
+                        (None, _) if model.is_some() => model.unwrap().1,
+                        (None, _) if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
+                        (None, _) if path.ends_with("/start-place") => json!({"reserved": !waiting}),
+                        (None, _) if path.contains("/credential-runtime") => granted(&text).unwrap_or_else(|| json!({})),
+                        (None, Some(voice)) if path.contains("/inputs?voice=") => {
+                            let seen = kept.lock().unwrap();
+                            let events = seen.iter().filter(|(_, p, _)| p.ends_with("/events"))
+                                .flat_map(|(_, _, b)| b["events"].as_array().into_iter().flatten());
+                            let mut completed = 0;
+                            let mut stalled = false;
+                            let mut ending = false;
+                            for event in events {
+                                if event["kind"] == "message" && event["payload"]["final"] == true {
+                                    completed += 1;
+                                }
+                                stalled |= event["kind"] == "delta" && event["payload"]["text"] == "Stalled";
+                                ending |= event["kind"] == "delta" && event["payload"]["text"] == "Ending";
+                            }
+                            let next = completed + usize::from(stalled);
+                            let payload = if ending || next >= voice.turns.len() {
+                                json!({"closed": true})
+                            } else if path.ends_with("voice=restart") {
+                                json!({"closed": false, "primer": "Reply exactly READY. Recent transcript from the server.",
+                                       "notes_stamp": crate::gitrun::sha256_hex(b"Current call notes.")})
+                            } else if path.ends_with("voice=busy") && stalled && completed == 2
+                                || voice.stream.as_ref().is_some_and(|s| path.contains(s.idle_attempt)) {
+                                json!({"closed": false})
+                            } else if path.ends_with("voice=busy") && next >= claimed.load(Ordering::SeqCst) {
+                                // As on the hub, a busy poll reports only a turn a ready poll already claimed.
+                                json!({"closed": false})
+                            } else {
+                                claimed.fetch_max(next + 1, Ordering::SeqCst);
+                                json!({"closed": false, "turn": voice.turns[next]})
+                            };
+                            json!({"messages": [], "call_voice": payload})
+                        },
+                        (None, _) => json!({}),
                     }
                     .to_string();
-                    let holding = {
+                    let (holding, hold_busy_poll) = {
                         let mut seen = kept.lock().unwrap();
                         let holding = path.ends_with("/inputs")
                             && seen.iter().filter(|(_, p, _)| p == &path).count() == 1;
+                        let stream = voice.as_ref().and_then(|v| v.stream.as_ref());
+                        let hold_busy_poll = stream.is_some_and(|stream| {
+                            path.ends_with("voice=busy")
+                                && seen.iter().any(|(_, p, _)| p.ends_with("voice=ready"))
+                                && !stream.held.swap(true, Ordering::SeqCst)
+                        });
+                        if let Some(stream) = stream {
+                            if body["events"].as_array().into_iter().flatten().any(|e| {
+                                e["kind"] == "delta"
+                                    && e["payload"]["voice_turn"] == "turn-0"
+                                    && e["payload"]["text"] == " "
+                            }) {
+                                stream.first_sentence.notify_one();
+                            }
+                        }
                         seen.push((method, path, body));
-                        holding
+                        (holding, hold_busy_poll)
                     };
+                    if hold_busy_poll {
+                        let stream = voice.as_ref().unwrap().stream.as_ref().unwrap();
+                        stream.busy_poll.notify_one();
+                        stream.release_poll.notified().await;
+                    }
                     if holding {
                         if let Some(hold) = hold {
                             hold.notified().await;
@@ -5699,6 +6214,16 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_claude_spawn_failure_after_start_acknowledgement_runs_the_fallback() {
+        lazy_claude_fallback(false).await;
+    }
+
+    /// A hub that granted the place at the claim (`start_reserved`): a Claude turn asks for none up to `started`.
+    #[tokio::test]
+    async fn a_claude_turn_granted_at_its_claim_asks_for_no_start_place_before_started() {
+        lazy_claude_fallback(true).await;
+    }
+
+    async fn lazy_claude_fallback(start_reserved: bool) {
         let _home = PrivateHome::claude(true);
         let _controls = RunControls;
         hosts::TEST_STARTS.with(|starts| starts.set(0));
@@ -5710,7 +6235,8 @@ mod tests {
             renewed_at: None,
             publish_repository: false,
         }));
-        let (url, seen, server) = recording_server_start_window(None, None, Some(window)).await;
+        let (url, seen, server) =
+            recording_server_start_window(None, None, Some(window), None).await;
         let (runner, dir) = runner_at(&url, "lazy-spawn-fallback");
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
@@ -5735,6 +6261,10 @@ mod tests {
             // Disable the Linux reaper so the missing executable fails at spawn, before any process is allocated.
             "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "background_wait_s": 0,
                 "fallback": {"harness": "pi", "model": "synthetic-fallback"}}});
+        let mut attempt = attempt;
+        if start_reserved {
+            attempt["start_reserved"] = json!(true);
+        }
         tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt))
             .await
             .unwrap()
@@ -5756,6 +6286,22 @@ mod tests {
             hosts::TEST_STARTS.with(|starts| starts.get()),
             2,
             "both primary and fallback hosts were reached"
+        );
+        // An older hub's claim names no grant: the turn asks once, then keeps the place up to `started`, asking again
+        // only after it gave the place back.
+        let asks = |waiting: bool| {
+            requests[..started]
+                .iter()
+                .filter(|(_, path, body)| {
+                    path.ends_with("/start-place") && body.get("waiting").is_some() == waiting
+                })
+                .count()
+        };
+        // Granted at the claim, it asks only after giving the place back.
+        assert_eq!(
+            asks(false),
+            usize::from(!start_reserved) + asks(true),
+            "{requests:?}"
         );
         assert!(
             requests
@@ -5886,162 +6432,6 @@ mod tests {
     #[tokio::test]
     async fn an_expired_gateway_fallback_is_refused_before_its_harness_starts() {
         expired_gateway_harness_is_not_started(true).await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_turn_that_ignores_the_ask_to_stop_at_the_cap_is_interrupted_once_its_grace_ends() {
-        use crate::login_turns::{Class, Turn};
-        let key = "codex:test-drive-grace";
-        crate::login_turns::cap_for_test(key, Duration::ZERO);
-        crate::login_turns::grace_for_test(key, Duration::from_millis(300));
-        let (url, _seen, server) = recording_server().await;
-        let (runner, dir) = runner_at(&url, "drive-grace");
-        // A stand-in app-server whose turn takes the steer and runs on; only an interrupt ends it.
-        let program = dir.join("codex");
-        crate::util::write_script(
-            &program,
-            r#"#!/usr/bin/env python3
-import json, os, sys
-def say(m): print(json.dumps(m), flush=True)
-for line in sys.stdin:
-    msg = json.loads(line)
-    method = msg.get("method")
-    if method == "initialize":
-        say({"id": msg["id"], "result": {}})
-    elif method == "turn/start":
-        say({"id": msg["id"], "result": {"turn": {"id": "t1"}}})
-        say({"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1"}}})
-    elif method == "turn/steer":
-        say({"id": msg["id"], "result": {"turnId": "t1"}})
-    elif method == "turn/interrupt":
-        open(os.environ["FAKE_INTERRUPTS"], "a").write("t1\n")
-        say({"id": msg["id"], "result": {}})
-        say({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "interrupted"}}})
-    elif "id" in msg:
-        say({"id": msg["id"], "result": {}})
-"#,
-        );
-        let interrupts = dir.join("interrupts");
-        let env: crate::env::Env = [
-            (
-                "PATH".to_string(),
-                format!(
-                    "{}:{}",
-                    dir.display(),
-                    std::env::var("PATH").unwrap_or_default()
-                ),
-            ),
-            (
-                "FAKE_INTERRUPTS".to_string(),
-                interrupts.display().to_string(),
-            ),
-        ]
-        .into_iter()
-        .collect();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
-        host.start().await.unwrap();
-
-        let mut held = crate::login_turns::try_take(
-            key,
-            &Turn::new("ops", "#7 Release notes", Class::Other).of("task-7", "a-ops"),
-        )
-        .unwrap();
-        held.bind(host.clone());
-        let review = tokio::spawn(async move {
-            crate::login_turns::take(key, &Turn::new("reviewer", "#8 Review 1", Class::Review))
-                .await
-        });
-        while !held.cap().due(Instant::now()) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let t = host
-            .start_turn("th1", "Write the release notes", None)
-            .await
-            .unwrap();
-        let flags = Flags {
-            lost: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
-            stop_reason: Mutex::new(None),
-            done: AtomicBool::new(false),
-            harness_allocated: Arc::new(AtomicBool::new(false)),
-            start_acknowledged: AtomicBool::new(false),
-            done_notify: Notify::new(),
-            deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
-        };
-        let wake = Notify::new();
-        let d = crate::drive::Drive {
-            limit_name: "max_run_minutes (60 minutes)",
-            aid: "a-ops",
-            host: &host,
-            thread: "th1",
-            effort: None,
-            limit: Instant::now() + Duration::from_secs(60),
-            flags: &flags,
-            wake: &wake,
-            redactor: None,
-            runtime: "codex",
-            bot: "ops",
-            session: "th1",
-            login: Some(held.cap()),
-            fresh: None,
-        };
-        let mut segment = crate::drive::Segment {
-            meter: Meter::default(),
-            config: json!({}),
-            profile: None,
-            billing: "subscription",
-            subscription: None,
-        };
-        let mut goal = crate::drive::GoalRun {
-            chat_goal: None,
-            controlled: false,
-            failure: None,
-            paused: None,
-            tries_key: ("ops".into(), "task-7".into()),
-        };
-        let drove = tokio::time::timeout(
-            Duration::from_secs(20),
-            runner.drive(
-                &d,
-                &mut rx,
-                t,
-                &mut segment,
-                &mut BTreeMap::new(),
-                &mut None,
-                &mut goal,
-            ),
-        )
-        .await
-        .expect("the turn was interrupted at the end of its grace")
-        .unwrap();
-        // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
-        assert!(
-            drove.yielded && drove.outcome == "interrupted",
-            "{}",
-            drove.outcome
-        );
-        assert!(goal.failure.is_none());
-        let terminal: i64 = runner.state.with(|c| c.query_row(
-            "SELECT count(*) FROM events WHERE attempt_id='a-ops' AND kind='diagnostic' AND json_extract(payload,'$.interruption_complete')=1",
-            [], |r| r.get(0))).unwrap();
-        assert_eq!(
-            terminal, 0,
-            "a forced grace expiry must not claim the host acknowledged its end"
-        );
-        assert!(
-            std::fs::read_to_string(&interrupts).unwrap().contains("t1"),
-            "the turn was never interrupted"
-        );
-        drop(held);
-        drop(
-            tokio::time::timeout(Duration::from_secs(5), review)
-                .await
-                .expect("the waiter got the login")
-                .unwrap(),
-        );
-        server.abort();
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -6716,7 +7106,6 @@ for line in sys.stdin:
         ));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
-        RIG_DIR.with(|d| *d.borrow_mut() = Some(dir.clone()));
         for n in compacting {
             // A process listed twice compacts twice.
             let mut marks =
@@ -6740,6 +7129,7 @@ for line in sys.stdin:
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
+             if [ -e '{d}/refuses-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"API Error: 400 invalid_request_error: messages.1.content.0: Invalid signature in thinking block\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -7109,147 +7499,6 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn a_keep_warm_turn_sends_its_one_line_once_and_the_next_turn_is_sent_as_if_it_never_ran()
-    {
-        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
-        let turns = [json!({}), json!({}), keep_warm_turn(line), json!({})];
-        let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
-            &turns,
-            &[],
-            &[],
-            &[],
-            json!({}),
-            |_| (),
-            |n, _| {
-                if n == 2 {
-                    saved_transcript(&dir_of_args());
-                }
-            },
-        )
-        .await;
-        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
-        // The keep-warm turn is its line alone: no standing lines, no "unchanged" line, no tail.
-        assert!(
-            prompts[2].contains(line) && !prompts[2].contains(crate::prompt::STANDING_SEEN),
-            "{}",
-            prompts[2]
-        );
-        assert!(
-            !prompts[2].contains("an AI teammate at") && !prompts[2].contains("Tico-Run"),
-            "{}",
-            prompts[2]
-        );
-        // The turn after it is sent what it would have been without it: the short form, as turn 1 was.
-        for n in [1, 3] {
-            assert!(
-                prompts[n].contains(crate::prompt::STANDING_SEEN),
-                "turn {n}: {}",
-                prompts[n]
-            );
-        }
-        // Only the keep-warm process is limited to one model turn.
-        let args: Vec<String> = std::fs::read_to_string(dir.join("args.log"))
-            .unwrap()
-            .lines()
-            .map(String::from)
-            .collect();
-        for (n, a) in args.iter().enumerate() {
-            assert_eq!(a.contains("--max-turns 1"), n == 2, "process {n}: {a}");
-        }
-        assert!(
-            completions.iter().all(|c| c["outcome"] == "completed"),
-            "{completions:?}"
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// A keep-warm turn's attempt fields (crate::prompt::keep_warm), saying `line`.
-    fn keep_warm_turn(line: &str) -> Value {
-        json!({"attempt": {"message": {"id": "m-warm", "from_actor": "keeper", "body": line, "refs": {"wake": "keep_warm"}}}})
-    }
-
-    thread_local! {
-        /// The rig's folder, for a `before_turn` that reads what the earlier turns ran (`dir_of_args`).
-        static RIG_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-    }
-
-    /// The rig's folder while it runs: found from the args log the fake claude writes.
-    fn dir_of_args() -> PathBuf {
-        RIG_DIR
-            .with(|d| d.borrow().clone())
-            .expect("the rig's folder")
-    }
-
-    /// Claude's transcript of the session the last process ran, under the turn's HOME: the session is saved here.
-    fn saved_transcript(dir: &Path) {
-        let last = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        let id = last
-            .lines()
-            .last()
-            .unwrap()
-            .split_whitespace()
-            .skip_while(|a| *a != "--session-id" && *a != "--resume")
-            .nth(1)
-            .unwrap()
-            .to_string();
-        let home = crate::env::tests::OPERATOR_HOME
-            .with(|h| h.borrow().clone())
-            .unwrap();
-        let projects = home.join(".claude/projects/rig");
-        std::fs::create_dir_all(&projects).unwrap();
-        std::fs::write(projects.join(format!("{id}.jsonl")), "{}\n").unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_keep_warm_turn_with_no_warm_session_here_starts_no_model_and_ends_done() {
-        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
-        // 0: the first turn on the conversation is a keep-warm one (none saved). 1, 2: real turns. 3: keep-warm, but
-        // the session is not on this computer (no transcript). 4: real. 5: keep-warm on a saved session, but on another
-        // model than its cache's. 6: the same on another effort (a plan is checked the same way: warm_identity).
-        let mut other_model = keep_warm_turn(line);
-        other_model["model"] = json!("synthetic-other");
-        let mut other_effort = keep_warm_turn(line);
-        other_effort["reasoning_effort"] = json!("low");
-        let turns = [
-            keep_warm_turn(line),
-            json!({}),
-            json!({}),
-            keep_warm_turn(line),
-            json!({}),
-            other_model,
-            other_effort,
-        ];
-        let (_, prompts, completions, _, _, dir) = claude_rig_each_turn(
-            &turns,
-            &[],
-            &[],
-            &[],
-            json!({}),
-            |_| (),
-            |n, _| {
-                if n >= 5 {
-                    saved_transcript(&dir_of_args());
-                }
-            },
-        )
-        .await;
-        // Only the three real turns started Claude; every keep-warm turn ended done without it.
-        assert_eq!(prompts.len(), 3, "{prompts:?}");
-        assert!(prompts.iter().all(|p| !p.contains(line)), "{prompts:?}");
-        assert!(
-            completions.iter().all(|c| c["outcome"] == "completed"),
-            "{completions:?}"
-        );
-        // Skipping left the thread's records alone: turn 4 is still sent the short form after turn 3's skip.
-        assert!(
-            prompts[2].contains(crate::prompt::STANDING_SEEN),
-            "{}",
-            prompts[2]
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
     async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
         // Each fake turn uses 350 tokens. With the whole prompt (over 900 characters, counted as tokens) that is under
         // 60% of a 100,000-token Compact at, but over 60% of 1,000, though 350 alone is not; a first turn's size is unknown.
@@ -7280,6 +7529,114 @@ for line in sys.stdin:
                 "{p}"
             );
         }
+    }
+
+    /// Each Claude process's arguments, one line per process.
+    fn claude_args(dir: &Path) -> Vec<Vec<String>> {
+        std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(|l| l.split_whitespace().map(String::from).collect())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_move_to_another_claude_plan_resumes_the_same_session_there() {
+        // The computer's set moves from Plan A to Plan B and back between turns: Claude Code's transcript is the
+        // bot's own, so each next turn `--resume`s the session the first began, on the plan it moved to.
+        let (threads, prompts, completions, _, _, dir) = claude_rig_kept(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-a")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        let args = claude_args(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert!(
+            args[0]
+                .windows(2)
+                .any(|w| w == ["--session-id", threads[0].as_str()]),
+            "{args:?}"
+        );
+        for n in [1, 2] {
+            assert!(
+                args[n]
+                    .windows(2)
+                    .any(|w| w == ["--resume", threads[0].as_str()]),
+                "{args:?}"
+            );
+            assert_eq!(session_of(&completions[n]).0, "resumed");
+        }
+        assert!(!prompts[1].contains("New session:"), "{}", prompts[1]);
+    }
+
+    #[tokio::test]
+    async fn a_session_missing_after_a_move_to_another_plan_starts_fresh_with_the_handoff_note() {
+        let (threads, prompts, completions, _) = claude_rig(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[1],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        // Process 1 finds no transcript; Claude begins a new session in its place, told what was said since.
+        assert_eq!(prompts.len(), 4, "{prompts:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here was not on this computer")
+                && prompts[2].contains("Question 1"),
+            "{}",
+            prompts[2]
+        );
+        assert_eq!(session_of(&completions[1]).1, json!("not_found"));
+        assert_eq!(session_of(&completions[2]).0, "resumed");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+    }
+
+    #[tokio::test]
+    async fn a_session_the_provider_refuses_on_the_new_plan_is_replaced_and_says_so() {
+        // Turn 1 resumes on Plan B and Claude's API refuses the transcript: that turn fails and says so, and the next
+        // starts a new session, told what was said since and why.
+        let (threads, prompts, completions, _, seen, dir) = claude_rig_each_turn(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, projects| {
+                if n == 1 {
+                    std::fs::write(projects.parent().unwrap().join("refuses-1"), "").unwrap();
+                }
+            },
+        )
+        .await;
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert_eq!(threads[1], threads[0]);
+        assert_eq!(completions[1]["outcome"], "failed");
+        let told = seen.iter().any(|(_, path, body)| {
+            path.ends_with("/attempts/a-claude-1/events")
+                && body
+                    .to_string()
+                    .contains("refused this session's transcript")
+        });
+        assert!(told, "{seen:?}");
+        assert_ne!(threads[2], threads[0], "{threads:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here could not be resumed")
+                && prompts[2].contains("Question 2"),
+            "{}",
+            prompts[2]
+        );
+        let (kind, why, detail) = session_of(&completions[2]);
+        assert_eq!((kind.as_str(), why), ("new", json!("resume_failed")));
+        assert_eq!(detail, json!(crate::continuity::TRANSCRIPT_REFUSED));
     }
 
     #[tokio::test]
@@ -8121,6 +8478,46 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn meter_reports_one_hour_cache_writes_only_to_a_server_that_takes_them() {
+        let mut m = Meter::default();
+        m.add(&json!({"usage": {"input": 100, "cached": 0, "cache_write": 40, "cache_write_1h": 40, "output": 2}}));
+        m.add(&json!({"usage": {"input": 10, "cached": 0, "cache_write": 5, "cache_write_1h": "5", "output": 1}}));
+        m.add(&json!({"usage": {"input": 10, "cached": 0, "cache_write": 0, "output": 1}}));
+        let r = m.report("m", "claude", "subscription").unwrap();
+        assert_eq!(
+            (&r["cache_write_tokens"], &r["cache_write_1h_tokens"]),
+            (&json!(45), &json!(45))
+        );
+        let server = |takes: &'static [&'static str]| move |name: &str| takes.contains(&name);
+        let current = served(
+            &m,
+            "m",
+            "claude",
+            "subscription",
+            server(&["usage_cache_writes", "usage_cache_write_1h"]),
+        )
+        .unwrap();
+        assert_eq!(current["cache_write_1h_tokens"], json!(45));
+        let older = served(
+            &m,
+            "m",
+            "claude",
+            "subscription",
+            server(&["usage_cache_writes"]),
+        )
+        .unwrap();
+        assert!(older.get("cache_write_1h_tokens").is_none(), "{older:?}");
+        assert_eq!(older["cache_write_tokens"], json!(45));
+        let oldest = served(&m, "m", "claude", "subscription", server(&[])).unwrap();
+        assert!(oldest.get("cache_write_1h_tokens").is_none(), "{oldest:?}");
+        // Writes with no split make the whole segment's split unknown: the server guesses it.
+        m.add(&json!({"usage": {"input": 100, "cached": 0, "cache_write": 60, "output": 3}}));
+        let r = m.report("m", "claude", "subscription").unwrap();
+        assert!(r.get("cache_write_1h_tokens").is_none(), "{r:?}");
+        assert_eq!(r["cache_write_tokens"], json!(105));
+    }
+
+    #[test]
     fn meter_lists_each_request_up_to_the_cap() {
         let mut m = Meter::default();
         m.add(&json!({"usage": {"input": 150, "cached": 120, "output": 7, "requests": [[10, 20, 3], [20, 100, "4"]]}}));
@@ -8186,16 +8583,18 @@ for line in sys.stdin:
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        (runner_from(&dir), dir)
+    }
+
+    fn runner_from(dir: &Path) -> Arc<Runner> {
+        let path = dir.join("runner.json");
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
-        (
-            Arc::new(Runner::new(
-                config,
-                client,
-                crate::state::State::open(&dir.join("state")).unwrap(),
-            )),
-            dir,
-        )
+        Arc::new(Runner::new(
+            config,
+            client,
+            crate::state::State::open(&dir.join("state")).unwrap(),
+        ))
     }
 
     fn posted(seen: &Mutex<Vec<(String, String, Value)>>, end: &str) -> usize {
@@ -8239,92 +8638,6 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn drain_hands_back_three_login_waiters_without_waiting_for_the_midturn_holder() {
-        use crate::login_turns::{Class, Login, Turn};
-        let (runner, dir, server) = drain_test_runner(300).await;
-        let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
-        let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other))
-            .unwrap();
-        let flags = Flags {
-            lost: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
-            stop_reason: Mutex::new(None),
-            done: AtomicBool::new(false),
-            harness_allocated: Arc::new(AtomicBool::new(false)),
-            start_acknowledged: AtomicBool::new(false),
-            done_notify: Notify::new(),
-            deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
-        };
-        let turns: Vec<_> = (0..3)
-            .map(|i| {
-                Turn::new(&format!("waiter{i}"), "", Class::Other)
-                    .of(&format!("work{i}"), &format!("a{i}"))
-            })
-            .collect();
-        for turn in &turns {
-            runner
-                .state
-                .record(&json!({"id": turn.attempt, "bot": turn.bot}))
-                .unwrap();
-        }
-        let wake = Notify::new();
-        let waits = async {
-            let (a, b, c) = tokio::join!(
-                runner.take_login("a0", &turns[0], &login, &flags, &wake),
-                runner.take_login("a1", &turns[1], &login, &flags, &wake),
-                runner.take_login("a2", &turns[2], &login, &flags, &wake)
-            );
-            assert!(
-                a.is_err() && b.is_err() && c.is_err(),
-                "every waiter must hand back its claim"
-            );
-            // The held turn is still running: freeing its login was not needed to hand the waiters back.
-            assert_eq!(
-                crate::login_turns::holder(&login.key).as_deref(),
-                Some("holder")
-            );
-            for turn in &turns {
-                let events = runner.state.pending(&turn.attempt).unwrap();
-                assert!(
-                    events.iter().any(|e| e["payload"]["yielded"]
-                        .as_str()
-                        .is_some_and(|line| line.contains("Handed back before starting"))),
-                    "{events:?}"
-                );
-            }
-        };
-        let drain = async {
-            // Wait for all three actual queue waits, not a wall-clock guess about their startup.
-            tokio::time::timeout(Duration::from_secs(3), async {
-                loop {
-                    let all_waiting = turns.iter().all(|t| {
-                        runner.state.pending(&t.attempt).unwrap().iter().any(|e| {
-                            e["payload"]["waiting"]
-                                .as_str()
-                                .is_some_and(|s| !s.is_empty())
-                        })
-                    });
-                    if all_waiting {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            runner.shut_down();
-        };
-        tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(waits, drain);
-        })
-        .await
-        .expect("login waits held the old runner after drain");
-        drop(held);
-        server.abort();
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
     async fn drain_caps_a_midturn_worker_and_keeps_its_session_for_the_queued_continuation() {
         let (runner, dir, server) = drain_test_runner(1).await;
         runner
@@ -8362,6 +8675,7 @@ for line in sys.stdin:
             done: AtomicBool::new(false),
             harness_allocated: Arc::new(AtomicBool::new(false)),
             start_acknowledged: AtomicBool::new(false),
+            granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
         };
@@ -8379,7 +8693,6 @@ for line in sys.stdin:
             runtime: "pi",
             bot: "ops",
             session: "c-cap",
-            login: None,
             fresh: None,
         };
         let mut segment = Segment {
@@ -8557,7 +8870,7 @@ for line in sys.stdin:
             let scratch = place.execution_path.clone();
             assert_ne!(scratch, main);
             assert_eq!(place.main_path, scratch);
-            assert!(!place.has_checkout() && place.private && place.add_dirs.is_empty());
+            assert!(!place.has_checkout() && place.disposable && place.add_dirs.is_empty());
             assert!(!scratch.join("private.txt").exists());
             std::fs::create_dir(scratch.join("reports")).unwrap();
             std::fs::write(scratch.join("reports/page.html"), "PRIVATE-PAGE-OUTPUT").unwrap();
@@ -8712,6 +9025,58 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn a_call_turn_on_the_main_lane_pushes_and_reports_memory() {
+        let (_threads, _prompts, completions, _injected, seen, dir) = claude_rig_kept(
+            &[json!({"session": "task"})],
+            &[],
+            &[],
+            &[],
+            json!({
+                "lane": "main",
+                "conversation": {"id": "c-call", "kind": "chat", "room_key": "live-meeting:call"},
+                "message": {"id": "request", "body": "Remember to check the runbook.", "refs": {
+                    "live_meeting": {"meeting_id": "call", "turn_id": "turn"}
+                }}
+            }),
+            |projects| {
+                let root = projects.parent().unwrap();
+                let checkout = projects.join("bot-ops");
+                let remote = root.join("remote.git");
+                repo_git(root, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+                repo_git(&checkout, &["init", "-q"]);
+                repo_git(&checkout, &["add", "AGENT.md"]);
+                repo_git(&checkout, &["commit", "-qm", "start"]);
+                repo_git(
+                    &checkout,
+                    &["remote", "add", "origin", remote.to_str().unwrap()],
+                );
+                repo_git(&checkout, &["push", "-qu", "origin", "main"]);
+                std::fs::write(root.join("edits-0"), "").unwrap();
+            },
+        )
+        .await;
+        assert_eq!(completions[0]["outcome"], "completed");
+        assert_eq!(
+            repo_git(
+                &dir.join("remote.git"),
+                &["show", "main:memory/learnings.md"]
+            ),
+            "rewritten"
+        );
+        let (_, _, report) = seen
+            .iter()
+            .find(|(_, path, _)| path.ends_with("/bots/ops/memory/report"))
+            .expect("the call turn must report its memory update");
+        assert_eq!(report["commits"][0]["attempt"], "a-claude-0");
+        assert_eq!(report["commits"][0]["shared"], true);
+        assert_eq!(
+            report["commits"][0]["files"],
+            json!(["memory/learnings.md"])
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_memory_pass_that_edits_commits_and_fails_is_discarded_before_its_turn_settles() {
         let base = Arc::new(Mutex::new(String::new()));
         let remote_path = Arc::new(Mutex::new(PathBuf::new()));
@@ -8829,7 +9194,7 @@ for line in sys.stdin:
             publish_repository: kind == "publish",
         }));
         let (url, seen, server) =
-            recording_server_start_window(None, None, Some(window.clone())).await;
+            recording_server_start_window(None, None, Some(window.clone()), None).await;
         let (runner, dir) = drain_runner_on(&url, 300).await;
         let bot = format!("wait-{}", uuid::Uuid::new_v4().simple());
         let attempt = json!({"id": "a-placement", "bot": bot, "token": "synthetic", "lease_seconds": 120,
@@ -8860,7 +9225,8 @@ for line in sys.stdin:
         } else {
             None
         };
-        let work = runner.clone().execute(attempt);
+        // On the heap, as the runner spawns it: a whole turn's future overflows a debug test thread's stack.
+        let work = Box::pin(runner.clone().execute(attempt));
         let release = async {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
@@ -9081,7 +9447,7 @@ for line in sys.stdin:
             std::fs::write(&script, r#"import json, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(10)
@@ -9127,7 +9493,7 @@ print(json.dumps({'type':'result','subtype':'success','result':'Acme completed o
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)  # A failed guard cannot leave this synthetic process behind.
@@ -9220,7 +9586,7 @@ else:
         std::fs::write(&script, r#"import json, os, pathlib, signal, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 signal.alarm(20)
@@ -9351,7 +9717,7 @@ else:
         std::fs::write(&script, r#"import json, pathlib, sys
 root = pathlib.Path(__file__).parent
 if '--version' in sys.argv:
-    print('2.1.999'); sys.exit(0)
+    print('2.1.999 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     sys.exit(0)
 with (root / 'argv.jsonl').open('a') as f:
@@ -9374,6 +9740,346 @@ print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme in
         });
         HOST_CLAUDE.with(|on| on.set(true));
         RUN_SESSION.with(|on| on.set(Some(true)));
+    }
+
+    #[tokio::test]
+    async fn voice_restarts_for_context_and_a_stalled_interrupt_and_meters_the_whole_call() {
+        let _controls = RunControls;
+        let _home = PrivateHome::claude(true);
+        let notes = "Current call notes.";
+        let turns = ["First question", "Context limit", "Stall", "Next question"]
+            .into_iter()
+            .enumerate()
+            .map(|(n, text)| json!({"id": format!("turn-{n}"), "text": text, "notes": notes}))
+            .collect::<Vec<_>>();
+        let voice = Arc::new(VoiceFixture {
+            turns: turns.into(),
+            stream: None,
+        });
+        let (url, seen, server) =
+            recording_server_start_window(None, None, None, Some(voice)).await;
+        let (runner, dir) = runner_at(&url, "voice-context");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let script = dir.join("synthetic_voice.py");
+        std::fs::write(
+            &script,
+            r#"import json, pathlib, sys
+if '--version' in sys.argv:
+    print('2.1.999 (Claude Code)'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+session = sys.argv[sys.argv.index('--session-id') + 1]
+def send(frame):
+    print(json.dumps(frame), flush=True)
+def delta(text):
+    send({'type':'stream_event', 'event':{'type':'content_block_delta',
+        'delta':{'type':'text_delta', 'text':text}}})
+for line in sys.stdin:
+    message = json.loads(line)
+    with pathlib.Path(__file__).with_name('prompts.jsonl').open('a') as out:
+        if message['type'] == 'control_request':
+            out.write(json.dumps([session, 'Interrupt received']) + '\n')
+            continue  # a process that never sends result for this interrupt
+        assert message['type'] == 'user', message['type']
+        prompt = message['message']['content'][0]['text']
+        out.write(json.dumps([session, prompt]) + '\n')
+    if prompt.startswith('Reply exactly READY'):
+        send({'type':'result', 'result':'READY', 'usage':{'input_tokens':100, 'output_tokens':2}})
+        continue
+    cached = 23994 if 'Context limit' in prompt else 10000
+    send({'type':'stream_event', 'parent_tool_use_id':'child', 'event':{'type':'message_start',
+        'message':{'id':'child', 'usage':{'cache_read_input_tokens':100000}}}})
+    send({'type':'stream_event', 'event':{'type':'message_start',
+        'message':{'id':'main', 'usage':{'input_tokens':4, 'cache_read_input_tokens':cached}}}})
+    if prompt.endswith('Stall'):
+        delta('Stalled')
+        continue
+    delta(' Agreed.')
+    if prompt.endswith('First question'):
+        send({'type':'stream_event', 'event':{'type':'content_block_stop'}})
+    send({'type':'stream_event', 'event':{'type':'message_delta', 'usage':{'output_tokens':10}}})
+    send({'type':'result', 'result':'Agreed. Tomorrow.',
+        'usage':{'input_tokens':4,'cache_read_input_tokens':100000+cached,'output_tokens':10}})
+"#,
+        )
+        .unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        let aid = "a-voice-context";
+        let primer = "Reply exactly READY to warm up.";
+        let mut attempt = room_attempt(aid, on_plan("voice-test")["attempt"].clone());
+        attempt["config"]["session"] = json!("task");
+        attempt["message"] = json!({"body": primer, "sender_id": "keeper", "refs": {"live_meeting": {
+            "voice_call": "call-1", "notes_stamp": crate::gitrun::sha256_hex(b""),
+        }}});
+
+        tokio::time::timeout(Duration::from_secs(15), runner.clone().execute(attempt))
+            .await
+            .expect("voice lease did not finish")
+            .unwrap();
+        let done = completion(&seen, aid);
+        assert_eq!(done["outcome"], "completed", "{done:?}");
+        assert_eq!(done["usage"]["input_tokens"], 316);
+        assert_eq!(done["usage"]["cached_tokens"], 453994);
+        assert_eq!(done["usage"]["output_tokens"], 36);
+        assert_eq!(done["usage"]["billing"], "subscription");
+        assert_eq!(posted(&seen, "/attempts/a-voice-context/started"), 1);
+        let rows: Vec<(String, String)> = std::fs::read_to_string(dir.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|row| serde_json::from_str(row).unwrap())
+            .collect();
+        let [(first, initial), (s1, first_question), (s2, _), (second, recap), (s3, stall), (interrupted, interrupt), (third, later_recap), (s4, next)] =
+            rows.as_slice()
+        else {
+            panic!("expected three primers, four utterances and one interrupt, saw {rows:?}");
+        };
+        assert_eq!(initial, primer);
+        assert!(first_question.contains(notes));
+        assert_eq!([s1, s2], [first; 2]);
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+        assert_eq!(
+            recap,
+            "Reply exactly READY. Recent transcript from the server."
+        );
+        assert_eq!(recap, later_recap);
+        assert_eq!(s3, second);
+        assert_eq!(stall, "Participant utterance:\nStall");
+        assert_eq!(interrupted, second);
+        assert_eq!(interrupt, "Interrupt received");
+        assert_eq!(s4, third);
+        assert_eq!(next, "Participant utterance:\nNext question");
+        let seen = seen.lock().unwrap();
+        let finals = seen
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .filter(|e| e["kind"] == "message" && e["payload"]["final"] == true)
+            .map(|e| {
+                (
+                    text_of(&e["payload"]["voice_turn"]),
+                    text_of(&e["payload"]["text"]),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            finals,
+            ["turn-0", "turn-1", "turn-3"].map(|turn| (turn.into(), "Agreed. Tomorrow.".into()))
+        );
+        let first_deltas = seen
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .filter(|e| e["kind"] == "delta" && e["payload"]["voice_turn"] == "turn-0")
+            .map(|e| text_of(&e["payload"]["text"]))
+            .collect::<Vec<_>>();
+        assert_eq!(first_deltas, [" Agreed.", " "]);
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_voice_streams_interrupts_and_resumes_the_call() {
+        use tokio::io::AsyncWriteExt;
+
+        let _controls = RunControls;
+        let idle = "a-voice-codex-idle";
+        let stream = Arc::new(VoiceStreamFixture {
+            idle_attempt: idle,
+            ..Default::default()
+        });
+        let turns = ["First question", "Second question", "Stall", "Next question", "End the call"]
+            .into_iter()
+            .enumerate()
+            .map(|(n, text)| json!({"id": format!("turn-{n}"), "text": text, "notes": "Current call notes."}))
+            .collect::<Vec<_>>();
+        let voice = Arc::new(VoiceFixture {
+            turns: turns.into(),
+            stream: Some(stream.clone()),
+        });
+        let (url, seen, server) =
+            recording_server_start_window(None, None, None, Some(voice)).await;
+        let (runner, dir) = runner_at(&url, "voice-codex");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        crate::util::write_script(
+            &dir.join("codex"),
+            include_str!("../tests/fixtures/codex/voice.py"),
+        );
+        let gate = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        std::fs::write(
+            dir.join("stream-gate"),
+            gate.local_addr().unwrap().port().to_string(),
+        )
+        .unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        HOST_CODEX.with(|env| *env.borrow_mut() = Some([("PATH".into(), path)].into()));
+        let token = format!("run-codex-voice-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
+                "id": "voice-test", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                "value": "{\"tokens\":{}}", "revision": 1, "billing": "subscription"
+            }]}),
+        );
+        let attempt = |aid| {
+            room_attempt(
+                aid,
+                json!({
+                    "token": token, "credential_vault": true, "job_id": "resident-voice-job",
+                    "message": {"body": "You are Ops. Reply exactly READY to warm up.", "sender_id": "keeper",
+                        "refs": {"live_meeting": {"voice_call": "call-2", "notes_stamp": crate::gitrun::sha256_hex(b"")}}},
+                    "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "task", "reasoning_effort": "medium"}
+                }),
+            )
+        };
+        let initial = "a-voice-codex";
+        let resumed = "a-voice-codex-resumed";
+        let room = format!("{}:subscription:voice-test", session_key(&attempt(initial)));
+        runner
+            .state
+            .save_session("ops", &room, "codex", "ordinary-thread")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let result = runner.clone().execute(attempt(initial));
+            let release = async {
+                let (mut socket, _) = gate.accept().await.unwrap();
+                stream.busy_poll.notified().await;
+                socket.write_all(b"y").await.unwrap();
+                // The hub holds the busy poll until it gets the complete commentary sentence.
+                stream.first_sentence.notified().await;
+                stream.release_poll.notify_one();
+                socket.write_all(b"z").await.unwrap();
+            };
+            tokio::try_join!(result, async {
+                release.await;
+                Ok(())
+            })
+            .unwrap();
+        })
+        .await
+        .expect("the interrupted voice session ended");
+        let first = completion(&seen, initial);
+        assert_eq!(first["outcome"], "interrupted", "{first}");
+        assert_eq!(first["yielded"], true);
+        assert_eq!(first["usage"]["input_tokens"], 300);
+        assert_eq!(first["usage"]["cached_tokens"], 100);
+        assert_eq!(first["usage"]["output_tokens"], 16);
+        assert_eq!(
+            runner
+                .state
+                .session("ops", &room, "codex")
+                .unwrap()
+                .as_deref(),
+            Some("ordinary-thread")
+        );
+        drop(runner);
+
+        std::fs::write(dir.join("exit-idle"), b"").unwrap();
+        let runner = runner_from(&dir);
+        tokio::time::timeout(Duration::from_secs(15), runner.execute(attempt(idle)))
+            .await
+            .expect("the app server exited while the resumed session was idle")
+            .unwrap();
+        assert_eq!(completion(&seen, idle)["yielded"], true);
+
+        let runner = runner_from(&dir);
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            runner.clone().execute(attempt(resumed)),
+        )
+        .await
+        .expect("the resumed voice session ended")
+        .unwrap();
+        let second = completion(&seen, resumed);
+        assert_eq!(second["outcome"], "completed", "{second}");
+        assert_eq!(second["usage"]["input_tokens"], 150);
+        assert_eq!(second["usage"]["cached_tokens"], 50);
+        assert_eq!(second["usage"]["output_tokens"], 8);
+        assert_eq!(second["usage"]["billing"], "subscription");
+        assert_eq!(posted(&seen, "/started"), 3);
+        assert_eq!(
+            runner
+                .state
+                .session("ops", &room, "codex")
+                .unwrap()
+                .as_deref(),
+            Some("ordinary-thread")
+        );
+
+        let calls: Vec<(String, Value)> = std::fs::read_to_string(dir.join("calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let thread = |method: &'static str| {
+            calls
+                .iter()
+                .filter(move |(name, _)| name == method)
+                .map(|(_, params)| params)
+        };
+        assert_eq!(thread("initialize").count(), 3);
+        assert_eq!(thread("thread/start").count(), 1);
+        assert_eq!(thread("thread/start").next().unwrap()["model"], "synthetic");
+        assert_eq!(
+            thread("thread/resume")
+                .map(|p| p["threadId"].clone())
+                .collect::<Vec<_>>(),
+            [json!("call-thread"), json!("call-thread")]
+        );
+        assert_eq!(
+            thread("turn/interrupt")
+                .map(|p| p["turnId"].clone())
+                .collect::<Vec<_>>(),
+            ["codex-turn-4", "codex-turn-6"]
+        );
+        let prompts = thread("turn/start")
+            .map(|p| {
+                assert_eq!(p["effort"], "medium");
+                assert_eq!(p["threadId"], "call-thread");
+                p["input"][0]["text"].as_str().unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prompts.len(), 6);
+        assert!(prompts[0].contains("answer in one or two short spoken sentences"));
+        assert!(prompts[0].contains("Reply exactly READY"));
+        assert!(prompts[1..]
+            .iter()
+            .all(|text| text.contains("Participant utterance:")));
+        assert!(prompts[4].contains("Current call notes."));
+        let seen = seen.lock().unwrap();
+        let finals = seen
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .filter(|e| e["kind"] == "message")
+            .map(|e| {
+                (
+                    text_of(&e["payload"]["voice_turn"]),
+                    text_of(&e["payload"]["text"]),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            finals,
+            [
+                ("turn-0", "Agreed.\n\nTomorrow."),
+                ("turn-1", "Agreed. Tomorrow."),
+                ("turn-3", "Agreed. Tomorrow.")
+            ]
+            .map(|(turn, text)| (turn.into(), text.into()))
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A turn in the bot's own room, with `extra` merged into the claim (`fresh_session`, `fork_thread`).

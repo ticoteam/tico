@@ -2,7 +2,6 @@
 reads show it, the same file posts nothing twice, an unmapped line is refused and named, a closed month waits for the
 owner, a bot's import waits for the owner's approval, and reversed months post the file again once all are reversed."""
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -14,11 +13,6 @@ from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
 from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
-from backend.finance.store import schema as SCH
-
-import importlib
-
-MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
 from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
@@ -504,7 +498,7 @@ def test_the_bank_line_is_the_providers_balance_across_covered_history(books, sh
     fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
     with books.transaction() as c:
         assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
-    connect(books, fake)
+    connect(books, fake, history_from="2025-12-01")  # reads back to the December row (the default starts Jan 1)
     sync_once(books, fake)
     with books.transaction() as c:
         line, held = _bank_gl(c)
@@ -609,61 +603,6 @@ def test_a_reconcile_to_a_month_end_counts_no_raw_totals_from_after_it(books):
         assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), (
             sep.result
         )
-
-
-def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
-    """Migration 0037 on an install whose fin_feed_txns predates the covered status (its CHECK has no 'covered'): the
-    rebuild keeps every row and its entry_line_id, the table's triggers come back, 'covered' is accepted afterwards, and
-    a second run changes nothing. Other statuses stay refused."""
-    fake = FakeMercury()
-    connect(books, fake)
-    with books.transaction() as c:
-        money = c.execute("SELECT id FROM fin_money_accounts ORDER BY id LIMIT 1").fetchone()[0]
-
-        def triggers() -> list[str]:
-            return sorted(
-                r[0]
-                for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='fin_feed_txns'")
-            )
-
-        def sql() -> str:
-            return str(
-                c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0]
-            )
-
-        def state() -> list[tuple]:
-            return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
-
-        before_triggers = triggers()
-        # The table as cloud step 77 left it: the same columns (refund_of comes later, in migration 0037), and a status
-        # CHECK without 'covered'.
-        current = sql()
-        c.execute("DROP TABLE fin_feed_txns")
-        c.execute(current.replace("'ignored','covered'", "'ignored'").replace(", refund_of TEXT", ""))
-        assert "'covered'" not in sql() and "entry_line_id" in sql() and "refund_of" not in sql()
-        c.executemany(
-            "INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
-            "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
-            [
-                ("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
-                ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None),
-            ],
-        )
-        rows = state()
-
-        MIGRATION.up(c)
-        assert state() == rows
-        assert "entry_line_id" in [r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")]
-        assert triggers() == before_triggers
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE fin_feed_txns SET status='bogus' WHERE id='f2'")
-        c.execute("UPDATE fin_feed_txns SET status='covered' WHERE id='f2'")
-        rows = state()
-        table = sql()
-
-        MIGRATION.up(c)
-        assert state() == rows and sql() == table
-        assert triggers() == before_triggers
 
 
 def _opening_entry(c) -> tuple[str, str, int]:

@@ -1,6 +1,8 @@
 ---
 name: write-an-adr-from-a-decision
 description: Turn a decision made in a merged pull request, a design review or a meeting into a short architecture decision record, with the context, the options considered, the decision, its consequences, and a clear mark on anything inferred rather than stated.
+metadata:
+  function: engineering
 ---
 # Write an ADR from a decision
 

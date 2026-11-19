@@ -22,8 +22,10 @@ place, without calling `/start-place` or acknowledging the same start again.
 ## Supported skew
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
-a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. `scripts/check_wire_contract.py` checks the
-current contract against each kept release copy in both directions and fails on any break.
+a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,
+0.6.0-rc.1) pauses any runner below it, so 0.5 runners are paused, not served, and the supported window starts at
+0.6.0-rc.1. `scripts/check_wire_contract.py` checks the current contract against each kept release copy in both
+directions and fails on any break.
 
 ## Compatibility rules
 
@@ -63,8 +65,8 @@ an `Option` with that fallback. An answer it cannot read at all is a `protocol` 
 `MIN_RUNNER_RELEASE` in `backend/runner_versions.py` is the oldest runner release the server gives work to. A runner
 below it is paused: its claims answer `{"attempt": null, "paused": "<why>"}`, it logs the reason, and Computers shows it
 as incompatible. It is not refused outright. A runner that does not report a release (a development checkout) is never
-paused. The floor is 0.4.0, the previous minor release, matching the supported window. Raise it with the window at
-each new minor release.
+paused. The floor is 0.6.0-rc.1, the first release candidate of 0.6, the oldest version Tico supports. Raise it with
+the window at each new minor release.
 
 ## Changing the contract
 
@@ -82,3 +84,17 @@ Make-page requests are claimed only by runners advertising `make_page`. The opti
 names the target task; `task_context` remains references only. The runner uses a fresh session and disposable scratch,
 skips automatic file publication, and discards scratch after the turn. Later chat inputs and queued work stay queued.
 Older servers negotiate the flag away through the heartbeat 422 fallback.
+
+
+A runner advertises `voice_sessions_v1` to take a call's resident model job. A harness can require an additional
+runner capability in `voice_session_runner`. Codex requires `voice_session_resume_v1` for resident sessions and
+keeps a warm thread across a computer restart. An interrupted question is settled without replay.
+The claim's
+`message.refs.live_meeting.voice_call` names that call. The same attempt's `inputs` reply has a `call_voice` field
+with `closed` and, when a question is ready, its turn ID, text and notes. The runner sends that turn's ID as
+`voice_turn` on its delta and final message events. The lease and the attachment must still belong to that attempt
+when the server accepts output. The optional `voice=busy` query parameter checks the current utterance without
+claiming another. `voice=restart` returns a fresh primer and notes stamp with a bounded transcript recap.
+After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
+Older hubs negotiate the capability away through the heartbeat 422 fallback.
+With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `attempt_id` and `call_id`, and goes only to the computer still holding that attempt. It is sent for a new turn and when the active turn is skipped (its deadline passed). The runner fetches inputs on hints and reconnects, with a 3-second backup poll; while the server refuses the capability, or the stream is down or quiet past 25 seconds, it keeps the 400 ms poll.

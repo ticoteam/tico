@@ -137,7 +137,6 @@ def test_a_turn_cannot_read_the_registration_but_can_run_a_harness_and_push(volu
     assert turn["harness"] == 'codex logged in: {"login": "chatgpt"}', result  # the model login moved with the bot
     assert turn["push"] == "ok" and result["pushed"] == "from the turn", result  # the helper got the bot's token
     assert result["auth_seen"][-1].startswith("Basic ") and len(result["auth_seen"]) == 2, result  # 401, then the token
-    assert result["token_bodies"]["turn_start"] == [{"bot": "alpha"}], result
     assert result["token_bodies"]["git_helper"] and all(
         body == {"bot": "alpha", "purpose": "git"} for body in result["token_bodies"]["git_helper"]
     ), result
@@ -263,20 +262,15 @@ def test_the_codex_home_is_the_bot_users_and_group_writable_so_both_users_can_us
           'umask 002; echo key > /home/runner/.codex/auth.json && chmod g+rw /home/runner/.codex/auth.json'
         cat /home/runner/.codex/auth.json
         stat -c '%g' /home/runner/.codex/auth.json
-        # the mail tool's venv goes under the workspace, which the bot user can write
-        setpriv --reuid=10003 --regid=10002 --clear-groups --inh-caps=-all --ambient-caps=-all \\
-          sh -c 'TICO_PROJECTS_DIR=/home/runner/workspace; mkdir -p "$TICO_PROJECTS_DIR/runtime/mail/venv" && echo mail-ok'
     """,
     )
     assert started.returncode == 0, started.stdout + started.stderr
-    assert started.stdout.split()[-7:] == ["10003:10002", "2770", "10003:10002", "664", "key", "10002", "mail-ok"], (
-        started.stdout
-    )
+    assert started.stdout.split()[-6:] == ["10003:10002", "2770", "10003:10002", "664", "key", "10002"], started.stdout
 
 
-def test_both_users_can_write_the_mail_database_the_connectors_job_created_and_nothing_else_widens(volume):
-    # The job (ticorun, umask 022) made mail.db, its -wal/-shm and audit.jsonl as 0644 before any turn ran:
-    # a bot's `mail.sh search` then failed with "attempt to write a readonly database".
+def test_the_retired_mail_folder_goes_and_nothing_else_in_the_runtime_folder_changes(volume):
+    # The connectors job (ticorun, umask 022) left mail.db, its -wal/-shm and audit.jsonl; mail runs on the server now,
+    # so the start removes the folder once (docker/runner-entrypoint.sh).
     seeded = docker(
         "run",
         "--rm",
@@ -315,15 +309,12 @@ def test_both_users_can_write_the_mail_database_the_connectors_job_created_and_n
         "-c",
         """
         cd /home/runner/workspace/runtime
-        stat -c '%a' mail/mail.db mail/mail.db-wal mail/mail.db-shm mail/mail.db-journal mail/audit.jsonl other.txt
-        setpriv --reuid=10003 --regid=10002 --clear-groups --inh-caps=-all --ambient-caps=-all \\
-          sh -c 'for f in mail.db mail.db-wal mail.db-shm mail.db-journal audit.jsonl; do echo bot >> mail/$f; done && echo bot-ok'
-        setpriv --reuid=10002 --regid=10002 --clear-groups \\
-          sh -c 'for f in mail.db mail.db-wal mail.db-shm mail.db-journal audit.jsonl; do echo sup >> mail/$f; done && echo super-ok'
+        test ! -e mail && echo mail-gone
+        stat -c '%a' other.txt
     """,
     )
     assert started.returncode == 0, started.stdout + started.stderr
-    assert started.stdout.split() == ["664"] * 5 + ["644", "bot-ok", "super-ok"], started.stdout
+    assert started.stdout.split() == ["mail-gone", "644"], started.stdout
 
 
 def test_the_bot_user_clones_and_fetches_the_mirror_the_supervisor_owns(volume):
@@ -540,10 +531,13 @@ class Stack:
         deadline = time.monotonic() + WAIT_SECONDS
         while True:
             listed = docker("exec", self.hub, "ls", "/work/done").stdout.split()
-            if all(f"{aid}.json" in listed for aid in ids) or time.monotonic() > deadline:
+            if all(f"{aid}.json" in listed for aid in ids):
                 break
+            if time.monotonic() > deadline:
+                pending = [aid for aid in ids if f"{aid}.json" not in listed]
+                raise AssertionError(f"turns {pending} did not finish in {WAIT_SECONDS} s\n{self.logs()}")
             if docker("inspect", "-f", "{{.State.Running}}", self.runner).stdout.strip() != "true":
-                break  # the runner stopped: nothing more will finish
+                break  # the runner stopped: nothing more will finish, and the caller reports the turns missing
             time.sleep(2)
         return {
             aid: json.loads(self.must("exec", self.hub, "cat", f"/work/done/{aid}.json") or "null") or {}

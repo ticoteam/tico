@@ -1,6 +1,8 @@
 ---
 name: check-leaver-access-is-gone
 description: Confirm each access item for a leaver with a dated statement from its owner, privileged access first, and chase anything unconfirmed without marking it done.
+metadata:
+  function: people
 ---
 # Check leaver access is gone
 

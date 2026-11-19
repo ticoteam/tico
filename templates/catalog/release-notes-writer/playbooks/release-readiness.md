@@ -24,7 +24,7 @@ One line each, with its evidence and date:
 - The QA Engineer's test plan for this release exists and its results are recorded (ask `qa-owner` if not).
 - Database migrations listed, each with whether it can be reversed.
 - Feature flags that change state with this release, and who turns each on.
-- Rollback plan, judged with `skills/judge-whether-a-release-can-roll-back/SKILL.md`: the previous version, how it is restored,
+- Rollback plan, judged with `.claude/skills/ship-a-release/SKILL.md` (step 3): the previous version, how it is restored,
   and whether data the new version wrote still works on the old one.
 - Notes and changelog ready (`playbooks/weekly-release-notes.md`).
 - Anyone who must know before release (support, sales) named, from `knowledge/`.

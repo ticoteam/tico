@@ -1,4 +1,4 @@
-"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/pipelines-v3.md "Stage
+"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/dev/pipelines-v3.md "Stage
 settings", "Default pipelines", S11).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, Ben is an Admin and
@@ -54,19 +54,18 @@ def _ops(**fields):
         "private": False,
         "factory_id": None,
         "preset": None,
-        "keep_warm_hours": 8,
         "stages": [
             {
                 "name": "Intake",
                 "purpose": "Sort what came in",
                 "owner": "bot:builder",
+                "side": False,
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": None,
                 "expected_minutes": 60,
                 "expected_bots_only": True,
                 "on_enter": {},
-                "keep_warm_hours": 2,
                 "requirements": [
                     {
                         "kind": "owner_done",
@@ -77,7 +76,6 @@ def _ops(**fields):
                         "who_oks": "none",
                         "person_id": None,
                         "line": "Say it is sorted",
-                        "choices": None,
                     }
                 ],
             },
@@ -85,13 +83,13 @@ def _ops(**fields):
                 "name": "Sign off",
                 "purpose": "",
                 "owner": "assignee",
+                "side": False,
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": 2,
                 "expected_minutes": None,
                 "expected_bots_only": False,
                 "on_enter": {},
-                "keep_warm_hours": None,
                 "requirements": [
                     {
                         "kind": "ok",
@@ -102,7 +100,6 @@ def _ops(**fields):
                         "who_oks": "people_only",
                         "person_id": BEN,
                         "line": "Ben OKs it",
-                        "choices": None,
                     }
                 ],
             },
@@ -178,32 +175,6 @@ def test_a_saved_pipeline_reads_back_as_it_was_saved_with_done_and_closed_after_
     assert [s["id"] for s in saved["stages"]] == [f"{saved['id']}-intake", f"{saved['id']}-sign-off"]
 
 
-def test_keep_warm_is_set_on_the_pipeline_and_a_stage_and_a_save_that_leaves_it_out_keeps_it(c):
-    """ "Keep warm for up to N hours" (backend/keep_warm.py): 8 on a new pipeline, 0 off; a stage's own, or None for the
-    pipeline's. A caller that never names it (an older editor) changes neither."""
-    record = _ops()
-    del record["keep_warm_hours"]
-    for stage in record["stages"]:
-        del stage["keep_warm_hours"]
-    saved = PS.save(c, ANA, record)
-    assert saved["keep_warm_hours"] == PS.KEEP_WARM_DEFAULT
-    assert [s["keep_warm_hours"] for s in saved["stages"]] == [None, None]
-    saved["keep_warm_hours"] = 0
-    saved["stages"][1]["keep_warm_hours"] = 3
-    saved = PS.save(c, ANA, saved)
-    assert saved["keep_warm_hours"] == 0 and [s["keep_warm_hours"] for s in saved["stages"]] == [None, 3]
-    left_out = copy.deepcopy(saved)
-    del left_out["keep_warm_hours"]
-    del left_out["stages"][1]["keep_warm_hours"]
-    left_out["goal"] = "Keep the office running well"
-    saved = PS.save(c, ANA, left_out)
-    assert saved["keep_warm_hours"] == 0 and saved["stages"][1]["keep_warm_hours"] == 3
-    saved["stages"][1]["keep_warm_hours"] = None  # back to the pipeline's
-    assert PS.save(c, ANA, saved)["stages"][1]["keep_warm_hours"] is None
-    for bad in (-1, 25, 1.5, True, "8"):
-        assert PS.check(c, _ops(keep_warm_hours=bad))[0] == "Keep warm is a whole number of hours from 0 to 24."
-
-
 def test_defaults_fill_in_the_switches_by_kind(c):
     record = _ops()
     record["stages"][0]["requirements"] = [{"kind": "owner_done"}]
@@ -246,42 +217,19 @@ CASES = {
         lambda r: _req(r).update(PS.github("checks_pass", rubric="green")),
         "Checks pass has no setting rubric (on Intake).",
     ),
-    "an answer with no name": (
-        lambda r: _req(r).update(kind="answer", settings={"type": "text"}),
-        "Say it is sorted on Intake needs a name",
-    ),
-    "an answer of no type": (
-        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "date"}),
-        "Say it is sorted on Intake is text, a number or a choice.",
-    ),
-    "a number's bounds the wrong way": (
-        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "number", "min": 5, "max": 1}),
-        "The min of Say it is sorted on Intake is more than its max.",
-    ),
-    "a choice with no choices": (
-        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "choice"}),
-        "Say it is sorted on Intake needs its choices.",
-    ),
-    "choices on owner done": (
-        lambda r: _req(r).update(choices=["Yes", "No"]),
-        "Only an answer has choices, not Owner says done (on Intake).",
-    ),
     "only when": (
         lambda r: _req(r, 1).update(settings={"only_when": {"answer": "risky", "in": ["Yes"]}}),
         "Only when and Met when are not ready yet. Remove only_when from OK from someone on Sign off.",
     ),
     "met when": (
-        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "met_when": {"min": 1}}),
-        "Remove met_when from Answer from someone on Intake.",
-    ),
-    "two answers, one name": (
-        lambda r: (
-            _req(r).update(kind="answer", settings={"name": "sorted"}),
-            _req(r, 1).update(kind="answer", person_id=BEN, settings={"name": "sorted"}),
-        ),
-        "Two answers are named sorted.",
+        lambda r: _req(r, 1).update(settings={"met_when": {"min": 1}}),
+        "Remove met_when from OK from someone on Sign off.",
     ),
     "a kind that is not one": (lambda r: _req(r).update(kind="vibes"), "vibes is not a requirement kind"),
+    "an answer, which is a ❓ now": (
+        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "text"}),
+        "answer is not a requirement kind (on Intake).",
+    ),
     "a person on owner done": (
         lambda r: _req(r).update(person_id=BEN),
         "Only a requirement a person can meet with a button can name a person (C29)",
@@ -312,6 +260,10 @@ CASES = {
         "Intake files into a pipeline that does not exist",
     ),
     "a manager nobody is": (lambda r: r.update(manager_id="bot:nobody"), "The manager must be a bot or a person"),
+    "a rubric that is not text": (
+        lambda r: _req(r).update(kind="page", settings={"rubric": 5}),
+        "What the Decision model checks on Intake must be text.",
+    ),
 }
 
 
@@ -326,6 +278,43 @@ def test_check_names_each_problem_in_a_sentence_and_save_refuses_it(c):
         with _refused("task_settings"):
             PS.save(c, ANA, record)
     assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1
+
+
+def test_a_stage_action_must_be_removed_before_turning_side_on(c):
+    record = _ops()
+    action = {"act": "github.queue"}
+    _stage(record, 1).update(name="Merge", on_enter=action, requirements=[])
+    saved = PS.save(c, ANA, record)
+    problem = "Remove the stage's action before making it a side stage (Merge)."
+    for requested in (action, {}, None):
+        changed = copy.deepcopy(saved)
+        stage = _stage(changed, 1)
+        stage["side"] = True
+        if requested is None:
+            del stage["on_enter"]
+        else:
+            stage["on_enter"] = requested
+        assert PS.check(c, changed) == [problem]
+        with _refused("task_settings", "Remove the stage's action"):
+            PS.save(c, ANA, changed)
+        stage = _stage(PS.read(c, saved["id"]), 1)
+        assert (stage["side"], stage["on_enter"]) == (False, action)
+
+    _stage(saved, 1)["on_enter"] = {}
+    cleared = PS.save(c, ANA, saved)
+    _stage(cleared, 1)["side"] = True
+    assert _stage(PS.save(c, ANA, cleared), 1)["side"] is True
+
+
+@pytest.mark.parametrize("owner", ["pick", "bot:builder"])
+def test_a_side_stage_cannot_pick_from_a_bot_pool(c, owner):
+    record = _ops()
+    _stage(record, 1).update(
+        side=True, owner=owner, pick={"bots": ["bot:builder", "bot:reviewer"], "limit_each": 1}, requirements=[]
+    )
+    assert PS.check(c, record) == ["A side stage cannot pick from a bot pool (Sign off)."]
+    with _refused("task_settings", "cannot pick from a bot pool"):
+        PS.save(c, ANA, record)
 
 
 def test_a_requirement_id_is_listed_once_in_the_whole_record(c):
@@ -531,17 +520,12 @@ def _preset(kind, line, **fields):
         "who_oks": "none",
         "person_id": None,
         "line": line,
-        "choices": None,
     }
     record.update(fields)
     return record
 
 
 EDITOR_PRESETS = {
-    "confidence": _preset(
-        "answer", "Confidence (0-100)", settings={"type": "number", "name": "confidence_0_100", "min": 0, "max": 100}
-    ),
-    "yes_no": _preset("answer", "Yes or no", settings={"type": "choice", "name": "yes_or_no"}, choices=["Yes", "No"]),
     "review_page": _preset("page", "Review page", settings={"at_head": True}, who_oks="people_with_exceptions"),
     "manager_ok": _preset("ok", "OK", who_oks="people_with_exceptions", person_id="bot:manager"),
 }

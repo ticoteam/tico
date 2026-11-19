@@ -9,7 +9,6 @@
 #team-more-menu .nav-icon{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
 #team-more-menu .team-menu-check{margin-left:auto;color:var(--ink);visibility:hidden}
 #team-more-menu [aria-checked="true"] .team-menu-check{visibility:visible}
-#team-more-menu .team-menu-line{border:0;border-top:1px solid var(--line);margin:var(--s1) 0}
 .tmodal.team-add-dialog{width:min(440px,calc(100vw - 32px))}
 .team-add-dialog h2{margin:0;font-size:var(--t-lg);color:var(--ink);letter-spacing:var(--track-tight)}
 .team-add-dialog .tmodal-body{padding-top:16px}

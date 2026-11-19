@@ -1,4 +1,4 @@
-"""Org rule checks (docs/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
+"""Org rule checks (docs/dev/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
 is delivered (`questions/rule-check.json`, asked through the server's Decide engine, on Decide's one monthly budget).
 
 Like ask ingest (backend/ask_ingest.py): one call per output, outside the write's transaction (`preflight`); plain
@@ -81,6 +81,7 @@ from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 from . import sources as SRC
 from .entities import rules as DR
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
@@ -94,7 +95,15 @@ RULE_LEVEL = "low"
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3  # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
 REVIEW_LABEL = "rule-review"
-REVIEW_TITLE = "Rule review"  # a review task's title, and its thread's row title
+REVIEW_TITLE = "Rule review"  # an older review task's title (one hold each), before reviews were one per rule
+# A review task's title: the rule its holds broke. Holds of one rule for one reviewer share one open review.
+REVIEW_TITLE_RULE = "Held by: {rule}"
+REVIEW_TITLE_MAX = 200
+# Which part of a held output breaks each rule it broke (`_parts`): one call, after the rule check and outside the
+# write, only for an output a Block or Escalate rule holds. Its parts are its lines, or a one-line output's sentences.
+PART_SET = "rule-part"
+PARTS_MAX = 40  # an output of more parts than this is not split: the card says the whole text breaks it
+PART_CHARS = 600  # one part as the call reads it
 CACHE_DAYS = 7
 HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
@@ -113,15 +122,17 @@ OPERATIONS = {
     "task_update": "a change to a task",
     "task_owner": "a task assignment",
     "task_ask": "a question on a task",
+    "question": "a question to a person on a task's chat",
+    "chat_question": "a question to a person in a chat",
     "bulk": "a change to several tasks",
     "note": "a note to a bot",
     "reply": "a reply in a conversation",
     "automation": "an automation's write",
     "slack": "a Slack reply",
+    "slack_post": "a Slack channel post",
     "mail": "an email",
     "letter": "a letter",
     "update": "an update",
-    "task_question": "a question put to a person",
     "slack_message": "a Slack message",
     "slack_dm": "a Slack message to a bot",
     "threads": "a thread message",
@@ -130,13 +141,6 @@ OPERATIONS = {
     "assistant_message": "a message to the Assistant",
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken TEXT NOT NULL, "
-    "call_id TEXT, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
-    "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
-)
 
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
@@ -151,11 +155,6 @@ AUDIENCE = {}
 PATH = contextvars.ContextVar("org_rule_path", default="")
 CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def replayer(operation, prepare=None, audience=None):
@@ -220,15 +219,21 @@ def asking(place):
     return bool(getattr(place, "asks_person", False))
 
 
+def _can_hold_reply(rule):
+    """Whether a rule can hold a live reply back: a Block or Escalate rule not met only by a bot's question to a person
+    (`kind:ask`). A Warn rule never holds one (holds), so its bots' replies still stream as they are written."""
+    return rule["if_broken"] != "warn" and not R.asks_only(rule["where"])
+
+
 def watched(c, bot):
-    """Whether any active rule's Who names this bot: its live reply text stays hidden until delivered."""
+    """Whether a rule that can hold a reply (_can_hold_reply) names this bot in its Who: its live reply text stays
+    hidden until delivered."""
     slug = H.actor_id(bot)
     try:
         if not R.any_active(c) or not on(c):
             return False
         key = R.who_key(c, "bot:" + slug)
-        # A rule met only by a bot's question to a person (`kind:ask`) never reads a live reply.
-        return any(R._hits(row["who"], key) for row in R._active(c) if not R.asks_only(row["where"]))
+        return any(R._hits(row["who"], key) for row in R._active(c) if _can_hold_reply(row))
     except Exception:  # noqa: BLE001 - no tables yet (an old copy): nothing to hide
         return False
 
@@ -238,7 +243,10 @@ def watched_bots(c):
     try:
         if not R.any_active(c) or not on(c):
             return []
-        rules, ctx = [rule for rule in R._active(c) if not R.asks_only(rule["where"])], R._ctx(c)
+        rules = [rule for rule in R._active(c) if _can_hold_reply(rule)]
+        if not rules:
+            return []
+        ctx = R._ctx(c)
         return [
             row["id"]
             for row in H.bots(c)
@@ -322,15 +330,21 @@ def _cached(raw):
     return list(data), []
 
 
+def _cached_parts(raw):
+    """The parts a cached verdict found ({rule id: part}), {} when it kept none."""
+    data = json.loads(raw or "[]")
+    return dict(data.get("parts") or {}) if isinstance(data, dict) else {}
+
+
 def calls_today(c, people=False):
     """Today's rule-check calls: the bots' (`people` False) or the people's, each under its own daily cap (`daily_cap`).
     A people's call's `judge.call` row says so, with `people`."""
     day = H.now()[:10] + "T00:00:00"
     flag = "IS 1" if people else "IS NOT 1"
     return c.execute(
-        "SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND target LIKE ? AND created_at>=? "
-        f"AND json_extract(detail,'$.people') {flag}",
-        (H.KEEPER, RULES_TARGET, day),
+        "SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND (target LIKE ? OR target LIKE ?) "
+        f"AND created_at>=? AND json_extract(detail,'$.people') {flag}",
+        (H.TICO_ACTOR, RULES_TARGET, PART_SET + "@%", day),
     ).fetchone()[0]
 
 
@@ -500,8 +514,153 @@ def _judged(store, engine, qset, level, operation, batch, questions, state, draf
     else:
         detail["broken"] = len(broken)
     with store.transaction() as c:
-        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+        call = H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)
     return broken, (None if broken is not None else error or "shape"), call["id"]
+
+
+# A task write's labels the check reads (backend/task_rule_gate.py `said_text`) that its reviewer reads without
+# (`task_rule_gate.said_text` with `plain`): a part split from the judged text drops them too, to match the held text.
+PLAIN_LABELS = re.compile(r"^(?:Ask|Shows): ")
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+
+def split_parts(text):
+    """An output's parts, in order, for `_parts`: its non-empty lines, or a one-line output's sentences. [] when it has
+    one part (nothing to point at) or more than PARTS_MAX."""
+    lines = [PLAIN_LABELS.sub("", line.strip()) for line in str(text or "").splitlines() if line.strip()]
+    if len(lines) == 1:
+        lines = [p.strip() for p in SENTENCE_END.split(lines[0]) if p.strip()]
+    return lines if 1 < len(lines) <= PARTS_MAX else []
+
+
+def needs_parts(verdict):
+    """Whether a verdict holds its write on a rule it broke, so its hold is worth a pointer to the part (not a draft,
+    not a Warn alone, not an output too long to check)."""
+    if not verdict or verdict.get("draft") or verdict.get("outcome") != "broken":
+        return False
+    return any(r["if_broken"] != "warn" for r in verdict["rules"] if r["id"] in verdict["broken"])
+
+
+def _parts(store, engine, output, rules):
+    """{rule id: the part of `output` that breaks it} for the `rules` a held output broke: one call on PART_SET, one
+    dynamic choice per rule over the output's parts. A rule left out is one no single part breaks, or one the call
+    could not answer: the card then says the whole text breaks it. Never raises: a pointer is never worth a write."""
+    parts = split_parts(output)
+    if not parts or not rules or engine is None:
+        return {}
+    try:
+        qset = J.load_set(PART_SET)
+        base = qset["questions"]["part"]
+        options = {f"p{n}": part[:PART_CHARS] for n, part in enumerate(parts, 1)}
+        questions = {}
+        for n, rule in enumerate(rules, 1):
+            asked = dict(base["instructions"])
+            asked["question"] = asked["question"].replace("{rule}", json.dumps(rule["text"]))
+            questions[f"r{n}"] = J.with_options({**base, "instructions": asked}, options)
+        state = {
+            "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules, 1)],
+            "parts": [{"id": k, "text": v} for k, v in options.items()],
+        }
+        result, error = _ask(calls_for(store), engine, state, questions, qset["label"], RULE_LEVEL)
+        found = {}
+        if result is not None and not error and isinstance(result, dict):
+            answers = J.check_answers(result.get("answers"), questions)
+            cut = float(qset["thresholds"]["part"])
+            for n, rule in enumerate(rules, 1):
+                picked, confidence = J.choice(answers, f"r{n}")
+                if picked in options and confidence >= cut:
+                    found[rule["id"]] = parts[int(picked[1:]) - 1]
+        detail = {"label": qset["label"], "questions": len(questions), "rules": [r["id"] for r in rules]}
+        if result is not None and isinstance(result, dict):
+            detail.update(B.audit_detail(result))
+        if error:
+            detail["error"] = error
+        if error not in ("busy", "breaker", "budget"):
+            with store.transaction() as c:
+                H.event(c, H.TICO_ACTOR, "judge.call", qset["label"], detail)
+        return found
+    except Exception:  # noqa: BLE001 - the pointer is a help to the reviewer; the hold never waits on it
+        LOG.warning("The held part could not be found", exc_info=True)
+        return {}
+
+
+def _shown_parts(parts, text):
+    """The `parts` ({rule id: part}) found in `text`, the copy of a held write its reviewer reads."""
+    return {rid: part for rid, part in (parts or {}).items() if part and part in (text or "")}
+
+
+def _held_rules(verdict):
+    """The rules a verdict holds its write on: those it broke that are not Warn."""
+    return [r for r in verdict["rules"] if r["id"] in verdict["broken"] and r["if_broken"] != "warn"]
+
+
+def _later_parts(store, engine, verdict, output):
+    """A verdict that holds its write, marked for one `_parts` call once its hold is written (`_write_hold` starts it
+    after the write commits), so the hold never waits on the pointer. Any other verdict as it is."""
+    if not needs_parts(verdict) or engine is None or not split_parts(output):
+        return verdict
+    return {**verdict, "parts_later": (store, engine, output)}
+
+
+_PART_WORK = []  # the part calls still running, for `settle_parts`
+_PART_LOCK = threading.Lock()
+
+
+def _start_parts(c, verdict, hold_id):
+    """Start the held write's part call once the write that holds it commits."""
+    store, engine, output = verdict["parts_later"]
+    rules, digest = _held_rules(verdict), verdict["digest"]
+
+    def start():
+        work = threading.Thread(
+            target=_fill_parts, args=(store, engine, output, rules, hold_id, digest), name="org-rule-part", daemon=True
+        )
+        with _PART_LOCK:
+            _PART_WORK[:] = [t for t in _PART_WORK if t.is_alive()] + [work]
+        try:
+            work.start()
+        except RuntimeError:  # pragma: no cover - no thread to be had: the card says the whole text breaks it
+            LOG.warning("No thread for the held part")
+
+    hooks = getattr(c, "after_commit", None)
+    if hooks is not None:
+        hooks.append(start)
+    else:  # pragma: no cover - every store transaction has after_commit; a bare connection starts it now
+        start()
+
+
+def _fill_parts(store, engine, output, rules, hold_id, digest):
+    """One `_parts` call for a written hold: the parts its reviewer's copy holds go on the hold's detail, and every
+    part found beside its cached verdict, so a repeat asks nothing more. Found or not, the hold stops saying a part
+    is coming (`parts_pending`), so an open card reads it once more and stops asking. Never raises."""
+    try:
+        parts = _parts(store, engine, output, rules)
+        with store.transaction() as c:
+            row = c.execute("SELECT payload, verdict FROM org_rule_holds WHERE id=?", (hold_id,)).fetchone()
+            if row:
+                detail = {k: v for k, v in json.loads(row[1] or "{}").items() if k != "parts_pending"}
+                shown = _shown_parts(parts, (json.loads(row[0] or "{}") or {}).get("text")) if parts else {}
+                if shown:
+                    detail["parts"] = shown
+                c.execute("UPDATE org_rule_holds SET verdict=? WHERE id=?", (json.dumps(detail), hold_id))
+            hit = (
+                c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (digest,)).fetchone()
+                if parts
+                else None
+            )
+            if hit and not _cached(hit[0])[1]:
+                kept = {"broken": _cached(hit[0])[0], "parts": parts}
+                c.execute("UPDATE org_rule_verdicts SET broken=? WHERE digest=?", (json.dumps(kept), digest))
+    except Exception:  # noqa: BLE001 - the pointer is a help to the reviewer; the hold is already written
+        LOG.warning("The held part could not be kept", exc_info=True)
+
+
+def settle_parts(timeout=10.0):
+    """Wait for the part calls started so far (tests, and a clean shutdown)."""
+    with _PART_LOCK:
+        running = list(_PART_WORK)
+    for work in running:
+        work.join(timeout)
 
 
 @SRC.scoped("rule-check")
@@ -581,7 +740,7 @@ def check_as(
             hit = c.execute("SELECT broken, call_id FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
             if hit:
                 broken, unchecked = _cached(hit[0])
-                return {
+                found = {
                     **verdict,
                     "broken": broken,
                     "outcome": "broken" if broken else "pass",
@@ -589,6 +748,8 @@ def check_as(
                     "call": hit[1],
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
+                # The parts its first check found are cached with it: a repeat asks nothing more.
+                return {**found, "parts": _cached_parts(hit[0])} if needs_parts(found) else found
             if deferred(late, draft, skip, rules):
                 # A Warn never changes what is saved: the write goes now, and this same check runs right after it,
                 # where too long to check, no engine and the day's cap are found and recorded as they are here.
@@ -636,7 +797,7 @@ def check_as(
         if failed:
             # Some calls answered and some did not (the judge out part-way): what was found holds or warns, and the
             # rules not judged are recorded unchecked. Not cached: the next try asks again.
-            return {
+            partial = {
                 **verdict,
                 "broken": broken,
                 "outcome": "broken" if broken else "pass",
@@ -644,13 +805,19 @@ def check_as(
                 "error": errors[0],
                 "unchecked_rules": failed,
             }
+            return _later_parts(store, engine, partial, output)
+        done = _later_parts(
+            store, engine, {**verdict, "broken": broken, "outcome": "broken" if broken else "pass"}, output
+        )
+        # A complete verdict is cached as a plain list of the rules it broke; its hold's part call, after the write,
+        # adds the parts it finds beside them (`_fill_parts`).
         with store.transaction() as c:
             c.execute(
                 "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
                 (key, json.dumps(broken), call, H.now()),
             )
             c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
-        return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call}
+        return {**done, "call": call}
     except Exception as exc:
         # Only the judge being out fails open (`_ask` turns its failures into error codes: a timeout, an error, a
         # malformed answer, the breaker). Anything else is a fault here: the write fails, never goes unchecked.
@@ -1117,7 +1284,7 @@ def outside_edition(store, primary, output, to=""):
                 calls.append(
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "judge.call",
                         qset["label"],
                         {
@@ -1218,12 +1385,12 @@ def _repeats(c, author, rule_id):
 
 @SRC.scoped("rule-check")
 def _tell_bot(c, author, text):
-    """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
+    """A note on the bot's next run, as Tico (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
         return
     row = {
         "id": H.new_id(),
-        "from_actor": H.KEEPER,
+        "from_actor": H.TICO_ACTOR,
         "to_actor": author,
         "body": text[: H.NOTE_MAX],
         "created_at": H.now(),
@@ -1232,7 +1399,7 @@ def _tell_bot(c, author, text):
         "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES (:id,:from_actor,:to_actor,:body,:created_at)",
         row,
     )
-    H.event(c, H.KEEPER, "note.create", row["id"], {"to": author, "org_rule": True})
+    H.event(c, H.TICO_ACTOR, "note.create", row["id"], {"to": author, "org_rule": True})
 
 
 def _author_name(c, author):
@@ -1242,25 +1409,114 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
+def _strictest_first(broken, strictest):
+    """`broken` with the rule the hold is on first, then the others by STRICT, strictest first."""
+    rest = [r for r in broken if r["id"] != strictest["id"]]
+    rest.sort(key=lambda r: -STRICT.get(r.get("if_broken"), 0))
+    return [strictest, *rest] if any(r["id"] == strictest["id"] for r in broken) else rest
+
+
+def review_title(rule):
+    """A review task's title: the rule its holds broke, one line, cut at REVIEW_TITLE_MAX. It names no one; the held
+    text is never in it, nor in the body (only the hold's own card shows that, to the people who may read it)."""
+    raw = rule.get("text") if isinstance(rule, dict) else rule
+    text = " ".join(str(raw or "").split())
+    title = REVIEW_TITLE_RULE.format(rule=text) if text else REVIEW_TITLE
+    return title if len(title) <= REVIEW_TITLE_MAX else title[: REVIEW_TITLE_MAX - 1].rstrip() + "\u2026"
+
+
+def open_review(c, rule_id, reviewer):
+    """The open review task of `reviewer` for holds of rule `rule_id` still held, oldest first; None when there is none.
+    A seek of org_rule_holds_reviewer."""
+    if not rule_id or not reviewer:
+        return None
+    row = c.execute(
+        "SELECT h.task_id FROM org_rule_holds h JOIN tasks t ON t.id=h.task_id WHERE h.reviewer=? AND h.state='held' "
+        "AND h.task_id IS NOT NULL AND json_extract(h.verdict,'$.rule')=? AND t.status='open' "
+        "ORDER BY h.created_at LIMIT 1",
+        (reviewer, rule_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
 @SRC.scoped("rule-check")
 def _review_task(c, hold_id, author, rule, reviewer):
-    """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
-    the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
+    """The review task for a rule's holds (or an appeal's). Its title names the rule (`review_title`), never who broke
+    it or what was held: the held text is on each hold's card, drawn on the task and on its Needs you item for the
+    people who may read the hold. Later holds of the rule for this reviewer join it (`open_review`)."""
     body = (
-        "A message or output was held by an org rule. Open the hold to Keep blocked, Send anyway or Edit rule. "
-        "Nothing from the output is copied here.\n\nHold: " + hold_id
+        "Messages or outputs held by this rule wait for your decision. Each one is on this task's card, with the "
+        "part that broke the rule: keep them blocked, send them anyway, or edit the rule.\n\nHold: " + hold_id
     )
-    task = H.task_create(
+    from . import person_asks
+
+    task = person_asks.task_for(
         c,
-        H.KEEPER,
-        REVIEW_TITLE,
+        H.TICO_ACTOR,
+        review_title(rule),
         body,
         reviewer,
+        question="Keep them blocked, send them anyway, or edit the rule?",
+        why="A rule held what a bot wrote, and you review what it holds.",
         labels=[REVIEW_LABEL],
-        lint=False,
         deduplicate=False,
     )
     return task["id"]
+
+
+def _open_task(c, task_id):
+    """`task_id` while that review task is still open, else None. A review task its reviewer (or Tico) closed or marked
+    done is never reused: a hold attached to it afterwards would reach nobody, and closing it decided none of its holds."""
+    if not task_id:
+        return None
+    row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return task_id if row and row[0] not in ("done", "closed") else None
+
+
+def _repeat_task(c, author, rule_id):
+    """Today's open repeat review task for the bot's escalations of `rule_id`, or None: a closed one is not reused."""
+    row = c.execute(
+        "SELECT h.task_id FROM org_rule_holds h JOIN tasks t ON t.id=h.task_id WHERE h.author=? AND h.created_at>=? "
+        "AND json_extract(h.verdict,'$.rule')=? AND json_extract(h.verdict,'$.repeat')=1 "
+        "AND t.status NOT IN ('done','closed') ORDER BY h.created_at LIMIT 1",
+        (author, _day(), rule_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
+@SRC.scoped("rule-check")
+def regroup_reviews(c):
+    """Once at start (backend/start_jobs.py): open review tasks made one per hold, before reviews were one per rule,
+    become one per rule and reviewer. Each group's holds still held move to its oldest open task, which takes the rule's
+    title; a task left with none is closed, saying where they went. Running it again changes nothing."""
+    rows = c.execute(
+        "SELECT h.id, h.task_id, h.reviewer, json_extract(h.verdict,'$.rule') AS rule FROM org_rule_holds h "
+        "JOIN tasks t ON t.id=h.task_id WHERE h.state='held' AND h.task_id IS NOT NULL AND h.reviewer IS NOT NULL "
+        "AND t.status='open' ORDER BY t.created_at, t.id, h.created_at"
+    ).fetchall()
+    keepers, moved = {}, set()
+    for row in rows:
+        if not row["rule"]:
+            continue
+        keeper = keepers.setdefault((row["reviewer"], row["rule"]), row["task_id"])
+        if keeper != row["task_id"]:
+            c.execute("UPDATE org_rule_holds SET task_id=? WHERE id=?", (keeper, row["id"]))
+            moved.add((row["task_id"], keeper, row["rule"]))
+    for (_reviewer, rule_id), keeper in keepers.items():
+        rule = c.execute("SELECT text FROM org_rules WHERE id=?", (rule_id,)).fetchone()
+        title = review_title({"text": rule[0] if rule else ""})
+        task = H.task(c, keeper)
+        if task and task.get("title") == REVIEW_TITLE and title != REVIEW_TITLE:
+            H.attempt(c, H.task_update, H.TICO_ACTOR, keeper, title=title, quiet=True)
+    for old, keeper, rule_id in sorted(moved):
+        if c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (old,)).fetchone():
+            continue
+        rule = c.execute("SELECT text FROM org_rules WHERE id=?", (rule_id,)).fetchone()
+        number = (H.task(c, keeper) or {}).get("number")
+        where = f"#{number}" if number else "the review"
+        note = f"Moved to the review for the rule '{rule[0]}' ({where})." if rule else f"Moved to {where}."
+        H.attempt(c, H.task_close, H.TICO_ACTOR, old, note)
+    return len({old for old, _, _ in moved})
 
 
 def appeal_line(c, hold_id, reviewer, author=""):
@@ -1495,26 +1751,15 @@ def _write_hold(
         mode = "block"  # nobody to file a review task for: a Block the owner or an Admin can still release
     hold_id, nonce = H.new_id(), secrets.token_urlsafe(24)
     task_id = None
-    if mode == "escalate":
-        if repeat:
-            row = c.execute(
-                "SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
-                "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
-                "ORDER BY created_at LIMIT 1",
-                (author, _day(), strictest["id"]),
-            ).fetchone()
-            task_id = row[0] if row else None
-        if task_id is None and reviewer:
-            task_id = _review_task(c, hold_id, author, strictest, reviewer)
+    if mode == "escalate" and reviewer:
+        # One open review per rule and reviewer: a hold on the same rule joins it, from any author on any day.
+        task_id = open_review(c, strictest["id"], reviewer) or _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
     # The whole text the check judged, kept only when the reviewer's copy leaves some of it out.
     judged = judged if isinstance(judged, str) or judged is None else json.dumps(judged, sort_keys=True, default=str)
     judged = judged if judged and judged != text else None
     body = (replay or {}).get("body") or {}
-    if operation == "task_answer":
-        asked = H.answer_question(c, body.get("target") or {})
-        text, text_refs = H.answer_text(asked, body.get("answers") or {}, text=text)
-    elif operation in ("answer", "reply"):
+    if operation in ("answer", "reply"):
         text, text_refs = H.answer_text(
             H.message(c, replay["message"]), replay.get("text") or body.get("text") or "", text=text
         )
@@ -1568,7 +1813,12 @@ def _write_hold(
         "digest": verdict["digest"],
         "versions": {r["id"]: r.get("version") for r in verdict["rules"] if r["id"]},
         "matched": [list(x) for x in matched],
+        # The part of the output that breaks each rule, as `_parts` found it: the reviewer's card points at it. Only a
+        # part the reviewer's copy holds is kept: one from words it leaves out (a private task's) is never shown.
+        **({"parts": shown} if (shown := _shown_parts(verdict.get("parts"), text)) else {}),
     }
+    if verdict.get("parts_later") and not detail.get("parts"):
+        detail["parts_pending"] = True  # the part call runs after this write; an open card reads the hold again
     if check == "structured":
         detail.update({"check": check, "error": error})
     c.execute(
@@ -1580,7 +1830,8 @@ def _write_hold(
             json.dumps(stored, default=str),
             author,
             json.dumps(verdict["recipients"]),
-            json.dumps([r["id"] for r in broken if r["id"]]),
+            # The rule the hold is on first, then the others strictest first: a card names the first.
+            json.dumps([r["id"] for r in _strictest_first(broken, strictest) if r["id"]]),
             json.dumps(detail),
             nonce,
             "held",
@@ -1590,6 +1841,8 @@ def _write_hold(
             check,
         ),
     )
+    if detail.get("parts_pending"):
+        _start_parts(c, verdict, hold_id)  # the pointer to the part is found after this write, never before it
     action = "rules.escalated" if mode == "escalate" else "rules.blocked"
     H.event(
         c,
@@ -1874,7 +2127,7 @@ def run_late(store, primary, row):
             if H.is_bot(verdict["author"]):
                 _tell_bot(c, verdict["author"], told)
             elif H.is_human(verdict["author"]) and told:
-                H.notice(c, H.KEEPER, verdict["author"], told, refs={"org_rule": True})
+                H.notice(c, H.TICO_ACTOR, verdict["author"], told, refs={"org_rule": True})
         return gate
 
 
@@ -1892,7 +2145,9 @@ def _warn_saved(c, target, gate):
         c.execute("UPDATE messages SET body=? WHERE id=?", (warned_text(gate, found[0]), target["message"]))
         if target.get("task"):
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, target["task"]))
-        H.event(c, H.KEEPER, "message.edited", target["message"], {"task": target.get("task"), "rule_warning": True})
+        H.event(
+            c, H.TICO_ACTOR, "message.edited", target["message"], {"task": target.get("task"), "rule_warning": True}
+        )
     elif kind == "answer":
         found = c.execute("SELECT notes FROM answers WHERE id=?", (target["answer"],)).fetchone()
         if found is not None:
@@ -2031,6 +2286,24 @@ def _reader(who, hold, c=None, auth=None):
     return "represented" if _is_represented(who, hold, c) else None
 
 
+def require_hold_meeting(c, principal, hold, stored=None):
+    """A hold's reviewer reads explicit meeting references under the same current membership as the message."""
+    operation = hold["operation"]
+    if operation not in ("message", "chat_question", "chat_upload", "threads", "threads_edit"):
+        return
+    from . import live_privacy
+
+    replay = (stored if stored is not None else json.loads(hold["payload"] or "{}")).get("replay") or {}
+    if operation == "threads_edit":
+        message = H.message(c, replay.get("message_id"), include_deleted=True)
+    elif operation == "threads":
+        message = {**replay, "conversation_id": replay.get("thread_id")}
+    else:
+        message = replay.get("body")
+    if not live_privacy.sources(c).message_readable(principal, message):
+        raise Problem("not_found", "There is no hold " + hold["id"], 404)
+
+
 def view_hold(c, who, hold, role=None, summary=False, auth=None):
     """One hold as its reader sees it. `summary` leaves out the held text, the appeal and the nonce (a list's row:
     the reader opens each hold for those)."""
@@ -2049,7 +2322,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     stored = {} if summary else stored
     if not summary:
         from .files import readable_page_refs
+        from .task_privacy import actor
 
+        require_hold_meeting(c, actor(who), hold, stored)
         stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
@@ -2059,12 +2334,18 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         # A list row is bounded whatever the hold names: a few short rule previews and names, and the counts.
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
     rules = []
+    # The part of the held text that breaks each rule (`_parts`), shown only with the text itself.
+    parts = {} if summary or not isinstance(stored, dict) else _shown_parts(verdict.get("parts"), stored.get("text"))
     for rid in rule_ids:
         row = c.execute(
             "SELECT id, kind, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)
         ).fetchone()
         if row:
-            rules.append({**dict(row), "text": row["text"][:SUMMARY_CHARS]} if summary else dict(row))
+            rules.append(
+                {**dict(row), "text": row["text"][:SUMMARY_CHARS]}
+                if summary
+                else {**dict(row), "part": parts.get(rid) or None}
+            )
     reviewer_name = H.person_name(c, H.actor_id(hold["reviewer"])) if hold["reviewer"] else None
     cut = lambda v: v[:SUMMARY_CHARS] if summary and isinstance(v, str) else v
     out = {
@@ -2084,6 +2365,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         "decided_by": hold["decided_by"],
         "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY,
         "can_withdraw": (author or stands_in) and hold["state"] == "held",
+        # The part call still runs: the card reads this hold again once it stops saying so (ui/app/org-rule-holds.ts).
+        "part_pending": bool(verdict.get("parts_pending")) and hold["state"] == "held",
     }
     if summary:
         out["appealed"] = bool(hold["why"])
@@ -2261,7 +2544,7 @@ def _finish_task(c, hold):
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
     if not left and task and task["status"] == "open":
-        H.attempt(c, H.task_close, H.KEEPER, tid, "Every hold on this task is decided.")
+        H.attempt(c, H.task_close, H.TICO_ACTOR, tid, "Every hold on this task is decided.")
 
 
 def _decide(c, who, hold, state, event=""):
@@ -2330,11 +2613,11 @@ def withdraw(c, who, hold_id, auth=None):
 
 
 def expire_unreviewed(c, at, limit=HELD_EXPIRE_MAX):
-    """Keep, unsent, each held write nobody decided within HELD_HOURS. The keeper decides it as `keep` does, so its
+    """Keep, unsent, each held write nobody decided within HELD_HOURS. Tico decides it as `keep` does, so its
     review task closes, and the bot that wrote it is told it was not sent, so it can write it again within the rules or
     drop it. Nothing here delivers a held payload. Oldest first, at most `limit` per sweep."""
     cutoff = H.shift(at, hours=-HELD_HOURS)
-    keeper = SimpleNamespace(actor=H.KEEPER, via="", task_actor="")
+    tico = SimpleNamespace(actor=H.TICO_ACTOR, via="", task_actor="")
     expired = []
     rows = c.execute(
         "SELECT * FROM org_rule_holds WHERE state='held' AND created_at<? ORDER BY created_at, id LIMIT ?",
@@ -2343,7 +2626,7 @@ def expire_unreviewed(c, at, limit=HELD_EXPIRE_MAX):
     for row in rows:
         hold = dict(row)
         with isolated(c, "held_expiry", hold["id"]):
-            _decide(c, keeper, hold, "kept", "org_rule_hold.expired")
+            _decide(c, tico, hold, "kept", "org_rule_hold.expired")
             _tell_bot(
                 c,
                 hold["author"],
@@ -2394,7 +2677,8 @@ def current_people(c, hold, audience=None, auth=None):
 
 def place_now(c, hold, people, replay=None):
     """The place the held write has now, read again on the people it reaches now (teams, outside members, the thread's
-    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start."""
+    participants). A write that starts its thread (`start`, with no thread yet) has the place it would start. A bot's
+    question to a person (`ask`, a ❓: backend/question_marks.py) is one still: that is what the write is, not where."""
     stored = hold_provenance(hold).get("place")
     if not stored:
         return None
@@ -2402,7 +2686,7 @@ def place_now(c, hold, people, replay=None):
     if replay.get("start") is not None and not stored.get("thread"):
         start = replay["start"]
         audience = "personal" if "dm" in start else (start.get("audience") or "members")
-        return place_for_start(
+        found = place_for_start(
             c,
             hold["author"],
             people,
@@ -2410,7 +2694,9 @@ def place_now(c, hold, people, replay=None):
             audience_group_id=start.get("audience_group_id"),
             members=start.get("dm") or start.get("members") or (),
         )
-    return place_for(c, hold["author"], people, stored.get("thread") or "")
+    else:
+        found = place_for(c, hold["author"], people, stored.get("thread") or "")
+    return {**found, "ask": True} if stored.get("ask") else found
 
 
 def current_matched(c, hold, audience=None, auth=None):
@@ -2556,6 +2842,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     hold = _hold(c, hold_id)
     if not _is_reviewer(who, hold, c, auth):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
+    require_hold_meeting(c, who.actor, hold)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
     if not nonce or not secrets.compare_digest(str(nonce), hold["nonce"]):
@@ -2588,7 +2875,8 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
 
 
 def appeal(c, who, hold_id, why):
-    """The author bot sends its hold to the reviewer as a review task. `why` stays on the hold, for the reviewer."""
+    """The author bot sends its hold to the reviewer as a review task: the hold's own while it is open, else a new one.
+    `why` stays on the hold, for the reviewer."""
     hold = _hold(c, hold_id)
     if not _is_author(who, hold):
         raise Problem("not_found", "There is no hold " + hold_id, 404)
@@ -2596,13 +2884,15 @@ def appeal(c, who, hold_id, why):
         raise Problem("conflict", "This hold is already decided", 409)
     H._writer(c, who.actor, task_id=hold["task_id"])
     why = str(why or "").strip()[:2000]
-    task_id = hold["task_id"]
+    task_id = _open_task(c, hold["task_id"])  # a closed review task gets a new one: the reviewer must see this hold
     if not hold["reviewer"]:
         raise Problem("no_reviewer", "Nobody on the team can review this hold", 409)
     if not task_id:
         rid = (json.loads(hold["verdict"] or "{}")).get("rule")
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
-        task_id = _review_task(c, hold_id, hold["author"], dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
+        task_id = open_review(c, rid, hold["reviewer"]) or _review_task(
+            c, hold_id, hold["author"], dict(rule) if rule else {"text": "a rule"}, hold["reviewer"]
+        )
     c.execute("UPDATE org_rule_holds SET why=?, task_id=? WHERE id=?", (why, task_id, hold_id))
     H.event(c, who.actor, "org_rule_hold.appealed", "org_rule_hold:" + hold_id, {"task": task_id})
     return {"id": hold_id, "task_id": task_id, "reviewer": H.person_name(c, H.actor_id(hold["reviewer"]))}
@@ -2728,16 +3018,12 @@ def _blocked_again(c, hold, verdict):
             },
         )
         return hold
-    row = c.execute(
-        "SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
-        "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
-        "ORDER BY created_at LIMIT 1",
-        (author, _day(), rid),
-    ).fetchone()
-    task_id = hold["task_id"] or (row[0] if row else None)
+    task_id = _open_task(c, hold["task_id"]) or _repeat_task(c, author, rid)
     if task_id is None and hold["reviewer"]:
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
-        task_id = _review_task(c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
+        task_id = open_review(c, rid, hold["reviewer"]) or _review_task(
+            c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"]
+        )
     c.execute(
         "UPDATE org_rule_holds SET verdict=json_set(verdict,'$.outcome','escalate','$.repeat',1), task_id=? WHERE id=?",
         (task_id, hold["id"]),
@@ -2855,7 +3141,7 @@ def stats(c, settings):
     checks = c.execute(
         "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action='judge.call' "
         "AND target=? AND created_at>=?",
-        (H.KEEPER, label, day),
+        (H.TICO_ACTOR, label, day),
     ).fetchone()[0]
 
     def count(*actions):
@@ -2872,7 +3158,7 @@ def stats(c, settings):
     people = c.execute(
         "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE actor=? AND "
         "action='judge.call' AND target LIKE ? AND created_at>=? AND json_extract(detail,'$.people')=1",
-        (H.KEEPER, RULES_TARGET, month),
+        (H.TICO_ACTOR, RULES_TARGET, month),
     ).fetchone()[0]
     return {
         "checks_today": checks,
@@ -3060,7 +3346,14 @@ def install(app, store, auth, mutate):
         )
         return mutate(request, body, lambda c: mail_decide(c, prep))
 
-    @app.get("/api/v2/rules/stats")
+    @app.get(
+        "/api/v2/rules/stats",
+        **api_v2(
+            "Rules",
+            "getRuleCheckStats",
+            "Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on",
+        ),
+    )
     def rules_stats(request: Request):
         """The Rules page header: checks today, unchecked, blocked, dollars left under Decide's monthly cap, and on/off."""
         who = request.state.identity
@@ -3068,7 +3361,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return stats(c, store.settings)
 
-    @app.get("/api/v2/rule-holds")
+    @app.get(
+        "/api/v2/rule-holds",
+        **api_v2(
+            "Rules",
+            "listRuleHolds",
+            "The held writes the caller may read, as summaries, a page at a time: a review task's holds (task), a conversation's held writes (thread), or every held write the caller may read",
+        ),
+    )
     def rule_holds(
         request: Request,
         task: str | None = None,
@@ -3084,25 +3384,46 @@ def install(app, store, auth, mutate):
             items, nxt = holds_listed(c, who, task or "", thread or "", cursor, limit, auth)
         return {"holds": items, "next_cursor": nxt}
 
-    @app.get("/api/v2/rule-holds/{hold_id}")
+    @app.get(
+        "/api/v2/rule-holds/{hold_id}",
+        **api_v2(
+            "Rules",
+            "getRuleHold",
+            "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest",
+        ),
+    )
     def rule_hold(request: Request, hold_id: str):
         who = request.state.identity
         with store.read() as c:
             hold = _hold(c, hold_id)
             return view_hold(c, who, hold, auth=auth)
 
-    @app.post("/api/v2/rule-holds/{hold_id}/keep")
+    @app.post("/api/v2/rule-holds/{hold_id}/keep", **api_v2("Rules", "keepRuleHold", "The reviewer keeps it blocked"))
     def rule_hold_keep(request: Request, hold_id: str, body: HoldEmpty):
         who = request.state.identity
         return mutate(request, body, lambda c: keep(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/withdraw")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/withdraw",
+        **api_v2(
+            "Rules",
+            "withdrawRuleHold",
+            "The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent",
+        ),
+    )
     def rule_hold_withdraw(request: Request, hold_id: str, body: HoldEmpty):
         """The author takes back a held write to send it again (Edit and resend): the hold is kept, nothing is sent."""
         who = request.state.identity
         return mutate(request, body, lambda c: withdraw(c, who, hold_id, auth))
 
-    @app.post("/api/v2/rule-holds/{hold_id}/send")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/send",
+        **api_v2(
+            "Rules",
+            "sendRuleHold",
+            "The reviewer sends it anyway, once, with the hold's nonce; for a person's write that is the rule's author, its editors or an admin",
+        ),
+    )
     def rule_hold_send(request: Request, hold_id: str, body: HoldSend):
         who = request.state.identity
         ingest, check, ident = None, None, None
@@ -3113,6 +3434,8 @@ def install(app, store, auth, mutate):
                 and hold["state"] == "held"
                 and not store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             )
+            if ready:
+                require_hold_meeting(c, who.actor, hold)
             if ready and hold["operation"] in prepare:
                 ident = replay_identity(c, hold, auth)
         if ready:
@@ -3135,13 +3458,23 @@ def install(app, store, auth, mutate):
             ),
         )
 
-    @app.post("/api/v2/rule-holds/{hold_id}/appeal")
+    @app.post(
+        "/api/v2/rule-holds/{hold_id}/appeal",
+        **api_v2("Rules", "appealRuleHold", "The author bot asks the reviewer to look, with why"),
+    )
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):
         """The author bot asks the reviewer to look. Never checked by rules: it delivers nothing."""
         who = request.state.identity
         return mutate(request, body, lambda c: appeal(c, who, hold_id, body.why))
 
-    @app.post("/api/v2/rules/check")
+    @app.post(
+        "/api/v2/rules/check",
+        **api_v2(
+            "Rules",
+            "checkRuleDraft",
+            "A bot checks a draft as the write it will be; sending that exact draft then costs no second check",
+        ),
+    )
     def rules_check(request: Request, body: DraftCheck):
         """A bot checks a draft as the write it will be (`tico rules check`): the same input, and the verdict cached, so
         sending that exact draft costs no second call. A person's draft is checked as theirs."""
@@ -3187,7 +3520,6 @@ __all__ = [
     "check_as",
     "checked_as",
     "digest",
-    "ensure",
     "health_findings",
     "held_for",
     "held_note",

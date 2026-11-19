@@ -2,6 +2,7 @@
 once Finance is set up, outside the org chart, with exactly its default Finance rights; an hourly check that opens one
 task only when the queue has news (no task, no model call otherwise); emailed bills land once. Synthetic fixtures."""
 
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -185,7 +186,7 @@ def test_an_older_install_gets_the_view_once_and_its_open_ask_is_closed_for_the_
         FA.ensure_setup(c, store.settings.owner_email)
         BK.grant_defaults(c)
         owner = "human:" + api.app.state.auth.owner_id(c)
-        ask = H.task_create(c, H.KEEPER, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
+        ask = H.task_create(c, H.TICO_ACTOR, BK.VIEW_TITLE, "Open Finance → Access.", owner, lint=False)["id"]
     ensure(api)
     ensure(api)
     with store.read() as c:
@@ -268,7 +269,7 @@ def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(en
     first = check(api)
     assert first["items"] == 1 and first["state"] == "opened"
     (task,) = checks(api)
-    assert task["title"] == "Books check (1)" and task["private"] == 1 and "bil_1" in task["body"]
+    assert task["title"] == "Books check (1)" and task["private"] == 1 and "bil_1" in task["words"]
     assert check(api)["words"] == "Nothing new" and len(checks(api)) == 1
 
 
@@ -326,8 +327,8 @@ def test_a_bill_emailed_to_the_address_lands_once_in_the_library_and_in_the_book
     assert again[1] == row["action_id"]
     first = check(api)
     (task,) = checks(api)
-    assert first["items"] == 1 and "Emailed bill from ap@acme.example: Invoice 1042" in task["body"]
-    assert row["file_id"] in task["body"]
+    assert first["items"] == 1 and "Emailed bill from ap@acme.example: Invoice 1042" in task["words"]
+    assert row["file_id"] in task["words"]
 
 
 def test_a_retired_template_is_offered_nowhere_but_a_bot_built_from_it_keeps_its_card(environment):
@@ -392,7 +393,7 @@ def test_a_check_reads_every_page_of_the_queue(environment, monkeypatch):
     monkeypatch.setattr(FR, "inbox", pages)
     assert check(api)["items"] == 451  # past the inbox's 200 per kind
     (task,) = checks(api)
-    assert "bil_late" in task["body"] and "uncategorized (450)" in task["body"]
+    assert "bil_late" in task["words"] and "uncategorized (450)" in task["words"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bookkeeper_seen WHERE key='bill_to_enter:bil_late'").fetchone()
 
@@ -426,7 +427,7 @@ def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(env
     assert len(tries) == 2
     with store.read() as c:
         assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "failed"
-    assert check(api)["items"] == 1 and "Invoice 1042" in checks(api)[0]["body"]
+    assert check(api)["items"] == 1 and "Invoice 1042" in checks(api)[0]["words"]
     with store.transaction() as c:
         assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "reported"
         later = BK.check(c, api.app.state.auth, H.shift(H.now(), hours=BK.REPEAT_HOURS + 1))
@@ -466,7 +467,7 @@ def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypa
                 ),
             )
     assert check(api)["items"] == 50
-    body = checks(api)[0]["body"]
+    body = checks(api)[0]["words"]
     with store.read() as c:
         reported = {r["id"] for r in c.execute("SELECT id FROM bills_inbound WHERE state='reported'")}
     assert len(reported) == BK.PER_KIND and all(f"- {i} " in body for i in reported)
@@ -514,16 +515,16 @@ def _bot_payment_events(c):
 
 
 def test_a_bots_payment_rule_is_seeded_once_and_an_owners_change_sticks(environment):
-    """The Security Owner's condition for the default view: one editable gate rule, "a bot's payment asks a finance
-    admin", seeded once per install with one event. The owner turns it off or deletes it on purpose and no start
-    restores it."""
+    """One editable gate rule, "a bot pays on its own up to $1,000 a payment; above that it asks a finance admin",
+    seeded once per install with one event. The owner turns it off or deletes it on purpose and no start restores it."""
     api = built(environment)
     ensure(api)
     ensure(api)
     store = api.app.state.store
     with store.read() as c:
-        ((rid, on, _),) = _bot_payment_rules(c)
+        ((rid, on, condition),) = _bot_payment_rules(c)
         assert on == 1 and _bot_payment_events(c) == 1
+        assert json.loads(condition) == {"kind": "payment_create", "actor.kind": "bot", "amount": {"gt": 100_000}}
     with store.transaction() as c:
         owner = "human:" + api.app.state.auth.owner_id(c)
         assert FA.act(c, owner, "rule_disable", {"rule_id": rid}, "rule-off").status == "committed"
@@ -563,3 +564,89 @@ def test_a_paused_finance_owner_still_gets_the_bots_payment_rule(environment):
     ensure(api)
     with store.read() as c:
         assert len(_bot_payment_rules(c)) == 1 and _bot_payment_events(c) == 1
+
+
+def _as_before_the_limit(c, **changes):
+    """The rule as an install before the payment limit seeded it ("a bot's payment asks a finance admin", any amount),
+    with the limit's own record gone: what an older install's next start finds."""
+    row = {
+        "name": "Bot payments",
+        "words": "A bot's payment asks a finance admin.",
+        "condition": json.dumps({"actor.kind": "bot", "kind": "payment_create"}),
+        "outcome": json.dumps({"outcome": "needs_approval", "who": "finance_admin"}),
+        "active": 1,
+        "updated_at": None,
+        **changes,
+    }
+    c.execute(
+        "UPDATE fin_rules SET name=?, words=?, condition=?, outcome=?, active=?, updated_at=? WHERE id=?",
+        (*row.values(), BK.BOT_PAYMENT_RULE),
+    )
+    c.execute("DELETE FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,))
+    c.execute("DELETE FROM messages WHERE kind='notice' AND body=?", (BK.BOT_PAYMENT_NOTICE,))
+
+
+def _limit_notices(c):
+    return c.execute(
+        "SELECT count(*) FROM messages WHERE kind='notice' AND body=?", (BK.BOT_PAYMENT_NOTICE,)
+    ).fetchone()[0]
+
+
+def test_an_untouched_any_amount_rule_from_before_moves_to_the_limit_once_and_tells_the_owner(environment):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        _as_before_the_limit(c)
+    ensure(api)
+    ensure(api)
+    with store.read() as c:
+        ((_, on, condition),) = _bot_payment_rules(c)
+        assert on == 1 and json.loads(condition)["amount"] == {"gt": BK.BOT_PAYMENT_LIMIT}
+        row = c.execute("SELECT name, updated_at FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,)).fetchone()
+        assert row["name"] == "Bot payments over $1,000" and row["updated_at"] is None
+        assert _limit_notices(c) == 1 and _bot_payment_events(c) == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,)).fetchone()[0] == 1
+
+
+def test_an_owners_edited_or_disabled_rule_from_before_is_never_moved(environment):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    for changes in ({"updated_at": "2026-10-01T00:00:00Z"}, {"active": 0, "updated_at": "2026-10-01T00:00:00Z"}):
+        with store.transaction() as c:
+            _as_before_the_limit(c, **changes)
+        ensure(api)
+        with store.read() as c:
+            ((_, on, condition),) = _bot_payment_rules(c)
+            assert json.loads(condition) == {"actor.kind": "bot", "kind": "payment_create"}, changes
+            assert on == changes.get("active", 1) and _limit_notices(c) == 0
+    with store.transaction() as c:  # the owner's own wording on an unedited row (a hand change to the db): kept too
+        _as_before_the_limit(c, outcome=json.dumps({"outcome": "needs_approval", "who": "owner"}))
+    ensure(api)
+    with store.read() as c:
+        assert "amount" not in json.loads(_bot_payment_rules(c)[0]["condition"]) and _limit_notices(c) == 0
+    with store.transaction() as c:  # deleted: not brought back
+        c.execute("DELETE FROM fin_rules WHERE id=?", (BK.BOT_PAYMENT_RULE,))
+        c.execute("DELETE FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,))
+    ensure(api)
+    with store.read() as c:
+        assert _bot_payment_rules(c) == [] and _limit_notices(c) == 0
+
+
+def test_without_the_new_recipient_rule_on_the_old_rule_stays_and_the_move_is_recorded_without_a_notice(environment):
+    """The old any-amount rule is the only check on a bot paying a new payee while rule:new-recipient is off, so it is
+    not moved; the move is still recorded (never tried again) and the owner is told nothing."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        _as_before_the_limit(c)
+        c.execute("UPDATE fin_rules SET active=0 WHERE id='rule:new-recipient'")
+    ensure(api)
+    with store.read() as c:
+        ((_, on, condition),) = _bot_payment_rules(c)
+        assert on == 1 and json.loads(condition) == {"actor.kind": "bot", "kind": "payment_create"}
+        assert _limit_notices(c) == 0
+        (moved,) = c.execute("SELECT detail FROM events WHERE action=?", (BK.BOT_PAYMENT_LIMIT_EVENT,)).fetchall()
+        assert json.loads(moved[0])["moved"] is False

@@ -10,10 +10,13 @@
     {
       "name": "tico",
       "source": "./",
-      "description": "Open a pull request the way the team and the dev bots do.",
+      "description": "Open a pull request, speed up CI with measured evidence, harden CI workflows, and keep tests and checks honest, the way the team and the dev bots do.",
       "strict": false,
       "skills": [
-        "./skills/create-pr"
+        "./skills/create-pr",
+        "./skills/ci-speed",
+        "./skills/ci-security",
+        "./skills/honest-code"
       ]
     }
   ]

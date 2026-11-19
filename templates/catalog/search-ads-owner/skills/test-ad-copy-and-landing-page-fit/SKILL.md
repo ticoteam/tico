@@ -1,6 +1,8 @@
 ---
 name: test-ad-copy-and-landing-page-fit
 description: Write a search ad copy or landing page test before it starts (one question, its variants, the primary conversion, the count and the earliest read date), check that the landing page matches the search, then read the test on that conversion and say when no winner can yet be called.
+metadata:
+  function: marketing
 ---
 # Test ad copy and landing page fit
 

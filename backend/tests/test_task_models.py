@@ -6,11 +6,13 @@ import json
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import usage_limits
 from backend.store import H
-from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import company, finish, heartbeat
-from backend import bot_settings as BS
+from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
 
@@ -45,7 +47,7 @@ def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_syn
     shown = lambda: next(m for m in get(api, "operations")["machines"] if m["id"] == machine["runner_id"])
     assert "grok" in shown()["bot_runtimes"]
     # Just like the bot's primary and fallback, the task runtime cannot be switched off while required.
-    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False}, expected=409)
+    post(api, f"computers/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False}, expected=409)
     # Grok's actual runner readiness has no sign-in check; installed + unknown must still run.
     rust_heartbeat(
         api,
@@ -61,7 +63,7 @@ def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_syn
     assert get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["source"] == "task"
     set_task_model(api, None)
     assert "grok" not in shown()["bot_runtimes"]
-    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False})
+    post(api, f"computers/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False})
 
 
 def test_with_no_task_model_a_task_runs_on_the_bots_own_model_and_effort(api):
@@ -563,7 +565,7 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
         },
         isolated=True,
     )
-    saved = set_task_model(api, {"harness": "codex", "model": "gpt-6.1-sol", "effort": "high"})
+    saved = set_task_model(api, {"harness": "codex", "model": "gpt-6.2-sol", "effort": "high"})
     assert saved["readiness"]["can_run"] is False and "gateway" not in saved["readiness"]
     assert saved["readiness"]["fix"].startswith("Sign in codex on Test Mac in Settings > Computers")
     task, turn = task_turn(api, machine)
@@ -595,7 +597,7 @@ def test_an_ordinary_fallback_usage_limit_is_not_a_task_model_limit(api):
             "usage": {
                 "runtime": "codex",
                 "harness": "codex",
-                "model": "gpt-6.1-sol",
+                "model": "gpt-6.2-sol",
                 "input_tokens": 10,
                 "output_tokens": 1,
                 "billing": "subscription",
@@ -634,7 +636,17 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
         asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
-        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
+        shows = X.shown(c)
+        H.task_ask(
+            c,
+            "bot:ops",
+            asked["id"],
+            "human:ana",
+            "OK to send it?",
+            kind="ok",
+            shows=shows,
+            seen_version=asked["version"],
+        )
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (
@@ -918,3 +930,25 @@ def test_undoing_a_save_over_the_bots_own_model_restores_it_after_the_model_is_h
     save_terra_then_hold_it("medium")
     undo_last()
     assert get(api, "bots/ops")["task_model"] is None
+
+
+def test_the_task_model_answer_and_the_bots_row_match_their_declared_shapes_and_a_non_manager_is_refused(api):
+    ops_on_sonnet(api)
+    document = get(api, "openapi.json")
+    schemas = document["components"]["schemas"]
+    refused = api.post(
+        "/api/v2/bots/ops/task-model",
+        json={"task_model": HAIKU, "expected_revision": revision(api)},
+        headers=headers("cara-test"),
+    )
+    assert (refused.status_code, refused.json()["error"]["code"]) == (403, "forbidden")
+    saved = set_task_model(api, HAIKU)
+    assert conforms(saved, schemas["BotTaskModelSaved"], document) is None
+    assert saved["task_model"]["model"] == "claude-haiku-5-5" and saved["readiness"] is not None
+    listed = api.get("/api/v2/bots", headers=headers()).json()
+    ops = next(row for row in listed if row["id"] == "ops")
+    assert ops["task_model"] == saved["task_model"] and isinstance(ops["compact_at"], int)
+    assert conforms(ops, schemas["Bot"], document) is None
+    cleared = set_task_model(api, None)
+    assert cleared["task_model"] is None and cleared["readiness"] is None
+    assert conforms(cleared, schemas["BotTaskModelSaved"], document) is None

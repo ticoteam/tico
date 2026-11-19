@@ -4,9 +4,11 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 
 import hashlib
 import json
+import re
 from urllib.parse import quote
 from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._shared import _CHANNEL
@@ -94,10 +96,11 @@ def tools_report(api, args):
 
 @tool(
     "tico_tool_add",
-    "Register a tool for a bot you manage (BotOps: one the person who asked you manages): a `tools:` entry for its bot.yaml. The server checks "
-    "it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself. The tool stays pending until a tool report lists "
-    "it. Names and verbs only: never a Credential value. `env` names a stored Credential granted to the bot. To give the bot a vendor's remote MCP server, add `mcp_url`, `transport` and `headers` (the "
-    "credential is a ${VAR} placeholder for `env`).",
+    "Add a note on a tool for yourself, or (the Tools Owner, BotOps, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. "
+    "A tool granted in Tools already reaches the bot's runs and shows on its Tools tab with no entry: an entry that only names one is answered with the grant and "
+    "opens no task. Otherwise the server checks it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself; it stays "
+    "pending until a tool report lists it. Names and verbs only: never a Credential value. To give the bot a vendor's remote MCP server Tools does not hold, add "
+    "`mcp_url`, `transport` and `headers` (the credential is a ${VAR} placeholder for `env`).",
     {
         "bot": _s("The bot's slug"),
         "service": _s("A short name such as posthog or google-calendar"),
@@ -186,7 +189,7 @@ def tools_update(api, args):
 
 @tool(
     "tico_tool_remove",
-    "Request removal of a tool from a bot you manage (its id from `tico_tool_list`), or withdraw "
+    "Request removal of a tool from yourself or a bot you may change (its id from `tico_tool_list`), or withdraw "
     "a pending request. BotOps changes bot.yaml; an external profile changes its own tools and reports the list.",
     {"bot": _s("The bot's slug"), "id": _s("The tool id from tico_tool_list")},
     required=("bot", "id"),
@@ -203,7 +206,7 @@ def _bot_of(api, args):
 @tool(
     "tico_slack_channel_list",
     "The Slack channels bots may read and post in: each one's name and id, which bots read it, "
-    "whether bots may post there, and its note. Also whether an old registry/slack-channels.yaml is still waiting to be imported.",
+    "whether bots may post there, and its note.",
     {},
 )
 def slack_channel_list(api, args):
@@ -214,7 +217,7 @@ def slack_channel_list(api, args):
     "tico_slack_channel_add",
     "Let a bot read a Slack channel: add the channel to the team's list with the bots that read it, "
     "or add readers to (or change) one already there, as the person who asked you (an owner or an admin; anyone else is "
-    "refused, with who to ask). A reader gets what is new in the channel about once an hour. Posting in the channel "
+    "refused, with who to ask). A reader follows the channel's thread and gets what is new there about once an hour. Posting in the channel "
     "is on unless you set post false. A channel shared outside the workspace is refused by Tico whatever this says. "
     "Safe to repeat. Say what you did in one line.",
     {
@@ -229,19 +232,13 @@ def slack_channel_list(api, args):
             "description": "May bots post there? On for a new channel; leave out to keep it as is",
         },
         "note": _s("What the channel is for"),
-        "digest_hours": {
-            "type": "number",
-            "description": "Readers get it at most once in this many hours (a noisy channel)",
-        },
         "name": _s("Its name, when you give the id"),
     },
     required=("channel",),
     writes=True,
 )
 def slack_channel_add(api, args):
-    body = {
-        k: args[k] for k in ("channel", "readers", "post", "note", "digest_hours", "name") if args.get(k) is not None
-    }
+    body = {k: args[k] for k in ("channel", "readers", "post", "note", "name") if args.get(k) is not None}
     return _as_person(api).post("slack/channels", body, key=_key(args))
 
 
@@ -256,17 +253,6 @@ def slack_channel_add(api, args):
 def slack_channel_remove(api, args):
     body = {k: args[k] for k in ("channel", "reader") if args.get(k)}
     return _as_person(api).post("slack/channels/remove", body, key=_key(args))
-
-
-@tool(
-    "tico_slack_channel_import",
-    "Store the channels an old registry/slack-channels.yaml lists in the team's list, once, as the "
-    "person who asked you (an owner or an admin). The file is ignored afterwards.",
-    {},
-    writes=True,
-)
-def slack_channel_import(api, args):
-    return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
 @tool(
@@ -292,6 +278,52 @@ def credential_request(api, args):
     if _as_person(api) is not api:
         body["on_behalf_of"] = "turn"
     return api.post("credential-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_request",
+    "Ask for a level on a tool in Tools or a GitHub repository that already exists, for yourself (BotOps, the Tools "
+    "Owner and people: `for_bot`). Read where Tico can hold it to reads is granted at once; anything else is one card "
+    "to each person who can grant it, and the first to act decides. Asking again adds nothing and notifies nobody. You "
+    "are woken on your task when it is granted, however it was given: work on something else or end your turn. Use "
+    "this for every access need instead of filing a task. A key that is not stored yet is tico_credential_request.",
+    {
+        "resource": _s(
+            "The tool (its name or id, `tool:<name>`) or the repository (`owner/name`, its short name, `repo:<name>`). "
+            "When several tools give the same variable, name the one you need"
+        ),
+        "level": _s("read (the default) or read_write", enum=["read", "read_write"]),
+        "for_bot": _s("The bot that needs it; you, when you leave it out"),
+        "why": _s("One line for the person: what it is for"),
+        "task": _s("The task that waits on it (its full id); the task your turn is on when you leave it out"),
+    },
+    required=("resource",),
+    writes=True,
+)
+def access_request(api, args):
+    body = {k: args[k] for k in ("resource", "level", "for_bot", "why", "task") if args.get(k)}
+    return api.post("access-requests", body, key=_key(args))
+
+
+@tool(
+    "tico_access_stats",
+    "Access requests in numbers: asked, reached a person, share granted at once, open, median minutes to grant.",
+    {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How many days back; 7 by default"}},
+)
+def access_stats(api, args):
+    return api.get("access-requests/stats" + (f"?days={int(args['days'])}" if args.get("days") else ""))
+
+
+ACCESS = (
+    Group("access", "ask for a level on a tool or a repository; the numbers on asking"),
+    Command(
+        "access request",
+        "ask for Read or Read and write on a tool or a repository",
+        args=(Arg("for_bot", flag="--for", metavar="BOT"),),
+        example="tico access request acme/web --level read --why 'review the release notes'",
+    ),
+    Command("access stats", "the last days' access requests in numbers", example="tico access stats --days 7"),
+)
 
 
 @tool(
@@ -383,8 +415,8 @@ def _bot_of_credentials(listing, ref):
 
 @tool(
     "tico_credential_grant",
-    "Give a bot a stored credential, as the person who asked you (a credential administrator, or the "
-    "person who stored it, for a bot they own or manage): from then "
+    "Give a bot a stored credential, as the person who asked you (BotOps and the Tools Owner: a credential "
+    "administrator, or the person who stored it, for a bot they own or manage): from then "
     "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
     "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
     "tico_credential_import it first. Then run the bot's own read-only check of the connection. Anyone else is "
@@ -429,7 +461,8 @@ def credential_revoke(api, args):
 
 @tool(
     "tico_credential_delete",
-    "Delete a stored Credential and all its grants. Credential administrators only. "
+    "Delete a stored Credential and all its grants. Its adder can remove it while they can still see its tool. "
+    "Credential administrators can also remove it. "
     "The encrypted value is erased; history keeps metadata only.",
     {"credential": _s("Credential name, id or variable name")},
     required=("credential",),
@@ -438,6 +471,9 @@ def credential_revoke(api, args):
 def credential_delete(api, args):
     person = _as_person(api)
     row = _credential_of(person.get("credentials"), args["credential"])
+    if row.get("tool_id"):  # a tool's key goes as its tool's page deletes it (backend/api_tools.py delete_key)
+        path = f"api-tools/{quote(str(row['tool_id']), safe='')}/keys/{quote(str(row['id']), safe='')}"
+        return person.call("DELETE", path, key=_key(args))
     return person.call("DELETE", f"credentials/{row['id']}", key=_key(args))
 
 
@@ -483,6 +519,72 @@ def credential_import(api, args):
             else "Its computer has not answered yet; run the same command again to keep waiting."
         ),
     }
+
+
+# `tico slack channel ...` and `tico credential ...` (clients/cli_spec.py). `credential set` is still built in
+# clients/hubcli.py: it reads the value from this computer's standard input.
+SLACK = (
+    Group("slack", "the Slack channels bots may read and post in"),
+    Group("slack channel", "list, add or remove a channel"),
+    Command(
+        "slack channel list",
+        "the listed channels, their readers, and whether bots may post",
+        example="tico slack channel list",
+    ),
+    Command(
+        "slack channel add",
+        "list a channel, or add readers to one already listed (an owner or an admin)",
+        args=(
+            Arg("readers", flag="--reader", metavar="BOT"),
+            Arg("post", flag="--post", action="store_const", const=True),
+            Arg("post", flag="--no-post", action="store_const", const=False),
+        ),
+        example="tico slack channel add '#launches' --reader growth --no-post",
+    ),
+    Command(
+        "slack channel remove",
+        "take a channel off the list, or one reader off it",
+        example="tico slack channel remove '#launches' --reader growth",
+    ),
+)
+CREDENTIAL = (
+    Group("credential", "ask for a credential in the chat, store one, list them"),
+    Command(
+        "credential request",
+        "open a card in the chat for the person to type the credential into",
+        args=(Arg("for_bot", flag="--for-bot"),),
+        example="tico credential request JIRA_BASIC_AUTH --label 'your Jira login'",
+    ),
+)
+# After the hand-built `credential set`, so `tico credential` lists its leaves in the order it always has.
+CREDENTIAL_AFTER_SET = (
+    Command(
+        "credential list", "names, variables and which bots have each; never a value", example="tico credential list"
+    ),
+    Command(
+        "credential grant",
+        "give a bot a stored credential",
+        args=(Arg("to_bot", flag="--to", metavar="BOT"),),
+        example="tico credential grant JIRA_BASIC_AUTH --to support",
+    ),
+    Command(
+        "credential revoke",
+        "take a stored credential away from a bot",
+        args=(Arg("from_bot", flag="--from", metavar="BOT"),),
+        example="tico credential revoke JIRA_BASIC_AUTH --from support",
+    ),
+    Command(
+        "credential delete",
+        "erase a Credential and its grants (its adder or a credential administrator)",
+        example="tico credential delete JIRA_BASIC_AUTH",
+    ),
+    Command(
+        "credential import",
+        "move one variable from a bot's own secrets file into Credentials, granted to that bot",
+        args=(Arg("env", metavar="VAR"), Arg("from_bot", flag="--from-bot", metavar="BOT")),
+        example="tico credential import JIRA_BASIC_AUTH --from-bot support",
+    ),
+)
 
 
 @tool("tico_repo_list", "List the team’s repositories and new bot default.", {})
@@ -591,11 +693,12 @@ def repo_product_create(api, args):
 
 @tool(
     "tico_tool_list",
-    "Every tool the team uses (each outside system), and what you need to use it: how you reach it "
-    "(`access`), the credentials or env names, how it is declared, writes, and query/learning counts. Read this "
-    "list before touching an outside system; `tico_tool_show` is the full page. With `bot`, the tools that bot uses, "
-    "as its page shows them: its model and harness, its repository and each declared tool, with who it acts as, what "
-    "it may do, its scope and a status (ready, problem, unknown, or pending while BotOps is adding it).",
+    "Every tool the team uses (each outside system): how you reach it (`access`), its credentials "
+    "or env names, how it is declared, writes, and query and learning counts. Read this before "
+    "touching an outside system; `tico_tool_show` is the full page. With `bot`, the tools that "
+    "bot uses (its model and harness, its repository, each declared tool), with who it acts as, "
+    "what it may do, its scope and a status (ready, problem, unknown, or pending while BotOps "
+    "adds it).",
     {"bot": _s("A bot's slug, or `me`: that bot's own tools instead of the team's")},
 )
 def tool_list(api, args):
@@ -664,6 +767,89 @@ def tool_check(api, args):
     return _as_person(api).post('api-tools/' + quote(str(args['id']).removeprefix('api:'), safe='') + '/check', {})
 
 
+# A path segment that names one record (an id, a number, a hash), folded to `:id` so one endpoint's calls count together.
+# A version (`v2`, `v26.0`) or a dated API version (`2010-04-01`) is part of the endpoint and stays.
+_RECORD = re.compile(r'^\d+$|^(?!v\d+(\.\d+)*$)(?!\d{4}-\d{2}-\d{2}$)(?=.*\d)[A-Za-z0-9_.:@=-]{6,}$')
+
+
+def _endpoint(path):
+    """`/v1/customers/cus_8f2k91/charges?limit=` as `/v1/customers/:id/charges?limit=`: the call's shape, never a value
+    (the proxy keeps a query's keys, not its values)."""
+    base, mark, query = str(path or '').partition('?')
+    return '/'.join(':id' if _RECORD.match(part) else part for part in base.split('/')) + mark + query
+
+
+def activity_summary(rows):
+    """The page's calls by caller, method, endpoint, status and result, most frequent first: what a tool is used for and
+    which error keeps coming back."""
+    groups = {}
+    for row in rows:
+        caller = row.get('bot') or row.get('actor') or ''
+        shape = (caller, row.get('method') or '', _endpoint(row.get('path')), row.get('status_code'), row['result'])
+        seen = groups.setdefault(shape, {'count': 0, 'last_at': row['at']})
+        seen['count'] += 1
+        seen['last_at'] = max(seen['last_at'], row['at'])
+    fields = ('caller', 'method', 'endpoint', 'status_code', 'result')
+    newest = sorted(groups.items(), key=lambda kv: kv[1]['last_at'], reverse=True)
+    return [
+        {**dict(zip(fields, shape, strict=True)), **seen}
+        for shape, seen in sorted(newest, key=lambda kv: -kv[1]['count'])
+    ]
+
+
+@tool(
+    'tico_tool_activity',
+    'An API tool\'s recent activity, newest first: each call through the proxy (who, method, path, status, result) and, '
+    'for keys on computers, each caller\'s last key use; a summary of repeated calls and errors; who added its keys. '
+    'Never a value. The Tools page\'s owner reads every caller; others their own and their bots\'. Page with cursor.',
+    {
+        'id': _s('Its tico_tool_index row id, without api:'),
+        'since': _s('Only rows from this window on: 24h, 7d or an ISO time'),
+        'result': {
+            'type': 'string',
+            'enum': ['sent', 'refused', 'failed', 'use'],
+            'description': 'sent: reached the vendor (any status); refused: stopped by Tico; failed: vendor unreachable',
+        },
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200},
+        'cursor': _s('The previous page\'s next'),
+    },
+    required=('id',),
+)
+def tool_activity(api, args):
+    reader = _as_person(api)
+    tool_id = quote(str(args['id']).removeprefix('api:'), safe='')
+    query = {k: args[k] for k in ('since', 'result', 'limit', 'cursor') if args.get(k) not in (None, '')}
+    page = reader.get(f'api-tools/{tool_id}/activity', **query)
+    detail = reader.get(f'api-tools/{tool_id}')
+    shown = ('id', 'name', 'vendor', 'service', 'base_url', 'auth_scheme', 'check_path', 'delivery')
+    return {
+        'tool': {k: (detail.get('tool') or {}).get(k) for k in shown},
+        'status': detail.get('status'),
+        'added_by': sorted({k['created_by'] for k in detail.get('keys') or [] if k.get('created_by')}),
+        'summary': activity_summary(page.get('rows') or []),
+        'rows': page.get('rows') or [],
+        'next': page.get('next'),
+    }
+
+
+@tool(
+    'tico_tool_level',
+    'Set a bot\'s level on an API tool: read, read_write or none. It grants the one key that level uses and takes the '
+    'others away. A credential administrator; the Tools Owner as the person who asked it. Never yourself.',
+    {
+        'id': _s('Its tico_tool_index row id, without api:'),
+        'bot': _s('The bot\'s slug'),
+        'level': {'type': 'string', 'enum': ['read', 'read_write', 'none']},
+    },
+    required=('id', 'bot', 'level'),
+    writes=True,
+)
+def tool_level(api, args):
+    tool_id = quote(str(args['id']).removeprefix('api:'), safe='')
+    subject = quote('bot:' + str(args['bot']).removeprefix('bot:'), safe='')
+    return _as_person(api).call('PUT', f'api-tools/{tool_id}/access/{subject}', {'level': args['level']}, _key(args))
+
+
 @tool(
     'tico_tools_propose_grant',
     'Tools owner only: propose which tool and bots each key a person dropped in your Tools chat goes to. The server '
@@ -687,10 +873,13 @@ def tool_check(api, args):
         'note': _s('One line above the card (optional)'),
     },
     required=('thread_id', 'rows'),
+    writes=True,
 )
 def tools_propose_grant(api, args):
     return api.post(
-        'tools-chat/proposals', {'thread_id': args['thread_id'], 'rows': args['rows'], 'note': args.get('note') or ''}
+        'tools-chat/proposals',
+        {'thread_id': args['thread_id'], 'rows': args['rows'], 'note': args.get('note') or ''},
+        key=_key(args),
     )
 
 
@@ -734,3 +923,188 @@ def query_search(queries, term):
         ).lower()
 
     return [q for q in queries if all(w in text(q) for w in words)]
+
+
+# ----------------------------------------------------------------------------- `tico tool` and `tico repo` (cli_spec)
+# The command lines of the tools above (clients/cli_spec.py). `tool call` is still built in clients/hubcli.py: it calls
+# the vendor through this computer's proxy. So are `repo review`, which reads --body-file here, and `repo
+# product-create`, which asks for the exact name at this terminal.
+def integrations_text(rows):
+    blocks = []
+    for row in rows:
+        head = (
+            f"{row['service']:<24} {row['kind']:<8} {row['writes']:<9} {row['summary']}"
+            f"  [{row['query_count']} queries, {row['learning_count']} learnings]"
+        )
+        extra = [f"  credentials: {c}" for c in (row.get("credentials") or [])]
+        if row.get("access"):
+            extra.append(f"  access: {row['access']}")
+        blocks.append("\n".join([head, *extra]))
+    return "\n\n".join(blocks) or "no integrations"
+
+
+def integration_text(page):
+    out = [
+        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
+        "",
+        page["summary"],
+        "",
+        f"Access: {page['access']}",
+        "Credentials:",
+    ]
+    out += [f"  - {c}" for c in page["credentials"]]
+    out += ["Declared in bot.yaml as:"] + ["  " + line for line in page["declared_as"].rstrip().splitlines()]
+    out += ["", page["body"].rstrip()]
+    if page["queries"]:
+        out += [
+            "",
+            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
+        ]
+        out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
+    notes = page.get("learnings") or []
+    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    return "\n".join(out)
+
+
+def query_text(query):
+    out = [
+        f"{query['id']}: {query['title']}",
+        query.get("description", ""),
+        f"database: {query.get('database', '')}  category: {query.get('category', '')}  tags: {', '.join(query.get('tags') or [])}",
+    ]
+    if query.get("params"):
+        out.append("params:")
+        for p in query["params"]:
+            extra = (" required" if p.get("required") else "") + (f" default={p['default']}" if "default" in p else "")
+            out.append(f"  {p['name']} ({p.get('type', 'text')}): {p.get('label', p['name'])}{extra}")
+    out += ["", query["sql"].rstrip() if "sql" in query else json.dumps(query.get("mongo"), indent=2)]
+    return "\n".join(out)
+
+
+def queries_text(rows):
+    return "\n".join(f"{q['id']:<44} {q['title']}  — {q.get('description', '')}" for q in rows) or "no matching queries"
+
+
+def _tool_list(client, fields):
+    """With a bot, its tools (the tool). Without, the team's rows from GET /tools, which a runner credential may read
+    outside a turn (/me, which the tool asks first for a bot, would refuse a runner)."""
+    from clients import hubtools
+
+    if fields.get("bot"):
+        return hubtools.BY_NAME["tico_tool_list"]["fn"](client, fields)
+    return client.get("tools")["integrations"]
+
+
+def _query_search(client, fields):
+    """The catalog searched here, from the tool's page (GET /tools/<service>), which a runner may read outside a turn."""
+    page = client.get("tools/" + fields["service"])
+    if fields.get("id"):
+        for query in page["queries"]:
+            if query["id"] == fields["id"]:
+                return query
+        raise APIError("not_found", f"No query {fields['id']} under {page['service']}", 404)
+    return query_search(page["queries"], fields.get("term"))
+
+
+def _no_key(fields):
+    """The arguments without an operation id: `repo tick` and `repo untick` never sent one."""
+    return {k: v for k, v in fields.items() if k != "operation_id"}
+
+
+_MCP_ARGS = (Arg("headers", flag="--header", action="append", metavar="'NAME: VALUE'"),)
+_SCOPE = Arg("scope", action="append", metavar="KEY=VALUE")
+
+TOOL = (
+    Group(
+        "tool",
+        "what the team uses: each tool, what a bot uses, its model, repository and declared tools (docs/creating-bots.md)",
+    ),
+    Command(
+        "tool list",
+        "the team's tools; with --bot, that bot's tools with their status",
+        run=_tool_list,
+        render=lambda args, result: json.dumps(result, indent=2) if args.bot else integrations_text(result),
+        example="tico tool list --bot me",
+    ),
+    Command(
+        "tool show",
+        "one tool: the page, its queries and the learnings",
+        render=lambda args, result: integration_text(result),
+        example="tico tool show posthog",
+    ),
+    Command(
+        "tool index", "Tools: every API tool, mailbox, number and connection you may see", example="tico tool index"
+    ),
+    Command("tool check", "check an API tool's keys now", example="tico tool check linear"),
+    Command(
+        "tool activity",
+        "an API tool's recent calls and key uses, with repeated calls and errors summed up; never a value",
+        args=(Arg("id", metavar="tool"),),
+        example="tico tool activity linear --since 24h",
+    ),
+    Command(
+        "tool level",
+        "set a bot's level on an API tool: read, read_write or none",
+        example="tico tool level linear ops read",
+    ),
+)
+# After the hand-built `tool call`, so `tico tool` lists its leaves in the order it always has.
+TOOL_AFTER_CALL = (
+    Command(
+        "tool query-search",
+        "search a tool's query catalog",
+        args=(Arg("term", positional=True, nargs="?", default=""),),
+        run=_query_search,
+        render=lambda args, result: query_text(result) if args.id else queries_text(result),
+        example="tico tool query-search posthog signups",
+    ),
+    Command(
+        "tool learn", 'add a learning: tico tool learn <service> "<text>"', example='tico tool learn posthog "..."'
+    ),
+    Command(
+        "tool report",
+        "report the external profile's complete current tool list",
+        args=(Arg("tools", action="store"),),
+        convert=lambda fields: {**fields, "tools": json.loads(fields["tools"])},
+        example="tico tool report '[...]'",
+    ),
+    Command(
+        "tool add",
+        "register a tool: BotOps adds it to bot.yaml; never a credential value",
+        args=(Arg("can", flag="--can", action="store"), _SCOPE, *_MCP_ARGS),
+        example="tico tool add analyst posthog --can read --env POSTHOG_KEY",
+    ),
+    Command(
+        "tool update",
+        "change a declared tool's can, scope or note in place; never remove and add again",
+        args=(Arg("bot", flag="--bot"), Arg("can", flag="--can", action="store"), _SCOPE, *_MCP_ARGS),
+        example="tico tool update posthog --bot analyst --can read,write",
+    ),
+    Command(
+        "tool remove",
+        "ask BotOps to remove a tool, or withdraw a pending request",
+        example="tico tool remove analyst posthog",
+    ),
+)
+
+REPO = (
+    Group("repo", "team repositories"),
+    Command("repo list", example="tico repo list"),
+    Command(
+        "repo tick",
+        tool="tico_repo_update",
+        fixed=(("enabled", True),),
+        omit=("setup_command",),
+        convert=_no_key,
+        example="tico repo tick acme/web",
+    ),
+    Command(
+        "repo untick",
+        tool="tico_repo_update",
+        fixed=(("enabled", False),),
+        omit=("setup_command",),
+        convert=_no_key,
+        example="tico repo untick acme/web",
+    ),
+)

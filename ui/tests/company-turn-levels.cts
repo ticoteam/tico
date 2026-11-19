@@ -39,7 +39,7 @@ declare function pageSettings(): void;
         if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], recent_runs: []});
         if (p === '/api/v2/operations') return json({machines: [], services: [], issues: []});
         if (p === '/api/v2/models') return json({models: [], harnesses: []});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/settings/turn-levels') {
           if (request.method() === 'POST') {
             const body = request.postDataJSON(); writes.push(body);

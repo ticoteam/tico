@@ -1,6 +1,8 @@
 ---
 name: score-a-tech-debt-item
 description: Score one technical debt item for the register by what it costs now, the risk of leaving it, and the size of the fix, with the evidence for each number, so the team can plan it instead of arguing about it.
+metadata:
+  function: engineering
 ---
 # Score a tech debt item
 

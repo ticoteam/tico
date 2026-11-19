@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from backend import api_tools
+from backend import api_tools, tool_access
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
@@ -29,7 +29,7 @@ def vault_ids(api, token):
 def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees_its_keys(api, monkeypatch):
     tid, rw, ro = bank(api)
     grant = post(api, f"credentials/{rw}/grants", {"subject": "bot:ops"})["id"]
-    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: 200)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, hdrs, params: api_tools.Reply(200))
     assert "api:" + tid not in index(api, "ben-test")
     for path in (f"api-tools/{tid}", f"api-tools/{tid}/activity"):
         r = api.get("/api/v2/" + path, headers=headers("ben-test"))
@@ -237,7 +237,10 @@ def test_support_staff_never_see_a_private_tool(api):
         tool_row = c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone()
         assert api_tools.visible(c, ana, tool_row, api.app.state.vault.admins) is True
         assert api_tools.visible(c, support, tool_row, api.app.state.vault.admins) is False
-        assert api_tools.may_set_audience(c, support, tool_row, api.app.state.vault.admins) is False
+        admins = api.app.state.vault.admins
+        assert not tool_access.may_change_access(
+            c, support, tool_access.tool(tool_row), action="audience", admins=admins
+        )
 
 
 def test_level_writes_by_the_owner_still_work_on_a_private_tool(api):
@@ -352,6 +355,22 @@ def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
         assert "Close read_write" in assistant.describe(c, "DELETE", path, {}, ana, admins)[0]
         said = assistant.describe(c, "DELETE", path, {}, ben, admins)[0]
         assert "Close" not in said and rw in said
+        # A change to a key is never described as deleting it.
+        said = assistant.describe(c, "PUT", path, {"name": "Renamed"}, ana, admins)[0]
+        assert said.startswith("Change the stored credential “Close read_write”"), said
+        # Giving a key, taking it back and any other route on it name which key, and never a hidden one.
+        grant = c.execute("SELECT id FROM credential_grants WHERE credential_id=?", (rw,)).fetchone()["id"]
+        for method, route, body in (
+            ("POST", f"{path}/grants", {"subject": "bot:ops"}),
+            ("POST", f"{path}/grants/{grant}/revoke", {}),
+            ("POST", f"{path}/rotate", {}),
+        ):
+            said = assistant.describe(c, method, route, body, ana, admins)[0]
+            assert "“Close read_write”" in said, said
+            said = assistant.describe(c, method, route, body, ben, admins)[0]
+            assert "Close" not in said and rw in said, said
+        said = assistant.describe(c, "POST", f"{path}/grants/{grant}/revoke", {}, ana, admins)[0]
+        assert said.endswith(" away from ops"), said
 
 
 def sql_targets(api, token):

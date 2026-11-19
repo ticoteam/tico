@@ -1,6 +1,8 @@
 ---
 name: score-a-crew-fairly
 description: Compute a crew's pass rate and re-do rate from a random sample of jobs, with the job count and the range shown, and decide whether the score is reliable enough to report or rank.
+metadata:
+  function: operations
 ---
 # Score a crew fairly
 

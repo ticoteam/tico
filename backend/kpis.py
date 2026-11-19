@@ -795,6 +795,10 @@ def add_reading(
         ":evidence, :quality, :definition_version, :supersedes)",
         reading,
     )
+    # A channel whose KPI or guardrail this is may have crossed a line (backend/growth_brief.py): its owner is told.
+    from . import growth_brief
+
+    growth_brief.safely(growth_brief.check_kpi, conn, row["id"], actor)
     return reading
 
 
@@ -821,9 +825,3 @@ def set_link(conn, actor, goal_id, kpi_id, values):
 
 def unlink(conn, goal_id, kpi_id):
     conn.execute("DELETE FROM goal_kpis WHERE goal_id=? AND kpi_id=?", (goal_id, kpi_id))
-
-
-def fill_slugs(conn):
-    """Give every KPI a slug (the folder name in the Strategy Owner's repository)."""
-    for row in conn.execute("SELECT id, name FROM kpis WHERE slug IS NULL OR slug='' ORDER BY created_at").fetchall():
-        conn.execute("UPDATE kpis SET slug=? WHERE id=?", (_unique_slug(conn, row["name"]), row["id"]))

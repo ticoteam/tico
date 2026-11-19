@@ -23,12 +23,14 @@
 
 mod accounts;
 mod afterwatch;
-mod appdriver;
 mod backlog;
+mod bot_files;
 mod browser;
 mod browser_exit;
 mod capture;
 mod checkout_groups;
+mod claude_login;
+mod cli_compat;
 #[cfg(test)]
 mod cli_contract;
 mod client;
@@ -48,6 +50,7 @@ mod env;
 mod events;
 mod execute;
 mod fallback;
+mod fetch_fresh;
 mod fetchrepo;
 mod files_publish;
 mod flight;
@@ -59,7 +62,6 @@ mod gitrun;
 #[cfg(test)]
 mod gittests;
 mod goals;
-mod harness_memory;
 mod harness_tools;
 mod hosts;
 mod idle_load;
@@ -69,12 +71,10 @@ mod lanes;
 mod lease;
 mod lock;
 mod login;
-mod login_turns;
-mod mail_key;
+mod mail_retire;
 mod manifest;
 mod mcp;
 mod memory_history;
-mod memory_tidy_keep;
 mod model_subscriptions;
 mod op;
 mod panics;
@@ -105,6 +105,7 @@ mod state;
 mod subscription_refresh;
 mod tls;
 mod turn_limits;
+mod turn_sweep;
 mod turn_users;
 mod upload_pace;
 mod util;
@@ -183,6 +184,33 @@ enum Command {
         bot: Option<String>,
         /// git's verb: only `get` answers.
         action: Option<String>,
+    },
+    /// A task worktree inside a turn (`tico task worktree`; prints JSON, reads the turn's environment).
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeAction {
+    /// Make (or resume, or verify) the task's worktree of a repository and run its setup.
+    Add {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Register a Git worktree already inside the team workspace.
+    Attach {
+        path: String,
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Run (or retry) the setup of the task's worktree of a repository.
+    Setup {
+        repo: String,
+        #[arg(long)]
+        task: Option<String>,
     },
 }
 
@@ -301,13 +329,12 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             let home = profile.home(&runtime).unwrap_or_default();
             let command = profiles::login_command(&runtime).unwrap_or_default();
             if command.is_empty() && harness_tools::caps(&runtime, "").api_keys == "bot" {
-                let secrets = config.projects_dir().join("secrets");
                 let key = harness_tools::api_key_env(&runtime)
                     .into_iter()
                     .next()
                     .unwrap_or_default();
                 let name = harness_tools::name_for(&runtime);
-                println!("{name} authenticates with an API key, not an interactive login: put {key} in {}/_shared.env or <bot>.env. This profile's {name} sessions live in {}.", secrets.display(), home.display());
+                println!("{name} authenticates with an API key, not an interactive login: save {key} in Tools > Credentials and grant it to the bot. This profile's {name} sessions live in {}.", home.display());
                 return 0;
             }
             if command.is_empty()
@@ -388,6 +415,14 @@ fn main() {
             std::process::exit(0);
         }
         std::process::exit(gitcred::git_credential_main(socket.clone()));
+    }
+    if let Command::Worktree { action } = &cli.command {
+        let (operation, value, task) = match action {
+            WorktreeAction::Add { repo, task } => ("add", repo, task),
+            WorktreeAction::Attach { path, task } => ("attach", path, task),
+            WorktreeAction::Setup { repo, task } => ("setup", repo, task),
+        };
+        std::process::exit(worktrees::cli::main(operation, value, task.as_deref()));
     }
     util::start_clock();
     if let Command::Flight {
@@ -481,8 +516,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
     };
     match &command {
         Command::Adopt { team, bot } => {
-            // After a re-enrollment, the protected mail key follows this operator's previous registration once.
-            mail_key::carry_protected(&config);
             return match commands::adopt(&config, &client, team.as_deref(), bot).await {
                 Ok(lines) => {
                     lines.iter().for_each(|l| println!("{l}"));
@@ -492,7 +525,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
             };
         }
         Command::Doctor => {
-            mail_key::carry_protected(&config);
             return match commands::doctor(&config, &client).await {
                 Ok((out, ready)) => {
                     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
@@ -522,13 +554,13 @@ async fn start(command: Command, config: config::Config) -> i32 {
             }
         };
     }
-    // After a re-enrollment, the protected mail key follows this operator's previous registration once.
-    mail_key::carry_protected(&config);
     let state_dir = config.state_dir();
     if let Err(e) = std::fs::create_dir_all(&state_dir) {
         fail(&format!("cannot create {}: {e}", state_dir.display()));
     }
     let _lock = lock::acquire(&state_dir.join("runner.lock")).unwrap_or_else(|e| fail(&e));
+    // The mail copy and Google credentials the retired mail job kept on this computer go (docs/mail.md).
+    mail_retire::once(&config);
     flight::init(&state_dir);
     panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
@@ -554,7 +586,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
             }
         }
     }
-    mail_key::init(&config); // an inbox bot's turn asks the credential socket for its mailbox's token
     let mut service = runner::Runner::new(config, client.clone(), state);
     match gitcred::CredentialSocket::serve(client.clone(), service.tokens.clone()) {
         Ok(socket) => service.socket = Some(socket),
@@ -584,7 +615,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
         service.config.runner_id()
     ));
     tls::announce(util::log);
-    // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
+    // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers and close-calls.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
     browser_exit::start(client.clone());

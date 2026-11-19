@@ -1,6 +1,5 @@
-//! The process side of the hosts that run one harness process per turn and read its JSON lines (Pi, Cursor, the
-//! Mac app driver): the prompt goes in on
-//! stdin, bounded stderr drained independently, one turn at a time, interrupt and stop by
+//! The process side of the hosts that run one harness process per turn and read its JSON lines (Pi, Cursor): the
+//! prompt goes in on stdin, bounded stderr drained independently, one turn at a time, interrupt and stop by
 //! signal. What a harness's lines mean is its `Wire`.
 
 use std::collections::{HashMap, HashSet};
@@ -41,9 +40,6 @@ pub struct Turn {
     pub context: Option<i64>,
     /// Events to emit, as (kind, fields).
     pub out: Vec<(&'static str, Value)>,
-    /// The host's bot and command, for a wire whose lines mean something only with them.
-    pub bot: String,
-    pub cmd: Vec<String>,
     /// What the wire keeps between lines of one turn.
     pub extra: Value,
 }
@@ -323,11 +319,7 @@ impl<W: Wire> OneShot<W> {
     }
 
     fn turn_state(&self) -> Turn {
-        Turn {
-            bot: self.0.bot.clone(),
-            cmd: self.0.cmd.clone(),
-            ..Default::default()
-        }
+        Turn::default()
     }
 
     /// The wire's gate, or None once the turn is interrupted or the host stopped while it waited.

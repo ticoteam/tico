@@ -201,7 +201,7 @@ def _drop_spent(conn, H, attempt_id, job, note):
 
 def _drop_jobs(conn, H, jobs, note, attempt_id=None):
     """Cancel queued deadline runs with no deferred items left to carry."""
-    from . import claim_holds
+    from . import bot_stops
 
     for spent_job in jobs:
         if conn.execute(
@@ -209,8 +209,8 @@ def _drop_jobs(conn, H, jobs, note, attempt_id=None):
             "SELECT 1 FROM deferrals WHERE fired_job=? AND settled_at IS NULL)",
             (spent_job, spent_job),
         ).rowcount:
-            claim_holds.clear(conn, spent_job, note)
-            H.event(conn, H.KEEPER, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
+            bot_stops.clear_claim(conn, spent_job, note)
+            H.event(conn, H.TICO_ACTOR, "delivery.deferred.spent", spent_job, {"attempt": attempt_id})
 
 
 def task_closed(conn, task):
@@ -247,7 +247,7 @@ def summary(carried_=None, notes=0):
 
 
 def _carrier_ok(conn, bot, item, refs, room, session):
-    """A deferred carrier (a thread's keeper notice for a person's deferred post, backend/threads.py) passes the same
+    """A deferred carrier (a thread's Tico notice for a person's deferred post, backend/threads.py) passes the same
     check when it is carried or fired as when it was written (threads.carrier_current: the source is still in its thread,
     the bot is still in that thread's audience, and the per-message check passes), and only in its own thread's session.
     Anything else deferred is not a carrier and passes."""
@@ -317,6 +317,16 @@ def due(conn, at, failures=None):
     return out
 
 
+def now(conn, bot, conversation_id):
+    """Start `bot`'s run in this session now, carrying everything deferred for it there, as its deadline would (a
+    person's reply to the bot's ❓, which wakes that bot only). The run's job, or None: a run already queued there
+    carries it, or nothing waits."""
+    from .harnesses import EXTERNAL_HARNESSES
+
+    H = _H()
+    return _fire(conn, H, H.actor_id(bot), conversation_id, H.now(), EXTERNAL_HARNESSES)
+
+
 def _fire(conn, H, bot, conversation_id, at, external):
     rows = H._rows(
         conn.execute(
@@ -369,7 +379,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
         # Quiet, so the wake rules do not turn it into a note for a later run: it is the run.
         message_id = H.say(
             conn,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "bot:" + bot,
             text,
             kind="notice",
@@ -382,7 +392,7 @@ def _fire(conn, H, bot, conversation_id, at, external):
     ids = [r["id"] for r in live]
     for part in H.chunks(ids):
         conn.execute(f"UPDATE deferrals SET fired_job=? WHERE id IN ({','.join('?' * len(part))})", (job, *part))
-    H.event(conn, H.KEEPER, EVENT, job, {"bot": bot, "conversation": conversation_id or None, "items": ids})
+    H.event(conn, H.TICO_ACTOR, EVENT, job, {"bot": bot, "conversation": conversation_id or None, "items": ids})
     return job
 
 

@@ -15,59 +15,12 @@ from . import hubdb as H
 from .models import Contract
 from .store import Problem
 from . import bot_settings as BS
+from .api_contract import api_v2, error
 
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
-VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
 NOT_YET = 'The public roadmap is not available yet.'
-
-
-def migrate(c):
-    ran_before = 'public_title' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
-    H.add_column(c, 'tasks', 'visibility', VISIBILITY)
-    H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, 'tasks', 'size', 'REAL')
-    H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
-    H.add_column(c, 'messages', 'hidden_at', 'TEXT')
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs,'$.task'),created_at,id) "
-        "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs,'$.comment')=1"
-    )
-    # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
-    # default and every task's internal title and body copied into its public text. The type becomes private, and
-    # those copies go from tasks that are not public, so publishing one later needs public text written for it.
-    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-    if c.execute(
-        "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')"
-    ).rowcount:
-        c.execute(
-            "UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
-            "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)"
-        )
-    # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
-    # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
-    if (
-        c.execute(
-            "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')"
-        ).rowcount
-        and ran_before
-        and H._has_table(c, 'history_events')
-    ):
-        clear_copies(c)
-    c.execute(
-        'CREATE TABLE IF NOT EXISTS task_requesters('
-        'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
-        "name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',"
-        "other TEXT NOT NULL DEFAULT '',organization TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '',"
-        "source TEXT NOT NULL,important INTEGER NOT NULL DEFAULT 0,token_hash TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL)"
-    )
-    c.execute('CREATE INDEX IF NOT EXISTS task_requesters_task ON task_requesters(task_id)')
-    c.execute(
-        'CREATE UNIQUE INDEX IF NOT EXISTS task_requesters_actor ON task_requesters(task_id,actor) '
-        'WHERE actor IS NOT NULL'
-    )
 
 
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
@@ -77,53 +30,6 @@ def written(field):
         f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
         f"AND e.kind='{field}')"
     )
-
-
-def clear_copies(c):
-    """Once, on a database that ran roadmaps before: the first version copied internal titles and bodies into public
-    text at creation and never updated them, so the check above misses a task edited since, and a Product roadmap
-    task it published at creation stayed public. Each field is decided on its own, since an owner may have rewritten
-    only the public title. Public text nobody wrote goes from a private task; from a public task only an exact copy
-    of the internal text goes, and one losing its public title is unpublished, with events saying why so its owner
-    can publish it again with public text. Text written at creation before creation left an event is cleared too,
-    so each clearing leaves one."""
-    rows = c.execute(
-        f"SELECT id,visibility,substr(coalesce(title,''),1,300),substr(coalesce(body,''),1,8000),"
-        f"public_title,public_summary,{written('public_title')},{written('public_summary')} FROM tasks "
-        "WHERE public_title!='' OR public_summary!=''"
-    ).fetchall()
-    for tid, visibility, title, body, public_title, public_summary, title_written, summary_written in rows:
-        fields = (
-            ('public_title', public_title, title, title_written),
-            ('public_summary', public_summary, body, summary_written),
-        )
-        cleared = [
-            (field, value)
-            for field, value, internal, was_written in fields
-            if value and not was_written and (visibility == 'private' or value == internal)
-        ]
-        for field, value in cleared:
-            c.execute(f"UPDATE tasks SET {field}='' WHERE id=?", (tid,))
-            H._task_event(
-                c,
-                tid,
-                H.KEEPER,
-                field,
-                value,
-                '',
-                'Cleared: public text with no record of being written, likely a copy of the internal text.',
-            )
-        if visibility == 'public' and any(field == 'public_title' for field, _ in cleared):
-            c.execute("UPDATE tasks SET visibility='private' WHERE id=?", (tid,))
-            H._task_event(
-                c,
-                tid,
-                H.KEEPER,
-                'visibility',
-                'public',
-                'private',
-                'Unpublished: its public title was a copy of the internal title. Write public text to publish it again.',
-            )
 
 
 def settings(c):
@@ -310,7 +216,7 @@ def add_requester(c, task_id, values, actor=None):
         ),
     )
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
-    H.event(c, actor or H.KEEPER, 'task.requester.add', task_id, {'requester_id': ident})
+    H.event(c, actor or H.TICO_ACTOR, 'task.requester.add', task_id, {'requester_id': ident})
     return {'id': ident, 'requester_token': token}
 
 
@@ -325,7 +231,7 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
     if not removed:
         raise Problem('not_found', 'Requester not found', 404)
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
-    H.event(c, actor or H.KEEPER, 'task.requester.remove', task_id, {})
+    H.event(c, actor or H.TICO_ACTOR, 'task.requester.remove', task_id, {})
     return {'removed': True}
 
 
@@ -347,17 +253,23 @@ def withdraw(c, task_id, token):
         raise Problem('not_found', 'Requester not found', 404)
     snapshot['rows']['task_requesters'] = kept
     c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
-    H.event(c, H.KEEPER, 'task.requester.remove', task_id, {'trashed': True})
+    H.event(c, H.TICO_ACTOR, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
+
+
+# A task's requester tallies over its task_requesters rows: one aggregate for a task's requester list and the ranking.
+STATS_COLUMNS = (
+    'count(*) requester_count,sum(actor IS NULL) external_requesters,'
+    'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
+    "min(nullif(organization,'')) organization"
+)
 
 
 def stats(c, ids):
     if not ids:
         return {}
     rows = c.execute(
-        'SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
-        'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
-        "min(nullif(organization,'')) organization FROM task_requesters "
+        'SELECT task_id,' + STATS_COLUMNS + ' FROM task_requesters '
         'WHERE task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id',
         (json.dumps(ids),),
     )
@@ -389,6 +301,49 @@ def page(rows, limit=100, offset=0, max_bytes=262144):
     return result, offset + len(result) if more else None
 
 
+# The Roadmap ranks the Product pipeline's tasks (pipeline_settings: the `product` preset, its pair's `product`
+# Product, or the `features` preset that replaced it): each one the company has not retired.
+PRODUCT_PIPELINES = (
+    "SELECT id FROM pipelines WHERE retired_at IS NULL AND (preset IN ('product','features') OR id='product')"
+)
+NO_PRODUCT = 'The roadmap ranks the Product pipeline, and this company has none.'
+# Each an expression, not an answer's alias: in an ORDER BY expression SQLite reads a bare name as r's column, which is
+# null for a task nobody asked for.
+RANK_SORTS = {
+    'requester_count': 'coalesce(r.requester_count,0)',
+    'external_requesters': 'coalesce(r.external_requesters,0)',
+    'important': 'coalesce(r.important_requesters,0)',
+    'organization': 'r.organization',
+    'size': 't.size',
+}
+
+
+def ranking(c, visible, sort='requester_count', direction='desc', limit=100, offset=0):
+    """A page of the Product pipeline's tasks that `visible` (Auth.task_sql, over the task's own columns) admits,
+    with their requester tallies, by `sort` (RANK_SORTS) in `direction`; a task with no organization or size comes
+    last either way. Returns (rows, next offset or None), or None when no Product pipeline is in use."""
+    pipelines = [r[0] for r in c.execute(PRODUCT_PIPELINES)]
+    if not pipelines:
+        return None
+    column = RANK_SORTS[sort]
+    within = json.dumps(pipelines)
+    rows = c.execute(
+        'SELECT t.id,t.number,t.title,t.status,t.visibility,t.public_title,t.size,t.version,t.pipeline_id,t.stage_id,'
+        's.name stage_name,coalesce(r.requester_count,0) requester_count,'
+        'coalesce(r.external_requesters,0) external_requesters,coalesce(r.internal_requesters,0) internal_requesters,'
+        'coalesce(r.important_requesters,0) important_requesters,r.organization '
+        # The reader's rule reads the task's own columns, so it is applied where they are the only ones.
+        'FROM (SELECT * FROM tasks WHERE pipeline_id IN (SELECT value FROM json_each(?)) AND (' + visible + ')) t '
+        'LEFT JOIN stages s ON s.id=t.stage_id '
+        'LEFT JOIN (SELECT task_id,' + STATS_COLUMNS + ' FROM task_requesters WHERE task_id IN '
+        '(SELECT id FROM tasks WHERE pipeline_id IN (SELECT value FROM json_each(?))) GROUP BY task_id) r '
+        'ON r.task_id=t.id '
+        f'ORDER BY {column} IS NULL,{column} {direction},t.id LIMIT ? OFFSET ?',
+        (within, within, limit + 1, offset),
+    )
+    return page((dict(r) for r in rows), limit, offset)
+
+
 class PublicationInput(Contract):
     visibility: str | None = Field(default=None, pattern='^(public|private)$')
     public_title: str | None = Field(default=None, min_length=1, max_length=300)
@@ -412,7 +367,12 @@ def install_internal(app, store, auth, mutate, mover):
             _mine(c, who.actor, row, mover(c, who))
         return row
 
-    @app.get('/api/v2/tasks/{tid}/requesters')
+    @app.get(
+        '/api/v2/tasks/{tid}/requesters',
+        **api_v2(
+            "Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped", "TaskRequesterList"
+        ),
+    )
     def requesters(request: Request, tid: str, limit: int = 100, offset: int = 0):
         with store.read() as c:
             row = task(c, request.state.identity, tid)
@@ -440,7 +400,12 @@ def install_internal(app, store, auth, mutate, mover):
                 **stats(c, [row['id']]).get(row['id'], {}),
             }
 
-    @app.post('/api/v2/tasks/{tid}/requesters')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters',
+        **api_v2(
+            "Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once", "TaskRequesterAdded"
+        ),
+    )
     def create_requester(request: Request, tid: str, body: RequesterInput):
         def work(c):
             who = request.state.identity
@@ -470,7 +435,10 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/requesters/{rid}/delete')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters/{rid}/delete',
+        **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester", "TaskRequesterRemoved"),
+    )
     def delete_requester(request: Request, tid: str, rid: str, body: Contract):
         def work(c):
             who = request.state.identity
@@ -493,7 +461,10 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/requesters/{rid}')
+    @app.post(
+        '/api/v2/tasks/{tid}/requesters/{rid}',
+        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details", "TaskRequesterUpdated"),
+    )
     def update_requester(request: Request, tid: str, rid: str, body: RequesterInput):
         def work(c):
             who = request.state.identity
@@ -522,13 +493,19 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.post('/api/v2/tasks/{tid}/publication-preview')
+    @app.post(
+        '/api/v2/tasks/{tid}/publication-preview',
+        **api_v2("Roadmaps", "previewTaskPublication", "Exact publish approval payload for public edits or replies"),
+    )
     def preview(request: Request, tid: str, body: PublicationInput):
         """Not available yet, like the public routes: no route asks a publish OK (task_asks has no ask path for the
         `publish:` subject, and the generic OK route refuses it), so a preview would lead nowhere."""
         raise Problem('not_found', NOT_YET, 404)
 
-    @app.post('/api/v2/tasks/{tid}/comments/{mid}/moderate')
+    @app.post(
+        '/api/v2/tasks/{tid}/comments/{mid}/moderate',
+        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment", "TaskCommentModerated"),
+    )
     def moderate(request: Request, tid: str, mid: str, body: Moderate):
         def work(c):
             who = request.state.identity
@@ -551,6 +528,33 @@ def install_internal(app, store, auth, mutate, mover):
 
         return mutate(request, body, work)
 
-    @app.get('/api/v2/roadmap-tasks')
-    def ranked():
-        raise Problem('not_found', NOT_YET, 404)
+    @app.get(
+        '/api/v2/roadmap-tasks',
+        **api_v2(
+            "Roadmaps",
+            "listRoadmapTasks",
+            "The Product pipeline's tasks the caller can read, ranked by who asked for them",
+            "RoadmapTaskList",
+            description="Every task of the company's Product pipeline the caller may read, in any stage and status, "
+            "with its requester tallies, paged and byte-capped. sort is requester_count (the default), "
+            "external_requesters, important, organization or size; direction is desc (the default) or asc. A task "
+            "with no organization or size sorts last either way. 404 not_found when the company has no Product "
+            "pipeline. Set a task's public text with updateTask (visibility, public_title, public_summary) and its "
+            "stage with moveTask",
+            parameters={"limit": "1 to 100 (100)", "offset": "From next_offset"},
+            responses={"404": error("not_found: the company has no Product pipeline")},
+        ),
+    )
+    def ranked(
+        request: Request, sort: str = 'requester_count', direction: str = 'desc', limit: int = 100, offset: int = 0
+    ):
+        if sort not in RANK_SORTS or direction not in ('asc', 'desc'):
+            raise Problem('sort', 'sort is ' + ', '.join(RANK_SORTS) + '; direction is asc or desc', 422)
+        with store.read() as c:
+            who = request.state.identity
+            auth.domain(who)
+            found = ranking(c, auth.task_sql(c, who), sort, direction, max(1, min(limit, 100)), max(0, offset))
+            if found is None:
+                raise Problem('not_found', NO_PRODUCT, 404)
+            items, after = found
+            return {'tasks': items, 'next_offset': after}

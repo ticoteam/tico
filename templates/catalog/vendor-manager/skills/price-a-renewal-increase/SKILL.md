@@ -1,6 +1,8 @@
 ---
 name: price-a-renewal-increase
 description: Work out what a vendor renewal will cost from its uplift clause, compound the uplift over the term, apply any cap in the contract, and show outside estimates only as a labelled range with their source and date, never as the contract's price.
+metadata:
+  function: operations
 ---
 # Price a renewal increase
 

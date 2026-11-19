@@ -8,7 +8,7 @@
 'use strict';
 
 const GKV_VIEWS: Array<[string, string]> = [['tree', 'Tree'], ['loops', 'Loops'], ['journey', 'Journey']];
-const GKV_ROLES: Array<[string, string]> = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail']];
+const GKV_ROLES: Array<[string, string]> = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail'], ['check_signups', 'Check: sign-ups'], ['check_new_customers', 'Check: new customers'], ['check_cost', 'Check: cost']];
 const GKV_KEY = 'tico.goals.kpiView';
 // A KPI as GET /api/v2/growth/kpis lists it (only the fields these views read).
 interface GkvKpi { id: string; name: string; parent_kpi_id: string | null; growth_role: string | null; stage: string | null; loop_name: string | null; loop_step: number | null; target: number | null; unit: string; latest: number | null; may_edit?: boolean }
@@ -56,15 +56,15 @@ const gkvK = (k: GkvKpi, cls = '') => {
   return k.may_edit === true ? `<button type="button" class="gkv-k ${cls}" data-kpi="${esc(k.id)}" data-kpi-place="${esc(k.id)}">${inner}</button>` : `<div class="gkv-k ${cls}" data-kpi="${esc(k.id)}">${inner}</div>`;
 };
 const gkvNone = '<p class="muted gkv-none">None</p>';
-function gkvTreeHtml(kpis: GkvKpi[]) {
+function gkvTreeHtml(kpis: GkvKpi[], find = '') {
   const ns = kpis.find(k => k.growth_role === 'north_star'), tree = ns ? gkvTree(kpis, ns.id) : [];
   const inTree = new Set([ns?.id, ...tree.map(k => k.id)]);
   const guards = kpis.filter(k => k.growth_role === 'guardrail' && !inTree.has(k.id));
   const rest = kpis.filter(k => !inTree.has(k.id) && k.growth_role !== 'guardrail');
   const grp = (label: string, list: GkvKpi[]) => list.length ? `<div class="gkv-grp"><h3 class="gr-k">${esc(label)}</h3>${list.map(k => gkvK(k, label === 'Guardrails' ? 'gkv-guard' : '')).join('')}</div>` : '';
   const html = (ns ? `<div class="gkv-tree">${gkvK(ns, 'gkv-ns')}${tree.map(k => `<div class="gkv-in" style="--d:${k.depth}">${gkvK(k, k.growth_role === 'guardrail' ? 'gkv-guard' : '')}</div>`).join('')}</div>` : '')
-    // KPIs with no place yet show only to someone who can place one.
-    + grp('Guardrails', guards) + (rest.some(k => k.may_edit === true) ? grp('Other', rest) : '');
+    // KPIs with no place yet show only to someone who can place one, and the one a link asked for.
+    + grp('Guardrails', guards) + grp('Other', rest.some(k => k.may_edit === true) ? rest : rest.filter(k => k.id === find));
   return html || gkvNone;
 }
 function gkvLoopsHtml(kpis: GkvKpi[]) {
@@ -84,7 +84,7 @@ function gkvDraw(state: GkvState) {
   const host = state.host;
   host.hidden = !state.kpis.length;
   if (!state.kpis.length) { host.innerHTML = ''; return; }
-  const body = state.view === 'loops' ? gkvLoopsHtml(state.kpis) : state.view === 'journey' ? gkvJourneyHtml(state.kpis) : gkvTreeHtml(state.kpis);
+  const body = state.view === 'loops' ? gkvLoopsHtml(state.kpis) : state.view === 'journey' ? gkvJourneyHtml(state.kpis) : gkvTreeHtml(state.kpis, state.find);
   host.innerHTML = `<div class="gkv-h"><h2 class="strat-k">KPIs</h2><span class="spacer"></span>${grSeg('gkv', 'KPI view', GKV_VIEWS, state.view)}</div>
     <div class="gkv-body" data-gkv="${esc(state.view)}">${body}</div>`;
   const seg = host.querySelector<HTMLElement>('[data-gr-seg="gkv"]');

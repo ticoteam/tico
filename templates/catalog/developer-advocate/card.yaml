@@ -54,3 +54,6 @@ first_routine:
 example_output: knowledge/examples/developer-pulse.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_github, publishes_content]
+shared_files:
+  - .claude/skills/build-a-partnership
+  - .claude/skills/get-found-and-cited

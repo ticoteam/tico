@@ -19,18 +19,25 @@ function needsStageCounts(): Map<string, number> {
   return counts;
 }
 const needsStageCount = (stage: string): number => needsStageCounts().get(stage) || 0;
-/** Every page of Needs you, read before a stage's review walks it (a stage's items can be past the first page). */
-async function needsReadAll(): Promise<void> {
+/** Every page of Needs you, for a walk whose items can be past the first page (Flow on a stage, a bot or a team). The
+    rest comes at the server's largest page: each read costs the whole list on the server, so fewer is faster. `got`
+    runs after each read that may have moved the list, so an open walk adds what came (decide.ts decideFill). */
+async function needsReadAll(got?: () => void): Promise<void> {
   // A page refused because a whole re-read started meanwhile (a live event) is read again from that re-read, twice at
   // most, so a walk does not start on part of the list.
   for (let i = 0, missed = 0; i < 40 && !needsAll(); i++) {
-    if (await v2NeedsMore() || needsAll()) continue;
+    if (await v2NeedsMore(NEEDS_PAGE_MAX) || needsAll()) { got?.(); continue; }
     if (++missed > 2 || !await v2NeedsRead()) break;
+    got?.();
   }
 }
-/** One item of Needs you by id, or null. */
-const needsItem = (id: unknown): NeedsEntry | null => needsHeld().find(it => String(it.id) === String(id)) || null;
 
+/** The `browser:<tool>/<account>` a bot's "needs you" ❓ shows (backend/browser_commands.py), '' for any other item. */
+const needsBrowserRef = (it: NeedsEntry): string =>
+  it.kind === 'question' ? (it.ask?.shows || it.shows || []).find(r => r.startsWith('browser:') && r.includes('/')) || '' : '';
+/** The held ❓ that asks the person to sign in on this account's browser, if Needs you holds it. */
+const needsBrowserAsk = (toolId: string, accountId: string): NeedsEntry | undefined =>
+  needsHeld().find(it => needsBrowserRef(it) === `browser:${toolId}/${accountId}`);
 // Finishing a bot's request is one tap: no prompt. What the person typed in the box they are looking at (the task
 // window's comment box) goes with Done as the outcome; otherwise nothing extra is sent. Closing never takes one.
 function taskOutcomeNote(task: {owner_id?: string | null | undefined; requester_id?: string | null | undefined} | null | undefined, action: {close?: boolean | undefined}, typed: string | null | undefined) {
@@ -46,7 +53,7 @@ function taskOutcomeTaken(task: {id: string | number}) {
 }
 
 // Browser notifications for a new ask, while the page is in the background, when the person turned them on (their
-// Notifications card, person-page.ts). An @ is not notified (docs/pipelines-v3.md: no push). The ids already notified
+// Notifications card, person-page.ts). An @ is not notified (docs/dev/pipelines-v3.md: no push). The ids already notified
 // are kept per person in localStorage, so a reload does not repeat them; the first read after a fresh start records what
 // is listed without notifying. Both reads of the list call this (hub-v2.ts, refresh.ts), one after another.
 const THREAD_NEED_KINDS: Record<string, string> = {ask: 'Needs you'};

@@ -1,4 +1,4 @@
-/* ui/app/meetings.ts — The Meetings page: list, a meeting (tasks, notes, transcript), Add notes
+/* ui/app/meetings.ts — The Meetings page: list, a meeting (tasks, notes, transcript), Log a meeting
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -86,31 +86,32 @@ async function pageNotes(): Promise<void> {
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state: MeetState = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemAdd: '', confirmDelete: '', open: false};
-  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search, the shared filter
-  // icon and Live now as tools, Add notes the one filled button, Sources and Settings in its ⋯. No chat button in a top
+  // The one page header (ui/app/page-head.ts): Shared / Pending / Dismissed on the title line, search and the shared
+  // filter icon as tools, then two quiet icons, Call and Log a meeting (no filled button: Chris, Nov 18, "call now can
+  // just be the call icon"), Sources and Settings in its ⋯. The search keeps the row (on a phone its magnifier, which
+  // opens it over the title, meetings.css), as page-head.ts keeps every search out of ⋯. No chat button in a top
   // bar (the guide): Meetings' chat is Ask, opened from the Assistant's tab on the right edge or a phone's chat mark
-  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them. The Recorder links stay in
-  // the bar under it.
+  // (page-chat.ts), and it sees the meeting open here. Filters in force show as chips under it, the way Tasks shows them..
   $('#main').innerHTML = pageHead({title: 'Meetings', hook: 'notes-head', tabsHook: 'meet-review-tabs', tabsAttrs: 'aria-label="Meeting views"',
     tabs: [{label: 'Shared', attrs: 'data-review="live"'}, {label: 'Pending', attrs: 'data-review="pending"'}, {label: 'Dismissed', attrs: 'data-review="dismissed"'}],
-    tools: '<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">'
-      + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
-      + `<button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>`,
+    tools: `<div class="tl-search meet-q">${TL_ICON.search}<input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search"></div>`
+      + `<button type="button" class="tl-ib" id="notes-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`,
     more: '<div class="meet-sources" id="meet-sources" hidden></div><button type="button" id="meet-settings">Settings</button>',
-    primary: '<button class="primary ph-go" type="button" id="notes-manual">Add notes</button>'}) + `
-    <div class="meet-review-bar">
-      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac" hidden>Get Tico Recorder</a>
-      <a class="linkish" id="meet-recorder-update" href="${MEET_RECORDER_DMG}" hidden>Recorder update available</a></div>
+    // Call now only where this server runs Tico Meet (thread-call.ts callTicoMeet): the meeting window and bots are its.
+    primary: (callTicoMeet() ? `<button class="ghost ph-add" type="button" id="meet-call-now" aria-label="Call" title="Call">${CALL_SVG}</button>` : '')
+      + '<button class="ghost ph-add" type="button" id="notes-manual" aria-label="Log a meeting" title="Log a meeting"><span class="nav-icon" aria-hidden="true">edit_note</span></button>'}) + `
     <div class="tl-bar meet-filter-bar" id="notes-filters" hidden><div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="notes-chips"></span></div><span class="notes-count muted tnum" id="notes-count"></span></div>
     <p class="sr-only" id="mg-live" aria-live="polite"></p>
     <div class="meet-review-bulk" id="meet-review-bulk" hidden></div>
+    <section class="meet-upcoming" id="meet-live-calls" aria-label="Live calls" hidden></section>
+    <section class="meet-upcoming" id="meet-upcoming" aria-label="Upcoming calls" hidden></section>
     <div class="notes" id="notes">
       <div class="meet-syncing" id="meet-syncing" role="status" hidden>${meetLogo('granola', 30)}<div class="meet-main"><b>Checking Granola</b><div class="meet-meta"><span>New notes arrive once Granola has a summary</span></div></div><div class="meet-side"><span class="meet-state"><i class="mg-spin" aria-hidden="true"></i>Syncing</span></div></div>
       <section class="notes-list"><div class="meet-list-head" id="meet-list-head" hidden><label class="meet-select-all" id="meet-select-all"><input type="checkbox" aria-label="Select all shown meetings"></label></div><div class="notes-rows" id="notes-rows"><div class="notes-empty">Loading…</div></div></section>
     </div>
     <div id="task-filter-pop" class="tl-pop" popover></div>
     <dialog class="tmodal notes-modal" id="notes-modal" aria-label="Meeting details"><div class="notes-modal-close"><span class="mp-tools" id="notes-modal-tools"></span><button class="mp-icon" type="button" id="notes-modal-window" aria-label="Open in new tab" title="Open in new tab"><span class="nav-icon" aria-hidden="true">open_in_new</span></button><button class="mp-icon" type="button" id="notes-modal-close" aria-label="Close meeting" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></div><section class="notes-detail" id="notes-detail"></section></dialog>
-    <dialog class="tmodal import-modal" id="manual-modal" aria-label="Add notes"></dialog>`;
+    <dialog class="tmodal import-modal" id="manual-modal" aria-label="Log a meeting"></dialog>`;
   // Pending's count is the tab's .ph-n, numbered by meetReviewTabs.
   $('[data-review=pending]').insertAdjacentHTML('beforeend', '<span class="ph-n meet-pending-n" id="meet-pending-count"></span>');
   document.querySelectorAll<HTMLElement>('[data-review]').forEach(button => button.onclick = () => {
@@ -121,8 +122,8 @@ async function pageNotes(): Promise<void> {
     $('#meet-review-bulk').hidden = true; meetReviewTabs(state); meetLoad(state, true);
   });
   $('#meet-settings').onclick = () => meetSettingsOpen(state);
-  meetRecorderLink();
-  $('#meet-live-now').onclick = () => pageLiveMeetings();
+  const callNow = document.getElementById('meet-call-now');
+  if (callNow) callNow.onclick = () => meetCallDialog();
   const dialog: HTMLDialogElement = $('#notes-modal');
   const closeNote = () => meetShow(state, false);
   $('#notes-modal-close').onclick = closeNote;
@@ -148,6 +149,8 @@ async function pageNotes(): Promise<void> {
   };
   meetSources(state);
   meetReviewTabs(state);
+  void meetLiveCalls(state);
+  void meetUpcoming(state);
   granolaInit(state);   // the viewer's own Granola account: status, then one sync (ui/app/meetings-granola.ts)
   await meetLoad(state, true);
   if (MEET !== state) return;
@@ -160,7 +163,181 @@ async function pageNotes(): Promise<void> {
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
   // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
   state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
-  state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
+  state.sourcesPoll = setInterval(() => { if (!document.hidden) { meetSources(state); void meetUpcoming(state); } }, 60000);
+}
+
+// Live: the Tico Meet calls going on now in threads the viewer can read (GET /v2/calls/live), each as an Upcoming row
+// (a gap where Upcoming's ⋯ sits, so Join lines up) with how long it has been going (thread-call.ts callTick moves the clock), who is in it and Join. It is read again on
+// the threads topic's call.* changes (below), never on a timer.
+async function meetLiveCalls(state: MeetState): Promise<void> {
+  const box = document.getElementById('meet-live-calls');
+  if (!box || !callTicoMeet()) return;
+  let calls: CallRecord[] = [];
+  try { calls = (await get<CallListReply>('/v2/calls/live', {fresh: true})).calls || []; } catch { return; }
+  if (MEET !== state) return;
+  for (const v of calls) CALL_VIEWS.set(v.id, v);
+  box.hidden = !calls.length;
+  patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Live</h3>${calls.map(v => {
+    const since = v.started_at || '';
+    return `<div class="meet-upcoming-row" data-live-call="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
+      <span class="meet-upcoming-when muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>
+      <span class="meet-upcoming-ppl">${callFaces(v).slice(0, 8).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button><span class="meet-upcoming-gap" aria-hidden="true"></span></div>`;
+  }).join('')}` : '');
+  if (calls.length) callTick();
+}
+// A call starting, ending or changing who is in it: Live is read again (once per burst), and Upcoming too when one
+// started, since a scheduled call's first join moves it from Upcoming to Live.
+liveOn('threads', (d: ThreadsEvent & {call_id?: string}) => {
+  const state = MEET, kind = String(d?.kind || '');
+  if (!state || !kind.startsWith('call.')) return;
+  liveSoon('meet-live-calls', () => { if (MEET === state) void meetLiveCalls(state); }, 300);
+  if (kind === 'call.started') liveSoon('meet-upcoming', () => { if (MEET === state) void meetUpcoming(state); }, 300);
+});
+
+// Upcoming: the scheduled calls the viewer is in, soonest first (GET /v2/calls/upcoming), each with when, who, Join and
+// its ⋯ for who may change it (thread-call.ts callScheduledMenu). Join (thread-call.ts, data-call-join) opens the meeting window, and the first
+// join starts the call. A phone says only the time for a call today.
+async function meetUpcoming(state: MeetState): Promise<void> {
+  const box = document.getElementById('meet-upcoming');
+  if (!box || !callTicoMeet()) return;
+  let calls: CallRecord[] = [];
+  try { calls = (await get<CallListReply>('/v2/calls/upcoming', {fresh: true})).calls || []; } catch { return; }
+  if (MEET !== state) return;
+  for (const v of calls) CALL_VIEWS.set(v.id, {...CALL_VIEWS.get(v.id), ...v, state: 'scheduled'});
+  box.hidden = !calls.length;
+  const phone = callPhone();
+  patchHTML(box, calls.length ? `<h3 class="meet-upcoming-h">Upcoming</h3>${calls.map(v => {
+    const when = callWhen(v.scheduled_start);
+    return `<div class="meet-upcoming-row" data-upcoming="${esc(v.id)}">${CALL_SVG}<a class="meet-upcoming-t" href="${esc(threadHref(v.thread_id || ''))}">${esc(v.title || 'Call')}</a>
+      <span class="meet-upcoming-when muted tnum">${esc(phone ? when.replace(/^Today /, '') : when)}</span>
+      <span class="meet-upcoming-ppl">${(v.people || []).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 18)}</span>`).join('')}</span>
+      <button type="button" class="ghost small" data-call-join="${esc(v.id)}">Join</button>${v.can_edit ? callMoreHTML(`data-upcoming-more="${esc(v.id)}"`) : ''}</div>`;
+  }).join('')}` : '');
+  box.onclick = ev => {
+    const more = eventElement(ev)?.closest<HTMLElement>('[data-upcoming-more]'), v = CALL_VIEWS.get(more?.dataset['upcomingMore'] || '');
+    if (more && v) callScheduledMenu(more, v, () => meetUpcoming(state));
+  };
+}
+
+// The Call dialog. A new call: the people and bots to call, picked in the who picker (its list in the dialog's flow,
+// open for the next pick; who is chosen leaves it; their chips between the field and the list, so they stay put; a tap
+// on a chip takes them out again), an optional title, and when: Now, or a time picked. Start calls now
+// (thread-call.ts callTeammates, which opens its meeting window); Schedule books it for the time picked (callSchedule:
+// the call and its calendar invite; nothing opens). The one the time points at is the filled button, and Enter's.
+// `change`: a scheduled call's Change time, the dialog filled in with it: only its time and length change (who it is
+// with is its thread's), and Save sends them (PATCH /v2/calls/{id}: its calendar event first). A refusal shows in the
+// dialog either way. Closing it gives focus back to `back` (the header's Call by default).
+function meetCallDialog(opts: {change?: CallRecord; done?: () => unknown; back?: () => HTMLElement | null} = {}): void {
+  const change = opts.change, back = opts.back || (() => document.getElementById('meet-call-now'));
+  const chosen: string[] = [];
+  const begins = change?.scheduled_start ? new Date(change.scheduled_start) : null;
+  const length = begins && change?.scheduled_end ? Math.round((Date.parse(change.scheduled_end) - begins.getTime()) / 60000) : 30;
+  const lengths = [...new Set([15, 30, 45, 60, 90, length])].filter(n => n > 0).sort((a, b) => a - b);
+  let at: Date | null = begins && !Number.isNaN(begins.getTime()) ? begins : null;
+  const dialog = whDialog('Call', `${change ? '' : whoPickerHTML({placeholder: 'Add a person or bot', inline: true, under: '<div class="meet-call-who" data-call-who></div>'})}
+    <input name="title" maxlength="200" autocomplete="off" placeholder="Title" aria-label="Title"${change ? ` value="${esc(change.title || 'Call')}" disabled` : ''}>
+    <div class="meet-call-when"><span class="meet-call-at-box"><button type="button" class="meet-call-at" data-call-at><span class="nav-icon" aria-hidden="true">schedule</span><span data-call-at-label></span></button>
+      <input type="datetime-local" name="starts" class="meet-call-at-input" tabindex="-1" aria-label="Starts" value="${meetLocalValue(at || meetNextHalfHour())}">
+      ${change ? '' : '<button type="button" class="meet-call-now-again" data-call-at-now aria-label="Now" title="Now" hidden><span class="nav-icon" aria-hidden="true">close</span></button>'}</span>
+      <select name="minutes" aria-label="Length">${lengths.map(n => `<option value="${n}"${n === length ? ' selected' : ''}>${n} min</option>`).join('')}</select></div>`,
+    change ? '<button type="submit" class="primary meet-call-save">Save</button>'
+      : `<button type="button" class="meet-call-schedule" disabled>Schedule</button><button type="button" class="meet-call-start" disabled>${CALL_SVG}Start</button>`);
+  dialog.classList.add('meet-call-dialog');
+  // whDialog names its dismiss Close when nothing is a submit button; Start and Schedule are both plain buttons here.
+  const dismiss = dialog.querySelector<HTMLElement>('[data-close]');
+  if (dismiss) dismiss.textContent = 'Cancel';
+  dialog.addEventListener('close', () => back()?.focus());
+  const $d = <T extends HTMLElement>(sel: string) => dialog.querySelector<T>(sel);
+  const form = $d<HTMLFormElement>('form')!, error = $d<HTMLElement>('[data-wh-error]')!, who = $d<HTMLElement>('[data-call-who]');
+  const start = $d<HTMLButtonElement>('.meet-call-start'), schedule = $d<HTMLButtonElement>('.meet-call-schedule');
+  const input = $d<HTMLInputElement>('.meet-call-at-input')!, minutes = $d<HTMLSelectElement>('select[name="minutes"]')!;
+  input.min = meetLocalValue(new Date());
+  const teammates = () => threadAddable({groups: false});
+  const name = (a: string) => teammates().find(t => t.actor === a)?.label || actorName(a);
+  const paint = () => {
+    if (who) who.innerHTML = chosen.map(a => `<span class="nm-chip" data-actor="${esc(a)}">${actorAvatar(a, 18)}<span>${esc(name(a))}</span><button type="button" data-remove aria-label="Remove ${esc(name(a))}">×</button></span>`).join('');
+    $d<HTMLElement>('[data-call-at-label]')!.textContent = at ? callWhen(at.toISOString()) : 'Now';
+    const again = $d<HTMLElement>('[data-call-at-now]');
+    if (again) again.hidden = !at;
+    $d<HTMLElement>('.meet-call-at-box')?.classList.toggle('has-clear', !!again && !!at);
+    minutes.hidden = !at;
+    // The time decides which button is the filled one.
+    for (const [button, on] of [[start, !at], [schedule, !!at]] as const) {
+      if (!button) continue;
+      button.disabled = !chosen.length; button.classList.toggle('primary', on); button.classList.toggle('ghost', !on);
+    }
+  };
+  // A team (the org chart's, as the meeting window's Add has them): its bots the viewer may call, in one pick. A bot
+  // says its team (`team`); a team inside it (`parent`) counts too. /api/humans' team rows list no members.
+  const team = (g: OrgGroup & {id: string; parent?: string}): string[] => {
+    const under = new Set([g.id]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const x of (S.orgGroups || []) as (OrgGroup & {id: string; parent?: string})[]) if (x.parent && under.has(x.parent) && !under.has(x.id)) { under.add(x.id); grew = true; }
+    }
+    const can = new Set(teammates().map(t => t.actor));
+    return activeEmps().filter(e => !!e.team && under.has(e.team)).map(e => 'bot:' + e.name).filter(a => can.has(a) && !chosen.includes(a));
+  };
+  const teams = (): WhoCandidate[] => (S.orgGroups || []).map(g => ({g, members: team(g)})).filter(t => t.members.length).map(({g, members}) => ({
+    subject: 'group:' + g.id, kind: 'group', name: g.name || g.id, face: '<span class="meet-team-ic" aria-hidden="true"><span class="nav-icon">groups</span></span>',
+    trail: `<span class="meet-team-n" aria-label="${members.length}"><span class="meet-stack" aria-hidden="true">${members.slice(0, 3).map(a => actorAvatar(a, 18)).join('')}</span><span class="tnum">${members.length}</span><span class="meet-team-add" aria-hidden="true"><span class="nav-icon">add</span></span></span>`}));
+  input.addEventListener('change', () => {
+    const d = new Date(input.value);
+    at = Number.isNaN(d.getTime()) ? at : d; paint();
+  });
+  $d<HTMLButtonElement>('[data-call-at]')!.onclick = () => { try { input.showPicker(); } catch { input.focus(); } };
+  const again = $d<HTMLButtonElement>('[data-call-at-now]');
+  if (again) again.onclick = () => { at = null; paint(); $d<HTMLButtonElement>('[data-call-at]')?.focus(); };
+  const picker = change ? null : whoPickerWire(dialog, {
+    candidates: () => [...teams(), ...teammates().filter(t => !chosen.includes(t.actor)).map(t => ({subject: t.actor, kind: t.actor.startsWith('bot:') ? 'bot' : 'person', name: t.label,
+      email: (S.people || []).find(p => 'human:' + p.id === t.actor)?.email || undefined, face: actorAvatar(t.actor, 24)}))],
+    onPick: c => {
+      const g = c.subject.startsWith('group:') ? (S.orgGroups || []).find(x => 'group:' + x.id === c.subject) : null;
+      chosen.push(...(g ? team(g) : [c.subject])); paint();
+    }});
+  if (who) who.onclick = ev => {
+    const actor = eventElement(ev)?.closest<HTMLElement>('[data-actor]')?.dataset['actor'];
+    if (!actor) return;
+    chosen.splice(chosen.indexOf(actor), 1); paint(); picker?.refresh(); picker?.input.focus();
+  };
+  paint();
+  // One action at a time, its button held, and its refusal shown here.
+  const act = async (button: HTMLButtonElement | null, fn: () => Promise<boolean>) => {
+    if (button?.disabled) return;
+    if (button) button.disabled = true;
+    error.textContent = '';
+    try { if (await fn()) dialog.close(); } catch (e) { error.textContent = errorMessage(e, 'Try again'); } finally { paint(); }
+  };
+  const ends = (from: Date) => new Date(from.getTime() + (Number(minutes.value) || 30) * 60000);
+  const title = () => String(new FormData(form).get('title') || '').trim();
+  const book = () => act(schedule, async () => {
+    if (!at) { $d<HTMLButtonElement>('[data-call-at]')?.click(); return false; }
+    if (!await callSchedule([...chosen], title(), at, (ends(at).getTime() - at.getTime()) / 60000)) return false;
+    callToast('Scheduled');
+    if (MEET) void meetUpcoming(MEET);
+    return true;
+  });
+  const call = () => act(start, () => callTeammates([...chosen], title()));
+  const save = () => act($d<HTMLButtonElement>('.meet-call-save'), async () => {
+    if (!change || !at) return false;
+    const r: CallRecord | null = await patch(`/v2/calls/${encodeURIComponent(change.id)}`, {starts_at: at.toISOString(), ends_at: ends(at).toISOString()});
+    const v = r?.call || r;
+    if (v?.id) callViewKeep(v);
+    callToast('Time changed');
+    await opts.done?.();
+    return true;
+  });
+  if (schedule) schedule.onclick = () => void book();
+  if (start) start.onclick = () => void call();
+  form.onsubmit = ev => { ev.preventDefault(); void (change ? save() : at ? book() : call()); };
+}
+// The next half hour.
+function meetNextHalfHour(): Date { return new Date(Math.ceil(Date.now() / 1800000) * 1800000); }
+// A time as a datetime-local field's value, in the viewer's own time.
+function meetLocalValue(d: Date): string {
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
 function meetReviewTabs(state: MeetState): void {
@@ -181,7 +358,7 @@ function meetReviewBulk(state: MeetState): void {
     box.onchange = () => { for (const r of visible) box.checked ? state.checked.add(r.id) : state.checked.delete(r.id); meetList(state); };
   }
   el.hidden = state.review !== 'pending' || selected < 2;
-  // Quiet buttons: Add notes stays the view's one filled button. Clear backs out at the left, Share goes forward last.
+  // Quiet buttons, as the header's. Clear backs out at the left, Share goes forward last.
   el.innerHTML = `<span>${selected} selected</span><button class="linkish" type="button" data-review-clear>Clear</button><span class="spacer"></span>
     <button class="ghost small" type="button" data-review-bulk="dismiss_all">Dismiss ${selected}</button>
     <button class="ghost small" type="button" data-review-bulk="approve_all">Share ${selected}</button>`;
@@ -258,26 +435,6 @@ async function meetSettingsOpen(state: MeetState): Promise<void> {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.ts;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.ts).
-// Tico Recorder for Mac: the newest release's disk image.
-const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
-// In the Mac app with Tico Recorder installed, Record opens the Recorder on this org instead (app/src/recorder.rs).
-// Elsewhere the download shows until Tico has seen one of the person's copies lately (backend/recorder_installs.py),
-// and one quiet link says when the copy they used last is older than the newest release.
-async function meetRecorderLink() {
-  const hasRecorder = async () => {
-    if (!nativeHas('openRecorder')) return false;
-    try { return await nativeHandler('hasRecorder')?.postMessage(null) === true; } catch { return false; }
-  };
-  const [installed, mine] = await Promise.all([hasRecorder(), get('/v2/meetings/recorder').catch(() => null)]);
-  const link = $('#meet-recorder'), update = $('#meet-recorder-update');
-  if (!link) return;
-  if (update) update.hidden = !mine?.update_available;
-  if (!installed) { link.hidden = !!mine?.recent; return; }
-  const button = document.createElement('button');
-  Object.assign(button, {type: 'button', className: 'linkish', id: 'meet-recorder', textContent: 'Record'});
-  button.onclick = () => { try { Promise.resolve(nativeHandler('openRecorder')?.postMessage(null)).catch(() => {}); } catch {} };
-  link.replaceWith(button);
-}
 const MEET_SOURCES: MeetSource[] = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -526,7 +683,7 @@ async function meetLoad(state: MeetState, first: boolean): Promise<void> {
 }
 const meetFiltersOn = (state: MeetState) => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
 // No meetings and nothing narrowing the list: the sources, since the Sources link is hidden until one is connected
-// (the header has Add notes).
+// (the header has Log a meeting).
 const meetEmptyHTML = (state: MeetState) => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
   : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state)}</div></div>`;
 const meetPill = (r: MeetRec) => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
@@ -619,7 +776,7 @@ function meetOneLine(text: unknown): string {
   const line = m ? m[0] : s;
   return line.length > 140 ? line.slice(0, 137).replace(/\s+\S*$/, '') + '…' : line;
 }
-// A row's own action: a quiet icon button (the row is a title and marks; Add notes is the view's one filled button).
+// A row's own action: a quiet icon button (the row is a title and marks).
 const meetRowAct = (action: string, id: string, icon: string, label: string, tip = label, extra = '') =>
   `<button class="mp-icon meet-act" type="button" data-review-action="${action}" data-id="${esc(id)}"${extra} aria-label="${esc(label)}" title="${esc(tip)}">${meetIcon(icon)}</button>`;
 // The top of an open meeting: every task it turned into, each a link. The bot's progress is the Outcome below.
@@ -660,8 +817,8 @@ async function meetDetail(state: MeetState, id: string): Promise<void> {
 const IMPORT_SOURCES: Record<string, string> = {upload: 'Upload', zoom: 'Zoom', 'google-meet': 'Google Meet', granola: 'Granola', otter: 'Otter', fireflies: 'Fireflies', other: 'Other'};
 const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Typed', close: 'Close', submitted: 'Imported', api: 'API', tico: 'Tico'})[s || 'tico']
   || String(s).replace(/[-_]+/g, ' ').replace(/^./, c => c.toUpperCase());
-// The source in words; a meeting the Recorder filed says so.
-const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
+// The source in words.
+const meetSourceName = (r: MeetRec) => r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
 const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
 const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';
@@ -711,12 +868,13 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
   // Only an https link is drawn as one; the server refuses anything else, and this keeps a bad row inert.
   if (/^https:\/\//i.test(rec.media_url || '')) meta.push(`<a href="${esc(rec.media_url)}" target="_blank" rel="noopener noreferrer">Recording</a>`);
   const draft = state.noteDraft?.id === id ? state.noteDraft.value : null;
-  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea></section>`
-    : rec.note ? `<section class="mp-sec"><div class="mp-label">Notes</div><div class="mp-notes mp-notes-ro">${esc(rec.note)}</div></section>` : '';
-  const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me?.cloud && f.id
+  // The source's summary sits under the person's own notes, so the record reads as one note.
+  const summary = rec.notes ? `<div class="mp-from"><div class="mp-label">${rec.source === 'granola' ? 'From Granola' : 'Summary'}</div><div class="md">${safeMd(rec.notes)}</div></div>` : '';
+  const notes = mayEdit ? `<section class="mp-sec"><div class="mp-label">Notes</div><textarea id="meet-note" class="mp-notes" aria-label="Notes" placeholder="Write notes…">${esc(draft ?? rec.note ?? '')}</textarea>${summary}</section>`
+    : rec.note || summary ? `<section class="mp-sec"><div class="mp-label">Notes</div>${rec.note ? `<div class="mp-notes mp-notes-ro">${esc(rec.note)}</div>` : ''}${summary}</section>` : '';
+  const files = rec.attachments?.length ? `<div class="mp-files">${rec.attachments.map(f => S.me && f.id
     ? `<a class="pill" href="${API}/v2/files/${encodeURIComponent(f.id)}" download>${esc(f.name)}</a>`
     : `<span class="pill">${esc(typeof f === 'string' ? f : f.name || 'Attachment')}</span>`).join('')}</div>` : '';
-  const summary = rec.notes ? `<section class="mp-sec"><div class="mp-label">Summary</div><div class="md">${safeMd(rec.notes)}</div></section>` : '';
   const side = !typed || (rec.turns || []).length || rec.voice_text;
   el.innerHTML = `<div class="mp${side ? '' : ' mp-one'}">
     <header class="mp-head">
@@ -729,7 +887,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
     <div class="mp-cols">
       <div class="mp-main">
         ${typed || reviewing ? '' : '<section class="mp-sec" id="meet-sections"></section>'}
-        ${notes}${files}${summary}
+        ${notes}${files}
       </div>
       ${side ? '<aside class="mp-side" id="meet-side" aria-label="Transcript"></aside>' : ''}
     </div>
@@ -748,7 +906,7 @@ function meetPaint(state: MeetState, rec: MeetRec): void {
     if (wanted === !!rec.private) return;
     el.querySelectorAll<HTMLButtonElement>('[data-vis]').forEach(x => x.disabled = true);
     try {
-      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {private: wanted, ...(S.me?.cloud ? {version: rec.version} : {})});
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {private: wanted, ...(S.me ? {version: rec.version} : {})});
       toast(wanted ? 'Private' : 'Visible to the team');
       await meetLoad(state, false);
       if (MEET === state && state.selected === id) meetPaint(state, {...rec, ...(d || {})});
@@ -771,7 +929,7 @@ function meetNoteWire(state: MeetState, rec: MeetRec): void {
     if (state.noteSaving) { state.noteAgain = true; return; }
     state.noteSaving = true;
     try {
-      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: value, ...(S.me?.cloud ? {version: rec.version} : {})});
+      const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {note: value, ...(S.me ? {version: rec.version} : {})});
       rec.note = value; if (d?.version !== undefined) rec.version = d.version;
       const row = state.list.find(r => r.id === id); if (row) row.note = value;
       if (state.noteDraft?.id === id && state.noteDraft.value.trim() === value) state.noteDraft = null;
@@ -811,7 +969,7 @@ function meetToolsWire(state: MeetState, rec: MeetRec): void {
     del.disabled = true;
     try {
       await post(`/meetings/${encodeURIComponent(id)}/delete`);
-      toast(S.me?.cloud ? 'Removed from the list; recoverable server history is retained.' : 'Deleted');
+      toast(S.me ? 'Removed from the list; recoverable server history is retained.' : 'Deleted');
       state.confirmDelete = ''; state.selected = ''; meetShow(state, false); await meetLoad(state, true);
     } catch (e) { toast(errorMessage(e, ''), true); del.disabled = false; del.innerHTML = meetIcon('delete', 'Delete'); }
   };
@@ -838,19 +996,21 @@ const meetMarked = (text: unknown, q?: string) => {
   return safe.replace(new RegExp(needle, 'gi'), m => `<mark>${m}</mark>`);
 };
 const meetTurnHTML = (who: string | undefined, at: string | undefined, text: unknown, q?: string) => `<div class="mp-turn"><div class="who">${who ? `<b>${esc(who)}</b>` : ''}${at ? `<span class="time">${esc(at)}</span>` : ''}</div><p class="said">${meetMarked(text, q)}</p></div>`;
+// Plain text has no times, so each line would read 0:00; a transcript with no times shows none.
+const meetTurnTime = (turns: MeetTurn[], t: MeetTurn): string => turns.some(x => x.start_ms) ? mmss(t.start_ms) : '';
 function meetTranscriptHTML(rec: MeetRec, q?: string): string {
   const turns = rec.turns || [];
-  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, mmss(t.start_ms), t.text, q)).join('')
+  const main = turns.length ? turns.map(t => meetTurnHTML(t.speaker, meetTurnTime(turns, t), t.text, q)).join('')
     : rec.voice_text ? meetTurnHTML('', '', rec.voice_text, q)
     : rec.transcript_readable ? String(rec.transcript_readable).split(/\n+/).filter(l => l.trim()).map(l => `<p class="said">${meetMarked(plainMd(l), q)}</p>`).join('')
     : '<div class="mp-empty">No transcript</div>';
   const others = (rec.transcript_sources || []).filter(t => !t.primary).map(t =>
     `<details class="mp-alt"><summary>${esc(meetSourceLabel(t.source))} ${esc(t.resource_type)}${t.transcript_index ? ` ${t.transcript_index + 1}` : ''}</summary>
-      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, mmss(turn.start_ms), turn.text, q)).join('')}</details>`).join('');
+      ${(t.turns || []).map(turn => meetTurnHTML(turn.speaker, meetTurnTime(t.turns || [], turn), turn.text, q)).join('')}</details>`).join('');
   return main + others;
 }
 const meetTranscriptText = (rec: MeetRec) => (rec.turns || []).length
-  ? rec.turns!.map(t => `${t.speaker ? t.speaker + ' ' : ''}[${mmss(t.start_ms)}] ${t.text}`).join('\n')
+  ? (rec.turns || []).map(t => { const at = meetTurnTime(rec.turns || [], t); return `${t.speaker ? t.speaker + ' ' : ''}${at ? `[${at}] ` : ''}${t.text}`; }).join('\n')
   : rec.voice_text || plainMd(rec.transcript_readable || '');
 const meetChatName = (m: MeetChatMessage) => m.actor ? actorLabel(m.actor) : m.role || '';
 const meetChatHTML = (chat: MeetChatMessage[]) => chat.map(m => meetTurnHTML(meetChatName(m), m.at_ms === null || m.at_ms === undefined ? '' : mmss(m.at_ms), m.text, '')).join('');
@@ -893,7 +1053,7 @@ function meetSideRender(state: MeetState, rec: MeetRec): void {
   }
 }
 
-// ---- Add notes: typed notes, an uploaded or pasted transcript, or both, filed through POST /api/v2/meetings/import ----
+// ---- Log a meeting: typed notes, an uploaded or pasted transcript, or both, filed through POST /api/v2/meetings/import ----
 // A local date-time as ISO-8601 with this browser's offset; the server wants a timezone.
 function meetLocalIso(value: string): string {
   const d = new Date(value); if (Number.isNaN(d.getTime())) return '';
@@ -911,7 +1071,7 @@ function meetNotesOpen(state: MeetState): void {
   const now = new Date(), pad = (n: number) => String(n).padStart(2, '0');
   const local = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
   dialog.innerHTML = `<form class="import-form" id="manual-form">
-      <header><h2>Add notes</h2><button class="ghost" type="button" id="manual-close" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
+      <header><h2>Log a meeting</h2><button class="ghost" type="button" id="manual-close" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <div class="import-grid">
         <label>Title <input type="text" id="manual-title" maxlength="300" autocomplete="off"></label>
         <label>Date and time <input type="datetime-local" id="manual-when" value="${local}"></label>
@@ -935,7 +1095,7 @@ function meetNotesOpen(state: MeetState): void {
       <label>Send to a bot (optional) <select id="manual-send"><option value="">Don't send</option><option value="auto">Auto — ${esc(assistantName())} routes it</option>${activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('')}</select></label>
       <label class="import-private"><input type="checkbox" id="manual-private"> Private: participants, its owner and the team owner only</label>
       <div class="row"><span class="muted" id="manual-msg" role="status"></span><span class="spacer"></span>
-        <button class="ghost" type="button" id="manual-cancel">Cancel</button><button class="primary" type="submit" id="manual-go">Add notes</button></div>
+        <button class="ghost" type="button" id="manual-cancel">Cancel</button><button class="primary" type="submit" id="manual-go">Log</button></div>
     </form>`;
   const q = (sel: string) => dialog.querySelector(sel), close = () => dialog.close();
   q('#manual-close').onclick = close; q('#manual-cancel').onclick = close;
@@ -1229,6 +1389,7 @@ liveOn('tasks', (event: MeetTaskEvent) => {
   meetLinkedTasksRender(state, id);
 });
 liveOn('reset', () => {
+  if (MEET) void meetLiveCalls(MEET);
   if (!MEET?.open || !MEET.selected) return;
   MEET.linkedTaskChanges = {};
   meetLinkedTasksLoad(MEET, MEET.selected);
@@ -1256,7 +1417,7 @@ function meetRenameable(state: MeetState, rec: MeetRec, title: HTMLElement | nul
       const value = input.value.trim();
       if (save && value && value !== (rec.title || '')) {
         try {
-          const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {title: value, ...(S.me?.cloud ? {version: rec.version} : {})});
+          const d = await post(`/meetings/${encodeURIComponent(id)}/edit`, {title: value, ...(S.me ? {version: rec.version} : {})});
           rec.title = value; if (d?.version !== undefined) rec.version = d.version; toast('Renamed');
           const row = state.list.find(r => r.id === id); if (row) row.title = value;
         } catch (e) { toast(errorMessage(e, ''), true); }

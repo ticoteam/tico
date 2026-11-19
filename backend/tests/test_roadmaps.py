@@ -1,6 +1,7 @@
 """What the roadmap keeps while the public roadmap is off (backend/roadmaps.py, backend/public_roadmaps.py): a task's
 public text and who may write it, its requesters, a visitor's token that takes their details back, the guard on the
-public routes, and the settings. The public pages and API answer "not available yet"."""
+public routes, the settings, and the signed-in Roadmap that ranks the Product pipeline's tasks. The public pages and
+API answer "not available yet"."""
 
 import hashlib
 import json
@@ -57,8 +58,6 @@ def test_the_public_roadmap_is_not_available_yet_and_its_settings_stay(api):
         assert r.status_code == 404 and r.json()['error']['detail'] == R.NOT_YET, r.text
         assert 'Internal' not in r.text and 'Roadmap item' not in r.text
     assert api.head('/public/roadmaps/roadmap').status_code == 404
-    ranked = api.get('/api/v2/roadmap-tasks', headers=headers())
-    assert ranked.status_code == 404 and ranked.json()['error']['detail'] == R.NOT_YET
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 1  # a suggestion files nothing
         assert not c.execute('SELECT 1 FROM task_requesters').fetchone()
@@ -105,7 +104,7 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
         'Better search',
         'Find more',
     )
-    changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'body': 'Internal revision'})
+    changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'title': 'Research search again'})
     assert changed['public_summary'] == 'Find more'
     private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Sensitive research', 'body': 'Secret', 'private': True})
     post(api, 'tasks/' + private['id'], {'version': private['version'], 'visibility': 'public'}, expected=422)
@@ -231,120 +230,77 @@ def test_internal_text_never_becomes_public_text(api):
     assert all(text not in shown for text in ('jane@', '$40k', 'Keep Acme happy', 'Faster exports'))
 
 
-def _first_version_copies_edited_since_or_published_at_creation_are_cleared(api):
-    from backend import roadmaps as R
+def _product(api):
+    """The company's Product pipeline, as a company that builds software gets it."""
+    from backend import pipeline_settings as PS
 
-    edited = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old title', 'body': 'Old notes'})
-    copied = post(api, 'tasks', {'owner': 'cpo', 'title': 'Acme churn', 'body': 'jane@acme.example'})
-    draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft', 'body': 'Internal'})
-    draft = post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'public_title': 'Written draft'})
-    shown = post(
-        api,
-        'tasks',
-        {
-            'owner': 'cpo',
-            'title': 'Shown idea',
-            'body': 'Shown notes',
-            'visibility': 'public',
-            'public_title': 'Shown idea',
-            'public_summary': 'Shown notes',
-        },
-    )
-    kept = post(
-        api,
-        'tasks',
-        {'owner': 'cpo', 'title': 'Kept internal', 'body': 'Kept internal notes'},
-    )
     with api.app.state.store.transaction() as c:
-        # A fresh database is marked on its first start, so its second start clears nothing.
-        assert c.execute("SELECT 1 FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'").fetchone()
-        # What the first version left: a copy made before the title changed, and a task public at creation.
-        c.execute(
-            "UPDATE tasks SET public_title='Old title',public_summary='Old notes',title='New title' WHERE id=?",
-            (edited['id'],),
-        )
-        c.execute(
-            "UPDATE tasks SET visibility='public',public_title=title,public_summary=body WHERE id=?", (copied['id'],)
-        )
-        # Public text with no event that differs from the internal text is not a copy, so a public task keeps it.
-        c.execute(
-            "UPDATE tasks SET visibility='public',public_title='Kept public',public_summary='Kept summary' WHERE id=?",
-            (kept['id'],),
-        )
-        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'")
-        R.migrate(c)
-        state = lambda tid: tuple(
-            c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?', (tid,)).fetchone()
-        )
-        assert state(edited['id']) == ('private', '', '')
-        assert state(copied['id']) == ('private', '', '')
-        assert state(draft['id']) == ('private', 'Written draft', '')  # written public text stays
-        assert state(shown['id']) == ('public', 'Shown idea', 'Shown notes')  # written at creation, so it stays
-        assert state(kept['id']) == ('public', 'Kept public', 'Kept summary')  # only an exact copy goes
-        note = c.execute(
-            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility'",
-            (copied['id'],),
-        ).fetchone()
-        assert 'copy of the internal title' in note[0]
-        cleared = c.execute(
-            "SELECT kind AS field,old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE 'Cleared:%' "
-            "ORDER BY kind",
-            (edited['id'],),
-        ).fetchall()
-        assert [tuple(r[:3]) for r in cleared] == [
-            ('public_summary', 'Old notes', ''),
-            ('public_title', 'Old title', ''),
-        ]
-        c.execute("UPDATE tasks SET public_title='Old title' WHERE id=?", (edited['id'],))
-        R.migrate(c)  # once only
-        assert state(edited['id']) == ('private', 'Old title', '')
+        return PS.add_preset(c, PS.SYSTEM, PS.PRODUCT)['id']
 
 
-def _first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api):
-    from backend import roadmaps as R
-
-    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'D', 'body': 'secret internal body'})
-    hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'E', 'body': 'other internal body'})
-    retitled = post(api, 'tasks', {'owner': 'cpo', 'title': 'F', 'body': 'Written summary'})
-    with api.app.state.store.transaction() as c:
-        # The first version made each a copy at creation; then the owner rewrote only one field through publication().
-        c.execute(
-            "UPDATE tasks SET public_title=title,public_summary=body WHERE id IN (?,?,?)",
-            (shown['id'], hidden['id'], retitled['id']),
-        )
-        c.execute("UPDATE tasks SET visibility='public' WHERE id IN (?,?)", (shown['id'], retitled['id']))
-    shown = get(api, 'tasks/' + shown['id'])['task']
-    post(api, 'tasks/' + shown['id'], {'version': shown['version'], 'public_title': 'D written'})
-    hidden = get(api, 'tasks/' + hidden['id'])['task']
-    post(api, 'tasks/' + hidden['id'], {'version': hidden['version'], 'public_title': 'E written'})
-    retitled = get(api, 'tasks/' + retitled['id'])['task']
-    post(api, 'tasks/' + retitled['id'], {'version': retitled['version'], 'public_summary': 'Written summary, public'})
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_copies_cleared_by_field'")
-        R.migrate(c)
-        state = lambda tid: tuple(
-            c.execute('SELECT visibility,public_title,public_summary FROM tasks WHERE id=?', (tid,)).fetchone()
-        )
-        assert state(shown['id']) == ('public', 'D written', '')  # the written title keeps it public
-        assert state(hidden['id']) == ('private', 'E written', '')
-        assert state(retitled['id']) == ('private', '', 'Written summary, public')
-        # Each clearing leaves its event, so it can be put back.
-        assert tuple(
-            c.execute(
-                "SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='public_summary' "
-                "AND note LIKE 'Cleared:%'",
-                (shown['id'],),
-            ).fetchone()
-        ) == ('secret internal body', '')
-        assert c.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility' AND note LIKE 'Unpublished:%'",
-            (retitled['id'],),
-        ).fetchone()
+def _ranked(api, query='', token='ana-test'):
+    return get(api, 'roadmap-tasks' + query, token=token)
 
 
-def test_first_version_copies_are_cleared_once_and_only_what_was_a_copy(api):
-    _first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api)
-    _first_version_copies_edited_since_or_published_at_creation_are_cleared(api)
+def test_the_roadmap_ranks_the_product_pipelines_tasks_by_who_asked(api):
+    missing = api.get('/api/v2/roadmap-tasks', headers=headers())
+    assert missing.status_code == 404 and missing.json()['error']['detail'] == R.NO_PRODUCT
+    product = _product(api)
+    made = {
+        title: post(api, 'tasks', {'owner': 'cpo', 'title': title, 'pipeline': product})
+        for title in ('Add exports', 'Add imports', 'Add filters')
+    }
+    post(api, 'tasks', {'owner': 'cpo', 'title': 'Plan the offsite'})  # General: not on the roadmap
+    exports, imports, filters = (made[t]['id'] for t in ('Add exports', 'Add imports', 'Add filters'))
+    post(api, f'tasks/{exports}/requesters', {'email': 'a@acme.example', 'organization': 'Globex', 'important': True})
+    post(api, f'tasks/{exports}/requesters', {'email': 'b@acme.example'})
+    post(api, f'tasks/{imports}/requesters', {'actor': 'human:priya'}, token='priya-test')
+    post(api, f'tasks/{filters}', {'version': made['Add filters']['version'], 'size': 3})
+
+    rows = _ranked(api)['tasks']
+    assert [r['id'] for r in rows] == [exports, imports, filters]
+    first = rows[0]
+    assert (first['pipeline_id'], first['stage_name'], first['status']) == (product, 'Spec', 'open')
+    assert {k: first[k] for k in R.EMPTY_STATS} == {
+        'requester_count': 2,
+        'external_requesters': 2,
+        'internal_requesters': 0,
+        'important_requesters': 1,
+        'organization': 'Globex',
+    }
+    assert rows[1]['internal_requesters'] == 1 and rows[2]['requester_count'] == 0
+    assert [r['id'] for r in _ranked(api, '?direction=asc')['tasks']] == [filters, imports, exports]
+    # A task with no organization or size comes last whichever way it sorts.
+    for direction in ('asc', 'desc'):
+        assert _ranked(api, '?sort=organization&direction=' + direction)['tasks'][0]['id'] == exports
+        assert _ranked(api, '?sort=size&direction=' + direction)['tasks'][0]['id'] == filters
+    one = _ranked(api, '?limit=1')
+    assert [r['id'] for r in one['tasks']] == [exports] and one['next_offset'] == 1
+    last = _ranked(api, '?limit=2&offset=2')
+    assert [r['id'] for r in last['tasks']] == [filters] and last['next_offset'] is None
+    for bad in ('?sort=votes', '?direction=up'):
+        r = api.get('/api/v2/roadmap-tasks' + bad, headers=headers())
+        assert r.status_code == 422 and r.json()['error']['code'] == 'sort', r.text
+
+
+def test_the_roadmap_shows_a_reader_only_what_they_may_read_and_only_editors_publish(api):
+    product = _product(api)
+    shared = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add exports', 'pipeline': product})
+    secret = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add payroll', 'pipeline': product, 'private': True})['task']
+    post(api, f"tasks/{secret['id']}/requesters", {'email': 'cfo@acme.example', 'organization': 'Initech'})
+    assert {r['id'] for r in _ranked(api)['tasks']} == {shared['id'], secret['id']}
+    seen = _ranked(api, token='priya-test')
+    assert [r['id'] for r in seen['tasks']] == [shared['id']]
+    assert 'Initech' not in json.dumps(seen) and 'payroll' not in json.dumps(seen)
+
+    # Public text and requesters are set by those who may change the task, never by a reader alone.
+    public = {'version': shared['version'], 'visibility': 'public', 'public_title': 'Exports'}
+    post(api, 'tasks/' + shared['id'], public, token='priya-test', expected=403)
+    post(api, f"tasks/{shared['id']}/requesters", {'email': 'x@acme.example'}, token='priya-test', expected=403)
+    assert _ranked(api, token='priya-test')['tasks'][0]['visibility'] == 'private'
+    post(api, 'tasks/' + shared['id'], public)
+    row = _ranked(api, token='priya-test')['tasks'][0]
+    assert (row['visibility'], row['public_title']) == ('public', 'Exports')
 
 
 def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):

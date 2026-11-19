@@ -60,7 +60,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   pattern needs a count to stand on; a single no-show is an event.
 
 ## Starting a run
-1. Read the task with `tico task show <id>` and anything attached.
+1. Read the task's chat with `tico task show <id>` and anything attached.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/booking-rules.md`,
    `knowledge/booking-practice.md` and the playbook the task names. A resumed turn already has them.
 
@@ -79,7 +79,7 @@ block: a snooze is only to look again on a date. While your own pull request's c
 stop, and their end wakes you.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>"`. When a result is ready,
 `tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards

@@ -34,8 +34,10 @@ KEY = "page_owners"
 # The bot that does each page's work (spec chat-on-every-page), one per page the sidebar and the router reach, in the
 # sidebar's order (Settings lists them so). ui/app/page-chat.ts maps each address to its key. A default names a bot a new
 # company has where one fits (the built-ins: general-manager, strategy-owner, finance-owner, rules-owner, librarian,
-# botops); a few name the catalogue's bot for the work (automations-owner, updates-owner, growth-manager,
-# it-support-specialist), which a company may not have installed: their page falls back to the General Manager.
+# botops, automations-owner, updates-owner, tools-owner); growth-manager is the catalogue's bot for the work, which a company
+# may not have installed: its page falls back to the General Manager. A page may name a second bot in line (`then`): Tools
+# goes to an IT Support Specialist a company hired when it has no Tools Owner (one from before it was built in, until a
+# start makes it), and only then to the General Manager.
 # Pages with no key have no page chat because the chat IS the page (a bot's or person's page, a thread, a task, the
 # Assistant) or it is setup or the style guide. Calendar and Meetings have none of their own either: the Assistant owns
 # them, and their chat is Ask itself, in the sidebar (page-chat.ts PGC_ASK), never a second Assistant chat.
@@ -47,9 +49,11 @@ PAGES: dict[str, dict[str, str]] = {
         "name": "Strategy",
         "default": "strategy-owner",
     },  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
+    "products": {"name": "Products", "default": "product-lead"},  # Company › Products; else the General Manager
     "goals": {"name": "Goals", "default": "strategy-owner"},
     "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
     "growth": {"name": "Growth", "default": "growth-manager"},
+    "risk": {"name": "Risk", "default": "legal-owner", "then": "rules-owner"},
     "automations": {"name": "Automations", "default": "automations-owner"},
     "listening": {"name": "Listening", "default": "automations-owner"},
     "rules": {"name": "Rules", "default": "rules-owner"},
@@ -58,8 +62,9 @@ PAGES: dict[str, dict[str, str]] = {
     "contacts": {"name": "Contacts", "default": "librarian"},
     "tools": {
         "name": "Tools",
-        "default": "it-support-specialist",
-    },  # with its keys and inboxes: who sets up tools and access
+        "default": "tools-owner",
+        "then": "it-support-specialist",
+    },  # with its keys and inboxes: who sets up tools, keys and levels
     "mail": {"name": "Mail", "default": "general-manager"},
     "messaging": {"name": "Messaging", "default": "general-manager"},
     "settings": {"name": "Settings", "default": "botops"},
@@ -100,12 +105,13 @@ def _owner(
     chosen: bool = True,
     fallback: bool = True,
 ) -> str | None:
-    """The page's owner: the chosen bot, else its default, else the General Manager, the first that is live. None only
+    """The page's owner: the chosen bot, else its default (then its `then`), else the General Manager, the first that is live. None only
     when a person chose no owner (or, with `fallback` False, when neither the choice nor the default is live).
     `chosen` False: who the page's default gives, whatever is chosen. `seen` keeps each bot looked up once per read."""
     if chosen and page in kept and kept[page] is None:
         return None
-    line = (kept.get(page) if chosen else None, PAGES[page]["default"], FALLBACK if fallback else None)
+    spec = PAGES[page]
+    line = (kept.get(page) if chosen else None, spec["default"], spec.get("then"), FALLBACK if fallback else None)
     for ref in line:
         if ref and ref not in seen:
             seen[ref] = _live(c, ref)

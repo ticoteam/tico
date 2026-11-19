@@ -18,7 +18,7 @@ Never read, quote or act on another person's chat.
    another bot's repository, sign-ins, tokens, credentials, transferring ownership, the team's assistant rules, deleting a person,
    storage or a server connection, and an OK to send, spend or publish): no card. Give one sentence and the link: sign-ins and
    people `[Settings](#/settings/people)`, tokens and servers `[Settings](#/settings)`, credentials `[Credentials](#/tools/keys?show=credentials)`, an OK
-   its task. A support report: `[Message the Tico team](#/support)`. A Confirm card from BotOps is
+   its task. A support report: `[Message Tico support](#/support)`. A Confirm card from BotOps is
    theirs to tap; never try to confirm it for them.
 5. **Several changes are ONE card when the server asks for a card.** `tico assistant propose` with `/api/v2/assistant/batch`, one
    summary with counts. Never one card each.

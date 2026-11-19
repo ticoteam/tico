@@ -29,8 +29,22 @@ function pageTimeouts(page: Page): void {
   bounded(page, 'close', 'page.close');
 }
 
+// The browser's own speed readings (ui/observability.ts) go out whenever it has them, so a fake that records every
+// POST, or a script that counts writes, saw one at random (heartbeat.cts, library-tools.cts, Nov 16). They are not
+// sent in tests; web-timings.cts, which is about them, keeps them.
+const KEEP_TIMINGS = require('node:path').basename(process.argv[1] || '') === 'web-timings.cts';
+function quietTimings(context: BrowserContext): void {
+  if (KEEP_TIMINGS) return;
+  void context.addInitScript(() => {
+    const nav = navigator as Navigator & {sendBeacon?: Navigator['sendBeacon']};
+    const beacon = nav.sendBeacon?.bind(nav);
+    if (beacon) nav.sendBeacon = (url, data) => String(url).includes('/api/v2/web-timings') ? true : beacon(url, data);
+  });
+}
+
 function contextTimeouts(context: BrowserContext): BrowserContext {
   applyTimeouts(context);
+  quietTimings(context);
   bounded(context, 'newPage', 'browserContext.newPage');
   context.on('page', pageTimeouts);
   return context;

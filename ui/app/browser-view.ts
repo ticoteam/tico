@@ -2,12 +2,13 @@
    browser_commands.py): the picture about once a second, the page's address above it, Take control / Give back and
    Done. With control a tap or click goes to the page at the same spot (page pixels: the frame's X-Page-Width and
    X-Page-Height), a box types text, a keys row sends Enter, Tab and Backspace, and the wheel or a drag scrolls.
-   Used by a website tool's page (Open browser, ui/app/tools-website.ts) and the ask screen (a `browser:<tool>/<account>`
-   show ref, ui/app/decide.ts), where Done answers the ask "Done".
+   Used by a website tool's page (Open browser, ui/app/tools-website.ts), a Needs you row (tasks-page.ts) and the ask
+   screen (a `browser:<tool>/<account>` show ref, ui/app/decide.ts); on an ask Done answers it "Done" (needs-you.ts
+   decideBrowserOpen outside Flow).
    browserView.mount(host, {toolId, accountId, full?, title?, onDone?, onClose?}) draws it into `host`; on a phone
    (≤ 760 px) an inline mount is one Open browser button that opens it full screen. browserView.open(...) opens it in a
    dialog over everything (full screen on a phone, 48 px controls). It stops by itself once its host leaves the page.
-   Routes (people who can use the account): POST /api/v2/website-tools/<id>/accounts/<aid>/browser (opens or wakes the
+   Routes (people who may open it, an account's `can_open`): POST /api/v2/website-tools/<id>/accounts/<aid>/browser (opens or wakes the
    session; 409 browser_host_offline says which computer), GET …/browser/frame (image/jpeg, 204 before the first),
    POST …/browser/control {take} and POST …/browser/input {kind: click|type|key|scroll}. Styles: ui/styles/browser-view.css.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */

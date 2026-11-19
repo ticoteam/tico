@@ -26,11 +26,10 @@ def whoami(api, args):
 
 @tool(
     "tico_message_send",
-    "Send a message to a bot or a human. Bot-to-human messages are linted "
-    "(a nonempty first line, under 120 words) and capped at 10 unsolicited a day. `fyi` expects no reply. "
-    "An ordinary bot-to-bot message does not deliver the recipient's final reply, and waits for the recipient's "
-    "next run unless needs_action. "
-    "To get an answer from a bot, set needs_action. Use in_reply_to or steer for a correction to an active run; "
+    "Send a message to a bot or a human. Bot-to-human messages are linted (a nonempty first line, "
+    "under 120 words) and capped at 10 unsolicited a day. `fyi` expects no reply. An ordinary "
+    "bot-to-bot message never returns the reply and waits for the recipient's next run; set "
+    "needs_action to get an answer. For a correction to an active run, use in_reply_to or steer; "
     "it is queued until the Computer applies it.",
     {
         "to": _s("Recipient: a bot slug, `bot:<slug>`, or a human id"),
@@ -145,6 +144,24 @@ def chat_goal(api, args):
 
 
 @tool(
+    "tico_chat_ask",
+    "Ask a person in a chat, marked ❓: in their Needs you until they reply there. Files no task.",
+    {
+        "to": _s("The person's id"),
+        "message": _s("A short first line, then any detail"),
+        "conversation_id": _s("A chat you share; default: your chat with them"),
+    },
+    required=("to", "message"),
+    writes=True,
+)
+def chat_ask(api, args):
+    body = {"to": args["to"], "text": args["message"]}
+    if args.get("conversation_id"):
+        body["conversation_id"] = args["conversation_id"]
+    return api.post("questions", body, key=_key(args))
+
+
+@tool(
     "tico_thread_catchup",
     "Catch up on a thread: what is new in it (and its sub-threads, with scope subtree) that you "
     "may read, summarized and posted to your Assistant DM. The newest 40 messages at most. Nothing new posts nothing.",
@@ -219,9 +236,9 @@ def unnote(api, args):
 
 @tool(
     "tico_conversation_show",
-    "What was said in a conversation: the newest 200 messages, oldest first. The "
-    "way a bot reads back past what its own session holds; the run's prompt names the conversation. "
-    "`has_more` means there is an older page: pass its `next_before` as `before`.",
+    "What was said in a conversation: the newest 200 messages, oldest first. The way a bot reads "
+    "back past what its own session holds; the run's prompt names the conversation. `has_more` "
+    "means there is an older page: pass its `next_before` as `before`.",
     {
         "conversation": _s("Conversation id"),
         "before": _s("The page before this message id: a page's next_before"),
@@ -350,6 +367,15 @@ def _reaction_path(args):
     return "messages/" + quote(args["message_id"], safe="") + "/reactions/" + quote(args["emoji"], safe=":+")
 
 
+SHARED_FILES = {
+    "type": "array",
+    "maxItems": 10,
+    "items": {"type": "string"},
+    "description": "Files already in Tico to attach, as file_id@version (tico file list prints both): any file you "
+    "can open, such as one you published; the thread's readers open it from the message",
+}
+
+
 def _thread_message(args, **more):
     """A message body for a thread post or reply: the text, who it is addressed to and its references."""
     body = {"text": args["text"], "kind": "say", "to": args.get("to"), **more}
@@ -361,8 +387,8 @@ def _thread_message(args, **more):
 @tool(
     "tico_thread_list",
     "Your threads: Needs attention first, then unread, then recent; direct messages are listed "
-    "apart. With with, only the threads shared with that person, bot or group. Paged: next_cursor says whether more "
-    "follow.",
+    "apart. With with, only the threads shared with that person, bot or group. Paged: next_cursor "
+    "says whether more follow.",
     {
         "with": _s("Only the threads shared with this person, bot or group: human:<id>, bot:<slug> or group:<id>"),
         "cursor": THREAD_CURSOR,
@@ -375,11 +401,11 @@ def thread_list(api, args):
 
 @tool(
     "tico_thread_show",
-    "One thread in tree order: each message is followed by the sub-thread that branched from it, "
-    "with its depth. A long sub-thread shows its latest messages under a collapsed row: tico_thread_show on that thread "
-    "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
-    "next_cursor reads on. flat: the thread and its open sub-threads as one list in time order, each message with the "
-    "reply_to it answers.",
+    "One thread in tree order: each message followed by the sub-thread that branched from it, "
+    "with its depth. A long sub-thread shows its latest messages under a collapsed row; "
+    "tico_thread_show on that sub-thread with the row's cursor reads the rest. Also its title and "
+    "breadcrumb. Paged over its own messages; next_cursor reads on. flat: the thread and its open "
+    "sub-threads as one time-ordered list, each message with the reply_to it answers.",
     {
         "thread": THREAD_ID,
         "cursor": THREAD_CURSOR,
@@ -448,14 +474,16 @@ def thread_create(api, args):
         "to": THREAD_ACTOR,
         "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
         "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"},
+        "attachments": SHARED_FILES,
     },
     required=("thread", "text"),
     writes=True,
 )
 def thread_post(api, args):
+    more = {"attachments": args["attachments"]} if args.get("attachments") else {}
     return api.post(
         _thread_path(args["thread"], "messages"),
-        _thread_message(args, in_reply_to=args.get("reply_to")),
+        _thread_message(args, in_reply_to=args.get("reply_to"), **more),
         key=_key(args),
     )
 
@@ -463,8 +491,8 @@ def thread_post(api, args):
 @tool(
     "tico_thread_bot_status",
     "The bots a thread is waiting on, and why: working (with its current step), up next "
-    "(finishing other work first) or can't reply (with what stops it and where to fix it). Five at most, oldest "
-    "wait first.",
+    "(finishing other work first) or can't reply (with what stops it and where to fix it). Five "
+    "at most, oldest wait first.",
     {"thread": THREAD_ID},
     required=("thread",),
 )
@@ -591,10 +619,10 @@ def thread_unpin(api, args):
 
 @tool(
     "tico_thread_catch_up",
-    "Catch up: each thread with something new for you, and each open mention, ask or "
-    "unread DM, mentions first, with the new messages in tree order (at most 20 an item; `more` counts the rest). "
-    "count is every item, at most 99. Mark one read with tico_thread_read all. For a written summary of one thread, "
-    "tico_thread_catchup.",
+    "Catch up: each thread with something new for you, and each open mention, ask or unread DM, "
+    "mentions first, with new messages in tree order (at most 20 an item; `more` counts the "
+    "rest). count is every item, at most 99. Mark one read with tico_thread_read all. For a "
+    "written summary of one thread, use tico_thread_catchup.",
     {
         "cursor": THREAD_CURSOR,
         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Items in this page (default 20)"},
@@ -814,7 +842,8 @@ def thread_delete(api, args):
 @tool(
     "tico_thread_upload",
     "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
-    "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
+    "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from; "
+    "a file already in Tico goes with tico_thread_post's attachments.",
     {
         "thread": THREAD_ID,
         "path": _s("A local file on this computer"),
@@ -840,7 +869,7 @@ def thread_upload(api, args):
     }
     fields = {name: value for name, value in fields.items() if value is not None}
     return api.post_multipart(
-        "uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path}, fields, key=_key(args)
+        "uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"files": path}, fields, key=_key(args)
     )
 
 
@@ -937,9 +966,9 @@ CLI = (
     ),
     Command(
         "thread post",
-        "post a message to a thread",
-        args=(Arg("reply_to", metavar="MESSAGE"), _REFS),
-        example="tico thread post th_1 'Shipped it' --ref task:42",
+        "post a message to a thread, with files already in Tico attached by --file",
+        args=(Arg("reply_to", metavar="MESSAGE"), _REFS, Arg("attachments", "--file", metavar="ID@VERSION")),
+        example="tico thread post th_1 'The draft' --file f_1@2",
     ),
     Command(
         "thread bot-status",

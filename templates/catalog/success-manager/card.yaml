@@ -53,3 +53,13 @@ first_routine:
 reasoning_effort: medium
 recommend_when: [uses_tickets, sells_to_consumers, has_pipeline]
 when: "A team with customer support and customer success work in more than one place, where nobody has the week's picture of both and nobody decides which success role to add next."
+# Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
+shared_files:
+  - knowledge/manager-practice.md
+  - .claude/skills/read-what-is-missing
+  - .claude/skills/write-the-stuck-task-question
+  - .claude/skills/find-the-owner-of-a-task
+  - playbooks/decide-a-stuck-task.md
+  - .claude/skills/collect-receivables
+# Base files (templates/catalog/_base) this template does not take.
+base_skip: [knowledge/README.md, playbooks/README.md]

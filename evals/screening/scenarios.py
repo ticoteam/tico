@@ -216,7 +216,7 @@ def s_hold_release(org, items, judge):
         {"Idempotency-Key": "in-1"},
     )
     org.store.automations.drain()
-    held_turn = org.sql("SELECT id,title,body,owner_id,version FROM tasks WHERE title='Held: Intake work'")
+    held_turn = [X.task_row(org, r["id"]) for r in org.sql("SELECT id FROM tasks WHERE title='Held: Intake work'")]
     held_task = X.find_task(org, "Held: Intake in-1")
     out.append(
         (
@@ -308,7 +308,7 @@ def s_fail_open(org, items, judge):
     def cap_on():
         settings.decisions_monthly_usd = 1.0
         with org.store.transaction() as c:  # the month's spend already at the cap
-            H.event(c, H.KEEPER, "judge.spend", "other@1", {"cost_usd": 2.0})
+            H.event(c, H.TICO_ACTOR, "judge.spend", "other@1", {"cost_usd": 2.0})
 
     def cap_off():
         settings.decisions_monthly_usd = 1_000_000.0

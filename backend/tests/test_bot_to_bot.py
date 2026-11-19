@@ -6,6 +6,7 @@ Builder sample, Oct 18: 74 of 168 wakes were QA updates, a bot telling another b
 from backend import bot_to_bot as B
 from backend import hubdb as H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.run_failures import wait_over
 
 
 def claim(api, r, bot=None):
@@ -91,7 +92,7 @@ def test_a_quiet_message_is_never_lost_a_failed_run_hands_it_to_the_next_even_da
     )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
+        wait_over(c)  # the fast failure's wait is over
     post(api, "chat/cpo", {"text": "Second"})
     second = claim(api, r, "cpo")
     carried = [n for n in second["notes"] if n.get("message")]
@@ -134,7 +135,7 @@ def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_fresh_session_ge
     )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
+        wait_over(c)  # the fast failure's wait is over
     retry = claim(api, r, "cpo")
     assert retry and [n["message"] for n in retry["notes"] if n.get("message")] == [msg["id"]]
 
@@ -234,7 +235,7 @@ def test_never_delayed_questions_approvals_and_awaited_replies(api):
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 2
 
 
-def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages():
+def test_the_rule_fails_open_and_never_touches_a_persons_or_the_tico_messages():
     class Conn:
         def execute(self, *a):
             raise RuntimeError("no database")
@@ -247,7 +248,7 @@ def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages
     assert B.can_wait(conn, "bot:a", "bot:b", "say", {}, "fyi", in_reply_to="m1") is False
     assert B.can_wait(conn, "bot:a", "bot:b", "say", {"something_new": 1}, "fyi") is False
     assert B.can_wait(conn, "human:ana", "bot:b", "say", {}, "fyi") is False
-    assert B.can_wait(conn, H.KEEPER, "bot:b", "notice", {}, "New task") is False
+    assert B.can_wait(conn, H.TICO_ACTOR, "bot:b", "notice", {}, "New task") is False
     assert B.can_wait(conn, "bot:a", "human:ana", "say", {}, "fyi") is False
     for kind in ("ask", "answer", "steer"):
         assert B.can_wait(conn, "bot:a", "bot:b", kind, {}, "fyi") is False

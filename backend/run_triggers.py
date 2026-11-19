@@ -5,11 +5,10 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
 - `trigger_kind`: what woke it. The place that writes a wake stamps it in the wake's refs (`trigger`, plus
   `trigger_source` where there is a source to name); the claim copies it onto the run. A message a person
   wrote is `person_message`, and a message a bot wrote (a task comment, a direct message) is `comment`: the
-  message is the wake and its author says which. A keeper wake nothing stamped is `other`.
+  message is the wake and its author says which. A Tico wake nothing stamped is `other`.
 - tokens: `input_tokens` (the uncached input), `cached_tokens` (the cached part of the input, where the harness
   reports it) and `output_tokens`, as the run's usage records them.
-- `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. NULL, with `outcome` NULL, for a
-  keep-warm turn that wrote nothing (KEEP_WARM): it was never meant to do anything. Exact for every write that
+- `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
   reaches Tico with the run's token, and for a git push from a worktree of the run's own task, which its runner
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
@@ -57,7 +56,6 @@ TRIGGERS = (
     "background_done",
     "release_published",
     "task_turn",
-    "keep_warm",
     "other",
 )
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
@@ -77,11 +75,7 @@ TRIGGER_PURPOSES = {
     "background_done": "resume after background work",
     "release_published": "follow up a release",
     "task_turn": "work a task",
-    "keep_warm": "keep warm",
 }
-# A keep-warm turn (backend/keep_warm.py): a one-line turn that only reads a task session's cache so it stays warm. It
-# is no work: never counted as acting, as doing nothing, or as a run on its task (never_stuck, may_start).
-KEEP_WARM = TRIGGER_PURPOSES["keep_warm"]
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
 REVIEWERS = ("pr-reviewer-sol", "reviewer-2")
 BOT_PURPOSES = {(bot, kind): "review PR" for bot in REVIEWERS for kind in ("status_or_relation", "pr_checks")}
@@ -192,12 +186,7 @@ OUTCOME_SQL = (
     + ",".join(f"'{s}'" for s in OPEN_TASK)
     + ") THEN 'no_change' ELSE 'nothing_to_do' END"
 )
-# A keep-warm turn that wrote nothing has neither (KEEP_WARM): it is no work, and not a run that did nothing.
-_KEPT_WARM = f"coalesce(purpose,'')='{KEEP_WARM}' AND coalesce(writes,0)=0"
-SETTLE_SQL = (
-    f"outcome=CASE WHEN {_KEPT_WARM} THEN NULL ELSE {OUTCOME_SQL} END, "
-    f"did_nothing=CASE WHEN {_KEPT_WARM} THEN NULL ELSE (coalesce(writes,0)=0) END"
-)
+SETTLE_SQL = f"outcome={OUTCOME_SQL}, did_nothing=(coalesce(writes,0)=0)"
 
 
 def pushed(conn, turn_id, computer, pushes):
@@ -260,7 +249,7 @@ def new_session(c, task_id, why, actor=None):
     from .store import H
 
     if task_id and c.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
-        H._task_event(c, task_id, actor or H.KEEPER, "session", "", "new", session_words(why))
+        H._task_event(c, task_id, actor or H.TICO_ACTOR, "session", "", "new", session_words(why))
 
 
 def session(conn, turn_id, session):
@@ -295,7 +284,7 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     else the latest run of the bot that worked it before (a person's OK in a stage another bot owns). An open task counts
     only for `overridden` (given to someone else). `event` is H.event (this module is below hubdb). Returns the event
     row, or None when there is no result, no run, or the run already has its outcome."""
-    from .hubdb_core import KEEPER
+    from .hubdb_core import TICO_ACTOR
 
     owner = str(row.get("owner_id") or "")
     status = row.get("status")
@@ -303,7 +292,7 @@ def turn_result(conn, actor, row, outcome, event, to=None):
         outcome not in TASK_OUTCOMES
         or not (status in RESULT_STATES or status == "open" and outcome == "overridden")
         or not owner.startswith("bot:")
-        or actor in (owner, KEEPER)
+        or actor in (owner, TICO_ACTOR)
     ):
         return None
     # When the task reached Done: the move into a Done stage (task_engine writes `move` rows, new = the stage).
@@ -321,8 +310,8 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     by = str(actor)[4:] if str(actor).startswith("bot:") else ""
     turn = conn.execute(
         "SELECT id FROM attempts WHERE task_id=? AND bot_id<>? AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "AND coalesce(purpose,'')<>? AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
-        (row["id"], by, KEEP_WARM, reached, reached, owner[4:]),
+        "AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
+        (row["id"], by, reached, reached, owner[4:]),
     ).fetchone()
     if (
         not turn

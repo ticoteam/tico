@@ -3,15 +3,17 @@
 Each finished run carries the tokens its runner counted, the model that ran it and, when the model
 has a list price (providers.PRICES), an estimated cost in USD. A run on a ChatGPT or Claude sign-in
 is `subscription`: it is billed to the plan, so its cost is what the same tokens would cost through
-the API, shown apart and never added to the estimate of what was spent. Days are UTC.
+the API, shown apart and never added to the estimate of what was spent. Days and hours are UTC; `from`
+and `to` are whole days or exact UTC times.
 
 Who sees what: the owner and the bot administrators see every bot; anyone else sees the bots they
 run or own. A bot's own credentials see nothing here.
 """
 
-from datetime import date, datetime, timedelta, timezone
+import re
+from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import Request
+from fastapi import Query, Request
 
 from . import bot_access as A
 from . import models as M
@@ -19,6 +21,7 @@ from . import providers, queue_purge, usage_limits, views
 from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
+from .api_contract import api_v2
 
 # A subscription run is its computer's subscription; a run with no lease (from before leases) names only its profile.
 DIMENSIONS = {
@@ -42,8 +45,10 @@ def task_key(visible):
     )
 
 
-GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
+GROUPS = ("bot", "day", "hour", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
+# group=hour lists every hour of its window, so the window is at most a week (168 rows).
+MAX_HOUR_DAYS = 7
 TOP_ROUTINES = 10
 TOP_TASKS = 25
 # The opened bot's detail lists its top tasks; the rest are one count and one sum.
@@ -261,8 +266,54 @@ def save_limit(c, auth, who, bot, body, via=None):
     return default, allowed
 
 
+def instant(value, end=False):
+    """A window bound as a UTC datetime: a date is its day's start, or as the end the next day's start (`to` is the
+    last day, included); a datetime is that instant (as the end, excluded)."""
+    if isinstance(value, datetime):
+        return value
+    return datetime.combine(value + timedelta(days=1 if end else 0), time(), timezone.utc)
+
+
+def stamp(moment):
+    """A bound in the stored timestamps' form (hubdb.now), which compare as text. A whole second has no fraction, so
+    a day's bounds read as they always have (YYYY-MM-DDT00:00:00)."""
+    moment = moment.astimezone(timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S" + (".%f" if moment.microsecond else ""))
+
+
+def shown(value):
+    """A bound as the answer echoes it: a date as YYYY-MM-DD, a time as ISO-8601 UTC with Z."""
+    if not isinstance(value, datetime):
+        return value.isoformat()
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds" if value.microsecond else "seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def bound(text):
+    """`from` or `to` as sent: a date (YYYY-MM-DD) or an ISO-8601 time, read as UTC when it names no offset."""
+    if len(text) == 10:
+        return date.fromisoformat(text)
+    # A `+` offset sent unescaped in a query string arrives as a space.
+    moment = datetime.fromisoformat(re.sub(r" (\d\d(:?\d\d)?)$", r"+\1", text))
+    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
+
+
+def hours(first, last, now):
+    """Each UTC hour the window touches, up to the current one: 'YYYY-MM-DDTHH', as substr(started_at, 1, 13) reads."""
+    at, end = instant(first).replace(minute=0, second=0, microsecond=0), min(instant(last, end=True), now)
+    out = []
+    while at < end:
+        out.append(at.strftime("%Y-%m-%dT%H"))
+        at += timedelta(hours=1)
+    return out
+
+
 def query(c, key, join, slugs, first, last, filters=None):
-    """Grouped sums for the runs that finished in the window on these bots. Module level so the demo's billing sample
+    """Grouped sums for the runs that started in the window on these bots and have finished. `first` and `last` are
+    dates (whole days, `last` included) or UTC datetimes (`last` excluded). Module level so the demo's billing sample
     (backend/demo_billing.py) sums the same runs the usage page does."""
     if not slugs:
         return []
@@ -271,7 +322,7 @@ def query(c, key, join, slugs, first, last, filters=None):
         f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
         f"AND t.started_at < ? AND t.bot IN ({marks})"
     )
-    args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
+    args = [stamp(instant(first)), stamp(instant(last, end=True)), *sorted(slugs)]
     for dimension, value in (filters or {}).items():
         sql += f" AND {DIMENSIONS[dimension]} = ?"
         args.append("" if value == "__unknown__" else value)
@@ -279,18 +330,40 @@ def query(c, key, join, slugs, first, last, filters=None):
 
 
 def install(app, store, auth, mutate, settings):
-    def window(start, end):
-        """(first day, last day) from the query; the default is the last seven days."""
+    def window(start, end, group):
+        """(first, last) from the query: dates for whole UTC days, or UTC datetimes for an exact window from `from`
+        up to (not including) `to`; one of each works too. The default is the last seven days."""
         try:
-            last = date.fromisoformat(end) if end else datetime.now(timezone.utc).date()
-            first = date.fromisoformat(start) if start else last - timedelta(days=6)
+            last = bound(end) if end else datetime.now(timezone.utc).date()
+            if start:
+                first = bound(start)
+            else:
+                first = (last.date() if isinstance(last, datetime) else last) - timedelta(days=6)
         except ValueError:
-            raise Problem("range", "from and to are dates, YYYY-MM-DD", 422)
-        if first > last:
+            raise Problem(
+                "range", "from and to are dates (YYYY-MM-DD) or UTC times (YYYY-MM-DDTHH:MM:SSZ)", 422
+            ) from None
+        if isinstance(first, datetime) or isinstance(last, datetime):
+            if instant(first) >= instant(last, end=True):
+                raise Problem("range", "from must be before to", 422)
+        elif first > last:
             raise Problem("range", "from is after to", 422)
-        if (last - first).days >= MAX_DAYS:
+        span = instant(last, end=True) - instant(first)
+        if span > timedelta(days=MAX_DAYS):
             raise Problem("range", f"A range is at most {MAX_DAYS} days", 422)
+        if group == "hour" and span > timedelta(days=MAX_HOUR_DAYS):
+            raise Problem(
+                "range",
+                f"group=hour covers at most {MAX_HOUR_DAYS} days ({MAX_HOUR_DAYS * 24} hours): narrow from..to",
+                422,
+            )
         return first, last
+
+    def days(first, last):
+        """Each UTC day the window touches, first to last, for a bot's daily series."""
+        start = instant(first).date()
+        end = (instant(last, end=True) - timedelta(microseconds=1)).date()
+        return [(start + timedelta(days=offset)).isoformat() for offset in range((end - start).days + 1)]
 
     def totals(rows):
         keys = (
@@ -369,7 +442,15 @@ def install(app, store, auth, mutate, settings):
             return allowed
         return allowed | (led_bots(c, who) & {row["id"] for row in H.bots(c)})
 
-    @app.get("/api/v2/usage/limits")
+    @app.get(
+        "/api/v2/usage/limits",
+        **api_v2(
+            "Usage",
+            "getUsageLimits",
+            "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a lead who is not an administrator gets the groups it leads and those below)",
+            "UsageLimits",
+        ),
+    )
     def limits(request: Request):
         """The company default, the limits of every bot the caller may see usage for (a lead's: also the bots in the
         groups it leads) and, for the owner and administrators, the team's and each group's combined limits; a lead gets
@@ -395,7 +476,15 @@ def install(app, store, auth, mutate, settings):
                 "bots": {bot: limit_view(c, who, bot, default, allowed) for bot in sorted(allowed)},
             }
 
-    @app.put("/api/v2/usage/limits")
+    @app.put(
+        "/api/v2/usage/limits",
+        **api_v2(
+            "Usage",
+            "setUsageDefault",
+            "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward every limit (owner and bot administrators)",
+            "UsageDefaultView",
+        ),
+    )
     def set_default(request: Request, body: M.UsageDefault):
         """The default for bots with no limit of their own (owner and bot administrators)."""
         who = request.state.identity
@@ -429,17 +518,41 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         return mutate(request, body, lambda c: save_pool(c, auth, who, scope, body))
 
-    @app.put("/api/v2/usage/pools/company")
+    @app.put(
+        "/api/v2/usage/pools/company",
+        **api_v2(
+            "Usage",
+            "setTeamUsageLimit",
+            "A limit on every bot's estimated spend together, per hour, day, week and month; null removes a field, one left out stays. Over it, no bot takes a new job (owner and bot administrators)",
+            "UsagePoolLimit",
+        ),
+    )
     def set_company_pool(request: Request, body: M.UsageLimit):
         """A limit on every bot's spend together: over it, no bot takes a new job."""
         return set_pool(request, usage_limits.COMPANY, body)
 
-    @app.put("/api/v2/usage/pools/groups/{group}")
+    @app.put(
+        "/api/v2/usage/pools/groups/{group}",
+        **api_v2(
+            "Usage",
+            "setGroupUsageLimit",
+            "A limit on the estimated spend of a group's bots together, nested groups included; null removes a field, one left out stays. Over it, none of them takes a new job (owner and bot administrators; also the lead of the group or one above it, within the parent group's limit)",
+            "UsagePoolLimit",
+        ),
+    )
     def set_group_pool(request: Request, group: str, body: M.UsageLimit):
         """A limit on the spend of a group's bots together, nested groups included: over it, none of them takes a new job."""
         return set_pool(request, "group:" + group, body)
 
-    @app.post("/api/v2/usage/queues/purge")
+    @app.post(
+        "/api/v2/usage/queues/purge",
+        **api_v2(
+            "Usage",
+            "purgeAutomaticQueue",
+            "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it (scope group:<id>). Tasks stay on their current step. Messages from people, and Tico's notices of a person's own act, stay queued. A run that has already started finishes (owner and bot administrators)",
+            "QueuePurgeResult",
+        ),
+    )
     def purge_queue(request: Request, body: M.QueuePurge):
         """Cancel queued automatic wakes and waits for the team or one group. Tasks stay. Messages from people stay
         queued. A run that has already started finishes."""
@@ -457,7 +570,15 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.put("/api/v2/usage/limits/{bot}")
+    @app.put(
+        "/api/v2/usage/limits/{bot}",
+        **api_v2(
+            "Usage",
+            "setBotUsageLimit",
+            "A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, the person who runs the bot within the team default, and a group lead for the bots in the group and those below. A bot over a limit takes no new job until the period turns over or the limit is raised",
+            "BotUsageLimit",
+        ),
+    )
     def set_limit(request: Request, bot: str, body: M.UsageLimit):
         """A bot's own 30-minute, daily, weekly and monthly limit in estimated USD; a field set to null follows the company default, a field left out keeps it. A
         person who runs the bot but is not an administrator may not go above the company default. A group's lead may set
@@ -472,25 +593,49 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/usage")
-    def usage(request: Request, group: str = "bot", department: str | None = None, bot: str | None = None):
-        """Estimated model spend per bot, per day, per routine, per task (its top TOP_TASKS by spend) or per dimension
-        over `from`..`to` (UTC dates, default the last seven days); `bots` (slugs, comma separated) narrows it to those
-        bots; `bot` is one bot's daily series and top routines."""
+    @app.get(
+        "/api/v2/usage",
+        **api_v2(
+            "Usage",
+            "getUsage",
+            "Estimated spend over from..to (UTC dates, or UTC times for an exact window; default the last 7 days), grouped by bot (default), day, hour (at most 7 days), routine, task (the top 25), harness, model, effort or subscription, filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
+            "Usage",
+            parameters={
+                "from": "Start of the window: a UTC day (YYYY-MM-DD, from its start) or an ISO-8601 time "
+                "(2026-11-18T17:00:00Z, included). Default: 6 days before to",
+                "to": "End of the window: a UTC day (YYYY-MM-DD, that whole day included) or an ISO-8601 time "
+                "(2026-11-18T20:00:00Z, excluded). Default: today. A time with no offset is UTC. At most 366 days, "
+                "7 for group=hour",
+                "group": "How rows are grouped: bot (default), day, hour (each UTC hour of the window up to now, empty "
+                "ones as zeros), routine, task, harness, model, effort or subscription",
+            },
+        ),
+    )
+    def usage(
+        request: Request,
+        group: str = "bot",
+        department: str | None = None,
+        bot: str | None = None,
+        start: str | None = Query(None, alias="from"),
+        end: str | None = Query(None, alias="to"),
+    ):
+        """Estimated model spend per bot, per day, per hour, per routine, per task (its top TOP_TASKS by spend) or per
+        dimension over `from`..`to` (UTC dates, or UTC times for an exact window; default the last seven days); `bots`
+        (slugs, comma separated) narrows it to those bots; `bot` is one bot's daily series and top routines."""
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human"):
             raise Problem("forbidden", "Usage is for people", 403)
-        first, last = window(request.query_params.get("from"), request.query_params.get("to"))
         if group not in GROUPS:
             raise Problem("group", "group must be one of: " + ", ".join(GROUPS), 422)
+        first, last = window(start, end, None if bot else group)
         filters = {key: request.query_params[key] for key in DIMENSIONS if request.query_params.get(key)}
         with store.read() as c:
             allowed = usage_bots(c, auth, who)
             people, configs = views.roster(c), views.entries(c, settings.github_owner)
             depts = {slug: P.team_of(slug, configs, people) or "" for slug in allowed}
             names = {row["id"]: row["display_name"] or row["slug"] for row in H.bots(c)}
-            base = {"from": first.isoformat(), "to": last.isoformat(), "prices_as_of": providers.PRICES_AS_OF}
+            base = {"from": shown(first), "to": shown(last), "prices_as_of": providers.PRICES_AS_OF}
             if bot:
                 bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
                 if bot not in names or not auth.visible_bot(c, who, bot):
@@ -498,10 +643,9 @@ def install(app, store, auth, mutate, settings):
                 if bot not in allowed:
                     raise Problem("forbidden", "Usage is for a bot's owners and administrators", 403)
                 daily = {r["k"]: r for r in query(c, "substr(t.started_at, 1, 10)", "", {bot}, first, last, filters)}
-                series = []
-                for offset in range((last - first).days + 1):
-                    day = (first + timedelta(days=offset)).isoformat()
-                    series.append({"day": day, **(figures(daily[day]) if day in daily else EMPTY_DAY)})
+                series = [
+                    {"day": day, **(figures(daily[day]) if day in daily else EMPTY_DAY)} for day in days(first, last)
+                ]
                 routines = sorted(
                     (
                         routine_row(c, r, names)
@@ -571,6 +715,12 @@ def install(app, store, auth, mutate, settings):
                     {"day": r["k"], **figures(r)}
                     for r in query(c, "substr(t.started_at, 1, 10)", "", slugs, first, last, filters)
                 ]
+            elif group == "hour":
+                hourly = {r["k"]: r for r in query(c, "substr(t.started_at, 1, 13)", "", slugs, first, last, filters)}
+                rows = [
+                    {"hour": hour + ":00:00Z", **(figures(hourly[hour]) if hour in hourly else EMPTY_DAY)}
+                    for hour in sorted(set(hours(first, last, datetime.now(timezone.utc))) | set(hourly))
+                ]
             elif group == "task":
                 rows = [
                     {"value": r["k"] or None, "name": r["k"] or "Chats and other runs", **figures(r)}
@@ -595,8 +745,8 @@ def install(app, store, auth, mutate, settings):
             whole = spend(total)
             for row in rows:
                 row["share"] = round(spend(row) / whole, 4) if whole else 0.0
-            if group == "day":
-                rows.sort(key=lambda r: r["day"])
+            if group in ("day", "hour"):
+                rows.sort(key=lambda r: r[group])
             else:
                 rows.sort(
                     key=lambda r: (

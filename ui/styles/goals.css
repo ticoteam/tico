@@ -101,6 +101,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gdot.green{background:var(--ok)}.gdot.yellow{background:var(--wait)}.gdot.red{background:var(--fail)}
 .gdot.none{background:transparent;border:1.5px solid var(--idle)}
 .goal-note{font-size:var(--t-sm);line-height:var(--lh);color:var(--muted);margin:-4px 0 6px 19px;overflow-wrap:anywhere}
+.goal-nomeasure{flex:none;font-size:var(--t-sm);font-weight:400;color:var(--muted);white-space:nowrap}
 .goal-note b{font-weight:600}.goal-suggest{margin-top:-2px}
 /* a goal's Why: one line tying it to the company's vision; none is a quiet note, not an error */
 .goal-why{font-size:var(--t-sm);line-height:var(--lh);margin:-2px 0 6px 19px;overflow-wrap:anywhere}

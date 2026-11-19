@@ -1,6 +1,8 @@
 ---
 name: verify-a-change
 description: "Before you tell a person a change to a bot is done or working, read back the effect it was for (readiness, the next run, a connection test, the effective access) and not only the setting you saved."
+metadata:
+  function: tico
 ---
 # Verify a change
 

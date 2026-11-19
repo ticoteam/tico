@@ -1,6 +1,8 @@
 ---
 name: match-one-save-offer
 description: Match at most one save offer to a coded reason from the written policy, checking its limits, and offer none when the policy has none, the limit is used, the customer has decided, or the account belongs to a person.
+metadata:
+  function: customers
 ---
 # Match one save offer
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Operate the Tico runner on this computer (a Mac: launchd jobs; Linux: systemd user units): install it, check it,
 # restart it, update it.
-# Usage: scripts/tico-computer [-e ENV] install|uninstall|restart [bot|connectors|close-calls|importers|all]
-#        scripts/tico-computer [-e ENV] status | doctor | logs [bot|connectors|close-calls|importers] [-n N] [-f]
+# Usage: scripts/tico-computer [-e ENV] install|uninstall|restart [bot|close-calls|importers|all]
+#        scripts/tico-computer [-e ENV] status | doctor | logs [bot|close-calls|importers] [-n N] [-f]
 #        scripts/tico-computer [-e ENV] update | open | help   (restart/update wait for turns in flight; TICO_RESTART_NOW=1 skips)
 #        scripts/tico-computer env create|list|show|remove ...          the companies on this Mac
 #        scripts/tico-computer -e ENV enroll --code-file F --label L    register this Mac for one company
@@ -98,7 +98,7 @@ logfile() {
     || printf '%s/tico-%s.log' "$LOG_DIR" "$1"
 }
 command_for() {
-  case "$1" in bot) echo run ;; connectors) echo connectors ;; close-calls) echo close-calls ;; importers) echo importers ;; esac
+  case "$1" in bot) echo run ;; close-calls) echo close-calls ;; importers) echo importers ;; esac
 }
 # BSD stat takes -f, GNU stat takes -c.
 file_mode() {
@@ -163,9 +163,9 @@ require_environment() {
 
 targets() {
   case "${1:-all}" in
-    all) printf '%s\n' bot connectors close-calls importers ;;
-    bot|connectors|close-calls|importers) printf '%s\n' "$1" ;;
-    *) echo "choose bot, connectors, close-calls, importers, or all" >&2; exit 1 ;;
+    all) printf '%s\n' bot close-calls importers ;;
+    bot|close-calls|importers) printf '%s\n' "$1" ;;
+    *) echo "choose bot, close-calls, importers, or all" >&2; exit 1 ;;
   esac
 }
 
@@ -325,6 +325,13 @@ uninstall_one() {
   launchctl bootout "$DOMAIN/$service" 2>/dev/null || true
   rm -f "$file"
   echo "removed $service"
+}
+
+# Mail and calendar run on the server now, so the connectors job a computer set up earlier has nothing to do. Install,
+# restart and uninstall take it away (a one-time step that 0.7 removes; runner_support/release_update.py RETIRED too).
+retire_connectors() {
+  [ -f "$(service_file connectors)" ] || return 0
+  uninstall_one connectors
 }
 
 # Bot turns in flight on this Mac: attempts the runner has claimed but not finished syncing.
@@ -625,16 +632,19 @@ PY
     fi
     if [ "$IS_LINUX" = 1 ]; then mkdir -p "$LOG_DIR"; else mkdir -p "$AGENTS" "$LOG_DIR"; fi
     retire_processing
+    retire_connectors
     while IFS= read -r kind; do install_one "$kind"; done < <(targets "${2:-all}")
     if [ "$IS_LINUX" = 1 ]; then linger_note; fi
     link_commands tico tico-computer
     ;;
   uninstall)
     retire_processing
+    retire_connectors
     while IFS= read -r kind; do uninstall_one "$kind"; done < <(targets "${2:-all}")
     ;;
   restart)
     retire_processing
+    retire_connectors
     # An update run by a scripts/tico from before tico-computer ends here (through the scripts/tico that took its
     # place), so a computer that has the tico command gets tico-computer beside it, even if a restart fails.
     [ ! -e "$HOME/.local/bin/tico" ] || link_commands tico-computer
@@ -643,7 +653,7 @@ PY
   status)
     require_setup
     fail=0
-    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner/version.py")"
+    version="$(sed -n 's/^RUNNER_VERSION = "\(.*\)"/\1/p' "$HUB/runner_support/version.py")"
     echo "runner: version $version at $HUB ($(git -C "$HUB" rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
     if [ -n "$ENV_DIR" ]; then
       echo "environment: $ENV_SLUG ($(env_field company_name), $(env_field id)) at $SITE"
@@ -669,7 +679,7 @@ PY
     runner doctor > "$tmp/doctor.json" 2> "$tmp/err" || true
     [ -s "$tmp/doctor.json" ] || echo "bot doctor failed: $(tail -n 1 "$tmp/err")"
     summarize doctor /dev/null "$tmp/doctor.json" || fail=1
-    for kind in connectors close-calls importers; do
+    for kind in close-calls importers; do
       [ -f "$(service_file "$kind")" ] || continue
       if runner "$kind-doctor" > "$tmp/$kind" 2>&1; then echo "$kind doctor: local prerequisites present (no provider call made)"
       else echo "$kind doctor: FAILED - $(tail -n 1 "$tmp/$kind")"; fail=1; fi
@@ -682,14 +692,14 @@ PY
       case "$1" in
         -n) lines="$2"; shift 2 ;;
         -f) follow=1; shift ;;
-        bot|connectors|close-calls|importers) kinds+=("$1"); shift ;;
+        bot|close-calls|importers) kinds+=("$1"); shift ;;
         all) shift ;;
         [0-9]*) lines="$1"; shift ;;   # runner.sh's positional line count
         *) usage; exit 1 ;;
       esac
     done
     # Empty arrays are never expanded: bash 3.2 (macOS /bin/bash) treats that as unbound under set -u.
-    [ "${#kinds[@]}" -gt 0 ] || kinds=(bot connectors close-calls importers)
+    [ "${#kinds[@]}" -gt 0 ] || kinds=(bot close-calls importers)
     for kind in "${kinds[@]}"; do
       file="$(logfile "$kind")"
       if [ -f "$file" ]; then files+=("$file"); else echo "$kind: no log yet at $file"; fi

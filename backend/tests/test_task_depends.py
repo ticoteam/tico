@@ -3,9 +3,6 @@ tasks were really waiting on another task (#304, #311, #264, the fix for a red m
 past the moment their blocker cleared. A dependency is a relation with no date: the task shows Blocked by the task, it is
 nobody's turn, holds no slot, is never Late, and its owner is woken once, the moment its last open dependency ends."""
 
-import sqlite3
-from importlib import import_module
-
 import pytest
 
 from backend import never_stuck as NS
@@ -19,6 +16,19 @@ from backend.tests.helpers import engine as X
 B = "bot:builder"
 # The column the until-released migration (20261113070100) adds: a table from before it has no such line.
 UNTIL_COLUMN = "  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),\n"
+# task_relations as a new database has it; the migration tests take pieces away to make the shapes before them.
+RELATIONS = """
+CREATE TABLE IF NOT EXISTS task_relations(
+  from_task TEXT NOT NULL REFERENCES tasks(id), to_task TEXT NOT NULL REFERENCES tasks(id),
+  kind TEXT NOT NULL CHECK (kind IN ('parent','related','duplicate_of','follow_up','after','depends_on')),
+  created_by TEXT, created_at TEXT NOT NULL,
+  until TEXT CHECK (until IS NULL OR (kind = 'depends_on' AND until = 'released')),
+  PRIMARY KEY(from_task, to_task, kind),
+  CHECK (from_task <> to_task), CHECK (kind <> 'related' OR from_task < to_task));
+CREATE INDEX IF NOT EXISTS task_relations_to ON task_relations(to_task, kind);
+CREATE INDEX IF NOT EXISTS task_relations_from ON task_relations(from_task, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS task_relations_one_parent ON task_relations(from_task) WHERE kind='parent';
+"""
 
 
 @pytest.fixture
@@ -75,7 +85,7 @@ def test_a_task_that_depends_on_another_is_blocked_by_it_and_nobodys_turn(c):
     assert TR.relate(c, X.ANA, blocked, blocker, "depends_on")
     waits = W.waiting_on(c, blocked)
     assert [(w.state, w.who, w.line) for w in waits] == [
-        (W.TASKS, blocker, f"Blocked by {ref(c, blocker)} Growth synced sources part 1, in Build")
+        (W.TASKS, blocker, "Blocked by Growth synced sources part 1, in Build")
     ]
     assert D.is_wait(waits[0].requirement_id)
     assert W.turn(c, E.task(c, blocked)) is None and W.turns(c, E.task(c, blocked)) == set()
@@ -101,7 +111,7 @@ def test_the_owner_is_woken_once_when_the_last_open_dependency_is_done(c):
     entered = X.wakes(c, blocked, B)
     ended(c, first)
     # Still blocked by the fix: nobody is woken.
-    assert [w.line for w in W.waiting_on(c, blocked)] == [f"Blocked by {ref(c, second)} Fix main, in Build"]
+    assert [w.line for w in W.waiting_on(c, blocked)] == ["Blocked by Fix main, in Build"]
     assert bodies(c, blocked) == [] and X.wakes(c, blocked, B) == entered
     ended(c, second)
     (body,) = bodies(c, blocked)
@@ -198,14 +208,16 @@ def test_a_blocked_task_holds_no_slot_is_never_late_and_is_not_handed_on(c):
     assert (E.task(c, blocked)["visit"].get("level") or "owner") == "owner"
 
 
-def test_a_blocked_task_leaves_its_person_owners_needs_you(c):
+def test_a_blocked_task_leaves_its_person_owners_plate(c):
+    """Its own work leaves the load ask ingest weighs (`own_work`); it was never in Needs you, which holds only asks."""
     build(c)
     X.pipeline(c)  # General: To do, the assignee's
     blocker = task(c, "Part 1")
     mine = X.new_task(c, X.ANA, "Write the copy", assignee=X.ANA)["id"]
-    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
-    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
     assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA))
+    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
 
 
 def test_blocked_time_does_not_count_toward_late():
@@ -213,29 +225,6 @@ def test_blocked_time_does_not_count_toward_late():
     there: each blocked moment is counted once."""
     spans = [("2026-11-13T00:00:00Z", "2026-11-13T05:00:00Z"), ("2026-11-13T04:00:00Z", "2026-11-13T05:30:00Z")]
     assert NS._covered(spans, "2026-11-13T00:00:00Z", "2026-11-13T06:00:00Z") == pytest.approx(5.5 * 3600)
-
-
-def test_the_migration_lets_an_old_table_take_depends_on_and_keeps_its_rows():
-    migration = import_module("backend.migrations.20261113060000_task_relations_depends_on")
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
-    conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
-    conn.execute("INSERT INTO task_relations VALUES('a','b','after','human:ana','2026-11-12T00:00:00Z')")
-    conn.execute("INSERT INTO task_relations VALUES('b','a','blocks','human:ana','2026-11-12T00:00:01Z')")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO task_relations VALUES('b','a','depends_on','human:ana','2026-11-12T00:00:02Z')")
-    migration.up(conn)
-    migration.up(conn)  # once only
-    conn.execute("INSERT INTO task_relations VALUES('b','a','depends_on','human:ana','2026-11-13T00:00:00Z')")
-    assert conn.execute("SELECT from_task, to_task, kind FROM task_relations ORDER BY rowid").fetchall() == [
-        ("a", "b", "after"),
-        ("b", "a", "depends_on"),
-    ]
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO task_relations VALUES('a','b','blocks','human:ana','2026-11-13T00:00:01Z')")
-    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
-    assert indexes == {"task_relations_to", "task_relations_from", "task_relations_one_parent"}
 
 
 def blocked_since(c, task_id, minutes):
@@ -401,7 +390,7 @@ def test_until_released_stays_blocked_after_done_and_wakes_once_when_production_
     (wait,) = W.waiting_on(c, check)
     assert (wait.state, wait.line) == (
         W.TASKS,
-        f"Blocked by {ref(c, work)} Growth synced sources, done, until production runs its release",
+        "Blocked by Growth synced sources, done, until production runs its release",
     )
     assert W.turn(c, E.task(c, check)) is None
     # rc.9 is cut with the merge, but production still runs rc.8: nothing.
@@ -596,62 +585,6 @@ def test_until_is_only_released_and_only_on_a_dependency(c):
     assert not TR.relate(c, X.ANA, two, one, "depends_on", until="released")
     assert TR.relate(c, X.ANA, two, one, "depends_on")
     assert TR.until_of(c, two, one, "depends_on") is None
-
-
-def test_the_until_migration_adds_the_column_and_keeps_every_row():
-    migration = import_module("backend.migrations.20261113070100_task_relations_until")
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
-    conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",)])
-    conn.executescript(TR.SCHEMA.replace(UNTIL_COLUMN, ""))
-    conn.execute(
-        "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES('a','b','depends_on','2026-11-13T00:00:00Z')"
-    )
-    migration.up(conn)
-    migration.up(conn)  # once only
-    assert conn.execute("SELECT from_task, to_task, kind, until FROM task_relations").fetchall() == [
-        ("a", "b", "depends_on", None)
-    ]
-    conn.execute("UPDATE task_relations SET until='released'")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("UPDATE task_relations SET until='merged'")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at,until) "
-            "VALUES('b','a','follow_up','2026-11-13T00:00:00Z','released')"
-        )
-    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
-    assert indexes == {"task_relations_to", "task_relations_from", "task_relations_one_parent"}
-
-
-def test_the_until_and_depends_on_migrations_give_one_table_in_either_order():
-    """Both are pending on an install from before them, and pending migrations run in any order: the table, its rows
-    and their order come out the same either way."""
-    depends = import_module("backend.migrations.20261113060000_task_relations_depends_on")
-    until = import_module("backend.migrations.20261113070100_task_relations_until")
-    out = []
-    for order in ((depends, until), (until, depends)):
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE tasks(id TEXT PRIMARY KEY)")
-        conn.executemany("INSERT INTO tasks VALUES(?)", [("a",), ("b",), ("c",)])
-        conn.executescript(TR.SCHEMA.replace("'after','depends_on'", "'after','blocks'").replace(UNTIL_COLUMN, ""))
-        for row in (("a", "b", "after"), ("b", "a", "blocks"), ("c", "a", "follow_up")):
-            conn.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'t')", row)
-        for migration in order:
-            migration.up(conn)
-        conn.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at,until) VALUES('c','b','depends_on','t','released')"
-        )
-        out.append(
-            (
-                conn.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall(),
-                conn.execute(
-                    "SELECT rowid, from_task, to_task, kind, until FROM task_relations ORDER BY rowid"
-                ).fetchall(),
-            )
-        )
-    assert out[0] == out[1]
-    assert [r[1:4] for r in out[0][1]] == [("a", "b", "after"), ("c", "a", "follow_up"), ("c", "b", "depends_on")]
 
 
 def test_a_dependency_that_comes_off_because_nothing_merged_here_never_says_in_production(c):

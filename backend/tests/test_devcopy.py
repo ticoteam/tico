@@ -5,7 +5,6 @@ import re
 import sqlite3
 import stat
 from contextlib import closing
-from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -18,7 +17,6 @@ from backend.execution import Execution
 from backend.finance import actions as finance
 from backend.enqueue import enqueue_stored
 from backend.store import H, Problem, Store
-from backend.tests.helpers.migrations import forget_from
 
 OLD = "2020-01-01T00:00:00.000000Z"
 
@@ -211,8 +209,6 @@ def test_every_table_is_classified(tmp_path, booted):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
-    # The Pipelines v3 cut-over drops the old task engine's tables from its own list.
-    dropped |= set(import_module("backend.migrations.20261110054000_pipelines_v3_cutover").OLD_TABLES)
     names -= dropped | {old for old, _new, _wave in renames_data.TABLES}  # an old schema step's name, renamed since
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
@@ -335,94 +331,39 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
 
 
-def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path, booted):
-    """devcopy prunes before the copy is migrated: the tables 0053 and 0054 move from keep their rows."""
+def test_a_copy_of_a_database_that_has_not_moved_its_run_budgets_into_holds_keeps_them(tmp_path, booted):
+    """The copy is pruned before its first start runs migration 20261117061834_holds_runaway: bot_budget is kept."""
     source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c:
-        c.execute("CREATE TABLE turn_usage_segments (turn_id TEXT, position INTEGER, est_cost_usd REAL)")
-        c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL)")
-        c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, daily_usd REAL)")
-        c.execute("INSERT INTO turn_usage_segments VALUES ('t1', 0, 0.25)")
-        c.execute("INSERT INTO usage_limits VALUES ('sales', 5)")
-        c.execute("INSERT INTO usage_pools VALUES ('company', 80)")
+        c.execute(
+            "CREATE TABLE bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER, "
+            "task_id TEXT, released_at TEXT, released_by TEXT)"
+        )
+        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('sales',?,'hour',300,300)", (OLD,))
         c.commit()
     dest = tmp_path / "copy" / "hub.sqlite"
     _, loose = devcopy.build(source, dest, days=30)
-    assert loose == []
+    assert "bot_budget" not in loose
     with closing(sqlite3.connect(dest)) as c:
-        assert [
-            c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            for t in ("turn_usage_segments", "usage_limits", "usage_pools")
-        ] == [1, 1, 1]
+        assert c.execute("SELECT bot, held_at FROM bot_budget").fetchall() == [("sales", OLD)]
 
 
-def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path, booted):
-    """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
-    and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
-    import json
-    from backend.tests.helpers.history_events import OLD, migration
-
-    stamp = "2020-01-01T00:00:00.000000Z"
+def test_a_copy_of_a_database_that_has_not_moved_its_failed_runs_into_holds_keeps_them(tmp_path, booted):
+    """The copy is pruned before its first start runs migration 20261117072000_holds_failing: run_backoff is kept."""
     source = source_db(tmp_path, booted)
-    snapshot = json.dumps(
-        {
-            "rows": {
-                "task_events": [
-                    {
-                        "_rowid": 1,
-                        "id": "t9",
-                        "task_id": "task-9",
-                        "field": "status",
-                        "old": "open",
-                        "new": "done",
-                        "actor": "human:ana",
-                        "created_at": stamp,
-                    }
-                ]
-            }
-        }
-    )
-    with closing(sqlite3.connect(source)) as c, c:
-        # Before 0064: no history table, the five logs are there, and the migration has not run.
-        c.execute("DROP TABLE history_events")
-        forget_from(c, "0064_history_events")
-        for statement in OLD:
-            c.execute(statement)
+    with closing(sqlite3.connect(source)) as c:
         c.execute(
-            "INSERT INTO task_events VALUES('t1','task-1','2026-01-01T00:00:00Z','human:ana','status','open',"
-            "'done','',NULL,NULL)"
+            "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, "
+            "wait_until TEXT, error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, "
+            "released_at TEXT, released_by TEXT)"
         )
-        c.execute("INSERT INTO task_events VALUES('t2','task-1',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)")
-        c.execute(
-            "INSERT INTO goal_events(id, goal_id, created_at, actor, field, old, new, note) "
-            "VALUES('g1','goal-1',?,'human:ana','status','on_track','at_risk','')",
-            (stamp,),
-        )
-        c.execute(
-            "INSERT INTO task_trash(task_id, number, title, status, private, deleted_at, deleted_by, rows) "
-            "VALUES('task-9', 9, 'Gone', 'done', 1, ?, 'human:ana', ?)",
-            (stamp, snapshot),
-        )
+        c.execute("INSERT INTO run_backoff(bot,fails,held_at) VALUES('sales',5,?)", (OLD,))
+        c.commit()
     dest = tmp_path / "copy" / "hub.sqlite"
-    removed, loose = devcopy.build(source, dest, days=30)
-    assert loose == [] and not {"task_events", "goal_events", "task_trash"} & set(removed)
+    _, loose = devcopy.build(source, dest, days=30)
+    assert "run_backoff" not in loose
     with closing(sqlite3.connect(dest)) as c:
-        assert c.execute("SELECT count(*) FROM task_events").fetchone()[0] == 2
-        assert c.execute("SELECT count(*) FROM goal_events").fetchone()[0] == 1
-        assert "task_events" in json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
-        # The move the dev server runs on its first start takes every one of them.
-        migration().up(c)
-        assert [r[0] for r in c.execute("SELECT id FROM history_events WHERE subject_type='task' ORDER BY rowid")] == [
-            "t1",
-            "t2",
-        ]
-        assert c.execute("SELECT subject_id, kind, created_at FROM history_events WHERE id='t2'").fetchone() == (
-            "task-1",
-            None,
-            None,
-        )
-        assert c.execute("SELECT id FROM history_events WHERE subject_type='goal'").fetchall() == [("g1",)]
-        assert not {"task_events", "goal_events"} & {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
+        assert c.execute("SELECT bot, held_at FROM run_backoff").fetchall() == [("sales", OLD)]
 
 
 def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
@@ -442,17 +383,40 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     assert removed["attempts"] == 3  # the running job, the old one and chat-open
 
 
-def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path, booted):
-    """A copy from before migration 0072 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
-    migration 0072 does not bring the pruned run back as a lease-less one."""
+def test_a_settled_run_with_no_job_keeps_no_token(tmp_path, booted):
+    """A run with no job can hold a token: the copy revokes it too, so a real company's job-less runs do not stop the copy."""
+    source = source_db(tmp_path, booted)
+    now = H.now()
+    with closing(sqlite3.connect(source)) as c:
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,token_hash,created_at,settled_at) VALUES('chat-token','sales','hash-chat',?,?)",
+            (now, now),
+        )
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    devcopy.build(source, dest, days=30)
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute(
+            "SELECT token_hash FROM attempts WHERE id IN ('chat-token','recorded') ORDER BY id"
+        ).fetchall() == [
+            ("devcopy-revoked:chat-token",),
+            (None,),
+        ]
+
+
+def test_litestreams_tables_are_classified_and_emptied(tmp_path, booted):
+    """A database restored from a Litestream replica carries Litestream's own tables: emptied, and not reported loose."""
     source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c:
-        c.execute("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, started_at TEXT)")
-        c.executemany("INSERT INTO turns VALUES(?,?,?)", [("done", "sales", H.now()), ("gone", "sales", OLD)])
+        c.execute("CREATE TABLE _litestream_seq (id INTEGER PRIMARY KEY, seq INTEGER)")
+        c.execute("CREATE TABLE _litestream_lock (id INTEGER)")
+        c.execute("INSERT INTO _litestream_seq VALUES(1, 42)")
+        c.execute("INSERT INTO _litestream_lock VALUES(1)")
         c.commit()
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     assert loose == []
+    assert removed["_litestream_seq"] == 1 and removed["_litestream_lock"] == 1
     with closing(sqlite3.connect(dest)) as c:
-        assert c.execute("SELECT id FROM turns").fetchall() == [("done",)]
-    assert removed["turns"] == 1
+        assert c.execute("SELECT count(*) FROM _litestream_seq").fetchone() == (0,)
+        assert c.execute("SELECT count(*) FROM _litestream_lock").fetchone() == (0,)

@@ -1,6 +1,8 @@
 ---
 name: define-a-metric-as-a-query
 description: Define a metric as one sentence, one query and one denominator before it is reported, and record it so the same word means the same count every week. Use it whenever a definition is first used or changed.
+metadata:
+  function: data
 ---
 # Define a metric as a query
 

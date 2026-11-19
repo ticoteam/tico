@@ -24,6 +24,53 @@ def delta(api, query, cursor, token="ana-test"):
     return tasks(api, f"{query}&changed_after={cursor}", token=token)
 
 
+def test_brief_rows_keep_side_stage_origins_and_omit_null_origins(api):
+    pipeline = post(
+        api,
+        "pipelines/triage",
+        {"name": "Triage", "stages": [{"name": "Review"}, {"name": "Rejected", "side": True}]},
+    )["pipeline"]
+    body = {"owner": "ana", "body": "Please review.", "pipeline": pipeline["id"]}
+    main = post(api, "tasks", {**body, "title": "Review the draft"})
+    side = post(api, "tasks", {**body, "title": "Review the outline"})
+    post(api, f"tasks/{side['id']}/move", {"to": pipeline["stages"][1]["id"]})
+
+    brief = {row["id"]: row for row in tasks(api, "pipeline=triage&brief=1")["tasks"]}
+    assert "came_from" not in brief[main["id"]]
+    assert brief[side["id"]]["came_from"] == {"id": pipeline["stages"][0]["id"], "name": "Review"}
+    assert get(api, f"tasks/{main['id']}")["task"]["came_from"] is None
+
+
+def test_full_task_reads_report_when_the_current_open_visit_started(api):
+    pipeline = post(
+        api,
+        "pipelines/triage",
+        {"name": "Triage", "stages": [{"name": "Review"}, {"name": "Rejected", "side": True}]},
+    )["pipeline"]
+    row = post(
+        api,
+        "tasks",
+        {"owner": "ana", "title": "Review the draft", "body": "Please review.", "pipeline": pipeline["id"]},
+    )
+    path = f"tasks/{row['id']}"
+    started = get(api, path)["task"]["stage_since"]
+    post(api, f"{path}/move", {"to": pipeline["stages"][1]["id"]})
+    with api.app.state.store.read() as c:
+        (entered,) = c.execute(
+            "SELECT entered_at FROM visits WHERE task_id=? AND left_at IS NULL", (row["id"],)
+        ).fetchone()
+    assert started and entered > started
+    assert get(api, path)["task"]["stage_since"] == entered
+    assert tasks(api, "pipeline=triage&brief=1")["tasks"][0]["stage_since"] == entered
+
+    post(api, f"{path}/move", {"to": "done"})
+    assert get(api, path)["task"]["stage_since"] is None
+    post(api, f"{path}/move", {"to": "reopen", "why": "Review another revision."})
+    assert get(api, path)["task"]["stage_since"] > entered
+    post(api, f"{path}/move", {"to": "closed", "why": "The draft was withdrawn."})
+    assert get(api, path)["task"]["stage_since"] is None
+
+
 def test_a_delta_returns_what_changed_and_what_left(api):
     keep = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
     finish = post(api, "tasks", {"owner": "ben", "title": "Book the room", "body": "Please."})
@@ -184,7 +231,7 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
         if actor == "ben" and not changed:
             changed = True
             with store.transaction() as write:
-                H.task_reassign(write, H.KEEPER, private["id"], "human:ana", "Ana takes it")
+                H.task_reassign(write, H.TICO_ACTOR, private["id"], "human:ana", "Ana takes it")
         return resolved
 
     monkeypatch.setattr(H, "resolve_actor", revoke_after_owner_read)
@@ -312,10 +359,10 @@ def test_every_filter_the_list_takes_still_answers(api):
         "due": "any",
         "late": "false",
         "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
+        "counts": "stage",
         "on_behalf_of": "default",
-        "type": "bug",  # installed Recorder builds send it; accepted and ignored
     }
-    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of", "type"}
+    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
     for name, value in values.items():
         r = api.get(f"/api/v2/tasks?{name}={value}", headers=headers())
         assert r.status_code == 200, (name, r.text)
@@ -329,9 +376,132 @@ def test_the_filter_list_is_what_the_route_declares(api):
     assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
 
 
-def test_an_installed_recorder_type_search_still_answers(api):
-    """Recorder builds from 0.5.181 send `type=<task type>` with a picker search: it answers the search, unnarrowed."""
-    made = post(api, "tasks", {"owner": "ben", "title": "Review pricing", "body": "Please."})
-    r = api.get("/api/v2/tasks?q=pricing&limit=30&brief=true&offset=0&type=bug", headers=headers())
-    assert r.status_code == 200, r.text
-    assert [t["id"] for t in r.json()["tasks"]] == [made["id"]]
+def test_a_task_asking_the_reader_names_its_visit_so_needs_you_reads_that_one_ask_by_id(api):
+    """The app opens a task's ask without paging through Needs you: the task's read and its list row carry the open
+    visit (a row only while its turn is an ask), and `needs-you?ids=<visit>:<requirement>` sends that ask alone."""
+    from backend import task_engine as TE
+
+    plain = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    row = post(api, "tasks", {"owner": "bot:ops", "title": "Review the plan", "body": "Please review."})
+    with api.app.state.store.transaction() as c:
+        version = H.task(c, row["id"])["version"]
+        TE.add_requirement(c, row["id"], "human:ana", "ok", "human:ana", "Ready?", seen_version=version)
+        (visit,) = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (row["id"],)).fetchone()
+    task = get(api, f"tasks/{row['id']}")["task"]
+    assert task["visit_id"] == visit
+    [rid] = [w["requirement_id"] for w in task["waits"] if w["ask"] and w["who"] == "human:ana"]
+    rows = {r["id"]: r for r in tasks(api, f"{ACTIVE}&brief=1")["tasks"]}
+    assert rows[row["id"]]["turn"]["ask"] and rows[row["id"]]["visit_id"] == visit
+    assert "visit_id" not in rows[plain["id"]], "a row whose turn is no ask carries none"
+    one = get(api, f"needs-you?ids={visit}:{rid}")
+    assert [x["id"] for x in one["items"]] == [f"{visit}:{rid}"] and one["items"][0]["task_id"] == row["id"]
+
+
+def stage_board(api):
+    """A pipeline of three stages holding tasks of two owners, a label, a search word, a snoozed one and a done one."""
+    pipeline = post(
+        api,
+        "pipelines/launch",
+        {"name": "Launch", "stages": [{"name": "Plan"}, {"name": "Build"}, {"name": "Check"}]},
+    )["pipeline"]
+    plan, build, check = (s["id"] for s in pipeline["stages"])
+    made = {}
+    for title, owner, labels, stage in (
+        ("Draft the launch agenda", "ben", ["area-a"], plan),
+        ("Book the launch room", "ben", [], plan),
+        ("Order the launch badges", "cara", ["area-a"], build),
+        ("Print the launch agenda", "cara", [], build),
+        ("Check the launch slides", "ben", [], check),
+        ("Check the launch venue", "cara", [], check),
+    ):
+        row = post(api, "tasks", {"owner": owner, "title": title, "pipeline": pipeline["id"], "labels": labels})
+        if stage != plan:
+            post(api, f"tasks/{row['id']}/move", {"to": stage})
+        if row["owner_id"] != "human:" + owner:  # a new pipeline's stage picks its own owner first
+            post(api, f"tasks/{row['id']}/owner", {"owner": owner, "why": "Theirs"})
+        made[title] = row["id"]
+    post(api, f"tasks/{made['Book the launch room']}/snooze", {"until": "2099-01-05", "why": "Later"})
+    post(api, f"tasks/{made['Check the launch venue']}/done", {"note": "Booked."})
+    return pipeline["id"], made
+
+
+def test_stage_counts_are_what_the_list_selects_under_each_filter_on_any_page(api):
+    from collections import Counter
+
+    pipeline, _ = stage_board(api)
+    for query in (
+        f"pipeline={pipeline}",
+        f"pipeline={pipeline}&status=open",
+        f"pipeline={pipeline}&status=all",
+        f"pipeline={pipeline}&snoozed=only",
+        f"pipeline={pipeline}&owner=cara",
+        f"pipeline={pipeline}&label=area-a",
+        f"pipeline={pipeline}&search=agenda",
+        f"pipeline={pipeline}&q=launch badges",
+        f"pipeline={pipeline}&owners=human:ben&status=all",
+        "status=open",
+    ):
+        whole = tasks(api, query + "&limit=500")["tasks"]
+        want = Counter(t["stage_id"] for t in whole)
+        # The first page of one row and the second page count the same: the counts are of every page.
+        first = tasks(api, query + "&limit=1&counts=stage")
+        assert first["counts"] == {"total": len(whole), "stage": {k: n for k, n in sorted(want.items()) if k}}, query
+        if first["next_after"]:
+            second = tasks(api, f"{query}&limit=1&counts=stage&after={first['next_after']}")
+            assert second["counts"] == first["counts"], query
+    assert "counts" not in tasks(api, f"pipeline={pipeline}")
+
+
+def test_stage_counts_leave_out_the_tasks_a_reader_may_not_read(api):
+    shared = post(api, "tasks", {"owner": "ben", "title": "Review the launch copy", "body": "Please."})
+    secret = post(
+        api, "tasks", {"owner": "ben", "title": "Review the launch salaries", "body": "Please.", "private": True}
+    )
+    assert shared["stage_id"] == secret["stage_id"]
+    stage = secret["stage_id"]
+    query = f"{ACTIVE}&search=launch&counts=stage"
+    ana, cara = tasks(api, query), tasks(api, query, token="cara-test")
+    assert {t["id"] for t in ana["tasks"]} == {shared["id"], secret["id"]}
+    assert [t["id"] for t in cara["tasks"]] == [shared["id"]]
+    assert ana["counts"] == {"total": 2, "stage": {stage: 2}}
+    assert cara["counts"] == {"total": 1, "stage": {stage: 1}}
+    # A filter that names only the hidden task counts nothing for her.
+    assert tasks(api, query + "&q=salaries", token="cara-test")["counts"] == {"total": 0, "stage": {}}
+    assert tasks(api, query + "&q=salaries")["counts"] == {"total": 1, "stage": {stage: 1}}
+
+
+def test_counts_refuse_another_kind_or_a_delta_and_change_the_etag_beyond_the_page(api):
+    pipeline, made = stage_board(api)
+    for bad in ("counts=owner", f"counts=stage&changed_after={tasks(api, ACTIVE)['cursor']}"):
+        r = api.get(f"/api/v2/tasks?{bad}", headers=headers())
+        assert r.status_code == 422 and r.json()["error"]["code"] == "counts", r.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET rank=-1 WHERE id=?", (made["Draft the launch agenda"],))  # first on every page 1
+    plain = f"/api/v2/tasks?pipeline={pipeline}&limit=1"
+    counted = plain + "&counts=stage"
+    first, tags = (
+        api.get(counted, headers=headers()),
+        {p: api.get(p, headers=headers()).headers["etag"] for p in (plain, counted)},
+    )
+    assert api.get(counted, headers={**headers(), "If-None-Match": tags[counted]}).status_code == 304
+    # A new task lands past the first page: the page's rows are the same (a plain read is still a 304), but the
+    # counts are not, so a read with counts answers in full.
+    post(api, "tasks", {"owner": "ben", "title": "Check the launch lights", "pipeline": pipeline})
+    assert api.get(plain, headers={**headers(), "If-None-Match": tags[plain]}).status_code == 304
+    again = api.get(counted, headers={**headers(), "If-None-Match": tags[counted]})
+    assert again.status_code == 200 and again.json()["tasks"] == first.json()["tasks"]
+    assert again.json()["counts"]["total"] == first.json()["counts"]["total"] + 1
+
+
+def test_a_task_read_carries_its_chat_and_links_and_so_does_its_row(api):
+    row = post(api, "tasks", {"owner": "ben", "title": "Draft the launch agenda", "body": "Please."})
+    post(api, f"tasks/{row['id']}/links", {"url": "https://docs.acme.example/agenda", "title": "Agenda"})
+    with api.app.state.store.read() as c:
+        chat = H.task(c, row["id"])["conversation_id"]
+    task = get(api, f"tasks/{row['id']}")["task"]
+    assert chat and task["conversation_id"] == chat
+    assert [(link["url"], link["title"], link["kind"]) for link in task["links"]] == [
+        ("https://docs.acme.example/agenda", "Agenda", "url")
+    ]
+    [listed] = [t for t in tasks(api, ACTIVE + "&brief=1")["tasks"] if t["id"] == row["id"]]
+    assert listed["conversation_id"] == chat and [link["id"] for link in listed["links"]] == [task["links"][0]["id"]]

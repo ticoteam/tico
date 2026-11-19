@@ -32,13 +32,20 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import hubdb as H, task_privacy
+from . import hubdb as H
 from .auth import validate_identity
 from .config import DEFAULT_COMPANY_NAME
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
 from . import brand_icons
+from .api_contract import KEYLESS, api_v2, error, ref
+
+
+def _now():
+    """The wall clock (epoch seconds): a test replaces this and not time.time for the whole process."""
+    return time.time()
+
 
 log = logging.getLogger("tico.github_app")
 
@@ -217,6 +224,8 @@ INSTALL_PATH = "/api/v2/github/app/install"
 # agent finishes the setup (`finish`). The middleware lets it through without a session (backend/app.py request_guard).
 CALLBACK_PATH = "/api/v2/github/app/callback"
 FINISH_PATH = "/api/v2/github/app/finish"
+# The v2 refusal of every connect route but GitHub's own returns: only the Owner connects GitHub (`owner`).
+OWNER_ONLY = {"403": error("forbidden: only the Owner connects GitHub")}
 
 
 def links(row):
@@ -702,7 +711,7 @@ class GitHubApp:
         with self.store.transaction() as c:
             gone = c.execute("DELETE FROM github_user_token WHERE id='app' AND nonce=?", (stored["nonce"],)).rowcount
             if gone:
-                H.event(c, H.KEEPER, "github.user_authorization_lost", "", {"reason": reason})
+                H.event(c, H.TICO_ACTOR, "github.user_authorization_lost", "", {"reason": reason})
 
     def _forget_rejected(self, token):
         """GitHub rejected this access token (401): forget the authorization if it is still the stored one, compared by value,
@@ -800,7 +809,7 @@ class GitHubApp:
 
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
-        now = int(time.time())
+        now = int(_now())
         with self.lock:
             hit = self.live.get("jwt")
             if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
@@ -817,7 +826,7 @@ class GitHubApp:
         """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
         with self.lock:
             hit = self.live.get("jwt")
-            if hit and hit[1] - 60 > time.time():
+            if hit and hit[1] - 60 > _now():
                 return hit[2]
         with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
             return self.app_jwt(c, self.row(c))
@@ -900,7 +909,7 @@ class GitHubApp:
             return None
         with self.lock:
             hit = self.live.get("permissions")
-            if hit and hit[0] > time.time() and not refresh:
+            if hit and hit[0] > _now() and not refresh:
                 return hit[1]
         try:
             installation = self.installation()
@@ -1001,7 +1010,7 @@ class GitHubApp:
         about the reads."""
         with self.lock:
             narrowed = self.live.get("turn-reads")
-        reads = narrowed[1] if narrowed and narrowed[0] > time.time() else TURN_READS
+        reads = narrowed[1] if narrowed and narrowed[0] > _now() else TURN_READS
         if any(name in TURN_NEVER_WRITE and level != "read" for name, level in {**reads, **base}.items()):
             raise Problem("github_turn_permissions", "A bot's token never writes checks, statuses or settings", 403)
         while True:
@@ -1014,7 +1023,7 @@ class GitHubApp:
             accepted = {name: level for name, level in reads.items() if granted.get(name) in ("read", "write")}
             reads = accepted if accepted != reads else {}
             with self.lock:
-                self.live["turn-reads"] = (time.time() + READS_RETRY, reads)
+                self.live["turn-reads"] = (_now() + READS_RETRY, reads)
 
     def delete_repo(self, repository):
         row = self.row()
@@ -1056,7 +1065,7 @@ class GitHubApp:
         while True:
             with self.lock:
                 hit = self.cache.get(key)
-                if hit and hit["exp"] - refresh_margin > time.time():
+                if hit and hit["exp"] - refresh_margin > _now():
                     result = (hit["token"], hit["expires_at"])
                     return (*result, True) if include_cache_status else result
                 flight = self.minting.get((key, diagnose))
@@ -1148,7 +1157,7 @@ class GitHubApp:
         data = r.json()
         entry = {"token": data["token"], "expires_at": data["expires_at"], "exp": _iso(data["expires_at"])}
         with self.lock:
-            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > time.time()}
+            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > _now()}
             if len(self.cache) >= 256:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = entry
@@ -1982,12 +1991,35 @@ def install_github_app(app, settings, store):
             "bot_repositories": made,
         }
 
-    @app.get("/api/v2/github/app")
+    @app.get(
+        "/api/v2/github/app",
+        **api_v2(
+            "Repositories",
+            "getGitHubApp",
+            "The GitHub App connection",
+            "GitHubApp",
+            description="The Owner only. Whether the company's GitHub App is connected and installed, and the GitHub "
+            "pages to fix it from. Not connected answers `connected` and `app_name` only; start with getGitHubAppSetup.",
+            responses=OWNER_ONLY,
+        ),
+    )
     def status(request: Request):
         owner(request)
         return status_view()
 
-    @app.post("/api/v2/github/app/check-permissions")
+    @app.post(
+        "/api/v2/github/app/check-permissions",
+        **api_v2(
+            "Repositories",
+            "checkGitHubAppPermissions",
+            "Read the installation's permissions again",
+            "GitHubApp",
+            description="The Owner only, after accepting a permission on GitHub: asks GitHub again and answers the "
+            "connection as getGitHubApp does.",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def check_permissions(request: Request):
         """After the owner accepts Administration on GitHub: read the installation's permissions again."""
         owner(request)
@@ -1996,7 +2028,42 @@ def install_github_app(app, settings, store):
             service.live.pop(raised.refused_key, None)
         return status_view(refresh=True)
 
-    @app.get("/api/v2/github/app/manifest")
+    @app.get(
+        "/api/v2/github/app/manifest",
+        **api_v2(
+            "Repositories",
+            "getGitHubAppSetup",
+            "Start connecting GitHub",
+            {
+                "description": "The setup to post to GitHub, or with html=true the hand-off page",
+                "content": {
+                    "application/json": {"schema": ref("GitHubAppSetup")},
+                    "text/html": {"schema": {"type": "string"}},
+                },
+            },
+            description="The Owner only. Makes a single-use setup state (an hour) and the App's manifest. The browser "
+            "then POSTs a form to `action` with one field, `manifest` (the manifest as JSON text), and GitHub makes the "
+            "App. Or send the browser itself to `/api/v2/github/app/manifest?html=true&org=<login>&administration=true` "
+            "in the owner's Tico session: the hand-off page posts that form by itself. GitHub comes back to "
+            "`/api/v2/github/app/callback` (no call of yours), which saves the App and goes on to GitHub's install page; "
+            "back from that, the browser lands on `/#/tools/github?github=<word>` (getGitHubApp's install_url says "
+            "which words).",
+            parameters={
+                "org": "The GitHub organization's login; none makes the App under the signed-in GitHub user's own account",
+                "name": "The App's name; none proposes \"<team name> Tico\"",
+                "administration": "Let Tico create bot repositories (Administration: write); always on for a personal "
+                "account",
+                "html": "true answers the hand-off page, which posts the form to GitHub by itself, instead of JSON",
+            },
+            responses={
+                **OWNER_ONLY,
+                "409": error(
+                    "github_connected: disconnect first; github_key_missing: the key is lost, replaceGitHubAppLostKey "
+                    "after the owner confirms"
+                ),
+            },
+        ),
+    )
     def manifest_form(request: Request, org: str = "", name: str = "", administration: bool = True, html: bool = False):
         """`org` is the GitHub account or organization the App is made under: GitHub says which it is, and the setup
         page is GitHub's for that kind (a personal account's or an organization's). No `org` is a personal account:
@@ -2043,7 +2110,20 @@ def install_github_app(app, settings, store):
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
         return {"action": action, "manifest": body, "state": nonce}
 
-    @app.post("/api/v2/github/app/replace-lost-key")
+    @app.post(
+        "/api/v2/github/app/replace-lost-key",
+        **api_v2(
+            "Repositories",
+            "replaceGitHubAppLostKey",
+            "Replace the lost GitHub App key",
+            "GitHubLostKeyReplaced",
+            description="The Owner only, after confirming it themselves: getGitHubAppSetup answered 409 "
+            "github_key_missing (the key that seals the App's secrets is lost with no copy). Drops the saved App and "
+            "every directory sync credential, which are entered again; does nothing while the key is there.",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def replace_lost_key(request: Request):
         """The owner confirmed it: github-app.key is lost with no copy, so drop the GitHub App and directory sync
         secrets only it opened. Not proposable: a person clicks it themselves."""
@@ -2143,11 +2223,28 @@ def install_github_app(app, settings, store):
         # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
         return RedirectResponse(install_page(who.actor, conversion["slug"]), status_code=302)
 
-    class FinishBody(BaseModel):
+    class GitHubAppFinish(BaseModel):
         state: str = Field("", max_length=200)
 
-    @app.post(FINISH_PATH)
-    def finish(request: Request, body: FinishBody):
+    @app.post(
+        FINISH_PATH,
+        **api_v2(
+            "Repositories",
+            "finishGitHubApp",
+            "Finish a GitHub setup that came back with no session",
+            "GitHubAppFinished",
+            description="The Owner only, with the `state` getGitHubAppSetup answered: GitHub came back to the callback "
+            "with no owner session (`github=finish`), so its code waits here. Saves the App once and answers GitHub's "
+            "install page.",
+            responses={
+                **OWNER_ONLY,
+                "400": error("github_state: not this owner's setup, used, or older than an hour"),
+                "409": error("github_not_returned: GitHub has not come back with this setup yet"),
+            },
+            idempotency=KEYLESS,
+        ),
+    )
+    def finish(request: Request, body: GitHubAppFinish):
         """The owner's agent finishes a setup GitHub returned with no owner session: the parked code is exchanged here,
         once, for the owner. Returns the install page, as the callback's redirect would."""
         who = owner(request)
@@ -2161,7 +2258,19 @@ def install_github_app(app, settings, store):
         conversion = exchange_and_save(who.actor, row, row["code"])
         return {"install_url": install_page(who.actor, conversion["slug"])}
 
-    @app.get("/api/v2/github/app/authorize-link")
+    @app.get(
+        "/api/v2/github/app/authorize-link",
+        **api_v2(
+            "Repositories",
+            "getGitHubAuthorizeLink",
+            "Authorize Tico in a personal account",
+            "GitHubAuthorizeLink",
+            description="The Owner only, for an App under a personal account (account_type User): GitHub's page where "
+            "the owner lets Tico create repositories there. GitHub comes back to `/api/v2/github/app/authorized` in the "
+            "owner's Tico session, which ends on `/#/tools/github?github=authorized` (or `declined`).",
+            responses={**OWNER_ONLY, "409": error("github_not_connected, or github_account: not a personal account")},
+        ),
+    )
     def authorize_link(request: Request):
         """The GitHub page where the owner authorizes Tico to create repositories in the personal account. The single-use state
         is bound to this session; GitHub sends the owner back to /authorized with it."""
@@ -2321,7 +2430,19 @@ def install_github_app(app, settings, store):
         found = installed_now(who.actor)
         return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
-    @app.post("/api/v2/github/app/disconnect")
+    @app.post(
+        "/api/v2/github/app/disconnect",
+        **api_v2(
+            "Repositories",
+            "disconnectGitHubApp",
+            "Disconnect GitHub",
+            "GitHubAppDisconnected",
+            description="The Owner only. Forgets the App and its secrets here and revokes the owner's personal-account "
+            "authorization on GitHub; the App stays installed on GitHub until it is uninstalled there (uninstall_url).",
+            responses=OWNER_ONLY,
+            idempotency=KEYLESS,
+        ),
+    )
     def disconnect(request: Request):
         who = owner(request)
         service.revoke_user_token()  # GitHub's copy of the owner's authorization, while the App's secrets can still sign
@@ -2390,9 +2511,6 @@ def install_github_app(app, settings, store):
                     ):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
-            if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
-                # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
-                grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
             if own_unused and not grants:
                 # Nothing on GitHub for this bot: no token, and no refusal for its computer to report every turn.
                 return {
@@ -2633,7 +2751,7 @@ def install_github_app(app, settings, store):
             "configured": True,
             "token": value,
             "expires_at": expires,
-            # The runner publishes the bot's history to this one (git_credentials.publish_history): none when withheld.
+            # The runner publishes the bot's history to this one (runner-rs/src/execute.rs publish_history): none when withheld.
             "repository": "" if own_unused else repo,
             "repositories": repos,
             **({"history": R.HOME_WORDS[own_unused]} if own_unused else {}),
@@ -2652,7 +2770,10 @@ def install_github_app(app, settings, store):
         )
         return row, own
 
-    @app.get("/api/v2/bots/{bot}/github-repos")
+    @app.get(
+        "/api/v2/bots/{bot}/github-repos",
+        **api_v2("Repositories", "getExtraRepositories", "Chosen write repositories (legacy alias)"),
+    )
     def extra_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -2670,7 +2791,12 @@ def install_github_app(app, settings, store):
                 ],
             }
 
-    @app.put("/api/v2/bots/{bot}/github-repos")
+    @app.put(
+        "/api/v2/bots/{bot}/github-repos",
+        **api_v2(
+            "Repositories", "setExtraRepositories", "Set chosen write repositories (legacy alias)", idempotency=KEYLESS
+        ),
+    )
     def extra_put(request: Request, bot: str, body: ExtraRepos):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -2877,7 +3003,7 @@ def install_github_app(app, settings, store):
         if owner_id:
             H.notice(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 H.human_actor(owner_id),
                 f"{name} created private repo {repository.split('/')[1]} ({repository}). {said}",
                 refs={"repository": repository, "created_by": who.actor},
@@ -2890,7 +3016,15 @@ def install_github_app(app, settings, store):
             "_moved": moved is not None,
         }
 
-    @app.get("/api/v2/github/product-repos/preview")
+    @app.get(
+        "/api/v2/github/product-repos/preview",
+        **api_v2(
+            "Repositories",
+            "previewProductRepository",
+            "Preview an empty private product repository",
+            "ProductRepositoryPreview",
+        ),
+    )
     def product_repo_preview(request: Request, name: str):
         who = product_creator(request)
         name = validate_product_repo_name(name)
@@ -2911,7 +3045,15 @@ def install_github_app(app, settings, store):
             "capability_detail": capability["detail"],
         }
 
-    @app.post("/api/v2/github/product-repos")
+    @app.post(
+        "/api/v2/github/product-repos",
+        **api_v2(
+            "Repositories",
+            "createProductRepository",
+            "Create the confirmed product repository",
+            "ProductRepositoryResult",
+        ),
+    )
     def create_product_repo(request: Request, body: ProductRepoCreate):
         who = product_creator(request)
         name = validate_product_repo_name(body.name)

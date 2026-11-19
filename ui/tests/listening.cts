@@ -9,7 +9,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
-type Trigger = {type: string; at?: string; tz?: string; sources: {id: string; kind: string; site?: string; target?: string}[];
+type Trigger = {type: string; at?: string; tz?: string; sources: {id: string; kind: string; site?: string; target?: string; follow?: string}[];
   rules: {do: string; tag?: string; text: string}[]; limits: {count: number; per: string}[]};
 type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {name: string; when: unknown[]; steps?: unknown[]}[]}[]};
 
@@ -83,7 +83,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.deepEqual(await secs.locator('.au-lb').allInnerTexts().then(t => t.map(x => x.toLowerCase())), ['sources', 'rules', 'rate limits']);
       assert.equal(await secs.nth(0).locator('.lst-r').count(), 5);
       assert.equal(await secs.nth(0).locator('.au-dot.ok').count(), 4, tag + ': four sources read well');
-      assert.equal(await secs.nth(0).locator('.au-dot.lst-no').getAttribute('title'), 'Blocked', tag + ': and one is blocked');
+      assert.equal(await secs.nth(0).locator('.au-dot.lst-no').getAttribute('title'), 'Blocked: Sign-in wall', tag + ': and one is blocked, with why');
       assert.match(await secs.nth(1).locator('.lst-r').first().innerText(), /Remove duplicates/, tag + ': Remove duplicates is first');
       assert.equal(await secs.nth(1).locator('.lst-r').count(), 6);
       assert.deepEqual(await secs.nth(2).locator('.lst-r').allInnerTexts().then(t => t.map(x => x.trim())), ['Up to 3 every hour', 'Up to 10 every day']);
@@ -100,6 +100,19 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.selectOption('[data-b="trigger.sources.5.kind"]', 'push');
       assert.equal(await page.locator('.au-ed [data-b="trigger.sources.5.target"]').count(), 0, tag + ': a push source has nothing to read');
       await page.fill('[data-b="trigger.sources.5.site"]', 'Partner feed');
+      // A GitHub source: a repository and what to follow, no site; a pasted address is saved as owner/repo.
+      await page.locator('.au-ed [data-op="add"][data-tpl="lsrc"]').click();
+      await page.waitForSelector('.au-ed [data-b="trigger.sources.6.kind"]');
+      await page.selectOption('[data-b="trigger.sources.6.kind"]', 'github');
+      await page.waitForSelector('.au-ed [data-b="trigger.sources.6.follow"]');
+      assert.equal(await page.locator('.au-ed [data-b="trigger.sources.6.site"]').count(), 0, tag + ': a GitHub source has no site');
+      assert.deepEqual(await page.locator('.au-ed [data-b="trigger.sources.6.follow"] option').allInnerTexts(), ['Merged PRs', 'Releases']);
+      await page.fill('[data-b="trigger.sources.6.target"]', 'widgets');
+      await page.locator('.au-save').click();
+      await page.locator('.toast.err', {hasText: 'A GitHub source is owner/repo'}).waitFor();
+      assert.equal(writes.length, 0, tag + ': a repository without its owner is not sent');
+      await page.fill('[data-b="trigger.sources.6.target"]', 'https://github.com/acme/widgets/releases');
+      await page.selectOption('[data-b="trigger.sources.6.follow"]', 'releases');
       // A Keep rule needs a tag no other rule has.
       await page.locator('.au-ed [data-op="add"][data-tpl="lrule"]').click();
       await page.fill('[data-b="trigger.rules.5.tag"]', 'buyer');
@@ -120,8 +133,9 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.deepEqual(Object.keys(body).sort(), ['name', 'trigger']);
       assert.equal(body.name, 'Market watch');
       assert.equal(t.type, 'listening');
-      assert.equal(t.sources.length, 6);
+      assert.equal(t.sources.length, 7);
       assert.deepEqual({...t.sources[5]!, id: ''}, {id: '', kind: 'push', site: 'Partner feed'});
+      assert.deepEqual({...t.sources[6]!, id: ''}, {id: '', kind: 'github', site: 'github', target: 'acme/widgets', follow: 'releases'});
       assert.deepEqual(t.rules[5], {do: 'keep', tag: 'price', text: 'Someone asking for a price'});
       assert.deepEqual(t.rules[3], {do: 'drop', text: 'Vendors promoting themselves'});
       assert.deepEqual(t.limits, [{count: 3, per: 'hour'}, {count: 10, per: 'day'}]);
@@ -153,7 +167,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       // S4: the Paths step in a listening. One line for the trigger while a step is edited.
       await page.locator('.au-card[data-open="lp1"]').click();
       await page.waitForSelector('.au-ed .au-bseg');
-      assert.match(await page.locator('.au-trig').innerText(), /6 sources · 6 rules · 10 a day/, tag + ': the trigger folds to one line');
+      assert.match(await page.locator('.au-trig').innerText(), /7 sources · 6 rules · 10 a day/, tag + ': the trigger folds to one line');
       assert.match(await page.locator('.au-pcard').innerText(), /By tag/);
       assert.deepEqual(await page.locator('.au-pth .au-cond').allInnerTexts(), ['competitor', 'question'], tag + ': a path reads as its tag');
       assert.equal(await page.locator('.au-ed [data-op="lst-by"][aria-pressed="true"]').innerText(), 'By tag');

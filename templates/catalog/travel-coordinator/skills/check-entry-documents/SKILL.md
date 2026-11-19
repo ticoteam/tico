@@ -1,6 +1,8 @@
 ---
 name: check-entry-documents
 description: Check the travel documents an international trip needs (passport validity, visa or entry registration rules) against each country's official source with its date, and list what the traveller must confirm themselves, without giving visa advice.
+metadata:
+  function: operations
 ---
 # Check entry documents
 

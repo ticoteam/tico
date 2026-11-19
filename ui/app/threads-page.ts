@@ -26,16 +26,6 @@ function thdLoaded(view: ThvView): ThdThread {
 type ThdChange = Partial<ThdThread> | null | undefined;
 
 // ----------------------------------------------------------------- choosing teammates
-// Whom the viewer may add: a bot, a person or (except to a DM, which names its people) a group they may write to. The
-// helpers and the viewer are never listed.
-function threadAddable({groups = true}: {groups?: boolean} = {}): ThdPick[] {
-  const bots = shownEmps().filter(e => e.can_chat !== false && (!e.my_access || e.my_access.write))
-    .map(e => ({actor: 'bot:' + e.name, label: (e.display_name || e.name)!}));
-  const people = (S.people || []).filter((p: ThdAccessible & (typeof S.people)[number]) => p.id && !p.hidden && p.id !== S.me?.id && p.my_access?.write !== false)
-    .map(p => ({actor: 'human:' + p.id, label: p.name || p.id}));
-  const teams = groups ? (S.orgGroups || []).filter((g: ThdAccessible & OrgGroup) => g.id && g.my_access?.write).map(g => ({actor: 'group:' + g.id, label: g.name || g.id})) : [];
-  return [...people, ...teams, ...bots].sort((a, b) => a.label.localeCompare(b.label));
-}
 function threadPickerHTML(chosen: string[], skip: Set<string> = new Set(), opts: {groups?: boolean} = {}): string {
   return `<input type="search" class="thd-q" placeholder="Find a teammate" aria-label="Find a teammate">
     <div class="thd-picks" role="group" aria-label="Teammates">${threadAddable(opts).filter(t => !skip.has(t.actor)).map(t =>
@@ -58,20 +48,6 @@ function threadAudienceHTML(t: ThvThread | null = null, {titled = false}: {title
       <select name="group" aria-label="Team">${groups.map(g => `<option value="${esc(g.id)}"${t?.audience_group_id === g.id ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></label>` : ''}
     <label class="dash-pick-row"><input type="radio" name="audience" value="company"${aud === 'company' ? ' checked' : ''}>Company</label></fieldset>`;
 }
-function threadDialog(id: string, label: string): HTMLDialogElement {
-  let dlg = document.getElementById(id) as HTMLDialogElement | null;
-  if (!dlg) {
-    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
-    // A route change (a link, the phone's Back) leaves the page the dialog was for.
-    addEventListener('hashchange', () => { if (dlg?.open) dlg.close(); });
-  }
-  dlg.setAttribute('aria-label', label);
-  return dlg;
-}
-const threadDialogHead = (title: string) => `<header class="tmodal-head"><h2>${esc(title)}</h2><span class="spacer"></span>
-  <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>`;
-function threadDialogWire(dlg: HTMLDialogElement): void { dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); }); }
-
 // ----------------------------------------------------------------- members
 async function threadMembersOpen(view: ThvView): Promise<void> {
   const t = view.thread; if (!t) return;

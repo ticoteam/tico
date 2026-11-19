@@ -5,12 +5,12 @@ ice, it was pushed past, or it changed after an OK or merged outside the queue. 
 outcome is one decision on the task with one line of reason.
 
 ## Steps
-1. Read the task: `tico task show <id>`. Note its version, stage, owner, whose turn it is, what is missing to leave the
+1. Read the task's chat: `tico task show <id>`. Note its version, stage, owner, whose turn it is, what is missing to leave the
    stage, who tried and when it last changed. Read the owner's last notes in its conversation.
-2. Read what is missing with `skills/read-what-is-missing/SKILL.md`. Unread is not met.
+2. Read what is missing with `.claude/skills/read-what-is-missing/SKILL.md`. Unread is not met.
 3. Pick the one decision that fits:
    - The owner is the wrong one, or it can't run, or there is none: **reassign** to the bot or person who can do it
-     (`skills/find-the-owner-of-a-task/SKILL.md`): `tico task reassign <id> <owner> -m "<why>" --version N`.
+     (`.claude/skills/find-the-owner-of-a-task/SKILL.md`): `tico task reassign <id> <owner> -m "<why>" --version N`.
    - An earlier stage's work is wrong or missing: **move back** to that stage, saying what to redo:
      `tico task move <id> "<stage>" -m "<what to redo>" --version N`.
    - What is missing no longer matters: **move on**, saying why: `tico task move <id> next -m "<why>" --version N`.
@@ -18,7 +18,7 @@ outcome is one decision on the task with one line of reason.
      `tico task snooze <id> --until <date> -m "<what it waits for>" --version N`.
    - It is no longer wanted, or duplicates another task: **close** it: `tico task close <id> -m "<why>" --version N`.
      If a person asked for it, ask them instead.
-   - Only a person can decide: **ask** them once, with `skills/write-the-stuck-task-question/SKILL.md`.
+   - Only a person can decide: **ask** them once, with `.claude/skills/write-the-stuck-task-question/SKILL.md`.
    - A bot or a tool is broken: **file** the fix for BotOps: `tico task file --parent <id> --owner botops "<what is broken>"`.
    - A failing check or a review finding on a task's own pull request goes back to that task's owner, who fixes it in
      place; file a separate task only for a broken bot, tool or shared infrastructure, and never a person's task about it.

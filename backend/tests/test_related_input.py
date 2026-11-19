@@ -1,4 +1,4 @@
-"""Related input (backend/related_input.py, docs/pipelines-v3.md "Related input"): Jev scores the company's bots against
+"""Related input (backend/related_input.py, docs/dev/pipelines-v3.md "Related input"): Jev scores the company's bots against
 a task's pitch and spec, the top 1 to 2 at the bar are asked once to comment, and the stage is met on their comments,
 when nobody clears the bar, or after its wait. It never blocks.
 
@@ -7,7 +7,6 @@ a fake set on `related_input.ENGINE`, as the idea check's is.
 """
 
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -90,10 +89,10 @@ def features(company, time_machine):
     return company
 
 
-def _related(store, title="Refund button", body="Let a customer refund an order from its page."):
+def _related(store, title="Refund button", body="Let a customer refund an order from its page.", private=False):
     """A task the owner files, moved into Related input."""
     with store.transaction() as c:
-        row = H.task_create(c, OWNER, title, body, OWNER, pipeline="features", lint=False)
+        row = H.task_create(c, OWNER, title, body, OWNER, pipeline="features", lint=False, private=private)
         row = E.task(c, row["id"])
         X.say_done(c, row)
         E.advance(c, row["id"])
@@ -138,7 +137,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
     row = _related(features)
     with features.read() as c:
         (wait,) = W.of(c, E.task(c, row["id"]))
-        assert (wait.state, wait.line) == (W.JEV, "Jev is picking related bots")
+        assert (wait.state, wait.line) == (W.JEV, "Decision model is picking related bots")
     _beat(features)
     (state, questions, label) = jev.calls[0]
     assert label == "related-bots@1" and len(jev.calls) == 1
@@ -159,7 +158,7 @@ def test_jev_scores_the_bots_and_the_top_two_over_the_bar_are_asked_once(feature
         assert "comment on the task once from your area" in wake and f"tico task comment {row['id']}" in wake
         (wait,) = W.of(c, E.task(c, row["id"]))
         assert (wait.state, wait.line) == (W.JEV, "Waiting on comments from billing and mail")
-    assert _events(features, row) == [("picked", "Related input: Jev picked billing (0.95), mail (0.86)")]
+    assert _events(features, row) == [("picked", "Related input: Decision model picked billing (0.95), mail (0.86)")]
     with features.transaction() as c:
         # A pick has no turn on the task, yet its one wake may start its run; the rules that hold at all times hold.
         message = c.execute(
@@ -244,7 +243,10 @@ def test_a_jev_that_fails_is_tried_again_then_the_stage_is_met(features, jev, ti
     assert len(jev.calls) == RI.TRIES
     assert _asked(features, row) == []
     assert _stage(features, row) == "features-ok-spec"
-    assert _events(features, row)[-1] == ("done", "Related input: Jev couldn't pick related bots, so nobody was asked")
+    assert _events(features, row)[-1] == (
+        "done",
+        "Related input: Decision model couldn't pick related bots, so nobody was asked",
+    )
 
 
 def test_a_private_task_asks_only_the_bots_who_can_read_it(features, jev):
@@ -312,23 +314,72 @@ def test_settings_out_of_range_are_refused_at_save(company):
     assert RI.settings_of({"settings": {"bar": 2, "most": True}}) == (RI.BAR, RI.MOST, RI.WAIT_HOURS)
 
 
-def test_the_migration_adds_the_kind_and_keeps_every_row():
-    from importlib import import_module
+def test_a_stage_whose_time_runs_out_with_nobody_picked_moves_on(features, jev, time_machine):
+    row = _related(features)
+    time_machine.move_to(START + timedelta(hours=4, minutes=1), tick=False)
+    _beat(features)
+    assert _asked(features, row) == []
+    assert _stage(features, row) == "features-ok-spec"
 
-    migration = import_module("backend.migrations.20261114075516_related_input")
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE requirements (id TEXT PRIMARY KEY, stage_id TEXT, "
-        "kind TEXT NOT NULL CHECK (kind IN ('owner_done', 'ok', 'page', 'item', 'linked_done', 'answer')), "
-        "person_id TEXT, CHECK (person_id IS NULL OR kind IN ('ok', 'page', 'answer')))"
-    )
-    conn.execute("CREATE INDEX requirements_stage ON requirements(stage_id)")
-    conn.execute("INSERT INTO requirements VALUES ('r1', 's1', 'owner_done', NULL)")
-    migration.up(conn)
-    migration.up(conn)  # again: nothing changes
-    conn.execute("INSERT INTO requirements VALUES ('r2', 's1', 'related_input', NULL)")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("INSERT INTO requirements VALUES ('r3', 's1', 'related_input', 'human:ana')")
-    assert [r[0] for r in conn.execute("SELECT id FROM requirements ORDER BY id")] == ["r1", "r2"]
-    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='requirements_stage'").fetchone()
-    assert conn.execute("SELECT COUNT(*) FROM related_inputs").fetchone()[0] == 0
+
+# ----------------------------------------------------------------------------- the comment, through the route
+@pytest.fixture
+def routed(api, time_machine, jev):
+    """The fictional company behind a test client, with the features pipeline and a token for each other bot."""
+    from backend.tests.helpers.task_moves_routes import as_bot
+
+    time_machine.move_to(START, tick=False)
+    store = api.app.state.store
+    _company(store)
+    return api, store, {slug: as_bot(api, slug) for slug in ("billing", "mail", "docs")}
+
+
+def _comment(api, token, row, text, expected=200):
+    from backend.tests.helpers.api import headers
+
+    r = api.post(f"/api/v2/tasks/{row['id']}/comments", json={"text": text}, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_a_picked_bot_that_is_no_party_comments_through_the_route_and_the_stage_moves_on(routed, jev):
+    api, store, tokens = routed
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store)
+    _beat(store)
+    assert _asked(store, row) == [BILLING, MAIL]
+    with store.read() as c:
+        task = H.task(c, row["id"])
+        assert not H.task_participant(c, BILLING, task) and not H.task_can_work(c, BILLING, task)
+    _comment(api, tokens["billing"], row, "Refunds over $500 need a second look; say so in the spec.")
+    _comment(api, tokens["mail"], row, "Send the refund receipt from the existing template.")
+    # Any bot that reads the task may comment, picked or not.
+    _comment(api, tokens["docs"], row, "The help center has a refunds page to update.")
+    _beat(store)
+    assert _stage(store, row) == "features-ok-spec"
+    assert _events(store, row)[-1] == ("done", "Related input: Comments from billing and mail")
+
+
+def test_a_bot_that_cannot_read_a_private_task_is_never_picked_nor_lets_comment(routed, jev):
+    api, store, tokens = routed
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store, private=True)
+    _beat(store)
+    assert jev.calls == [] and _asked(store, row) == []
+    assert _events(store, row) == [
+        ("none", "Related input: No other bot can read this private task, so nobody was asked")
+    ]
+    _comment(api, tokens["billing"], row, "From billing.", expected=404)
+
+
+def test_a_bot_the_task_owner_takes_no_comments_from_is_never_picked_nor_lets_comment(routed, jev):
+    from backend import bot_settings as BS
+
+    api, store, tokens = routed
+    with store.transaction() as c:
+        BS.update(c, "owner", {"bot_contact": "tasks"})  # the owner bot takes tasks from other bots, not comments
+    jev.says = {"billing": 0.95, "mail": 0.9}
+    row = _related(store)
+    _beat(store)
+    assert jev.calls == [] and _asked(store, row) == []
+    _comment(api, tokens["billing"], row, "From billing.", expected=403)

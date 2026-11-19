@@ -13,11 +13,14 @@ import time
 import pytest
 
 from backend import skill_screening as S
+from backend import skills as S_SKILLS
 from backend.store import H
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.helpers.decide_strict import gateway  # noqa: F401  (fixture)
 from backend.tests.helpers.skills import NEWER, SKILL, approve, bundle, decide, proposal, publish
+from backend.tests.helpers.wait import wait_for
 from clients import judge as J
+
 
 EVIDENCE = {
     "summary": "Sorts the inbox; nothing leaves the company.",
@@ -126,6 +129,38 @@ def test_each_failed_call_leaves_the_proposal_not_screened_with_its_reason(api, 
     assert approve(api, pid).json()["error"]["code"] == "not_screened"
 
 
+def test_a_not_screened_proposal_says_why_and_what_to_do_and_a_failed_rescreen_counts(api):
+    pid = proposal(api)["id"]
+    assert drain(api, Engine(fail=J.JudgeError("spend_cap", "the cap", 429))) == ["not_screened"]
+    with store_of(api).transaction() as c:  # a fake engine leaves no judge.call row: name one
+        c.execute("UPDATE skill_screenings SET judge_call_id='jc_1' WHERE proposal_id=?", (pid,))
+    listed = [p for p in get(api, "skills/proposals", "ben-test")["proposals"] if p["id"] == pid][0]
+    shown = get(api, f"skills/proposals/{pid}", "ben-test")
+    for view in (listed, shown["proposal"]):
+        assert (view["screen_reason"], view["judge_call_id"], view["screen_failures"]) == ("cap", "jc_1", 1)
+        assert view["screen_action"] == S_SKILLS.SCREEN_REASONS["cap"]
+    assert shown["screening"]["judge_call_id"] == "jc_1" and shown["screening"]["reason"] == "cap"
+
+    waiting = decide(api, pid, "rescreen", token="ana-test")["proposal"]
+    assert (waiting["screen_status"], waiting["screen_reason"], waiting["screen_action"]) == ("pending", None, None)
+    assert drain(api, Engine(fail=J.JudgeError("unconfigured", "no key"))) == ["not_screened"]
+    again = get(api, f"skills/proposals/{pid}", "ben-test")["proposal"]
+    assert (again["screen_reason"], again["screen_failures"], again["judge_call_id"]) == ("unavailable", 2, None)
+
+    decide(api, pid, "rescreen", token="ana-test")
+    assert drain(api, Engine()) == ["screened"]
+    done = get(api, f"skills/proposals/{pid}", "ben-test")["proposal"]
+    assert (done["screen_reason"], done["screen_action"], done["screen_failures"]) == (None, None, 0)
+
+
+def test_a_not_screened_proposal_with_no_screening_row_still_says_what_to_do(api):
+    pid = proposal(api)["id"]
+    with store_of(api).transaction() as c:
+        c.execute("UPDATE skill_proposals SET screen_status='not_screened' WHERE id=?", (pid,))
+    view = get(api, f"skills/proposals/{pid}", "ben-test")["proposal"]
+    assert (view["screen_reason"], view["screen_action"]) == (None, S_SKILLS.NO_REASON)
+
+
 def test_no_engine_is_unavailable_or_the_cap_and_nothing_is_asked(api):
     pid = proposal(api)["id"]
     assert S.drain(store_of(api), engine_for=lambda store, c: None) == ["not_screened"]
@@ -133,7 +168,7 @@ def test_no_engine_is_unavailable_or_the_cap_and_nothing_is_asked(api):
 
     store_of(api).settings.decisions_monthly_usd = 1.0
     with store_of(api).transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "earlier", {"cost_usd": 1.5})
+        H.event(c, H.TICO_ACTOR, "judge.spend", "earlier", {"cost_usd": 1.5})
     decide(api, pid, "rescreen", token="ana-test")
     assert S.drain(store_of(api), engine_for=lambda store, c: None) == ["not_screened"]
     assert latest(api, pid)["reason"] == "cap"
@@ -372,9 +407,11 @@ def test_the_scheduler_tick_starts_a_pass_that_records_its_run(api, monkeypatch)
     pid = proposal(api)["id"]
     monkeypatch.setattr(S, "strict_engine", lambda store, c: None)
     Scheduler(store_of(api), api.app.state.execution).tick()
-    deadline = time.monotonic() + 15
-    while (S._RUNNING.locked() or row(api, pid)["screen_status"] == "pending") and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_for(
+        lambda: not S._RUNNING.locked() and row(api, pid)["screen_status"] != "pending",
+        "the scheduled screening pass finished",
+        seconds=15,
+    )
     assert row(api, pid)["screen_status"] == "not_screened" and latest(api, pid)["reason"] == "unavailable"
     with store_of(api).read() as c:
         runs = c.execute("SELECT ok, result FROM system_runs WHERE job='skill_screening'").fetchall()

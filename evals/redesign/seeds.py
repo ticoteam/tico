@@ -3,6 +3,7 @@ server runs (harness.Org) and makes one piece of state a browser test starts fro
 Seeds run in the order given. A seed returns False when it skipped itself because the route it needs is not built yet;
 otherwise it returns None."""
 
+import datetime
 import json
 
 SEEDS = {}
@@ -200,6 +201,40 @@ def bot_proposal(world):
         ),
         "proposal",
     )
+
+
+GOOGLE_CLIENT = ("e2e-google-client", "e2e-google-secret")  # made-up; Google never sees them
+
+
+@seed("connected_inbox")
+def connected_inbox(world):
+    """Dana's own Connect Google grant for dana@acme.example, the inbox the `automations` seed's mail automations
+    watch, kept as backend/google_connect.py keeps one: its refresh token sealed on the server, Gmail read and change.
+    A mail action needs a credential that covers its mailbox (backend/google_tokens.py); without one it fails with why.
+    Google is never reached: the grant's refresh (google_connect.post_token, the test seam) answers as an unreachable
+    Google, so a mail action on the inbox waits for the server's next try (backend/automations.py
+    drain_workspace_mail), as in a Google outage, and nothing leaves the machine. The patches go when the world does."""
+    from backend import google_connect, google_tokens
+    from backend.store import H
+    from .harness import DANA_ID
+
+    settings = world.app.state.auth.settings
+    world.patch(settings, "google_oauth_client_id", lambda _real: GOOGLE_CLIENT[0])
+    world.patch(settings, "google_oauth_client_secret", lambda _real: GOOGLE_CLIENT[1])
+
+    def unreachable(fields, uri=google_connect.TOKEN_URI):
+        raise OSError("Google is not reachable from the test hub")
+
+    world.patch(google_connect, "post_token", lambda _real: unreachable)
+    box, operation, g = "dana@acme.example", "gc_" + DANA_ID, google_connect.G
+    scopes = json.dumps(sorted(["openid", "email", g + "gmail.readonly", g + "gmail.modify"]))
+    with world.store.transaction() as c:
+        sealed = google_tokens.seal(c, DANA_ID, operation, box, "e2e-refresh-token")
+        c.execute(
+            "INSERT INTO google_connects(person_id,mailbox,status,operation_id,grant_operation_id,grant_sealed,"
+            "grant_scopes,client_id,created_at,updated_at) VALUES(?,?,'connected',?,?,?,?,?,?,?)",
+            (DANA_ID, box, operation, operation, sealed, scopes, GOOGLE_CLIENT[0], H.now(), H.now()),
+        )
 
 
 @seed("groups")
@@ -475,6 +510,104 @@ def directory(world):
     fill(call, write, reviewer=f"human:{DANA_ID}")
 
 
+@seed("risk")
+def risk(world):
+    """Company › Risk (ui/tests/risk.cts): three risks Dana keeps and the matters under them. Customer theft claims is
+    live (Randazzo arrived today); Pro disputes is open (Flores is three weeks old), with one private dispute only Dana
+    and its owner read; Trademarks has none, so it is quiet. A rule guards the theft claims."""
+    from .harness import DANA, LEAD_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    for label in ("Customer theft claims", "Pro disputes", "Trademarks"):
+        call("POST", "risks", {"label": label})
+    old = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=21)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for title, risk_key, facts, private, aged in (
+        (
+            "Randazzo",
+            "risk:customer-theft-claims",
+            {"amount": 5_000_000, "claim": "jewelry", "forum": "Demand"},
+            False,
+            False,
+        ),
+        ("Murphy", "risk:customer-theft-claims", {"amount": 9_040_000, "forum": "AAA"}, False, True),
+        ("Flores", "risk:pro-disputes", {"forum": "Notice"}, False, True),
+        ("Sealed claim", "risk:pro-disputes", {"amount": 500_000, "forum": "Court"}, True, True),
+    ):
+        made = call(
+            "POST",
+            "tasks",
+            {
+                "owner": LEAD_ID,
+                "title": title,
+                "body": f"{title}: the facts are on the task.",
+                "labels": [risk_key],
+                **({"private": True} if private else {}),
+            },
+        )
+        tid = made["task"]["id"]
+        call("POST", f"tasks/{tid}/matter", {"kind": "dispute", "currency": "USD", **facts})
+        if aged:
+            with world.store.transaction() as c:
+                c.execute("UPDATE matters SET created_at=? WHERE task_id=?", (old, tid))
+                c.execute("UPDATE tasks SET created_at=? WHERE id=?", (old, tid))
+    rule = call(
+        "POST",
+        "rules",
+        {"kind": "internal", "text": "Every pro is checked before a first job.", "who": {"everyone": True}},
+    )
+    call("POST", "risks/risk:customer-theft-claims/links", {"linkable_type": "org_rule", "linkable_id": rule["id"]})
+
+
+@seed("risk-dates")
+def risk_dates(world):
+    """Risk's dates (ui/tests/risk-obligations.cts), on top of the "risk" seed, counted from the scenario's day (the
+    hub's clock): a court's dates on Murphy (one theirs to meet, two orders), Murphy's production met with a link, and
+    Randazzo's asked-for reply passed; a court order with no matter on Pro disputes, and one on the private Sealed claim
+    that only Dana and its owner read; and People & benefits, whose Principal premium (a contract) passed with no proof,
+    so it is unconfirmed and the risk is live."""
+    from .harness import DANA, LEAD_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    today = datetime.datetime.now(datetime.UTC).date()
+
+    def day(offset):
+        return (today + datetime.timedelta(days=offset)).isoformat()
+
+    tasks = {m["task"]["title"]: m["task"]["id"] for m in call("GET", "matters?limit=200")["matters"]}
+    call("POST", "risks", {"label": "People & benefits", "key": "people-benefits"})
+
+    def standing(text, risk):
+        made = call("POST", "rules", {"kind": "internal", "text": text, "who": {"everyone": True}})
+        call("POST", f"risks/{risk}/links", {"linkable_type": "org_rule", "linkable_id": made["id"]})
+        return made["id"]
+
+    def due(rule_id, offset, title, basis, task=None):
+        body = {"first_due": day(offset), "repeats": "once", "owner": LEAD_ID, "timezone": "UTC"}
+        body.update({"title": title, "basis": basis, **({"task_id": tasks[task]} if task else {})})
+        return call("POST", f"rules/{rule_id}/due", body)["id"]
+
+    courts = standing("Meet every date a court or arbitrator sets.", "risk:customer-theft-claims")
+    due(courts, 12, "Murphy claimant discovery", "theirs", "Murphy")
+    due(courts, 19, "Murphy discovery, Zoom notice", "order", "Murphy")
+    due(courts, 26, "Murphy final hearing", "order", "Murphy")
+    produced = due(courts, -6, "Murphy production", "order", "Murphy")
+    call(
+        "POST",
+        f"rule-due/{produced}/satisfied",
+        {"due_on": day(-6), "proof": {"kind": "link", "ref": "https://files.acme.example/murphy-production"}},
+    )
+    due(courts, -4, "Randazzo reply", "asked", "Randazzo")
+    pros = standing("Meet every date a court sets on a pro dispute.", "risk:pro-disputes")
+    due(pros, 1, "Paiva records", "order")
+    due(pros, 3, "Sealed claim answer", "order", "Sealed claim")
+    premiums = standing("Pay each insurance premium on time.", "risk:people-benefits")
+    due(premiums, -19, "Principal premium", "contract")
+
+
 @seed("priya-leads")
 def priya_leads(world):
     """Priya is the engineering manager on the chart: engineering-manager reports to her, so she is above the bots under it
@@ -521,7 +654,8 @@ def tools(world):
     Read and write key; the Engineering Lead at Read and Omar at Read and write. One run of the Lead's, as a runner runs
     it, takes its proxy token from credential-runtime and makes two calls through the proxy: a GET (sent) and a POST
     (refused: at Read with only the full key, only GET goes through). Then a read key is added, the Lead's Read moves to
-    it, and Dana runs Check now. And Ledger export: a key with no address, on computers, so under Needs you.
+    it, and Dana runs Check now. And Ledger export: a key with no address, on computers, that ends in five days, so
+    under Needs you (how a key reaches runs never is).
     The vendor runs in this process: the proxy's transport (app.state.tool_proxy_transport) and the check's send
     (api_tools.send_check), the two test seams, answer as _vendor, and egress.resolve gives VENDOR_HOST a public address,
     so the product's own checks run unchanged, nothing leaves the machine, and nothing in the product is switched for
@@ -541,7 +675,7 @@ def tools(world):
 
     def check(url, headers, params):
         egress.check(url)  # what the real send refuses, this one refuses too
-        return _vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code
+        return api_tools.Reply(_vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code)
 
     world.patch(api_tools, "send_check", lambda _real: check)
     world.app.state.tool_proxy_transport = httpx.MockTransport(_vendor)
@@ -610,7 +744,14 @@ def tools(world):
         world.api(
             "post",
             f"/api/v2/api-tools/{ledger}/keys",
-            {"name": "Key", "value": "ledger-test-0003", "access_level": "read_write"},
+            {
+                "name": "Key",
+                "value": "ledger-test-0003",
+                "access_level": "read_write",
+                "expires_on": (
+                    datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=5)
+                ).isoformat(),
+            },
             who=DANA,
         ),
         "ledger key",

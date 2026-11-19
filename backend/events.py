@@ -13,8 +13,9 @@ signed-in person as they commit, filtered to what that person may read:
   to more than FAN_CAP tasks (a tag edit) is a single `bulk: true`: read task lists in full.
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
 - `runs`: a bot run's output step, or its state moving (queued, started, finished). `output=compact` (the web app)
-  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents; the
-  whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
+  sends each step as a compact signal (which step, its kind and size, `compact: true`) instead of its contents, except
+  the reply's own text (a text delta, an assistant message), which goes whole so a chat draws the reply as it is
+  written; the whole step is read on demand from `GET /api/v2/runs/{run_id}/steps/{seq}`, under the same checks.
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
 - `threads`: every thread the viewer reads, whatever is on screen: `conversation=` and `thread=` narrow `messages` and
   `runs` only, so the sidebar stays live while a thread is open (docs/dev/threads-contract.md §9).
@@ -24,6 +25,8 @@ signed-in person as they commit, filtered to what that person may read:
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
   whose held version is not `base` reads the list whole.
   Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
+- `screen`: an action the person's Assistant asks their open app to do (backend/screen_actions.py), to that person's own
+  streams only, and only while the Assistant still waits on the app's answer.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
 reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
@@ -47,6 +50,7 @@ unsigned.
 
 import asyncio
 import contextvars
+import json
 import sqlite3
 import threading
 import time
@@ -61,8 +65,28 @@ from . import runs
 from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
+from .api_contract import api_v2, ref as schema_ref
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
+
+TOPICS = (
+    "tasks",
+    "messages",
+    "runs",
+    "bots",
+    "needs",
+    "threads",
+    "meeting_items",
+    "presence",
+    "letters",
+    "calendar",
+    "setup",
+    "screen",
+)
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24  # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5  # the shared look for changes another process wrote
@@ -91,7 +115,7 @@ LEAD_SECONDS = 0.02  # a ring after a quiet window waits only this long, for the
 def gathered(window, read_at):
     """How long a stream waits after a ring before it reads: at most one read per `window`, but a ring after
     a quiet window is read almost at once instead of a full window later (a chat reply, a job for a computer)."""
-    return max(LEAD_SECONDS, window - (time.monotonic() - read_at))
+    return max(LEAD_SECONDS, window - (_monotonic() - read_at))
 
 
 BATCH = 500
@@ -495,6 +519,43 @@ TRIGGERS = [
     # The rest of what a task's row in a list shows: its tags, files and cover and routine.
     ("changes_task_tags_insert", "INSERT", "task_tags", None, _row("tasks", "tags", "NEW.task_id")),
     ("changes_task_tags_delete", "DELETE", "task_tags", None, _row("tasks", "tags", "OLD.task_id")),
+    # A task's matter (backend/risk.py): the facts its full view shows.
+    ("changes_matters_insert", "INSERT", "matters", None, _row("tasks", "matter", "NEW.task_id")),
+    ("changes_matters_update", "UPDATE", "matters", None, _row("tasks", "matter", "NEW.task_id")),
+    ("changes_matters_delete", "DELETE", "matters", None, _row("tasks", "matter", "OLD.task_id")),
+    # A matter's own dates (backend/rule_due.py, rule_due_dates.task_id) and their marks: the Risk page re-reads them.
+    (
+        "changes_rule_due_dates_insert",
+        "INSERT",
+        "rule_due_dates",
+        "NEW.task_id IS NOT NULL",
+        _row("tasks", "obligations", "NEW.task_id"),
+    ),
+    (
+        "changes_rule_due_dates_update",
+        "UPDATE",
+        "rule_due_dates",
+        "OLD.task_id IS NOT NULL OR NEW.task_id IS NOT NULL",
+        _row("tasks", "obligations", "OLD.task_id", where="OLD.task_id IS NOT NULL")
+        + _row(
+            "tasks", "obligations", "NEW.task_id", where="NEW.task_id IS NOT NULL AND NEW.task_id IS NOT OLD.task_id"
+        ),
+    ),
+    *(
+        (
+            f"changes_rule_due_status_{op.lower()}",
+            op,
+            "rule_due_status",
+            None,
+            _row(
+                "tasks",
+                "obligations",
+                f"(SELECT task_id FROM rule_due_dates WHERE id={rec}.due_date_id)",
+                where=f"(SELECT task_id FROM rule_due_dates WHERE id={rec}.due_date_id) IS NOT NULL",
+            ),
+        )
+        for op, rec in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
     (
         "changes_tags_update",
         "UPDATE",
@@ -504,6 +565,20 @@ TRIGGERS = [
     ),
     ("changes_task_assets_insert", "INSERT", "task_assets", None, _row("tasks", "files", "NEW.task_id")),
     ("changes_task_assets_delete", "DELETE", "task_assets", None, _row("tasks", "files", "OLD.task_id")),
+    (
+        "changes_page_links_insert",
+        "INSERT",
+        "page_links",
+        "NEW.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(NEW.target,6)", "NEW.page_id"),
+    ),
+    (
+        "changes_page_links_delete",
+        "DELETE",
+        "page_links",
+        "OLD.target LIKE 'task:%'",
+        _row("tasks", "files", "substr(OLD.target,6)", "OLD.page_id"),
+    ),
     (
         "changes_pins_insert",
         "INSERT",
@@ -616,6 +691,33 @@ TRIGGERS = [
         "snoozes",
         _ANY_COLUMN,
         _row("tasks", "snooze", "NEW.task_id") + _needs("task", *_task_parties("NEW.task_id")),
+    ),
+    # A person's snooze of one ask (backend/ask_snoozes.py) moves their own Needs you, and nobody else's.
+    ("changes_ask_snoozes_insert", "INSERT", "ask_snoozes", None, _needs("snooze", "NEW.person_id")),
+    (
+        "changes_ask_snoozes_update",
+        "UPDATE",
+        "ask_snoozes",
+        _ANY_COLUMN,
+        _needs("snooze", "OLD.person_id", "NEW.person_id"),
+    ),
+    ("changes_ask_snoozes_delete", "DELETE", "ask_snoozes", None, _needs("snooze", "OLD.person_id")),
+    # A bot's ❓ (backend/question_marks.py) moves the Needs you of the person it is for, and of whoever it was given
+    # from, and the task whose chat it is on. Its glyph moves with the message's refs (changes_messages_update).
+    (
+        "changes_question_marks_insert",
+        "INSERT",
+        "question_marks",
+        None,
+        _row("tasks", "question", "NEW.task_id", where="NEW.task_id <> ''") + _needs("question", "NEW.person_id"),
+    ),
+    (
+        "changes_question_marks_update",
+        "UPDATE",
+        "question_marks",
+        _ANY_COLUMN,
+        _row("tasks", "question", "NEW.task_id", where="NEW.task_id <> ''")
+        + _needs("question", "OLD.person_id", "NEW.person_id"),
     ),
     (
         "changes_links_insert",
@@ -812,7 +914,7 @@ TRIGGERS = [
 # A runner used to ask a dozen endpoints on timers whether anything was new for it, and almost
 # every answer was no. The same log now carries `runner` rows: one per computer a write concerns,
 # its id as the subject, naming which of the computer's reads to repeat. A row carries a kind and
-# at most a bot id (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
+# only IDs, never a value (`GET /api/v2/runners/me/events`,
 # runner-rs/src/events.rs).
 RUNNER_KINDS = (
     "work",
@@ -827,7 +929,9 @@ RUNNER_KINDS = (
     "credential_imports",
     "subscription_refresh",
     "screen_open",
+    "voice_inputs",
     "browser_exit",
+    "pushed",  # only to a computer that takes it (backend/github.py tell_pushed)
 )
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
@@ -836,6 +940,13 @@ _TASK_COMPUTERS = "SELECT computer_id AS rid FROM task_links WHERE task_id={task
 _REFRESH_RUNNER = (
     "SELECT substr(NEW.key,22,instr(substr(NEW.key,22),':')-1) AS rid WHERE NEW.key LIKE 'subscription-refresh:%'"
 )
+# A Claude plan's week asked of one computer (subscription_refresh.request_plan_read, key `subscription-usage:{sid}`):
+# that computer is told while the read is asked, so it polls at once and not on its backup timer, after the read lapsed.
+_PLAN_READ_RUNNER = (
+    "SELECT json_extract(NEW.value,'$.request.runner_id') AS rid "
+    "WHERE json_extract(NEW.value,'$.request.state')='requested'"
+)
+_PLAN_READ = "NEW.key LIKE 'subscription-usage:%' AND json_valid(NEW.value)"
 _MIGRATIONS = "NEW.key IN ('credential-file-migration-v1','credential-file-migration-v2-hub')"
 _WORKTREE_LINK = "{row}.kind IN ('worktree','pr')"
 
@@ -850,6 +961,43 @@ def _tell(kind, runners, bot="NULL"):
 
 def _bot_runner(kind, bot):
     return _tell(kind, _BOT_RUNNER.format(bot=bot), bot)
+
+
+# A call's resident attempt while it still holds the bot's voice job: attached to the call, leased, and on the bot's
+# current assignment. Checked when a hint is written and again when it is sent, so a computer the bot has since moved
+# away from is not told about the call.
+_VOICE_HOLDER = (
+    "FROM calls v JOIN live_meeting_bots b ON b.meeting_id=v.live_meeting_id "
+    "JOIN jobs j ON j.id=b.voice_job JOIN attempts a ON a.id=j.attempt_id "
+    "JOIN assignments s ON s.bot=b.bot AND s.runner_id=a.runner_id AND s.generation=a.generation "
+)
+_VOICE_HELD = (
+    "v.state='live' AND v.ending_at IS NULL AND a.state IN ('leased','running') "
+    f"AND a.stop_requested_at IS NULL AND a.lease_until>{_NOW}"
+)
+# Only a computer that said it takes the hint (voice_inputs_v1) gets one; any other keeps its own 400 ms poll.
+_QUEUE_VOICE_INPUTS = (
+    "INSERT INTO changes(topic,kind,subject_id,ref,created_at) "
+    f"SELECT 'runner','voice_inputs',a.runner_id,json_object('attempt_id',a.id,'call_id',v.id),{_NOW} "
+    + _VOICE_HOLDER
+    + "JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL JOIN runner_states p ON p.runner_id=r.id "
+    + f"WHERE v.id=? AND b.bot=? AND {_VOICE_HELD} "
+    + "AND 'voice_inputs_v1' IN (SELECT value FROM json_each(p.capabilities))"
+)
+_VOICE_STILL_HELD = (
+    f"EXISTS(SELECT 1 {_VOICE_HOLDER}WHERE a.id=json_extract(ch.ref,'$.attempt_id') "
+    f"AND v.id=json_extract(ch.ref,'$.call_id') AND a.runner_id=ch.subject_id AND {_VOICE_HELD})"
+)
+
+
+def queue_voice_inputs(c, store, call_id, bot):
+    """Wake the computer running this bot's resident voice session to read its inputs (a new turn, or its turn
+    ended): written in the caller's transaction."""
+    inserted = c.execute(_QUEUE_VOICE_INPUTS, (call_id, bot))
+    if inserted.rowcount:
+        seq = inserted.lastrowid
+        # Transcription and the voice ticker write outside a request's change-log wrapper.
+        c.after_commit.append(lambda: runner_bell(store).observe(seq))
 
 
 RUNNER_TRIGGERS = [
@@ -992,16 +1140,30 @@ RUNNER_TRIGGERS = [
         None,
         _tell("credentials", _ALL_RUNNERS),
     ),
-    ("changes_runner_credentials_insert", "INSERT", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
+    # Not a service row (backend/credentials.py SERVICE): no computer is ever handed one, and a subscription's value
+    # (one, refreshed by a turn's Codex login) would otherwise send every computer to fetch its credentials again.
+    (
+        "changes_runner_credentials_insert",
+        "INSERT",
+        "credentials",
+        "NEW.kind<>'service'",
+        _tell("credentials", _ALL_RUNNERS),
+    ),
     (
         "changes_runner_credentials_update",
         "UPDATE",
         "credentials",
         # A new value too: a model key replaced for every computer is fetched again at once (runner-rs/src/signin.rs).
-        f"{_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext",
+        f"NEW.kind<>'service' AND ({_changed('env')} OR OLD.ciphertext IS NOT NEW.ciphertext)",
         _tell("credentials", _ALL_RUNNERS),
     ),
-    ("changes_runner_credentials_delete", "DELETE", "credentials", None, _tell("credentials", _ALL_RUNNERS)),
+    (
+        "changes_runner_credentials_delete",
+        "DELETE",
+        "credentials",
+        "OLD.kind<>'service'",
+        _tell("credentials", _ALL_RUNNERS),
+    ),
     # The company's AI providers (backend/providers.py): a computer installs what is enabled.
     (
         "changes_runner_providers_insert",
@@ -1032,6 +1194,20 @@ RUNNER_TRIGGERS = [
         "registry_metadata",
         "NEW.key LIKE 'subscription-refresh:%'",
         _tell("subscription_refresh", _REFRESH_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_insert",
+        "INSERT",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
+    ),
+    (
+        "changes_runner_plan_read_update",
+        "UPDATE",
+        "registry_metadata",
+        _PLAN_READ,
+        _tell("subscription_refresh", _PLAN_READ_RUNNER),
     ),
     (
         "changes_runner_imports_insert",
@@ -1139,7 +1315,7 @@ _ATTENTION_CHANGE_WHERE = (
 )
 # `bot_status` (backend/thread_bot_status.py): the status rows of a root may have moved. Written for the root of an open
 # wake a person's message gave a bot, of a run, of a bot's post where it had one, and of every open wake of a bot whose
-# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last five seconds.
+# claim refusal, state or pause moved. A run's step writes one only when the root had none in the last second.
 _OPEN_WAKE = (
     "recipient LIKE 'bot:%' AND mode IN ('queue','steer') AND state IN ('pending','delivered','capped') "
     "AND cause='human'"
@@ -1153,7 +1329,7 @@ _RUN_ROOT = (
 )
 _STATUS_QUIET = (
     "NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=r "
-    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds'))"
+    "AND created_at>strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 seconds'))"
 )
 
 
@@ -1441,10 +1617,93 @@ THREAD_TRIGGERS = [
 ]
 TRIGGERS += THREAD_TRIGGERS
 
+# Setup gaps (backend/setup_gaps.py): a write that may open or close one rings `setup` with the area, and a page that
+# shows setup marks reads GET /api/v2/setup/gaps again. Each fires only when the gap can move (the first or the last
+# row of its kind), so building a market of hundreds of entities rings once.
+_MARKET_TASK = "NEW.owner_id='bot:librarian' AND NEW.title LIKE 'Set up the market map%'"
+
+
+def _setup(area):
+    return _row("setup", area, f"'{area}'")
+
+
+SETUP_TRIGGERS = [
+    (
+        "changes_setup_entities_insert",
+        "INSERT",
+        "entities",
+        "NEW.status='active' AND NOT EXISTS (SELECT 1 FROM entities WHERE status='active' AND id<>NEW.id)",
+        _setup("market"),
+    ),
+    (
+        "changes_setup_entities_update",
+        "UPDATE",
+        "entities",
+        "OLD.status IS NOT NEW.status AND 'active' IN (OLD.status, NEW.status)",
+        _setup("market"),
+    ),
+    ("changes_setup_entities_delete", "DELETE", "entities", "OLD.status='active'", _setup("market")),
+    ("changes_setup_market_pages_insert", "INSERT", "market_pages", "NEW.seeded=0", _setup("market")),
+    ("changes_setup_market_pages_update", "UPDATE", "market_pages", "OLD.seeded IS NOT NEW.seeded", _setup("market")),
+    ("changes_setup_market_pages_delete", "DELETE", "market_pages", "OLD.seeded=0", _setup("market")),
+    ("changes_setup_market_task_insert", "INSERT", "tasks", _MARKET_TASK, _setup("market")),
+    (
+        "changes_setup_market_task_update",
+        "UPDATE",
+        "tasks",
+        "OLD.status IS NOT NEW.status AND " + _MARKET_TASK,
+        _setup("market"),
+    ),
+    ("changes_setup_strategy_insert", "INSERT", "strategy_versions", None, _setup("strategy")),
+    (
+        "changes_setup_strategy_update",
+        "UPDATE",
+        "strategy_versions",
+        "(OLD.summary='') IS NOT (NEW.summary='')",
+        _setup("strategy"),
+    ),
+    ("changes_setup_brand_draft_insert", "INSERT", "brand_drafts", None, _setup("strategy")),
+    ("changes_setup_brand_draft_update", "UPDATE", "brand_drafts", "OLD.body IS NOT NEW.body", _setup("strategy")),
+    ("changes_setup_brand_versions_insert", "INSERT", "brand_versions", None, _setup("strategy")),
+    (
+        "changes_setup_goals_insert",
+        "INSERT",
+        "goals",
+        "NOT EXISTS (SELECT 1 FROM goals WHERE id<>NEW.id)",
+        _setup("goals"),
+    ),
+    ("changes_setup_goals_delete", "DELETE", "goals", "NOT EXISTS (SELECT 1 FROM goals)", _setup("goals")),
+    ("changes_setup_bots_insert", "INSERT", "bots", None, _setup("org")),
+    (
+        "changes_setup_bots_update",
+        "UPDATE",
+        "bots",
+        "(OLD.state IN ('archived','planned')) IS NOT (NEW.state IN ('archived','planned'))",
+        _setup("org"),
+    ),
+    ("changes_setup_bots_delete", "DELETE", "bots", None, _setup("org")),
+    (
+        "changes_setup_tools_insert",
+        "INSERT",
+        "tools",
+        "NOT EXISTS (SELECT 1 FROM tools WHERE id<>NEW.id)",
+        _setup("tools"),
+    ),
+    ("changes_setup_tools_delete", "DELETE", "tools", "NOT EXISTS (SELECT 1 FROM tools)", _setup("tools")),
+    ("changes_setup_budget_insert", "INSERT", "budget_nodes", "NEW.scope='company'", _setup("budget")),
+    ("changes_setup_budget_delete", "DELETE", "budget_nodes", "OLD.scope='company'", _setup("budget")),
+]
+TRIGGERS += SETUP_TRIGGERS
+
 # Tables (and `table.column`s) a trigger's body reads besides its own: without them it is skipped,
 # so a write never fails on a table this install does not have.
 NEEDS = {
     "changes_tags_update": ("task_tags",),
+    "changes_rule_due_dates_insert": ("rule_due_dates.task_id",),
+    "changes_rule_due_dates_update": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_insert": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_update": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_delete": ("rule_due_dates.task_id",),
     "changes_blob_media_insert": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_blob_media_update": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_messages_update": ("messages.superseded_at",),
@@ -1861,18 +2120,13 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = (
-    "SELECT id,created_at FROM attempts WHERE bot_id=? AND state IN ('leased','running') "
-    "ORDER BY created_at DESC,rowid DESC LIMIT 1"
-)
-
 
 def prime_bot_rows(c, slugs):
     """Each of these bots' own row in the five tables a claim check reads (status, bot, back-off, budget, exit),
     one query per table (per 500 bots), so a loop over bots reads none of them again; spend limits are one read of
     every budget node (usage_limits.nodes). Outside a snapshot nothing is kept."""
     from .read_cache import cache, prime
-    from . import browser_exit, run_backoff, turn_budgets
+    from . import browser_exit, holds
 
     if cache(c) is None:
         return
@@ -1881,12 +2135,13 @@ def prime_bot_rows(c, slugs):
         for table, column, statement in (
             ("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
             ("bots", "id", "SELECT * FROM bots WHERE id=?"),
-            ("run_backoff", "bot", run_backoff.GET_SQL),
-            ("bot_budget", "bot", turn_budgets.GET_SQL),
             ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL),
         ):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
+        holds.prime(c, holds.RUNAWAY, "bot", part)
+        holds.prime(c, holds.QUARANTINE, "bot", part)
+        holds.prime(c, holds.FAILING, "bot", part)
 
 
 def prime_status_lines(c, slugs):
@@ -1901,14 +2156,6 @@ def prime_status_lines(c, slugs):
     prime_bot_rows(c, slugs)
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
-        live = {}
-        for row in c.execute(
-            f"SELECT bot_id,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot_id IN ({marks}) "
-            "ORDER BY created_at,rowid",
-            part,
-        ):
-            live[row["bot_id"]] = row  # the newest run, as LIMIT 1 picks it
-        prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
         found = {
             row["key"]: row
@@ -1953,57 +2200,27 @@ def _rows_by_id(c, statement, ids):
 
 
 def status_line(c, who, slug, default=None, inputs=None, auth=None):
-    """A bot's status as `GET /api/v2/status` lists it to `who`; a first login wait needs no stored row.
+    """A bot's status as `GET /api/v2/status` lists it to `who`, or None before it has one.
     With `auth`, a person who manages a quarantined bot is also sent what was refused (`review`)."""
     from . import task_privacy as privacy
     from . import usage_limits
 
     row = H.status(c, slug)
-    from .login_waits import waiting
-    from .read_cache import one
-
-    live = one(c, LIVE_SQL, (slug,))
-    line = waiting(c, live["id"], slug, who, auth) if live else None
     if not row:
-        if not line:
-            return None
-        # Before /started, a newly created bot has never written a status. Project only its current
-        # wait, without manufacturing status history or copying private task content into a stored row.
-        row = {
-            "bot": slug,
-            "state": "waiting_bot",
-            "focus": "",
-            "task_id": None,
-            "changed_at": live["created_at"],
-            "last_turn_at": None,
-            "last_result": None,
-            "next_due_at": None,
-            "open_tasks": 0,
-            "needs_human": 0,
-            "updated_at": live["created_at"],
-        }
+        return None
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
     # Why its last run ended without finishing, said plainly for its page header: never a bare "Crashed".
     from .execution import last_stop
 
     row["last_stop"] = last_stop(c, row["bot"], row)
-    # A turn waiting for its shared ChatGPT login is waiting, not stuck: the line says on whom and its place.
-    if line:
-        row["waiting"] = row["focus"] = line
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])
-        from .quarantine_display import builder_notice, explanation
-
-        row["quarantine"]["why"] = explanation(c, row["bot"], who, auth)
-        row["quarantine"]["builder_notice"] = builder_notice(row["quarantine"])
-        auto = row["quarantine"]["auto"]
-        if (
-            not auto
-            and auth is not None
-            and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
-        ):
+        manages = auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
+        row["quarantine"]["why"] = H.quarantine_words(c, row["bot"], manages)
+        row["quarantine"]["builder_notice"] = H.builder_notice(row["quarantine"])
+        if not row["quarantine"]["auto"] and manages:
             review = dict(H.quarantine_review(c, row["bot"]) or {})
             task = H.task(c, review["task"]) if review.get("task") else None
             # The task is named only to someone who may read it; the refused words are theirs to review.
@@ -2011,9 +2228,25 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
                 {"id": task["id"], "title": task["title"]} if task and privacy.task_readable(c, who, task) else None
             )
             row["quarantine"]["review"] = review
-    from . import bot_stops
+    from . import holds
 
-    return bot_stops.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    row = holds.overlay(c, usage_limits.overlay(c, row, usage_limits.company(c) if default is None else default))
+    return credit_overlay(c, row)
+
+
+CREDIT_FOCUS = "Its cloud machine is stopped: add credit to start it"
+
+
+def credit_overlay(c, row):
+    """A cloud-mode bot whose machine is stopped for credit (cloud_machines.out_of_credit) reads stopped, out of
+    credit, not idle with its turns queued. A running turn, a quarantine and Tico's own stops keep theirs."""
+    if not row or row.get("state") in ("running", "quarantined") or row.get("stopped"):
+        return row
+    from . import cloud_machines
+
+    if not cloud_machines.out_of_credit(c, row["bot"]):
+        return row
+    return {**row, "state": "paused", "focus": CREDIT_FOCUS, "stopped": "out_of_credit"}
 
 
 def _trashed_visible(c, who, task_id):
@@ -2124,10 +2357,17 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, task_reads
+    from . import files, meeting_task_links, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
+    refs = {row["ref"] for row in rows if row["kind"] == "files" and row["ref"]}
+    if refs:
+        pages = files.page_rows(c, refs)
+        files.prime_visible(c, list(pages.values()))
+        cache = {}
+        visible_files = {ref for ref, page in pages.items() if files.file_visible(c, view.auth, who, page, cache)}
+        rows = [row for row in rows if row["kind"] != "files" or not row["ref"] or row["ref"] in visible_files]
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
@@ -2322,6 +2562,12 @@ def _event(row, actor, entry):
     return data
 
 
+def _answers_run_notice(c, message):
+    """Whether a message replies to Tico's notice to a bot (H.run_notice), which no person's timeline holds."""
+    target = H.message(c, message["in_reply_to"], include_deleted=True) if message.get("in_reply_to") else None
+    return bool(target) and H.run_notice(target.get("sender_id"), target.get("recipient_id"))
+
+
 def _messages(view, rows, shared=None):
     c, privacy = view.c, view.privacy
     last = {}
@@ -2358,6 +2604,8 @@ def _messages(view, rows, shared=None):
             continue
         if isinstance(refs, dict) and refs.get("carries"):
             continue  # a carrier starts a bot's run; no thread shows it (threads._carrier)
+        if message.get("seq") is None and not H.is_bot(view.who.actor):
+            continue  # Tico's notice to a bot (H.run_notice) is the bot's run input: no person's chat shows it
         place = {
             "thread_id": cid,
             "root_id": conversation.get("root_id") or cid,
@@ -2368,6 +2616,9 @@ def _messages(view, rows, shared=None):
             shown = view.known.message(message)
             # Shared text only when this reader sees the message as all its readers do, `source` included.
             whole = view.known.whole(message) if "sender_id" in message else message
+            if _answers_run_notice(c, message):
+                # A reply to Tico's notice to a bot quotes nothing (threads.reply_quotes), live as on a re-read.
+                shown, whole = {**shown, "reply_to": None}, {**whole, "reply_to": None}
             from .files import readable_page_refs
 
             original_refs = refs
@@ -2554,6 +2805,8 @@ def _activity_shown(view, thread, message_id):
     message = H.message(view.c, message_id, include_deleted=True) if message_id else None
     if not message or threads.legacy_reader_only(view.c, view.reader, thread):
         return False
+    if message.get("seq") is None and not H.is_bot(view.who.actor):
+        return False  # Tico's notice to a bot is its run's input: it moves no person's row
     if message.get("deleted_at"):
         return not threads.legacy_hidden(view.c, view.reader, message) and _readable_before_deletion(
             view, dict(message)
@@ -2598,10 +2851,20 @@ def _step_shown(view, bot, event, watched):
     return (decoded,)
 
 
+def _live_text(event, shown):
+    """Whether a run step is the reply's own words as they are written (a text delta, an assistant message): a compact
+    stream still sends it whole, so a chat on screen draws the reply as it comes (thread-view.ts). A model's thinking
+    stays compact."""
+    if event["kind"] == "message":
+        return True
+    payload = (shown[0] or {}).get("payload")
+    return event["kind"] == "delta" and isinstance(payload, dict) and payload.get("delta_kind") != "thought"
+
+
 def _step_output(event, compact, shown):
     """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
     what `_step_shown` gave for it."""
-    if compact:
+    if compact and not _live_text(event, shown):
         return {
             **{key: event[key] for key in COMPACT_STEP},
             "bytes": len((event["payload"] or "").encode()),
@@ -2827,7 +3090,7 @@ class _Snapshot:
                 or places
                 and topic == "presence"
                 and row["ref"] not in places
-                or topic == "needs"
+                or topic in ("needs", "screen")
                 and row["subject_id"] != who.actor
             ):
                 continue
@@ -2865,9 +3128,10 @@ class _Snapshot:
             if values:
                 clauses.append("(topic<>? OR ref IN (%s))" % ",".join("?" * len(values)))
                 args += [topic, *values]
-        if "needs" in topics:
-            clauses.append("(topic!='needs' OR subject_id=?)")
-            args.append(who.actor)
+        for own in ("needs", "screen"):
+            if own in topics:
+                clauses.append(f"(topic!='{own}' OR subject_id=?)")
+                args.append(who.actor)
         return _change_rows(self.c, clauses, args, limit)
 
 
@@ -2877,8 +3141,8 @@ def _within_budget(c, rows):
     counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
     or task still relies on read_in's final byte cut. The first row always goes, however large; a row
     this viewer may not see still counts, as its size is known before its check. A compact stream (`output=compact`)
-    is sized the same way: it is sent none of a step's payload, but its read still loads and decodes each one for the
-    content check (_step_shown)."""
+    is sized the same way: it is sent none of a step's payload but the reply's text, and its read still loads and
+    decodes each one for the content check (_step_shown)."""
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
     if not outputs:
         return rows
@@ -2945,6 +3209,7 @@ def read(
     places=(),
     watch=None,
     compact_runs=False,
+    screens=None,
 ):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
@@ -2975,6 +3240,7 @@ def read(
             places=places,
             watch=watch,
             compact_runs=compact_runs,
+            screens=screens,
         )
     finally:
         if c.in_transaction:
@@ -3004,8 +3270,10 @@ def read_in(
     places=(),
     watch=None,
     compact_runs=False,
+    screens=None,
 ):
-    """`read` inside a transaction its caller holds, with that transaction's _Snapshot."""
+    """`read` inside a transaction its caller holds, with that transaction's _Snapshot. `screens`
+    (backend/screen_actions.py) holds what a `screen` change asks; without it none is sent."""
     newest, first = snapshot.newest, snapshot.first
     floor = (first - 1) if first is not None else newest
     if after > newest or after < floor or newest - after > BACKLOG_MAX:
@@ -3090,6 +3358,14 @@ def read_in(
         # Which calendar moved, never what is on it: the reader refetches through /api/v2/calendar/events, which
         # decides what this viewer may see (a private event is Busy).
         picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
+    for row in by_topic.get("setup", []):
+        # Which setup area may have moved, never what is in it: the page reads GET /api/v2/setup/gaps again.
+        picked.append(("setup", row, {"area": row["subject_id"]}))
+    for row in by_topic.get("screen", []):
+        # Only while the Assistant still waits on it: a stream that comes back later never replays an old move.
+        asked = screens.event(row["ref"], who.actor) if screens is not None else None
+        if asked is not None:
+            picked.append(("screen", row, asked))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append(
@@ -3119,9 +3395,10 @@ class _Data(dict):
     encoded = None
 
 
-def _frame(seq, topic, data):
-    # A task's or message's own attempt_id keys read run_id here too, as in every answer (backend/runs.py).
-    text = runs.public_json(getattr(data, "encoded", None) or encode(data))
+def _frame(seq, topic, data, path=None):
+    # A task's or message's own attempt_id keys read run_id here too, as in every answer (backend/runs.py). A
+    # computer's stream passes its path: the runner wire keeps attempt_id (runs.RUNNER_WIRE), which a voice hint names.
+    text = runs.public_json(getattr(data, "encoded", None) or encode(data), path)
     return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {text}\n\n"
 
 
@@ -3230,10 +3507,66 @@ class Watch:
             return pending
 
 
+EVENTS_DESCRIPTION = (
+    "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` "
+    "(who made it, when the viewer may know) and `at`:\n"
+    "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
+    "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "When the batch moved its owner or status, `was` (`owner`, `status`) is what they were, only to a viewer who could "
+    "read the task before and can now; a viewer who never could gets no event. "
+    "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
+    "A `bulk: true` event without `id` means read task lists in full.\n"
+    "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
+    "Explicit meeting/task subscriptions receive one `gone: true` on access loss, rechecked within 60 seconds.\n"
+    "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
+    "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
+    "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
+    "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
+    "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
+    "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
+    "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
+    "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
+    "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
+    "root's readers, at most one a run step every 1 s) carries `bots`, the root's whole list as "
+    "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
+    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
+    "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
+    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), each stage's count (`stages`), counts by kind (`by_kind`), "
+    "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
+    "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
+    "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
+    "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
+    "`base`. `ready` then carries `needs_version`.\n"
+    "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
+    "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
+    "- `setup`: `area` (market, strategy, goals, org, tools or budget) when a write may have opened or closed that "
+    "setup gap; read `GET /api/v2/setup/gaps` again.\n"
+    "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
+    "- `screen`: `id`, `action`, `input` and `done`, an action from contracts/screen-actions.json the person's "
+    "Assistant asks this person's open app to do (`done`: the change is made, only show it); to that person's own "
+    "streams only, and only while the Assistant waits. One tab does it and reports on "
+    "`POST /api/v2/screen-actions/{id}/result`.\n"
+    "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
+    "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
+    "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
+    "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
+)
+EVENTS_ANSWER = {
+    "description": EVENTS_DESCRIPTION,
+    "x-task-event-schema": schema_ref("TaskEvent"),
+    "content": {"text/event-stream": {"schema": {"type": "string"}}},
+}
+
+
 def install(app, store, auth, task_views, task_view):
+    from . import screen_actions
+
     doorbell = bell(store)
     shared = hydrated(store)
     served = rounds(store)
+    on_screen = screen_actions.screens(store)
 
     @app.get("/api/v2/runs/{run_id}/steps/{seq}")
     def run_output_step(request: Request, run_id: str, seq: int):
@@ -3248,7 +3581,15 @@ def install(app, store, auth, task_views, task_view):
             raise Problem("not_found", "No such run step", 404)
         return {"output": step}
 
-    @app.get("/api/v2/events")
+    @app.get(
+        "/api/v2/events",
+        **api_v2(
+            "Live events",
+            "streamEvents",
+            "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, meeting=<ids> filters meeting_items, place=<places> filters presence (20 each); task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
+            answer=EVENTS_ANSWER,
+        ),
+    )
     async def events(
         request: Request,
         topics: str | None = None,
@@ -3290,7 +3631,8 @@ def install(app, store, auth, task_views, task_view):
         if needs not in (None, "", "list", "changes"):
             raise Problem("validation", "needs is list or changes", 422)
         held = {} if needs == "changes" and "needs" in wanted else None
-        # `output=compact`: each run step as its compact signal (_step_output), what the web app asks for.
+        # `output=compact`: each run step as its compact signal, the reply's text whole (_step_output), what the web app
+        # asks for.
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 
@@ -3335,6 +3677,7 @@ def install(app, store, auth, task_views, task_view):
                 places=places,
                 watch=watch,
                 compact_runs=output == "compact",
+                screens=on_screen,
             )
 
         def newest():
@@ -3348,6 +3691,8 @@ def install(app, store, auth, task_views, task_view):
         async def generate():
             nonlocal cursor
             leave = doorbell.reader(store)
+            # The person's app is open while a stream of theirs follows `screen` (backend/screen_actions.py).
+            unfollow = on_screen.follow(who.actor) if "screen" in wanted and not agent else None
             every, beat = keepalive_seconds(store), Beat(check)
             try:
                 yield "retry: 1000\n\n"
@@ -3442,6 +3787,8 @@ def install(app, store, auth, task_views, task_view):
                         quiet_since = time.monotonic()
             finally:
                 leave()
+                if unfollow:
+                    unfollow()
 
         return StreamingResponse(
             generate(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
@@ -3451,13 +3798,14 @@ def install(app, store, auth, task_views, task_view):
 # ---------------------------------------------------------------- a computer's stream
 
 RUNNER_GATHER_SECONDS = 0.25  # one write often tells a computer two things (an assignment and its work)
+RUNNER_EVENTS = "/api/v2/runners/me/events"
 
 
 def runner_read(c, runner_id, actor, after, limit=BATCH):
     """What a computer is told after change `after`: (events, cursor, reset, more), each event
-    (seq, {"seq", "kind", "bots"}), one per kind however many rows said it. Its own writes (a report,
-    a heartbeat) tell it nothing it does not know, except work: a lease its heartbeat expired requeues
-    a job. One indexed read, no per-row lookups."""
+    (seq, data), one per kind (per attempt for voice inputs). Its own writes (a report,
+    a heartbeat) only tell it about queued work or voice inputs it still needs to fetch. One indexed read,
+    no per-row lookups."""
     c.execute("BEGIN")  # one snapshot: the bounds and the rows agree
     try:
         # A runner's token is its row: revoking the row is revoking the token, checked on every wake.
@@ -3468,15 +3816,26 @@ def runner_read(c, runner_id, actor, after, limit=BATCH):
         floor = (first - 1) if first is not None else newest
         if after > newest or after < floor:
             return [], newest, True, False
+        # A voice hint goes only while this computer still holds the call's resident attempt: one written before the
+        # bot moved away is skipped, and the cursor passes it like any other row.
         rows = c.execute(
-            "SELECT seq,kind,bot,ref FROM changes WHERE topic='runner' AND seq>? AND subject_id=? "
-            "AND (actor IS NOT ? OR kind='work') ORDER BY seq LIMIT ?",
+            "SELECT seq,kind,bot,ref FROM changes ch WHERE topic='runner' AND seq>? AND subject_id=? "
+            "AND (actor IS NOT ? OR kind IN ('work','voice_inputs')) "
+            f"AND (kind!='voice_inputs' OR {_VOICE_STILL_HELD}) ORDER BY seq LIMIT ?",
             (after, runner_id, actor, limit),
         ).fetchall()
         more = len(rows) >= limit
         cursor = rows[-1]["seq"] if more else newest
         kinds = {}
         for row in rows:
+            if row["kind"] == "voice_inputs":
+                kinds[("voice_inputs", row["ref"])] = {
+                    "seq": row["seq"],
+                    "kind": "voice_inputs",
+                    "bots": [],
+                    **json.loads(row["ref"]),
+                }
+                continue
             entry = kinds.setdefault(row["kind"], {"seq": row["seq"], "kind": row["kind"], "bots": []})
             entry["seq"] = row["seq"]
             if row["bot"] and row["bot"] not in entry["bots"]:
@@ -3494,10 +3853,10 @@ def runner_read(c, runner_id, actor, after, limit=BATCH):
 def install_runner(app, store, execution):
     doorbell = runner_bell(store)
 
-    @app.get("/api/v2/runners/me/events")
+    @app.get(RUNNER_EVENTS)
     async def runner_events(request: Request, after: int | None = None):
         """Server-sent events for a computer: what changed for it, as hints to re-read one of its
-        endpoints (`event: runner`, `data: {seq, kind, bots}`), never a value. `ready` names this
+        endpoints (`event: runner`, data with a sequence, kind and any relevant IDs). `ready` names this
         server's release; `reset` means re-read everything. Ends with `expired` once the computer is
         revoked, and on its own after RUNNER_LIFETIME_SECONDS; the runner reconnects with `after`."""
         who = request.state.identity
@@ -3541,6 +3900,7 @@ def install_runner(app, store, execution):
                     None,
                     "ready",
                     {"seq": now_seq, "after": cursor, "release": runner_versions.desired().get("version", "")},
+                    RUNNER_EVENTS,
                 )
                 deadline = time.monotonic() + RUNNER_LIFETIME_SECONDS
                 # Contact is due every keepalive whatever is sent, so last_seen never lapses.
@@ -3561,10 +3921,10 @@ def install_runner(app, store, execution):
                         due = more
                         if reset:
                             cursor = next_cursor
-                            yield _frame(cursor, "reset", {"seq": cursor})
+                            yield _frame(cursor, "reset", {"seq": cursor}, RUNNER_EVENTS)
                         else:
                             for seq, data in sent:
-                                yield _frame(seq, "runner", data)
+                                yield _frame(seq, "runner", data, RUNNER_EVENTS)
                             cursor = max(cursor, next_cursor)
                         if more:
                             continue

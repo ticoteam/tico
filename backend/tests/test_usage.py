@@ -47,8 +47,9 @@ def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
 
 
 def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
-    """Anthropic's page prices a cache hit at 0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5."""
+    """Anthropic's page prices a cache hit at 0.025x input on Fable 5.2 and 5.1, 0.05x on Opus 5.5 and Sonnet 5.5."""
     for model, ratio in (
+        ("claude-fable-5-2", 0.025),
         ("claude-fable-5-1", 0.025),
         ("claude-opus-5-5", 0.05),
         ("claude-sonnet-5-5", 0.05),
@@ -322,12 +323,13 @@ def test_each_haiku_request_pays_the_rate_for_its_own_prompt_length(api):
 
 def test_a_claude_runs_cache_writes_are_kept_apart_from_input_in_every_group(api):
     """A Claude run reports `cache_creation_input_tokens` as `cache_write_tokens`: stored on the run and its fact,
-    left out of `input_tokens`, and returned by every grouping of /api/v2/usage. Priced as input, as before."""
+    left out of `input_tokens`, and returned by every grouping of /api/v2/usage. An API-key run with no TTL split
+    pays the 5-minute write rate, 1.25x input."""
     r, _, attempt = setup_attempt(api)
     complete(api, r, attempt, haiku(input_tokens=200, cached_tokens=40_000, cache_write_tokens=3_000, output_tokens=90))
     row = turn(api, attempt["id"])
     assert (row["input_tokens"], row["cached_tokens"], row["cache_write_tokens"]) == (200, 40_000, 3_000)
-    assert row["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 3_200, 40_000, 90))
+    assert row["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 3_200, 40_000, 90) + 750 * 0.10 / 1e6)
     with api.app.state.store.read() as c:
         fact = c.execute("SELECT input_tokens, cache_write_tokens FROM usage_facts WHERE run_id=?", (attempt["id"],))
         assert tuple(fact.fetchone()) == (200, 3_000)
@@ -345,6 +347,104 @@ def test_a_runner_that_does_not_count_cache_writes_apart_records_none(api):
     complete(api, r, attempt, haiku(input_tokens=3_200, cached_tokens=40_000, output_tokens=90))
     assert turn(api, attempt["id"])["cache_write_tokens"] is None
     assert today(api)["cache_write_tokens"] == 0
+
+
+# --------------------------------------------------------------------------- cache writes (providers.CACHE_WRITE)
+def opus(**tokens):
+    part = {"model": "claude-opus-5-5", "runtime": "claude", "billing": "subscription", **tokens}
+    return {**part, "segments": [part]}
+
+
+# One turn on Claude Opus 5.5 ($4 in, $0.20 cache read, $20 out per 1M): 2,000 new input, 100,000 cache reads,
+# 30,000 cache writes, 1,000 output. Priced as input, the writes cost $0.12; at 2x (1-hour) they cost $0.24.
+TURN = {"input_tokens": 2_000, "cached_tokens": 100_000, "cache_write_tokens": 30_000, "output_tokens": 1_000}
+AS_INPUT = (32_000 * 4.0 + 100_000 * 0.20 + 1_000 * 20.0) / 1e6  # 0.168, what main estimated
+
+
+def test_cache_writes_pay_anthropics_rate_for_their_ttl():
+    """1.25x input for a 5-minute write, 2x for a 1-hour write (Anthropic's pricing page, read 2026-11-18)."""
+    five = providers.estimate("claude-opus-5-5", 32_000, 100_000, 1_000, cache_writes=(30_000, 0))
+    hour = providers.estimate("claude-opus-5-5", 32_000, 100_000, 1_000, cache_writes=(0, 30_000))
+    mixed = providers.estimate("claude-opus-5-5", 32_000, 100_000, 1_000, cache_writes=(10_000, 20_000))
+    assert five == (pytest.approx(AS_INPUT + 30_000 * 4.0 * 0.25 / 1e6), False)  # 0.198
+    assert hour == (pytest.approx(AS_INPUT + 30_000 * 4.0 / 1e6), False)  # 0.288
+    assert mixed[0] == pytest.approx(AS_INPUT + (10_000 * 0.25 + 20_000) * 4.0 / 1e6)
+
+
+def test_other_providers_and_the_gateways_cache_writes_stay_at_the_input_rate():
+    for model in ("gpt-6.2-sol", "deepseek-v4.1-flash", "tico-low-1.0"):
+        assert providers.estimate(model, 32_000, 1_000, 100, cache_writes=(10_000, 20_000)) == providers.estimate(
+            model, 32_000, 1_000, 100
+        ), model
+    assert not providers.prices_cache_writes("tico-low-1.0")
+    assert providers.prices_cache_writes("claude-opus-5-5")
+
+
+def test_a_claude_run_reporting_one_hour_writes_pays_2x_for_them(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, opus(**TURN, cache_write_1h_tokens=30_000, billing="api"))
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 / 1e6)
+
+
+def test_a_claude_run_reporting_five_minute_writes_pays_1_25x_for_them(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, opus(**TURN, cache_write_1h_tokens=0))
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 * 0.25 / 1e6)
+
+
+@pytest.mark.parametrize(
+    ("billing", "runtime", "rate"),
+    [("subscription", "claude", 2.0), ("api", "claude", 1.25), ("subscription", "pi", 1.25)],
+)
+def test_without_a_split_a_claude_plan_sign_in_is_read_as_one_hour_writes(api, billing, runtime, rate):
+    """An older runner sends no `cache_write_1h_tokens`: Claude Code on a Claude plan writes 1-hour entries, anything
+    else is read as 5-minute ones."""
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, opus(**TURN, billing=billing, runtime=runtime))
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 * (rate - 1) / 1e6)
+
+
+def test_a_claude_plan_run_that_names_no_runtime_is_read_as_five_minute_writes(api):
+    """The fallback trusts only the runtime the runner named, not the model's catalog runtime: Cursor on a Claude model
+    is not Claude Code."""
+    r, _, attempt = setup_attempt(api)
+    part = {"model": "claude-opus-5-5", "harness": "cursor-agent", "billing": "subscription", **TURN}
+    complete(api, r, attempt, {**part, "segments": [part]})
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 * 0.25 / 1e6)
+
+
+def test_haiku_writes_in_a_run_with_a_long_prompt_say_the_estimate_may_be_low():
+    """The write premium is at the standard rate; which request wrote is not known, so a long one makes it may-be-low."""
+    short, long = [1_000, 50_000, 800], [5_000, 115_000, 2_000]
+    assert providers.estimate("claude-haiku-5-5", 1_000, 50_000, 800, [short], cache_writes=(0, 900))[1] is False
+    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long], cache_writes=(0, 900))[1]
+    assert providers.estimate("claude-haiku-5-5", 6_000, 165_000, 2_800, [short, long])[1] is False
+
+
+def test_a_claude_judge_calls_cache_writes_are_priced_by_their_ttl():
+    from backend import judge
+
+    usage = {"input_tokens": 100, "cache_creation_input_tokens": 30_000, "output_tokens": 0}
+    hourly = {**usage, "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 30_000}}
+    assert judge._list_cost("claude-opus-5-5", 100, 0, 0, usage) == pytest.approx((100 + 30_000 * 1.25) * 4.0 / 1e6)
+    assert judge._list_cost("claude-opus-5-5", 100, 0, 0, hourly) == pytest.approx((100 + 30_000 * 2) * 4.0 / 1e6)
+    # gpt-6.1-terra (one request, long tier) keeps pricing writes as input.
+    assert judge._list_cost("gpt-6.1-terra", 100, 0, 0, hourly) == pytest.approx(30_100 * 1.25 / 1e6)
+
+
+def test_a_split_larger_than_the_writes_is_capped_at_them(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, opus(**TURN, cache_write_1h_tokens=90_000, billing="api"))
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(AS_INPUT + 30_000 * 4.0 / 1e6)
+
+
+def test_a_non_anthropic_runs_cache_writes_stay_at_the_input_rate(api):
+    r, _, attempt = setup_attempt(api)
+    part = {"model": "gpt-6.2-sol", "runtime": "codex", "billing": "subscription", **TURN, "cache_write_1h_tokens": 0}
+    complete(api, r, attempt, {**part, "segments": [part]})
+    assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(
+        (32_000 * 2.0 + 100_000 * 0.10 + 1_000 * 10.0) / 1e6
+    )
 
 
 def test_tico_low_bills_a_prompt_over_100k_whole_at_its_long_rate():
@@ -582,3 +682,82 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
         k: before[k] for k in ("input_tokens", "cached_tokens", "output_tokens", "est_cost_usd", "usage_reason")
     }
     assert kept["usage_reason"] is None
+
+
+# --------------------------------------------------------------------------- hours and exact windows
+def seed_hours(api):
+    """Runs on DAY at 09:30, 10:00, 10:45 and 11:00 (UTC), each a whole cent so the sums read plainly."""
+    with api.app.state.store.transaction() as c:
+        c.executemany(
+            "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, input_tokens, cached_tokens, output_tokens, "
+            "usage_model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', 100, 0, 10, ?, ?, ?)",
+            [
+                (tid, bot, DAY + "T" + at + "Z", DAY + "T" + at + "Z", model, cost, billing)
+                for tid, bot, at, model, cost, billing in (
+                    ("h1", "ops", "09:30:00.000000", "gpt-6-sol", 0.01, "api"),
+                    ("h2", "ops", "10:00:00.000000", "gpt-6-sol", 0.02, "api"),
+                    ("h3", "cpo", "10:45:00.000000", "claude-opus-5", 0.04, "subscription"),
+                    ("h4", "cpo", "11:00:00.000000", "claude-opus-5", 0.08, "api"),
+                )
+            ],
+        )
+
+
+def test_group_hour_lists_each_utc_hour_of_the_window_with_empty_ones_as_zeros(api):
+    seed_hours(api)
+    got = usage(api, group="hour", **{"from": DAY + "T09:00:00Z", "to": DAY + "T13:00:00Z"})
+    assert (got["group"], got["from"], got["to"]) == ("hour", DAY + "T09:00:00Z", DAY + "T13:00:00Z")
+    assert [(r["hour"], r["runs"], r["est_cost_usd"], r["subscription_equiv_usd"]) for r in got["rows"]] == [
+        (DAY + "T09:00:00Z", 1, 0.01, 0),
+        (DAY + "T10:00:00Z", 2, 0.02, 0.04),
+        (DAY + "T11:00:00Z", 1, 0.08, 0),
+        (DAY + "T12:00:00Z", 0, 0, 0),
+    ]
+    assert got["totals"]["runs"] == 4 and got["rows"][3]["share"] == 0
+    # Whole days still mean whole days: 24 hours of DAY, the same four runs.
+    whole = usage(api, group="hour", **{"from": DAY, "to": DAY})
+    assert len(whole["rows"]) == 24 and whole["rows"][0]["hour"] == DAY + "T00:00:00Z"
+    assert sum(r["runs"] for r in whole["rows"]) == 4 and (whole["from"], whole["to"]) == (DAY, DAY)
+    # An offset is turned to UTC, and a `+` sent unescaped (a space) reads as one.
+    shifted = usage(api, group="hour", **{"from": DAY + "T11:30:00+02:00", "to": DAY + "T12:00:00 02:00"})
+    assert shifted["from"] == DAY + "T09:30:00Z" and [r["runs"] for r in shifted["rows"]] == [1]
+
+
+def test_an_exact_window_sums_only_its_runs_in_every_group_and_a_bots_detail(api):
+    seed_hours(api)
+    hour = {"from": DAY + "T10:00:00Z", "to": DAY + "T11:00:00Z"}  # from included, to excluded
+    models = usage(api, group="model", **hour)
+    assert [(r["value"], r["runs"]) for r in models["rows"]] == [("claude-opus-5", 1), ("gpt-6-sol", 1)]
+    assert models["totals"]["est_cost_usd"] == pytest.approx(0.02)
+    assert models["totals"]["subscription_equiv_usd"] == pytest.approx(0.04)
+    assert [(r["bot"], r["runs"]) for r in usage(api, **hour)["rows"]] == [("cpo", 1), ("ops", 1)]
+    detail = usage(api, bot="cpo", **{"from": DAY + "T10:30:00Z", "to": DAY + "T11:00:00.000001Z"})
+    assert detail["totals"]["runs"] == 2 and [d["day"] for d in detail["daily"]] == [DAY]
+    # A time and a date together: from 10:00 to the end of DAY.
+    rest = usage(api, group="day", **{"from": DAY + "T10:00:00Z", "to": DAY})
+    assert [(r["day"], r["runs"]) for r in rest["rows"]] == [(DAY, 3)]
+
+
+def test_dates_still_mean_whole_days(api):
+    seed(api)
+    got = usage(api, group="day")
+    assert (got["from"], got["to"]) == (DAY, "2026-09-21")
+    assert [(r["day"], r["runs"]) for r in got["rows"]] == [(DAY, 2), ("2026-09-21", 3)]
+    assert [d["day"] for d in usage(api, bot="ops")["daily"]] == [DAY, "2026-09-21"]
+
+
+@pytest.mark.parametrize(
+    "params, detail",
+    [
+        ({"group": "hour", "from": "2026-09-01", "to": "2026-09-08"}, "group=hour covers at most 7 days"),
+        ({"group": "hour", "from": DAY + "T00:00:00Z", "to": "2026-09-27T00:00:01Z"}, "group=hour covers at most 7"),
+        ({"from": DAY + "T25:00:00Z"}, "UTC times"),
+        ({"from": "yesterday"}, "UTC times"),
+        ({"from": DAY + "T10:00:00Z", "to": DAY + "T10:00:00Z"}, "from must be before to"),
+        ({"from": "2026-09-21", "to": DAY}, "from is after to"),
+        ({"from": "2025-01-01", "to": "2026-09-21"}, "at most 366 days"),
+    ],
+)
+def test_a_bad_window_is_a_422_that_says_why(api, params, detail):
+    r = api.get("/api/v2/usage", params=params, headers=headers("ana-test"))
+    assert r.status_code == 422 and detail in r.text, r.text

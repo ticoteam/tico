@@ -10,8 +10,8 @@ from backend.tests.helpers.people_access import call, person_headers, view
 
 
 def added_and_left(api, email="e2e-tester@acme.example"):
-    pid = call(api, "POST", "/people", {"name": "E2E Tester", "email": email})["person"]
-    assert api.post(f"/api/v2/people/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
+    pid = call(api, "POST", "/humans", {"name": "E2E Tester", "email": email})["person"]
+    assert api.post(f"/api/v2/humans/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
     return pid
 
 
@@ -48,7 +48,7 @@ def test_a_left_person_with_no_history_is_removed_with_what_goes_with_them(envir
     assert json.loads(event["detail"]) == {"name": "E2E Tester", "email": "e2e-tester@acme.example"}
     remove(api, pid, expected=404)
     # The same address can be added again as a new person.
-    assert call(api, "POST", "/people", {"email": "e2e-tester@acme.example"})["person"] == pid
+    assert call(api, "POST", "/humans", {"email": "e2e-tester@acme.example"})["person"] == pid
 
 
 def test_a_person_with_history_stays_as_left(environment):
@@ -82,10 +82,10 @@ def test_a_person_with_history_stays_as_left(environment):
 
 def test_only_the_owner_removes_and_only_a_left_person(environment):
     api = environment()
-    pid = call(api, "POST", "/people", {"email": "typo@acme.example"})["person"]
+    pid = call(api, "POST", "/humans", {"email": "typo@acme.example"})["person"]
     assert not next(p for p in view(api)["people"] if p["id"] == pid)["removable"]
     assert remove(api, pid, expected=409)["error"]["detail"] == "Mark them as left first"
-    assert api.post(f"/api/v2/people/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
+    assert api.post(f"/api/v2/humans/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
     remove(api, pid, person_headers(api, "riley"), expected=403)  # an admin
     remove(api, pid, person_headers(api, "quinn"), expected=403)  # a member
     remove(api, pid)

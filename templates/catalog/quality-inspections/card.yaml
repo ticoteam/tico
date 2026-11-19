@@ -55,3 +55,6 @@ first_routine:
 example_output: knowledge/examples/quality-page.md
 reasoning_effort: medium
 recommend_when: [onsite_jobs, sells_to_consumers, small_team]
+shared_files:
+  - .claude/skills/review-hardware-for-manufacture
+  - .claude/skills/source-and-certify-hardware

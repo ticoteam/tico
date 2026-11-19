@@ -18,6 +18,7 @@ class Stop(BaseException):
 
 
 NOTE = [{"id": "note", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "Acme check"}}]
+TASK = [{"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Acme claim check"}}]
 
 
 def later(minutes):
@@ -47,7 +48,7 @@ def stalled_first_worker(api, first, second, hold=None):
             return {**state, **first, "threads": [], "steps": []}
         return {**state, **second, "threads": [], "steps": []}
 
-    with patch.object(A.E, "advance", advance):
+    with patch.object(A.E, "advance", advance):  # double: a stalled outside call; the claim fence is under test
         worker = threading.Thread(target=lambda: result.update(won=hub.go(claimed)))
         worker.start()
         assert entered.wait(10)
@@ -97,7 +98,7 @@ def test_an_old_automation_worker_cannot_save_after_reclaim_and_is_told_to_stop(
 
 def test_a_run_taken_back_and_claimed_again_is_settled_only_by_the_new_claim(api):
     """The ABA case: running (A) -> queued -> running (B). A status-only check sees `running` both times."""
-    rid = queued(api, make_automation(api, NOTE))
+    rid = queued(api, make_automation(api, TASK))
     store = api.app.state.store
     hub = store.automations
     old = hub.claim()
@@ -105,17 +106,12 @@ def test_a_run_taken_back_and_claimed_again_is_settled_only_by_the_new_claim(api
     assert run_row(api, rid)["status"] == "queued" and run_row(api, rid)["claim_token"] is None
     new = hub.claim()
     assert new.id == rid and new.token != old.token and run_row(api, rid)["status"] == "running"
-
-    def outcome(status, cost):
-        return lambda flow, state, services: {**state, "status": status, "cost": cost, "threads": [], "steps": []}
-
-    with patch.object(A.E, "advance", outcome("failed", 1.0)):
-        assert hub.go(old) is False  # A fails late, while B holds the run
+    assert hub.go(old) is False  # A's claim lapsed: the run is B's, so A goes no further
     assert run_row(api, rid)["status"] == "running" and run_row(api, rid)["claim_token"] == new.token
-    with patch.object(A.E, "advance", outcome("ok", 2.0)):
-        assert hub.go(new) is True
+    assert hub.go(new) is True
     done = run_row(api, rid)
-    assert done["status"] == "ok" and done["cost"] == 2.0 and done["claim_token"] is None
+    assert done["status"] == "ok" and done["claim_token"] is None
+    assert len(sql(api, "SELECT id FROM tasks WHERE title='Acme claim check'")) == 1  # B's step ran, once
 
 
 def test_a_resumed_run_still_does_each_effect_once(api):
@@ -134,7 +130,10 @@ def test_a_resumed_run_still_does_each_effect_once(api):
         real(self, state)
         raise Stop()
 
-    with patch.object(A.HubServices, "checkpoint", cut_off), pytest.raises(Stop):
+    with (
+        patch.object(A.HubServices, "checkpoint", cut_off),  # double: the process dies after a save
+        pytest.raises(Stop),
+    ):
         hub.go(old)
     assert run_row(api, rid)["claim_token"] == old.token
     A.tick(store, later(A.STALE_MINUTES + 1))
@@ -160,7 +159,7 @@ def test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run(
         seen["on_hold"] = services.on_hold()
         return {**state, "status": "ok", "cost": 9.0, "threads": [], "steps": []}
 
-    with patch.object(A.E, "advance", advance):
+    with patch.object(A.E, "advance", advance):  # double: a stalled outside call; the claim fence is under test
         worker = threading.Thread(target=lambda: result.update(won=hub.go(old)))
         worker.start()
         assert entered.wait(10)
@@ -184,18 +183,12 @@ def test_a_worker_whose_run_was_taken_back_before_it_started_does_not_run_it(api
     """The take-back clears the claim's token: a worker that stalled between its claim and its first step finds the
     run queued again under no claim, and neither advances nor settles it (status alone would not tell it apart:
     the run is queued, and the old token would otherwise still match)."""
-    rid = queued(api, make_automation(api, NOTE))
+    rid = queued(api, make_automation(api, TASK))
     store = api.app.state.store
     hub = store.automations
     old = hub.claim()
     A.tick(store, later(A.STALE_MINUTES + 1), drain=False)
-    calls = []
-
-    def advance(flow, state, services):
-        calls.append(services.token)
-        return {**state, "status": "ok", "cost": 9.0, "threads": [], "steps": []}
-
-    with patch.object(A.E, "advance", advance):
-        assert hub.go(old) is False
+    assert hub.go(old) is False
     after = run_row(api, rid)
-    assert calls == [] and (after["status"], after["cost"], after["claim_token"]) == ("queued", 0, None)
+    assert (after["status"], after["cost"], after["claim_token"]) == ("queued", 0, None)
+    assert not sql(api, "SELECT id FROM tasks WHERE title='Acme claim check'")  # the step never ran

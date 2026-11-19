@@ -61,9 +61,9 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 
 ## Actions and tasks
 - `tico finance action <action id>` — an action's status: committed, needs_approval, denied or failed.
-- `tico task show <task id>` — the task, its version, what it waits on, its body and its comments.
+- `tico task show <task id>` — the task, its version, what it waits on, its first message and its comments.
 - `tico task comment <task id> "<text>"` — a comment on the record. Notes go here, including the close's variance note.
-- `tico task ask <task id> --to <person> "<question, and why it matters>" --choices "<a>,<b>" --version N` — one decision for a person, on the task; the task waits on them. `--to` is the approver a dry run names, or the person the task names. Two to six choices, each saying what happens. For yes or no, leave out `--choices`. One open ask per task.
+- `tico task ask <task id> --to <person> "<question>"` — one question for a person, on the task, marked ❓. Write the options and why it matters into the message in plain words. `--to` is the approver a dry run names, or the person the task names. Their reply wakes you. One open question per task.
 - `tico task done <task id> -m "<one line>" --version N` — marks the task done with its one line.
 - `tico doc write finance/reports/<YYYY-MM> --title "<title>" --body-file <file>` — the monthly report, in Docs.
 

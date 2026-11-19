@@ -1,12 +1,23 @@
 """The health checks read the company's settings once a page, and each bot's own rows once for all the bots."""
 
+import contextlib
 import re
+import threading
 from collections import Counter
 
-from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.helpers.status_reads import busy, setup
-from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.api import headers, ready  # noqa: F401
 from backend.tests.helpers.health_reads import counted
+from backend.tests.helpers.run_failures import setup as bare_setup
+from backend.tests.helpers.status_reads import busy
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task_bot
+
+
+def setup(api, monkeypatch, tasks=8):
+    """A computer that reports the capabilities of the oldest supported release (0.6.0-rc.1): its claims take the
+    session root and lane rules every computer runs, so the query counts below measure those."""
+    machine = bare_setup(api, monkeypatch, tasks=tasks)
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    return machine
 
 
 def warmed(api, monkeypatch, path, trace):
@@ -75,7 +86,7 @@ def stuck_company(api, monkeypatch, count):
     on a blocker, a few running, and a refusal Health has watched for over 12 hours on each."""
     from backend import health
     from backend.store import H, encode
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     monkeypatch.setattr(
         health,
@@ -107,7 +118,7 @@ def stuck_company(api, monkeypatch, count):
 def refuse_queues(api, monkeypatch, slugs):
     """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
     from backend.store import H, encode
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with api.app.state.store.transaction() as c:
@@ -124,7 +135,7 @@ def refuse_queues(api, monkeypatch, slugs):
 def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
     # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
     # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
-    from backend.tests.helpers.run_backoff import at
+    from backend.tests.helpers.run_failures import at
 
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
@@ -163,3 +174,71 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
         # The control reads several times the batched total (about 560 against 200).
         assert slow > 2 * total, (total, slow)
         assert api.get("/api/v2/health", headers=headers("ana-test")).content == primed
+
+
+def test_a_read_another_thread_runs_during_the_request_is_not_counted(api, monkeypatch):
+    # CI run 43990123595 counted one more bot_status read at 12 bots than at 6 on /api/employees: a read another thread
+    # ran on the store while the request was in flight. Here the first connection the request borrows starts a read on
+    # a thread of its own and joins it, so that read lands in the window every time. The request's count must stay what
+    # it was without it.
+    store = api.app.state.store
+    machine = setup(api, monkeypatch, tasks=2)
+    busy(api, machine, 0, 6)
+    counted(api, monkeypatch, "/api/employees")  # warm
+    _, alone = counted(api, monkeypatch, "/api/employees")
+    real_read, ran = store.read, []
+
+    def elsewhere():
+        with store.read() as other:
+            other.execute("SELECT * FROM bot_status WHERE bot IN ('busy-0','busy-1')").fetchall()
+
+    @contextlib.contextmanager
+    def read_with_a_read_elsewhere():
+        if not ran:
+            ran.append(True)
+            worker = threading.Thread(target=elsewhere)
+            worker.start()
+            worker.join()
+        with real_read() as c:
+            yield c
+
+    monkeypatch.setattr(store, "read", read_with_a_read_elsewhere)
+    body, beside = counted(api, monkeypatch, "/api/employees")
+    assert ran, "the employees request borrowed no connection"
+    assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 6
+    assert beside == alone, (alone, beside)
+
+
+def test_health_reads_the_whole_queue_only_of_bots_it_asks_about_and_says_the_same(api, monkeypatch):
+    # Tico Team's hub (Nov 18): Health read every queued message of every bot with queued work, though it asks the
+    # claim only about a bot whose oldest job (or a person's message) has waited: most of a poll's time went to young
+    # queues' messages. It reads those bots' queues now, and the page says what reading everyone's said.
+    from backend import execution
+    from backend.tests.helpers.run_failures import at
+
+    stuck_company(api, monkeypatch, 8)
+    real, primed = execution.prime_claimables, []
+
+    def recorded(c, bots, first=3):
+        if first is None:
+            primed.append(sorted(bots))
+        return real(c, bots, first=first)
+
+    def everyone(c, bots, first=3):
+        every = [r[0] for r in c.execute("SELECT slug FROM bots")] if first is None else bots
+        return real(c, every, first=first)
+
+    def page(prime):
+        with monkeypatch.context() as patched:
+            patched.setattr(execution, "prime_claimables", prime)
+            return api.get("/api/v2/health", headers=headers("ana-test")).content
+
+    # 40 minutes on: every busy bot's queue is old, and Health reads each of them.
+    old = page(recorded)
+    assert {f"busy-{k}" for k in range(8)} <= set(primed[-1]), primed[-1]
+    assert old == page(everyone)
+    # A minute on: no queue is old, so none is read, and the page is the one reading them all gives.
+    at(monkeypatch, api, "2026-10-24T12:01:00.000000Z")
+    young = page(recorded)
+    assert not any(slug.startswith("busy-") for slug in primed[-1]), primed[-1]
+    assert young == page(everyone)

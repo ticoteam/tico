@@ -2,9 +2,11 @@
 
 It is the one key for everything the app asks the Gateway (clients/gateway.py): Decide's questions and the bots that run
 on Tico's models (Tico Cheap, Mid and Power). The server's environment may set it (`TICO_GATEWAY_KEY`, `TICO_GATEWAY_URL`), which
-wins and shows as connected; otherwise the owner saves it here. The saved key is sealed with the credential vault's
-data key (backend/credentials.py `CredentialCipher.seal`), like the storage and Slack secrets: no read returns it, only
-a preview of its first and last three characters, and no event or log line carries it.
+wins and shows as connected; otherwise the owner saves it here. The saved key, and the install's secret below, are
+service rows of the credential vault (backend/credentials.py `keep_service`), like the Slack tokens; the connection's
+record in `registry_metadata` keeps only a reference to each (`SECRETS`). No read returns the key, only a preview of
+its first and last three characters, and no event or log line carries it. A record from before D11-11 that still holds
+them sealed in itself opens as before until the start moves them (backend/migrations/20261117103033_one_encrypted_store.py).
 
 While a key is set, the `tico` provider is on (`providers.load`), so Tico models can be picked like any other model;
 clearing it turns them off. A bot on a Tico model gets the key and URL in its run's environment (`run_credentials`,
@@ -39,7 +41,14 @@ import time
 from clients import gateway as G
 
 from . import destinations, read_cache
+from .credentials import drop_service, keep_service, kept_record, open_kept
 from .store import H, Problem
+
+
+def _monotonic():
+    """The deadline clock: a test replaces this and not time.monotonic for the whole process."""
+    return time.monotonic()
+
 
 KEY = "gateway-connection"
 CONTEXT = "gateway-connection:key"
@@ -52,6 +61,11 @@ RUN_BOT_ENV = "TICOAI_GATEWAY_BOT"
 MODEL_PREFIX = "tico-"
 INVITE_ENV = "TICO_GATEWAY_INVITE"
 INSTALL_CONTEXT = "gateway-connection:install"
+# Record field -> (its vault service row, the row's name, the context it was sealed under in the record before D11-11).
+SECRETS = {
+    "key": ("gateway-key", "Tico AI Gateway key", CONTEXT),
+    "install_secret": ("gateway-install-secret", "Tico AI Gateway install secret", INSTALL_CONTEXT),
+}
 AUTOMATIC = "automatic"
 COMPANY = "company"  # `via`: the key and identity came from the company link
 SYSTEM = "system:gateway"
@@ -62,12 +76,12 @@ ENROLL_AGAIN = (G.REVOKED_KEY, G.UNKNOWN_KEY, "already_rotated", "not_enrolled")
 # Why an enroll did not work, for the owner on Health; anything else is a plain "try again later".
 AUTO_MESSAGES = {
     "invalid_invite": "Tico AI Gateway could not connect automatically: the invite code in the install command is not "
-    "one Tico made. Ask Tico Team for a new one, or paste a gateway key here.",
-    "invite_expired": "Tico AI Gateway could not connect automatically: the invite code has expired. Ask Tico Team for a "
+    "one Tico made. Ask Tico support for a new one, or paste a gateway key here.",
+    "invite_expired": "Tico AI Gateway could not connect automatically: the invite code has expired. Ask Tico support for a "
     "new one, or paste a gateway key here.",
     "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
-    "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
-    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico Team "
+    "installs it allows. Ask Tico support for a new one, or paste a gateway key here.",
+    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico support "
     "for a new one, or paste a gateway key here.",
 }
 AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."
@@ -94,16 +108,45 @@ def env_url(settings=None):
     return configured if configured and G.base_url(configured) != G.DEFAULT_BASE else ""
 
 
-def _row(c):
-    row = read_cache.metadata(c, KEY)
+def _decode(text):
     try:
-        stored = json.loads(row[0]) if row else {}
+        stored = json.loads(text) if text else {}
     except ValueError:
         stored = {}
     return stored if isinstance(stored, dict) else {}
 
 
+def _row(c):
+    """The saved connection, without its secrets. A read that opens one takes both from `_snapshot`."""
+    row = read_cache.metadata(c, KEY)
+    return _decode(row[0] if row else None)
+
+
+def _snapshot(c):
+    """(the saved connection, its secrets' service rows), read in one statement (`kept_record`): a key saved with a
+    new address between two reads can never be paired with the old address (and sent to it), whether or not `c` is in
+    a transaction."""
+    text, rows = kept_record(c, KEY, [cid for cid, _, _ in SECRETS.values()])
+    return _decode(text), rows
+
+
+def _secret(c, vault, snapshot, field):
+    """The key or install secret the connection keeps ('' with none), from `_snapshot`. Never logged."""
+    record, rows = snapshot
+    cid, _, context = SECRETS[field]
+    return open_kept(c, vault.cipher, cid, context, record.get(field), rows)
+
+
+def _seal(c, vault, field, value):
+    """Keep `value` in the field's service row; what the record keeps for it."""
+    cid, name, _ = SECRETS[field]
+    return keep_service(c, vault.cipher, cid, name, value, SYSTEM, "gateway")
+
+
 def _write(c, record):
+    for field, (cid, _, _) in SECRETS.items():
+        if not record.get(field):
+            drop_service(c, cid)  # a record without the key (or secret) leaves no copy of it in the vault
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (KEY, json.dumps(record, sort_keys=True)),
@@ -132,8 +175,7 @@ def key(c, vault, settings=None):
     `target`."""
     if env_key(settings):
         return env_key(settings)
-    sealed = _row(c).get("key")
-    return vault.cipher.unseal(c, CONTEXT, sealed) if sealed else ""
+    return _secret(c, vault, _snapshot(c), "key")
 
 
 def url(c, settings=None, record=None):
@@ -148,13 +190,14 @@ def target(c, vault, settings=None):
     key) would pair the key it took away with an address it was never kept for. A demo's key is the sample's and goes
     nowhere: here it is '' as if none were set, so every send that takes it (search, fetch, images, judges, the postal
     reader, Billing) acts as it does without a key and sends nothing."""
-    record = _row(c)
+    snapshot = _snapshot(c)
+    record = snapshot[0]
     if _demo(settings):
         secret = ""
     elif env_key(settings):
         secret = env_key(settings)
     else:
-        secret = vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""
+        secret = _secret(c, vault, snapshot, "key")
     return secret, url(c, settings, record), _fingerprint(c, settings, record)
 
 
@@ -299,7 +342,7 @@ def save(c, vault, who, body, now, settings=None):
             raise Problem(
                 "vault_unavailable", "Credentials are not set up on this server, so a key cannot be stored", 503
             )
-        after["key"] = vault.cipher.seal(c, CONTEXT, secret)
+        after["key"] = _seal(c, vault, "key", secret)
         after["preview"] = secret[:3] + "…" + secret[-3:] if len(secret) >= 12 else "••••••"
         for field in ("origin", "key_id", "rotate_after"):
             after.pop(field, None)  # a pasted key is the owner's: never rotated or replaced
@@ -437,7 +480,7 @@ def check_soon(store, vault, settings=None, opener=None):
         )
     if not fingerprint:
         return None
-    now = time.monotonic()
+    now = _monotonic()
     with _tried_lock:
         if now - _tried.get(fingerprint, -CHECK_EVERY) < CHECK_EVERY:
             return None
@@ -686,11 +729,11 @@ def _utc(value):
 def bot_header(c, vault, slug):
     """{X-Tico-Bot: gb_...} for a Gateway call made for bot `slug` with an automatic key, else {}. The id is opaque
     (an HMAC under the install's secret), so the Gateway's ledger can tell bots apart without learning their names."""
-    record = _row(c)
-    if not slug or not record.get("install_secret") or not getattr(vault, "configured", False):
+    snapshot = _snapshot(c)
+    if not slug or not snapshot[0].get("install_secret") or not getattr(vault, "configured", False):
         return {}
     try:
-        secret = vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"])
+        secret = _secret(c, vault, snapshot, "install_secret")
     except Exception:
         return {}
     return {G.BOT_HEADER: G.bot_id(secret, slug)}
@@ -736,19 +779,16 @@ def auto_tick(store, vault, settings=None, opener=None, now=None):
 
 def _auto_tick(store, vault, settings, opener, now):
     with store.read() as c:
-        record = _row(c)
+        snapshot = _snapshot(c)  # the address, key and install secret of one save
+        record = snapshot[0]
         linked = _linked(c, settings)
         action = _due(record, settings, now, linked)
         if not action:
             return None
         base = url(c, settings, record)  # the address this record's key was kept for (`target`)
-        current = vault.cipher.unseal(c, CONTEXT, record["key"]) if action == "rotate" else ""
+        current = _secret(c, vault, snapshot, "key") if action == "rotate" else ""
         install = str(record.get("install") or "")
-        secret = (
-            vault.cipher.unseal(c, INSTALL_CONTEXT, record["install_secret"])
-            if install and record.get("install_secret")
-            else ""
-        )
+        secret = _secret(c, vault, snapshot, "install_secret") if install else ""
     try:
         G.safe_base(base)
     except ValueError:
@@ -768,7 +808,7 @@ def _auto_tick(store, vault, settings, opener, now):
             record = {
                 **_row(c),
                 "install": install,
-                "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+                "install_secret": _seal(c, vault, "install_secret", secret),
                 **({"via": COMPANY} if linked else {}),
             }
             _write(c, record)
@@ -809,10 +849,10 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
             return None
         after = {
             **{k: v for k, v in record.items() if k not in ("check", "auto")},
-            "key": vault.cipher.seal(c, CONTEXT, key_value),
+            "key": _seal(c, vault, "key", key_value),
             "preview": key_value[:3] + "…" + key_value[-3:],
             "install": install,
-            "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+            "install_secret": _seal(c, vault, "install_secret", secret),
             "origin": AUTOMATIC,
             "key_id": str(answer.get("key_id") or ""),
             "rotate_after": str(answer.get("rotate_after") or ""),

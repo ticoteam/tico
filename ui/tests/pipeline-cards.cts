@@ -5,7 +5,8 @@ import type {Browser, Page, Route} from 'playwright';
 // - A long title wraps to two lines and stops there; pointing at the card shows the whole title.
 // - Under the title, the asker's face and name and the time in this stage; the owner's face at the right, saying
 //   "Owner: <name>", only when someone else owns it.
-// - A phone (400 px) shows the same card: title, asker and age.
+// - A phone (400 px) shows the same card: title, asker and age. A drag along its stage tabs keeps the stage; a swipe
+//   across the cards steps to the next one.
 // TICO_SHOTS=<dir> saves the desktop and phone screenshots.
 // Run: npm run build:ui && node ui/tests/pipeline-cards.cts
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -54,7 +55,7 @@ async function serve(page: Page, errors: string[]): Promise<void> {
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json(bots);
-    if (p === '/api/humans' || p === '/api/people') return json({people, teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people, teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
     if (p === '/api/v2/pipelines/product') return json({pipeline});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
@@ -123,6 +124,18 @@ async function opened(browser: Browser, viewport: {width: number; height: number
     const wide = await phone.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(wide <= 400, `the phone page does not scroll sideways (${wide} px)`);
     if (shots) await phone.screenshot({path: path.join(shots, 'board-phone-400.png')});
+    // A finger dragged along the stage tabs scrolls them and keeps the stage; the same drag across the cards steps to
+    // the next stage, and back.
+    const swipe = (on: string, from: number, to: number) => phone.evaluate(([sel, x0, x1]) => {
+      const el = document.querySelector(sel as string)!, box = el.getBoundingClientRect(), y = box.top + Math.min(20, box.height / 2);
+      const touch = (x: number) => new Touch({identifier: 1, target: el, clientX: x, clientY: y});
+      el.dispatchEvent(new TouchEvent('touchstart', {bubbles: true, touches: [touch(x0 as number)], changedTouches: [touch(x0 as number)]}));
+      el.dispatchEvent(new TouchEvent('touchend', {bubbles: true, touches: [], changedTouches: [touch(x1 as number)]}));
+      return document.querySelector('.pv-tab.on')?.getAttribute('data-pv-tab');
+    }, [on, from, to] as const);
+    assert.equal(await swipe('.pv-tabs .pv-tab', 320, 100), 'ideas', 'a drag along the stage tabs is no swipe');
+    assert.equal(await swipe('.pv-phone .tk-card', 320, 100), 'spec', 'a swipe across the cards steps to the next stage');
+    assert.equal(await swipe('.pv-phone .tk-card', 100, 320), 'ideas', 'and back');
 
     assert.deepEqual(errors, []);
     console.log('pipeline cards: ok');

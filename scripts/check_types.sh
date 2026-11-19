@@ -3,7 +3,7 @@
 # basedpyright reads the .basedpyright/baseline.json generated from them), then the ratchet in
 # scripts/check_pyright_ratchet.py. The baseline and the legacy module list only shrink, and a module added since
 # the legacy list was written must be strict (migrations excepted). Takes about 30 seconds on a Mac; CI runs it in
-# the static job.
+# the types job.
 #   scripts/check_types.sh                                 check: fails on a new error and on a non-strict new
 #                                                          module; a baseline entry that no longer fires warns
 #   scripts/check_types.sh --writebaseline                 rewrite the baseline after fixes (review the diff)
@@ -28,6 +28,18 @@ else
   PYTHON_BIN="$(command -v python3)"
   if [ -z "${CI:-}" ]; then
     echo "check_types: no .venv-pyright here or in ${main_checkout:-the main checkout}; using $PYTHON_BIN (see the setup line at the top of this script)" >&2
+  fi
+fi
+# One basedpyright at a time per computer. Each run holds 2-6 GB, and the pre-push hook starts one on every bot's push,
+# so on a shared cloud machine (16 GB, many bots) three pushes at once filled memory and swapped it offline (Nov 18).
+# A run that finds the lock held waits its turn. Released when this script exits. Where flock is missing (a Mac), or the
+# lock file belongs to another user, no lock.
+lock=/tmp/tico-basedpyright.lock
+if [ -z "${CI:-}" ] && command -v flock >/dev/null 2>&1 && (: >>"$lock") 2>/dev/null; then
+  exec 9>>"$lock"
+  if ! flock -n 9; then
+    echo "check_types: another basedpyright run on this computer; waiting for it" >&2
+    flock 9
   fi
 fi
 case " $* " in

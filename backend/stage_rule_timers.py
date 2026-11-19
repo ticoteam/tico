@@ -190,8 +190,9 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> No
 
 # ----------------------------------------------------------------------------- If
 def _matches(conn: Any, rule: Row, task: Row) -> bool:
-    """The rule's If: `turn` is read here (whose turn the task is, as the never-stuck ladder reads it: a bot's, or a
-    person's when the first thing it waits on is a person); every other key by stage_rules.matches."""
+    """The rule's If: `turn` is read here (whose turn the task is, as the never-stuck ladder reads it: a bot's, also
+    once the ladder has rested on it and wakes nobody, or a person's when the first thing it waits on is a person);
+    every other key by stage_rules.matches."""
     SR, E, W = _mod("stage_rules"), _mod("task_engine"), _mod("waiting_on")
     row = E.task(conn, task["id"])
     if not row:
@@ -199,7 +200,9 @@ def _matches(conn: Any, rule: Row, task: Row) -> bool:
     turn = rule["cond"].get("turn")
     if turn:
         waits: list[Any] = W.of(conn, row)
-        who: str | None = W.turn(conn, row, waits) or (waits[0].who if waits and waits[0].state == W.PERSON else None)
+        who: str | None = W.turn(conn, row, waits, resting=True) or (
+            waits[0].who if waits and waits[0].state == W.PERSON else None
+        )
         if _kind(who) != turn:
             return False
     return bool(SR.matches(conn, rule, row)[0])
@@ -229,9 +232,15 @@ def _then(conn: Any, rule: Row, task: Row, done: dict[str, int]) -> str:
         _tell_owner(conn, rule, task, said)
         done["told"] += 1
         return "told"
-    if task.get("late_told_at"):
-        return "late"  # already listed as Late on this visit: the manager has it
-    return "pending" if _manager(conn, task) else "no_manager"
+    outcome = "late" if task.get("late_told_at") else "pending" if _manager(conn, task) else "no_manager"
+    if outcome != "pending":
+        # No manager will hear of it: a task the ladder stopped on asks a person instead (never_stuck.ask_person).
+        E, NS = _mod("task_engine"), _mod("never_stuck")
+        row: Row | None = E.task(conn, task["id"])
+        visit: Row = (row or {}).get("visit") or {}
+        if row and visit.get("level") == "person":
+            NS.ask_person(conn, row)
+    return outcome
 
 
 def _move_back(conn: Any, rule: Row, task: Row, said: str) -> None:
@@ -243,11 +252,17 @@ def _move_back(conn: Any, rule: Row, task: Row, said: str) -> None:
         R.TASK_RUNNERS["move"](conn, task["id"], {"stage": stage}, said)
         now: Row = H.task(conn, task["id"]) or {}
         if now.get("owner_id"):
-            E.reassign(conn, task["id"], None, H.KEEPER, said)
+            E.reassign(conn, task["id"], None, H.TICO_ACTOR, said)
     moved: Row = H.task(conn, task["id"]) or {}
     task.update(stage_id=moved.get("stage_id"), late_told_at=None)
     SR.record(
-        conn, task["id"], rule, said, H.KEEPER, "moved_back", {"from": task["stage_name"], "to": moved.get("stage_id")}
+        conn,
+        task["id"],
+        rule,
+        said,
+        H.TICO_ACTOR,
+        "moved_back",
+        {"from": task["stage_name"], "to": moved.get("stage_id")},
     )
 
 
@@ -262,8 +277,8 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str) -> None:
         task_wakes.add(conn, row, owner, row["visit"], task_wakes.body(conn, row, said, to=owner), wake_key=key)
     elif H.task_private_readable(conn, owner, row):
         conv = H.conversation(conn, task["conversation_id"])
-        H._write_message(conn, H.KEEPER, owner, said, conv, "notice", {"task": task["id"]}, None, None)
-    SR.record(conn, task["id"], rule, said, H.KEEPER, "told", {"to": owner})
+        H._write_message(conn, H.TICO_ACTOR, owner, said, conv, "notice", {"task": task["id"]}, None, None)
+    SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
 
 
 def _manager(conn: Any, task: Row) -> str | None:
@@ -346,8 +361,8 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     if H.is_bot(manager):
         ok = R._tell_bot(conn, "stage-rules", H.actor_id(manager), text, refs, wake=True)[0]
     else:
-        conv = H._pair_conversation(conn, H.KEEPER, manager, "notice", allow_held=True)
-        ok = bool(H._write_message(conn, H.KEEPER, manager, text, conv, "notice", refs, None, None))
+        conv = H._pair_conversation(conn, H.TICO_ACTOR, manager, "notice", allow_held=True)
+        ok = bool(H._write_message(conn, H.TICO_ACTOR, manager, text, conv, "notice", refs, None, None))
     if not ok:
         # The manager cannot be told (archived, gone): nothing says it was, and its next match tries again.
         _settle(conn, named, "failed", None)
@@ -355,7 +370,7 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
     _settle(conn, named, "told", at)
     name = str(H.actor_name(conn, manager))
     for row, rule in listed:
-        SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.KEEPER, "told", {"to": manager})
+        SR.record(conn, row["id"], rule, f"Rule {rule['name']}: {name} was told", H.TICO_ACTOR, "told", {"to": manager})
     return True
 
 

@@ -1,6 +1,8 @@
 ---
 name: verify-a-help-desk-change
 description: Write and check a help desk change so that it has a named test ticket, an expected result, an undo step and a recorded before-and-after, and so that nothing is called fixed until the test shows it.
+metadata:
+  function: customers
 ---
 # Verify a help desk change
 

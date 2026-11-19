@@ -3,7 +3,7 @@
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
 from urllib.parse import quote
-from clients.cli_spec import Command, Group
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -301,7 +301,7 @@ def setup_show(api, args):
     "Finish the welcome wizard with the answers and picks it has saved (`tico_setup_show`), as the owner: the built-in "
     "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
     "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
-    "`tico_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    "`tico_api` PUT /api/v2/setup, or come from the company file the install was given.",
     {},
     writes=True,
 )
@@ -333,7 +333,8 @@ def setup_invite(api, args):
 @tool(
     "tico_group_list",
     "The groups: sub-teams of the team, each with its id, name, parent group (groups nest), the "
-    "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in one group at a time.",
+    "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in "
+    "one group at a time.",
     {},
 )
 def group_list(api, args):
@@ -342,10 +343,10 @@ def group_list(api, args):
 
 @tool(
     "tico_group_update",
-    "Create, rename, move, lead or fill a group, as the person who asked you (the owner or an "
-    "admin; a group's lead within the groups it leads). Leave `group` out to create one from `name`. `parent` nests it "
-    "under another group (an empty one moves it to the top). Adding a teammate to a group takes it out of the one it "
-    "was in; built-in bots stay outside groups. Answers with the group.",
+    "Create, rename, move, lead or fill a group, as the person who asked (the owner or an admin; "
+    "a group's lead within the groups it leads). Leave `group` out to create one from `name`. "
+    "`parent` nests it under another group (empty moves it to the top). Adding a teammate takes "
+    "them out of their old group; built-in bots stay outside groups. Answers with the group.",
     {
         "group": _s("The group's id; leave out to create a new one"),
         "name": _s("Its name"),
@@ -405,7 +406,14 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
+    row = next(
+        (
+            b
+            for b in api.get("bots", fields="id,slug,name,revision")
+            if ref in (b.get("id"), b.get("slug") or b.get("name"))
+        ),
+        None,
+    )
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(
@@ -492,10 +500,11 @@ def _pointer(data, pointer):
 
 @tool(
     "tico_settings_find",
-    "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
-    "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
-    "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
-    "person), the route and body it writes, and the `card` link. Then `tico_settings_show` or `tico_settings_set` with its key.",
+    "Find a control in Settings by its words: each one's `key`, `name`, `where` it sits, who may "
+    "change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
+    "person gets a Confirm card for them; person: only the person, in Settings; `class_when` "
+    "names what makes a direct one confirm or person), the route and body it writes, and the "
+    "`card` link. Then `tico_settings_show` or `tico_settings_set` with its key.",
     {"words": _s("What the setting is about, e.g. sql, budget, release time")},
     required=("words",),
 )
@@ -525,11 +534,11 @@ def settings_show(api, args):
 @tool(
     "tico_settings_set",
     "Change one setting from `tico_settings_find`, as the person who asked (BotOps, the "
-    "Assistant) or yourself. direct: it changes and the answer has the new `value`; confirm, from BotOps or the "
-    "Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing changed yet; person: refused with the "
-    "one-line reason and the card's `link`. A refusal names who may change it. The Assistant cites the person's words "
-    "(`on_behalf_of`) for a direct one; without them, or while the owner's \"Assistant acts without asking\" is off, "
-    "it is a card too.",
+    "Assistant) or yourself. direct: it changes now and the answer has the new `value`; confirm, "
+    "from BotOps or the Assistant: a Confirm card in the person's chat (`needs_confirm`), nothing "
+    "changed yet; person: refused with a one-line reason that names who may change it, and the "
+    "card's `link`. The Assistant cites the person's words (`on_behalf_of`) for a direct change; "
+    "without them, or while the owner's \"Assistant acts without asking\" is off, it is a card.",
     {
         "key": _s("The setting's key"),
         "value": {"description": "The new value: on/off, a number, text, a list or JSON, as `tico_settings_show` says"},
@@ -548,7 +557,7 @@ def settings_set(api, args):
     if "run" not in planned:
         return planned  # the Confirm card
     run = planned["run"]
-    who.call(run["method"], run["path"], run["body"], _key(args))
+    answer = who.call(run["method"], run["path"], run["body"], _key(args))
     # The value read back after the change, where Settings shows one; else the value sent.
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {
@@ -556,6 +565,8 @@ def settings_set(api, args):
         "name": planned["setting"]["name"],
         "where": planned["setting"]["where"],
         "value": shown["value"] if "value" in shown else planned["value"],
+        # Advice the route gave with the change (a cloud machine size Tico does not recommend, and why).
+        **({"note": answer["note"]} if isinstance(answer, dict) and answer.get("note") else {}),
     }
 
 
@@ -597,9 +608,9 @@ def audit(api, args):
 
 @tool(
     "tico_team_show",
-    "The Team chart: who each person is, how to reach them (email, Slack, "
-    "phone), what they own, their goals, and which bots hang under them. Use this to find who "
-    "handles a kind of work before you file a task or ping someone.",
+    "The Team chart: who each person is, how to reach them (email, Slack, phone), what they own, "
+    "their goals, and which bots hang under them. Use this to find who handles a kind of work "
+    "before you file a task or ping someone.",
     {
         "person": _s("Optional person id: that person and everyone under them"),
         "team": _s("Optional group id: that group and the groups in it, like engineering or sales"),
@@ -645,9 +656,10 @@ def live_stats(api, args):
 @tool(
     "tico_origin_show",
     "Why an item is on the person's list: the task, the bot's question or the approval it names. "
-    "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
-    "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
-    "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
+    "Answers who made it and its cause (the automation that opened it, the org rule that asked "
+    "for it, the parent task, or the bot that filed it), how many items that cause made this week "
+    "and how many are open, and up to three commands that would stop the source. Read-only; a ref "
+    "the person cannot read is not found.",
     {"ref": _s("A task id (or 8+ leading characters), a message id (a bot's question) or an approval id")},
     required=("ref",),
 )
@@ -669,4 +681,105 @@ SEAT = (
         example="tico seat update s1 --reports-to human:ana",
     ),
     Command("seat close", "take a seat off the chart (a person)", example="tico seat close s1"),
+)
+
+
+# `tico settings ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+_TARGETS = ("bot", "computer", "id", "person")  # the one thing a setting is set on, or none
+SETTINGS = (
+    Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
+    Command(
+        "settings find",
+        "settings whose name, place or key hold these words",
+        example="tico settings find 'admin sql'",
+    ),
+    Command(
+        "settings show",
+        "one setting: its value, who may change it and its card",
+        exclusive=(_TARGETS,),
+        example="tico settings show team.rules.admin_sql --bot ana",
+    ),
+    Command(
+        "settings set",
+        "change one setting as yourself, or BotOps or the Assistant as the person who asked",
+        args=(Arg("on_behalf_of", metavar="MESSAGE_ID"),),
+        exclusive=(_TARGETS,),
+        example="tico settings set team.rules.admin_sql on",
+    ),
+)
+
+
+# `tico alerts ...` (clients/cli_spec.py) except `set`, which the hand parser still builds (clients/hubcli.py): its
+# --urgent-needs and --bot-stuck are not in the alert-preferences schema, so the tool never gets them.
+ALERTS = (
+    Group("alerts", "your own phone and paid alert preferences"),
+    Command("alerts show", "your phone, alert preferences and spend", example="tico alerts show"),
+    Command("alerts remove", "revoke your phone and cancel queued alerts", example="tico alerts remove"),
+    Command(
+        "alerts verify",
+        "send a free code to your own US/Canada phone (SMS consent is required)",
+        args=(Arg("sms_consent", flag="--sms-consent"),),
+        example="tico alerts verify +14155550100 --sms-consent",
+    ),
+    Command(
+        "alerts confirm",
+        "confirm your phone with its six-digit code",
+        example="tico alerts confirm 123456",
+    ),
+    Command(
+        "alerts test",
+        "send yourself a test alert; the company pays $1 per accepted alert",
+        args=(Arg("accept_charge", flag="--accept-charge"), Arg("operation_id", flag="--operation-id")),
+        example="tico alerts test --accept-charge --operation-id test-1",
+    ),
+    Command(
+        "alerts company",
+        "the company's alert cap and spend in USD; --monthly-cap sets the cap (zero stops paid alerts)",
+        example="tico alerts company --monthly-cap 50",
+    ),
+)
+
+# `tico group ...` and `tico team show|budget` (clients/cli_spec.py). `team icon` is still built in clients/hubcli.py:
+# it sends the bytes of a file on this computer.
+GROUP = (
+    Group("group", "the groups: sub-teams that nest, holding humans and bots"),
+    Command("group list", "the groups with their humans and bots", example="tico group list"),
+    Command(
+        "group update",
+        "create (no group given), rename, move, lead or fill a group (an owner or an admin)",
+        args=(
+            Arg("group", positional=True, nargs="?"),
+            Arg("add_humans", flag="--add-human", metavar="HUMAN"),
+            Arg("add_bots", flag="--add-bot", metavar="BOT"),
+            Arg("remove_humans", flag="--remove-human", metavar="HUMAN"),
+            Arg("remove_bots", flag="--remove-bot", metavar="BOT"),
+            Arg("on_behalf_of", metavar="MESSAGE_ID"),
+        ),
+        example="tico group update engineering --add-bot builder",
+    ),
+    Command(
+        "group delete",
+        "delete a group; its teammates and groups move up to its parent",
+        args=(Arg("on_behalf_of", metavar="MESSAGE_ID"),),
+        example="tico group delete engineering",
+    ),
+    Command(
+        "group access",
+        "show or set who may see, read and write to a group",
+        example="tico group access engineering --read everyone",
+    ),
+)
+TEAM = (Group("team", "team chart and icon"),)
+# After the hand-built `team icon`, so `tico team` lists its leaves in the order it always has.
+TEAM_AFTER_ICON = (
+    Command(
+        "team show",
+        "the team chart: humans, Slack, what they own, the bots with reports_to and group",
+        example="tico team show --team engineering",
+    ),
+    Command(
+        "team budget",
+        "read or set the team's default runs per hour and per day for bots (owner and admins)",
+        example="tico team budget --hour 20 --day 200",
+    ),
 )

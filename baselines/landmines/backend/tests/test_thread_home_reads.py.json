@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_thread_home_reads.py": {
+    "timing-assert": 1
+  }
+}

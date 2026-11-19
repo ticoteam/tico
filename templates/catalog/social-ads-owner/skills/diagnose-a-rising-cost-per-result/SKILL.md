@@ -1,6 +1,8 @@
 ---
 name: diagnose-a-rising-cost-per-result
 description: Split a rise in a paid social campaign's cost per result into its three factors (auction price, link click-through and conversion rate), name the most likely cause, and say which check would confirm it before any change is proposed.
+metadata:
+  function: marketing
 ---
 # Diagnose a rising cost per result
 

@@ -8,6 +8,7 @@ from pydantic import Field
 from . import media, models as M
 from .store import H, Problem
 from .views import human_only
+from .api_contract import api_v2
 
 
 class Heartbeat(M.Contract):
@@ -51,7 +52,12 @@ def listing(c, place):
 
 
 def install(app, store, mutate, auth):
-    @app.get('/api/v2/presence')
+    @app.get(
+        '/api/v2/presence',
+        **api_v2(
+            "Live events", "getPresence", "Current actors aggregated across unexpired sessions at an authorized place"
+        ),
+    )
     def get(request: Request, place: str):
         who = request.state.identity
         human_only(who)
@@ -59,7 +65,14 @@ def install(app, store, mutate, auth):
             authorized(c, auth, who, place)
             return listing(c, place)
 
-    @app.post('/api/v2/presence')
+    @app.post(
+        '/api/v2/presence',
+        **api_v2(
+            "Live events",
+            "heartbeatPresence",
+            "Heartbeat one session every 15 seconds, or leave with gone=true; sessions expire after 30 seconds",
+        ),
+    )
     def post(request: Request, body: Heartbeat):
         who = request.state.identity
         human_only(who)

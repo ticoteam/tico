@@ -1,8 +1,8 @@
 # pyright: strict
 """The server's slow drains, beside the 10-second loop (backend/app.py `schedule_loop`), not inside it.
 
-The automation queue (its runs, then their Workspace Gmail actions), the server's own email sends and the Workspace key
-check call models, connectors and Google, so one pass of them can take as long as those answer. Each has one thread of
+The automation queue (its runs, then their Workspace Gmail actions), the server's own email sends, the Workspace key
+check and the mail watch call models, connectors and Google, so one pass of them can take as long as those answer. Each has one thread of
 its own here. The loop's pass, the automation doorbell and a manual run wake it; it runs at most one pass at a time, and
 a wake while a pass runs asks for one more pass after it, never a second one beside it.
 
@@ -33,6 +33,8 @@ TELEMETRY: dict[str, str] = {
     "automations": "automations",
     "email": "email_drain",
     "workspace_check": "google_workspace",
+    "calendar_watch": "calendar_watch",
+    "gmail_watch": "gmail_watch",
 }
 
 
@@ -44,19 +46,22 @@ Work = Callable[["Budget"], Any]
 OnError = Callable[[str, BaseException], Any]
 
 
+def _monotonic() -> float:
+    """The clock a budget reads. A test sets its own."""
+    return time.monotonic()
+
+
 class Budget:
     """A pass's elapsed-time budget: `left()` is False once `seconds` have gone by or the server is stopping. None
     seconds is no limit (an inline drain, as before). `spent` says whether the budget, not the queue, ended the pass."""
 
     def __init__(self, seconds: float | None = None, stop: Stop | None = None) -> None:
         self.seconds, self.stop = seconds, stop
-        self.until = None if seconds is None else time.monotonic() + seconds
+        self.until = None if seconds is None else _monotonic() + seconds
         self.spent = False
 
     def left(self) -> bool:
-        if (self.stop is not None and self.stop.is_set()) or (
-            self.until is not None and time.monotonic() >= self.until
-        ):
+        if (self.stop is not None and self.stop.is_set()) or (self.until is not None and _monotonic() >= self.until):
             self.spent = True
             return False
         return True
@@ -205,7 +210,8 @@ class Worker:
 
 class Drains:
     """The server's drain workers: `automations` (the queue's runs, then their Gmail actions), `email` (Workspace
-    inboxes' queued sends) and `workspace_check` (a pending or failing Workspace key, checked again)."""
+    inboxes' queued sends), `workspace_check` (a pending or failing Workspace key, checked again), `calendar_watch`
+    (Google calendars' changes) and `gmail_watch` (each mailbox's new mail, backend/gmail_watch.py)."""
 
     def __init__(
         self,
@@ -216,7 +222,7 @@ class Drains:
         on_error: OnError | None = None,
         stopping: Callable[[], bool] | None = None,
     ) -> None:
-        from . import email_sending, system_routines
+        from . import email_sending, gmail_watch, system_routines
         from . import google_workspace as workspace_checks
 
         hub = store.automations
@@ -248,7 +254,26 @@ class Drains:
             on_error=on_error,
             stopping=stopping,
         )
-        self.all = (self.automations, self.email, self.workspace_check)
+        from . import gcal_watch
+
+        # Google calendars' own changes, as calendar.event.* (backend/gcal_watch.py); each calendar every 90 s.
+        self.calendar_watch = Worker(
+            "calendar_watch",
+            lambda budget: gcal_watch.tick(store, budget=budget),
+            store=store,
+            budget=budget,
+            on_error=on_error,
+            stopping=stopping,
+        )
+        self.gmail_watch = Worker(
+            "gmail_watch",
+            lambda budget: gmail_watch.drain(store, budget=budget),  # pyright: ignore[reportUnknownMemberType]
+            store=store,
+            budget=budget,
+            on_error=on_error,
+            stopping=stopping,
+        )
+        self.all = (self.automations, self.email, self.workspace_check, self.calendar_watch, self.gmail_watch)
         self.hub = hub
 
     def start(self) -> "Drains":
@@ -275,7 +300,7 @@ class Drains:
             self.hub.worker = None
         for worker in self.all:
             worker.halt()
-        end = None if timeout is None else time.monotonic() + timeout
+        end = None if timeout is None else _monotonic() + timeout
         for thread in getattr(self, "threads", ()):
-            # One deadline for all three: a shutdown waits at most `timeout`, not `timeout` per worker.
-            thread.join(None if end is None else max(0.0, end - time.monotonic()))
+            # One deadline for all of them: a shutdown waits at most `timeout`, not `timeout` per worker.
+            thread.join(None if end is None else max(0.0, end - _monotonic()))

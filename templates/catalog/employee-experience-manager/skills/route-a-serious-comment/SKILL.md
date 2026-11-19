@@ -1,6 +1,8 @@
 ---
 name: route-a-serious-comment
 description: Recognise a survey comment or message about harassment, safety, discrimination or someone at risk, stop any summary of it, pass it untouched to the named human the same day, and report only that it was routed.
+metadata:
+  function: people
 ---
 # Route a serious comment
 

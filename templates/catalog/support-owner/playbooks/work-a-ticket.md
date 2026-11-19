@@ -47,7 +47,7 @@ One draft per ticket, on the task, never in the support tool. Each draft:
 - starts by naming what they asked, in one line, so the requester can check the match;
 - answers from a doc the Librarian cited or a human's word, not from a policy you assembled;
 - leaves a marked gap wherever it would need a refund, a credit, a discount, a fix, or a date, and
-  says on the task what the gap needs (`skills/write-a-reply-with-a-marked-gap/SKILL.md`);
+  says on the task what the gap needs (`.claude/skills/answer-a-customer/SKILL.md`);
 - carries no personal detail beyond what the intended reader already has;
 - matches `knowledge/voice.md`, is short enough to read on a phone, and ends with what happens next
   or what you need from them.

@@ -37,24 +37,18 @@ so there is no public receiver and no signing secret. What it does, in order, fo
    network fault between send and record is `uncertain` and waits for an operator
    (`docs/slack-gateway.md`, Recovery).
 
-6. **Read the channels like an employee reads them.** Every other message in a channel Tico is
-   in (`message.channels`, `message.groups`) is stored as it arrives, bots' posts included,
-   with edits and deletions applied to the stored row. Each reader a channel names in
-   the channel list in Settings > Tools > Slack (`readers`) has a cursor per channel in `slack_reads`; every
-   `slack_digest_minutes` the gateway fills any gap the socket left (`conversations.history`
-   since the newest stored message, `conversations.replies` for the threads it knows), then
-   hands each reader what is unread, grouped by thread with the thread so far as context, as
-   one keeper-written message in that reader's channels conversation, and moves the cursors in
-   the same transaction. Nothing unread, nothing sent, no turn. A reply in a thread a bot
-   already has a conversation in does not wait for the hour: it goes through step 3 at once.
+6. **Store the channels.** Every other message in a channel Tico is in (`message.channels`,
+   `message.groups`) is stored as it arrives, bots' posts included, with edits and deletions
+   applied to the stored row: message automations hear it, and bots read it through their Slack
+   routes. A reply in a thread a bot already has a conversation in goes through step 3 at once.
+   A channel linked to a thread goes to the bridge (`backend/slack_threads.py`); a read-only link
+   (the channels bots read, Settings > Tools > Slack) is stored and routed as well.
 
 It never runs a bot turn and never loads an employee's secrets; the tokens it holds are the one
-Slack app's, read by `backend.config.slack_credentials`. Kill switch: `TICO_SLACK_GATEWAY_ENABLED`;
-`TICO_SLACK_DIGEST_MINUTES=0` pauses the readers' pass while storage goes on.
+Slack app's, read by `backend.config.slack_credentials`. Kill switch: `TICO_SLACK_GATEWAY_ENABLED`.
 """
 
 import argparse
-import datetime as dt
 import json
 import logging
 import os
@@ -76,6 +70,7 @@ from . import org_rule_check as OR
 from . import screening
 from . import slack_app
 from . import slack_channels as SC
+from . import slack_errors as SE
 from . import slack_unfurl as SU
 from .config import Settings, slack_credentials
 from clients import judge as J
@@ -94,9 +89,6 @@ EVENT_TYPES = ("app_mention", "message")
 CHANNEL_TYPES = ("channel", "group")  # stored channel messages; "im" is the fast lane
 STORED_SUBTYPES = ("", "bot_message", "thread_broadcast", "file_share", "me_message")
 EXCHANGES = 12  # thread context, both for the decision model and for the routed bot
-CONTEXT_REPLIES = 3  # already-read replies shown before the new ones in a digest thread
-DIGEST_LINE_CHARS = 600  # one Slack message inside a digest
-DIGEST_CHARS = 60_000  # the whole digest body
 HISTORY_PAGE = 200  # one conversations.history / replies call
 TEXT_CHARS = 4_000  # what one Slack message may carry, in and out
 POST_CHARS = 3_800  # a mirrored reply, before the footer
@@ -215,11 +207,6 @@ class SlackAPI:
                 break
         return out
 
-    def history(self, channel, oldest="", limit=HISTORY_PAGE):
-        """Top-level messages newer than `oldest` (exclusive), oldest first, one page."""
-        data = self.call("conversations.history", {"channel": channel, "oldest": oldest or None, "limit": limit})
-        return sorted(data.get("messages") or [], key=lambda m: float(m.get("ts") or 0))
-
     def replies(self, channel, thread_ts, oldest="", limit=HISTORY_PAGE):
         """Replies in one thread newer than `oldest` (exclusive), oldest first, the root excluded."""
         data = self.call(
@@ -265,6 +252,65 @@ class SlackAPI:
         return list(data.get("messages") or []), str(
             (data.get("response_metadata") or {}).get("next_cursor") or ""
         ).strip()
+
+    def replies_page(self, channel, thread_ts, cursor=""):
+        """One page of a thread (the root first on the first page) and the cursor for the next ("" at the end): a bot's
+        history read with threads (backend/slack_requests.py), which pages to the end."""
+        data = self.call(
+            "conversations.replies",
+            {"channel": channel, "ts": thread_ts, "limit": HISTORY_PAGE, "cursor": cursor or None},
+        )
+        return list(data.get("messages") or []), str(
+            (data.get("response_metadata") or {}).get("next_cursor") or ""
+        ).strip()
+
+    def history_range(self, channel, oldest, latest, cursor=""):
+        """One page of a channel's top-level messages from `oldest` to `latest` (both kept), and the next cursor: a bot's
+        history read (backend/slack_requests.py)."""
+        data = self.call(
+            "conversations.history",
+            {
+                "channel": channel,
+                "oldest": oldest,
+                "latest": latest,
+                "inclusive": "true",
+                "limit": HISTORY_PAGE,
+                "cursor": cursor,
+            },
+        )
+        return list(data.get("messages") or []), str(
+            (data.get("response_metadata") or {}).get("next_cursor") or ""
+        ).strip()
+
+    def files_info(self, file_id):
+        return self.call("files.info", {"file": file_id}).get("file") or {}
+
+    def download(self, url, limit):
+        """(status, content type, bytes) of a file on Slack's file host, with the bot token and no redirect followed:
+        a redirect is Slack's sign-in page, and the token never goes anywhere else. Over `limit` bytes is refused."""
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        request = urllib.request.Request(
+            url, headers={"Authorization": "Bearer " + self.bot_token, "User-Agent": "tico-slack-gateway/1"}
+        )
+        try:
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+                status, kind, raw = (
+                    response.status,
+                    response.headers.get("Content-Type") or "",
+                    response.read(limit + 1),
+                )
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, "", b""
+        except Exception as exc:  # URLError, socket timeout, TLS
+            raise SlackUnreachable(f"Slack file download: {type(exc).__name__}") from exc
+        if len(raw) > limit:
+            raise SlackError("files.download", "file_too_large")
+        return status, kind, raw
 
     def history_metadata_page(self, channel, oldest, cursor=""):
         """One page of messages newer than `oldest` with their metadata, and the cursor for the next ("" at the end): where
@@ -364,7 +410,7 @@ class SlackAPI:
                 try:
                     on_envelope(payload)
                 except Exception as exc:  # a bad event never takes the socket down
-                    LOG.error("Event %s not persisted: %s", request.envelope_id, type(exc).__name__)
+                    LOG.error("Event %s not persisted: %s", request.envelope_id, SE.describe(exc))
                     return  # no ack: Slack redelivers, dedupe absorbs it
                 if early:
                     return
@@ -397,30 +443,6 @@ def humanize(text, names=None):
     s = LINK_RE.sub(lambda m: f"{m.group(2)} ({m.group(1)})" if m.group(2) else m.group(1), s)
     s = BANG_RE.sub(lambda m: "@" + m.group(1), s)
     return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
-
-
-def completion_result(c, notice):
-    """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
-    the notice and after the task's previous done or closed notice (a reopened task's earlier visuals are not this
-    result), or None. A comment is what the task page shows, so the link lands on it."""
-    task_id = H._task_ref(notice["refs"].get("task"))  # a list names its first task (hubdb._task_ref)
-    if not task_id:
-        return None
-    owner = notice["refs"]["task_completion"]["owner"]
-    since = (
-        c.execute(
-            "SELECT MAX(created_at) FROM messages WHERE id<>? AND created_at<=? AND deleted_at IS NULL "
-            f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.task_completion') IS NOT NULL",
-            (notice["id"], notice["created_at"], task_id, task_id),
-        ).fetchone()[0]
-        or ""
-    )
-    found = [
-        m
-        for m in H.task_comments(c, task_id)
-        if m["sender_id"] == owner and since < m["created_at"] <= notice["created_at"] and visuals.elsewhere("", m)
-    ]
-    return found[-1] if found else None
 
 
 def slack_escape(text):
@@ -601,22 +623,6 @@ def channel_event_from(payload, bot_user_id):
     return {**head, **row}, None
 
 
-def registry_channels(registry_dir):
-    """The channels the old `registry/slack-channels.yaml` lists, by id (the list now lives in the database)."""
-    return SC.file_channels(registry_dir)
-
-
-def channel_link(team_url, channel):
-    return f"{(team_url or 'https://slack.com/').rstrip('/')}/archives/{channel}"
-
-
-def slack_time(ts):
-    try:
-        return dt.datetime.fromtimestamp(float(ts), dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    except (TypeError, ValueError, OverflowError, OSError):
-        return str(ts)
-
-
 def ends_with_question(body):
     lines = [line.strip() for line in str(body or "").splitlines() if line.strip()]
     return bool(lines) and "?" in lines[-1]
@@ -639,10 +645,7 @@ class Gateway:
         self.wake = threading.Event()
         self.stop = threading.Event()
         self._customize_warned = False
-        self._names = {}  # Slack user id -> what a digest calls them
-        self._name_misses = {}  # Slack user id -> when to ask Slack again after a failed lookup
-        self._unreadable = set()  # channels history refused (not a member, no scope)
-        self.next_digest = self.clock()  # the first pass sets the readers' cursors
+        self._names_retry = ""  # the time before which the list is not checked for channels named without an id
         self.pin_workspace = False  # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None  # called every loop turn; the process uses it for health
         self._auth = None  # who may write to which bot (backend/bot_access.py)
@@ -743,8 +746,13 @@ class Gateway:
             return why
         if not event["event_id"]:
             return "shape"
-        if event["op"] in ("store", "edit", "delete", "route") and self.bridge.linked(event["channel"]):
-            return self.bridge.receive(event)  # every event of a linked channel, mentions too, goes to its thread
+        link = self.bridge.linked(event["channel"]) if event["op"] in ("store", "edit", "delete", "route") else None
+        if link:
+            carried = self.bridge.receive(event)  # every event of a linked channel, mentions too, goes to its thread
+            if not link["read_only"]:
+                return carried
+            # A read-only link only copies the channel into its thread: an @Tico still routes, a reply in a bot's
+            # Slack thread still reaches it, and message automations still hear the channel.
         if event["op"] in ("edit", "delete"):
             return self.amend(event)
         with self.store.transaction() as c:
@@ -754,15 +762,15 @@ class Gateway:
         return outcome
 
     def persist(self, c, event):
-        """One message into `slack_events`: `queued` for the fast lane, `stored` for the readers,
-        `duplicate` when it is already there. Pure store; the caller holds the transaction."""
+        """One message into `slack_events`: `queued` for the fast lane, `stored` for message automations and the
+        bots' channel reads, `duplicate` when it is already there. Pure store; the caller holds the transaction."""
         event["text"] = (
             humanize(event["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS] or event["text"]
         )
         state = "received"
         if event["op"] == "store":
             # A person's reply in a thread a bot already talks in is for that bot, now; anything
-            # else in the channel waits for the readers' pass.
+            # else in the channel is only stored.
             attached = (
                 event["author"] == "human"
                 and event["thread_ts"] != event["ts"]
@@ -904,9 +912,9 @@ class Gateway:
             ]
 
     def offer(self):
-        """A stored channel message (the readers' copy) is offered once to `automations.on_slack`, after the same sender
-        and channel checks as a DM. The row keeps its `stored` state, so the readers, the edit path and an `@Tico` copy
-        that promotes it are unchanged; `processed` alone records the offer. Only while an enabled message automation
+        """A stored channel message is offered once to `automations.on_slack`, after the same sender and channel checks
+        as a DM. A channel with a two-way thread link is left out (its thread is where it is heard). The row keeps its
+        `stored` state, so the edit path and an `@Tico` copy that promotes it are unchanged; `processed` alone records the offer. Only while an enabled message automation
         names a channel, and only for messages that arrived after the oldest such automation was made, so a new one does
         not replay the channel's history."""
         from . import automations
@@ -923,7 +931,8 @@ class Gateway:
                 for r in c.execute(
                     "SELECT * FROM slack_events WHERE state='stored' AND author='human' AND channel_kind='channel' "
                     "AND processed_at IS NULL AND received_at>=? AND channel NOT IN (SELECT channel_id FROM slack_thread_links "
-                    "WHERE channel_id<>'' AND state IN ('active','suspended')) ORDER BY received_at, ts LIMIT 50",
+                    "WHERE channel_id<>'' AND state IN ('active','suspended') AND read_only=0) ORDER BY received_at, ts "
+                    "LIMIT 50",
                     (since,),
                 )
             ]
@@ -1507,7 +1516,7 @@ class Gateway:
         )
         H.event(
             c,
-            actor or H.KEEPER,
+            actor or H.TICO_ACTOR,
             "slack.event",
             event["event_id"],
             {
@@ -1737,9 +1746,8 @@ class Gateway:
                 dict(r)
                 for r in c.execute(
                     "SELECT m.id,m.body,m.conversation_id,m.sender_id,m.recipient_id,m.created_at FROM messages m "
-                    "WHERE m.kind IN ('say','ask','answer','notice') AND m.sender_id LIKE 'bot:%' "
+                    "WHERE m.kind IN ('say','notice') AND m.sender_id LIKE 'bot:%' "
                     "AND m.recipient_id LIKE 'human:%' AND m.deleted_at IS NULL "
-                    "AND json_extract(m.refs,'$.task_completion') IS NULL "
                     "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
                     "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id "
                     "AND (t.channel NOT LIKE 'D%' OR t.recipient_actor=m.recipient_id)) "
@@ -1787,6 +1795,7 @@ class Gateway:
                 opened_ch = self.slack.conversations_open(slack_id)
                 channel = str(opened_ch.get("id") or "")
             except Exception as exc:
+                # A Slack API error can echo a message, so the class alone is logged.
                 LOG.warning("Could not open a Slack DM with %s: %s", pid, type(exc).__name__)
                 continue
             if not channel:
@@ -1819,8 +1828,8 @@ class Gateway:
             rows = c.execute(
                 "SELECT m.id,m.body,m.in_reply_to,m.recipient_id,m.conversation_id,m.created_at,t.channel,t.thread_ts,t.bot FROM messages m "
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.sender_id='bot:'||t.bot "
-                "WHERE m.created_at>t.created_at AND m.kind IN ('say','ask','answer','notice') AND m.recipient_id LIKE 'human:%' "
-                "AND m.deleted_at IS NULL AND json_extract(m.refs,'$.task_completion') IS NULL "
+                "WHERE m.created_at>t.created_at AND m.kind IN ('say','notice') AND m.recipient_id LIKE 'human:%' "
+                "AND m.deleted_at IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created_at LIMIT 50"
             ).fetchall()
             people = roster(c) if rows else None
@@ -1885,137 +1894,20 @@ class Gateway:
             return True
         return bool(mapped["recipient_actor"]) and mapped["recipient_actor"] == person
 
-    def task_completions(self):
-        """Completion notices use the same durable post queue, sent by the Tico app."""
-        if not self.settings.slack_gateway_enabled:
-            return 0
-        with self.store.read() as c:
-            pending = [
-                dict(r)
-                for r in c.execute(
-                    "SELECT m.* FROM messages m WHERE m.recipient_id LIKE 'human:%' "
-                    "AND json_extract(m.refs,'$.task_completion.notify')=1 "
-                    "AND COALESCE(json_extract(m.refs,'$.task_completion.checked'),0)=0 "
-                    "AND (json_extract(m.refs,'$.task_completion.retry_after') IS NULL "
-                    "OR json_extract(m.refs,'$.task_completion.retry_after')<=?) "
-                    "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
-                    "ORDER BY m.created_at LIMIT 20",
-                    (self.clock(),),
-                )
-            ]
-        queued = 0
-        for message in pending:
-            pid = message["recipient_id"][6:]
-            with self.store.read() as c:
-                if not privacy.public_message(c, H.message(c, message["id"])):
-                    continue
-                person = P.person(pid, roster(c))
-                channel = self.im_channel(c, pid)
-                slack_id = str((H.human(c, pid) or {}).get("slack_id") or (person or {}).get("slack_id") or "").strip()
-                if not slack_id:
-                    linked = c.execute(
-                        "SELECT user_id FROM slack_events WHERE actor=? AND state IN ('routed','recorded') "
-                        "ORDER BY received_at DESC LIMIT 1",
-                        (message["recipient_id"],),
-                    ).fetchone()
-                    slack_id = linked["user_id"] if linked else ""
-            if (
-                not person
-                or person.get("hidden")
-                or person.get("directory_left")
-                or person.get("sign_in") is False
-                or not slack_id
-            ):
-                self.completion_checked(message["id"])
-                continue
-            if person.get("notify_slack_task_done") is False:
-                self.completion_checked(message["id"])
-                continue
-            # Verify the mapping against the pinned workspace and the current roster. An old
-            # DM or a manually supplied Slack id must never send task details outside the team.
-            with self.store.read() as c:
-                verified, _, denied = self.verify_sender(c, {"user_id": slack_id})
-            if denied or not verified or verified["id"] != pid:
-                self.completion_checked(message["id"], retry=bool(denied and denied.startswith("users.info:")))
-                continue
-            if not channel:
-                try:
-                    channel = str(self.slack.conversations_open(slack_id).get("id") or "")
-                except (SlackError, SlackUnreachable) as exc:
-                    LOG.warning("Could not open a task notification DM for %s: %s", pid, type(exc).__name__)
-                    self.completion_checked(
-                        message["id"], retry=True, seconds=getattr(exc, "retry_after", None) or RETRY_SECONDS
-                    )
-                    continue
-            if not channel or not channel.startswith("D"):
-                self.completion_checked(message["id"])
-                continue
-            with self.store.transaction() as c:
-                completion = json.loads(message["refs"])["task_completion"]
-                owner = completion["owner"]
-                who = H.human(c, owner) if H.is_human(owner) else H.bot(c, owner)
-                name = (who or {}).get("name") or (who or {}).get("display_name") or H.actor_id(owner)
-                title = message["body"].splitlines()[0]
-                text = title + "\nby " + name
-                if completion.get("note"):
-                    text += "\n" + completion["note"]
-                now = self.clock()
-                queued += c.execute(
-                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-                    "VALUES(?,?, '', '',?,'ready',?,?,?)",
-                    (message["id"], channel, text, now, now, message["recipient_id"]),
-                ).rowcount
-        return queued
-
-    def completion_checked(self, message_id, retry=False, seconds=RETRY_SECONDS):
-        with self.store.transaction() as c:
-            if retry:
-                c.execute(
-                    "UPDATE messages SET refs=json_set(refs,'$.task_completion.retry_after',?) WHERE id=?",
-                    (H.shift(self.clock(), seconds=seconds), message_id),
-                )
-            else:
-                c.execute(
-                    "UPDATE messages SET refs=json_set(refs,'$.task_completion.checked',1) WHERE id=?", (message_id,)
-                )
-
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
         message = H.message(c, post["message_id"]) or {}
-        about = None
-        if post["bot"]:
-            conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-            about = H.message_task_id(message, conv)
-            line = visuals.elsewhere(self.settings.public_url, message, about)
-        else:
-            # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
-            result = completion_result(c, message)
-            line = result and visuals.elsewhere(
-                self.settings.public_url, result, H._task_ref(message["refs"].get("task"))
-            )
+        conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
+        about = H.message_task_id(message, conv)
+        line = visuals.elsewhere(self.settings.public_url, message, about)
         seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
-        if not post["bot"]:
-            task_id = H._task_ref(message["refs"].get("task"))
-            link = (
-                (
-                    "\n<"
-                    + slack_escape(self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe=""))
-                    + "|Open task>"
-                )
-                if task_id
-                else ""
-            )
-            return {
-                "text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + link,
-                "username": None,
-                "icon_emoji": None,
-                "icon_url": None,
-            }
         bot = H.bot(c, post["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or post["bot"]
         config = entries(c).get(post["bot"]) or {}
         text = str(post["text"] or "").strip()
-        if len(text) > POST_CHARS:
+        # A mirrored reply is cut here, with its link to Tico. A bot's own post never is: the route refuses one longer
+        # than POST_CHARS (backend/slack_bots.py), and an org rule warning added after that check is kept whole.
+        if len(text) > POST_CHARS and "slack_post" not in (message.get("refs") or {}):
             text = text[:POST_CHARS].rstrip() + " …"
         # A reply about a task names it and links to it, so the DM makes sense on its own.
         task = H.task(c, about) if about else None
@@ -2052,6 +1944,27 @@ class Gateway:
         viewer = threads.actor_viewer(c, to)
         return viewer is not None and threads.readable(c, viewer, message)
 
+    def outside_workspace(self, post):
+        """Why a bot's own post (backend/slack_bots.py) may not go to its channel, "" when it may, None when Slack could
+        not be asked now (unreachable, or rate limited: the next pass asks again). A channel shared outside the
+        workspace (Slack Connect) is refused whatever the channel list says. Slack is asked on every post, never from a
+        cache, since sharing can start at any time. Other posts (replies, automations) are not asked about."""
+        if str(post["channel"] or "").startswith("D"):
+            return ""
+        with self.store.read() as c:
+            refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
+        if "slack_post" not in refs:
+            return ""
+        try:
+            outside = is_external(self.slack.conversations_info(post["channel"]))
+        except SlackError as exc:
+            if exc.code == "ratelimited":
+                return None
+            return f"Slack could not say whether the channel is shared outside the workspace ({exc.code})"
+        except SlackUnreachable:
+            return None
+        return "Slack Connect channel: bots never post outside the workspace" if outside else ""
+
     def deliver(self):
         """Post what is ready, one attempt each. A crash between send and record is uncertain."""
         now = self.clock()
@@ -2068,7 +1981,17 @@ class Gateway:
         for post in due:
             if not post["bot"] and not self.settings.slack_gateway_enabled:
                 continue
+            outside = self.outside_workspace(post)
+            if outside is None:
+                continue  # Slack could not be asked: the next pass tries again
             with self.store.transaction() as c:
+                if outside:
+                    c.execute(
+                        "UPDATE slack_posts SET state='canceled',error=?,updated_at=? "
+                        "WHERE message_id=? AND state IN ('ready','rate_limited')",
+                        (outside, self.clock(), post["message_id"]),
+                    )
+                    continue
                 message = H.message(c, post["message_id"])
                 if not privacy.public_message(c, message):
                     c.execute(
@@ -2126,7 +2049,7 @@ class Gateway:
                 else:
                     state, error = "failed", exc.code
             except Exception as exc:  # unreachable, unreadable, or anything unexpected
-                state, error = "uncertain", f"{type(exc).__name__}: {exc}"[:300]
+                state, error = "uncertain", SE.describe(exc)
             with self.store.transaction() as c:
                 c.execute(
                     "UPDATE slack_posts SET state=?,slack_ts=?,error=?,next_attempt_at=?,updated_at=? WHERE message_id=?",
@@ -2134,7 +2057,7 @@ class Gateway:
                 )
                 H.event(
                     c,
-                    "bot:" + post["bot"] if post["bot"] else H.KEEPER,
+                    "bot:" + post["bot"] if post["bot"] else H.TICO_ACTOR,
                     "slack.post",
                     post["message_id"],
                     {"state": state, "channel": post["channel"], "thread_ts": post["thread_ts"], "error": error},
@@ -2144,34 +2067,18 @@ class Gateway:
             results.append({"message_id": post["message_id"], "state": state, "slack_ts": slack_ts})
         return results
 
-    # ------------------------------------------------------------------ the readers' pass
-    def linked_channels(self):
-        """The channel ids a thread link carries now (active or suspended). Their messages reach the thread through the
-        bridge, so the readers' pass (backfill, digest, automations) leaves them out, rows stored before the link included."""
-        with self.store.read() as c:
-            return {
-                r[0]
-                for r in c.execute(
-                    "SELECT DISTINCT channel_id FROM slack_thread_links WHERE channel_id<>'' "
-                    "AND state IN ('active','suspended')"
-                )
-            }
-
-    def readable(self):
-        """The listed channels (Settings > Tools > Slack) that have readers, by channel id."""
-        self.resolve_names()
-        with self.store.read() as c:
-            return {cid: entry for cid, entry in SC.channel_map(c, self.settings).items() if entry["readers"]}
-
+    # ------------------------------------------------------------------ the channel list
     def resolve_names(self):
-        """A channel listed by name only gets its id from Slack, at most every ten minutes while Slack cannot tell."""
+        """A channel listed by name only gets its id from Slack, at most every ten minutes while Slack cannot tell. Every
+        tick calls this, so a list with every id is read once a minute."""
+        now = self.clock()
+        if now < self._names_retry:
+            return
         with self.store.read() as c:
             if not SC.unresolved(c):
+                self._names_retry = H.shift(now, seconds=60)
                 return
-        now = time.monotonic()
-        if now < getattr(self, "_names_retry", 0):
-            return
-        self._names_retry = now + 600
+        self._names_retry = H.shift(now, seconds=600)
         try:
             ids = {
                 str(ch.get("name") or "").lower(): str(ch["id"])
@@ -2183,408 +2090,49 @@ class Gateway:
             return
         with self.store.transaction() as c:
             if SC.fill_ids(c, ids):
-                self._names_retry = 0
-
-    def newest_ts(self, c, channel, thread_ts=None):
-        if thread_ts:
-            row = c.execute(
-                "SELECT MAX(ts) AS ts FROM slack_events WHERE channel=? AND thread_ts=? AND ts!=?",
-                (channel, thread_ts, thread_ts),
-            ).fetchone()
-        else:
-            row = c.execute("SELECT MAX(ts) AS ts FROM slack_events WHERE channel=?", (channel,)).fetchone()
-        return str(row["ts"] or "") if row else ""
-
-    def backfill(self):
-        """What the socket missed: history per readable channel since its newest stored message,
-        and replies in every thread the gateway knows. Stores only; nothing found here is routed
-        (the fast lane is the socket's), so an old mention never wakes a bot late."""
-        stored = 0
-        linked = self.linked_channels()
-        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
-        with self.store.read() as c:
-            since = {cid: self.newest_ts(c, cid) for cid in channels}
-            threads = (
-                [
-                    (r["channel"], r["thread_ts"])
-                    for r in c.execute(
-                        "SELECT DISTINCT channel,thread_ts FROM slack_threads WHERE thread_ts!='' AND channel IN (%s)"
-                        % ",".join("?" * len(channels)),
-                        tuple(channels),
-                    )
-                ]
-                if channels
-                else []
-            )
-        found = []
-        for cid, entry in channels.items():
-            if cid in self._unreadable:
-                continue
-            try:
-                page = self.slack.history(cid, oldest=since[cid])
-            except SlackError as exc:
-                if exc.code in ("not_in_channel", "channel_not_found", "missing_scope", "invalid_auth"):
-                    LOG.warning(
-                        "Channel #%s is not readable (%s); its readers get nothing until it is",
-                        entry["name"] or cid,
-                        exc.code,
-                    )
-                    self._unreadable.add(cid)
-                continue
-            except SlackUnreachable as exc:
-                LOG.warning("History for #%s skipped: %s", entry["name"] or cid, exc)
-                continue
-            channel_type = "group" if cid.startswith("G") else "channel"
-            for message in page:
-                found.append((cid, channel_type, message))
-                if int(message.get("reply_count") or 0) and str(message.get("ts")) == str(
-                    message.get("thread_ts") or message.get("ts")
-                ):
-                    threads.append((cid, str(message["ts"])))
-        seen = set()
-        for cid, thread_ts in threads:
-            if (cid, thread_ts) in seen or cid in self._unreadable:
-                continue
-            seen.add((cid, thread_ts))
-            with self.store.read() as c:
-                oldest = self.newest_ts(c, cid, thread_ts)
-            try:
-                page = self.slack.replies(cid, thread_ts, oldest=oldest)
-            except (SlackError, SlackUnreachable) as exc:
-                LOG.warning("Replies for %s/%s skipped: %s", cid, thread_ts, getattr(exc, "code", exc))
-                continue
-            for message in page:
-                found.append((cid, "group" if cid.startswith("G") else "channel", {**message, "thread_ts": thread_ts}))
-        if not found:
-            return 0
-        with self.store.transaction() as c:
-            for cid, channel_type, message in found:
-                row, _why = channel_message(cid, channel_type, message, self.bot_user_id)
-                if not row:
-                    continue
-                row = {
-                    **row,
-                    "op": "store",
-                    "event_id": f"history:{cid}:{row['ts']}",
-                    "team_id": self.team_id,
-                    "api_app_id": self.app_id,
-                }
-                # History fills context and the readers' unread; it never routes.
-                if c.execute("SELECT 1 FROM slack_events WHERE channel=? AND ts=?", (cid, row["ts"])).fetchone():
-                    continue
-                stored += c.execute(
-                    "INSERT OR IGNORE INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,"
-                    "user_id,event_type,text,received_at,state,author,author_name,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'stored',?,?,?)",
-                    (
-                        row["event_id"],
-                        row["team_id"],
-                        cid,
-                        "channel",
-                        row["thread_ts"],
-                        row["reply_ts"],
-                        row["ts"],
-                        row["user_id"],
-                        row["event_type"],
-                        humanize(row["text"], {self.bot_user_id: self.settings.assistant_name})[:TEXT_CHARS]
-                        or row["text"],
-                        self.clock(),
-                        row["author"],
-                        row["author_name"],
-                        self.clock(),
-                    ),
-                ).rowcount
-        if stored:
-            LOG.info("Backfilled %d channel message(s) the socket did not deliver", stored)
-        return stored
-
-    def display_name(self, row, lookup=True):
-        """What a digest calls the author: the roster name for a person, the bot's own name for a bot.
-        `lookup=False` (inside the write transaction) answers from the cache only; a failed lookup waits five minutes."""
-        if row["author"] == "bot":
-            return row["author_name"] or (
-                "the " + self.settings.assistant_name + " app" if row["user_id"] == self.bot_user_id else "a bot"
-            )
-        uid = row["user_id"]
-        if uid not in self._names:
-            if not lookup or time.monotonic() < self._name_misses.get(uid, 0):
-                return uid
-            try:
-                user = self.slack.users_info(uid)
-                profile = user.get("profile") or {}
-                self._names[uid] = str(
-                    profile.get("real_name")
-                    or profile.get("display_name")
-                    or user.get("real_name")
-                    or user.get("name")
-                    or uid
-                )
-            except (SlackError, SlackUnreachable):
-                self._name_misses[uid] = time.monotonic() + 300
-                return uid
-        return self._names[uid]
-
-    def render_line(self, row, marker=""):
-        text = str(row["text"] or "").strip()
-        if row["deleted_at"]:
-            text = "(message removed)"
-        elif len(text) > DIGEST_LINE_CHARS:
-            text = text[:DIGEST_LINE_CHARS].rstrip() + " …"
-        text = text.replace("\n", "\n    ")
-        tag = " (edited)" if row["edited_at"] and not row["deleted_at"] else ""
-        return f"- {slack_time(row['ts'])} {self.display_name(row, lookup=False)}{tag}{marker}: {text}"
-
-    def unread_for(self, c, channel, reader, cursor):
-        """New rows past the reader's cursor (what the fast lane already gave this reader excluded),
-        and rows it has seen that were edited or removed since its last pass."""
-        new, changed, newest = [], [], cursor["last_ts"]
-        for r in c.execute(
-            "SELECT * FROM slack_events WHERE channel=? AND ts>? AND deleted_at IS NULL ORDER BY ts",
-            (channel, cursor["last_ts"]),
-        ):
-            r = dict(r)
-            newest = r["ts"]
-            if r["state"] == "routed":
-                routing = json.loads(r["routing"] or "{}")
-                if reader in [d["bot"] for d in routing.get("delivered") or []]:
-                    continue
-            new.append(r)
-        if cursor["last_run_at"]:
-            changed = [
-                dict(r)
-                for r in c.execute(
-                    "SELECT * FROM slack_events WHERE channel=? AND ts<=? AND updated_at>? AND (edited_at IS NOT NULL OR deleted_at IS NOT NULL) "
-                    "ORDER BY ts",
-                    (channel, cursor["last_ts"], cursor["last_run_at"]),
-                )
-            ]
-        return new, changed, newest
-
-    def render_channel(self, c, channel, entry, new, changed, cursor):
-        """One channel's section: threads in order, each with its earlier lines as context."""
-        lines = [
-            f"## #{entry['name'] or channel}" + (f" — {entry['purpose']}" if entry.get("purpose") else ""),
-            channel_link(self.team_url, channel),
-        ]
-        by_thread = {}
-        for r in new:
-            by_thread.setdefault(r["thread_ts"], []).append(r)
-        for thread_ts, rows in sorted(by_thread.items(), key=lambda kv: float(kv[0] or 0)):
-            lines.append("")
-            root_is_new = any(r["ts"] == thread_ts for r in rows)
-            if not root_is_new:
-                earlier = [
-                    dict(r)
-                    for r in c.execute(
-                        "SELECT * FROM slack_events WHERE channel=? AND thread_ts=? AND ts<=? AND deleted_at IS NULL "
-                        "ORDER BY ts DESC LIMIT ?",
-                        (channel, thread_ts, cursor["last_ts"], CONTEXT_REPLIES + 1),
-                    )
-                ]
-                root = [r for r in earlier if r["ts"] == thread_ts]
-                if not root:
-                    root = [
-                        dict(r)
-                        for r in c.execute("SELECT * FROM slack_events WHERE channel=? AND ts=?", (channel, thread_ts))
-                    ]
-                context = root + [r for r in reversed(earlier) if r["ts"] != thread_ts][-CONTEXT_REPLIES:]
-                if context:
-                    lines.append(f"thread ({permalink(self.team_url, channel, thread_ts)}), earlier:")
-                    lines.extend(self.render_line(r, " (earlier)") for r in context)
-                    lines.append("new:")
-                else:
-                    lines.append(f"thread ({permalink(self.team_url, channel, thread_ts)}), new:")
-            elif len(rows) > 1:
-                lines.append(f"thread ({permalink(self.team_url, channel, thread_ts)}):")
-            lines.extend(self.render_line(r) for r in rows)
-        if changed:
-            lines.append("")
-            lines.append("changed since your last look:")
-            lines.extend(self.render_line(r) for r in changed)
-        return "\n".join(lines)
-
-    def reader_conversation(self, c, reader):
-        row = c.execute(
-            "SELECT conversation_id FROM slack_digests WHERE reader=? ORDER BY created_at DESC LIMIT 1", (reader,)
-        ).fetchone()
-        if row:
-            conv = H.conversation(c, row["conversation_id"])
-            if conv and not conv["closed_at"]:
-                return conv
-        return H.open_conversation(
-            c, H.KEEPER, [H.KEEPER, "bot:" + reader], kind="chat", subject="Slack channels", scope="direct"
-        )
-
-    def digest(self):
-        """Every reader gets what is unread in its channels, once, and its cursors move with it."""
-        linked = self.linked_channels()
-        channels = {cid: entry for cid, entry in self.readable().items() if cid not in linked}
-        with self.store.read() as c:
-            active = {r["id"] for r in c.execute("SELECT id FROM bots WHERE state='active'")}
-        by_reader = {}
-        for cid, entry in channels.items():
-            for reader in entry["readers"]:
-                if reader in active:
-                    by_reader.setdefault(reader, []).append((cid, entry))
-                else:
-                    LOG.debug("Reader %s of #%s is not an active bot", reader, entry["name"] or cid)
-        # Names are looked up before the write lock is taken, so Slack's latency is not the API's: the
-        # digest itself reads only the cache. Unread lines' authors, then their threads' earlier lines'.
-        with self.store.read() as c:
-            authors = c.execute(
-                "SELECT DISTINCT e.user_id AS uid, e.author FROM slack_events e JOIN slack_reads r "
-                "ON r.channel=e.channel WHERE e.ts>r.last_ts OR (r.last_run_at IS NOT NULL AND e.updated_at>r.last_run_at) "
-                "LIMIT 500"
-            ).fetchall()
-            authors += c.execute(
-                "SELECT DISTINCT p.user_id AS uid, p.author FROM slack_events e JOIN slack_reads r ON r.channel=e.channel "
-                "JOIN slack_events p ON p.channel=e.channel AND p.thread_ts=e.thread_ts AND p.ts<=r.last_ts "
-                "WHERE e.ts>r.last_ts AND p.author!='bot' LIMIT 500"
-            ).fetchall()
-        for r in authors:
-            self.display_name({"author": r["author"], "user_id": r["uid"], "author_name": None})
-        results = []
-        for reader, chans in sorted(by_reader.items()):
-            try:
-                with self.store.transaction() as c:
-                    results.append(self.digest_for(c, reader, chans))
-            except H.Refused as exc:
-                LOG.warning("Digest for %s refused (%s): %s", reader, exc.rule, exc.detail)
-                results.append({"reader": reader, "state": "refused", "reason": f"{exc.rule}: {exc.detail}"[:300]})
-        return results
-
-    def digest_for(self, c, reader, chans):
-        now = self.clock()
-        sections, ids, count, skipped, names = [], [], 0, 0, []
-        for cid, entry in chans:
-            cursor = c.execute("SELECT * FROM slack_reads WHERE channel=? AND reader=?", (cid, reader)).fetchone()
-            if cursor is None:
-                # A new reader starts at now: the channel's past is context, not unread.
-                c.execute(
-                    "INSERT INTO slack_reads(channel,reader,last_ts,last_run_at,digests) VALUES(?,?,?,NULL,0)",
-                    (cid, reader, self.newest_ts(c, cid)),
-                )
-                continue
-            hours = entry.get("digest_hours") or 0
-            if hours and cursor["last_run_at"] and cursor["last_run_at"] > H.shift(now, seconds=-hours * 3600):
-                continue  # this channel is read less often: it waits, unread
-            new, changed, newest = self.unread_for(c, cid, reader, cursor)
-            if not new and not changed:
-                if newest != cursor["last_ts"]:  # only what the fast lane already gave this reader
-                    c.execute("UPDATE slack_reads SET last_ts=? WHERE channel=? AND reader=?", (newest, cid, reader))
-                continue
-            over = max(0, len(new) - self.settings.slack_digest_cap)
-            if over:
-                new, skipped = new[: self.settings.slack_digest_cap], skipped + over
-            section = self.render_channel(c, cid, entry, new, changed, cursor)
-            if over:
-                section += f"\n\n({over} more in #{entry['name'] or cid} not shown; read the channel for those.)"
-            sections.append(section)
-            ids.extend(r["event_id"] for r in new + changed)
-            count += len(new) + len(changed)
-            names.append("#" + (entry["name"] or cid))
-            c.execute(
-                "UPDATE slack_reads SET last_ts=?,last_run_at=?,digests=digests+1 WHERE channel=? AND reader=?",
-                (newest, now, cid, reader),
-            )
-        if not sections:
-            return {"reader": reader, "state": "nothing", "count": 0}
-        head = (
-            f"Slack, what is new in the channels you read: {count} message(s) in {', '.join(names)}"
-            + (f", {skipped} more not shown" if skipped else "")
-            + ". Channel posts follow your Slack access and "
-            "the channel's Slack settings (post off blocks them); a reply in a thread here is not through this conversation."
-        )
-        body = head + "\n\n" + "\n\n".join(sections)
-        if len(body) > DIGEST_CHARS:
-            body = (
-                body[:DIGEST_CHARS].rstrip()
-                + "\n\n(… the digest was cut at its size limit; read the channels for the rest.)"
-            )
-        conv = self.reader_conversation(c, reader)
-        first = chans[0][0]
-        refs = {
-            "slack": {
-                "digest": {"channels": names, "count": count, "skipped": skipped, "event_ids": ids[:500]},
-                "channel": first,
-                "channel_name": names[0] if len(names) == 1 else f"{len(names)} channels",
-                "kind": "channel",
-                "permalink": channel_link(self.team_url, first),
-                "note": "A digest of Slack channels you read, written by the gateway. Nothing here was said "
-                "to you; act on it as an employee who read the channel would.",
-            }
-        }
-        message = H.feed(c, "bot:" + reader, body, conv, refs=refs)
-        c.execute(
-            "INSERT INTO slack_digests(id,reader,conversation_id,message_id,channels,event_ids,count,skipped,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
-            (H.new_id(), reader, conv["id"], message["id"], json.dumps(names), json.dumps(ids), count, skipped, now),
-        )
-        H.event(
-            c,
-            H.KEEPER,
-            "slack.digest",
-            message["id"],
-            {"reader": reader, "channels": names, "count": count, "skipped": skipped},
-        )
-        LOG.info("Digest for %s: %d message(s) in %s", reader, count, ", ".join(names))
-        return {
-            "reader": reader,
-            "state": "sent",
-            "count": count,
-            "skipped": skipped,
-            "message_id": message["id"],
-            "conversation_id": conv["id"],
-        }
-
-    def maybe_digest(self):
-        """The readers' pass when it is due: fill the socket's gaps, then deliver."""
-        minutes = self.settings.slack_digest_minutes
-        if not minutes or self.clock() < self.next_digest:
-            return None
-        self.next_digest = H.shift(self.clock(), seconds=minutes * 60)
-        try:
-            self.backfill()
-        except Exception as exc:  # the pass still delivers what is stored
-            LOG.error("Backfill failed: %s: %s", type(exc).__name__, exc)
-        return self.digest()
+                self._names_retry = ""
 
     # ------------------------------------------------------------------ the loop
     def tick(self):
         """One pass: pending events, the channel messages message automations hear, then replies to mirror, then posts to
-        send, then the readers' pass when due."""
+        send, then the listed channels' ids and the thread links."""
         out = []
         for event in self.pending():
             try:
                 out.append(self.process(event))
             except Exception as exc:  # one bad event never stops the rest
-                LOG.error("Event %s failed: %s", event["event_id"], type(exc).__name__)
+                LOG.error("Event %s failed: %s", event["event_id"], SE.describe(exc))
                 with self.store.transaction() as c:
-                    self.finish(c, event, "failed", reason=f"{type(exc).__name__}: {exc}")
+                    self.finish(c, event, "failed", reason=SE.describe(exc))
                 out.append({"event_id": event["event_id"], "state": "failed"})
         out.extend(self.offer())
-        self.task_completions()
         self.originate()
         self.mirror()
         posts = self.deliver()
-        digests = self.maybe_digest()
+        self.resolve_names()
         try:
             threads = self.bridge.tick()
-        except Exception as exc:  # one bad link never stops the readers
-            LOG.error("Slack thread links failed: %s", type(exc).__name__)
+        except Exception as exc:  # one bad link never stops the rest
+            LOG.error("Slack thread links failed: %s", SE.describe(exc))
             threads = {"error": type(exc).__name__}
-        return {"events": out, "posts": posts, "digests": digests, "threads": threads}
+        return {"events": out, "posts": posts, "threads": threads}
 
     def run(self):
+        from . import slack_requests
+
+        # Bots' history reads and file downloads (backend/slack_bots.py) are answered on their own thread: a tick can
+        # wait on the decision model, and a bot's read must not.
+        threading.Thread(target=slack_requests.serve_forever, args=(self,), name="slack-requests", daemon=True).start()
         while not self.stop.is_set():
             try:
                 self.tick()
             except Exception as exc:
-                LOG.error("Gateway tick failed: %s", type(exc).__name__)
+                LOG.error("Gateway tick failed: %s", SE.describe(exc))
             if self.heartbeat:
                 try:
                     self.heartbeat()
                 except Exception as exc:
-                    LOG.error("Gateway heartbeat failed: %s", type(exc).__name__)
+                    LOG.error("Gateway heartbeat failed: %s", SE.describe(exc))
             self.wake.wait(TICK_SECONDS)
             self.wake.clear()
 
@@ -2700,17 +2248,14 @@ def main(argv=None, make_slack=None):
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
             store.initialize()
-            # Under KMS the API sealed the tokens with the vault's key (backend/slack_app.py); open them with the same.
-            from .credentials import Vault
-
-            stored = slack_app.load(store, settings, Vault(store) if settings.credential_kms_key else None)
+            stored = slack_app.load(store)  # sealed in the vault by Tools > Slack (backend/slack_app.py)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:
             if not wait:
-                LOG.error("No Slack tokens: set SLACK_BOT_TOKEN and SLACK_APP_TOKEN or TICO_SLACK_SECRET_ARN")
+                LOG.error("No Slack tokens: paste them in Tools > Slack or set TICO_SLACK_SECRET_ARN")
                 return 1
-            LOG.info("No Slack tokens yet; paste them in Settings > Slack")
+            LOG.info("No Slack tokens yet; paste them in Tools > Slack")
             if _sleep(stopping, 15):
                 continue
             return 0
@@ -2744,6 +2289,7 @@ def main(argv=None, make_slack=None):
         try:
             gateway.slack.connect(lambda payload: gateway.receive(payload))
         except Exception as exc:
+            # A Slack connection error can echo a message, so the class alone is logged.
             LOG.error("Socket Mode did not connect: %s", type(exc).__name__)
             if not wait:
                 return 1
@@ -2756,18 +2302,18 @@ def main(argv=None, make_slack=None):
             return 0
         LOG.info(
             "Socket Mode connected; listening for app_mention, message.im, message.channels, message.groups and "
-            "link_shared (previews for %s); readers' pass every %d minute(s)",
+            "link_shared (previews for %s)",
             ", ".join(sorted(SU.hosts(settings))) or "no host",
-            settings.slack_digest_minutes,
         )
         state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
 
-        def heartbeat():
+        def heartbeat(gateway=gateway, state=state, store=store, verified=verified):  # this connection's own
             up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
             if up != state["connected"]:
                 state["connected"] = up
                 if up:
                     slack_app.report(store, "connected", team=verified["team_id"])
+                    gateway.bridge.catch_up_soon()  # what the socket missed while it was down
                 else:
                     slack_app.report(store, "disconnected", "The Slack websocket dropped; reconnecting")
             if state["stamp"] is not None and slack_app.stamp(store) != state["stamp"]:

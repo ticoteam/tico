@@ -1,21 +1,23 @@
 // The Tasks header as one row (ui/app/tasks-page.ts, ui/styles/task-list.css; spec "Pipeline board: one-row header, one
 // count per stage, a floating face", part A), offline on the fake server of tasks-page.cts. Checks:
-//  - a phone (390×844) on a pipeline: one 44 px row of the picker, Search, Filter, ▶ n and ⋯, nothing accent, the title for
+//  - a phone (390×844) on a pipeline: one 44 px row of the picker, Search, Filter, Flow n and ⋯, nothing accent, the title for
 //    screen readers only (the UI Owner's call; page-head.cts); at 320 px with a long pipeline name it is still one row
 //    and the name ends in "…" (AC-1);
 //  - a computer (1440×900 with the manager's chat docked open, and 1000×800 and 900×800 with it folded to its tab): one
-//    56 px row of Tasks, the picker, the search, Filter, ▶ n, List/Columns, New task and ⋯, nothing sideways; no chat
+//    56 px row of Tasks, the picker, the search, Filter, Flow n, List/Columns, New task and ⋯, nothing sideways; no chat
 //    button in the row: the manager is the page chat, docked open or the tab on the right edge (page-chat.ts, style guide
 //    "Where chat lives") (AC-2);
 //  - List/Columns and New task sit on the row whenever there is room: the search shrinks to its icon first (900), New
 //    task goes into ⋯ only on the phone's row (Chris, round 2 C);
-//  - ⋯ holds Archived and Edit pipeline on a computer, and New task too on a phone; each does what its button did; C
+//  - ⋯ holds Archived, Select and Edit pipeline on a computer, and New task too on a phone; each does what its button did; C
 //    still makes a task; closed, ⋯ is aria-expanded="false" (AC-3);
-//  - ▶ on a pipeline opens the review on the open stage; with nothing waiting it is quiet, keeps its width and says
+//  - Flow on a pipeline walks the pipeline; with nothing waiting it is quiet, keeps its width and says
 //    "Nothing waits on you in Product" without walking anything (AC-10);
 //  - nothing on the row moves when Needs you arrives 2 s late (AC-6, the header's part);
 //  - the phone search opens over the row with one ✕, which empties it and closes it (AC-11, in a browser);
-//  - Tasks › You shows its count once, in ▶, and the picker reads "You" (AC-13).
+//  - Tasks › You shows its count once, in Flow, and the picker reads "You" (AC-13);
+//  - a long pipeline name is whole on a computer at 1040 px (the picker keeps its width, the search gives way), and cut
+//    with an ellipsis only on a phone (320 px).
 // Run: node scripts/ui-tests.cts tasks-header
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -77,16 +79,16 @@ async function menu(page: Page): Promise<string[]> {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     {
-      // A phone on Product: one 44 px row; Spec's two asks are ▶ 2. A board with no bot has no face on it.
+      // A phone on Product: one 44 px row; Spec's two asks are Flow 2. A board with no bot has no face on it.
       const {page, errors} = await open(browser, {viewport: PHONE, hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv-phone').waitFor();
       await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '2');
       assert.deepEqual(await oneRow(page, 44), []);
       assert.deepEqual((await rowControls(page)).map(c => c.id), ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-menu'],
-        'the picker, Search, Filter, ▶ and ⋯, in that order');
-      assert.equal(await page.locator('#task-play').getAttribute('aria-label'), 'Review: 2 wait on you');
-      // ⋯ on a phone: New task, Archived, Edit pipeline; no List/Columns (a phone shows one stage at a time).
-      assert.deepEqual(await menu(page), ['New task', 'Archived', 'Edit pipeline']);
+        'the picker, Search, Filter, Flow and ⋯, in that order');
+      assert.equal(await page.locator('#task-play').getAttribute('aria-label'), 'Flow, 2');
+      // ⋯ on a phone: New task, Archived, Select, Edit pipeline; no List/Columns (a phone shows one stage at a time).
+      assert.deepEqual(await menu(page), ['New task', 'Archived', 'Select', 'Edit pipeline']);
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');
 
@@ -105,10 +107,10 @@ async function menu(page: Page): Promise<string[]> {
       assert.equal(await page.locator('#task-q').evaluate(el => el === document.activeElement), false, 'closed');
       assert.equal(await page.locator('#main header.ph .tl-search-x').isVisible(), false);
 
-      // ▶ opens the review of the open stage.
+      // Flow walks the pipeline.
       await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
       await page.locator('#task-play').click();
-      await page.waitForFunction(() => /^Spec · 1 of 2$/.test(document.querySelector('#need-card .dc-count')?.textContent || ''));
+      await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine/Product');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -125,14 +127,14 @@ async function menu(page: Page): Promise<string[]> {
         await page.locator('#task-manager').waitFor();
         assert.deepEqual(await oneRow(page, 44), []);
         assert.deepEqual((await rowControls(page)).map(c => c.id), ['task-scope', 'task-filter', 'task-play', 'task-manager', 'task-menu'],
-          'the picker, Filter, ▶, the face and ⋯; the search is in ⋯');
+          'the picker, Filter, Flow, the face and ⋯; the search is in ⋯');
         const cut = await page.locator('#task-scope .tl-scope-l').evaluate(el => {
           const range = document.createRange(), text = el.firstChild!;
           range.setStart(text, 0); range.setEnd(text, 8);
           return {over: el.scrollWidth > el.clientWidth, how: getComputedStyle(el).textOverflow, eight: el.clientWidth >= range.getBoundingClientRect().width};
         });
         assert.deepEqual(cut, {over: true, how: 'ellipsis', eight: true}, 'the name ends in …, after at least eight letters');
-        assert.deepEqual(await menu(page), ['Search', 'New task', 'Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(page), ['Search', 'New task', 'Archived', 'Select', 'Edit pipeline']);
         await page.locator('#task-mi-search').click();
         await page.waitForFunction(() => document.activeElement?.id === 'task-q');
         const field = await box(page, '#main header.ph .tl-search'), row = await box(page, '#main header.ph');
@@ -154,20 +156,20 @@ async function menu(page: Page): Promise<string[]> {
       await page.close();
     }
     {
-      // Nothing waits on the person: ▶ is quiet, keeps its width, and a tap says so and walks nothing.
+      // Nothing waits on the person: Flow is quiet, keeps its width, and a tap says so and walks nothing.
       const {page, errors} = await open(browser, {viewport: PHONE, needs: [], hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv-phone').waitFor();
       const play = page.locator('#task-play');
-      assert.equal(await play.isVisible(), true, '▶ stays on the row');
+      assert.equal(await play.isVisible(), true, 'Flow stays on the row');
       assert.equal(await play.evaluate(el => el.classList.contains('none')), true);
-      assert.equal(await play.getAttribute('aria-label'), 'Review: nothing waits on you');
+      assert.equal(await play.getAttribute('aria-label'), 'Flow');
       // One width with or without a count, up to "99+".
       const quiet = (await box(page, '#task-play')).width;
       const widths = await page.locator('#task-play').evaluate(el => ['1', '12', '99', '99+'].map(n => {
         el.classList.remove('none'); el.querySelector('.tl-review-n')!.textContent = n;
         return el.getBoundingClientRect().width;
       }));
-      assert.ok(widths.every(w => Math.abs(w - quiet) < 0.1), `▶ is ${quiet}px at 0 and ${widths.join(', ')} with 1, 12, 99, 99+`);
+      assert.ok(widths.every(w => Math.abs(w - quiet) < 0.1), `Flow is ${quiet}px at 0 and ${widths.join(', ')} with 1, 12, 99, 99+`);
       await page.locator('#task-play').evaluate(el => { el.classList.add('none'); el.querySelector('.tl-review-n')!.textContent = ''; });
       await play.click();
       await page.locator('.toast', {hasText: 'Nothing waits on you in Product'}).waitFor();
@@ -198,10 +200,10 @@ async function menu(page: Page): Promise<string[]> {
         await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
         assert.equal(await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').getAttribute('aria-label'), 'Chat with PM');
 
-        // List/Columns on the row, the current one pressed; ⋯ keeps Archived and Edit pipeline.
+        // List/Columns on the row, the current one pressed; ⋯ keeps Archived, Select and Edit pipeline.
         const pressed = () => page.locator('#task-mi-layout [aria-pressed="true"]').getAttribute('data-layout');
         assert.equal(await pressed(), 'list');
-        assert.deepEqual(await menu(page), ['Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(page), ['Archived', 'Select', 'Edit pipeline']);
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');
         await page.locator('#task-mi-layout [data-layout="columns"]').click();
@@ -249,13 +251,33 @@ async function menu(page: Page): Promise<string[]> {
           ['task-scope', 'tl-search', 'task-filter', 'task-play', 'task-mi-layout', 'task-new', 'task-menu']);
         const icon = (await box(narrow.page, '#main header.ph .tl-search')).width;
         assert.ok(icon < 50, `the search folds to its icon first: ${icon}px`);
-        assert.deepEqual(await menu(narrow.page), ['Archived', 'Edit pipeline']);
+        assert.deepEqual(await menu(narrow.page), ['Archived', 'Select', 'Edit pipeline']);
         assert.deepEqual(narrow.errors, []);
         await narrow.page.close();
       } finally { (product as {manager_id: string | null}).manager_id = null; }
     }
     {
-      // Tasks › You: the count once, in ▶; the picker reads "You". No List/Columns off a pipeline; New task on the row.
+      // A long pipeline name is whole on a computer: the picker keeps its natural width and the search gives way. At
+      // 1040 px, with the manager's chat folded to its tab, a picker that shrank with the search read "Growth Monitori…".
+      const name = product.name;
+      (product as {name: string}).name = 'Growth Monitoring';
+      (product as {manager_id: string | null}).manager_id = 'bot:pm';
+      try {
+        const {page, errors} = await open(browser, {viewport: {width: 1040, height: 800}, hash: '#/tasks?pipeline=product&layout=columns'});
+        await page.locator('#task-body .pv').waitFor();
+        await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').waitFor();
+        assert.deepEqual(await oneRow(page, 56), []);
+        const scope = await page.locator('#task-scope .tl-scope-l').evaluate(el => ({text: el.textContent, cut: el.scrollWidth > el.clientWidth}));
+        assert.deepEqual(scope, {text: 'Growth Monitoring', cut: false}, 'the picker shows its whole name at a computer width');
+        assert.deepEqual(errors, []);
+        await page.close();
+      } finally {
+        (product as {name: string}).name = name;
+        (product as {manager_id: string | null}).manager_id = null;
+      }
+    }
+    {
+      // Tasks › You: the count once, in Flow; the picker reads "You". No List/Columns off a pipeline; New task on the row.
       const {page, errors} = await open(browser, {hash: '#/tasks?pipeline='});
       await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '3');
       assert.equal((await page.locator('#task-scope').innerText()).trim(), 'You');
@@ -266,6 +288,6 @@ async function menu(page: Page): Promise<string[]> {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('the Tasks header: one row on a phone and a computer, ⋯, ▶ Review, search ✕, You\'s one count: ok');
+    console.log('the Tasks header: one row on a phone and a computer, ⋯, Flow, search ✕, You\'s one count: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

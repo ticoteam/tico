@@ -1,6 +1,8 @@
 ---
 name: work-out-the-last-order-day
 description: Work out the date an item runs out at the expected sales rate and the last day an order can be placed and still land before then, using observed lead time; say which items are already past that day and by how many days.
+metadata:
+  function: operations
 ---
 # Work out the last order day
 

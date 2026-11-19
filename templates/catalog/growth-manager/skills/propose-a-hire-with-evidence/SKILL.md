@@ -1,6 +1,8 @@
 ---
 name: propose-a-hire-with-evidence
 description: Decide whether recurring marketing work justifies proposing a new worker, and write the proposal with its evidence, first routine, manager and weekly review cost to a person.
+metadata:
+  function: growth
 ---
 # Propose a hire with evidence
 

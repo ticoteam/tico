@@ -2,6 +2,11 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import argparse
+import re
+import sys
+
+from clients.cli_spec import NULL, Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -75,10 +80,6 @@ def bot_archive(api, args):
             "(its template's changes), tico (Tico releases); [] for none",
         },
         "status": {"type": "string", "enum": ["active", "paused", "planned"]},
-        "app_delivery": _s(
-            "A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
-            "or `off` for the daily sync alone"
-        ),
     },
     required=("slug",),
     writes=True,
@@ -87,7 +88,14 @@ def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
-    row = next((b for b in api.get("bots") if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))), None)
+    row = next(
+        (
+            b
+            for b in api.get("bots", fields="id,slug,name,revision")
+            if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))
+        ),
+        None,
+    )
     if not row or row.get("revision") is None:
         row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
@@ -113,10 +121,6 @@ def bot_set(api, args):
     }
     if args.get("new_slug"):
         change["slug"] = args["new_slug"]
-    if args.get("app_delivery"):
-        change["app_delivery"] = (
-            None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
-        )
     return api.post(
         f"bots/{args['slug']}/definition",
         {**change, "expected_revision": row["revision"], **({"on_behalf_of": on_behalf} if delegated else {})},
@@ -166,8 +170,9 @@ def bot_register(api, args):
 @tool(
     "tico_bot_access",
     "Show, or set, who may see, read and write to a bot, as the person who asked you (they must "
-    "own the bot). Each of see, read and write is `everyone`, or a comma list of person ids, `group:<id>` and "
-    "`bot:<slug>`. Anyone who may read or write can also see it. Levels you leave out stay as they are.",
+    "own the bot). Each of see, read and write is `everyone`, or a comma list of person ids, "
+    "`group:<id>` and `bot:<slug>`. Anyone who may read or write can also see it. Levels you "
+    "leave out stay as they are.",
     {
         "slug": _s("The bot"),
         "see": _s("everyone, or ben,group:legal,bot:analyst"),
@@ -384,6 +389,26 @@ def bot_suggest_to_original(api, args):
     from clients import botcopy
 
     return botcopy.run_suggest(_as_person(api), args)
+
+
+@tool(
+    "tico_skill_list",
+    "Every skill on Library › Skills: the company's directory and the skills Tico ships with its roles (`source`: "
+    "directory or tico), each with its job function (`metadata.function` in SKILL.md). `function` keeps one function "
+    "(tico, legal, marketing, growth, sales, customers, finance, product, engineering, people, operations, hardware, data, "
+    "security, or other for any other value or none); `q` keeps the skills whose name, description or function has every "
+    "word. Answers {skills, functions: [{function, count}]}, the counts after `q`. Read-only.",
+    {
+        "q": _s("Words to match in the name, description or function"),
+        "function": _s("One job function, or other"),
+    },
+)
+def skill_list(api, args):
+    words = args.get("q")
+    if isinstance(words, list):  # `tico skill list legal review`: the words as typed
+        words = " ".join(str(word) for word in words)
+    query = {"q": str(words).strip() if words else None, "function": args.get("function") or None}
+    return api.get("skills", **{k: v for k, v in query.items() if v})
 
 
 @tool(
@@ -715,13 +740,16 @@ COMPACT_SIZES = (
     900_000,
     1_000_000,
 )
+# Claude Code's built-in output styles and Codex's verbosity levels (backend/harnesses.py OUTPUT_STYLES, VERBOSITIES).
+OUTPUT_STYLES = ("Concise", "Explanatory", "Learning", "Proactive")
+VERBOSITIES = ("low", "medium", "high")
 
 
 @tool(
     "tico_bot_model",
-    "Show the models a bot may run on, or change its model or where its conversation compacts (`compact_at`), as "
-    "the person who asked you. A model change waits for a run in progress to end. A manager bot may change its "
-    "direct report's model.",
+    "Show the models a bot may run on, or change its model, where its conversation compacts "
+    "(`compact_at`), its Claude Code output style or its Codex verbosity, as the person who asked you. A model change "
+    "waits for a run in progress to end. A manager bot may change its direct report's model.",
     {
         "bot": _s("The bot's slug"),
         "model": _s("A model id or name from the list; leave out to list them"),
@@ -733,6 +761,18 @@ COMPACT_SIZES = (
             "description": "Where the bot's conversation compacts, in tokens; `default` puts it back on its model's "
             "default (it then moves with the model); leave out to keep it",
         },
+        "output_style": {
+            "type": "string",
+            "enum": ["default", *OUTPUT_STYLES],
+            "description": "Claude Code's output style for the bot's turns; `default` is Claude Code's own; leave out "
+            "to keep it. Only a Claude Code turn uses it",
+        },
+        "verbosity": {
+            "type": "string",
+            "enum": ["default", *VERBOSITIES],
+            "description": "Codex's verbosity for the bot's turns; `default` is the model's own; leave out to keep it. "
+            "Only a Codex turn uses it",
+        },
         "on_behalf_of": ON_BEHALF_OF,
     },
     required=("bot",),
@@ -742,7 +782,7 @@ def bot_model(api, args):
     who = _as_person(api, args.get("on_behalf_of"))
     catalog = who.get("models")
     current = who.get(f"bots/{args['bot']}")
-    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at")):
+    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at", "output_style", "verbosity")):
         enabled = set(catalog.get("enabled_providers") or [])
         return {
             "models": [
@@ -750,9 +790,15 @@ def bot_model(api, args):
                 for m in catalog.get("models", [])
                 if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)
             ],
-            **{k: v for k, v in current.items() if k in ("harness", "effort", "compact_at")},
+            **{
+                k: v
+                for k, v in current.items()
+                if k in ("harness", "effort", "compact_at", "output_style", "verbosity")
+            },
             "current": current.get("model"),
             "compact_sizes": list(COMPACT_SIZES),
+            "output_styles": ["default", *OUTPUT_STYLES],
+            "verbosities": ["default", *VERBOSITIES],
         }
     out = None
     if any(args.get(k) for k in ("model", "harness", "effort")):
@@ -766,6 +812,15 @@ def bot_model(api, args):
             key=_key(args, ":compact"),
         )
         out = {**(out or {}), **{k: saved.get(k) for k in ("compact_at", "compacts_at", "revision")}}
+    for key, route in (("output_style", "output-style"), ("verbosity", "verbosity")):
+        if not args.get(key):
+            continue
+        revision = (out or {}).get("revision") or who.get(f"bots/{args['bot']}")["revision"]
+        value = None if str(args[key]).lower() == "default" else args[key]
+        saved = who.post(
+            f"bots/{args['bot']}/{route}", {key: value, "expected_revision": revision}, key=_key(args, ":" + key)
+        )
+        out = {**(out or {}), **{k: saved.get(k) for k in (key, "revision")}}
     return out
 
 
@@ -892,10 +947,10 @@ def status_set(api, args):
 
 @tool(
     "tico_bot_recent",
-    "The bots you (a person) have been working with lately, most recent first: each "
-    "with its live status and what it is working on, the last thing you said and the last thing it "
-    "said, the conversation id to read on with tico_conversation_show, your open tasks together, and what it "
-    "needs from you. Start here to pick up where you left off.",
+    "The bots you (a person) have been working with lately, most recent first: each with its live "
+    "status and current work, the last thing you and it said, the conversation id to read on with "
+    "tico_conversation_show, your open tasks together, and what it needs from you. Start here to "
+    "pick up where you left off.",
     {
         "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 7)"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 30, "description": "At most this many bots (default 10)"},
@@ -1139,3 +1194,346 @@ def github_create_bot_repo(api, args):
 )
 def catalog(api, args):
     return api.get("templates")["cards"]
+
+
+# ----------------------------------------------------------------------------- the `tico bot` commands
+def _update(client, fields):
+    """`tico bot update`: the tool, without an operation id (the hand parser sent none), and a bot it cannot find is
+    not_found, not a crash."""
+    from clients import hubtools
+
+    try:
+        return hubtools.BY_NAME["tico_bot_update"]["fn"](
+            client, {k: v for k, v in fields.items() if k != "operation_id"}
+        )
+    except ValueError as exc:
+        raise APIError("not_found", str(exc)) from None
+
+
+def _branch(client, fields, computer=None):
+    """`tico bot branch`: `--computer` is one of your own computers, by its id or unique label, sent as its id. No
+    operation id is sent, as the hand parser sent none."""
+    body = {"bot": fields["bot"]}
+    if computer:
+        person = _as_person(client)
+        listing = person.get("computers")
+        rows = listing.get("computers", []) if isinstance(listing, dict) else listing
+        me = person.get("me")
+        own = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
+        matches = [
+            row
+            for row in rows
+            if not row.get("revoked_at")
+            and row.get("owner_id") == own
+            and computer in (row.get("id"), row.get("label"))
+        ]
+        if len(matches) != 1:
+            raise APIError("computer", "Choose one of your computers by its id or unique label")
+        body["runner_id"] = matches[0]["id"]
+    return bot_branch(client, body)
+
+
+def _budget(client, fields, action=None):
+    """`tico bot budget BOT release` releases the bot from a hold instead of changing a budget."""
+    from clients import hubtools
+
+    return hubtools.BY_NAME["tico_bot_budget"]["fn"](client, {**fields, "release": True} if action else fields)
+
+
+def _subscriptions(text):
+    """`--subscribe-updates templates,tico`: the list; `none` (or nothing) is the empty list."""
+    return [p.strip() for p in text.split(",") if p.strip() and p.strip() != "none"]
+
+
+# `tico bot ...` (clients/cli_spec.py): the flags come from each tool's schema. A positional the schema leaves optional
+# says so (`positional=True, nargs="?"`); a switch that sent nothing when left out keeps `default=None`. The words a
+# value is typed as (`unlimited`, `none`, `on`/`off`) are converted where they are parsed, so a wrong word is refused
+# with the same line it always was. The hand parser keeps the leaves clients/hubcli.py names: their arguments are not
+# the tool's, or they work on this computer.
+_ON_OFF = lambda v: {"on": True, "off": False}[v]  # a lambda, as the hand parser had: its errors name <lambda>
+BOT = (
+    Group("bot", "build a bot from a template (BotOps), change it, place it, its status", aliases=("bots",)),
+    Command(
+        "bot show",
+        "one bot: its profile, and for one you may read also its status, machine, queue, goals and routines",
+        example="tico bot show builder",
+    ),
+    Command(
+        "bot update",
+        "change a bot's settings with your rights, or the requester's (BotOps)",
+        args=(
+            Arg("on_behalf_of", metavar="MESSAGE_ID"),
+            Arg("shared", action=argparse.BooleanOptionalAction),
+            Arg(
+                "update_subscriptions",
+                "--subscribe-updates",
+                action="store",
+                type=_subscriptions,
+                metavar="templates,tico|none",
+            ),
+        ),
+        omit=("template",),
+        example="tico bot update builder --display-name Builder --status paused",
+        run=_update,
+    ),
+    Command(
+        "bot access",
+        "show or set who may see, read and write to a bot",
+        example="tico bot access builder --see everyone",
+    ),
+    Command(
+        "bot owners",
+        "add or remove the humans who own a bot",
+        args=(
+            Arg("add", action="store", nargs="+", metavar="HUMAN"),
+            Arg("remove", action="store", nargs="+", metavar="HUMAN"),
+        ),
+        example="tico bot owners builder --add 7",
+    ),
+    Command(
+        "bot mail",
+        "show or set whether a bot sends mail on its own (a person only)",
+        args=(Arg("outbound_send", "--send", action=argparse.BooleanOptionalAction),),
+        example="tico bot mail builder --no-send",
+    ),
+    Command(
+        "bot setup-done",
+        "mark a bot's onboarding complete, as a person above it on the org chart",
+        args=(Arg("slug", positional=True, nargs="?"),),
+        example="tico bot setup-done builder",
+    ),
+    Command(
+        "bot ready",
+        "an onboarding bot says it is ready, with what it learned",
+        args=(Arg("summary", "--summary"),),
+        example="tico bot ready --summary 'Read the backlog; starting with the oldest bug'",
+    ),
+    Command(
+        "bot place",
+        "put a bot on a computer, as the person who asked (BotOps)",
+        example="tico bot place builder --computer studio",
+    ),
+    Command(
+        "bot go-live",
+        "place it if needed, turn it on and start its setup (BotOps)",
+        args=(Arg("setup", "--no-setup", action="store_const", const=False),),
+        example="tico bot go-live builder --computer studio",
+    ),
+    Command(
+        "bot restore", "bring an archived bot back, as the person who asked (BotOps)", example="tico bot restore ana"
+    ),
+    Command("bot archive", "archive a bot you manage", example="tico bot archive ana --successor builder"),
+    Command(
+        "bot turns-at-once",
+        "read or set the most turns the bot runs at once across all computers: N or unlimited",
+        args=(Arg("limit", positional=True, nargs="?", type=lambda v: NULL if v == "unlimited" else int(v)),),
+        example="tico bot turns-at-once builder 2",
+    ),
+    Command(
+        "bot browser-exit",
+        "read or set the computer a bot browses the web through: a computer id, or none for its own",
+        args=(Arg("computer", positional=True, nargs="?", type=lambda v: NULL if v == "none" else v),),
+        example="tico bot browser-exit builder none",
+    ),
+    Command(
+        "bot app-view",
+        "read or set whether a bot may view the app read only, for its screenshots: on or off",
+        args=(Arg("on", positional=True, nargs="?", action="store", type=_ON_OFF),),
+        example="tico bot app-view builder on",
+    ),
+    Command(
+        "bot budget",
+        "read or set a bot's runs per hour and per day, or release it from a hold",
+        args=(
+            Arg(
+                "action",
+                positional=True,
+                nargs="?",
+                choices=("release",),
+                local=True,
+                help="release the bot from a hold instead of changing a budget",
+            ),
+            Arg("hour", type=lambda v: v if v == "default" else int(v)),
+            Arg("day", type=lambda v: v if v == "default" else int(v)),
+        ),
+        omit=("release",),
+        example="tico bot budget builder --hour 4 --day default",
+        run=_budget,
+    ),
+    Command(
+        "bot profile",
+        "read or set a bot's profile: what wakes it and which tasks it takes",
+        args=(
+            Arg("profile", positional=True, nargs="?"),
+            Arg("sweeps", action="store", type=_ON_OFF, metavar="on|off"),
+            Arg("confirm_drop_rules", default=None),
+        ),
+        example="tico bot profile builder reviewer",
+    ),
+    Command(
+        "bot release",
+        "release a bot Tico stopped (failed runs, too many runs, or a run it could not start); its queue starts again",
+        example="tico bot release builder",
+    ),
+    Command(
+        "bot task-model",
+        "the model the bot's tasks run on, with its effort and harness; --clear puts them back on the bot's own model",
+        args=(Arg("model", positional=True, nargs="?"),),
+        example="tico bot task-model builder gpt-6.2-sol --effort high",
+    ),
+    Command("bot pause", "pause a bot (BotOps)", example="tico bot pause builder"),
+    Command("bot resume", "resume a bot (BotOps)", example="tico bot resume builder"),
+    Command(
+        "bot scope",
+        "limit a bot's claims to one task and its subtasks, or lift that (BotOps)",
+        args=(Arg("task", positional=True, nargs="?"),),
+        example="tico bot scope builder T1",
+    ),
+    Command(
+        "bot branch",
+        "make your branch of a bot that allows branches",
+        args=(Arg("computer", "--computer", local=True, help="your computer's label or id"),),
+        omit=("runner_id",),
+        example="tico bot branch builder --computer studio",
+        run=_branch,
+    ),
+    Command(
+        "bot repo-create",
+        "owner or BotOps: create <org>/bot-<slug> from a template, or empty",
+        args=(Arg("template", default="ticoteam/botops", metavar="OWNER/REPO"),),
+        example="tico bot repo-create inbound-sales-owner",
+    ),
+    Command(
+        "bot recent",
+        "the bots you have been working with lately and where each stands",
+        example="tico bot recent --days 3",
+    ),
+    Group("bot status", "a bot's live status: set yours, list every bot's, read the history"),
+    Command(
+        "bot status set",
+        "one factual line about what you are doing now",
+        args=(Arg("task_id", "--task"),),
+        example="tico bot status set 'Reviewing the pricing PR' --state running --task T1",
+    ),
+    Command("bot status list", "every bot you may see with its live status", example="tico bot status list"),
+    Command("bot status history", "a bot's status history", example="tico bot status history builder --since 7d"),
+    Command(
+        "bot list",
+        "every bot's state, stage and setup in one short row, with the command that gets a stuck one working (anyone)",
+        args=(Arg("needs_action", default=None), Arg("archived", default=None)),
+        example="tico bot list --needs-action",
+    ),
+    Command(
+        "bot go-live-all",
+        "take every planned bot live; --setup-done also finishes onboarding (the owner, admins, the bots' managers)",
+        args=(
+            Arg("setup_done", default=None),
+            Arg("setup", action=argparse.BooleanOptionalAction),
+            Arg("dry_run", default=None),
+        ),
+        example="tico bot go-live-all --dry-run",
+    ),
+    Command(
+        "bot quarantine-clear",
+        "lift a bot's quarantine so it works again (a person who manages the bot)",
+        example="tico bot quarantine-clear builder --note 'the refused push was a test'",
+    ),
+)
+
+
+def chosen_grant(value):
+    """`owner/repo`, `owner/repo:read`, `owner/repo:write`, or a write grant with options: `+actions` (may run
+    workflows) and `+edit` (may edit workflow files), as in `owner/repo:write+actions+edit`. Left out, an option keeps
+    whatever setting the grant has; `-actions` or `-edit` turns it off."""
+    name, _, level = value.rpartition(":") if ":" in value else (value, "", "write")
+    access, *options = re.split(r"(?=[+-])", level)
+    flags = {}
+    for option in options:
+        flag = {"actions": "run_workflows", "edit": "edit_workflows"}.get(option[1:])
+        if not flag or flag in flags:
+            access = ""
+            break
+        flags[flag] = option[0] == "+"
+    if access not in ("read", "write") or access == "read" and flags:
+        raise APIError(
+            "validation",
+            f"'{value}': use owner/repo, :read, :write, or :write with +actions, -actions, "
+            "+edit or -edit (e.g. :write+actions+edit)",
+        )
+    return {"full_name": name, "access": access, **flags}
+
+
+def _repos_fields(fields):
+    """--all, --own or --chosen (each grant parsed by chosen_grant) set the mode; none of them reads the access. No
+    operation id is sent: the hand-built command never sent one."""
+    fields = {k: v for k, v in fields.items() if k != "operation_id"}
+    if "chosen" in fields:
+        fields["mode"] = "chosen"
+        fields["chosen"] = [chosen_grant(r) for r in fields["chosen"]]
+    return fields
+
+
+def _repos_run(api, fields):
+    """Read the access when no mode is given, else set it and say on stderr what the change took away (a switch to own
+    keeps the chosen rows, but they stop applying)."""
+    if "mode" not in fields:
+        return bot_repos_get(api, {"bot": fields["bot"]})
+    result = bot_repos_set(api, fields)
+    lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
+    lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
+    lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
+    lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
+    lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
+    if lost:
+        print(f"{fields['bot']} no longer has: " + ", ".join(lost), file=sys.stderr)
+    return result
+
+
+# `tico bot repos` (after the hand-built bot leaves in clients/hubcli.py): tico_bot_repos_get without a mode, else
+# tico_bot_repos_set.
+BOT_REPOS = (
+    Command(
+        "bot repos",
+        "read or set a bot’s repository access",
+        tool="tico_bot_repos_set",
+        tools=("tico_bot_repos_get",),
+        args=(
+            Arg("mode", flag="--all", action="store_const", const="all", required=False),
+            Arg("mode", flag="--own", action="store_const", const="own", required=False),
+            Arg(
+                "chosen",
+                flag="--chosen",
+                nargs="*",
+                action="store",
+                metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
+            ),
+        ),
+        exclusive=(("mode", "chosen"),),
+        omit=("all_access",),
+        convert=_repos_fields,
+        run=_repos_run,
+        example="tico bot repos builder --chosen acme/app:write+actions",
+    ),
+)
+
+# `tico agent pair ...`: connect a Hermes profile to a bot.
+AGENT = (
+    Group("agent", "external agents: connect a Hermes profile to a bot"),
+    Group("agent pair", "approve or decline the code a Hermes profile printed when it asked to pair"),
+    Command(
+        "agent pair show",
+        "preview the profile, computer and expiry without changing a credential",
+        example="tico agent pair show K7QM-4F2P",
+    ),
+    Command(
+        "agent pair approve",
+        "connect the profile that printed this code to a bot (BotOps, or its owner or an admin)",
+        args=(Arg("bot", flag="--bot"),),
+        example="tico agent pair approve K7QM-4F2P --bot hermes-1",
+    ),
+    Command(
+        "agent pair decline",
+        "turn down the profile that printed this code",
+        example="tico agent pair decline K7QM-4F2P",
+    ),
+)

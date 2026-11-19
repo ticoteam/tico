@@ -3,7 +3,6 @@ threads end with each run, and nothing module-level keeps the app once it is let
 
 import gc
 import threading
-import time
 import typing
 import weakref
 
@@ -18,15 +17,15 @@ SIGNED_IN = {"Authorization": "Bearer ana-test"}  # whatever the answer, sign-in
 
 
 def auth_threads():
-    return sum(t.name.startswith("tico-auth") for t in threading.enumerate())
+    return {t for t in threading.enumerate() if t.name.startswith("tico-auth")}
 
 
-def settle(count, at_most=5.0):
-    """Sign-in's pool is shut down without waiting; its idle threads end a moment later."""
-    deadline = time.monotonic() + at_most
-    while auth_threads() != count and time.monotonic() < deadline:
-        time.sleep(0.02)
-    return auth_threads()
+def end_sign_in(started):
+    """Sign-in's pool is shut down without waiting, so each of its threads must end on its own. Names any that do not."""
+    for t in started:
+        t.join(5)
+    still_running = sorted(t.name for t in started if t.is_alive())
+    assert not still_running, f"sign-in threads still running after the run: {still_running}"
 
 
 def test_each_run_ends_its_sign_in_threads_and_lets_the_app_go(tmp_path):
@@ -37,8 +36,10 @@ def test_each_run_ends_its_sign_in_threads_and_lets_the_app_go(tmp_path):
         app = create_app(api_settings(tmp_path / str(n)))
         with TestClient(app) as client:
             client.get("/api/v2/me", headers=SIGNED_IN)
-            assert auth_threads() == before + 1, "sign-in ran on the app's own pool"
-        assert settle(before) == before, f"build {n + 1} left sign-in threads behind"
+            started = auth_threads() - before
+            assert len(started) == 1, "sign-in ran on the app's own pool"
+        end_sign_in(started)
+        assert auth_threads() == before, f"build {n + 1} left sign-in threads behind"
         assert app.state.auth_pool is None
         apps.append(weakref.ref(app))
         del app, client
@@ -60,8 +61,10 @@ def test_an_app_served_twice_gets_a_fresh_pool_each_time(tmp_path):
     for _ in range(2):
         with TestClient(app) as client:
             client.get("/api/v2/me", headers=SIGNED_IN)
-            assert auth_threads() == before + 1
-        assert settle(before) == before
+            started = auth_threads() - before
+            assert len(started) == 1
+        end_sign_in(started)
+        assert auth_threads() == before
 
 
 def test_outside_a_run_sign_in_uses_the_default_pool(tmp_path):
@@ -87,4 +90,5 @@ def test_a_run_inside_another_run_of_the_same_app_ends_cleanly(tmp_path):
             inner.get("/api/v2/me", headers=SIGNED_IN)
         outer.get("/api/v2/me", headers=SIGNED_IN)  # the inner run took its pool; the outer's requests still sign in
     assert app.state.auth_pool is None
-    assert settle(before) == before
+    end_sign_in(auth_threads() - before)
+    assert auth_threads() == before

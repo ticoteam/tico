@@ -1,6 +1,8 @@
 ---
 name: "score-an-event-after-it-ends"
 description: "Score an event that has ended for its results line: cost, meetings held, pipeline, cost per meeting, follow-up inside the rule and one lesson, marking any figure the data cannot yet give as not yet measurable."
+metadata:
+  function: marketing
 ---
 # Score an event after it ends
 

@@ -26,9 +26,9 @@ on:
         options: [python, browser, rust, all]
         default: python
       cpus:
-        description: vCPUs of the VM
+        description: vCPUs of the VM (8 at most; a whole suite runs as two 8-vCPU shards)
         type: choice
-        options: ['4', '8', '16']
+        options: ['4', '8']
         default: '4'
       minutes:
         description: Time limit for the command
@@ -40,9 +40,10 @@ permissions:
 
 jobs:
   run:
-    # Spot: an interruption reruns the job automatically, and a test run can always be repeated. The family list gives
-    # Spot more pools: with none, a 16-vCPU VM came almost only from c8i-flex/c8id, and ~1 in 4 was reclaimed (Nov 11).
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/family=m8+c8+r8+m7+c7+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
+    # Spot, 8 vCPUs at most, no c-family: the same families as every other RunsOn job. An interruption reruns the job
+    # automatically, and a test run can always be repeated. 16-vCPU runs drew on c8i-flex/c7i-flex pools and were the
+    # ones that fell back to on-demand (Nov 10-17: 11 of the 12 on-demand jobs), so remote-run no longer offers them.
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
     timeout-minutes: 75
     env:
       ID: ${{ inputs.id }}
@@ -61,23 +62,24 @@ jobs:
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full commit SHA"; exit 1; }
           [[ "$MINUTES" =~ ^[0-9]+$ ]] && [ "$MINUTES" -ge 1 ] && [ "$MINUTES" -le 60 ] \
             || { echo "::error::minutes must be 1 to 60"; exit 1; }
+          [ "$CPUS" = 4 ] || [ "$CPUS" = 8 ] || { echo "::error::cpus must be 4 or 8"; exit 1; }
           # GitHub-hosted runners have 4 vCPUs; a larger VM needs RunsOn.
           if [ "$HOSTED" = true ] && [ "$CPUS" != 4 ]; then echo "::error::cpus must be 4 while TICO_CI_HOSTED is true"; exit 1; fi
       - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
         if: vars.TICO_CI_HOSTED == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.15'
       # Every setup compiles the UI's TypeScript (scripts/ci_install.sh).
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: '24.22.3'
           cache: npm
       - if: inputs.setup == 'browser' || inputs.setup == 'all'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -93,7 +95,7 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - if: inputs.setup == 'rust' || inputs.setup == 'all'
         name: Install Rust
-        run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
+        run: rustup toolchain install 1.99 --profile minimal && rustup default 1.99
       - name: Run the command
         env:
           COMMAND: ${{ inputs.command }}
@@ -106,7 +108,7 @@ jobs:
           echo "$code" > "$RUNNER_TEMP/remote/exit-code"
           echo "Exit code $code"
           exit "$code"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: remote-run-${{ inputs.id }}

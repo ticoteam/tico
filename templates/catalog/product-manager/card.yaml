@@ -72,3 +72,18 @@ reasoning_effort: high
 recommend_when: [sells_software, uses_github, uses_docs, has_pipeline]
 repo_access_mode: all
 repo_all_access: read
+# Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
+shared_files:
+  - knowledge/manager-practice.md
+  - .claude/skills/read-what-is-missing
+  - .claude/skills/write-the-stuck-task-question
+  - playbooks/decide-a-stuck-task.md
+  - .claude/skills/ask-with-recommended-answers
+  - .claude/skills/read-the-roadmap-status
+  - .claude/skills/frame-a-decision-for-the-owner
+  - .claude/skills/review-hardware-for-manufacture
+  - .claude/skills/brainstorm-a-feature
+  - .claude/skills/decide-what-not-to-build
+  - .claude/skills/learn-from-customers
+  - .claude/skills/write-the-spec
+  - .claude/skills/build-the-page

@@ -1,7 +1,9 @@
-"""scripts/install.sh in real distro containers (ubuntu:24.04, debian:12) with docker and friends stubbed.
+"""scripts/install.sh in real distro containers (Ubuntu 24.04, Debian 12) with docker and friends stubbed.
 
-The scenarios are in install_scenarios.sh. They install curl and python3 from the distro's own packages, so the
-containers need network access; the tests skip when Docker is not available."""
+The scenarios are in install_scenarios.sh. The images are Docker's official buildpack-deps ones for those releases,
+which already carry the curl and python3 the installer needs, so the container runs with no network at all: an apt
+mirror that stalls cannot hang the test, and a scenario that reaches for the network fails at once. The tests skip
+when Docker is not available."""
 
 import hashlib
 import os
@@ -80,7 +82,7 @@ def docker_ready():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("image", ["ubuntu:24.04", "debian:12"])
+@pytest.mark.parametrize("image", ["buildpack-deps:noble-scm", "buildpack-deps:bookworm-scm"])
 def test_installer_scenarios(image, rel, docker_ready):
     name = "tico-install-test-" + uuid.uuid4().hex[:8]
     # Docker Desktop may not share an external checkout or pytest's configured temp volume.
@@ -98,14 +100,15 @@ def test_installer_scenarios(image, rel, docker_ready):
                     "--name",
                     name,
                     "--rm",
+                    "--network",
+                    "none",
                     "--mount",
                     f"type=bind,src={staged / 'rel'},dst=/rel,readonly",
                     "--mount",
                     f"type=bind,src={staged / 'scen.sh'},dst=/scen.sh,readonly",
                     image,
                     "sh",
-                    "-c",
-                    "apt-get update -qq >/dev/null 2>&1; sh /scen.sh",
+                    "/scen.sh",
                 ],
                 capture_output=True,
                 text=True,

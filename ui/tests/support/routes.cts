@@ -9,7 +9,10 @@ const SHAPES: Record<string, () => Record<string, unknown>> = {
   '/api/v2/system/storage': () => ({active: null, earlier: [], server: {mode: 'local', location: ''},
     copy: {done: 0, total: 0, failed: 0, running: false}}),
 };
-const unrouted = (p: string): unknown[] | Record<string, unknown> => LISTS.has(p) ? [] : SHAPES[p] ? SHAPES[p]() : {};
+// A thread's timeline: an empty thread the reader may post in (Flow's chat on a task, decide.ts decideChatMount).
+const timeline = (p: string) => /^\/api\/v2\/threads\/[^/]+\/timeline$/.test(p)
+  ? {thread: {id: p.split('/')[4], title: '', me: {can_post: true}}, messages: [], next_cursor: null} : null;
+const unrouted = (p: string): unknown[] | Record<string, unknown> => LISTS.has(p) ? [] : SHAPES[p] ? SHAPES[p]() : timeline(p) || {};
 const api = {LISTS, unrouted};
 export type Api = typeof api;
 module.exports = api;

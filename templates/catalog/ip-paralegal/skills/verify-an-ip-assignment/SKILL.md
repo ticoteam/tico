@@ -1,6 +1,8 @@
 ---
 name: verify-an-ip-assignment
 description: Check each person who created code, designs or content for the team against their agreement, and mark whether the agreement assigns the work, does not, or has not been seen, quoting the words that decide it.
+metadata:
+  function: legal
 ---
 # Verify an IP assignment
 

@@ -82,6 +82,7 @@ machine; a shared machine's facts are its member bots' together:
              nothing worth keeping: it is deleted, and the next want makes a new one with a fresh code. After
              ENROLL_TRIES such machines in a row nothing more is made ("no_enroll") until one enrolls or a person
              explicitly replaces the machine. Each failed id is counted durably before deletion or replacement.
+             HQ's temporary create refusals consume no tries and back off even when HQ lists a failed machine.
     frozen   out of credit (cloud_access.frozen, or HQ's 402): nothing starts and the bot shows "Out of credit". HQ
              stops running machines and keeps their disks. A 402 is asked again once HQ says the company is open.
     errors   HQ not answering or refusing: the bot's queued work says so ("its cloud machine didn't start"), and the
@@ -113,28 +114,13 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls, releases
+from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
+from .api_contract import api_v2, error
 
 log = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS cloud_machines(
- bot TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'cloud', placement TEXT NOT NULL DEFAULT 'shared',
- size TEXT NOT NULL DEFAULT 'default',
- always_on INTEGER NOT NULL DEFAULT 0, pause_minutes INTEGER, machine_id TEXT, runner_id TEXT,
- state TEXT NOT NULL DEFAULT 'none',
- machine_size TEXT, started_at TEXT, stopped_at TEXT, cost_month_usd REAL NOT NULL DEFAULT 0,
- starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
- active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
- problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
- enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
- start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL, move_drain REAL);
-CREATE TABLE IF NOT EXISTS cloud_machine_codes(
- code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
-"""
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"  # the shared machine's row and HQ key: no bot id has an underscore
@@ -149,6 +135,10 @@ SUPPORT_REVISION_KEY = "cloud-machine-support-revision"
 NAME_KEY = (
     "cloud-machine-name:"  # + machine key: the name a person gave its computer, kept when the machine is made again
 )
+REPLACES_KEY = (
+    "cloud-machine-replaces:"  # + machine key: the computers it had before its row stopped naming one (`left`)
+)
+REPLACES_KEPT = 8
 TICK = 10  # seconds between looks
 SYNC = 60  # seconds between HQ lists
 DELETION_BATCH = 4  # old ids reconciled per look, even when HQ's list cannot be read
@@ -167,12 +157,13 @@ PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5  # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600  # a 402 is asked again this late, or as soon as HQ says the company is open
+CREDIT_FRESH = 3 * FROZEN_RETRY  # a 402 older than this no longer says the company is out of credit (`credit_refused`)
 ENROLL_MINUTES = 15
 ENROLL_GRACE = 60  # past its newest code's expiry, a machine not enrolled yet never will be
 CREATE_HOLD = ENROLL_MINUTES * 60 + ENROLL_GRACE  # give an unanswered create time to enroll before another request
 ENROLL_TRIES = 3  # machines made in a row that never enrolled before it waits for a person
 STOP_HOLD = 120  # a stop's reservation lapses this late: a server that died mid-stop strands no work
-DEAD = ("deleted", "failed")  # HQ's word for a machine that is gone or never got a computer: a want makes a new one
+DEAD = ("deleted", "failed")  # HQ's word for an unusable machine: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 SIGNIN_WANT = "signin:"  # the shared machine's want while a person signs a plan in with no computer online
 SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked, and last asked (epoch seconds)
@@ -204,7 +195,13 @@ STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "ma
 WAIT = 15
 ANSWER_CAP = 256 * 1024
 TRANSPORT = None  # tests' fake HQ (httpx transport), never the live one
-now = time.time  # tests' clock
+
+
+def now():
+    """Epoch seconds: the tests' clock. A test replaces this, not time.time for the whole process."""
+    return time.time()
+
+
 now_ns = time.time_ns  # support writes' ordering clock
 
 
@@ -454,9 +451,46 @@ def offered(c, settings=None):
     return cloud_company(c, settings) and bool(sizes(c))
 
 
+ROW_SQL = "SELECT * FROM cloud_machines WHERE bot=?"
+DELETING_SQL = "SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?"
+
+
 def row(c, bot):
-    found = c.execute("SELECT * FROM cloud_machines WHERE bot=?", (bot,)).fetchone()
+    # Kept for the read snapshot (read_cache: a write starts it again); `prime_rows` reads many bots' together.
+    from . import read_cache
+
+    found = read_cache.one(c, ROW_SQL, (bot,))
     return {**dict(found), "deleting": deleting(c, found["machine_id"])} if found else None
+
+
+def prime_rows(c, bots):
+    """`row` of each of these bots and of the shared machine (a cloud bot with no computer waits for one of them), in
+    two statements, for the reads that follow in this snapshot: "can this bot run" asks it of every such bot."""
+    from . import read_cache
+
+    if read_cache.cache(c) is None:
+        return
+    keys = sorted({str(b) for b in bots if b} | {SHARED})
+    found = {
+        r["bot"]: r
+        for r in c.execute(
+            "SELECT * FROM cloud_machines WHERE bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),)
+        )
+    }
+    read_cache.prime(c, ROW_SQL, {(k,): found.get(k) for k in keys})
+    machines = sorted({r["machine_id"] for r in found.values() if r["machine_id"] is not None})
+    gone = (
+        {
+            r[0]
+            for r in c.execute(
+                "SELECT machine_id FROM cloud_machine_deletions WHERE machine_id IN (SELECT value FROM json_each(?))",
+                (json.dumps(machines),),
+            )
+        }
+        if machines
+        else set()
+    )
+    read_cache.prime(c, DELETING_SQL, {(m,): (1,) if m in gone else None for m in machines})
 
 
 def rows(c):
@@ -471,7 +505,9 @@ def rows(c):
 
 def deleting(c, machine_id):
     """A sent DELETE fences this id until HQ reports it gone or no longer pending deletion."""
-    return bool(c.execute("SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?", (machine_id,)).fetchone())
+    from . import read_cache
+
+    return bool(read_cache.one(c, DELETING_SQL, (machine_id,)))
 
 
 def deletion_settled(answer, machine_id, refusal=None):
@@ -490,14 +526,26 @@ def intend_delete(c, current, reason="manual"):
 
 
 def count_enrollment_failure(c, key, machine_id, last_error=None):
-    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt. A machine HQ says
-    failed because the plan cannot run its size (`last_error`, else the row's for this id) spends none: its computer
-    never had a chance to connect, and `Manager.fall_back` starts the next one smaller instead."""
+    """Spend one try per unenrolled id before HTTP or adoption can lose the attempt. Temporary HQ and plan
+    refusals leave the enrollment budget intact."""
+    current = row(c, key)
+    tracked = current if current and current["machine_id"] == machine_id else None
     if last_error is None:
-        current = row(c, key)
-        last_error = current["last_error"] if current and current["machine_id"] == machine_id else ""
-    if plan_refusal(last_error):
-        return row(c, key)
+        last_error = tracked["last_error"] if tracked else ""
+    if last_error in TEMPORARY_REFUSALS:
+        # An older server may already have charged this id and stopped trying. Only the tracked id's error is known.
+        if (
+            tracked
+            and tracked["enroll_fails"]
+            and c.execute(
+                "DELETE FROM cloud_machine_enrollment_failures WHERE machine_id=? AND bot=?", (machine_id, key)
+            ).rowcount
+        ):
+            save(c, key, enroll_fails=tracked["enroll_fails"] - 1)
+            return row(c, key)
+        return current
+    if plan_refusal(last_error) or (tracked and tracked["runner_id"]):
+        return current
     added = c.execute(
         "INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, key)
     ).rowcount
@@ -507,6 +555,28 @@ def count_enrollment_failure(c, key, machine_id, last_error=None):
     if current and current["enroll_fails"] >= ENROLL_TRIES:
         save(c, key, problem="no_enroll", problem_at=current["problem_at"] or H.now())
     return row(c, key)
+
+
+def retry_backoff(current, at):
+    failures = current["failures"] + 1
+    return {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** min(failures - 1, 6))}
+
+
+def temporary_create_retry(current, machine, at):
+    """A failed create's list entry can be the only report or follow an HTTP refusal for the same attempt."""
+    code = machine["last_error"]
+    if machine["state"] != "failed" or code not in TEMPORARY_REFUSALS or current["enroll_fails"] >= ENROLL_TRIES:
+        return {}
+    problem = "hq:" + code
+    retry_at = current["next_try_at"]
+    asked_at = current["create_asked_at"] or at
+    if (
+        current["problem"] == problem
+        and retry_at is not None
+        and (current["machine_id"] == machine["id"] or retry_at > asked_at)
+    ):
+        return {field: current[field] for field in ("failures", "next_try_at", "problem", "problem_at")}
+    return {**retry_backoff(current, at), "problem": problem, "problem_at": H.now()}
 
 
 def deletion_retry(c, machine_id, refused=None):
@@ -537,13 +607,11 @@ def replacement_runner(c, key, old_id):
 
 def visible_rows(c):
     """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
-    from .getting_started import ONLINE_SECONDS
-
     online = {
         r["id"]
         for r in c.execute(
             "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-ONLINE_SECONDS),),
+            (runner_online.cutoff(),),
         )
     }
     return {
@@ -601,7 +669,7 @@ def default_placement(c, bot):
     return "own" if OWN_NAME.fullmatch(name) else "shared"
 
 
-def adopt(c, bot, actor=H.KEEPER):
+def adopt(c, bot, actor=H.TICO_ACTOR):
     """A bot of a cloud company with no computer and no choice yet: a cloud machine (the default), shared or its own by
     its role. Returns whether it is in cloud mode now. A bot someone moved to a computer keeps that; an external agent's
     has no computer at all."""
@@ -625,7 +693,7 @@ def adopt(c, bot, actor=H.KEEPER):
 def ensure_shared(c):
     c.execute(
         "INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
-        (SHARED, "cloud", "shared", H.KEEPER, H.now()),
+        (SHARED, "cloud", "shared", H.TICO_ACTOR, H.now()),
     )
 
 
@@ -715,6 +783,20 @@ def resting(c):
     )
 
 
+def credit_stopped(c):
+    """Computer ids of cloud machines Tico stopped because the company is out of credit, only while HQ says access is
+    frozen: Health names one account-wide cause for them, not one outage per machine (task #423). Unknown, stale or
+    unfrozen access is no claim, so a machine there keeps its own diagnosis."""
+    if cloud_access.access(c) != "frozen":
+        return set()
+    return {
+        r["runner_id"]
+        for r in c.execute(
+            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND problem='out_of_credit'"
+        )
+    }
+
+
 def label_for(c, key):
     """The name machine `key`'s computer enrolls with: the one a person gave it (`named`), else its bot's."""
     chosen = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NAME_KEY + key,)).fetchone()
@@ -797,6 +879,59 @@ def low_disk(disk):
     return free * 100 < GROW_FREE_PCT * total or free < GROW_FREE_GB * 1024**3
 
 
+# The largest size Tico recommends. A bigger one is still offered, but costs about as much as several of these, which
+# also spread the load and the risk: Tico marks it not recommended (`with_advice`), says why to whoever picks it (people
+# in Settings, agents in the API answer) and never grows a machine into it by itself (`grow_plan`).
+RECOMMENDED_TOP = "large"
+NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def recommended(offered, name):
+    """Whether Tico recommends size `name`: True unless it has more CPUs than RECOMMENDED_TOP in HQ's list `offered`
+    (True when either is not listed or has no CPU count)."""
+    top = next((s for s in offered if s["name"] == RECOMMENDED_TOP), None)
+    here = next((s for s in offered if s["name"] == name), None)
+    return not (top and here and top.get("cpu") and here.get("cpu") and here["cpu"] > top["cpu"])
+
+
+def size_note(offered, name):
+    """Why Tico does not recommend size `name`, with HQ's prices: "Costs about as much as three Large machines ($0.25/h
+    vs $0.09/h). For more room, give busy bots their own Large machine." '' for a recommended size."""
+    if recommended(offered, name):
+        return ""
+    top = next(s for s in offered if s["name"] == RECOMMENDED_TOP)
+    here = next(s for s in offered if s["name"] == name)
+    advice = f"For more room, give busy bots their own {cloud_size_name(RECOMMENDED_TOP)} machine."
+    price, top_price = here.get("usd_per_hour"), top.get("usd_per_hour")
+    if not price or not top_price:
+        return f"Costs more than {cloud_size_name(RECOMMENDED_TOP)} machines. {advice}"
+    prices = f"(${_hourly(price)}/h vs ${_hourly(top_price)}/h)"
+    many = round(price / top_price)
+    if many < 2:  # HQ's prices can change without a release: never "about as much as 1 Large machines"
+        return f"Costs more than a {cloud_size_name(RECOMMENDED_TOP)} machine {prices}. {advice}"
+    count = NUMBER_WORDS.get(many, str(many))
+    return f"Costs about as much as {count} {cloud_size_name(RECOMMENDED_TOP)} machines {prices}. {advice}"
+
+
+def _hourly(usd):
+    return f"{usd:.6f}".rstrip("0").rstrip(".") if round(usd, 2) != usd else f"{usd:.2f}"
+
+
+def with_advice(offered):
+    """HQ's sizes, each with `recommended` and, for one Tico does not recommend, the `note` that says why."""
+    out = []
+    for s in offered:
+        note = size_note(offered, s["name"])
+        out.append({**s, "recommended": not note, **({"note": note} if note else {})})
+    return out
+
+
+def note_field(c, size):
+    """{"note": ...} for a size answer when `size` is one Tico does not recommend, else {}."""
+    note = size_note(sizes(c), size) if size else ""
+    return {"note": note} if note else {}
+
+
 def bigger(offered, name):
     """The next size up from `name` that has more disk (the least disk above its own, the fewest CPUs among those), or
     None at the largest, for a size HQ did not list, or without HQ's disk sizes."""
@@ -822,13 +957,14 @@ def unresized(current, disk, offered):
     return bool(here and here.get("disk_gb") and disk["total_bytes"] < 0.8 * here["disk_gb"] * 1e9)
 
 
-def grow_plan(current, disk, offered, caps, others_cpu, at=0):
+def grow_plan(current, disk, offered, caps, others_cpu, at=0, shared=False):
     """(size, why, full) for a running machine row `current` whose storage grows, from its runner's newest disk reading
     `disk`: `size` the next one with more disk to grow to, or None; `why` the words for a machine that cannot grow (the
     largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running machines, or a size
     HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
-    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. Pure:
-    the clock is `at`."""
+    percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. It
+    grows only into a size Tico recommends: at RECOMMENDED_TOP `why` says what to do instead, for the `shared` machine
+    or a bot's own. Pure: the clock is `at`."""
     if not low_disk(disk) or resizing(current):
         return None, None, None
     full = round(100 * (1 - disk["free_bytes"] / disk["total_bytes"]))
@@ -836,6 +972,13 @@ def grow_plan(current, disk, offered, caps, others_cpu, at=0):
     if unresized(current, disk, offered):
         return None, f"Disk {full}% full: disk not resized to {cloud_size_name(here)}", full
     target = bigger(offered, here)
+    if target is not None and not recommended(offered, target) and recommended(offered, here):
+        instead = (
+            f"Give its busiest bots their own {cloud_size_name(RECOMMENDED_TOP)} machine"
+            if shared
+            else "Free space on it"
+        )
+        return None, f"Disk {full}% full at {cloud_size_name(here)}. {instead}", full
     if target is None:
         return None, f"Disk {full}% full: {cloud_size_name(here)} is the largest size", full
     until = current.get("grow_blocked_until")
@@ -934,22 +1077,75 @@ def opens(key):
 def enrolled(c, execution, runner_id, key):
     """Machine `key`'s runner is in: it becomes that machine's computer (a machine made again after its disk was
     deleted replaces the old one), and each bot set to run there is assigned to it now, or by the manager's next look
-    if it is busy."""
+    if it is busy. A computer that replaces one that is gone takes the plans the old one was given (`replaced`)."""
+    from . import model_subscriptions as MS
+
     current = row(c, key)
     old = current.get("runner_id")
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
+    gone = replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
-    H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
+    H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
+    for source in gone:
+        MS.carry_over(c, source, runner_id)
+    c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):
         bind(c, execution, bot)
-    from . import model_subscriptions as MS
-
     for bot in hosted(c, key):  # a new computer, even while its bot's last turn is still out elsewhere
         chooser = (row(c, bot) or {}).get("changed_by") or ""
         if MS.may_grant(c, execution.auth, chooser):
             lend_plans(c, execution, bot, runner_id, chooser, new=True)
+
+
+def left(c, key):
+    """Machine `key`'s row is about to stop naming its computer (made again: `adopt`, or deleted for a Replace:
+    `deleted`) before the next one enrolls. Kept, newest first, so `replaced` still finds it when the bots set to run there are no
+    longer assigned to it by then: otherwise the new computer gets only what the company lends, and a person's plans
+    given to the old one are lost (Tico Team, 2026-11-18: Reviewer 1 and Reviewer 2 lost Chris's Claude set)."""
+    runner_id = (row(c, key) or {}).get("runner_id")
+    if not runner_id:
+        return
+    earlier = were(c, key)
+    value = json.dumps([runner_id, *(r for r in earlier if r != runner_id)][:REPLACES_KEPT])
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (REPLACES_KEY + key, value),
+    )
+
+
+def were(c, key):
+    """The computers machine `key` had before its row stopped naming one, newest first (`left`)."""
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,)).fetchone()
+    try:
+        ids = json.loads(found["value"]) if found else []
+    except ValueError:
+        return []
+    return [r for r in ids if isinstance(r, str)] if isinstance(ids, list) else []
+
+
+def replaced(c, key, old, runner_id):
+    """The computers machine `key`'s new computer `runner_id` takes the place of, newest first: the one the machine
+    still names (`old`), the ones it named before it was made again or deleted (`left`), and the ones the bots set to
+    run there are still assigned to, when that computer is gone
+    (revoked: a replaced or deleted machine's, or one a person removed). Their plans follow the bots
+    (model_subscriptions.carry_over), so a Replace keeps every runtime the old machine signed in, a person's plans
+    included, and not only the ones the company would lend it now. A computer still in use keeps its plans to itself.
+    """
+    placed_on = []
+    for bot in hosted(c, key):
+        found = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        if found:
+            placed_on.append(found["runner_id"])
+    out = []
+    for source in dict.fromkeys([old, *were(c, key), *placed_on]):
+        if not source or source == runner_id:
+            continue
+        gone = c.execute("SELECT revoked_at FROM runners WHERE id=?", (source,)).fetchone()
+        if gone and gone["revoked_at"]:
+            out.append(source)
+    return out
 
 
 def unplaced(c, bot):
@@ -1165,7 +1361,7 @@ def facts(c, settings, current, at):
         restarted = c.execute(
             "SELECT created_at FROM events WHERE actor=? AND action='cloud_machine.stopped' AND target=? "
             "AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
-            (H.KEEPER, key, f"%{OFFLINE_REASON}%"),
+            (H.TICO_ACTOR, key, f"%{OFFLINE_REASON}%"),
         ).fetchone()
         out["restarted_at"] = epoch(restarted["created_at"]) if restarted else None
     if current["problem"] == "out_of_credit" and not out["frozen"]:
@@ -1280,8 +1476,6 @@ def signin_wake(c, settings):
     for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
     after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
     after the first ask."""
-    from .getting_started import ONLINE_SECONDS
-
     if not offered(c, settings) or cloud_access.frozen(c):
         return False
     ensure_shared(c)
@@ -1292,7 +1486,7 @@ def signin_wake(c, settings):
         current["runner_id"]
         and c.execute(
             "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
-            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+            (current["runner_id"], runner_online.cutoff()),
         ).fetchone()
     ):
         return False
@@ -1656,7 +1850,7 @@ class Manager:
                 with self.store.transaction() as c:
                     H.event(
                         c,
-                        H.KEEPER,
+                        H.TICO_ACTOR,
                         "cloud_machine.list_refused",
                         "",
                         {"code": str(refused.code)[:60], "status": refused.status},
@@ -1725,13 +1919,10 @@ class Manager:
                         continue
                     gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
-                        # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
-                        # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
-                        # Only HQ's list says so: a refused or unanswered create may be a passing outage. One HQ made
-                        # and then failed because the plan cannot run its size is that refusal, not a stall.
-                        count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+                        counted = count_enrollment_failure(c, key, machine["id"], machine["last_error"])
                         if machine["state"] == "failed" and current["state"] != "failed":
                             self.plan_failed(c, current, machine, at)
+                        gone.update(temporary_create_retry(counted, machine, at))
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
                     elif machine["state"] in ON and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
@@ -1818,7 +2009,7 @@ class Manager:
             if intent["reason"] == "never_enrolled":
                 self.never_enrolled(current, c)
             else:
-                deleted(c, current, H.KEEPER)
+                deleted(c, current, H.TICO_ACTOR)
         c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
 
     def reconcile_delete(self, hq, machine_id):
@@ -1871,6 +2062,7 @@ class Manager:
             c.execute(
                 "UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?", (current["runner_id"], old_id)
             )
+            left(c, key)
         c.execute(
             "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
             "WHERE bot=? AND replacement_for IS NOT ?)",
@@ -1880,6 +2072,12 @@ class Manager:
         dead = machine["state"] in DEAD
         fresh = {**current, **self.described(machine), "runner_id": fresh_runner, "deleting": False}
         woke_for = wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
+        retry = temporary_create_retry(current, machine, at) or {
+            "failures": 0,
+            "next_try_at": None,
+            "problem": "",
+            "problem_at": None,
+        }
         save(
             c,
             key,
@@ -1892,10 +2090,7 @@ class Manager:
             ttl_s=None,
             wake_key=None if dead else woke_for,
             woke_at=None if dead else at,
-            failures=0,
-            next_try_at=None,
-            problem="",
-            problem_at=None,
+            **retry,
             stop_until=None,
             start_asked_at=None,
             create_asked_at=None,
@@ -1977,7 +2172,7 @@ class Manager:
             if not live or live["problem"] != OFFLINE_RESTARTING or live["problem_at"] != current["problem_at"]:
                 return live  # it checked in, or something else happened, meanwhile
             save(c, key, problem="", problem_at=None)
-            H.event(c, H.KEEPER, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
+            H.event(c, H.TICO_ACTOR, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
             if live["state"] in ON:
                 file_health_card(c, key, None, epoch(live["problem_at"]) or at)
             return row(c, key)
@@ -1995,7 +2190,9 @@ class Manager:
             disk = fresh_disk(current, latest_disks(c, [current["runner_id"]], at).get(current["runner_id"]))
             on = grows(current, None if key == SHARED else row(c, SHARED))
             target, why, full = (
-                grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at) if on else (None, None, None)
+                grow_plan(current, disk, sizes(c), listed_caps(c), others_cpu(c, key), at, shared=key == SHARED)
+                if on
+                else (None, None, None)
             )
         if target is None and why is None:
             if current["problem"] != "disk_full" or resizing(current):
@@ -2021,7 +2218,7 @@ class Manager:
                 )
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.grew",
                     key,
                     {"from": live["machine_size"], "to": target, "disk_pct": full},
@@ -2030,7 +2227,11 @@ class Manager:
                 save(c, key, problem="disk_full", problem_at=live["problem_at"] or H.now(), grow_note=why)
                 if live["problem"] != "disk_full":
                     H.event(
-                        c, H.KEEPER, "cloud_machine.grow_blocked", key, {"size": live["machine_size"], "disk_pct": full}
+                        c,
+                        H.TICO_ACTOR,
+                        "cloud_machine.grow_blocked",
+                        key,
+                        {"size": live["machine_size"], "disk_pct": full},
                     )
             return row(c, key)
 
@@ -2176,7 +2377,7 @@ class Manager:
                 )
             H.event(
                 c,
-                H.KEEPER,
+                H.TICO_ACTOR,
                 "cloud_machine." + {"create": "created", "start": "started", "stop": "stopped"}[action],
                 key,
                 {
@@ -2198,7 +2399,8 @@ class Manager:
         fails = live["enroll_fails"]
         # Its id stays, as deleted: HQ keeps a machine live until boat confirms the delete, and a create meanwhile
         # answers with that one (act), which is not the new machine.
-        deleted(c, live, H.KEEPER, details={"reason": "never_enrolled", "tries": fails})
+        # Part of the replacement it was made for: the next attempt still takes the old computer's place.
+        deleted(c, live, H.TICO_ACTOR, details={"reason": "never_enrolled", "tries": fails}, replacing=True)
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
@@ -2210,13 +2412,15 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.KEEPER)
+                deleted(c, row(c, key), H.TICO_ACTOR, replacing=True)  # HQ lost it: the next one takes its place
             return
         else:
-            failures = current["failures"] + 1
-            fields = {"failures": failures, "next_try_at": at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1))}
+            fields = retry_backoff(current, at)
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
+        if action == "heartbeat" and refused.status == 409 and refused.code == "not_running":
+            # HQ can be reporting a stop. Refresh its state before deciding whether to resume the same disk.
+            self.synced = None
         if action == "create":
             self.synced = None  # read HQ's state before the next retry when possible
             if 400 <= refused.status < 500 and refused.status != 408:
@@ -2288,7 +2492,7 @@ class Manager:
             ):
                 H.event(
                     c,
-                    H.KEEPER,
+                    H.TICO_ACTOR,
                     "cloud_machine.refused",
                     key,
                     {
@@ -2309,14 +2513,12 @@ class Manager:
         if tried != current["size"]:
             return  # a person chose another size meanwhile: the next machine is made at theirs
         if not self.fall_back(c, current, tried, code, at, "made"):
-            failures = current["failures"] + 1
             save(
                 c,
                 current["bot"],
                 problem="hq:" + code,
                 problem_at=H.now(),
-                failures=failures,
-                next_try_at=at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1)),
+                **retry_backoff(current, at),
             )
 
     def fall_back(self, c, current, refused_size, code, at, action="create", fields=None):
@@ -2343,7 +2545,7 @@ class Manager:
         save(c, key, **fields)
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.refused",
             key,
             {"action": action, "code": code, "size": refused_size, "fallback": target},
@@ -2358,7 +2560,7 @@ class Manager:
         key, refused_size = current["bot"], current["size"]
         H.event(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             "cloud_machine.size_fallback",
             key,
             {"from": refused_size, "to": runs_at, "code": code, "at": at},
@@ -2383,7 +2585,7 @@ class Manager:
         name = "The shared cloud machine" if key == SHARED else f"{bot_name(c, key)}'s cloud machine"
         H.notice(
             c,
-            H.KEEPER,
+            H.TICO_ACTOR,
             chooser,
             f"{name} couldn't start at {cloud_size_name(refused_size)} ({fallback_words(sizes(c), refused_size, code)}), "
             f"so it runs at {cloud_size_name(runs_at)}. Its work isn't waiting. To change it, pick another size in "
@@ -2432,6 +2634,44 @@ def problem_words(problem):
     return PROBLEMS.get(problem, problem)
 
 
+OUT_OF_CREDIT_WAIT = "out of credit: its cloud machine can't start"
+
+
+def credit_refused(c):
+    """Whether HQ refused any of the company's cloud machines for credit (a 402 on a start or a create) in the last
+    CREDIT_FRESH, whatever its company-wide word says: HQ's billing can stop machines while its `cloud` answer still
+    says open, and then every page would show nothing while the machines cannot start. A machine a bot still wants asks
+    HQ again every FROZEN_RETRY, and each 402 renews the mark, so an older one is a machine nothing wants any more: one
+    stopped, moved or deleted while refused. Counted forever, it kept "Out of credit" on every TIDY page on Nov 18
+    with HQ open and $163 left, as credit that was never short does not come back (cloud_access.recovered)."""
+    since = H.shift(H.now(), seconds=-CREDIT_FRESH)
+    return bool(
+        c.execute(
+            "SELECT 1 FROM cloud_machines WHERE problem='out_of_credit' AND mode='cloud' AND problem_at >= ? LIMIT 1",
+            (since,),
+        ).fetchone()
+    )
+
+
+def any_credit_stop(c):
+    """Whether anything in the company is stopped for credit (a machine HQ refused, or the company frozen), read once
+    per snapshot: a page of status lines asks for every bot, and nearly always the answer is no."""
+    from .read_cache import value
+
+    return value(c, "cloud_credit_stopped", lambda: credit_refused(c) or cloud_access.frozen(c))
+
+
+def out_of_credit(c, bot):
+    """Whether a cloud-mode bot's machine is stopped for credit: HQ refused it (402), or the company is frozen."""
+    if not any_credit_stop(c):
+        return False
+    current = row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return False
+    machine = home(c, bot, current) or current
+    return machine["problem"] == "out_of_credit" or cloud_access.frozen(c)
+
+
 def waiting(c, bot):
     """What a cloud-mode bot's queued work waits for while its machine is not up (views.queued_label), or ''."""
     current = row(c, bot)
@@ -2439,7 +2679,7 @@ def waiting(c, bot):
         return ""
     machine = home(c, bot, current) or current
     if machine["problem"] == "out_of_credit" or cloud_access.frozen(c):
-        return "out of credit: its cloud machine can't start"
+        return OUT_OF_CREDIT_WAIT
     if machine["problem"].startswith("hq:"):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
     if machine["problem"].startswith("error:"):
@@ -2804,13 +3044,21 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def deleted(c, current, actor, changed_by=None, details=None):
-    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts."""
+def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
+    """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts.
+    `replacing`: the next machine takes this one's place (a Replace, the shared machine, one HQ lost, or an attempt
+    that never enrolled), so its computer is kept for the next to carry its plans over (`left`). Any other deletion
+    forgets the computers kept: a machine deleted for good gives a later one no plan, a person's included, without a
+    new grant."""
     key = current["bot"]
     fails = row(c, key)["enroll_fails"]
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
+    if not replacing:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     if current["runner_id"] and current["runner_id"] != fresh_runner:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
+        if replacing:
+            left(c, key)
     c.execute(
         "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
         "WHERE bot=? AND (replacement_for IS NOT ? OR ? IS NULL))",
@@ -2913,7 +3161,11 @@ def _remove(service, who, auth, key, request, mutate, replace):
         # Enrollment can finish during HQ's call. Revoke the runner found here, under the same lock enrollment takes.
         # A manager's repair preserves an admin's placement for the new computer's first-enrollment plan rule.
         deleted(
-            c, live, who.actor, live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor
+            c,
+            live,
+            who.actor,
+            live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor,
+            replacing=explicit,
         )
         return {"ok": True}
 
@@ -2984,7 +3236,9 @@ def disk_words(c):
         elif resizing(current):
             advice = f"It restarts at {cloud_size_name(current['size'])} once its turns finish."
         elif current["problem"] == "disk_full":
-            advice = f"{current['grow_note'] or 'It cannot grow'}. Free space on it."
+            note = current["grow_note"] or "It cannot grow"
+            # A note from `grow_plan` at RECOMMENDED_TOP already says what to do.
+            advice = f"{note}." if " full at " in note else f"{note}. Free space on it."
         elif grows(current, None if key == SHARED else shared):
             advice = "It grows to a bigger size at the next look."
         else:
@@ -3016,10 +3270,16 @@ def health(c, settings=None):
     stuck = sorted(
         bot
         for bot, machine in machines.items()
-        if bot in active and machine["problem"] and machine["problem"] != "disk_full"
+        if bot in active
+        and machine["problem"]
+        and machine["problem"] != "disk_full"
+        # Out of credit is one account-wide cause Health names once, with Add credit (health.view, task #423).
+        and not (machine["problem"] == "out_of_credit" and cloud_access.access(c) == "frozen")
     )
+    machines_by_key = rows(c)
+    shared_stuck = (machines_by_key.get(SHARED) or {}).get("problem") == "no_enroll"
     lines = []
-    for key, current in sorted(rows(c).items()):
+    for key, current in sorted(machines_by_key.items()):
         if current["problem"] == "disk_full" and current["state"] in ON:
             lines.append(f"{machine_name(c, key)}: {current['grow_note'] or PROBLEMS['disk_full']}.")
         elif resizing(current) and current["grow_note"] == STOP_REFUSED:
@@ -3032,7 +3292,7 @@ def health(c, settings=None):
                 f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
                 f"its turns to finish before it restarts at {cloud_size_name(current['size'])}."
             )
-    for key, current in sorted(rows(c).items()):
+    for key, current in sorted(machines_by_key.items()):
         failed = update_failed(c, current["runner_id"]) if current["runner_id"] and current["mode"] == "cloud" else None
         if failed and (key == SHARED or key in active):
             why = str(failed["update_error"] or "").strip()[:120]
@@ -3040,16 +3300,18 @@ def health(c, settings=None):
                 f"{machine_name(c, key)}: still on Tico {failed['release']}; its update to {failed['update_target']} "
                 f"failed{' (' + why + ')' if why else ''}. It tries again when it next starts."
             )
-    if not stuck and not old and not lines:
+    if not shared_stuck and not stuck and not old and not lines:
         return None
     names = [
         f"{(H.bot(c, bot) or {}).get('slug') or bot}: {problem_words(machines[bot]['problem'])}" for bot in stuck[:5]
     ]
-    summary = (
-        [f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine problem: {'; '.join(names)}"]
-        if stuck
-        else []
-    )
+    summary = []
+    if shared_stuck:
+        summary.append("Shared cloud machine never connected. Its member bots cannot run. Replace it in Computers.")
+    if stuck:
+        summary.append(
+            f"{len(stuck)} bot{'s have' if len(stuck) != 1 else ' has'} a cloud machine problem: {'; '.join(names)}"
+        )
     if old:
         names = [
             f"{'shared (_shared)' if r['bot'] == SHARED else r['slug'] or r['bot']}: {r['machine_id']}" for r in old
@@ -3060,7 +3322,7 @@ def health(c, settings=None):
             "Old disks may still cost money."
         )
     summary.extend(lines[:5])
-    return {"status": "warn", "summary": " ".join(summary)}
+    return {"status": "bad" if shared_stuck else "warn", "summary": " ".join(summary)}
 
 
 # ----------------------------------------------------------------------------- routes
@@ -3113,6 +3375,21 @@ class CloudSupportView(BaseModel):
     machines: list[CloudSupportMachine] = Field(max_length=1000)
 
 
+CLOUD_SUPPORT_DESCRIPTION = (
+    "HQ is the source of the switch and helper states; no local copy is kept. "
+    "GET returns available false, on null and an empty machines list off Tico Cloud "
+    "or when HQ answers 404 not_cloud. Demo and rehearsal never contact HQ. "
+    "PUT accepts a boolean on, needs the owner and refuses support sessions. "
+    "Core assigns an increasing revision and keeps it for retries of the same "
+    "Idempotency-Key. A 409 stale_revision is final and carries HQ's current boolean "
+    "on in the error. After an uncertain PUT, read HQ again before showing a saved state."
+)
+CLOUD_SUPPORT_ERRORS = {
+    "403": error("People only; changing the switch needs the owner"),
+    "502": error("Didn't reach Tico HQ, or HQ's answer could not be used"),
+}
+
+
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
@@ -3141,7 +3418,17 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("not_cloud", "Tico support on cloud machines is not available here", 404)
         return {"available": False, "on": None, "machines": []}
 
-    @app.get("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.get(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "getCloudMachineSupport",
+            "Read Tico support's cloud-machine switch and helper states from HQ; unavailable off Tico Cloud",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses=CLOUD_SUPPORT_ERRORS,
+        ),
+    )
     def cloud_machine_support(request: Request):
         """The switch and each machine's helper state, read from HQ every time. Unavailable off Tico Cloud.
         Signed-in people only; demo and rehearsal never contact HQ."""
@@ -3151,7 +3438,20 @@ def install(app, settings, store, auth, execution, mutate):
             raise Problem("forbidden", "Only people see Tico support on cloud machines", 403)
         return support_state()
 
-    @app.put("/api/v2/cloud-machines/support", response_model=CloudSupportView)
+    @app.put(
+        "/api/v2/cloud-machines/support",
+        response_model=CloudSupportView,
+        **api_v2(
+            "Computers",
+            "setCloudMachineSupport",
+            "Let Tico support reach the company's cloud machines, or stop it; owner only",
+            description=CLOUD_SUPPORT_DESCRIPTION,
+            responses={
+                **CLOUD_SUPPORT_ERRORS,
+                "404": error("not_cloud: cloud-machine support is not available"),
+            },
+        ),
+    )
     def cloud_machine_support_set(request: Request, body: CloudSupportChange):
         """Let Tico support reach this company's cloud machines, or stop it, at HQ. Owner only; support sessions
         cannot change their own access. Retries keep the same revision; HQ refuses a change older than its latest."""
@@ -3233,7 +3533,7 @@ def install(app, settings, store, auth, execution, mutate):
                 return {"offered": False, "sizes": [], "caps": {}, "shared": None}
             return {
                 "offered": True,
-                "sizes": sizes(c) or [{"name": n} for n in SIZES],
+                "sizes": with_advice(sizes(c) or [{"name": n} for n in SIZES]),
                 "caps": listed_caps(c),
                 "shared": shared_view(c),
             }
@@ -3250,7 +3550,8 @@ def install(app, settings, store, auth, execution, mutate):
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
             return {
-                "shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes, body.grow_storage)
+                "shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes, body.grow_storage),
+                **note_field(c, body.size),
             }
 
         return mutate(request, body, run)
@@ -3292,7 +3593,8 @@ def install(app, settings, store, auth, execution, mutate):
                     body.placement,
                     body.pause_minutes,
                     body.grow_storage,
-                )
+                ),
+                **note_field(c, body.size),
             },
         )
 

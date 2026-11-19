@@ -28,7 +28,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico pin add <place> <item>\ntico pin add: error: the following arguments are required: place, item",
+  "stderr": "Example: tico pin add <place> <item>\nplace: Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (Company, the person's own landing page)\nitem: page:<file id> or card:<id>\ntico pin add: error: the following arguments are required: place, item",
   "exit": 64
  },
  {
@@ -40,7 +40,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico pin add <place> <item>\ntico pin add: error: the following arguments are required: item",
+  "stderr": "Example: tico pin add <place> <item>\nitem: page:<file id> or card:<id>\ntico pin add: error: the following arguments are required: item",
   "exit": 64
  },
  {
@@ -162,7 +162,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico pin update <pin>\ntico pin update: error: the following arguments are required: pin",
+  "stderr": "Example: tico pin update <pin>\npin: Pin id, from `card list --place`\ntico pin update: error: the following arguments are required: pin",
   "exit": 64
  },
  {
@@ -244,7 +244,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico pin remove <pin>\ntico pin remove: error: the following arguments are required: pin",
+  "stderr": "Example: tico pin remove <pin>\npin: Pin id\ntico pin remove: error: the following arguments are required: pin",
   "exit": 64
  },
  {

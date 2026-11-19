@@ -40,7 +40,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 |---|---|
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
-| Repositories | Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
+| Repositories | Team repositories, the company's GitHub App connection (the Owner), product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
 | Subscriptions | Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
@@ -52,7 +52,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
-| Calls | Calls in a thread ([guide](meet.md)): a Google Meet, or a Tico Meet call with audio and screen share, a live transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for audio and screen share only, never a camera; joining a Google Meet hands back its link. |
+| Calls | Calls in a thread ([guide](meet.md)): a Google Meet, or a Tico Meet call with audio and screen share, a live transcript posted to the thread when it ends, and bots that listen and, in Tico Meet, answer aloud. Joining a Tico Meet call hands back a token for audio and screen share only, never a camera; joining a Google Meet hands back its link. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
@@ -66,10 +66,13 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Roadmaps | The Roadmap's ranked Product tasks, company roadmap settings and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
-| Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
+| Risk | Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and documents linked to a risk. |
+| Page history | The pages the signed-in person opened in the app in the last 30 days, newest first, kept so Tico knows where they have been. Nobody else reads them; clearing removes the list. |
+| Products | Our products: kind, status, tax kind, owner, code, the agreement each is sold under and the vendors it depends on. Each is a Contacts Product record company/self owns. |
+| Strategy | The team's strategy: what the owner saves is live at once as the next numbered version; the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
 | Tools | Every way the company reaches the outside world in one list, and API tools: their keys per level, who can use each, its checks and calls. |
@@ -178,9 +181,15 @@ included:
 
 ## Rate limits and size limits
 
-Tico does not rate-limit ordinary calls. What it does enforce: writes are limited to 2 MB (uploads and meeting
-imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live stream costs the
-server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the guidance.
+Each API client has a fair share of the server, so one script cannot slow everyone else: an API token or service key
+runs at most 4 requests at once and 240 a minute, a bot or a person's Assistant 8 at once and 600 a minute. Past
+either, the request is refused at once with `429 rate_limited`, a `Retry-After` header and the same seconds in
+`retry_after`; the `tico` client retries it. Runners and people in the app have no limit. The server's
+operator changes the numbers with `TICO_FAIR_SHARE_TOKEN_CONCURRENT`, `TICO_FAIR_SHARE_TOKEN_PER_MINUTE`,
+`TICO_FAIR_SHARE_BOT_CONCURRENT` and `TICO_FAIR_SHARE_BOT_PER_MINUTE` (0 is no limit). Writes are limited to 2 MB
+(uploads and meeting imports 20 MB, `413 too_large`), a few actions have a daily budget (`429`), and each open live
+stream costs the server a small read every second. [custom-frontend.md](custom-frontend.md#rate-limits) has the
+guidance.
 
 File imports have limits of their own. A conversion stops after 30 seconds, or when it needs more than 1 GiB of memory.
 The import then fails with `422 import_failed`, and its `detail` says to split the file. Two conversions run at once.
@@ -256,15 +265,6 @@ no correction or deletion is sent to external services. Provider threads, existi
 and external copies already delivered remain outside this operation. An edit accepts only `text`,
 not `ask` or attachments.
 A client can tell a server offers this by the `editTaskComment` and `deleteTaskComment` operations in `GET /api/v2/openapi.json`.
-
-`POST /api/v2/tasks/{tid}/comments/{mid}/resolve` settles an open question `mid` on the task. With
-`{"quote": "..."}` (at most 4000 characters), the question's asker or the task's owner bot records the person's
-words from wherever they answered as a `kind: "answer"` reply with `refs.quoted: true`; on a structured question
-its `answer` is `{target, answers: {}, other: <quote>, dismiss: false, by: <caller>, at, quoted: true}`. With `{}`,
-the asker withdraws the question: it stays in the thread with `superseded_at`. Either way it leaves every Needs
-you list and count, wakes nobody, and answers as an edit does, with the answer (or the withdrawn question) as
-`comment`. `404` when `mid` is not a question on this task; `403 identity` for any other caller; `422 kind` when
-it was already answered or withdrawn.
 
 ## Branches
 

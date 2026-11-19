@@ -35,7 +35,7 @@ from backend import pipeline_settings as S
 
 CHECK_OF = {"Spec": "spec", "Review": "review", "QA": "qa", "Checked in production": "validate"}
 NAME_OF = {"spec": "Spec page", "review": "Review page", "qa": "QA page", "validate": "Checked in production"}
-RUBRIC_OF = {"spec": S.SPEC_RUBRIC, "review": S.REVIEW_RUBRIC, "qa": S.QA_RUBRIC, "validate": S.VALIDATE_RUBRIC}
+RUBRIC_OF = {"spec": S.SPEC_RUBRIC, "review": S.LEGACY_REVIEW_RUBRIC, "qa": S.QA_RUBRIC, "validate": S.VALIDATE_RUBRIC}
 # The bars tried: a part is yes at met_at or more. Below 0.5 a yes would be likelier no than yes, so the grid starts there.
 GRID = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))  # 0.5 .. 0.95
 UNSURE_UNDER = 0.10
@@ -189,7 +189,7 @@ def state_of(row, cache, context):
         {"id": row.get("requirement_id") or "r", "name": NAME_OF[check]},
         {
             "title": task.get("title") or "",
-            "body": task.get("body") or "",
+            "request": (task.get("request") or {}).get("text") or task.get("body") or "",
             "version": task.get("version") or 0,
             "pipeline": {"goal": ""},
             "pipeline_id": task.get("pipeline_id"),

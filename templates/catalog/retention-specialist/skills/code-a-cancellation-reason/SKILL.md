@@ -1,6 +1,8 @@
 ---
 name: code-a-cancellation-reason
 description: Give one cancellation or downgrade request one reason code from what the customer actually said, using the codes in the save policy, and record "not given" when no reason was stated.
+metadata:
+  function: customers
 ---
 # Code a cancellation reason
 

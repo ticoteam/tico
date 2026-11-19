@@ -56,3 +56,5 @@ first_routine:
 example_output: knowledge/examples/security-report.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_github]
+shared_files:
+  - .claude/skills/manage-insurance

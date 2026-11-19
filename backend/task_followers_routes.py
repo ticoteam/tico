@@ -7,6 +7,7 @@ from fastapi import Request
 from . import org_rule_check
 from . import task_privacy as privacy
 from . import task_followers
+from .api_contract import api_v2
 
 
 def register(
@@ -50,7 +51,9 @@ def register(
                 following=body.following,
                 notify=body.notify,
                 mover=mover(c, who) or None,
-                check=lambda target: reach.check(c, who, target, "task", task_id=task_id),
+                check=lambda target: reach.check(
+                    c, who, target, "task", task_id=task_id, owner=(H.task(c, task_id) or {}).get("owner_id")
+                ),
             )
             return followers_answer(c, who, task_id)
 
@@ -99,7 +102,15 @@ def register(
             raise Problem("forbidden", "Only the person or bot who wrote a comment can edit or delete it", 403)
         return row
 
-    @app.post("/api/v2/tasks/{tid}/comments/{mid}")
+    @app.post(
+        "/api/v2/tasks/{tid}/comments/{mid}",
+        **api_v2(
+            "Tasks",
+            "editTaskComment",
+            "Change the text of a comment you wrote; it wakes nobody and is marked edited_at",
+            "CommentResult",
+        ),
+    )
     def task_comment_edit(request: Request, tid: str, mid: str, body: M.TaskComment):
         """The author changes a comment's text. It wakes nobody and is not sent again; the new text
         is new words to the bot on the task, so it needs what a new comment needs."""
@@ -147,7 +158,15 @@ def register(
         body = M.TaskComment.model_validate(replay["body"])
         return comment_edit_write(c, bot, replay["task"], replay["message"], body, org_rule_check.decided(gate))
 
-    @app.post("/api/v2/tasks/{tid}/comments/{mid}/delete")
+    @app.post(
+        "/api/v2/tasks/{tid}/comments/{mid}/delete",
+        **api_v2(
+            "Tasks",
+            "deleteTaskComment",
+            "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain",
+            "CommentResult",
+        ),
+    )
     def task_comment_delete(request: Request, tid: str, mid: str, body: M.Empty):
         """The author takes a comment back: never listed again, never handed to a bot."""
         who = request.state.identity

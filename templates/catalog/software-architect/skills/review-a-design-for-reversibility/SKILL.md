@@ -1,6 +1,8 @@
 ---
 name: review-a-design-for-reversibility
 description: Sort each decision in a design doc as a two-way door (cheap to undo) or a one-way door (costly to undo), then check the blast radius, the data path and the rollback of each one-way door before the design is approved.
+metadata:
+  function: engineering
 ---
 # Review a design for reversibility
 

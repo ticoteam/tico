@@ -17,12 +17,13 @@ Posting a feed row:
 - Pending -> posted, or an amount change, updates the row in place; a changed posted row is reversed and posted
   again, never twice. A row a done reconciliation cleared is locked."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any, cast
 
-from . import budgeting, documents, payments, posting, posting_rules, shared
+from . import budgeting, documents, key_use, payments, posting, posting_rules, shared
 from . import receipts as RCP
 from .context import Ctx
 from .core import dates
@@ -35,16 +36,22 @@ from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import raw_totals as SR
 from .store import tico
 
+log = logging.getLogger(__name__)
+
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 BOOKS_PROVIDERS = ("quickbooks", "xero")
+RULE = "rule"  # _settle's answer when a posting rule posted the row
 MATCH_DAYS = 5  # a transfer's two sides post within this many days of each other
+# A card paid from a bank on another connection: the bank's debit posts up to a week from the card's credit.
+CARD_PAY_DAYS = 7
 AUTH_DAYS = 30  # an authorization's hold lasts this long without its settlement
 
 
@@ -65,7 +72,7 @@ def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
 
 def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
     """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
-    status before this run: only the first failure of a run is told (one finance.sync.failed event and one keeper
+    status before this run: only the first failure of a run is told (one finance.sync.failed event and one Tico
     notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
     a new run."""
     if prior == "error":
@@ -109,13 +116,22 @@ def gl_account(ctx: Ctx, money: Any) -> L.Account:
     return account
 
 
-def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str) -> L.Account:
-    """The first free code from `base` (1000 → 1001, 1002...) for a provider account Tico maps."""
+def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str, parent_id: str = "") -> L.Account:
+    """The first free code from `base` (1000 → 1001, 1002...) for a provider account Tico maps, under `parent_id` when
+    given."""
     taken = {a.code for a in ctx.accounts.values()}
     code = int(base)
     while str(code) in taken:
         code += 1
-    made = L.Account(id=SL.new_id(), book_id=ctx.book.id, code=str(code), name=name[:120], type=type_, subtype=subtype)
+    made = L.Account(
+        id=SL.new_id(),
+        book_id=ctx.book.id,
+        code=str(code),
+        name=name[:120],
+        type=type_,
+        subtype=subtype,
+        parent_id=parent_id,
+    )
     L.check_account(made, ctx.accounts)
     SL.insert_account(ctx.c, made, who, ctx.at)
     ctx.changed()
@@ -123,7 +139,51 @@ def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: s
 
 
 # ------------------------------------------------------------------------------------------------ connecting
+KEY_NOT_USABLE_NOW = key_use.KEY_NOT_USABLE_NOW
+KEY_NOT_YOURS = key_use.KEY_NOT_YOURS
+
+
+def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
+    """Refuse binding a credential the requester may not use (the vault's rule, `tico.may_use_credential`). Every
+    path that sets a connection's credential runs it: the connect route before its probe sends the key anywhere, and
+    connection_create, which the route and the generic actions path both reach, again at approval."""
+    if not tico.may_use_credential(ctx.c, who, credential_id):
+        raise denied(KEY_NOT_YOURS)
+
+
+def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
+    """Why a sync must not read this connection's credential, or "" when it may: the person or bot who made the
+    connection may no longer use it (`key_use.refused`: a grant revoked, a person gone, a bot paused or archived)."""
+    with store.read() as c:
+        return key_use.refused(
+            c,
+            str(row["created_by"] or ""),
+            str(row["credential_ref"] or ""),
+            ident=str(row["id"]),
+            provider=str(row["provider"]),
+        )
+
+
 def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Connect a bank, card or Stripe account with a stored credential the requester may use (`require_usable_key`),
+    checked after the provider's own checks so a malformed request still says what is wrong with it."""
+    plan = _connection_plan(ctx, who, p)
+    require_usable_key(ctx, who, str(p.get("credential_id") or ""))
+    return plan
+
+
+def history_from(ctx: Ctx, p: V.Payload) -> str:
+    """The first day a new connection reads its history from (`history_from`, YYYY-MM-DD): Jan 1 of this year when left
+    out. A connection made before this setting has none in its settings and keeps reading its whole history."""
+    day = V.opt_text(p, "history_from", 10) or f"{ctx.today[:4]}-01-01"
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        raise invalid("history_from is a day, YYYY-MM-DD") from None
+    return day
+
+
+def _connection_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Connect a Mercury account with the company's token (a Tico credential, read at use time and never copied
     here). `probe` is what finance/sync.probe read with that token just before: the accounts (last 4 only), the IO
     credit accounts and Mercury's users. Each account becomes a money account mapped to a line in the books: checking
@@ -133,6 +193,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if str(p.get("provider") or "") in BOOKS_PROVIDERS:
         # A books connection is made only by its claim (books_link.finish), never as a bank connection.
         raise invalid("QuickBooks and Xero connect through POST /api/v2/finance/books/connect, not here")
+    if not isinstance(p.get("probe"), dict):
+        # The probe is the provider read the connect route makes with the key, outside any transaction.
+        raise invalid("connect through POST /api/v2/finance/connections: it reads the provider and sends the probe")
     if V.opt_text(p, "provider", 20) == "stripe":
         from . import stripe_sync  # lazy: it imports this module
 
@@ -141,7 +204,19 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         from . import brex_sync  # lazy: it imports this module
 
         return brex_sync.connection_create(ctx, who, p)
-    V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
+    V.only(
+        p,
+        (
+            "provider",
+            "credential_id",
+            "name",
+            "probe",
+            "approver_email",
+            "token_creator_email",
+            "server_ip",
+            "history_from",
+        ),
+    )
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
     if any(
@@ -149,16 +224,16 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     ):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probe = V.obj(p.get("probe"), "probe")
-    accounts = [V.obj(a, "an account") for a in V.items(probe.get("accounts"), "probe.accounts")]
-    raw_credit: object = probe.get("credit") or []
-    credit = [V.obj(a, "a credit account") for a in V.items(raw_credit, "probe.credit")]
+    # A company with no IO card lists no credit account (and one with only IO no bank account): either may be empty.
+    accounts = [V.obj(a, "an account") for a in V.opt_items(probe.get("accounts"), "probe.accounts")]
+    credit = [V.obj(a, "a credit account") for a in V.opt_items(probe.get("credit"), "probe.credit")]
     if not accounts and not credit:
         raise invalid("the token sees no Mercury accounts")
     approver = (V.opt_text(p, "approver_email", 200) or "").strip().lower()
     creator = (V.opt_text(p, "token_creator_email", 200) or "").strip().lower()
     users: object = probe.get("users")
     emails = (
-        {str(V.obj(u, "a user").get("email") or "").lower() for u in V.items(users, "users")}
+        {str(V.obj(u, "a user").get("email") or "").lower() for u in V.opt_items(users, "users")}
         if users is not None
         else None
     )
@@ -176,6 +251,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         "approval_note": note or None,
         "approver_email": approver or None,
         "egress_ip": V.opt_text(p, "server_ip", 64) or probe.get("egress_ip") or None,
+        "history_from": history_from(ctx, p),
     }
     name = V.opt_text(p, "name", 120) or "Mercury"
 
@@ -196,7 +272,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             },
         )
         if users is not None:
-            SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.items(users, "users")], ctx.at)
+            SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.opt_items(users, "users")], ctx.at)
         mapped: list[Result] = []
         for a in accounts:
             if str(a.get("status") or "active") not in ("active", "pending"):
@@ -408,10 +484,21 @@ def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
 
 
 def _natural_day(ctx: Ctx, money: Any) -> str:
-    """The day before the account's first row the balance holds (covered history counts), or today with none. set_opening
-    caps it before the first raw-totals month."""
+    """The day before the account's first row the balance holds (covered history counts). With none: the day before its
+    connection's `history_from` when its history is cut there (every row from that day on comes after the opening, so
+    none is netted into it as one the balance already held), else today. set_opening caps it before the first raw-totals
+    month."""
     _, first = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
-    return (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+    if first:
+        return (dates.day(first) - timedelta(days=1)).isoformat()
+    return _cut_day(ctx, money) or ctx.today
+
+
+def _cut_day(ctx: Ctx, money: Any) -> str:
+    """The day before the connection's `history_from` ("" when its history is not cut): the latest day an opening of a
+    cut history is dated, as every row it takes in is from `history_from` on."""
+    cut = str(_conn_settings(ctx, money).get("history_from") or "")
+    return (dates.day(cut) - timedelta(days=1)).isoformat() if cut else ""
 
 
 def open_at(ctx: Ctx, money: Any, balance: int) -> str | None:
@@ -525,7 +612,9 @@ def _before_opening(ctx: Ctx, money: Any, t: F.FeedTxn) -> None:
         return
     earlier = (dates.day(t.txn_date) - timedelta(days=1)).isoformat()
     if entry is None:
-        set_opening(ctx, money, -t.amount, earlier)
+        # An opening brought to 0 kept no day: a cut history's comes back no later than the day before history_from,
+        # where it was, so late rows give the same day in any order.
+        set_opening(ctx, money, -t.amount, min(earlier, _cut_day(ctx, money) or earlier))
         return
     dated = str(entry["entry_date"])
     set_opening(ctx, money, opening_amount(ctx, money, dated) - t.amount, min(dated, earlier))
@@ -587,7 +676,8 @@ def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
 
 def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
     """At the end of a sync pass: card payments taken in before both sides could pair (_card_payment) pair now. Each
-    unposted payment on the connection's credit card programs looks for its one bank side again. How many paired.
+    unposted payment on the connection's credit card programs looks for its one bank side again, on its own connection
+    and then across the book's other connections (_card_payment `across`). How many paired.
     A mirror pairs nothing: its rows wait for the provider's own entries (mirror.settle_row)."""
     if ctx.book.mode == "mirror":
         return 0
@@ -602,7 +692,7 @@ def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
         for row in SK.waiting_credits(ctx.c, str(money["id"])):
             if str(row["kind"]) in (*F.CARD_KINDS, *F.TRANSFER_KINDS) or covered_day(ctx, str(row["txn_date"])):
                 continue
-            paired += _card_payment(ctx, row, money)
+            paired += _card_payment(ctx, row, money, across=True)
     return paired
 
 
@@ -732,6 +822,7 @@ def _txn_of(row: Any) -> F.FeedTxn:
         description=str(row["description"]),
         card_id=str(row["card_id"] or ""),
         request_id=str(row["request_id"] or ""),
+        note=str(SK.loads(row["raw"]).get("note") or "")[:500],
         version=int(row["version"]),
         raw=SK.loads(row["raw"]),
     )
@@ -754,7 +845,9 @@ def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
     shift_openings(ctx, before)
 
 
-def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
+def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> str | None:
+    """Post what a settled (or pending, voided, reversed) row means, the way a new row is taken in. RULE when a posting
+    rule posted it (posting_rules.post_feed, or card_lines for a card Tico issued), else None."""
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
@@ -862,9 +955,9 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
                     str(found[1][f"{documents.CONTACT_OF['bill']}_id"]),
                 )
             ]
-            ask = False
+            ask = ruled = False
         else:
-            lines, ask = posting_rules.card_lines(ctx, row, money, account, tags)
+            lines, ask, ruled = posting_rules.card_lines(ctx, row, money, account, tags)
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
         entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
@@ -873,7 +966,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             documents.feed_paid(ctx, row, found[0], found[1], entry)
         if ask:
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
-        return
+        return RULE if ruled else None
     # Anything else: a payment marked paid from this account, else the one open bill or invoice it pays, else the
     # first posting rule (or the counterparty's default line), else a debit posts to Other expenses and a credit
     # waits, and a person is asked (needs_category).
@@ -920,7 +1013,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if refunds.settle(ctx, row, money, t, None):
             return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
-        return
+        return RULE
     # Nothing above decided it (a rule, a bill, a top-up...): it may be one side of a card payment (_card_payment). Here,
     # after those, so the bank side gets the same decision whichever side comes first.
     if card is None and t.kind not in F.CARD_KINDS and not t.request_id and _card_payment(ctx, row, money):
@@ -1468,11 +1561,15 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
     return found[0] if found else None
 
 
-def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
-    """A payment from a bank account to a credit card program of the same connection (Mercury IO's autopay: a plain
-    row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever side comes
-    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back, one
-    a rule or match posted elsewhere is not. No pair, or several, and the row posts as any other."""
+def _card_payment(ctx: Ctx, row: Any, money: Any, across: bool = False) -> bool:
+    """A payment from a bank account to a credit card program (Mercury IO's autopay, or a Brex card paid from a Mercury
+    bank: a plain row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever
+    side comes second pairs them on its own connection (within MATCH_DAYS); a bank side on the automatic Other expenses
+    default is taken back (default_debit), one posted anywhere else is not. `across` (pair_card_payments, at the end of
+    the card connection's sync pass, never at ingest): a card side with no pair on its own connection looks at the
+    book's other connections' banks (signs checked) within CARD_PAY_DAYS, for a debit on the automatic default only
+    (an unposted debit is held for a person: bills, a top-up, a canceled payment). Exactly the opposite amount and one
+    candidate each way (the debit could pay no other waiting card payment), else nothing pairs."""
     kind, amount = str(money["kind"]), int(row["amount"])
     if kind == "card_program" and str(money["subtype"]) == "credit" and amount > 0:
         want = "bank"
@@ -1481,27 +1578,18 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
     else:
         return False
     conn = str(money["connection_id"] or "")
-    others = [
-        str(m["id"])
+    accounts = [
+        m
         for m in SK.money_accounts(ctx.c, ctx.book.id)
-        if conn
-        and str(m["kind"]) == want
-        and str(m["connection_id"] or "") == conn
-        and (want == "bank" or str(m["subtype"]) == "credit")
+        if str(m["kind"]) == want and (want == "bank" or str(m["subtype"]) == "credit") and m["connection_id"]
     ]
-    if not others:
-        return False
-    day = dates.day(str(row["txn_date"]))
-    start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
-    other_line = by_code(ctx, OTHER)
-    found = [
-        r
-        for r in SK.transfer_candidates(ctx.c, others, -amount, start, end)
-        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
-        and not r["card_id"]
-        and not r["request_id"]
-        and (not r["entry_id"] or other_line is not None and _only_other(ctx, r, other_line.id))
-    ]
+    same = [str(m["id"]) for m in accounts if conn and str(m["connection_id"]) == conn]
+    found = _payment_sides(ctx, row, same, MATCH_DAYS)
+    if not found and across and want == "bank" and conn:
+        cross = [str(m["id"]) for m in accounts if str(m["connection_id"]) != conn and not _awaiting_sign(ctx, m)]
+        found = [r for r in _payment_sides(ctx, row, cross, CARD_PAY_DAYS) if r["entry_id"]]
+        if len(found) == 1 and len(_waiting_card_sides(ctx, found[0])) != 1:
+            return False  # the debit could pay another waiting card payment too: a person picks
     if len(found) != 1:
         return False
     other = found[0]
@@ -1509,17 +1597,46 @@ def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
         unpost_row(ctx, other, "it pays the card")
         other = SK.get(ctx.c, "fin_feed_txns", str(other["id"]))
     transfer(ctx, row, money, other)
+    for fid in (str(row["id"]), str(other["id"])):
+        SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)  # an ask not yet sent on: neither side waits for a person now
     return True
 
 
-def _only_other(ctx: Ctx, row: Any, other_id: str) -> bool:
-    """Whether a posted row's live entry is the Other expenses line alone (beside its own money line): no category yet."""
+def _payment_sides(ctx: Ctx, row: Any, money_ids: Sequence[str], days: int) -> list[Any]:
+    """The rows on these money accounts that may be the other side of a card payment: the opposite amount within `days`,
+    no card, request, card or transfer kind, and not posted, or posted on the automatic Other expenses default."""
+    if not money_ids:
+        return []
+    day = dates.day(str(row["txn_date"]))
+    start, end = (day - timedelta(days=days)).isoformat(), (day + timedelta(days=days)).isoformat()
+    return [
+        r
+        for r in SK.transfer_candidates(ctx.c, money_ids, -int(row["amount"]), start, end)
+        if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS)
+        and not r["card_id"]
+        and not r["request_id"]
+        and (not r["entry_id"] or default_debit(ctx, r))
+    ]
+
+
+def _waiting_card_sides(ctx: Ctx, debit: Any) -> list[Any]:
+    """The waiting card payments, on any connection's credit card program, that this bank debit could pay."""
+    cards = [
+        str(m["id"])
+        for m in SK.money_accounts(ctx.c, ctx.book.id)
+        if str(m["kind"]) == "card_program" and str(m["subtype"]) == "credit" and m["connection_id"]
+    ]
+    return [r for r in _payment_sides(ctx, debit, cards, CARD_PAY_DAYS) if not r["entry_id"]]
+
+
+def _only_line(ctx: Ctx, row: Any, account_id: str) -> bool:
+    """Whether a posted row's live entry, shared with no other row, has that line alone beside its own money line."""
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     if entry is None or str(entry["status"]) != "posted" or len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
         return False
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     rest = {line.account_id for _, line in SL.entry_lines(ctx.c, str(row["entry_id"]))} - {str(money["account_id"])}
-    return rest == {other_id}
+    return rest == {account_id}
 
 
 def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
@@ -1677,6 +1794,113 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "accounts": [account.code],
             **{f"tags.{k}": v for k, v in tags.items()},
         },
+    )
+
+
+def by_rule_again(ctx: Ctx, row: Any, money: Any) -> str:
+    """Settle a past row again as a new row would be (_settle), when it still waits for a category: new with no entry,
+    or posted to the automatic default (default_debit; for a card Tico issued, its budget line: default_card). It settles in a savepoint and is kept only when
+    a posting rule posted it; anything else that takes it there (a payment, a document, a Stripe payout, a refund, a
+    top-up, a canceled payment, an ask) is undone, so the row and its asks stay as they were. The default's entry is
+    reversed first, as categorize does, and the row's unsent ask is withdrawn. A row in a closed period is not changed.
+    Says "posted", "closed", "failed" (it raised: undone alone, the others go on) or "". The caller keeps the opening in
+    step (shift_openings)."""
+    fid = str(row["id"])
+    if (
+        row["request_id"]
+        or row["refund_of"]
+        or int(row["amount"]) == 0
+        or str(row["provider_status"] or "") in (*F.VOID, F.REVERSED, "returned")
+        or str(row["kind"]) in (*F.TRANSFER_KINDS, *F.BREX_CARD_PAYMENTS)
+    ):
+        return ""
+    if str(money["kind"]) not in ("bank", "card_program") or ctx.book.mode == "mirror":
+        return ""
+    if covered_day(ctx, str(row["txn_date"])) or _awaiting_sign(ctx, money):
+        return ""
+    # A charge on a card Tico issued settles as one (posting_rules.card_lines: its use, hold and holder tag stay);
+    # any other card row (a Mercury debit card, a card Tico did not issue) as a bank row does.
+    card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
+    issued = card is not None and str(money["kind"]) == "card_program"
+    if row["entry_id"] and not (default_card(ctx, row, card) if issued else default_debit(ctx, row)):
+        return ""
+    rule = posting_rules.first_for(ctx, posting_rules.feed_facts(row, money))
+    if rule is None or rule.then.outcome != "post" or not posting_rules.usable(ctx, rule.then):
+        return ""
+    if SL.closed_on(ctx.c, ctx.book.id, str(row["txn_date"])):
+        return "closed"
+    mark = _alone(ctx.c)
+    try:
+        if row["entry_id"]:
+            unpost_row(ctx, row, "a posting rule took it")
+        done = _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, _txn_of(row))
+    except Exception:
+        _undo_alone(ctx.c, mark)
+        log.exception("Finance: feed row %s did not settle again by the posting rules", fid)
+        return "failed"
+    if done != RULE:
+        _undo_alone(ctx.c, mark)
+        return ""
+    ctx.c.execute(f"RELEASE SAVEPOINT {_ALONE}")
+    SK.withdraw_asks(ctx.c, CATEGORY_EVENT, fid)
+    return "posted"
+
+
+_ALONE = "fin_row_alone"
+
+
+def _alone(c: Any) -> int:
+    """Open the savepoint one row's settling runs in; how many after-commit callbacks were queued before it."""
+    c.execute(f"SAVEPOINT {_ALONE}")
+    hooks = cast(list[object] | None, getattr(c, "after_commit", None))
+    return len(hooks) if hooks is not None else 0
+
+
+def _undo_alone(c: Any, mark: int) -> None:
+    """Undo that row's settling, with the after-commit callbacks it queued."""
+    c.execute(f"ROLLBACK TO SAVEPOINT {_ALONE}")
+    c.execute(f"RELEASE SAVEPOINT {_ALONE}")
+    hooks = cast(list[object] | None, getattr(c, "after_commit", None))
+    if hooks is not None:
+        del hooks[mark:]
+
+
+def default_debit(ctx: Ctx, row: Any) -> bool:
+    """Whether a posted row sits on the automatic Other expenses default _settle gives a debit nothing else took: its
+    live entry is the Other expenses line alone, shared with no other row, with no refund posted against it and no
+    document settled from it; the default's needs_category ask was raised for it (a payment, a contact default or a
+    rule that posts to Other expenses on purpose raises none); and no categorize or split by hand put it there."""
+    other = by_code(ctx, OTHER)
+    fid = str(row["id"])
+    return (
+        other is not None
+        and _only_line(ctx, row, other.id)
+        and SK.asked(ctx.c, CATEGORY_EVENT, fid)
+        and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
+        and not SK.refunds_of(ctx.c, fid)
+        and not SAP.settled_from(ctx.c, "feed", fid)
+    )
+
+
+def _split_by_hand(ctx: Ctx, row: Any) -> bool:
+    """Whether a person or a bot split a line of the row's entry between teammates (an attribution override): a re-post
+    would drop it, as it would a categorize."""
+    lines = [str(r["id"]) for r, _ in SL.entry_lines(ctx.c, str(row["entry_id"]))]
+    return bool(ATT.lines_owned_by_people(ctx.c, lines))
+
+
+def default_card(ctx: Ctx, row: Any, card: Any) -> bool:
+    """Whether a posted charge on a card Tico issued sits on the card's default (card_line: its budget's line, else
+    Other expenses) that _settle gives it when no posting rule matched: that line alone, shared with no other row, no
+    refund posted against it, no document settled from it, and no categorize or split by hand put it there."""
+    fid = str(row["id"])
+    return (
+        _only_line(ctx, row, card_line(ctx, card)[0])
+        and not SAP.categorized_into(ctx.c, str(row["entry_id"]))
+        and not _split_by_hand(ctx, row)
+        and not SK.refunds_of(ctx.c, fid)
+        and not SAP.settled_from(ctx.c, "feed", fid)
     )
 
 
@@ -1999,27 +2223,56 @@ def money_account_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(K.ALLOW, f"Add {labeled} ({'card' if kind == 'card_program' else 'bank'}, no connection)", apply)
 
 
+# A Stripe connection's own lines (stripe_post): the setting, and the type of line it may name.
+STRIPE_LINE_SETTINGS = {"transfer_account_id": "expense", "capital_account_id": "liability"}
+
+
+def stripe_lines(ctx: Ctx, p: V.Payload, provider: str) -> dict[str, str]:
+    """The Stripe line settings `p` gives (STRIPE_LINE_SETTINGS), each an active line of its type, or "" to clear it."""
+    out: dict[str, str] = {}
+    for key, type_ in STRIPE_LINE_SETTINGS.items():
+        if key not in p:
+            continue
+        if provider != "stripe":
+            raise invalid(f"{key} is a Stripe connection's setting")
+        line = V.opt_text(p, key, 120) or ""
+        found = ctx.accounts.get(line)
+        if line and (found is None or not found.active or found.type != type_):
+            raise invalid(f"{key} is an active {type_} line in the books")
+        out[key] = line
+    return out
+
+
 def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
-    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
-    V.only(p, ("connection_id", "card_user_id"))
+    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`). On a Stripe
+    connection, the lines its Connect transfers (`transfer_account_id`, an expense) and its Stripe Capital loan
+    (`capital_account_id`, a liability) post to, or empty to clear one (stripe_post then finds or makes the line). A
+    setting left out is unchanged."""
+    V.only(p, ("connection_id", "card_user_id", *STRIPE_LINE_SETTINGS))
     row = _connection(ctx, who, p)
     if str(row["status"]) == "disconnected":
         raise FinanceError(CONFLICT, "that connection is disconnected")
-    user = V.opt_text(p, "card_user_id", 120) or ""
-    if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
-        raise invalid("that is not a Mercury user on this connection")
+    changes: dict[str, str] = {}
+    if "card_user_id" in p:
+        user = V.opt_text(p, "card_user_id", 120) or ""
+        if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
+            raise invalid("that is not a Mercury user on this connection")
+        changes["card_user_id"] = user
+    changes.update(stripe_lines(ctx, p, str(row["provider"])))
 
     def apply(aid: str) -> Result:
-        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k != "card_user_id"}
-        if user:
-            settings["card_user_id"] = user
+        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k not in changes}
+        settings.update({k: v for k, v in changes.items() if v})
         SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings": SK.dump(settings), "updated_at": ctx.at})
-        return {"connection_id": str(row["id"]), "card_user_id": user or None}
+        return {"connection_id": str(row["id"]), **{k: v or None for k, v in changes.items()}}
 
-    return Plan(
-        K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else f"Clear the card user on {row['name']}", apply
-    )
+    user = changes.get("card_user_id")
+    if user is None:
+        what = f"Change the Stripe lines on {row['name']}"
+    else:
+        what = f"Issue cards on {row['name']} to {user}" if user else f"Clear the card user on {row['name']}"
+    return Plan(K.ALLOW, what, apply)
 
 
 __all__ = [

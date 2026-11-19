@@ -11,7 +11,8 @@ import json
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import bot_home_merge, rooms, threads, visuals
+from backend import rooms, threads, visuals
+from backend.tests.helpers import bot_home_merge
 from backend.auth import Identity
 from backend.blobs import register
 from backend.files import series
@@ -290,7 +291,10 @@ def test_the_api_puts_a_reply_to_an_old_room_in_the_home_and_refuses_a_private_r
     )
     assert refused.status_code == 403, refused.text
     with store(api).read() as c:
-        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential%'").fetchone()
+        # Neither refused reply was written (the private task's own request is its first message, on its chat).
+        assert not c.execute(
+            "SELECT 1 FROM messages WHERE body IN ('Confidential reply', 'Confidential again')"
+        ).fetchone()
         assert not seqs(c, ops_rooms["ana"])
 
 

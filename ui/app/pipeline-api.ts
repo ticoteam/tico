@@ -5,21 +5,19 @@
 
 /** A factory, with how many of its tasks reached Done in the period asked for (Closed never counts). */
 interface FactoryRow { id: string; name: string; goal: string | null; manager_id: string | null; done: number }
-/** A pipeline's counts on Company › Factories: its open tasks, the pipelines it files into, and its mark: a bot in it
-    can't run, or it needs a person. The mark is read into the task mark's own names (task-row.ts). */
-interface FactoryPipelineRow { id: string; name: string; factory_id: string | null; open: number; files_into: string[]; mark: 'cant' | 'person' | null }
+/** A pipeline as the factories read places it: its factory and the pipelines it files into (Strategy › Org's Factories
+    section orders a factory's cards by them, org-factories.ts). */
+interface FactoryPipelineRow { id: string; name: string; factory_id: string | null; files_into: string[] }
 /** GET /api/v2/factories?period=1d|7d|30d. */
 interface FactoryMap { factories: FactoryRow[]; pipelines: FactoryPipelineRow[] }
-interface FactoryPipelineWire { id: string; name?: string; factory_id?: string | null; open?: number; files_into?: string[] | null; mark?: string | null }
-const FACTORY_MARKS: Record<string, 'cant' | 'person'> = {cant_run: 'cant', needs_person: 'person'};
+interface FactoryPipelineWire { id: string; name?: string; factory_id?: string | null; files_into?: string[] | null }
 
-/** The factories and each pipeline's open count, arrows and mark over a period (1d, 7d or 30d). */
+/** The factories and where each pipeline files, with each factory's Done count over a period (1d, 7d or 30d). */
 async function factoriesRead(period: string): Promise<FactoryMap> {
   const map = await get<{factories?: FactoryRow[]; pipelines?: FactoryPipelineWire[]}>(`/v2/factories?period=${encodeURIComponent(period)}`, {fresh: true});
   return {
     factories: map.factories ?? [],
-    pipelines: (map.pipelines ?? []).map(p => ({id: p.id, name: p.name ?? '', factory_id: p.factory_id ?? null, open: p.open ?? 0,
-      files_into: p.files_into ?? [], mark: FACTORY_MARKS[p.mark ?? ''] ?? null})),
+    pipelines: (map.pipelines ?? []).map(p => ({id: p.id, name: p.name ?? '', factory_id: p.factory_id ?? null, files_into: p.files_into ?? []})),
   };
 }
 

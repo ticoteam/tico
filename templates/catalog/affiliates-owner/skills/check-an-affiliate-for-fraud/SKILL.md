@@ -1,6 +1,8 @@
 ---
 name: check-an-affiliate-for-fraud
 description: Check an affiliate's referrals against named fraud rules, with the evidence for each rule, one innocent explanation and the check that separates them, and record a flag as a question for a person rather than a verdict.
+metadata:
+  function: marketing
 ---
 # Check an affiliate for fraud
 

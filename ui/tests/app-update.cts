@@ -28,7 +28,6 @@ declare const window: Window & typeof globalThis & {
   const errors: string[] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => {
-    window.EventSource = undefined as unknown as typeof EventSource;
     Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
     window.__posted = [];
     window.ticoNative = (name: string) => ({postMessage: (body: unknown) => window.__posted.push([name, body])});
@@ -47,6 +46,7 @@ declare const window: Window & typeof globalThis & {
     if (p === '/api/status') return json({cloud:true,keeper_alive:true,health_issues:[]});
     if (p === '/api/download/mac') return json({available:true,version:'0.3.46',url:'https://github.com/ticoteam/tico/releases/download/v0.3.46/Tico.dmg'});
     if (p === '/api/employees' || p === '/api/issues') return json([]);
+    if (p === '/api/v2/events') return route.fulfill({contentType:'text/event-stream',body:'event: ready\ndata: {"seq":1}\n\n'});
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/settings', {waitUntil:'domcontentloaded'});

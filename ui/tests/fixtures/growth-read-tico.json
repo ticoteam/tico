@@ -1,0 +1,287 @@
+{
+ "reads": {
+  "all": {
+   "as_of": "2026-11-13",
+   "channels": [
+    {
+     "budget": null,
+     "cac": null,
+     "cost": null,
+     "name": "Content",
+     "new_customers": 14,
+     "new_share": 0.64,
+     "over_budget": null,
+     "owner": null,
+     "signups": 56,
+     "slug": "content",
+     "status": "no_spend",
+     "with_effort": 4.29
+    },
+    {
+     "budget": null,
+     "cac": null,
+     "cost": null,
+     "name": "Outbound",
+     "new_customers": 4,
+     "new_share": 0.18,
+     "over_budget": null,
+     "owner": null,
+     "signups": 17,
+     "slug": "outbound",
+     "status": "no_spend",
+     "with_effort": 180.0
+    },
+    {
+     "budget": null,
+     "cac": null,
+     "cost": null,
+     "name": "Community",
+     "new_customers": 2,
+     "new_share": 0.09,
+     "over_budget": null,
+     "owner": null,
+     "signups": 11,
+     "slug": "community",
+     "status": "no_spend"
+    },
+    {
+     "new_customers": 2,
+     "new_share": 0.09,
+     "signups": 8,
+     "slug": "unknown"
+    }
+   ],
+   "headline": {
+    "activated_rate": {
+     "status": "not_supplied",
+     "value": null
+    },
+    "cac": {
+     "n": 22,
+     "status": "no_spend",
+     "value": null,
+     "with_effort": 35.45
+    },
+    "cost": {
+     "status": "no_spend",
+     "value": null,
+     "with_effort": 780.0
+    },
+    "kept": {
+     "cohort": "2026-07",
+     "n": 17,
+     "status": "too_few",
+     "value": null,
+     "window": "d90"
+    },
+    "ltv": {
+     "status": "not_supplied",
+     "value": null
+    },
+    "ltv_cac": {
+     "status": "no_spend",
+     "value": null
+    },
+    "new_customers": {
+     "value": 22,
+     "verdict": "up",
+     "vs_3mo": 18.7
+    },
+    "paid_rate": {
+     "cohort": "2026-10",
+     "n": 92,
+     "status": "ok",
+     "value": 0.239
+    },
+    "payback_months": {
+     "status": "no_spend",
+     "value": null
+    },
+    "signups": {
+     "value": 92,
+     "verdict": "up",
+     "vs_3mo": 81.7
+    }
+   },
+   "health": {
+    "basis": "customers",
+    "reconciled": "not_reconciled",
+    "stale_sources": [],
+    "unknown_share": 0.09
+   },
+   "metrics": [
+    {
+     "channel": "content",
+     "estimate": false,
+     "id": "kpi-1",
+     "name": "Weekly active teams",
+     "owner": "human:ana",
+     "period_end": "2026-10-31",
+     "unit": "teams",
+     "value": 36.0,
+     "vs_prior": 31.0
+    }
+   ],
+   "more": [
+    "campaigns"
+   ],
+   "period": "2026-10",
+   "retention": [
+    {
+     "cohort": "2026-10",
+     "entered": 22,
+     "kept_d90": {
+      "n": 0,
+      "status": "not_yet",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-09",
+     "entered": 21,
+     "kept_d90": {
+      "n": 0,
+      "status": "not_yet",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-08",
+     "entered": 18,
+     "kept_d90": {
+      "n": 0,
+      "status": "not_yet",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-07",
+     "entered": 17,
+     "kept_d90": {
+      "n": 17,
+      "status": "too_few",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-06",
+     "entered": 16,
+     "kept_d90": {
+      "n": 16,
+      "status": "too_few",
+      "value": null
+     }
+    },
+    {
+     "cohort": "2026-05",
+     "entered": 16,
+     "kept_d90": {
+      "n": 16,
+      "status": "too_few",
+      "value": null
+     }
+    }
+   ],
+   "scope": "all",
+   "series": [
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 7,
+     "period": "2025-11",
+     "signups": 33
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 7,
+     "period": "2025-12",
+     "signups": 37
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 10,
+     "period": "2026-01",
+     "signups": 43
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 11,
+     "period": "2026-02",
+     "signups": 49
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 12,
+     "period": "2026-03",
+     "signups": 54
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 13,
+     "period": "2026-04",
+     "signups": 59
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 16,
+     "period": "2026-05",
+     "signups": 66
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 16,
+     "period": "2026-06",
+     "signups": 70
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 17,
+     "period": "2026-07",
+     "signups": 76
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 18,
+     "period": "2026-08",
+     "signups": 82
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 21,
+     "period": "2026-09",
+     "signups": 87
+    },
+    {
+     "cac": null,
+     "cost": null,
+     "kept": null,
+     "new_customers": 22,
+     "period": "2026-10",
+     "signups": 92
+    }
+   ]
+  }
+ },
+ "segments": []
+}

@@ -23,7 +23,7 @@ Nothing on GitHub changes.
    between them. Read the failed log and name the test. Apply the threshold in `knowledge/thresholds.md` (starting
    default: two such flips in two weeks). A candidate whose log cannot be read is "unknown", not flaky. Classify each
    failure with `skills/classify-a-failed-run/SKILL.md`. You name the flips; the QA Owner keeps the flaky-test register
-   and decides fix or quarantine.
+   and decides fix or delete.
 4. **Find red-main streaks and deploys.** For each stretch where the main branch's merge check stayed red, record the
    first failing run and commit, the end, the length, and the cause if the log shows one. Count the deploy runs and the
    failed deploys from the deploy workflow. Before you count a deploy as a success, check it with

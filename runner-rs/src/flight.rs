@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,14 +28,27 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(60);
 pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 /// A git command at least this long is recorded (timeouts and commands that never ran always are).
 pub const GIT_SLOW_MS: u64 = 2000;
-/// The order a turn passes its marks in (`util::mark` names plus the flight-only ones).
-const PHASES: [&str; 13] = [
+/// The order a turn passes its marks in (`util::mark` names plus the flight-only ones). The `claude_*` marks are a
+/// Claude turn's own (hosts/claude.rs): its process spawned, its `system/init`, and its last `result`. `prepared` is
+/// its credentials and environment ready, `refreshed` its checkouts brought up to date, `skills_ready` its company
+/// skills staged, `acknowledged` its `started` accepted by the hub. Two marks that are not steps tell a chat turn's
+/// refresh (crate::fetch_fresh): `fetch_skipped`, it started on the runner's recent fetch, and `fetched_first`, it
+/// fetched before it started. A third, `start_asked`, is the turn's first start-place ask: a turn without it kept the
+/// place the hub granted at its claim up to `started` (execute.rs keep_start_place).
+const PHASES: [&str; 20] = [
     "claimed",
+    "prepared",
+    "refreshed",
     "placed",
     "harness_started",
+    "skills_ready",
+    "acknowledged",
+    "claude_spawned",
     "harness_spawned",
+    "claude_init",
     "first_output",
     "first_delta_posted",
+    "claude_result",
     "model_done",
     "scrubbed",
     "finished",
@@ -45,18 +58,36 @@ const PHASES: [&str; 13] = [
     "done",
 ];
 
+/// Marks the last of several wins (a steered turn has a `result` per reply); every other mark keeps its first.
+const LAST_WINS: [&str; 1] = ["claude_result"];
+
 static SENDER: OnceLock<SyncSender<Map<String, Value>>> = OnceLock::new();
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Turns are timed in the `run` command even with the file off: their timings also go to the server (`timings`).
+static TRACKING: AtomicBool = AtomicBool::new(false);
 
 struct Turn {
     at: Instant,
+    /// When it was claimed, Unix seconds on this computer's clock.
+    wall: f64,
     phases: Vec<(String, u64)>,
+    /// Numbers about the turn beside its marks (`transcript_bytes`).
+    facts: Map<String, Value>,
+    /// From the work frame last heard (`heard`) to this claim, when one was heard shortly before: the flight file's
+    /// record only, never the timings the server is sent.
+    heard_ms: Option<u64>,
 }
+
+/// When a work frame was last heard on the event stream (the `heard` mark, which names no attempt).
+static HEARD: Mutex<Option<Instant>> = Mutex::new(None);
+/// A claim this long after the last heard work frame was not woken by it.
+const HEARD_WITHIN: Duration = Duration::from_secs(60);
 
 static TURNS: Mutex<Option<HashMap<String, Turn>>> = Mutex::new(None);
 
 /// Start the writer for `state_dir` (the `run` command only). Off when `TICO_FLIGHT_RECORDER=0`, as on the server.
 pub fn init(state_dir: &Path) {
+    TRACKING.store(true, Ordering::Relaxed);
     if std::env::var("TICO_FLIGHT_RECORDER").ok().as_deref() == Some("0") || SENDER.get().is_some()
     {
         return;
@@ -87,6 +118,11 @@ pub fn init(state_dir: &Path) {
         start.insert("pid".into(), json!(std::process::id()));
         emit("runner.start", start);
     }
+}
+
+#[cfg(test)]
+pub fn track() {
+    TRACKING.store(true, Ordering::Relaxed);
 }
 
 /// Queue one record; never blocks. Without a writer (other commands, tests) it does nothing.
@@ -126,12 +162,24 @@ fn record_ts(record: &Value) -> f64 {
 /// A turn reached `name` (`util::mark` calls this for every mark). `claimed` opens the turn; a later mark for a
 /// turn not open is ignored, so nothing builds up for turns this process never claimed.
 pub fn phase(name: &str, attempt: &str) {
-    if SENDER.get().is_none() || attempt == "-" {
+    if !TRACKING.load(Ordering::Relaxed) {
+        return;
+    }
+    if name == "heard" {
+        *HEARD.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+    }
+    if attempt == "-" {
         return;
     }
     let mut turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
     let turns = turns.get_or_insert_with(HashMap::new);
     if name == "claimed" {
+        let heard_ms = HEARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .map(|at| at.elapsed())
+            .filter(|gap| *gap < HEARD_WITHIN)
+            .map(|gap| gap.as_millis() as u64);
         if turns.len() >= 512 {
             // A worker that died before `turn_end` leaves its entry: the oldest go.
             let oldest = turns
@@ -146,15 +194,51 @@ pub fn phase(name: &str, attempt: &str) {
             attempt.to_string(),
             Turn {
                 at: Instant::now(),
+                wall: now_ts(),
                 phases: vec![("claimed".into(), 0)],
+                facts: Map::new(),
+                heard_ms,
             },
         );
     } else if let Some(turn) = turns.get_mut(attempt) {
-        if !turn.phases.iter().any(|(n, _)| n == name) {
-            turn.phases
-                .push((name.to_string(), turn.at.elapsed().as_millis() as u64));
+        let ms = turn.at.elapsed().as_millis() as u64;
+        match turn.phases.iter_mut().find(|(n, _)| n == name) {
+            Some(seen) if LAST_WINS.contains(&name) => seen.1 = ms,
+            Some(_) => {}
+            None => turn.phases.push((name.to_string(), ms)),
         }
     }
+}
+
+/// A number about an open turn, kept beside its marks (`transcript_bytes`).
+pub fn fact(attempt: &str, key: &str, value: u64) {
+    if let Some(turn) = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.get_mut(attempt))
+    {
+        turn.facts.insert(key.into(), json!(value));
+    }
+}
+
+/// An open turn's timings so far, for its result (backend/models.py RunTimings): when it was claimed on this
+/// computer's clock, each mark's milliseconds since then, and its facts. None for a turn this process never claimed.
+pub fn timings(attempt: &str) -> Option<Value> {
+    let turns = TURNS.lock().unwrap_or_else(|p| p.into_inner());
+    let turn = turns.as_ref()?.get(attempt)?;
+    let mut out = turn.facts.clone();
+    out.insert("claimed_at".into(), json!(turn.wall));
+    out.insert(
+        "phases".into(),
+        Value::Object(
+            turn.phases
+                .iter()
+                .map(|(n, ms)| (n.clone(), json!(ms)))
+                .collect(),
+        ),
+    );
+    Some(Value::Object(out))
 }
 
 /// The turn's end: one `runner.turn` record with every phase's milliseconds since it was claimed.
@@ -182,6 +266,10 @@ pub fn turn_end(attempt: &str, bot: &str, runtime: &str, outcome: &str, settled:
         json!(turn.at.elapsed().as_millis() as u64),
     );
     f.insert("phases".into(), Value::Object(phases));
+    if let Some(ms) = turn.heard_ms {
+        f.insert("heard_ms".into(), json!(ms));
+    }
+    f.extend(turn.facts);
     emit("runner.turn", f);
 }
 
@@ -513,7 +601,7 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
                 (k, *v.last().unwrap_or(&0), v[v.len() / 2], v.len())
             })
             .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (step, max, median, count) in rows.iter().take(8) {
             say(
                 &mut out,
@@ -524,6 +612,57 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
                 ),
             );
         }
+    }
+
+    // A chat turn's checkout refresh, started on the runner's recent fetch or fetching first.
+    let refresh = |how: &str| {
+        let mut v: Vec<u64> = turns
+            .iter()
+            .filter(|t| t["phases"][how].is_u64())
+            .filter_map(|t| {
+                let p = &t["phases"];
+                Some(
+                    p["refreshed"]
+                        .as_u64()?
+                        .saturating_sub(p["prepared"].as_u64()?),
+                )
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    let (skipped, fetched) = (refresh("fetch_skipped"), refresh("fetched_first"));
+    if !skipped.is_empty() || !fetched.is_empty() {
+        let median = |v: &[u64]| v.get(v.len() / 2).map_or("-".to_string(), |ms| secs(*ms));
+        say(
+            &mut out,
+            format!(
+                "\nChat turns' checkout refresh (prepared -> refreshed, median): {} on the runner's recent fetch ({} turns), {} fetching first ({} turns)",
+                median(&skipped),
+                skipped.len(),
+                median(&fetched),
+                fetched.len()
+            ),
+        );
+    }
+
+    // Turns since a runner that keeps start places: how many still asked the hub for one before `started`.
+    let kept: Vec<&Value> = turns
+        .iter()
+        .filter(|t| t["phases"]["acknowledged"].is_u64())
+        .collect();
+    if !kept.is_empty() {
+        let asked = kept
+            .iter()
+            .filter(|t| t["phases"]["start_asked"].is_u64())
+            .count();
+        say(
+            &mut out,
+            format!(
+                "\nStart-place asks before `started`: {asked} of {} turns asked at least once",
+                kept.len()
+            ),
+        );
     }
 
     let failed = heartbeats.iter().filter(|h| h["ok"] == false).count();
@@ -670,6 +809,8 @@ mod tests {
             r#"{"v":1,"ts":1791968400.25,"kind":"runner.turn","bot":"stale-bot","runtime":"codex","outcome":"completed","total_ms":1,"phases":{"claimed":0}}"#,
             r#"{"v":1,"ts":1791977400.25,"kind":"runner.turn","attempt":"a1","bot":"acme-seo","runtime":"claude","outcome":"completed","total_ms":84000,"phases":{"claimed":0,"placed":1200,"harness_started":1500,"first_output":6000,"finished":80000,"complete_posted":81000,"done":84000}}"#,
             r#"{"v":1,"ts":1791977430.25,"kind":"runner.turn","attempt":"a2","bot":"acme-ops","runtime":"codex","outcome":"completed","total_ms":76100,"phases":{"claimed":0,"first_output":2000,"model_done":30000,"scrubbed":75000,"finished":75100,"saved":75100,"flushed":75200,"complete_posted":76000,"done":76100}}"#,
+            r#"{"v":1,"ts":1791977440.25,"kind":"runner.turn","attempt":"a3","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"prepared":400,"fetch_skipped":420,"refreshed":460,"placed":500,"acknowledged":600,"done":9000}}"#,
+            r#"{"v":1,"ts":1791977450.25,"kind":"runner.turn","attempt":"a4","bot":"acme-ops","runtime":"claude","outcome":"completed","total_ms":9000,"phases":{"claimed":0,"start_asked":5,"prepared":400,"fetched_first":1250,"refreshed":1300,"placed":1350,"acknowledged":1600,"done":9000}}"#,
             r#"{"v":1,"ts":1791977460.25,"kind":"runner.heartbeat","ms":4200,"tries":1,"ok":true}"#,
             r#"{"v":1,"ts":1791977520.25,"kind":"runner.git","verb":"fetch","repo":"acme-seo","ms":9000,"code":0}"#,
             r#"{"v":1,"ts":1791977580.25,"kind":"runner.process","rss_bytes":52428800,"turns":1,"dropped":3}"#,
@@ -679,7 +820,17 @@ mod tests {
         std::fs::write(dir.join(FILE), lines.join("\n")).unwrap();
         let now = crate::util::parse_iso("2026-10-14T12:00:00Z");
         let text = summary(&dir, parse_since("1h").unwrap(), now);
-        assert!(text.contains("Turns: 2"), "{text}");
+        assert!(text.contains("Turns: 4"), "{text}");
+        assert!(
+            text.contains(
+                "acme-ops claude completed 9.0s prepared+0.4s refreshed+0.5s placed+0.5s"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Chat turns' checkout refresh (prepared -> refreshed, median): 0.1s on the runner's recent fetch (1 turns), 0.9s fetching first (1 turns)"),
+            "{text}"
+        );
         assert!(
             text.contains("acme-seo claude completed 84.0s placed+1.2s"),
             "{text}"
@@ -699,8 +850,40 @@ mod tests {
         assert!(text.contains("4.2s tries 1"), "{text}");
         assert!(text.contains("git fetch acme-seo 9.0s"), "{text}");
         assert!(text.contains("Dropped records: 3"), "{text}");
+        assert!(
+            text.contains("Start-place asks before `started`: 1 of 2 turns asked at least once"),
+            "{text}"
+        );
         assert!(!text.contains("stale-bot"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_turns_timings_carry_its_marks_and_facts_until_it_ends() {
+        track();
+        let aid = format!("timing-{}", uuid::Uuid::new_v4().simple());
+        assert!(timings(&aid).is_none(), "a turn never claimed has none");
+        phase("placed", &aid); // before its claim: ignored
+        phase("claimed", &aid);
+        phase("claude_spawned", &aid);
+        phase("claude_result", &aid);
+        std::thread::sleep(Duration::from_millis(30));
+        phase("claude_spawned", &aid); // a relaunch keeps the first spawn
+        phase("claude_result", &aid); // a steered turn's last result is the one that ends it
+        fact(&aid, "transcript_bytes", 4096);
+        let t = timings(&aid).unwrap();
+        assert!(t["claimed_at"].as_f64().unwrap() > 1.0e9, "{t}");
+        assert_eq!(t["transcript_bytes"], 4096, "{t}");
+        assert_eq!(t["phases"]["claimed"], 0, "{t}");
+        assert!(t["phases"]["claude_spawned"].as_u64().unwrap() < 30, "{t}");
+        assert!(t["phases"]["claude_result"].as_u64().unwrap() >= 30, "{t}");
+        assert!(t["phases"].get("placed").is_none(), "{t}");
+        assert!(
+            t.get("heard_ms").is_none(),
+            "the server's timings take no heard gap: {t}"
+        );
+        turn_end(&aid, "acme-seo", "claude", "completed", true);
+        assert!(timings(&aid).is_none());
     }
 
     #[test]

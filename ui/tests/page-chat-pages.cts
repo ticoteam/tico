@@ -34,6 +34,7 @@ const PAGES: [string, string, string[]][] = [
   ['strategy', 'engineering-manager', ['#/strategy', '#/strategy/org', '#/strategy/budget', '#/strategy/market']],
   ['finance', 'release-manager', ['#/finance']],
   ['growth', 'builder-claude', ['#/growth']],
+  ['risk', 'release-manager', ['#/risk', '#/risk/disputes', '#/risk/obligations']],
   ['automations', 'builder-openai', ['#/automations']],
   ['docs', 'engineering-manager', ['#/docs', '#/library/files']],
   ['updates', 'release-manager', ['#/updates']],
@@ -46,7 +47,7 @@ const PAGES: [string, string, string[]][] = [
 const ASK_PAGES = ['#/calendar', '#/meetings'];
 const NONE = ['#/bot/engineering-manager', '#/threads', '#/assistant', '#/style-guide'];
 // Where each page's "From <page>" line leads.
-const BACK: Record<string, string> = {strategy: '#/strategy', finance: '#/finance', growth: '#/growth', automations: '#/automations',
+const BACK: Record<string, string> = {strategy: '#/strategy', finance: '#/finance', growth: '#/growth', risk: '#/risk', automations: '#/automations',
   docs: '#/docs', updates: '#/updates', rules: '#/rules', company: '#/home', skills: '#/library/skills', settings: '#/settings', usage: '#/usage'};
 
 const TAB = 'body > .pgc-edge:not([hidden]) .pgc-tab', MARK = '#main header.ph > .ph-chat > [data-pgc-open]';

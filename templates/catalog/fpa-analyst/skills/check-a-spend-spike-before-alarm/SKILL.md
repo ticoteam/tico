@@ -1,6 +1,8 @@
 ---
 name: check-a-spend-spike-before-alarm
 description: Before a spend spike, duplicate or unexpected charge is raised as an anomaly, compare complete periods, trace it to the transaction, allow for normal posting and processing time, and check for a known cause. Use for every anomaly.
+metadata:
+  function: finance
 ---
 # Check a spend spike before the alarm
 

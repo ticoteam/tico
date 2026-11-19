@@ -12,7 +12,7 @@ headline and the export dates used.
 ## 1. Get this week's data
 
 The sales and stock exports on the task. If they are missing or older than 7 days, ask once with
-`tico task ask <id> --to <person> "<question>" --version N` and build the list from the last exports, saying so in the first line.
+`tico task ask <id> --to <person> "<question>"` and build the list from the last exports, saying so in the first line.
 
 ## 2. Update the item plan
 

@@ -1,6 +1,8 @@
 ---
 name: check-a-handbook-page-is-current
 description: Before a handbook page is quoted in a policy answer or a checklist, check its date, whether a human called it out of date, and whether another page disagrees, and report current, stale, conflicting or unknown, never quoting a page that fails the check.
+metadata:
+  function: people
 ---
 # Check a handbook page is current
 

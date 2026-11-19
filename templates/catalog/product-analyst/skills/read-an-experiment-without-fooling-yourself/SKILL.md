@@ -1,6 +1,8 @@
 ---
 name: read-an-experiment-without-fooling-yourself
 description: Read an A/B test or staged rollout in the order that prevents false wins. Plan first, then the sample ratio check, the planned end, the planned metric with its interval, and guardrails. Give one of four verdicts.
+metadata:
+  function: data
 ---
 # Read an experiment without fooling yourself
 

@@ -21,7 +21,9 @@ from clients import skills as bundles
 from . import brand
 from . import hubdb as H
 from . import models as M
+from . import skill_catalog as SC
 from .store import Problem
+from .api_contract import api_v2
 
 PEOPLE_AND_BOTS = (
     "owner",
@@ -112,10 +114,32 @@ def _version_view(row, with_files=False):
     return value
 
 
+# The latest screening's reason and judge call ride on the proposal row, so the list, a rescreen's answer and the
+# proposal's own page all say why one was not screened (docs/skills.md "Not screened"); `screen_failures` counts the
+# not_screened rows since the last screened one, so a rescreen that fails again says so.
+_LATEST_SCREEN = "(SELECT s.{col} FROM skill_screenings s WHERE s.proposal_id = p.id ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1)"
 _PROPOSAL_SQL = (
-    "SELECT p.*, bv.number AS base_number, v.number AS version_number FROM skill_proposals p "
+    "SELECT p.*, bv.number AS base_number, v.number AS version_number, "
+    + _LATEST_SCREEN.format(col="reason")
+    + " AS screen_reason, "
+    + _LATEST_SCREEN.format(col="judge_call_id")
+    + " AS screen_judge_call_id, "
+    "(SELECT COUNT(*) FROM skill_screenings s WHERE s.proposal_id = p.id AND s.status = 'not_screened' AND "
+    "s.rowid > COALESCE((SELECT MAX(k.rowid) FROM skill_screenings k WHERE k.proposal_id = p.id AND "
+    "k.status = 'screened'), 0)) AS screen_failures "
+    "FROM skill_proposals p "
     "LEFT JOIN skill_versions bv ON bv.id = p.base_version_id LEFT JOIN skill_versions v ON v.id = p.version_id"
 )
+
+# What an admin does about each reason a proposal was not screened (the Skills page says the same words).
+SCREEN_REASONS = {
+    "oversize": "The skill is too big to screen (over 120,000 characters with its diff). Make it smaller and propose it again.",
+    "cap": "The monthly spend cap for model calls is reached. Raise the cap or wait for it to reset, then re-run screening.",
+    "unavailable": "No screening model is available: no Gateway, or it refused its key. Connect the Gateway or check its key, then re-run screening.",
+    "timeout": "The screening model did not answer in time. Re-run screening.",
+    "error": "Screening failed. Re-run it; if it fails again, send support the judge call id, if there is one.",
+}
+NO_REASON = "No reason was recorded. Re-run screening."
 
 
 def _proposal(c, pid):
@@ -131,6 +155,7 @@ def _proposal_view(row):
         "name": row["name"],
         "status": row["status"],
         "screen_status": row["screen_status"],
+        **_screen_reason(row),
         "sha256": row["sha256"],
         "description": row["description"],
         "note": row["note"],
@@ -144,6 +169,19 @@ def _proposal_view(row):
         "decline_reason": row["decline_reason"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def _screen_reason(row):
+    """Why a not_screened proposal was not screened, what to do about it, and how many screens in a row failed. Only a
+    not_screened row carries a reason: a pending one waits for its next screen, so the last reason no longer stands."""
+    failed = row["screen_status"] == "not_screened"
+    reason = row["screen_reason"] if failed else None
+    return {
+        "screen_reason": reason,
+        "screen_action": SCREEN_REASONS.get(reason or "", NO_REASON) if failed else None,
+        "screen_failures": row["screen_failures"] or 0,
+        "judge_call_id": row["screen_judge_call_id"],
     }
 
 
@@ -171,6 +209,7 @@ def _screening_view(row):
         "summary": row["summary"],
         "findings": _json(row["findings"], []),
         "patterns": _json(row["patterns"], []),
+        "judge_call_id": row["judge_call_id"],
         "created_at": row["created_at"],
     }
 
@@ -337,6 +376,98 @@ def _installed_on(c, auth, who, skill_ids):
     return out
 
 
+def _directory_details(c, skill_ids):
+    """{skill id: row of its latest version's number, sha256 and approved_at, and installs_count}."""
+    if not skill_ids:
+        return {}
+    rows = c.execute(
+        "SELECT s.id, v.number, v.sha256, v.approved_at, "
+        "(SELECT COUNT(*) FROM skill_installs i WHERE i.skill_id = s.id) AS installs_count "
+        "FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id "
+        f"WHERE s.id IN ({','.join('?' * len(skill_ids))})",
+        skill_ids,
+    ).fetchall()
+    return {r["id"]: r for r in rows}
+
+
+def _holds(row, q):
+    """Whether the row's name, description and function hold every word of `q`."""
+    words = (q or "").lower().split()
+    text = " ".join((row["name"], row["description"] or "", row["function"] or "")).lower()
+    return all(word in text for word in words)
+
+
+def _in_function(row, function):
+    """Whether the row is under `function`: one of the known functions or `other` by its group, any other value as written."""
+    want = (function or "").strip().lower()
+    if not want:
+        return True
+    if want in bundles.FUNCTIONS or want == bundles.OTHER:
+        return bundles.function_group(row["function"]) == want
+    return (row["function"] or "").strip().lower() == want
+
+
+def _function_counts(rows):
+    """[{function, count}] of the rows per function, in the functions' order, `other` last, none that is empty."""
+    counts = {}
+    for row in rows:
+        group = bundles.function_group(row["function"])
+        counts[group] = counts.get(group, 0) + 1
+    return [{"function": f, "count": counts[f]} for f in (*bundles.FUNCTIONS, bundles.OTHER) if counts.get(f)]
+
+
+def _seen_bots(c, auth, who, bots):
+    """The ids, of these bots, the caller may see: the rule the bots list keeps (backend/org_routes.py)."""
+    ids = sorted({bot["id"] for bot in bots})
+    if not ids:
+        return set()
+    access = auth.bot_accesses(c, who, ids)
+    return {b for b in ids if access.get(b, auth.FULL)["see"]}
+
+
+def _shipped_rows(c, auth, who, entries):
+    """The list's rows of skills Tico ships that the directory does not have: on the provisioned bots made from a role
+    that ships it and the caller may see (the first ON_CAP of them, `on_count` all of them)."""
+    if not entries:
+        return []
+    by_template = SC.bots_by_template(c)
+    seen = _seen_bots(c, auth, who, [bot for bots in by_template.values() for bot in bots])
+    out = []
+    for entry in entries:
+        bots = [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
+        out.append(
+            {
+                "id": None,
+                "name": entry["name"],
+                "description": entry["description"],
+                "function": entry["function"],
+                "source": "tico",
+                "latest": None,
+                "installs_count": 0,
+                "on": [{"type": "Bot", **bot} for bot in bots[:ON_CAP]],
+                "on_count": len(bots),
+            }
+        )
+    return out
+
+
+def _shipped_view(c, auth, who, store, entry, with_files):
+    """A skill Tico ships: the roles that ship it, the provisioned bots made from them the caller may see, and its
+    files (the copy of a role that has bots here, when roles ship different copies)."""
+    names = SC.role_names(store.settings.catalog_dir)
+    by_template = SC.bots_by_template(c)
+    seen = _seen_bots(c, auth, who, SC.bots_with(entry, by_template))
+    bots = [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
+    value = {
+        "roles": [{"template": t, "name": names.get(t, t)} for t in entry["templates"]],
+        "bots": [{"type": "Bot", **bot} for bot in bots],
+        "bots_count": len(bots),
+    }
+    if with_files:
+        value["files"] = SC.files(entry, with_bots=set(by_template), directory=store.settings.catalog_dir)
+    return value
+
+
 def propose(c, auth, who, body):
     """A new skill, or an update of one from `base_version` (or its latest). Replaces this proposer's pending proposal for the name."""
     files = [{"path": item.path, "content": item.content} for item in body.files]
@@ -441,18 +572,32 @@ def approve(c, auth, who, pid, acknowledged):
     ):
         raise Problem("unchanged", f"{row['name']} already has this exact version", 409)
     now, approver = H.now(), H.actor_id(who.actor)
+    # The job function the approved SKILL.md names, kept on the skill so the list never reads a version's files.
+    function = bundles.function_of(_json(row["files"], []))
     if skill:
         skill_id = skill["id"]
         number = c.execute(
             "SELECT COALESCE(MAX(number), 0) + 1 FROM skill_versions WHERE skill_id=?", (skill_id,)
         ).fetchone()[0]
-        c.execute("UPDATE skills SET description=?, updated_at=? WHERE id=?", (row["description"], now, skill_id))
+        c.execute(
+            "UPDATE skills SET description=?, function=?, updated_at=? WHERE id=?",
+            (row["description"], function, now, skill_id),
+        )
     else:
         skill_id, number = _id("sk_"), 1
         c.execute(
-            "INSERT INTO skills (id, name, description, latest_version_id, created_by_type, created_by_id, deleted_at, created_at, "
-            "updated_at) VALUES (?,?,?,NULL,?,?,NULL,?,?)",
-            (skill_id, row["name"], row["description"], row["proposed_by_type"], row["proposed_by_id"], now, now),
+            "INSERT INTO skills (id, name, description, function, latest_version_id, created_by_type, created_by_id, deleted_at, "
+            "created_at, updated_at) VALUES (?,?,?,?,NULL,?,?,NULL,?,?)",
+            (
+                skill_id,
+                row["name"],
+                row["description"],
+                function,
+                row["proposed_by_type"],
+                row["proposed_by_id"],
+                now,
+                now,
+            ),
         )
     version_id = _id("skv_")
     c.execute(
@@ -516,14 +661,29 @@ def install(app, store, auth, mutate):
         return who
 
     # Fixed paths first: `skills/proposals`, `skills/installs` must not be read as a skill's name.
-    @app.post("/api/v2/skills/proposals", status_code=201)
+    @app.post(
+        "/api/v2/skills/proposals",
+        status_code=201,
+        **api_v2(
+            "Skills",
+            "proposeSkill",
+            "Propose a skill or an update as its whole folder of text files; an admin approves it after screening",
+        ),
+    )
     def skill_propose(request: Request, body: M.SkillPropose):
         """Propose a skill or an update: the whole folder as text files. A bot or a person may; an admin approves. The bundle is
         checked here (the same rules as `tico skill submit`), and screening follows before anyone can approve it."""
         who = reader(request)
         return mutate(request, body, lambda c: propose(c, auth, who, body))
 
-    @app.get("/api/v2/skills/proposals")
+    @app.get(
+        "/api/v2/skills/proposals",
+        **api_v2(
+            "Skills",
+            "listSkillProposals",
+            "Proposals waiting for an OK (status=all or a status for history): admins see all, anyone else their own",
+        ),
+    )
     def skill_proposals(request: Request, status: str = Query(default="pending")):
         """The proposals waiting for an OK: admins see every one, anyone else their own. Newest first, at most 200. A
         decided proposal is history (an approved one is the skill's version); `status` names one to read it anyway,
@@ -544,7 +704,14 @@ def install(app, store, auth, mutate):
             rows = c.execute(_PROPOSAL_SQL + where + " ORDER BY p.created_at DESC LIMIT 200", args).fetchall()
             return {"proposals": [_proposal_view(dict(row)) for row in rows]}
 
-    @app.get("/api/v2/skills/proposals/{pid}")
+    @app.get(
+        "/api/v2/skills/proposals/{pid}",
+        **api_v2(
+            "Skills",
+            "getSkillProposal",
+            "A proposal with its files, its diff, whether the skill moved on, and its latest screening",
+        ),
+    )
     def skill_proposal(request: Request, pid: str):
         """A proposal with its files, its diff against the version it was based on, whether the skill has moved on since (then
         `diff_latest` too), and its latest screening. Its proposer and admins only."""
@@ -573,29 +740,48 @@ def install(app, store, auth, mutate):
                 value["screening"] = _screening_view(screen)
             return value
 
-    @app.post("/api/v2/skills/proposals/{pid}/approve")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/approve",
+        **api_v2("Skills", "approveSkillProposal", "Admins approve a screened proposal as the skill's next version"),
+    )
     def skill_approve(request: Request, pid: str, body: M.SkillApprove):
         """An admin approves a screened proposal (409 not_screened or stale otherwise): the next version of the skill."""
         who = reader(request)
         return mutate(request, body, lambda c: approve(c, auth, who, pid, body.acknowledged))
 
-    @app.post("/api/v2/skills/proposals/{pid}/decline")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/decline",
+        **api_v2("Skills", "declineSkillProposal", "Admins decline a pending proposal with a reason"),
+    )
     def skill_decline(request: Request, pid: str, body: M.SkillDecline):
         who = reader(request)
         return mutate(request, body, lambda c: decline(c, auth, who, pid, body.reason))
 
-    @app.post("/api/v2/skills/proposals/{pid}/withdraw")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/withdraw",
+        **api_v2("Skills", "withdrawSkillProposal", "The proposer withdraws a pending proposal"),
+    )
     def skill_withdraw(request: Request, pid: str, body: M.Empty):
         who = reader(request)
         return mutate(request, body, lambda c: withdraw(c, auth, who, pid))
 
-    @app.post("/api/v2/skills/proposals/{pid}/rescreen")
+    @app.post(
+        "/api/v2/skills/proposals/{pid}/rescreen",
+        **api_v2("Skills", "rescreenSkillProposal", "Admins or the proposer send a pending proposal back to screening"),
+    )
     def skill_rescreen(request: Request, pid: str, body: M.Empty):
         """Screen the proposal again (an admin or its proposer): approval waits for the new screen."""
         who = reader(request)
         return mutate(request, body, lambda c: rescreen(c, auth, who, pid))
 
-    @app.get("/api/v2/skills/installs")
+    @app.get(
+        "/api/v2/skills/installs",
+        **api_v2(
+            "Skills",
+            "listSkillInstalls",
+            "The installs of one bot or person, with what is wanted and what is staged there",
+        ),
+    )
     def skill_installs(request: Request, target_type: str = Query(...), target_id: str = Query(...)):
         """The installs of one bot or person, with what is wanted and what is staged there."""
         who = reader(request)
@@ -615,7 +801,10 @@ def install(app, store, auth, mutate):
                 for row in _installs(c, "i.target_type=? AND i.target_id=?", (target_type, target_id))
             ]
 
-    @app.delete("/api/v2/skills/installs/{iid}")
+    @app.delete(
+        "/api/v2/skills/installs/{iid}",
+        **api_v2("Skills", "uninstallSkill", "Take a skill off a bot or person, with the rights to install it"),
+    )
     def skill_uninstall(request: Request, iid: str):
         """Take a skill off a bot or person: the same rights as installing it."""
         who = reader(request)
@@ -637,42 +826,100 @@ def install(app, store, auth, mutate):
 
         return mutate(request, M.Empty(), work)
 
-    @app.get("/api/v2/skills")
-    def skills_list(request: Request):
-        """The directory: each skill with its latest approved version, how many installs it has, and the first few of
-        them the caller may see (`on`)."""
+    @app.get(
+        "/api/v2/skills",
+        **api_v2(
+            "Skills",
+            "listSkills",
+            "Every skill the company has, the directory's and the ones Tico ships with its roles, by job function and words",
+        ),
+    )
+    def skills_list(
+        request: Request,
+        q: str = Query(default="", max_length=200, description="Words the name, description or function holds"),
+        function: str = Query(
+            default="", max_length=80, description="One job function, or `other` for any other value or none"
+        ),
+    ):
+        """Every skill the company has, one row per name: the directory's (each with its latest approved version, how
+        many installs it has and the first few of them the caller may see, `on`) and the ones Tico ships in its role
+        templates (`source: tico`, on the bots made from those roles). `q` keeps the rows whose name, description and
+        function hold every word; `function` keeps one job function. `functions` counts the rows `q` keeps, per function."""
         who = reader(request)
+        shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
-            rows = c.execute(
-                "SELECT s.id, s.name, s.description, v.number, v.sha256, v.approved_at, "
-                "(SELECT COUNT(*) FROM skill_installs i WHERE i.skill_id = s.id) AS installs_count "
-                "FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id "
-                "WHERE s.deleted_at IS NULL ORDER BY s.name LIMIT ?",
-                (LIST_CAP,),
+            # Every name is searched and counted; only the first LIST_CAP the filter keeps get their versions and installs.
+            names = c.execute(
+                "SELECT id, name, description, function FROM skills WHERE deleted_at IS NULL ORDER BY name"
             ).fetchall()
-            on = _installed_on(c, auth, who, [r["id"] for r in rows])
-            return {
-                "skills": [
-                    {
-                        "id": r["id"],
-                        "name": r["name"],
-                        "description": r["description"],
-                        "latest": {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
+            directory = [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "description": r["description"],
+                    "function": r["function"] or (shipped[r["name"]]["function"] if r["name"] in shipped else None),
+                    "source": "directory",
+                }
+                for r in names
+            ]
+            listed = {r["name"] for r in names}
+            directory = [row for row in directory if _holds(row, q)]
+            extra = [entry for name, entry in shipped.items() if name not in listed and _holds(entry, q)]
+            found = sorted(directory + _shipped_rows(c, auth, who, extra), key=lambda row: row["name"])
+            kept = [row for row in found if _in_function(row, function)]
+            ids = [row["id"] for row in kept if row["source"] == "directory"][:LIST_CAP]
+            details = _directory_details(c, ids)
+            on = _installed_on(c, auth, who, ids)
+            shown = set(ids)
+            out = []
+            for row in kept:
+                if row["source"] == "directory":
+                    if row["id"] not in shown:
+                        continue
+                    r = details[row["id"]]
+                    row["latest"] = (
+                        {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
                         if r["number"] is not None
-                        else None,
-                        "installs_count": r["installs_count"],
-                        "on": on.get(r["id"], []),
-                    }
-                    for r in rows
-                ]
-            }
+                        else None
+                    )
+                    row["installs_count"] = row["on_count"] = r["installs_count"]
+                    row["on"] = on.get(row["id"], [])
+                out.append(row)
+        return {"skills": out, "functions": _function_counts(found)}
 
-    @app.get("/api/v2/skills/{name}")
+    @app.get(
+        "/api/v2/skills/{name}",
+        **api_v2(
+            "Skills",
+            "getSkill",
+            "One skill: its versions and the installs the caller may see, or the roles and bots of one Tico ships",
+        ),
+    )
     def skill_detail(request: Request, name: str):
-        """One skill: its versions (no files) and the installs the caller may see."""
+        """One skill: its versions (no files) and the installs the caller may see. One Tico ships also has `shipped`: the
+        roles that ship it and the bots made from them the caller may see, and its files when the directory has no
+        version of it."""
         who = reader(request)
+        entry = SC.shipped(store.settings.catalog_dir).get(name)
         with store.read() as c:
-            skill = _skill_or_404(c, name)
+            skill = None if name in bundles.RESERVED else _skill(c, name)
+            extra = {"shipped": _shipped_view(c, auth, who, store, entry, with_files=not skill)} if entry else {}
+            if not skill:
+                if not entry:
+                    raise Problem("not_found", f"No skill named {name}", 404)
+                return {
+                    "skill": {
+                        "id": None,
+                        "name": name,
+                        "description": entry["description"],
+                        "function": entry["function"],
+                        "source": "tico",
+                        "latest": None,
+                    },
+                    "versions": [],
+                    "installs": [],
+                    **extra,
+                }
             versions = c.execute(
                 "SELECT * FROM skill_versions WHERE skill_id=? ORDER BY number DESC", (skill["id"],)
             ).fetchall()
@@ -687,13 +934,19 @@ def install(app, store, auth, mutate):
                     "id": skill["id"],
                     "name": skill["name"],
                     "description": skill["description"],
+                    "function": skill["function"] or (entry["function"] if entry else None),
+                    "source": "directory",
                     "latest": _version_view(latest) if latest else None,
                 },
                 "versions": [_version_view(row) for row in versions],
                 "installs": installs,
+                **extra,
             }
 
-    @app.get("/api/v2/skills/{name}/versions/{number}")
+    @app.get(
+        "/api/v2/skills/{name}/versions/{number}",
+        **api_v2("Skills", "getSkillVersion", "One approved version of a skill, with its files"),
+    )
     def skill_version(request: Request, name: str, number: int):
         """One approved version, with its files."""
         reader(request)
@@ -704,7 +957,12 @@ def install(app, store, auth, mutate):
                 raise Problem("not_found", f"{name} has no version {number}", 404)
             return {"skill": name, "version": _version_view(version, with_files=True)}
 
-    @app.post("/api/v2/skills/{name}/installs")
+    @app.post(
+        "/api/v2/skills/{name}/installs",
+        **api_v2(
+            "Skills", "installSkill", "Install a skill for one bot or person, at the latest version or pinned to one"
+        ),
+    )
     def skill_install(request: Request, name: str, body: M.SkillInstall):
         """Install a skill for one bot or person, latest or pinned to a version. Explicit only: nothing reaches later joiners."""
         who = reader(request)
@@ -728,7 +986,12 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/skills/{name}/installs/bulk")
+    @app.post(
+        "/api/v2/skills/{name}/installs/bulk",
+        **api_v2(
+            "Skills", "installSkillForTargets", "Install a skill for several bots or people at once, all or nothing"
+        ),
+    )
     def skill_install_bulk(request: Request, name: str, body: M.SkillInstallBulk):
         """Install for several targets at once, all or nothing: each target is checked before any row is written."""
         who = reader(request)

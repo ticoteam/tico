@@ -54,3 +54,6 @@ first_routine:
 example_output: knowledge/examples/copy-review.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_github]
+shared_files:
+  - .claude/skills/build-the-brand-guide
+  - .claude/skills/write-marketing-copy

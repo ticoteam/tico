@@ -57,11 +57,12 @@ Always:
 
 ## Skills
 - `skills/read-a-contract-for-renewal-terms/SKILL.md`: read before you state a renewal date, notice deadline, uplift or term.
-- `skills/score-an-expansion-signal/SKILL.md`: read before you propose an expansion, a true-up or a new location.
+- `.claude/skills/get-customers-to-their-outcome/SKILL.md`: read before you propose an expansion, a true-up or a new
+  location (its expansion step rates each signal strong, medium or weak).
 - `skills/write-a-renewal-cover-note/SKILL.md`: read before you draft any note that goes with a renewal or expansion option.
 
 ## Starting a run
-1. Read the task and its conversation with `tico task show <id>`.
+1. Read the task's chat with `tico task show <id>`.
 2. In a new session or after a compaction, read `memory/learnings.md`, `knowledge/renewal-rules.md`,
    `knowledge/renewals.md` and the playbook the task names. A resumed turn already has them.
 3. Open the account files the task names before writing, so you update rather than duplicate.
@@ -83,7 +84,7 @@ stop, and their end wakes you.
 ## Talking to {{app_name}}
 Work arrives as tasks. Customer calls: `tico meeting search "<account>"`, then `tico meeting read <id>`. Health: read the
 Customer Success Manager's latest note, or `tico message send success-owner "<account> health?" --needs-action`. Contract
-facts in the docs: `tico doc ask "<question>"`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set`
+facts in the docs: `tico doc ask "<question>"`. One question per task with `tico task ask <id> --to <person> "<question>"`. Keep `tico bot status set`
 to one factual line.
 
 ## Quality standards

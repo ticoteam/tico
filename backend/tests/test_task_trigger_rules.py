@@ -8,6 +8,7 @@ import json
 import pytest
 
 from backend import hubdb as H, task_trigger_rules as T
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import unrelated_task_managers
 
 ANA = "human:ana"
@@ -157,6 +158,7 @@ def test_close_ask_and_relate_actions_go_through_the_task_calls(c):
     )
     linked = rule(c, action="relate", params={"task": related["id"]}, when={"owner": "ops"})
     closed = rule(c, action="close", params={"text": "Filed by mistake"}, when={"owner": "cpo"})
+    X.bot(c, H.RULES_OWNER)  # a rule's question is the Rules Owner's ❓ on the task (rules._rule_ask)
     task = make(c)
     waits = H.task_waits(c, [task["id"]])[task["id"]]
     assert [(w.state, w.who) for w in waits if w.ask] == [("person", "human:ben")]
@@ -189,7 +191,7 @@ def test_a_missing_bot_and_a_throwing_action_keep_the_task_and_mark_the_row(c, m
     broken = rule(c, "task.done", params={"text": "Must roll back"})
 
     def failing(conn, tid, params, said):
-        H.task_update(conn, H.KEEPER, tid, note="Must roll back")
+        H.task_update(conn, H.TICO_ACTOR, tid, note="Must roll back")
         raise RuntimeError("private content must never enter shared rule settings")
 
     monkeypatch.setitem(R.TASK_RUNNERS, "note", failing)
@@ -214,7 +216,7 @@ def test_a_private_task_is_read_with_the_authors_view_and_its_copy_is_private(c)
     assert not H.task_private_readable(c, "human:ben", task)
     H.task_done(c, ANA, task["id"])
     copy = dict(c.execute("SELECT * FROM tasks WHERE title='Private copy'").fetchone())
-    assert copy["private"] and copy["body"] == "Synthetic body"
+    assert copy["private"] and H.task_words(c, copy["id"]) == "Synthetic body"
     assert not H.task_private_readable(c, "human:cara", copy)
     assert not c.execute("SELECT 1 FROM tasks WHERE title='Must not copy'").fetchone()
     assert T.state(c, denied["id"])["last_error_at"]

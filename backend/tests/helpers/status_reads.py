@@ -2,12 +2,13 @@
 
 from backend.store import H
 from backend.tests.helpers.api import claim, post, ready
-from backend.tests.helpers.run_backoff import setup
+from backend.tests.helpers.run_failures import setup
 from backend import bot_settings as BS
+from backend import question_marks
 
 
 def busy(api, machine, first, count, live=1):
-    """`count` more active bots on the test computer, each with open tasks, two questions to a person, a task for a
+    """`count` more active bots on the test computer, each with open tasks, two ❓ to a person, a task for a
     person, private tasks and a stopped run on record; the first `live` of them running, every third one crashed."""
     from backend.store import encode
     from backend.tests.helpers.api import assign
@@ -36,8 +37,7 @@ def busy(api, machine, first, count, live=1):
                 task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
                 first_task = first_task or task["id"]
                 if k in (1, 2):
-                    seen = H.task(c, task["id"])["version"]
-                    H.task_ask(c, "bot:" + slug, task["id"], "human:ana", "Which one?", seen_version=seen)
+                    question_marks.ask(c, "bot:" + slug, task["id"], "human:ana", "Which one?")
             H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
             H.status_set(
                 c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working", task_id=first_task
@@ -61,6 +61,7 @@ def page(api, monkeypatch, path, token="ana-test"):
     """One status page as `token` sees it, without its clock fields, and the statements it took."""
     import contextlib
     from backend.tests.helpers.api import headers
+    from backend.tests.helpers.statement_scope import measuring, recorder
 
     store, seen = api.app.state.store, []
     with monkeypatch.context() as patched:
@@ -70,7 +71,7 @@ def page(api, monkeypatch, path, token="ana-test"):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -79,7 +80,8 @@ def page(api, monkeypatch, path, token="ana-test"):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
+        with measuring(seen):
+            response = api.get(path, headers=headers(token))
     assert response.status_code == 200, response.text
     body = {k: v for k, v in response.json().items() if k not in ("server_time", "tick_age_s", "last_tick")}
     return body, len(seen)

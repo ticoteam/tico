@@ -1399,6 +1399,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('.fin-pl').waitFor();
       const now = new Date(), a = iso(new Date(now.getFullYear(), now.getMonth() - 1, 3)), z = iso(now);
       const short = (v: string) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][day(v).getMonth()]} ${day(v).getDate()}`;
+      // The page's year rule for Day and Week: one year at the end when the range sits in one year, and each end's year
+      // when it spans two (every January, the 3rd of last month is in December of the year before).
+      const ya = day(a).getFullYear(), yz = day(z).getFullYear();
+      const label = ya === yz ? `${short(a)} – ${short(z)}, ${yz}` : `${short(a)}, ${ya} – ${short(z)}, ${yz}`;
       // On a phone the period, range, basis and Compare sit behind the filter icon (one bar row: the view and the icon);
       // nothing is changed yet, so its badge is hidden.
       const setIcon = page.locator('#fin-pl-set');
@@ -1421,7 +1425,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         await page.waitForFunction(p => FIN_PNL.period === p && FIN.pnl.data && !FIN.pnl.busy && FIN.pnl.data.columns.length > 2, period);
         const v = await span();
         assert.ok(v.first.startsWith(short(a)), `${period}: the first column is the range's first day (${v.first})`);
-        assert.ok(v.label.startsWith(short(a) + ' – ' + short(z)), `${period}: the label says the range (${v.label})`);
+        assert.equal(v.label, label, `${period}: the label says the range, with its years (${v.label})`);
         assert.ok(v.left > 0 && v.inView, period + ': opens on the newest actual');
         assert.ok(Math.abs(v.names) < 1, period + ': line names stay at the left');
       }

@@ -27,20 +27,13 @@ import sqlite3
 
 from . import hubdb as H
 from .store import Problem
+from .api_contract import api_v2
 
 SLUG = "general-manager"
 NAME = "General Manager"
 ACTOR = "bot:" + SLUG
 EVENT = "task_manager_report"  # the routine's key and the wake's `refs.wake`
 COMPANY = "company"  # the group of a task whose owner is in no department
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_manager_seen(
- key TEXT PRIMARY KEY, department TEXT NOT NULL, stamp TEXT NOT NULL DEFAULT '', seen_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS task_manager_reports(
- department TEXT PRIMARY KEY, name TEXT NOT NULL, items INTEGER NOT NULL DEFAULT 0, task_id TEXT, checked_at TEXT NOT NULL,
- changed_at TEXT NOT NULL DEFAULT '');
-"""
 
 PER_DEPARTMENT = 30  # items in one report; the rest are counted
 BODY_BYTES = 12000  # the report's text is cut here
@@ -162,7 +155,7 @@ def _paused(c):
         for bot in owners
         if (cause := task_wakes.cannot_run(c, bot, seen)) is not None
         and cause
-        not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP, task_wakes.CLOUD_STARTING)  # it starts by itself
+        not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP, *task_wakes.STARTS_BY_ITSELF)  # it starts by itself
     ]
     if not stopped:
         return []
@@ -200,18 +193,21 @@ def _paused(c):
 
 
 def _held(c):
-    """Bots held after five fast failures in a row (run_backoff) or for going over a turn budget (turn_budgets). Each
+    """Bots held after five fast failures in a row (run_failures) or for going over a turn budget (turn_budgets). Each
     hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (
         (
-            "SELECT bot, held_at, error_class AS reason FROM run_backoff WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, json_extract(details,'$.held_at') AS held_at, "
+            "json_extract(details,'$.error_class') AS reason FROM holds WHERE kind='failing' AND holdable_type='bot' "
+            "AND until_at IS NULL AND released_at IS NULL",
             "held after five fast failures in a row",
         ),
         (
-            "SELECT bot, held_at, runs || ' runs in the last ' || coalesce(window,'hour') AS reason "
-            "FROM bot_budget WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, created_at AS held_at, json_extract(details,'$.runs') || ' runs in the last ' "
+            "|| coalesce(json_extract(details,'$.window'),'hour') AS reason "
+            "FROM holds WHERE kind='runaway' AND holdable_type='bot' AND released_at IS NULL",
             "held by its turn budget, a likely runaway loop",
         ),
     ):
@@ -374,7 +370,7 @@ def _open_report(c, name):
         c,
         "SELECT * FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? ESCAPE '\\' "
         "AND status='open' ORDER BY created_at DESC LIMIT 1",
-        (ACTOR, H.KEEPER, like),
+        (ACTOR, H.TICO_ACTOR, like),
     )
 
 
@@ -385,16 +381,27 @@ def deliver(c, auth, name, body, count):
     title = f"Task check: {name} ({count})"
     open_task = _open_report(c, name)
     if open_task:
-        if open_task["body"] == body:
+        from . import task_wakes
+
+        if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
+        H.task_update(c, H.TICO_ACTOR, open_task["id"], title=title)
         after = H.task(c, open_task["id"])
-        H._wake(c, after, ACTOR, f"The report changed: {title}", {"wake": EVENT}, trigger="schedule", source=EVENT)
+        # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
+        H._wake(
+            c,
+            after,
+            ACTOR,
+            task_wakes.with_instructions(f"The report changed: {title}", body.strip()),
+            {"wake": EVENT, **task_wakes.replace_refs(body)},
+            trigger="schedule",
+            source=EVENT,
+        )
         return open_task["id"], "updated"
-    conversation = rooms.task_conversation_id(c, auth, ACTOR, H.KEEPER) if auth is not None else None
+    conversation = rooms.task_conversation_id(c, auth, ACTOR, H.TICO_ACTOR) if auth is not None else None
     made = H.task_create(
         c,
-        H.KEEPER,
+        H.TICO_ACTOR,
         title,
         body,
         ACTOR,
@@ -463,7 +470,11 @@ def report(c, auth, settings, at):
     c.execute("DELETE FROM task_manager_seen WHERE seen_at<?", (H.shift(at, days=-KEEP_DAYS),))
     if made:
         H.event(
-            c, H.KEEPER, "task_manager.report", SLUG, {"departments": [m["department"] for m in made], "items": total}
+            c,
+            H.TICO_ACTOR,
+            "task_manager.report",
+            SLUG,
+            {"departments": [m["department"] for m in made], "items": total},
         )
     words = (
         f"{len(made)} department{'s' if len(made) != 1 else ''}, {total} item{'s' if total != 1 else ''}"
@@ -520,7 +531,14 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
             raise Problem("forbidden", "People and bots read this", 403)
         return who
 
-    @app.get("/api/v2/general-manager")
+    @app.get(
+        "/api/v2/general-manager",
+        **api_v2(
+            "Health",
+            "getGeneralManager",
+            "People and bots: whether the General Manager is on, its hourly report's switch, schedule and last run, and each department's last check and open check task",
+        ),
+    )
     def general_manager(request: Request):
         """Whether the General Manager is on, the routine's switch and schedule, and for each department how many items its
         last check found and its open Task check task (a task a reader may not open is left out)."""
@@ -532,14 +550,24 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
                     row["task"] = None
             return out
 
-    @app.post("/api/v2/general-manager/turn-on")
+    @app.post(
+        "/api/v2/general-manager/turn-on",
+        **api_v2(
+            "Health",
+            "turnOnGeneralManager",
+            "Owner only: add the General Manager from the catalog (or wake a paused one) and activate it",
+        ),
+    )
     def turn_on(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + NAME + " back on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_general_manager(c, who))
 
-    @app.post("/api/v2/general-manager/turn-off")
+    @app.post(
+        "/api/v2/general-manager/turn-off",
+        **api_v2("Health", "turnOffGeneralManager", "Owner only: pause the General Manager"),
+    )
     def turn_off(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":

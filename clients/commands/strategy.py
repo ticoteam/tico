@@ -45,7 +45,8 @@ def _draft_revision(api, args):
     if not draft:
         raise APIError(
             "forbidden",
-            "Only the owner writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft",
+            "Only the owner (or the Strategy Owner, on their words) writes the strategy; a bot proposes a change with "
+            "tico_proposal_create, kind strategy_draft",
             403,
         )
     return draft["revision"]
@@ -77,13 +78,14 @@ BET_PROPS = {
     "cites": {"type": "array", "items": {"type": "string"}, "description": "Market entity or page ids it rests on"},
     "status": {"type": "string", "enum": ["proposed", "active", "retired"], "description": "Proposed by default"},
     "rank": {"type": "integer", "description": "Its place in the list"},
+    "task": _s("The Strategy Owner's: its task the owner wrote these words on"),
 }
 
 
 def _bet_body(args):
     body = {
         k: args.get(k)
-        for k in ("statement", "why", "rules_out", "cites", "status", "rank", "revision")
+        for k in ("statement", "why", "rules_out", "cites", "status", "rank", "revision", "task")
         if args.get(k) is not None
     }
     wrong = _wrong_if(args)
@@ -94,14 +96,15 @@ def _bet_body(args):
 
 @tool(
     "tico_strategy_show",
-    "The team's published strategy: summary, vision, the seven sections, the bets with their "
-    "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
-    "last changed). The owner also gets the draft. With `section`, only that section of the published strategy.",
+    "The team's live strategy: summary, vision, the seven sections, the bets with their "
+    "wrong-ifs, each bet's goals and colour, the website, and proof_since (when How we know they "
+    "want it last changed). The owner also gets the draft, the same words: every save is live. With `section`, only "
+    "that section of the live strategy.",
     {
         "section": {
             "type": "string",
             "enum": list(STRATEGY_SECTIONS),
-            "description": "Only this section of the published strategy, as text (proof: How we know they want it; "
+            "description": "Only this section of the live strategy, as text (proof: How we know they want it; "
             "now: Why now; how: How we sell)",
         }
     },
@@ -117,7 +120,7 @@ def strategy_show(api, args):
 
 @tool(
     "tico_strategy_summary",
-    "The published strategy as the text every run's context carries: the summary, one line "
+    "The live strategy as the text every run's context carries: the summary, one line "
     "per active bet with what would show it wrong, what we won't do, the version.",
     {},
 )
@@ -127,9 +130,12 @@ def strategy_summary(api, args):
 
 @tool(
     "tico_strategy_draft",
-    "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
-    "proposes instead: tico_proposal_create, kind strategy_draft.",
+    "The owner: change the strategy, only the fields sent (\"\" clears one); the save is live at once as the next "
+    "version. The Strategy Owner writes it "
+    "too, only what the owner told it, naming the task they said it on (task). Any other bot proposes instead: "
+    "tico_proposal_create, kind strategy_draft.",
     {
+        "task": _s("The Strategy Owner's: its task the owner wrote these words on"),
         "summary": _s("At most 400 characters: what every bot reads"),
         "vision": _s("One or two sentences"),
         "sections": {
@@ -157,7 +163,7 @@ def strategy_draft(api, args):
                 {"title": key.strip().replace("-", " ").capitalize(), "body": text} if text else ""
             )
     body = {"revision": _draft_revision(api, args)}
-    for k in ("summary", "vision"):
+    for k in ("summary", "vision", "task"):
         if args.get(k) is not None:
             body[k] = args[k]
     if sections:
@@ -181,24 +187,8 @@ def strategy_vision(api, args):
 
 
 @tool(
-    "tico_strategy_publish",
-    "Owner only: the draft becomes the next numbered version. Needs an active bet with "
-    "rules_out and wrong_if, and \"What we won't do\".",
-    {
-        "note": _s("What this version is for, in a line", default=""),
-        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"},
-    },
-    writes=True,
-)
-def strategy_publish(api, args):
-    return _as_person(api).post(
-        "strategy/publish", {"note": args.get("note") or "", "revision": _draft_revision(api, args)}, key=_key(args)
-    )
-
-
-@tool(
     "tico_strategy_versions",
-    "The published strategy versions, newest first; with n, that version whole.",
+    "The strategy versions, newest first (each save that changed something is one); with n, that version whole.",
     {"n": {"type": "integer", "description": "One version's number"}},
 )
 def strategy_versions(api, args):
@@ -207,7 +197,7 @@ def strategy_versions(api, args):
 
 @tool(
     "tico_strategy_diff",
-    "What changed between two published versions: fields, and bets added, retired or changed.",
+    "What changed between two versions: fields, and bets added, retired or changed.",
     {
         "from_n": {"type": "integer", "description": "The older version's number"},
         "to_n": {"type": "integer", "description": "The newer version's number"},
@@ -220,8 +210,8 @@ def strategy_diff(api, args):
 
 @tool(
     "tico_strategy_bet_add",
-    "Owner only: a new bet, proposed unless status says otherwise. A bot proposes one with "
-    "tico_proposal_create, kind strategy_draft.",
+    "Owner only: a new bet, proposed unless status says otherwise. The Strategy Owner adds one on the owner's words "
+    "with `task`; any other bot proposes one with tico_proposal_create, kind strategy_draft.",
     {"statement": _s("One sentence that could turn out wrong"), **BET_PROPS},
     required=("statement",),
     writes=True,
@@ -232,7 +222,7 @@ def strategy_bet_add(api, args):
 
 @tool(
     "tico_strategy_bet_update",
-    "Owner only: change a bet, only the fields sent.",
+    "Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent.",
     {"id": _s("Bet id"), "statement": _s("One sentence that could turn out wrong"), **BET_PROPS},
     required=("id",),
     writes=True,
@@ -243,7 +233,7 @@ def strategy_bet_update(api, args):
 
 @tool(
     "tico_strategy_bet_retire",
-    "Owner only: retire a bet. Its goals keep their link; the next publish asks the owner what to do with them.",
+    "Owner only: retire a bet. Its goals keep their link; the owner is asked what to do with them.",
     {"id": _s("Bet id")},
     required=("id",),
     writes=True,
@@ -330,9 +320,9 @@ def brand_publish(api, args):
 
 @tool(
     "tico_brand_check",
-    "Check a draft (a post, an email, an ad) against the published brand: words to avoid, "
-    "wrong spellings of names, claims the brand never makes. Each hit has kind, match, rule, level (block or warn) "
-    "and index. Fix every block before it goes out.",
+    "Check a draft (a post, an email, an ad) against the published brand: words to avoid, wrong "
+    "spellings of names, claims the brand never makes. Each hit has kind, match, rule, level "
+    "(block or warn) and index. Fix every block before it goes out.",
     {"text": _s("The draft, whole (on a command line, a file holding it, or - for standard input)")},
     required=("text",),
 )
@@ -350,6 +340,8 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number", "description": "The most that KPI may reach"},
+    "input_kpi_id": _s("The input KPI the channel moves; \"\" clears"),
+    "segment": _s("The segment its spend is for, by slug; \"\" is company-wide"),
     "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
 
@@ -363,9 +355,9 @@ def _channel_body(api, args, keys):
 
 # Every Growth read's answer carries these two (backend/growth_setup.py).
 SETUP_NOTE = (
-    " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
-    "months; a bot that owns a channel still changes its own why, stage and budget). setup: while Growth is not set up, "
-    "each step and the next one with its command, its tool and who may do it; then only done."
+    " you_may: what you may do per action (settings, any channel, sources, months; a bot that owns a channel changes its "
+    "own why, stage and budget). setup: while Growth is unset, each step and the next one with its command, tool and who "
+    "may do it; then only done."
 )
 
 
@@ -381,7 +373,8 @@ def growth_channel_list(api, args):
 
 @tool(
     "tico_growth_channel_show",
-    "One channel by slug, with its open marketing tasks (labelled channel:<slug>)." + SETUP_NOTE,
+    "One channel by slug: KPI vs target, 6 months, what changed and what lines up, tests, sources, open tasks."
+    + SETUP_NOTE,
     {"slug": _s("Channel slug")},
     required=("slug",),
 )
@@ -390,8 +383,76 @@ def growth_channel_show(api, args):
 
 
 @tool(
+    "tico_growth_segment_show",
+    "One segment's last 6 months from customer facts: new customers, kept at 30 and 90 days, LTV and the change; "
+    "with segments, its direct and loaded CAC, observed LTV, churn rule and channels.",
+    {"label": _s("Segment slug or name (none: No segment), or the label customer facts give it: agency")},
+    required=("label",),
+)
+def growth_segment_show(api, args):
+    return api.get("growth/segments/" + quote(args["label"], safe=""))
+
+
+@tool(
+    "tico_growth_segment_list",
+    "The segments: customer rule, churn days, value per customer, and the channels whose spend is for each. "
+    "may_edit: you may add and change them.",
+    {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
+)
+def growth_segment_list(api, args):
+    return api.get("growth/segments", include_retired="true" if args.get("include_retired") else None)
+
+
+SEGMENT_PROPS = {
+    "name": _s("What people call it: Consumer"),
+    "customer_rule": _s("When someone becomes a customer and when they churn, in plain words"),
+    "churn_days": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Days with no activity before a customer counts as churned; 0 when churn is a cancel date",
+    },
+    "revenue_month": {"type": "number", "description": "Revenue per customer per month; blank uses the settings"},
+    "margin_pct": {"type": "number", "description": "Margin as a percent; blank uses the settings"},
+    "min_cohort": {"type": "integer", "minimum": 5, "description": "Fewest customers a cohort needs for a rate"},
+    "value_kind": {
+        "type": "string",
+        "enum": ["revenue", "retention"],
+        "description": "What a customer is worth: revenue (LTV) or retention (kept and cost per retained)",
+    },
+    "owner": _s("Who runs it: me, a bot slug or a person id; \"\" clears"),
+    "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
+}
+
+
+@tool(
+    "tico_growth_segment_set",
+    "Owner, admin or the Growth Manager: add a segment, or change one by slug (only the fields sent); retire: true "
+    "retires it (owner or admin only).",
+    {
+        "slug": _s("Lowercase, digits and dashes: consumer"),
+        **SEGMENT_PROPS,
+        "retire": {"type": "boolean", "description": "Retire it: no channel can be given it any more"},
+    },
+    required=("slug",),
+    writes=True,
+)
+def growth_segment_set(api, args):
+    slug = args["slug"]
+    client = _as_person(api)
+    if args.get("retire"):
+        return client.post(f"growth/segments/{slug}/retire", {}, key=_key(args))
+    body = {k: args[k] for k in SEGMENT_PROPS if k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    known = {s["slug"] for s in api.get("growth/segments", include_retired="true")["segments"]}
+    if slug in known:
+        return client.patch(f"growth/segments/{slug}", body, key=_key(args))
+    return client.post("growth/segments", {"slug": slug, **body}, key=_key(args))
+
+
+@tool(
     "tico_growth_channel_add",
-    "Owner or admin only: a new channel.",
+    "Owner or admin only: a new channel. A bot proposes one: tico_growth_channel_propose.",
     {"slug": _s("Lowercase, digits and dashes: google-search"), **CHANNEL_PROPS},
     required=("slug", "name"),
     writes=True,
@@ -404,7 +465,7 @@ def growth_channel_add(api, args):
 @tool(
     "tico_growth_channel_update",
     "Change a channel, only the fields sent. Owner or admin; the bot that owns the "
-    "channel may change its why, stage and monthly budget.",
+    "channel may change its why, stage, monthly budget and input KPI.",
     {"slug": _s("Channel slug"), **CHANNEL_PROPS},
     required=("slug",),
     writes=True,
@@ -535,13 +596,66 @@ def growth_source_list(api, args):
 
 @tool(
     "tico_growth_source_add",
-    "Owner or admin only: name the system that holds the truth for a number.",
+    "Owner or admin only: name the system that holds the truth for a number. A bot proposes one: "
+    "tico_growth_source_propose.",
     SOURCE_PROPS,
     required=("truth_for", "system"),
     writes=True,
 )
 def growth_source_add(api, args):
     return _as_person(api).post("growth/sources", _source_body(api, args), key=_key(args))
+
+
+PROPOSE_PROPS = {
+    "ask": _s("Whose Needs you it goes to: the owner (by default) or an admin, by person id; any admin may OK it"),
+}
+SOURCE_OF_CHANNEL = {"source_" + k: v for k, v in SOURCE_PROPS.items() if k not in ("owner", "campaign")}
+
+
+def _proposal(api, args, body):
+    if args.get("ask"):
+        body["ask"] = _target(api, args["ask"])
+    return api.post("growth/proposals", body, key=_key(args))
+
+
+@tool(
+    "tico_growth_channel_propose",
+    "A bot: propose a channel you will run, and with source_* the source of its numbers, for the owner or an admin "
+    "to OK in one click. Nothing is added until then; then both are yours and you get a notice.",
+    {
+        "slug": _s("Lowercase, digits and dashes: google-search"),
+        **{k: v for k, v in CHANNEL_PROPS.items() if k != "owner"},
+        **SOURCE_OF_CHANNEL,
+        **PROPOSE_PROPS,
+    },
+    required=("slug", "name"),
+    writes=True,
+)
+def growth_channel_propose(api, args):
+    body = {"channel": {"slug": args["slug"], **_channel_body(api, args, CHANNEL_PROPS)}}
+    own = {k.removeprefix("source_"): v for k, v in args.items() if k in SOURCE_OF_CHANNEL}
+    if any(v is not None for v in own.values()):
+        body["source"] = _source_body(api, own)
+    return _proposal(api, args, body)
+
+
+@tool(
+    "tico_growth_source_propose",
+    "A bot: propose a source you will own, for a channel you run (channel names it) or alone, for the owner or an "
+    "admin to OK in one click. Nothing is added until then.",
+    {
+        **{k: v for k, v in SOURCE_PROPS.items() if k not in ("owner", "campaign")},
+        "channel": _s("Your channel that will name this source"),
+        **PROPOSE_PROPS,
+    },
+    required=("truth_for", "system"),
+    writes=True,
+)
+def growth_source_propose(api, args):
+    body = {"source": _source_body(api, {k: v for k, v in args.items() if k in SOURCE_PROPS})}
+    if args.get("channel"):
+        body["for_channel"] = args["channel"]
+    return _proposal(api, args, body)
 
 
 @tool(
@@ -748,7 +862,11 @@ def growth_cohort_list(api, args):
         "kept_d180": {"type": "number", "description": "% kept after 180 days"},
         "revenue_month": {"type": "number", "description": "Revenue per customer per month"},
         "margin_pct": {"type": "number", "description": "Gross margin %"},
-        "quality": {"type": "string", "enum": ["actual", "estimate"]},
+        "quality": {
+            "type": "string",
+            "enum": ["actual", "estimate"],
+            "description": "Default estimate; actual only when every number came from a source",
+        },
         "sources": {"type": "object", "description": "{field: where the number came from}"},
         "source": {"type": "array", "items": {"type": "string"}, "description": "FIELD=TEXT, instead of sources"},
     },
@@ -825,6 +943,60 @@ def growth_customers_load(api, args):
 
 
 @tool(
+    "tico_growth_read",
+    "The Growth read for a scope's month: signups, activation and paid rates, new customers, cost, CAC (money and "
+    "promotions; with_effort adds bot cost and hours; no_spend, never 0), kept, LTV or a retention segment's value, "
+    "each channel's new_customers, cost, CAC, owner and budget, health, and Growth's KPIs (metrics). Rates say which cohort "
+    "they come from.",
+    {
+        "scope": _s(
+            "all (default), mine (the channels you own), segment:<slug> (segment:none: no segment) or channel:<slug> "
+            "(channel:unknown)"
+        ),
+        "period": _s("YYYY-MM; default the last full month"),
+        "detail": _s("Comma list of campaigns, retention, series"),
+    },
+)
+def growth_read(api, args):
+    return api.get("growth/read", **{k: args[k] for k in ("scope", "period", "detail") if args.get(k)})
+
+
+_PUSH = {
+    "source": _s("The push's label: a bot's (hotmic-db) or source:<id>; a push replaces its months"),
+    "csv": _s("The CSV text"),
+    "rows": {"type": "array", "items": {"type": "object"}, "description": "Instead of csv: rows as objects"},
+}
+
+
+@tool(
+    "tico_growth_rows_push",
+    "Owner, admin, Growth Manager, or a channel's owner for its own channels: cohort rows (anchor signup|customer, period YYYY-MM, segment, channel, "
+    "campaign, as_of, entered, and counts with their _eligible: activated, paid, kept_d30/d90/d180, net_d90/d180/d365 "
+    "as _sum). Replaces the source's rows for the months sent. docs/growth.md has the rules.",
+    _PUSH,
+    required=("source",),
+    writes=True,
+)
+def growth_rows_push(api, args):
+    body = {k: args[k] for k in ("source", "csv", "rows") if args.get(k) is not None}
+    return _as_person(api).post("growth/rows", body, key=_key(args))
+
+
+@tool(
+    "tico_growth_costs_push",
+    "Owner, admin, Growth Manager, or a channel's owner for its own channels: costs (period YYYY-MM, channel, campaign, kind money|promo_cash|"
+    "promo_credits|bot|hours, purpose acquisition|retention, amount, quality actual|estimate). Replaces the source's "
+    "costs for the months sent.",
+    _PUSH,
+    required=("source",),
+    writes=True,
+)
+def growth_costs_push(api, args):
+    body = {k: args[k] for k in ("source", "csv", "rows") if args.get(k) is not None}
+    return _as_person(api).post("growth/costs", body, key=_key(args))
+
+
+@tool(
     "tico_growth_customers_delete",
     "Owner or admin: delete every customer fact.",
     {},
@@ -836,19 +1008,21 @@ def growth_customers_delete(api, args):
 
 @tool(
     "tico_growth_numbers",
-    "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers. may_edit: you may record months." + SETUP_NOTE,
+    "Monthly totals, channel economics, KPI tree, markers, and line: one month joined source to channel "
+    "to KPI, with how each number was made. may_edit: may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
             "minimum": 1,
             "maximum": 24,
-            "description": "How many months back, ending now; default 12",
-        }
+            "description": "Months back; default 12",
+        },
+        "month": _s("Last month, YYYY-MM; default newest"),
     },
 )
 def growth_numbers(api, args):
-    return api.get("growth/numbers", months=args.get("months"))
+    query = {k: args[k] for k in ("months", "month") if args.get(k) is not None}
+    return api.get("growth/numbers", **query)
 
 
 @tool(
@@ -915,6 +1089,8 @@ _CHANNEL = (
     Arg("source_id", "--source", metavar="ID"),
     Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
     Arg("guardrail_max", "--guardrail-max", metavar="N"),
+    Arg("input_kpi_id", "--input-kpi", metavar="ID"),
+    Arg("segment", "--segment", metavar="SLUG"),
 )
 _SOURCE = (
     Arg("truth_for", "--truth-for"),
@@ -957,7 +1133,10 @@ CLI = (
         example="tico growth channel list",
     ),
     Command(
-        "growth channel show", "one channel", render=_growth_text, example="tico growth channel show google-search"
+        "growth channel show",
+        "one channel: its KPI against target, 6 months, what changed and what lines up with it, its tests, its sources",
+        render=_growth_text,
+        example="tico growth channel show google-search",
     ),
     Command(
         "growth channel add",
@@ -967,8 +1146,21 @@ CLI = (
         example="tico growth channel add google-search --name 'Google Search' --track performance --budget 2000",
     ),
     Command(
+        "growth channel propose",
+        "a bot: propose a channel you will run, and its source, for the owner or an admin to OK",
+        args=(
+            Arg("name", "--name"),
+            *_CHANNEL,
+            Arg("source_sync_kind", "--source-sync"),
+            Arg("source_map", "--source-map", metavar="NUMBER=COLUMN"),
+        ),
+        render=_growth_text,
+        example="tico growth channel propose linkedin --name 'LinkedIn posts' --source-system HubSpot "
+        "--source-truth-for signups --source-reach-kind mcp",
+    ),
+    Command(
         "growth channel update",
-        "change a channel (owner or admin; the owning bot may change why, stage, budget)",
+        "change a channel (owner or admin; the owning bot may change why, stage, budget, input KPI)",
         args=_CHANNEL,
         render=_growth_text,
         example="tico growth channel update google-search --stage scaling",
@@ -978,6 +1170,36 @@ CLI = (
         "retire a channel (owner or admin)",
         render=_growth_text,
         example="tico growth channel retire google-search",
+    ),
+    Group("growth segment", "who the team sells to, and the numbers for each, from customer facts"),
+    Command(
+        "growth segment list",
+        "the segments: customer rule, churn days, value per customer, channels",
+        args=(_RETIRED,),
+        render=_growth_text,
+        example="tico growth segment list",
+    ),
+    Command(
+        "growth segment show",
+        "one segment: 6 months of new customers, kept at 30 and 90 days, LTV, direct and loaded CAC, and the change",
+        render=_growth_text,
+        example="tico growth segment show consumer",
+    ),
+    Command(
+        "growth segment set",
+        "add a segment or change one (owner, admin or the Growth Manager); --retire retires it (owner or admin)",
+        args=(
+            Arg("name", "--name"),
+            Arg("customer_rule", "--rule"),
+            Arg("churn_days", "--churn-days", metavar="N"),
+            Arg("revenue_month", "--revenue", metavar="N"),
+            Arg("margin_pct", "--margin", metavar="PCT"),
+            Arg("min_cohort", "--min-cohort", metavar="N"),
+            Arg("value_kind", "--value-kind"),
+        ),
+        render=_growth_text,
+        example="tico growth segment set consumer --name Consumer --churn-days 90 "
+        "--rule 'first completed booking; churned after 90 days with no booking'",
     ),
     Group("growth source", "which system holds the truth for each number"),
     Command(
@@ -993,6 +1215,17 @@ CLI = (
         args=_SOURCE,
         render=_growth_text,
         example="tico growth source add --truth-for 'ad spend' --system 'Google Ads' --reach-kind mcp",
+    ),
+    Command(
+        "growth source propose",
+        "a bot: propose a source you will own, for your channel, for the owner or an admin to OK",
+        args=(
+            *_SOURCE[:3],
+            *[a for a in _SOURCE[3:] if a.name != "campaign"],
+            Arg("channel", "--channel", metavar="SLUG"),
+        ),
+        render=_growth_text,
+        example="tico growth source propose --channel linkedin --truth-for signups --system HubSpot --reach-kind mcp",
     ),
     Command(
         "growth source update",
@@ -1042,7 +1275,8 @@ CLI = (
     ),
     Command(
         "growth cohort set",
-        "one channel's month, only the fields given (any bot or an admin)",
+        "one channel's month, only the fields given (any bot or an admin); numbers are saved as estimates unless "
+        "--quality actual is given",
         args=(
             Arg("channel", "--channel", metavar="SLUG"),
             Arg("month", "--month", metavar="YYYY-MM"),
@@ -1095,11 +1329,36 @@ CLI = (
         example="tico growth customers delete",
     ),
     Command(
+        "growth read",
+        "the Growth read for a scope's month: headline, channels, health, metrics; --detail adds campaigns, retention, series",
+        args=(Arg("scope", metavar="SCOPE"), Arg("period", metavar="YYYY-MM"), Arg("detail", metavar="LIST")),
+        render=lambda args, result: json.dumps(result, indent=2),
+        example="tico growth read --scope segment:rental --period 2026-10",
+    ),
+    Group("growth rows", "cohort rows: the people in each month's cohort cell"),
+    Command(
+        "growth rows push",
+        "push a source's cohort rows from a CSV; they replace its rows for those months (owner, admin, Growth Manager; a channel's owner for its own)",
+        args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
+        omit=("rows",),
+        render=_growth_text,
+        example="tico growth rows push --source hotmic-db --file cohorts.csv",
+    ),
+    Group("growth costs", "costs by month, channel, kind and purpose"),
+    Command(
+        "growth costs push",
+        "push a source's costs from a CSV; they replace its costs for those months (owner, admin, Growth Manager; a channel's owner for its own)",
+        args=(Arg("source", "--source", metavar="LABEL"), Arg("csv", "--file", type=text_file, metavar="FILE")),
+        omit=("rows",),
+        render=_growth_text,
+        example="tico growth costs push --source promotions --file costs.csv",
+    ),
+    Command(
         "growth numbers",
         "the monthly series, each channel's economics, the KPI tree, markers",
-        args=(Arg("months", metavar="N"),),
+        args=(Arg("months", metavar="N"), Arg("month", metavar="YYYY-MM")),
         render=lambda args, result: json.dumps(result, indent=2),
-        example="tico growth numbers --months 6",
+        example="tico growth numbers --months 6 --month 2026-10",
     ),
     Command(
         "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"
@@ -1137,9 +1396,9 @@ def lens_list(api, args):
 @tool(
     "tico_lens_run",
     "Run a lens: answers by step key (a step left out is skipped and assumed from the strategy), on "
-    "the published strategy or, for the owner, the draft. The owner, the Strategy Owner and, for a market lens, the "
-    "Librarian may run one. The Strategy Owner's run files its changes as one strategy_draft proposal; nobody's run "
-    "publishes. Waits up to `wait` seconds (at most 60) for the result.",
+    "the live strategy. The owner, the Strategy Owner and, for a market lens, the Librarian may run one. The Strategy "
+    "Owner's run files its changes as one strategy_draft proposal; nobody's run changes the strategy. Waits up to "
+    "`wait` seconds (at most 60) for the result.",
     {
         "lens": _s("Lens id, from `lens list`"),
         "answers": {
@@ -1148,7 +1407,10 @@ def lens_list(api, args):
             "(at most 12); scores: {columns: [\"Us\", ...], rows: [{factor, scores: [0-5 per column]}]}; "
             "choice: one of the step's options",
         },
-        "draft": {"type": "boolean", "description": "Owner only: run on the draft instead of the published version"},
+        "draft": {
+            "type": "boolean",
+            "description": "Owner only: run on the draft (the same words as the live version)",
+        },
         "wait": {"type": "integer", "description": "Seconds to wait for the result; 0 returns the running run"},
     },
     required=("lens",),
@@ -1226,7 +1488,7 @@ def _strategy_text(args, result):
     """`strategy show`: one section as text with `--section`, else the strategy as JSON."""
     if not args.section:
         return json.dumps(result, indent=2)
-    return "Nothing published yet." if result["text"] is None else result["text"]
+    return "No strategy yet." if result["text"] is None else result["text"]
 
 
 def _read_draft(fields):
@@ -1253,14 +1515,14 @@ STRATEGY = (
     Group("strategy", "the team's strategy: its bets, its sections, the versions"),
     Command(
         "strategy show",
-        "the published strategy, its bets and their goals; the owner also gets the draft",
+        "the live strategy, its bets and their goals; the owner also gets the draft",
         render=_strategy_text,
         example="tico strategy show --section serve",
     ),
     Command("strategy summary", "the text every run's context carries", example="tico strategy summary"),
     Command(
         "strategy draft",
-        "owner only: change the draft; a bot proposes instead (proposal create --kind strategy_draft)",
+        "owner only: change the strategy, live at once; a bot proposes instead (proposal create --kind strategy_draft)",
         args=(Arg("sections", type=json.loads, metavar="JSON"), Arg("section", metavar="KEY=TEXT")),
         example="tico strategy draft --section 'serve=Small offices with one IT person' --revision 4",
     ),
@@ -1271,19 +1533,14 @@ STRATEGY = (
         example="tico strategy vision --task t_1 'Every small landlord runs on bots'",
     ),
     Command(
-        "strategy publish",
-        "owner only: the draft becomes the next version",
-        example="tico strategy publish --note 'serve: small offices'",
-    ),
-    Command(
         "strategy versions",
-        "the published versions, newest first; with N, that version whole",
+        "the versions, newest first; with N, that version whole",
         args=(Arg("n", positional=True, nargs="?"),),
         example="tico strategy versions 3",
     ),
     Command(
         "strategy diff",
-        "what changed between two published versions",
+        "what changed between two versions",
         args=(Arg("from_n", "--from"), Arg("to_n", "--to")),
         example="tico strategy diff --from 2 --to 3",
     ),

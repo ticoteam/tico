@@ -17,6 +17,7 @@ interface Window {
   ticoNativeFeatures?: any;
   ticoNativeLog?: any;
   ticoNativeVersion?: any;
+  ticoScreenCaptureUnavailable?: boolean;
   __callLeaveTimeoutMs?: number;
   threadHref: any;
   threadRowHref: any;
@@ -26,7 +27,7 @@ interface Window {
 declare var marked: { parse(src: string, options?: object): string };
 /** Vendored livekit-client.umd.min.js. */
 declare var LivekitClient: LivekitNamespace;
-/** Vendored docx-preview.min.js and jszip.min.js, loaded on first use by ui/app/file-review.ts. */
+/** Vendored docx-preview.min.js and jszip.min.js, loaded on first use by ui/app/viewer.ts (docxLib). */
 declare var docx: {renderAsync(data: Blob, body: HTMLElement, style: HTMLElement | null, options: Record<string, boolean>): Promise<unknown>} | undefined;
 declare var JSZip: {loadAsync(data: Blob): Promise<{file(name: string): {async(type: 'string'): Promise<string>} | null}>} | undefined;
 
@@ -52,11 +53,9 @@ declare var marketStop: any;
 declare var mountGranolaTool: any;
 declare var obResizeWired: any;
 declare var pageCard: any;
-declare var pageChangelog: any;
 declare var pageLenses: () => Promise<void>;
 declare var pageMarket: any;
 declare var pageStrategy: () => Promise<void>;
-declare var renderChangelogNotice: any;
 declare var reportThisHTML: any;
 declare var runnerOutdatedBanner: any;
 declare var runnerUpdateHtml: any;
@@ -71,11 +70,11 @@ declare var ticoAppUpdate: any;
 declare var ticoAssistantName: any;
 declare var ticoBootSnap: any;
 declare var ticoBootTiming: BootTimingReport | undefined;
-declare var ticoIsCloud: any;
+declare var ticoCallStartTiming: Partial<Record<CallStartMark, number | null>> | undefined;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;
 
-// The page parts' stand-ins (backend/ui_bundle.py stubs), declared by the server before the shell's files; none when
-// the UI is served as separate files (ui/app/parts.ts).
+// The page parts' stand-ins (scripts/build-ui.cjs stubs), declared by the bundle before the shell's files; none when
+// there are no page parts (ui/app/parts.ts).
 declare const UI_PART_STUBS: Set<unknown> | undefined;

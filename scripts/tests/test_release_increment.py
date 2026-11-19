@@ -4,6 +4,11 @@ the replay and RunsOn read the real ones."""
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +29,17 @@ PYTEST_FAILURES = (
     "FAIL  threads.cjs (4.1s)\n"
     "FAIL  ui/tests/task-code.cjs (2s)\n"
 )
+
+
+def test_release_selection_skips_map_for_documentation_and_owned_baselines(monkeypatch):
+    checkout = ri.Checkout()
+    monkeypatch.setattr(checkout, "known", lambda sha: True)
+    monkeypatch.setattr(ri.pr_checks, "script_changes", lambda *args, **kwargs: [])
+    paths = ["README.md", "baselines/ruff/example.json"]
+    monkeypatch.setattr(ri.pr_checks, "changed_files", lambda *args, **kwargs: paths)
+    monkeypatch.setattr(ri.pr_checks, "DependencyMap", lambda root: pytest.fail("unnecessary dependency scan"))
+    _, selected = checkout.selected(A, B)
+    assert selected["python"] == sorted(pr_checks.OWNED_DATA["baselines/"])
 
 
 def record(id, sha, *, conclusion="success", hours=1, incremental=False, status="completed"):
@@ -94,6 +110,13 @@ def test_an_incremental_anchor_chains_the_next_candidate_from_the_newest_green_i
     anchor = ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"backend/tests/test_a.py"})
     assert anchor["id"] == 3 and anchor["failed"] == {"backend/tests/test_a.py"}
     assert ri.full_within_day(records, NOW)["id"] == 1, "the day's full run is still the one that holds the day"
+
+
+def test_a_red_that_fail_fast_cut_short_is_no_anchor_so_the_one_before_it_is():
+    records = [record(3, C, conclusion="failure", incremental=True), record(2, B, hours=3, incremental=True)]
+    named = lambda item: {"backend/tests/test_a.py"}  # noqa: E731
+    assert ri.anchor_of(records, NOW, lambda sha: True, named, lambda item: item["id"] != 3)["id"] == 2
+    assert ri.anchor_of(records, NOW, lambda sha: True, named)["id"] == 3
 
 
 def test_the_anchor_is_the_newest_by_finish_time_not_by_list_order():
@@ -198,6 +221,93 @@ def test_a_failure_nobody_can_name_is_unknown_so_any_commit_may_fix_it():
     assert ri.failed_tokens([("native-linux (linux-x86_64)", "")]) is None
 
 
+# ---- a red that only its infrastructure failed ----
+
+# The annotations of this morning's two reds, as GitHub recorded them (runs 44483934113 and 44490064278).
+BUILDKIT_DENIED = (
+    "Error response from daemon: pull access denied for moby/buildkit, repository does not exist or may require "
+    "'docker login': denied: RBAC: access denied"
+)
+SPOT = "AWS interrupted the EC2 Spot instance running this job. RunsOn can retry it after the workflow run finishes."
+
+
+# Receipts (hosted_release_check.py's run.json) as this morning's reports hold them: the Spot part's gate was still
+# running when AWS took it; v0.6.87's product never started its gate (its report has no receipt); the v0.6.83 isolation
+# race finished its gate with exit 1.
+RUNNING = {"gate_started": True, "gate_state": "running", "success": False}
+NOT_STARTED = {}
+FAILED_GATE = {"gate_started": True, "gate_state": "finished", "gate_exit": 1, "success": False}
+LOST = "The runner has received a shutdown signal. This can happen when the runner service is stopped."
+
+
+def test_a_registry_pull_denial_and_the_product_part_waiting_on_its_images_are_infrastructure():
+    # v0.6.87: one image build could not pull moby/buildkit from Docker Hub; product failed waiting for the images.
+    parts = [
+        ("images (tico-updater, arm64)", [BUILDKIT_DENIED], None),
+        ("product", ["Process completed with exit code 1.", "An image build did not succeed."], NOT_STARTED),
+        ("release-check", ["Process completed with exit code 1."], None),
+    ]
+    assert ri.infrastructure_red(parts) == [("images (tico-updater, arm64)", "registry pull denied", BUILDKIT_DENIED)]
+
+
+def test_a_spot_interruption_of_a_gate_that_had_not_answered_is_infrastructure():
+    # v0.6.89: AWS took the product part's Spot VM (exit 137) mid-gate; the train waited for a commit selecting "product".
+    annotations = ["Process completed with exit code 1.", SPOT, "Process completed with exit code 137.", SPOT]
+    assert ri.infrastructure_red([("product", annotations, RUNNING)]) == [("product", "Spot interrupted", SPOT)]
+    # A gate that passed, or never started, before its machine went is infrastructure too.
+    assert ri.infrastructure_red([("python-3", [SPOT], {"gate_state": "finished", "gate_exit": 0})])
+    assert ri.infrastructure_red([("python-3", [SPOT], NOT_STARTED)])
+
+
+@pytest.mark.parametrize(
+    "message, cause",
+    [
+        ("toomanyrequests: You have reached your unauthenticated pull rate limit.", "registry rate limited"),
+        ("Error: ... 429 toomanyrequests: retry-after: 60", "registry rate limited"),
+        (
+            "The self-hosted runner: runs-on-i-0abc lost communication with the server. Verify the machine is running.",
+            "runner lost",
+        ),
+        ("The hosted runner: GitHub Actions 12 lost communication with the server.", "runner lost"),
+        (LOST, "runner lost"),
+    ],
+)
+def test_rate_limits_and_lost_runners_are_infrastructure(message, cause):
+    assert ri.infrastructure_red([("python-3", [message], RUNNING)]) == [("python-3", cause, message)]
+
+
+def test_a_test_that_failed_before_its_runner_was_lost_is_a_test_failure():
+    # The gate finished with exit 1, then the runner went during the always-run log upload: both annotations show.
+    assert ri.infrastructure_red([("python-3", ["Process completed with exit code 1.", LOST], FAILED_GATE)]) is None
+    assert ri.infrastructure_red([("product", [SPOT], FAILED_GATE)]) is None
+    # A gate that crashed (its receipt has an error) answered too.
+    assert (
+        ri.infrastructure_red([("product", [SPOT], {"gate_state": "running", "error": "source tree changed"})]) is None
+    )
+    # A report that cannot be read cannot show the gate had not answered: no retry.
+    assert ri.infrastructure_red([("product", [SPOT], None)]) is None
+
+
+def test_a_red_with_any_other_failure_is_not_infrastructure():
+    # A test failure beside a lost VM is still a test failure: it is never run again until it passes (CLAUDE.md).
+    other = ("python-2", ["Process completed with exit code 1."], FAILED_GATE)
+    assert ri.infrastructure_red([("product", [SPOT], RUNNING), other]) is None
+    assert ri.infrastructure_red([("python-2", ["Process completed with exit code 1."], RUNNING)]) is None
+    # A part with nothing said is unknown, not infrastructure.
+    assert ri.infrastructure_red([("contracts-1", [], RUNNING)]) is None
+    assert ri.infrastructure_red([]) is None
+    # "An image build did not succeed" excuses product only, and only when an image build failed on infrastructure.
+    assert ri.infrastructure_red([("product", ["An image build did not succeed."], NOT_STARTED)]) is None
+    assert (
+        ri.infrastructure_red([("python-2", [SPOT], RUNNING), ("product", ["An image build did not succeed."], {})])
+        is None
+    )
+    images = ("images (tico, amd64)", [BUILDKIT_DENIED], None)
+    assert ri.infrastructure_red([images, ("python-2", ["An image build did not succeed."], NOT_STARTED)]) is None
+    # A test that prints the words is not a registry: only annotations are read, and a test's own says it failed.
+    assert ri.infrastructure_red([("python-2", ["FAILED test_registry.py::test_pull - pull access"], RUNNING)]) is None
+
+
 # ---- when a red validation runs again ----
 
 
@@ -292,6 +402,20 @@ def test_selection_tokens_name_what_the_selection_runs():
     assert {"backend/tests/test_a.py", "ui/tests/threads.cjs", ri.DESKTOP} <= tokens
     assert set(pr_checks.CONTRACT_TESTS) <= tokens
     assert "ui/tests/sign-in-redirect.cjs" not in tokens
+
+
+def test_a_fix_to_the_isolation_suite_selects_the_product_part():
+    # v0.6.83: the isolation check went red and its fix (#4413) touched only runner_support/tests/isolation/fake_cli.py;
+    # the train read no product token from it and waited for a commit that would never come.
+    changed = ["runner_support/tests/isolation/fake_cli.py"]
+    assert ri.PRODUCT in ri.selection_tokens(selected(), changed)
+    assert ri.red_rule(
+        {"sha": "a" * 40, "url": "u", "conclusion": "failure", "failed": {ri.PRODUCT}},
+        "b" * 40,
+        ri.selection_tokens(selected(), changed),
+    )[0]
+    assert plan_of(selected(), changed=changed, smoke=(), gone=())["product"] is True
+    assert ri.PRODUCT not in ri.selection_tokens(selected(), ["runner_support/turns.py"])
 
 
 def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner(tmp_path, monkeypatch):
@@ -396,3 +520,79 @@ def test_a_large_contracts_lane_splits_into_timed_vms_and_a_small_one_keeps_its_
     assert all(job["part"] == "python" for job in jobs)
     small = ri.build_jobs([], [], files[:2], False, [], False, False, tables)
     assert [job["name"] for job in small] == ["contracts"]
+
+
+def test_only_the_python_vms_holding_native_test_files_wait_for_the_release_binaries():
+    # ci.yml waits for native-linux on every VM without binaries "no"; as in the full matrix (shards 1-2), only the VMs
+    # with a file that runs the runner or relay binaries wait, and those files are packed on their own VMs.
+    files = [f"backend/tests/test_p{i}.py" for i in range(6)]
+    native = {"runner_support/tests/test_engine.py"}
+    tables = {"seconds": {name: 400.0 for name in [*files, *native]}, "browser": {}, "slow_only": set()}
+    jobs = ri.build_jobs(
+        sorted([*files, *native]), [], [], False, [], False, False, tables, native=lambda names: native & set(names)
+    )
+    waiting = [job for job in jobs if "binaries" not in job]
+    assert [job["files"] for job in waiting] == [sorted(native)]
+    assert all(job["binaries"] == "no" for job in jobs if job not in waiting)
+    assert sorted(sum((job["files"] for job in jobs), [])) == sorted([*files, *native])  # the same tests run
+    assert [job["name"] for job in jobs] == [f"python-{i}" for i in range(1, len(jobs) + 1)]
+    include = ri.matrix_of(json.dumps({"jobs": jobs}))["include"]
+    assert [entry.get("binaries", "") for entry in include] == [job.get("binaries", "") for job in jobs]
+
+
+def test_a_contracts_vm_waits_for_the_binaries_only_when_it_holds_a_native_test_file():
+    native = {"backend/tests/test_s0.py"}
+    files = [f"backend/tests/test_s{i}.py" for i in range(20)]
+    tables = {"seconds": {name: 100.0 for name in files}, "browser": {}, "slow_only": set()}
+    jobs = ri.build_jobs([], [], files, False, [], False, False, tables, native=lambda names: native & set(names))
+    assert [("binaries" not in job) for job in jobs] == [bool(native & set(job["files"])) for job in jobs]
+    assert any(job.get("binaries") == "no" for job in jobs)
+
+
+def test_a_plan_that_cannot_tell_native_files_keeps_every_python_vm_waiting_for_the_binaries():
+    plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=())
+    assert [job for job in plan["jobs"] if job["part"] == "python" and "binaries" in job] == []
+    told = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=(), native=lambda names: set())
+    assert [job["binaries"] for job in told["jobs"] if job["name"].startswith("python-")] == ["no"]
+
+
+def test_the_planner_finds_native_test_files_in_the_candidates_checkout(tmp_path):
+    tests = tmp_path / "backend/tests"
+    tests.mkdir(parents=True)
+    # Split so this file itself names no native binary (release_checks.NATIVE_TEST would make it a native test).
+    (tests / "test_native.py").write_text('BIN = "runner-rs/target/' + 'release/tico-runner"\n')
+    (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
+    names = ["backend/tests/test_native.py", "backend/tests/test_plain.py"]
+    assert ri.native_test_files(names, tmp_path) == {"backend/tests/test_native.py"}
+
+
+def test_the_planner_finds_native_files_with_only_the_files_ci_checks_out_beside_it(tmp_path):
+    # ci.yml's candidate job checks the planner out sparsely (`validation-control`, read here from ci.yml), so
+    # everything the planner imports must be in that list; a missing import fails every incremental validation at its
+    # plan step while full-checkout tests stay green.
+    root = Path(ri.__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/ci.yml").read_text()
+    listed = re.search(r"path: validation-control\n\s+sparse-checkout: \|\n((?:\s+scripts/\S+\n)+)", workflow)
+    assert listed, "ci.yml's validation-control checkout no longer has a sparse list this test can read"
+    control = tmp_path / "control"
+    for name in listed.group(1).split():
+        (control / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(root / name, control / name)
+    control = control / "scripts"
+    tests = tmp_path / "candidate/backend/tests"
+    tests.mkdir(parents=True)
+    (tests / "test_native.py").write_text('BIN = "runner-rs/target/' + 'release/tico-runner"\n')
+    (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import release_increment as ri; "
+        "print(sorted(ri.native_test_files(['backend/tests/test_native.py', 'backend/tests/test_plain.py'], sys.argv[2])))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(control), str(tmp_path / "candidate")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "['backend/tests/test_native.py']"

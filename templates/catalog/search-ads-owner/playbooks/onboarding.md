@@ -46,7 +46,7 @@ Create `knowledge/structure.md`, `knowledge/negatives.md`, `knowledge/copy.md`, 
 
 Then file each kept campaign as a task in Growth Monitoring. It lands in Watching:
 
-    tico task create --owner me --pipeline growth-monitoring --label channel:search-ads --title "<campaign name>" --body "<link to the campaign>. KPI: cost per result <value>, range <low> to <high>; spend <low> to <high> a week. Kept at setup."
+    tico task create --owner me --pipeline growth-monitoring --label channel:search-ads --title "<campaign name>" --message "<link to the campaign>. KPI: cost per result <value>, range <low> to <high>; spend <low> to <high> a week. Kept at setup."
 
 ## 5. Say setup is done
 
@@ -63,7 +63,7 @@ Fill the blanks in `knowledge/channel-playbook.md` (who puts changes live, anyth
 "Search Ads playbook" is bot-wide, and a page made in a chat stays in that chat, so publish it on a task of its own.
 File one for yourself:
 
-    tico task create --owner me --title "Publish the Search Ads playbook" --body "Publish knowledge/channel-playbook.md as the Search Ads playbook page."
+    tico task create --owner me --title "Publish the Search Ads playbook" --message "Publish knowledge/channel-playbook.md as the Search Ads playbook page."
 
 On that task (or on this one, when setup runs on a task), write the file as an HTML page and publish it. Bold, code
 and lists become HTML tags, with no `**` or backtick left on the page, and the sentence that calls the file a starter

@@ -12,7 +12,6 @@ from ..store import (
     sweep_deltas,
     sweep_events,
     sweep_idempotency,
-    sweep_mail,
     sweep_tokens,
 )
 
@@ -52,7 +51,6 @@ def run(c, ctx):
         presence.sweep(tx, now)
         calendar_store.purge_cancelled(tx, now)  # cancelled calendar events keep 90 days
     sweep_idempotency(store, now)
-    sweep_mail(store, now)
     sweep_deltas(store, now)  # finished runs' streamed text pieces keep a day
     sweep_tokens(store, now)  # finished runs' token rows keep a week
     sweep_events(store, now)  # bookkeeping events keep 7 or 30 days

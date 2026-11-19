@@ -7,7 +7,8 @@ from fastapi import Request
 import json
 from . import task_privacy as privacy
 from .store import refused
-from . import org_rule_check, task_rule_gate
+from . import org_rule_check, task_rule_gate, task_text_keys
+from .api_contract import api_v2
 
 
 def register(app, auth, mover, mutate, store, task_filters, task_idents, task_view):
@@ -102,7 +103,15 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
             H.task_update(c, who.actor, row["id"], labels=changed, mover=moves)
         return True
 
-    @app.post("/api/v2/task-bulk")
+    @app.post(
+        "/api/v2/task-bulk",
+        **api_v2(
+            "Tasks",
+            "bulkChangeTasks",
+            "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is move (to), owner, tags (add, remove) or close, with a why. People only. Each task changes by the call a single change makes: a task the caller may not change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
+            "TaskBulkResult",
+        ),
+    )
     def task_bulk(request: Request, body: M.TaskBulk):
         """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made by the task call
         a single change would make: a task the caller may not change is skipped with the reason, the rest still
@@ -117,6 +126,12 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
         # no task changes; warned, each task's why carries the line. A dry run writes nothing, so it is not checked.
         rules = request.app.state.task_rules
         said = [("Why", body.why or "")]
+        # A key in the why is refused before any task changes, a dry run's too, with an audit row on each task it
+        # would have gone on (backend/task_text_keys.py).
+        if body.why and task_text_keys.found(body.why):
+            with store.read() as c:
+                selected = bulk_select(c, caller, body.filter)
+            task_text_keys.refuse_text(store, str(caller.actor), selected, {"why": body.why})
 
         def reached(c):
             """Each selected task with the people the why reaches through it: its owner, its requester, a new owner."""

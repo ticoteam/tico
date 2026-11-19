@@ -1,0 +1,527 @@
+[
+ {
+  "argv": [
+   "risk",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_risk_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risks",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "list",
+   "--task",
+   "D18450"
+  ],
+  "tools": [
+   [
+    "tico_risk_list",
+    {
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risks?task=D18450",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "add",
+   "Customer theft claims"
+  ],
+  "tools": [
+   [
+    "tico_risk_add",
+    {
+     "label": "Customer theft claims",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "risks",
+    {
+     "label": "Customer theft claims"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "show",
+   "risk:customer-theft-claims",
+   "--limit",
+   "20"
+  ],
+  "tools": [
+   [
+    "tico_risk_show",
+    {
+     "limit": 20,
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risks/risk:customer-theft-claims?limit=20",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "update",
+   "risk:customer-theft-claims",
+   "--version",
+   "1",
+   "--label",
+   "Theft claims"
+  ],
+  "tools": [
+   [
+    "tico_risk_update",
+    {
+     "label": "Theft claims",
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims",
+     "version": 1
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "risks/risk:customer-theft-claims",
+    {
+     "version": 1,
+     "label": "Theft claims"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--kind",
+   "dispute",
+   "--amount",
+   "250000",
+   "--currency",
+   "USD",
+   "--forum",
+   "AAA"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "amount": 250000,
+     "clear": false,
+     "currency": "USD",
+     "forum": "AAA",
+     "kind": "dispute",
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "kind": "dispute",
+     "amount": 250000,
+     "currency": "USD",
+     "forum": "AAA"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--version",
+   "2",
+   "--unset",
+   "party",
+   "--unset",
+   "amount"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "operation_id": null,
+     "task": "D18450",
+     "unset": [
+      "party",
+      "amount"
+     ],
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "version": 2,
+     "party_entity_id": null,
+     "amount": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--clear",
+   "--version",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": true,
+     "operation_id": null,
+     "task": "D18450",
+     "version": 3
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "version": 3,
+     "clear": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matters",
+   "--kind",
+   "dispute",
+   "--open"
+  ],
+  "tools": [
+   [
+    "tico_risk_matters",
+    {
+     "kind": "dispute",
+     "open": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "matters?kind=dispute&open=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matters",
+   "--risk",
+   "risk:customer-theft-claims"
+  ],
+  "tools": [
+   [
+    "tico_risk_matters",
+    {
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "matters?risk=risk%3Acustomer-theft-claims",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "obligations",
+   "--group",
+   "unconfirmed"
+  ],
+  "tools": [
+   [
+    "tico_risk_obligations",
+    {
+     "group": "unconfirmed",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risk/obligations?group=unconfirmed",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "obligations",
+   "--risk",
+   "risk:customer-theft-claims",
+   "--state",
+   "watched",
+   "--days",
+   "30",
+   "--limit",
+   "10",
+   "--offset",
+   "10"
+  ],
+  "tools": [
+   [
+    "tico_risk_obligations",
+    {
+     "days": 30,
+     "limit": 10,
+     "offset": 10,
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims",
+     "state": "watched"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risk/obligations?risk=risk%3Acustomer-theft-claims&state=watched&days=30&limit=10&offset=10",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "link",
+   "risk:customer-theft-claims",
+   "--document",
+   "ent_policy",
+   "--role",
+   "covers"
+  ],
+  "tools": [
+   [
+    "tico_risk_link",
+    {
+     "document": "ent_policy",
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims",
+     "role": "covers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "risks/risk:customer-theft-claims/links",
+    {
+     "linkable_type": "entity",
+     "linkable_id": "ent_policy",
+     "role": "covers"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "link",
+   "risk:customer-theft-claims",
+   "--rule",
+   "rule_vet",
+   "--document",
+   "ent_policy"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico risk link: error: argument --document: not allowed with argument --rule",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "risk",
+   "unlink",
+   "risk:customer-theft-claims",
+   "--rule",
+   "rule_vet"
+  ],
+  "tools": [
+   [
+    "tico_risk_unlink",
+    {
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims",
+     "rule": "rule_vet"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "risks/risk:customer-theft-claims/unlink",
+    {
+     "linkable_type": "org_rule",
+     "linkable_id": "rule_vet",
+     "role": "rule"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "link",
+   "risk:customer-theft-claims"
+  ],
+  "tools": [
+   [
+    "tico_risk_link",
+    {
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"Give one of rule or document\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ }
+]

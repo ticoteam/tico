@@ -1,13 +1,18 @@
 """The task calls everything outside the engine uses (backend/task_calls.py, re-exported by hubdb), and what a task's
 life looks like through them: made by `H.task_create`, worked with `H.task_done`, `task_move`, `task_close`,
-`task_reassign`, `task_ask`, `task_answer`, `task_snooze`, edited with `H.task_update`, deleted and restored."""
+`task_reassign`, `task_ask`, `task_answer`, `task_snooze`, edited with `H.task_update`, deleted and restored.
+
+A bot's question to a person is a message marked ❓ (backend/question_marks.py); what a task waits on is an OK. A bot's
+OK shows what it approves (`shows`), a person's need not."""
 
 import json
 
 import pytest
 
+from backend import question_marks as Q
 from backend import task_delete
 from backend import task_engine as E
+from backend import task_followers
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -47,6 +52,13 @@ def _visits(c, task_id):
     return c.execute("SELECT COUNT(*), SUM(left_at IS NULL) FROM visits WHERE task_id=?", (task_id,)).fetchone()
 
 
+def _ok(c, task_id, person=ANA, line="OK the launch note?", by=BUILDER, shows=None):
+    """A bot's OK of a person on the task, showing what it approves (a page, unless `shows` names one): the task waits on
+    it."""
+    shows = shows or X.shown(c)
+    return H.task_ask(c, by, task_id, person, line, kind="ok", shows=shows, seen_version=_version(c, task_id))
+
+
 # ----------------------------------------------------------------------------- create
 def test_a_new_task_is_open_in_the_first_stage_of_general_with_one_visit_and_its_owner_bot_woken_once(c):
     row = _new(c, wake_refs={"automation_run": "run-1"})
@@ -65,13 +77,13 @@ def test_a_new_task_is_open_in_the_first_stage_of_general_with_one_visit_and_its
     assert refs["version"] == row["version"]
 
 
-def test_a_task_for_a_person_wakes_nobody_and_is_in_their_needs_you(c):
+def test_a_task_for_a_person_wakes_nobody_and_is_their_turn_in_tasks_not_needs_you(c):
     from backend import waiting_on as W
 
     row = _new(c, by=BUILDER, owner=ANA, title="Pick the launch date")
     assert X.wakes(c, row["id"]) == []
-    mine = [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]
-    assert [item["kind"] for item in mine] == ["task"]
+    assert [(w.state, w.who) for w in W.waiting_on(c, row["id"])] == [("person", ANA)]
+    assert not [item for item in W.needs(c, ANA) if item["task_id"] == row["id"]]  # nothing is asked of her
 
 
 def test_a_sub_task_is_linked_both_ways_and_its_parent_waits_on_nothing_it_did_not_ask_for(c):
@@ -121,12 +133,12 @@ def test_done_from_the_owner_finishes_the_task_and_what_a_move_causes_happens_on
 
 def test_done_never_pushes_past_and_a_move_with_a_reason_does(c):
     row = _new(c)
-    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    asked = _ok(c, row["id"])
     with _refused("identity"):
         H.task_done(c, HELPER, row["id"], "Looks finished to me.", _version(c, row["id"]))  # not on the task
     H.task_done(c, BUILDER, row["id"], "Drafted both.", _version(c, row["id"]))
     still = H.task(c, row["id"])
-    assert (still["status"], still["stage_id"]) == ("open", "general-todo")  # waits on Ana's answer
+    assert (still["status"], still["stage_id"]) == ("open", "general-todo")  # waits on Ana's OK
     with _refused("task_not_met") as refusal:
         H.task_move(c, BUILDER, row["id"], H.TASK_NEXT, None, _version(c, row["id"]))
     assert refusal.value.extra["missing"] and refusal.value.extra["version"] == _version(c, row["id"])
@@ -140,78 +152,40 @@ def test_a_person_says_a_bots_task_is_done_and_tico_finishing_one_needs_no_push(
     one = _new(c)
     assert H.task_done(c, BEN, one["id"], "Saw it live.", mover=True)["status"] == "done"
     two = _new(c, title="File the receipts")
-    assert H.task_done(c, H.KEEPER, two["id"], "The bot was archived.")["status"] == "done"
+    assert H.task_done(c, H.TICO_ACTOR, two["id"], "The bot was archived.")["status"] == "done"
 
 
 # ----------------------------------------------------------------------------- ask and answer
-def test_a_bot_asks_a_person_who_answers_and_the_bot_is_woken_with_the_answer(c):
+def test_a_bot_asks_a_person_for_an_ok_who_answers_and_the_bot_is_woken_with_the_answer(c):
     row = _new(c)
     X.settled(c)
-    asked = H.task_ask(
-        c,
-        BUILDER,
-        row["id"],
-        ANA,
-        "Ship it on Monday or Friday?",
-        choices=["Monday", "Friday"],
-        seen_version=_version(c, row["id"]),
-    )
-    rid = asked["requirement_id"]
+    rid = _ok(c, row["id"], line="OK shipping it on Friday?")["requirement_id"]
     view = H.task_view(c, row["id"], ANA)
     ask = next(r for r in view["to_leave"] if r["requirement_id"] == rid)
-    assert (ask["kind"], ask["met"], ask["who"], ask["asked_by"], ask["choices"]) == (
-        "answer",
-        False,
-        ANA,
-        BUILDER,
-        ["Monday", "Friday"],
-    )
-    assert {"answer", "give", "thumbs"} <= set(ask["may"])
+    assert (ask["kind"], ask["met"], ask["who"], ask["asked_by"]) == ("ok", False, ANA, BUILDER)
+    assert {"ok", "no", "give"} <= set(ask["may"])
     assert (view["turn"]["state"], view["turn"]["who"]) == ("person", ANA)
-    assert (
-        "answer" not in next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid)["may"]
-    )
+    assert "ok" not in next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid)["may"]
     with _refused("task_requirement"):
-        H.task_answer(c, BEN, row["id"], rid, "Monday")
-    H.task_answer(c, ANA, row["id"], rid, "Friday")
+        H.task_answer(c, BEN, row["id"], rid, "ok")
+    H.task_answer(c, ANA, row["id"], rid, "ok")
     after = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)
-    assert (after["met"], after["answer"]["value"], after["answer"]["by"]) == (True, "Friday", ANA)
+    assert (after["met"], after["answer"]["value"], after["answer"]["by"]) == (True, "ok", ANA)
     assert [w[1] for w in X.wakes(c, row["id"]) if ":answer:" in w[0]] == [BUILDER]
 
 
 def test_a_bots_open_ask_counts_as_waiting_on_a_person_until_it_is_answered(c):
+    """An OK it asked counts until the person answers it, and a ❓ it marked until the person replies."""
     row = _new(c)
     before = H.status_counts(c, BUILDER)
-    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    asked = _ok(c, row["id"])
     assert H.status_counts(c, BUILDER) == (before[0], before[1] + 1)
-    H.task_answer(c, ANA, row["id"], asked["requirement_id"], "Friday")
+    H.task_answer(c, ANA, row["id"], asked["requirement_id"], "ok")
     assert H.status_counts(c, BUILDER) == before
-
-
-def test_a_thumbs_down_that_lets_the_task_finish_is_the_persons_move(c):
-    row = _new(c)
-    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
-    H.task_done(c, BUILDER, row["id"], "Drafted both.", _version(c, row["id"]))
-    out = H.task_thumbs(c, ANA, row["id"], asked["requirement_id"], False, "Either day is fine; do not ask.")
-    assert out["status"] == "done"
-    updates = c.execute(
-        "SELECT actor FROM events WHERE action='task.update' AND target=? AND detail LIKE '%\"done\"%'", (row["id"],)
-    ).fetchall()
-    assert [u[0] for u in updates] == [ANA]  # what the move causes is Ana's, not Tico's
-
-
-def test_a_thumb_is_offered_only_on_a_bots_ask(c):
-    row = _new(c, by=BEN)
-    theirs = H.task_ask(c, BEN, row["id"], ANA, "Which venue do we book?", seen_version=_version(c, row["id"]))
-    ask = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == theirs["requirement_id"])
-    assert "thumbs" not in ask["may"]  # a person's ask on a bot's task
-    with _refused("Only a bot's ask takes a thumb"):
-        H.task_thumbs(c, ANA, row["id"], theirs["requirement_id"], True)
-    stage_ok = X.requirement(c, "general-todo", "ok", person=ANA, line="OK the venue")
-    mine = _new(c, owner=BEN, title="Book the venue")
-    on_bot = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
-    on_person = next(r for r in H.task_view(c, mine["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
-    assert "thumbs" in on_bot["may"] and "thumbs" not in on_person["may"]  # a stage's ask is the owner bot's
+    Q.ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?")
+    assert H.status_counts(c, BUILDER) == (before[0], before[1] + 1)
+    H.task_comment(c, ANA, row["id"], "Friday.")
+    assert H.status_counts(c, BUILDER) == before
 
 
 def test_a_bots_ask_to_a_person_is_plain_words(c):
@@ -308,6 +282,37 @@ def test_reassign_gives_the_task_to_its_new_owner_and_tells_the_automations_once
     assert H.task_reassign(c, ANA, row["id"], HELPER)["version"] == version + 1  # the same owner: no change
     with _refused("task_requirement|identity|reach"):
         H.task_reassign(c, ANA, row["id"], "bot:nobody")
+
+
+def test_reassign_keeps_the_tasks_place_in_its_stage(c):
+    """Seen on TIDY (D-20021): a person put a task at the top of On Deck (rank 1.0, the next at 556 and 564). Giving it
+    to someone else set its rank to the end of the new owner's queue (200225.0), so it dropped to the bottom of the
+    stage. A reassignment keeps the task in its stage, so it keeps its rank and its place there."""
+    top, second, third = (
+        _new(c, title="Top of the stage"),
+        _new(c, title="Second"),
+        _new(c, owner=HELPER, title="Third"),
+    )
+    for task_id, rank in ((top["id"], 1.0), (second["id"], 556.0), (third["id"], 564.0)):
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (rank, task_id))
+    for n in range(3):  # the new owner's queue already ends far below the stage's top
+        c.execute("UPDATE tasks SET rank=? WHERE id=?", (200224.0 - n, _new(c, owner=HELPER, title=f"Later {n}")["id"]))
+    X.settled(c)
+
+    def stage_order():
+        return [t["id"] for t in H.tasks(c, status="open") if t["stage_id"] == top["stage_id"]]
+
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    out = H.task_reassign(c, ANA, top["id"], HELPER, "Helper has the numbers.", _version(c, top["id"]))
+    assert (out["owner_id"], out["stage_id"], out["rank"]) == (HELPER, top["stage_id"], 1.0)
+    assert stage_order()[:3] == [top["id"], second["id"], third["id"]]
+    assert [t["id"] for t in H.tasks(c, owner=HELPER, status="open")][0] == top["id"]  # first in its new owner's queue
+
+    # A task with no rank yet still takes the end of the new owner's queue.
+    unranked = _new(c, title="Never ranked")
+    c.execute("UPDATE tasks SET rank=NULL WHERE id=?", (unranked["id"],))
+    out = H.task_reassign(c, ANA, unranked["id"], HELPER, "Helper has the numbers.", _version(c, unranked["id"]))
+    assert out["rank"] == 200225.0
 
 
 def _pr(c, task_id, number, repo="acme/app"):
@@ -420,7 +425,7 @@ def test_a_private_task_is_not_found_by_someone_who_may_not_read_it(c):
 @pytest.mark.parametrize("ended", [None, "done", "closed"])
 def test_a_deleted_task_keeps_no_stage_and_a_restored_one_comes_back_as_it_stood(c, ended):
     row = _new(c)
-    H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    _ok(c, row["id"])
     if ended == "done":
         H.task_move(c, ANA, row["id"], H.TASK_DONE, "Good enough.")
     elif ended == "closed":
@@ -603,7 +608,7 @@ def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_
         for slug in ("builder", "helper", "manager"):
             X.bot(c, slug)
         row = _new(c, by=BEN, owner=BUILDER, private=True)
-        H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
+        _ok(c, row["id"], BEN, "OK dropping the Acme contract?")
     first = _move_through_the_store(company, BEN, row["id"], "ben-1")
     assert first.code == "task_not_met" and "Acme" in json.dumps(first.extra["missing"])
     assert "next" not in first.extra  # a person in the app is told what is missing, never a `tico task ...` line
@@ -619,11 +624,11 @@ def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_
 
 def test_a_bot_never_answers_its_own_ask_and_an_ok_is_asked_only_of_a_person(c):
     row = _new(c, by=BEN, owner=BUILDER)
-    for to, kind in ((BUILDER, "ok"), (BUILDER, "answer"), (HELPER, "ok")):
+    for to in (BUILDER, HELPER):
         with _refused("task_requirement"):
-            H.task_ask(c, BUILDER, row["id"], to, "Ship it on Monday?", kind=kind, seen_version=_version(c, row["id"]))
+            _ok(c, row["id"], to)
     assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # nothing was asked
-    H.task_ask(c, BUILDER, row["id"], HELPER, "Which day suits the launch?", seen_version=_version(c, row["id"]))
+    assert _ok(c, row["id"], BEN)["requirement_id"]
 
 
 def test_a_persons_own_ask_is_okd_only_by_their_own_click(c):
@@ -652,20 +657,18 @@ def test_a_persons_own_ask_is_okd_only_by_their_own_click(c):
 
 
 def test_a_bots_new_ask_keeps_what_was_decided_and_replaces_only_its_open_ask(c):
-    """C15: a bot's new ask replaces its ask that is still open. An answered question and an OK'd OK stay on the task,
-    met, with their answers (smoke 2026-11-10, item 3)."""
+    """C15: a bot's new ask replaces its ask that is still open, a sent back one included (nothing was decided). An
+    OK'd OK stays on the task, met, with its answer (smoke 2026-11-10, item 3)."""
     row = _new(c, by=BEN, owner=BUILDER)
-    question = H.task_ask(c, BUILDER, row["id"], BEN, "Which CRM?", seen_version=_version(c, row["id"]))
-    H.task_answer(c, BEN, row["id"], question["requirement_id"], "New CRM")
-    ok = H.task_ask(c, BUILDER, row["id"], BEN, "OK the budget?", kind="ok", seen_version=_version(c, row["id"]))
+    back = _ok(c, row["id"], BEN, "OK the old CRM?", shows=X.shown(c, "Old CRM"))
+    H.task_answer(c, BEN, row["id"], back["requirement_id"], "no", "Use the new CRM")
+    ok = _ok(c, row["id"], BEN, "OK the budget?", shows=X.shown(c))
     H.task_answer(c, BEN, row["id"], ok["requirement_id"], "ok")
-    open_one = H.task_ask(c, BUILDER, row["id"], BEN, "Which day?", seen_version=_version(c, row["id"]))
-    last = H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    open_one = _ok(c, row["id"], BEN, "OK the launch day?", shows=X.shown(c))
+    last = _ok(c, row["id"], BEN, "OK the launch week?", shows=X.shown(c))
     shown = {r["requirement_id"]: r for r in H.task_view(c, row["id"], BEN)["to_leave"]}
     assert open_one["requirement_id"] not in shown  # it was still open: replaced
-    assert (
-        shown[question["requirement_id"]]["met"] and shown[question["requirement_id"]]["answer"]["value"] == "New CRM"
-    )
+    assert back["requirement_id"] not in shown  # sent back, the bot's to revise: replaced too
     assert shown[ok["requirement_id"]]["met"] and shown[ok["requirement_id"]]["standing"] == "OK'd"
     assert not shown[last["requirement_id"]]["met"]
 
@@ -687,21 +690,21 @@ def test_a_bots_new_ask_never_drops_an_ok_given_for_exact_content_it_has_not_use
     rid = asked["requirement_id"]
     task_asks.show(c, BEN, rid, {"cents": 500}, own_click=True)
     task_asks.give_ok(c, BEN, rid, task_asks.content_hash({"cents": 500}), own_click=True)
-    with _refused("task_requirement"):
-        H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    with _refused("not used yet"):
+        _ok(c, row["id"], BEN, "OK the launch week?")
     assert task_asks.standing(c, rid) == task_asks.OK  # still good, for that content only
     task_asks.use(c, rid, "budget_raise:b1", {"cents": 500}, BUILDER)
-    H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    _ok(c, row["id"], BEN, "OK the launch week?")
     assert task_asks.standing(c, rid) == task_asks.USED
     assert H.task_view(c, row["id"], BEN)["to_leave"][-1]["requirement_id"] == rid  # what was decided stays
 
 
 def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER)
-    asked = H.task_ask(c, BUILDER, row["id"], BEN, "Which CRM?", seen_version=_version(c, row["id"]))["requirement_id"]
+    asked = _ok(c, row["id"], BEN, "OK the old CRM?")["requirement_id"]
     via = H.VIA.set("assistant")
     try:
-        H.task_answer(c, BEN, row["id"], asked, "New CRM")
+        H.task_answer(c, BEN, row["id"], asked, "no", "Use the new CRM")  # a send back: the Assistant gives no OK
     finally:
         H.VIA.reset(via)
     answer = next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == asked)["answer"]
@@ -711,13 +714,14 @@ def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
 
 
 def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it(c):
-    """Not even the bot that owns a private task no person is on brings a person in by asking them: the ask is refused
-    with the fix, and nothing is written. Once they are added under Who can see, the same ask goes."""
+    """Not even the bot that owns a private task no person is on brings a person in by asking them: the ask (a
+    question or an OK) is refused with the fix, and nothing is written. Once they are added under Who can see, the same
+    question goes, as a ❓."""
     row = _new(c, by=HELPER, owner=BUILDER, private=True)
     for ask in (
         lambda: H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor?", seen_version=_version(c, row["id"])),
         lambda: E.add_requirement(
-            c, row["id"], BUILDER, "answer", BEN, "Which vendor?", seen_version=_version(c, row["id"])
+            c, row["id"], BUILDER, "ok", BEN, "OK the vendor?", shows=X.shown(c), seen_version=_version(c, row["id"])
         ),
     ):
         with _refused("private") as refused:
@@ -727,16 +731,16 @@ def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it
     task = H.task(c, row["id"])
     assert H.task_readers(task) == [] and not H.task_private_readable(c, BEN, task)
     assert len(H.task_view(c, row["id"], BUILDER)["to_leave"]) == 1
-    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Which vendor?", seen_version=_version(c, row["id"]))
+    asked = _ok(c, row["id"], ANA, "OK the vendor?")
     with _refused("private"):
         H.task_give(c, BUILDER, row["id"], asked["requirement_id"], BEN)
     H.set_task_readers(c, BUILDER, row["id"], add=[BEN])
-    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor?", seen_version=_version(c, row["id"]))
+    assert Q.ask(c, BUILDER, row["id"], BEN, "Which vendor?")["person_id"] == BEN
 
 
 def test_a_bot_asks_only_a_person_in_its_reach_or_who_handed_it_the_task(c, monkeypatch):
-    """By default a bot reaches its manager, its reports, its peers and its team (reach.py, mode nearby). An ask is a
-    write to a person like a message is, so one outside that reach is refused and nothing is asked; the person who
+    """By default a bot reaches its manager, its reports, its peers and its team (reach.py, mode nearby). An ask or a ❓
+    is a write to a person like a message is, so one outside that reach is refused and nothing is asked; the person who
     handed the bot the task may always be asked about it."""
     from backend import reach
 
@@ -745,13 +749,17 @@ def test_a_bot_asks_only_a_person_in_its_reach_or_who_handed_it_the_task(c, monk
     with pytest.raises(reach.Refused) as refused:
         H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
     assert refused.value.code == "reach_closed"
+    with pytest.raises(reach.Refused) as refused:
+        Q.ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?")
+    assert refused.value.code == "reach_closed"
     assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # only the owner's own done
-    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+    assert Q.on_task(c, row["id"]) == []
+    assert Q.ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?")["person_id"] == BEN
 
 
 def test_a_refused_write_on_a_private_task_is_recorded_without_its_words(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
-    H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
+    _ok(c, row["id"], BEN, "OK dropping the Acme contract?")
     with _refused("task_not_met") as refusal:
         H.task_move(c, BUILDER, row["id"], H.TASK_NEXT, None, _version(c, row["id"]))
     assert refusal.value.private is True
@@ -768,23 +776,41 @@ def test_a_bot_that_sends_no_version_is_refused_the_old_way_of_saying_done_too(c
     assert H.task_update(c, ANA, row["id"], status="done", note="Sent.")["status"] == "done"  # a person may
 
 
-def test_a_move_into_a_stage_someone_else_owns_does_what_a_reassignment_does(c):
+def test_qa_stage_moves_keep_the_developer_following_and_preserve_rank(c):
     stages = (
-        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-        {"name": "Check", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
+        {"name": "In progress", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"name": "Bot QA", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
+        {"name": "Human QA", "owner": BEN, "requirements": [{"kind": "owner_done"}]},
     )
     X.pipeline(c, "notes", "Notes", stages, manager=MANAGER)
     row = _new(c, pipeline="notes")
-    wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (row["id"] + ":%",)).fetchone()[0]
+    task_id = row["id"]
+    rank = -10.0
+    H.task_update(c, ANA, task_id, rank=rank, mover=True)
+
+    def check(stage, owner):
+        task = E.task(c, task_id)
+        assert (task["stage"]["name"], task["owner_id"], task["assignee_id"], task["rank"]) == (
+            stage,
+            owner,
+            BUILDER,
+            rank,
+        )
+        assert {f["actor"] for f in task_followers.listed(c, task)} == {BUILDER, owner}
+
+    check("In progress", BUILDER)
+    wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (task_id + ":%",)).fetchone()[0]
     c.execute(
         "INSERT INTO task_delegations (task_id, delegate, requested_by, message_id, expires_at) VALUES (?,?,?,?,?)",
-        (row["id"], MANAGER, ANA, wake, "2099-01-01T00:00:00Z"),
+        (task_id, MANAGER, ANA, wake, "2099-01-01T00:00:00Z"),
     )
-    rank = H.task(c, row["id"])["rank"]
-    out = H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
-    assert (out["stage"]["name"], out["owner_id"]) == ("Check", HELPER)
-    assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (row["id"],)).fetchone()[0] == 0
-    assert H.task(c, row["id"])["rank"] != rank or rank is None  # at the end of the new owner's queue
+    H.task_done(c, BUILDER, task_id, "Drafted.", _version(c, task_id))
+    check("Bot QA", HELPER)
+    assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (task_id,)).fetchone()[0] == 0
+    H.task_done(c, HELPER, task_id, "Checked.", _version(c, task_id))
+    check("Human QA", BEN)
+    H.task_move(c, ANA, task_id, "In progress", "Address QA feedback.", _version(c, task_id))
+    check("In progress", BUILDER)
 
 
 COUNSEL = "bot:counsel"
@@ -914,8 +940,8 @@ def test_a_task_is_never_replaced_by_an_insert(c):
 
 
 def test_an_ok_taken_back_before_the_task_moves_on_stays_taken_back_whatever_the_clock_says(c, monkeypatch):
-    """Ana OKs an email, then it changes and her OK is taken back; the task moves on once Ben answers where to send
-    it. Her OK stays withdrawn and cannot be used, even when every write lands in the same instant: a met OK is not
+    """Ana OKs an email, then it changes and her OK is taken back; the task moves on once Ben OKs where to send it.
+    Her OK stays withdrawn and cannot be used, even when every write lands in the same instant: a met OK is not
     told from a taken-back one by two timestamps that happen to match."""
     from backend import hubdb
     from backend import task_asks as K
@@ -933,12 +959,14 @@ def test_an_ok_taken_back_before_the_task_moves_on_stays_taken_back_whatever_the
         content=email,
         task_id=row["id"],
     )
-    question = H.task_ask(c, ANA, row["id"], BEN, "Which address?", seen_version=_version(c, row["id"]))
+    office = H.task_ask(
+        c, ANA, row["id"], BEN, "OK sending it to the office?", kind="ok", seen_version=_version(c, row["id"])
+    )
     H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
     shown = K.show(c, ANA, asked["requirement_id"], email, own_click=True)
     K.give_ok(c, ANA, asked["requirement_id"], shown, own_click=True)
     K.withdraw(c, asked["requirement_id"], "The email changed")
-    H.task_answer(c, BEN, row["id"], question["requirement_id"], "The office")
+    H.task_answer(c, BEN, row["id"], office["requirement_id"], "ok")
     assert H.task(c, row["id"])["status"] == "done"
     assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
     with pytest.raises(Exception):

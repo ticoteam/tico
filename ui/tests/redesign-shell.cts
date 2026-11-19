@@ -32,7 +32,7 @@ declare function post(path: string, body: unknown): Promise<unknown>;
 declare function v2MessageHTML(m: {id: string; sender_id: string; body: string; created_at: string; [k: string]: unknown}): string;
 
 
-const PHONE_BAR = ['Team', 'Search', 'Assistant', 'Tasks', 'More'];   // five slots, the Liquid Dot in the centre; Updates is in More
+const PHONE_BAR = ['Team', 'Flow', 'Assistant', 'Tasks', 'More'];   // five slots, the Liquid Dot in the centre; Threads and Updates are in More
 // The sliding current-row bar (motion.js .nav-ind) is decoration, not a rail entry.
 const railKeys = (page: import('playwright').Page) => page.$$eval('#side .side-scroll > :not(.nav-ind)', els => (els as HTMLElement[]).map(el =>
   el.dataset.nav || (el.classList.contains('nav-row') && (el.querySelector(':scope > [data-nav]') as HTMLElement | null)?.dataset.nav) || el.id || el.className.split(' ')[0]));
@@ -128,8 +128,9 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
       for (const helper of ['botops', 'rules-owner', 'mail-sorter'])
         assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
-      // Recruiting and the company page's sources are page parts (ui/parts.json): loaded as opening those pages would.
-      await page.evaluate(() => Promise.all([uiPartLoad('bot'), uiPartLoad('company')]));
+      // Recruiting, the company page's sources and Finance's helpers are page parts (ui/parts.json): loaded as opening
+      // those pages would.
+      await page.evaluate(() => Promise.all([uiPartLoad('bot'), uiPartLoad('company'), uiPartLoad('finance')]));
       assert.deepEqual(await page.evaluate(() => ({
         recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
         audience: cpSourceChoices().some(([id]) => id === 'counsel'),
@@ -158,7 +159,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'welcome', 'tasks', 'calendar', 'threads', 'updates',
+      assert.deepEqual(await railKeys(page), ['side-update', 'welcome', 'tasks', 'calendar', 'threads', 'updates', 'meetings',
         'overview', 'rd-co', 'library', 'rd-lib', 'nav-pins',
         'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
@@ -216,7 +217,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Listening', 'Rules', 'Library'], tag + ': the rail, with no Strategy Owner entry (Company open on its own page, Library folded)');
+      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Threads', 'Updates', 'Meetings', 'Company', 'Strategy', 'Products', 'Growth', 'Risk', 'Automations', 'Listening', 'Rules', 'Library'], tag + ': the rail, with no Strategy Owner entry (Company open on its own page, Library folded)');
       assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');

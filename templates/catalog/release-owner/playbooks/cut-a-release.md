@@ -8,11 +8,12 @@ Engineering tasks waiting in Release need none of this: a person already signed 
 Cut their release with `tico task release <id> --version N` (with `--tag <version>` where the repository releases from a
 tag), once for the repository; every task waiting on it moves on when the release is published. The daily release hour's
 task is the same: ask once for a task in Release, then close the hour's task. Where the stage has no "Release with" set
-(a person's setting; never ask to change it), ask for nothing and tag nothing: the tasks wait for the next release.
+(a person's setting; never ask to change it), ask for nothing: the tasks wait for the next release. Tag or cut one there
+only when {{company_name}}'s own release skill or playbook says you do.
 
 ---
 
-## 1. Read the task
+## 1. Read the task's chat
 
     tico task show <id>
 
@@ -33,7 +34,7 @@ no-go with its reason. A no-go stops here: say what blocks it and who clears eac
 ## 4. Notes and version
 
 Follow `playbooks/release-notes-draft.md` over the range from the last release that reached users to the candidate commit.
-Use `knowledge/versioning.md` for the numbering and suggest the version with its reason, from `skills/find-hidden-breaking-changes/SKILL.md`
+Use `knowledge/versioning.md` for the numbering and suggest the version with its reason, from `.claude/skills/find-hidden-breaking-changes/SKILL.md`
 for any change that might be breaking. The notes must cover every task you could read; a task with no merged pull request in the
 range is listed under "Could not classify" with the question.
 

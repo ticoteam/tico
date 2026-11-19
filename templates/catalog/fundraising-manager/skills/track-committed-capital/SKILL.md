@@ -1,6 +1,8 @@
 ---
 name: track-committed-capital
 description: Classify each investor in the raise tracker as open, interested, verbal, committed or closed, with the source and the confirming person for each status, so committed capital counts only what is in writing and confirmed.
+metadata:
+  function: finance
 ---
 # Track committed capital
 

@@ -157,12 +157,31 @@ MODEL_CATALOG = tuple(
             "deprecated": True,
         },
         {
+            "id": "gpt-6.2-sol",
+            "context_tokens": 1_050_000,
+            "label": "gpt 6.2 sol",
+            "runtime": "codex",
+            "provider": "openai",
+            "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
+            "default_effort": "medium",
+        },
+        {
             "id": "gpt-6.1-sol",
             "context_tokens": 1_050_000,
             "label": "gpt 6.1 sol",
             "runtime": "codex",
             "provider": "openai",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "default_effort": "medium",
+            "deprecated": True,
+        },
+        {
+            "id": "gpt-6.2-astra",
+            "context_tokens": 1_050_000,
+            "label": "gpt 6.2 astra",
+            "runtime": "codex",
+            "provider": "openai",
+            "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
             "default_effort": "medium",
         },
         # Offered on Codex (Product opened it, 2026-11-11; it was held under Dev 693). The Tico AI Gateway still holds
@@ -256,6 +275,15 @@ MODEL_CATALOG = tuple(
             "default_effort": "high",
         },
         {
+            "id": "claude-fable-5-2",
+            "context_tokens": 1_000_000,
+            "label": "fable 5.2",
+            "runtime": "claude",
+            "provider": "anthropic",
+            "efforts": ("low", "medium", "high", "xhigh", "max"),
+            "default_effort": "high",
+        },
+        {
             "id": "claude-fable-5-1",
             "context_tokens": 1_000_000,
             "label": "fable 5.1",
@@ -263,6 +291,7 @@ MODEL_CATALOG = tuple(
             "provider": "anthropic",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
             "default_effort": "high",
+            "deprecated": True,
         },
         {
             "id": "claude-haiku-5-5",
@@ -517,17 +546,21 @@ def with_compact_default(config):
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
 # output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
-# threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
-# counted as input). A bot that names a model by another id than these gets no estimate.
+# threshold; batch, priority and regional premiums are not modelled. A cache write is input, plus Anthropic's
+# write premium on a Claude model (CACHE_WRITE below); other providers' writes are priced as input. A bot that
+# names a model by another id than these gets no estimate.
 # Sources, read 2026-09-29 (Anthropic re-read 2026-10-17):
 #   Anthropic  platform.claude.com/docs/en/about-claude/pricing (cache hit = "cache hits and refreshes";
-#              0.025x input on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              0.025x input on Fable 5.2 and 5.1, 0.05x on Opus 5.5 and Sonnet 5.5, 0.1x on the rest)
+#              claude-fable-5-2 read 2026-11-17 (pricing page: $8 in, $0.20 cache hit, $40 out per 1M)
 #              claude-haiku-5-5 read 2026-10-17: the rate for prompts up to 100,000 tokens (LONG_PROMPT below).
 #   OpenAI     developers.openai.com/api/docs/pricing (standard, short context)
 #              gpt-6.1-terra read 2026-11-03 (standard, short context; its model page gives the same rates)
 #              gpt-6.1-terra at 272,000 or more prompt tokens: Tico's approved long-prompt rate (LONG_PROMPT below).
 #              OpenRouter's public list (read 2026-11-05) gives openai/gpt-6.1-terra an override at min_prompt_tokens
 #              272000 of $2.00 in / $0.10 cached / $7.50 out per 1M. A citation only: it changes no rate here.
+#              gpt-6.2-sol ($2 / $0.10 / $10) and gpt-6.2-astra ($8 / $0.40 / $40) read 2026-11-17 from their
+#              model pages (short context; long-context rates, as for gpt-6.1-sol and gpt-6-astra, are not modelled)
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
@@ -561,6 +594,7 @@ class _Priced(dict):
 
 PRICES = _Priced(
     {
+        "claude-fable-5-2": (8.0, 0.20, 40.0),
         "claude-fable-5-1": (10.0, 0.25, 50.0),
         "claude-fable-5": (10.0, 1.0, 50.0),
         "claude-opus-5-5": (4.0, 0.20, 20.0),
@@ -570,9 +604,11 @@ PRICES = _Priced(
         "claude-sonnet-5": (2.0, 0.20, 10.0),
         "claude-haiku-5-5": (0.10, 0.01, 0.50),
         "claude-haiku-4-5": (1.0, 0.10, 5.0),
+        "gpt-6.2-astra": (8.0, 0.40, 40.0),
         "gpt-6-astra": (10.0, 1.0, 50.0),
         "gpt-6-sol": (2.0, 0.20, 10.0),
         "gpt-6-luna": (0.10, 0.01, 0.50),
+        "gpt-6.2-sol": (2.0, 0.10, 10.0),
         "gpt-6.1-sol": (2.0, 0.10, 10.0),
         "gpt-6.1-terra": (
             1.25,
@@ -632,14 +668,42 @@ def price_of(model):
     return PRICES.get(str(model or "").strip().lower())
 
 
-def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None):
+# Anthropic bills a prompt-cache write at a multiple of the model's input rate, by how long the entry lives:
+# 1.25x for the 5-minute TTL, 2x for the 1-hour TTL (platform.claude.com/docs/en/about-claude/pricing, "Prompt
+# caching"; read 2026-11-18). Claude Code signed in with a Claude plan writes 1-hour entries; on an API key it writes
+# 5-minute ones unless told otherwise. Only Anthropic's own ids (`claude-*` in PRICES) pay it: a Gateway id
+# (`tico-*`) is priced from the Gateway's own rates, and other providers' writes stay at the input rate.
+CACHE_WRITE_AS_OF = "2026-11-18"
+CACHE_WRITE = {"5m": 1.25, "1h": 2.0}
+
+
+def prices_cache_writes(model):
+    """Whether `model`'s cache writes pay Anthropic's write premium (CACHE_WRITE): an Anthropic id with a list price."""
+    key = str(model or "").strip().lower()
+    return key.startswith("claude-") and dict.__contains__(PRICES, key)
+
+
+def estimate(model, input_tokens, cached_tokens, output_tokens, requests=None, cache_writes=None):
     """(USD, may be low) for one run's tokens at list price; USD is None for a model with no price.
     `input_tokens` are the uncached ones; cached tokens are billed at the cached rate. On a model with a
     LONG_PROMPT rate each of `requests` ((input, cached, output) per model request, as the runner counted
-    them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low."""
+    them) pays its own tier. Tokens no request accounts for pay the lower rate, and the estimate may be low.
+    `cache_writes` is (5-minute, 1-hour) cache-write tokens already counted in `input_tokens`: on a Claude model
+    (prices_cache_writes) each pays the rest of its CACHE_WRITE multiple at the standard input rate. Which request wrote
+    them is not known, so on a model with a LONG_PROMPT rate a run with a request over the limit may be low."""
     price = price_of(model)
     if not price:
         return None, False
+    cost, low = _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests)
+    five, hour = (int(n or 0) for n in cache_writes or (0, 0))
+    if (five or hour) and prices_cache_writes(model):
+        cost += (five * (CACHE_WRITE["5m"] - 1) + hour * (CACHE_WRITE["1h"] - 1)) * price[0] / 1_000_000
+        long = LONG_PROMPT.get(str(model or "").strip().lower())
+        low = low or bool(long and any(int(r[0] or 0) + int(r[1] or 0) > long[0] for r in requests or ()))
+    return cost, low
+
+
+def _estimate(model, price, input_tokens, cached_tokens, output_tokens, requests):
     totals = [int(input_tokens or 0), int(cached_tokens or 0), int(output_tokens or 0)]
     long = LONG_PROMPT.get(str(model or "").strip().lower())
     if not long:
@@ -681,6 +745,14 @@ class NoProvider(ProviderError):
 def runtime_provider(runtime):
     row = PROVIDER_BY_RUNTIME.get(str(runtime or ""))
     return row["id"] if row else ""
+
+
+def maker(model):
+    """Who made `model` (`anthropic`, `openai`, ...): its catalog provider, or for a Tico AI Gateway id the maker of the
+    model it runs underneath (gateway_tiers.maker_of), so Tico Medium on Claude Sonnet is Anthropic's. '' when the
+    catalog does not list it."""
+    row = MODEL_BY_ID.get(str(model or "")) or {}
+    return str(row.get("maker") or row.get("provider") or "")
 
 
 def serves(provider, row):
@@ -1074,14 +1146,19 @@ def normalize_check_models(value, record, saved=()):
 def check_order(record):
     """The models a review or check subtask may run on, best first: the owner's check-model order, then one model
     per other enabled provider in the owner's order (the company default for its own provider). An entry whose
-    provider is off or whose model is retired is skipped."""
+    provider is off or whose model is retired is skipped. Under a models choice that never spends the Gateway
+    (`subscriptions`, `own-keys`), the Tico AI Gateway is not added for being on: it stays on for the Gateway services
+    (decide, search, meetings), not for reviews. Only a Tico model the owner lists in the order runs a check there."""
     rows = []
     for entry in record["check_models"]:
         try:
             rows.append(_check_row(entry, record))
         except ProviderError:
             continue
+    no_gateway = never_gateway(record)
     for name in record["enabled"]:
+        if no_gateway and (PROVIDER_BY_ID.get(name) or {}).get("gateway"):
+            continue
         default = MODEL_BY_ID.get(record["model"])
         row = (
             default if default and default["provider"] == name and not default.get("deprecated") else recommended(name)
@@ -1092,8 +1169,41 @@ def check_order(record):
     for row in rows:
         if row["model"] not in seen and not MODEL_BY_ID[row["model"]].get("deprecated"):
             seen.add(row["model"])
-            order.append(row)
+            order.append({**row, "maker": maker(row["model"]) or row["provider"]})
     return order
+
+
+def skipped_check_models(record):
+    """The owner's check-model entries check_order leaves out, each with why ("gpt 6.1 sol is retired; ..."): a
+    provider turned off or a model retired. They stay saved and come back when they work again; until then a check
+    says in its history which it skipped, so a retired choice is never passed over silently."""
+    skipped = []
+    for entry in record["check_models"]:
+        try:
+            _check_row(entry, record)
+        except ProviderError as error:
+            skipped.append((entry, error.detail))
+    return skipped
+
+
+def never_gateway(record):
+    """Whether the company's models choice never spends the Gateway on bots' work: `subscriptions` or `own-keys`.
+    No choice (as before presets) and the two Gateway choices keep the Gateway in reach."""
+    return bool(models_preset.of(record)) and not models_preset.spends_gateway(record)
+
+
+def gateway_check_refused(record, model):
+    """Whether a review or check may not run on `model`: a Gateway model under a choice that never spends the
+    Gateway, unless the owner lists it in the check-model order."""
+    if not gateway_model(model) or not never_gateway(record):
+        return False
+    for entry in record["check_models"]:
+        try:
+            if _check_row(entry, record)["model"] == model:
+                return False
+        except ProviderError:
+            continue
+    return True
 
 
 def author_provider(author):
@@ -1101,9 +1211,8 @@ def author_provider(author):
     author = str(author or "").strip()
     if author in PROVIDER_BY_ID:
         return author
-    row = MODEL_BY_ID.get(author)
-    if row:
-        return row["provider"] or ""
+    if author in MODEL_BY_ID:
+        return maker(author)
     return runtime_provider(author)
 
 
@@ -1113,7 +1222,7 @@ def check_choice(record, author, available=None):
     second opinion from another provider is preferred; with none, the author's own provider still checks the work."""
     own = author_provider(author)
     rows = [row for row in check_order(record) if available is None or row["runtime"] in available]
-    for row in [r for r in rows if r["provider"] != own] + [r for r in rows if r["provider"] == own]:
+    for row in [r for r in rows if r["maker"] != own] + [r for r in rows if r["maker"] == own]:
         return row
     raise ProviderError(
         "check_model",

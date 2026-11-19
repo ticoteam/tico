@@ -1,6 +1,8 @@
 ---
 name: compute-a-reorder-point
 description: Compute one item's safety stock and reorder point from its own clean sales and its observed lead times, showing every input, using the variance method when the data allows and the max-minus-average rule when it does not.
+metadata:
+  function: operations
 ---
 # Compute a reorder point
 
