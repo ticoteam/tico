@@ -1,12 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GranolaStatus } from '@/api/schema';
+import type { GranolaStatus, MeetingImporter, MeetingImporterComputer } from '@/api/schema';
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { MeetingMenu } from './MeetingMenu';
-import { granolaQuery, meetingSettingsQuery } from './queries';
+import { granolaQuery, importersQuery, meetingSettingsQuery, sourcesQuery } from './queries';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -34,20 +34,43 @@ const granola = (p: Partial<GranolaStatus> = {}): GranolaStatus => ({
   ...p,
 });
 
+const importer = (p: Partial<MeetingImporter> = {}): MeetingImporter => ({
+  source: 'zoom',
+  name: 'Zoom',
+  enabled: false,
+  runner_id: '',
+  runner_label: '',
+  status: 'off',
+  last_succeeded_at: null,
+  last_attempt: null,
+  last_import: null,
+  imported_total: 0,
+  error_code: '',
+  error: '',
+  setup: { file: 'secrets/zoom.env', keys: ['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID'], doc: 'docs/meetings.md#zoom' },
+  ...p,
+});
+const computer = (id: string, online: boolean): MeetingImporterComputer => ({ id, label: `Desk ${id}`, platform: 'linux', online, last_seen_at: null });
+
 const CODE = 'WXYZ-4821';
 const sent: { method: string; url: string; body: unknown }[] = [];
 let answer: (method: string, url: string) => unknown = () => ({});
+let status: (method: string, url: string) => number = () => 200;
+const gets: string[] = [];
 
 beforeEach(() => {
   queryClient.clear();
   sent.length = 0;
+  gets.length = 0;
   answer = () => ({});
+  status = () => 200;
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: { 'human:ana': { id: 'human:ana', kind: 'person', name: 'Ana Reyes' } } });
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
-    return new Response(JSON.stringify(answer(method, String(url))), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    else gets.push(String(url));
+    return new Response(JSON.stringify(answer(method, String(url))), { status: status(method, String(url)), headers: { 'Content-Type': 'application/json' } });
   });
 });
 afterEach(() => {
@@ -159,6 +182,58 @@ describe('List’s ⋯', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ method: 'DELETE', url: '/api/v2/meetings/granola/connect' }));
     expect(await screen.findByRole('button', { name: 'Connect' })).toBeTruthy();
+  });
+
+  it('an owner turns an importer on with a computer; it shows at once and goes back when refused', async () => {
+    queryClient.setQueryData(granolaQuery.queryKey, granola());
+    queryClient.setQueryData(sourcesQuery.queryKey, { sources: [{ id: 'import', name: 'Import', status: 'available', last_succeeded_at: null }] });
+    queryClient.setQueryData(importersQuery.queryKey, { importers: [importer()], computers: [computer('r1', false), computer('r2', true)] });
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    status = (m) => (m === 'POST' ? 422 : 200);
+    answer = (m) => (m === 'POST' ? { detail: 'no' } : { importers: [importer()], computers: [computer('r1', false), computer('r2', true)] });
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'POST') {
+        sent.push({ method, url: String(url), body: JSON.parse(String(init?.body)) });
+        await held;
+      }
+      return new Response(JSON.stringify(answer(method, String(url))), { status: status(method, String(url)), headers: { 'Content-Type': 'application/json' } });
+    });
+    show();
+    await pick(/^Meeting sources/);
+    const on = await screen.findByRole('switch', { name: 'Zoom' });
+    expect(screen.getByText('Off')).toBeTruthy();
+    expect(screen.queryByText('Import')).toBeNull();
+    fireEvent.click(on);
+    // the online computer is the one picked; the file its credentials go in shows, never the credentials
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/meeting-importers/zoom', body: { enabled: true, runner_id: 'r2' } }));
+    expect(await screen.findByText('Waiting')).toBeTruthy();
+    expect(screen.getByText('secrets/zoom.env')).toBeTruthy();
+    expect(screen.getByText('ZOOM_ACCOUNT_ID')).toBeTruthy();
+    release();
+    expect(await screen.findByText('Off')).toBeTruthy();
+    expect(screen.queryByText('secrets/zoom.env')).toBeNull();
+  });
+
+  it('anyone else sees each source and its state, with no controls', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
+    queryClient.setQueryData(granolaQuery.queryKey, granola());
+    queryClient.setQueryData(sourcesQuery.queryKey, {
+      sources: [
+        { id: 'import', name: 'Import', status: 'available', last_succeeded_at: null },
+        { id: 'close', name: 'Close', status: 'needs_setup', last_succeeded_at: null },
+        { id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: null, error: 'The tool refused the credential.' },
+      ],
+    });
+    show();
+    await pick(/^Meeting sources/);
+    expect(await screen.findByText('Zoom')).toBeTruthy();
+    expect(screen.getByText('Error')).toBeTruthy();
+    expect(screen.getByText('The tool refused the credential.')).toBeTruthy();
+    expect(within(screen.getByText('Close').closest('li') as HTMLElement).getByText('Not connected')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(gets.some((u) => u.includes('/meeting-importers'))).toBe(false);
   });
 
   it('saves who sees imported meetings, and the company default for an owner', async () => {

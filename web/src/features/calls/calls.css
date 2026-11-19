@@ -64,7 +64,8 @@ a.call-card-t:hover{text-decoration:underline}
 .call-src-st,.call-src-facts{font-size:var(--t-sm);color:var(--muted)}
 .call-src-facts{display:flex;flex-wrap:wrap;gap:var(--s-2h);flex-basis:100%;order:3}
 .call-src-err{flex-basis:100%;order:4;margin:0;font-size:var(--t-sm);color:var(--ink)}
-.call-src-go{margin-left:auto;display:flex;gap:var(--s-1h)}
+.call-src-go{margin-left:auto;display:flex;align-items:center;gap:var(--s-1h)}
+.call-src-setup{flex-basis:100%;order:5;display:flex;flex-wrap:wrap;gap:var(--s-1h) var(--s-2h);font-family:var(--font-code);font-size:var(--t-xs);color:var(--muted);overflow-wrap:anywhere}
 .call-gr-steps{margin:0;padding-left:var(--s-4);display:grid;gap:var(--s-2h)}
 .call-gr-steps li>span:first-child{margin-right:var(--s-2h)}
 .call-gr-code{font-family:var(--font-code);font-weight:var(--w-strong);margin-right:var(--s-1h)}

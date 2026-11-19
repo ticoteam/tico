@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GranolaDevice, GranolaStatus } from '@/api/schema';
+import type { GranolaDevice, GranolaStatus, MeetingImporter, MeetingImporterComputer, MeetingSource } from '@/api/schema';
 import { run } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
@@ -15,7 +15,7 @@ import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { PeoplePick } from './PeoplePick';
 import { press } from './parts';
-import { granolaQuery, meetingSettingsQuery, pollGranola } from './queries';
+import { granolaQuery, importersQuery, meetingSettingsQuery, pollGranola, sourcesQuery } from './queries';
 
 type Open = 'log' | 'sources' | 'granola' | 'settings' | null;
 
@@ -23,13 +23,15 @@ type Open = 'log' | 'sources' | 'granola' | 'settings' | null;
 export function MeetingMenu() {
   const [open, setOpen] = useState<Open>(null);
   const granola = useQuery(granolaQuery).data;
+  const sources = useQuery(sourcesQuery).data?.sources ?? [];
+  const connected = (granola?.connected ? 1 : 0) + sources.filter((x) => x.id !== 'import' && x.status !== 'needs_setup').length;
   // Stable: Connect Granola's sign-in runs once per open, and it closes with this.
   const close = useCallback(() => setOpen(null), []);
   return (
     <>
       <Menu trigger={<IconButton icon="more" label="More" />}>
         <MenuItem label="Log a meeting" icon="edit" onSelect={() => setOpen('log')} />
-        <MenuItem label="Meeting sources" icon="list" meta={granola?.connected ? '1' : undefined} onSelect={() => setOpen('sources')} />
+        <MenuItem label="Meeting sources" icon="list" meta={connected ? String(connected) : undefined} onSelect={() => setOpen('sources')} />
         {granola && !granola.connected && <MenuItem label="Connect Granola" icon="link" onSelect={() => setOpen('granola')} />}
         <MenuRule />
         <MenuItem label="Calendar settings" icon="gear" onSelect={() => setOpen('settings')} />
@@ -138,43 +140,140 @@ function LogForm({ done }: { done: () => void }) {
 
 /* ---------------------------------------------------------------- Meeting sources */
 
-/** Where meetings come in from. Granola is each person's own account. */
+/**
+ * Where meetings come in from (meetings-sources.ts): the person's own Granola, then Close and each importer that is on,
+ * with its state. The owner sees every importer instead, turns it on or off and picks the computer that runs it; its
+ * credentials are a file on that computer and never come to the page.
+ */
 function Sources({ onConnect }: { onConnect: () => void }) {
-  const { data: g, isError } = useQuery(granolaQuery);
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  const granola = useQuery(granolaQuery);
+  const sources = useQuery(sourcesQuery);
+  const importers = useQuery({ ...importersQuery, enabled: owner });
+  if (granola.isPending && sources.isPending) return null;
+  // The owner's own rows stand in for the importers' shared ones.
+  const mine = owner ? (importers.data?.importers ?? []) : [];
+  const computers = importers.data?.computers ?? [];
+  const shown = (sources.data?.sources ?? []).filter((x) => x.id !== 'import' && !mine.some((i) => i.source === x.id));
+  return (
+    <ul className="call-src" data-target="dialog:meeting-sources">
+      {granola.data ? (
+        <GranolaRow g={granola.data} onConnect={onConnect} />
+      ) : (
+        granola.isError && <ShortRow name="Granola" />
+      )}
+      {shown.map((x) => (
+        <li key={x.id} className="call-src-row">
+          <b>{x.name}</b>
+          <span className="call-src-st">{sourceWord(x)}</span>
+          <Synced last={x.last_import} ok={x.last_succeeded_at} />
+          {x.error && <span className="call-src-err">{x.error}</span>}
+        </li>
+      ))}
+      {sources.isError && <ShortRow name="Other sources" />}
+      {mine.map((i) => (
+        <ImporterRow key={i.source} i={i} computers={computers} />
+      ))}
+      {owner && importers.isError && <ShortRow name="Importers" />}
+      {owner && importers.data && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
+    </ul>
+  );
+}
+
+function ShortRow({ name }: { name: string }) {
+  return (
+    <li className="call-src-row">
+      <b>{name}</b>
+      <span className="call-src-err">Did not load</span>
+    </li>
+  );
+}
+
+const sourceWord = (x: MeetingSource) =>
+  x.status === 'needs_setup' ? (x.id === 'close' ? 'Not connected' : 'Waiting') : x.status === 'syncing' || x.status === 'available' ? 'Connected' : WORDS[x.status];
+const WORDS: Record<MeetingImporter['status'], string> = { off: 'Off', waiting: 'Waiting', syncing: 'Connected', delayed: 'Delayed', error: 'Error' };
+
+/** A source's time: its last meeting in, else its last good sync. */
+function Synced({ last, ok }: { last?: string | null; ok?: string | null }) {
+  const at = last ?? ok;
+  if (!at) return null;
+  return (
+    <span className="call-src-facts">
+      <span>
+        {last ? 'Last import' : 'Synced'} <Ago at={at} />
+      </span>
+    </span>
+  );
+}
+
+/** An importer, for the owner: on or off, the computer that runs it, and where that computer keeps its credentials. */
+function ImporterRow({ i, computers }: { i: MeetingImporter; computers: MeetingImporterComputer[] }) {
+  const options = computers.map((c) => ({ value: c.id, label: c.label, meta: c.online ? undefined : 'Offline' }));
+  const set = (on: boolean, computer?: string) => void press('calls.setImporter', { source: i.source, on, ...(computer ? { computer } : {}) });
+  return (
+    <li className="call-src-row" data-target={`importer:${i.source}`}>
+      <b>{i.name}</b>
+      <span className="call-src-st">{WORDS[i.status]}</span>
+      {i.enabled && <Synced last={i.last_import} ok={i.last_succeeded_at} />}
+      {i.enabled && i.error && <span className="call-src-err">{i.error}</span>}
+      {i.enabled && (
+        <span className="call-src-setup" aria-label="Credentials file">
+          <code>{i.setup.file}</code>
+          {i.setup.keys.map((k) => (
+            <code key={k}>{k}</code>
+          ))}
+          <code>{i.setup.doc}</code>
+        </span>
+      )}
+      <span className="call-src-go">
+        <Select
+          label={`Computer for ${i.name}`}
+          labelHidden
+          look="quiet"
+          placeholder="Computer"
+          options={options}
+          value={i.runner_id || null}
+          disabled={!computers.length}
+          onValueChange={(c) => set(i.enabled, c)}
+        />
+        <Switch label={i.name} labelHidden checked={i.enabled} disabled={!computers.length} onCheckedChange={(on) => set(on)} />
+      </span>
+    </li>
+  );
+}
+
+/** The person's own Granola account. */
+function GranolaRow({ g, onConnect }: { g: GranolaStatus; onConnect: () => void }) {
   const [syncing, setSyncing] = useState(false);
-  if (isError) return <p className="call-src-err">Granola did not load.</p>;
-  if (!g) return null;
   const sync = async () => {
     setSyncing(true);
     await press('calls.syncGranola', {});
     setSyncing(false);
   };
   return (
-    <ul className="call-src">
-      <li className="call-src-row">
-        <b>Granola</b>
-        <span className="call-src-st">{word(g)}</span>
-        {g.connected && <GranolaFacts g={g} />}
-        {(g.connected || g.needs_signin) && g.last_error && <span className="call-src-err">{g.last_error}</span>}
-        <span className="call-src-go">
-          {g.connected && !g.needs_signin && (
-            <Button className="btn-sm" busy={syncing || g.syncing} onClick={() => void sync()}>
-              Sync now
-            </Button>
-          )}
-          {(g.connected || g.needs_signin) && (
-            <Button className="btn-sm" variant="quiet" onClick={() => void press('calls.disconnectGranola', {})}>
-              Remove
-            </Button>
-          )}
-          {(!g.connected || g.needs_signin) && (
-            <Button className="btn-sm" variant="primary" onClick={onConnect}>
-              {g.needs_signin ? 'Sign in again' : 'Connect'}
-            </Button>
-          )}
-        </span>
-      </li>
-    </ul>
+    <li className="call-src-row">
+      <b>Granola</b>
+      <span className="call-src-st">{word(g)}</span>
+      {g.connected && <GranolaFacts g={g} />}
+      {(g.connected || g.needs_signin) && g.last_error && <span className="call-src-err">{g.last_error}</span>}
+      <span className="call-src-go">
+        {g.connected && !g.needs_signin && (
+          <Button className="btn-sm" busy={syncing || g.syncing} onClick={() => void sync()}>
+            Sync now
+          </Button>
+        )}
+        {(g.connected || g.needs_signin) && (
+          <Button className="btn-sm" variant="quiet" onClick={() => void press('calls.disconnectGranola', {})}>
+            Remove
+          </Button>
+        )}
+        {(!g.connected || g.needs_signin) && (
+          <Button className="btn-sm" variant="primary" onClick={onConnect}>
+            {g.needs_signin ? 'Sign in again' : 'Connect'}
+          </Button>
+        )}
+      </span>
+    </li>
   );
 }
 

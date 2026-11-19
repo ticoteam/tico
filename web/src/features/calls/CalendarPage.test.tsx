@@ -163,6 +163,22 @@ describe('Calendar', () => {
     expect(fetches.some((u) => u.endsWith('/api/v2/calendar/search?q=sync'))).toBe(true);
   });
 
+  it('Shared with me reads review=shared, and says when nothing is shared', async () => {
+    queryClient.setQueryData(meetingsQuery('shared').queryKey, { meetings: [], count: 0, pending_count: 0 });
+    const router = show('/calendar?view=list');
+    fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Shared with me' }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ review: 'shared' }));
+    expect(await screen.findByText('Nothing shared with you')).toBeTruthy();
+    queryClient.setQueryData(meetingsQuery('shared').queryKey, {
+      meetings: [{ id: 'mt2', title: 'Garden plan', review_state: 'live', started: at(9) }],
+      count: 1,
+      pending_count: 0,
+    });
+    expect(await screen.findByText('Garden plan')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Shared with me/ })).toBeTruthy();
+  });
+
   it('a removed event goes at once and comes back when the server refuses', async () => {
     seed('week', [occ({})]);
     show(`/calendar?view=week&date=${DAY}&panel=event%3Ao1`);

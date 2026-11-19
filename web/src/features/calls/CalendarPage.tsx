@@ -49,7 +49,7 @@ import {
 } from './model';
 import { PeoplePick } from './PeoplePick';
 import { joinNow, LiveMark, press, refsOf, useNow, Who } from './parts';
-import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeting } from './queries';
+import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery, type Meeting, type Review } from './queries';
 import './calls.css';
 
 const HOUR = 56;
@@ -211,6 +211,7 @@ function ListFilter({ search, at }: { search: CalendarSearch; at: At }) {
     <Menu trigger={<IconButton icon="filter" label="Filter" on={set || undefined} />}>
       <MenuItem label="All meetings" on={!search.review} onSelect={() => go({ review: undefined })} />
       <MenuItem label="Pending" meta={pending ? String(pending) : undefined} on={search.review === 'pending'} onSelect={() => go({ review: 'pending' })} />
+      <MenuItem label="Shared with me" on={search.review === 'shared'} onSelect={() => go({ review: 'shared' })} />
       <MenuItem label="Dismissed" on={search.review === 'dismissed'} onSelect={() => go({ review: 'dismissed' })} />
       <MenuRule />
       {HAS.map((h) => (
@@ -503,6 +504,8 @@ const kept = (m: Meeting, h: (typeof HAS)[number]) =>
       ? !!m.media_url
       : (m.outcome?.tasks?.length ?? 0) > 0;
 
+const REVIEW_WORDS: Record<Review, string> = { live: 'Past', pending: 'Pending', dismissed: 'Dismissed', shared: 'Shared with me' };
+
 function ListView({ list, now, today, at, search }: GridProps & { search: CalendarSearch }) {
   const q = search.q ?? '';
   const has = hasOf(search.has);
@@ -533,7 +536,10 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
   if (!onNow.length && !calls.length && !coming.length && !done.length)
     return past.isPending || (q && found.isPending) ? null : (
       <div className="page-body cl-body is-empty">
-        <Empty title={q || pastOnly || kinds.size > 1 ? 'Nothing found' : 'No meetings or calls yet'} icon="calendar" />
+        <Empty
+          title={search.review === 'shared' && !q && !has.length ? 'Nothing shared with you' : q || pastOnly || kinds.size > 1 ? 'Nothing found' : 'No meetings or calls yet'}
+          icon="calendar"
+        />
       </div>
     );
 
@@ -563,7 +569,7 @@ function ListView({ list, now, today, at, search }: GridProps & { search: Calend
       )}
       {done.length > 0 && (
         <ListSec
-          name={search.review === 'pending' ? 'Pending' : search.review === 'dismissed' ? 'Dismissed' : 'Past'}
+          name={REVIEW_WORDS[search.review ?? 'live']}
           count={done.length}
           open={!folded.has('past')}
           onToggle={() => fold('past')}

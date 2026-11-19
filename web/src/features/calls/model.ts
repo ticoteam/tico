@@ -295,7 +295,7 @@ export function panelOf(value: string | undefined): PanelRef | null {
 }
 
 /** List's filter (cal-merge.js filterMenu): which meetings, what they kept, and more kinds than meetings. */
-export const REVIEWS = ['pending', 'dismissed'] as const;
+export const REVIEWS = ['pending', 'dismissed', 'shared'] as const;
 export const HAS = ['summary', 'recording', 'tasks'] as const;
 export const ALSO = ['due', 'run'] as const;
 export type Has = (typeof HAS)[number];

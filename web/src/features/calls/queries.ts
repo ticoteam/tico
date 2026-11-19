@@ -21,7 +21,12 @@ import type {
   GranolaStatus,
   GranolaSync,
   ImportMeetingBody,
+  ImporterConfig,
+  MeetingImporter,
+  MeetingImporterList,
+  MeetingImporterSaved,
   MeetingReviewPreferences,
+  MeetingSourceList,
   ReviewSettings,
   ThreadView,
 } from '@/api/schema';
@@ -217,8 +222,11 @@ export interface Chunk {
   start_ms?: number | null;
 }
 
-/** Which meetings List shows: shared ones (the server's default), the person's own to review, or those they put away. */
-export type Review = 'live' | 'pending' | 'dismissed';
+/**
+ * Which meetings List shows: shared ones (the server's default), the person's own to review, those they put away, or
+ * the shared ones someone else filed (`shared`).
+ */
+export type Review = 'live' | 'pending' | 'dismissed' | 'shared';
 
 export const meetingsQuery = (review: Review = 'live', q = '') =>
   queryOptions({
@@ -436,8 +444,46 @@ export async function leaveCall(id: string): Promise<void> {
 
 const sourceKeys = {
   granola: ['meetings', 'sources', 'granola'] as const,
+  list: ['meetings', 'sources', 'list'] as const,
+  importers: ['meetings', 'sources', 'importers'] as const,
   settings: ['meetings', 'settings'] as const,
 };
+
+/** Every source and how it is doing: Import, Close and each importer that is on. Anyone may read it. */
+export const sourcesQuery = queryOptions({
+  queryKey: sourceKeys.list,
+  queryFn: ({ signal }) => api.get<MeetingSourceList>('/api/v2/meetings/sources', { signal }),
+});
+
+/** Every importer, on or off, with the computer that runs it, and the computers that may. The owner's read only. */
+export const importersQuery = queryOptions({
+  queryKey: sourceKeys.importers,
+  queryFn: ({ signal }) => api.get<MeetingImporterList>('/api/v2/meeting-importers', { signal }),
+});
+
+/** An importer as it will be: off, or on with a computer (a new computer starts over at waiting, as the server does). */
+function configured(i: MeetingImporter, change: Required<ImporterConfig>, computers: MeetingImporterList['computers']): MeetingImporter {
+  const same = i.enabled && i.runner_id === change.runner_id;
+  return {
+    ...i,
+    enabled: change.enabled,
+    runner_id: change.runner_id,
+    runner_label: computers.find((c) => c.id === change.runner_id)?.label ?? '',
+    status: !change.enabled ? 'off' : same ? i.status : 'waiting',
+  };
+}
+
+/** Turn an importer on or off, or move it to another computer. Its credentials stay in a file on that computer. */
+export async function setImporter(source: string, change: Required<ImporterConfig>): Promise<MeetingImporterSaved> {
+  const r = await write({
+    key: sourceKeys.importers,
+    optimistic: (d: MeetingImporterList | undefined) =>
+      d && { ...d, importers: d.importers.map((i) => (i.source === source ? configured(i, change, d.computers) : i)) },
+    send: (idempotencyKey) => api.post<MeetingImporterSaved>(`/api/v2/meeting-importers/${enc(source)}`, change, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: sourceKeys.list });
+  return r;
+}
 
 /** The person's own Granola account: connected or not, last sync, how many notes it brought. */
 export const granolaQuery = queryOptions({

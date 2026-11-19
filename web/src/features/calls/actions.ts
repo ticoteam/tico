@@ -1,6 +1,7 @@
 // What a person (or Tico) can do on the Calendar, in a meeting's panel and on a call.
-import type { Call } from '@/api/schema';
+import type { Call, MeetingImporterList } from '@/api/schema';
 import { defineAction, s, type Ctx } from '@/actions';
+import { meQuery } from '@/data';
 import { callWindowControls, desktop, isCallWindow } from '@/desktop';
 import { VIEWS } from './model';
 import {
@@ -15,12 +16,14 @@ import {
   editItem,
   editNote,
   endCall,
+  importersQuery,
   joinCall,
   logMeeting,
   makeTask,
   meetKeys,
   removeEvent,
   reviewMeeting,
+  setImporter,
   setMeetingSettings,
   startCall,
   startInThread,
@@ -45,6 +48,7 @@ const smallWindow = ({ router }: Ctx) => isCallWindow(router.state.location.path
 // The small window is its call's page already: a navigation there would drop ?window=1 and draw the whole app in it.
 const openCall = (ctx: Ctx, room: string) => (smallWindow(ctx) ? undefined : ctx.router.navigate({ to: '/call/$room', params: { room } }));
 const PAGE = { kind: 'page', id: '/calendar' } as const;
+const SOURCES = { kind: 'dialog', id: 'meeting-sources' } as const;
 
 /* ---------------------------------------------------------------- the calendar */
 
@@ -52,7 +56,7 @@ const showInput = s.object({
   view: s.optional(s.oneOf(VIEWS)),
   date: s.optional(day),
   q: s.optional(s.string({ max: 200, what: 'words to find in List' })),
-  review: s.optional(s.oneOf(['pending', 'dismissed'] as const)),
+  review: s.optional(s.oneOf(['pending', 'dismissed', 'shared'] as const)),
 });
 const showRun = (ctx: Ctx, i: { view?: string; date?: string; q?: string; review?: string }) =>
   toCalendar(ctx, (prev) => {
@@ -496,6 +500,29 @@ export const connectGranolaAction = defineAction({
   input: s.object({}),
   run: () => connectGranola(),
   did: () => 'Started connecting Granola',
+});
+
+/** Turn a meeting importer on or off, or move it to another computer. Left out, the computer stays, or is the first online one. */
+export const setImporterAction = defineAction({
+  id: 'calls.setImporter',
+  title: 'Turn a meeting importer on or off',
+  kind: 'change',
+  input: s.object({
+    source: id('an importer: zoom, google-meet or granola'),
+    on: s.boolean(),
+    computer: s.optional(id('a computer id from the importers list')),
+  }),
+  can: ({ queryClient }) => queryClient.getQueryData(meQuery.queryKey)?.role === 'owner',
+  run: async ({ queryClient }, { source, on, computer }) => {
+    const d = queryClient.getQueryData<MeetingImporterList>(importersQuery.queryKey) ?? (await queryClient.fetchQuery(importersQuery));
+    const now = d.importers.find((i) => i.source === source);
+    if (!now) throw new Error('not_found: no such importer');
+    const runner = computer ?? (now.runner_id || (d.computers.find((c) => c.online) ?? d.computers[0])?.id || '');
+    if (on && !runner) throw new Error('no_computer: add a computer first');
+    return setImporter(source, { enabled: on, runner_id: runner });
+  },
+  did: ({ on }) => (on ? 'Turned the importer on' : 'Turned the importer off'),
+  target: () => SOURCES,
 });
 
 export const syncGranolaAction = defineAction({
