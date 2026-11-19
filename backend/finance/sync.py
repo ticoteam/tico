@@ -1179,10 +1179,15 @@ def pause(store: Any, at: str | None = None) -> float:
     return BACKFILL_PAUSE if any(_backfill_due(row, now) for row in rows) else SWEEP
 
 
+def _monotonic() -> float:
+    """The loop's clock: a test advances it instead of patching time."""
+    return time.monotonic()
+
+
 def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: threading.Event) -> None:
     """Step, then wait for a ring or the pause. A wake on the short BACKFILL_PAUSE (no ring, a SWEEP not yet gone by
     since the last full step) steps only the backfills that are due; a ring or a SWEEP's wait steps everything."""
-    short, full_at = False, time.monotonic()
+    short, full_at = False, _monotonic()
     while not halt.is_set():
         seen = BELL.rung
         try:
@@ -1190,7 +1195,7 @@ def _loop(store: Any, vault: Any, rehearsal: bool, make: Make | None, halt: thre
         except Exception:
             log.exception("Finance sync failed")
         if not short:
-            full_at = time.monotonic()
+            full_at = _monotonic()
         FIRST_PASS.set()
         rung = BELL.wait(seen, SWEEP if rehearsal else pause(store))
-        short = rung == seen and time.monotonic() - full_at < SWEEP
+        short = rung == seen and _monotonic() - full_at < SWEEP

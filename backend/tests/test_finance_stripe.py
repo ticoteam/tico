@@ -1730,7 +1730,7 @@ def test_the_loop_steps_everything_after_a_ring_or_a_sweep(books, monkeypatch):
     monkeypatch.setattr(sync, "pause", lambda _store: sync.BACKFILL_PAUSE)
     s = sync.SWEEP
     clock = iter([0.0, 0.0, 2.0, 4.0, 6.0, 6.0 + s, 6.0 + s, 8.0 + s, 8.0 + s])
-    monkeypatch.setattr(sync.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(sync, "_monotonic", lambda: next(clock))
     halt = threading.Event()
 
     class Ringing(_CountingBell):
