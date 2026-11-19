@@ -55,11 +55,15 @@ export interface SkillsSearch {
 export const skillsSearch = (raw: Record<string, unknown>): SkillsSearch =>
   clean({ q: str(raw.q), skill: str(raw.skill), proposal: str(raw.proposal), connect: str(raw.connect) });
 
+/** `kind`: one kind of tool (api, website...); `needs`: only the tools that need someone. */
 export interface ToolsSearch {
   q?: string;
   tool?: string;
+  kind?: string;
+  needs?: 1;
 }
-export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch => clean({ q: str(raw.q), tool: str(raw.tool) });
+export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
+  clean({ q: str(raw.q), tool: str(raw.tool), kind: str(raw.kind), needs: flag(raw.needs) });
 
 /** `type`: person, organization, place...; `panel`: the contact open beside the list. */
 export interface ContactsSearch {

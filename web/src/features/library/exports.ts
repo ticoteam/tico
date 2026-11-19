@@ -22,6 +22,9 @@ export { ContactsPage } from './ContactsPage';
 export { DocPage } from './DocPage';
 export { DocsPage } from './DocsPage';
 export { FilesPage } from './FilesPage';
+// A file anywhere: `files.view` opens it over the page (FileViewerHost mounted once at the root shows it);
+// FilePreview draws one in place (a task's Details).
+export { FilePreview, FileViewer, FileViewerHost } from './FileViewer';
 export { SkillsPage } from './SkillsPage';
 export { ToolsPage } from './ToolsPage';
 export {

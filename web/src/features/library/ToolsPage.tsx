@@ -15,8 +15,20 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
-import { ItemHead, ListAndItem, Section, type PageState } from '@/pagekinds';
+import { FilterRow, ItemHead, ListAndItem, Section, type PageState } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
+import {
+  CodeDialog,
+  EditApiDialog,
+  EditInboxDialog,
+  ExpiryDialog,
+  MessageDialog,
+  PasteDialog,
+  ReleaseDialog,
+  RevealDialog,
+  SettingDialog,
+  SitesDialog,
+} from './ToolDialogs';
 import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
 import {
   apiToolQuery,
@@ -27,6 +39,8 @@ import {
   mailQuery,
   toolsQuery,
   vendorQuery,
+  webhookQuery,
+  webhookSendsQuery,
   websiteToolQuery,
 } from './queries';
 import type { ToolsSearch } from './search';
@@ -53,9 +67,20 @@ export const KIND: Record<string, string> = {
   vendor: 'Service',
 };
 
-const toolHref = (id: string) => `/library/tools?tool=${encodeURIComponent(id)}`;
+/** A tool's address, keeping the list's filter. */
+const toolHref = (id: string, s: ToolsSearch = {}) => {
+  const p = new URLSearchParams();
+  if (s.kind) p.set('kind', s.kind);
+  if (s.needs) p.set('needs', '1');
+  p.set('tool', id);
+  return `/library/tools?${p.toString()}`;
+};
 const held = (r: ToolIndexRow) => r.kind === 'api' && r.delivery === 'proxy';
 const bad = (r: { needs_you: boolean; status: { tone: string; text: string } }) => (r.needs_you || r.status.tone === 'fail' ? r.status.text : null);
+
+/** The rows the filter keeps: one kind, and (with `needs`) only those that need someone. */
+export const narrow = (rows: ToolIndexRow[], s: Pick<ToolsSearch, 'kind' | 'needs'>) =>
+  rows.filter((r) => (!s.kind || r.kind === s.kind) && (!s.needs || !!bad(r)));
 
 /** One row per tool, or one per vendor when a vendor has several. */
 export interface Entry {
@@ -96,13 +121,19 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   const tools = useQuery(toolsQuery);
   const [words, setWords] = useState(search.q ?? '');
   const w = words.trim().toLowerCase();
-  const rows = (tools.data?.rows ?? []).filter(
+  const rows = narrow(tools.data?.rows ?? [], search).filter(
     (r) => !w || r.name.toLowerCase().includes(w) || r.detail.toLowerCase().includes(w) || (r.vendor_name ?? '').toLowerCase().includes(w),
   );
   const all = entries(rows);
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
   const none = !!tools.data && !tools.data.rows.length;
+  const kinds = [...new Set((tools.data?.rows ?? []).map((r) => r.kind))].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
+  const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
+  const filters = [
+    ...(search.needs ? [{ label: 'Needs you', onClear: () => filter({ kind: search.kind }) }] : []),
+    ...(search.kind ? [{ label: KIND[search.kind] ?? search.kind, onClear: () => filter({ needs: !!search.needs }) }] : []),
+  ];
 
   let state: PageState = 'ready';
   if (tools.isError) state = 'fault';
@@ -120,7 +151,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
             key={e.id}
             className={e.inUse ? 'tl-row trow' : 'tl-row trow is-off'}
             title={e.name}
-            href={toolHref(e.id)}
+            href={toolHref(e.id, search)}
             selected={e.id === open}
             target={`tool:${e.id}`}
           >
@@ -141,11 +172,28 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
         title="Tools"
         path="/library/tools"
         className="lib tools"
-        actions={<AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />}
+        actions={
+          <>
+            <Menu trigger={<IconButton icon="filter" label="Filter tools" on={filters.length > 0} />}>
+              <MenuItem label="All tools" on={!filters.length} onSelect={() => filter({})} />
+              <MenuItem label="Needs you" on={!!search.needs} onSelect={() => filter({ kind: search.kind, needs: !search.needs })} />
+              <MenuRule />
+              {kinds.map((k) => (
+                <MenuItem key={k} label={KIND[k] ?? k} on={k === search.kind} onSelect={() => filter({ kind: k === search.kind ? undefined : k, needs: !!search.needs })} />
+              ))}
+            </Menu>
+            <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />
+          </>
+        }
         open={!!open}
         state={state}
         onRetry={() => void tools.refetch()}
-        search={<Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />}
+        search={
+          <>
+            <Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />
+            <FilterRow filters={filters} />
+          </>
+        }
         list={
           none ? (
             <Empty title="No tools yet" />
@@ -201,6 +249,7 @@ function Tool({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
     return <MailboxView id={(row as unknown as { mailbox_id: string }).mailbox_id} row={row as ToolIndexRow} />;
   if (kind === 'tico' || kind === 'number') return <InboxView inbox={key} row={row} number={kind === 'number'} />;
   if (kind === 'address') return <AddressView row={row} />;
+  if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
   return <PlainView row={row} kind={kind} />;
 }
 
@@ -214,16 +263,22 @@ interface ShellProps {
   state?: 'loading' | 'fault' | 'no-access' | 'ready';
   onRetry?: () => void;
   target: string;
+  /** "⋯": what else may change on it. */
+  more?: ReactNode;
+  /** The name renames in place. */
+  onRename?: (name: string) => void;
   children?: ReactNode;
 }
 
 /** The open tool's head and its scrolling body (tools.css `.tool-head`, `.tool-body`). */
-function Shell({ name, kind, mcp, lock, problem, fill, state = 'ready', onRetry, target, children }: ShellProps) {
+function Shell({ name, kind, mcp, lock, problem, fill, state = 'ready', onRetry, target, more, onRename, children }: ShellProps) {
   return (
     <section className="tool" aria-label={name}>
       <ItemHead
         title={name}
         target={target}
+        more={more}
+        onRename={onRename}
         back={{ to: '/library/tools', label: 'Tools' }}
         lead={<KindTile kind={kind} mcp={mcp} big />}
         actions={
@@ -274,11 +329,16 @@ function Who({ actor, name, right, at }: { actor: string | null; name: string; r
 /* ---------------------------------------------------------------- an API or MCP tool */
 
 type Key = ApiTool['keys'][number];
+type ApiDialog =
+  | { is: 'edit' | 'paste' }
+  | { is: 'setting'; setting: NonNullable<ApiTool['settings']>[number] | null }
+  | { is: 'expiry' | 'reveal'; key: Key };
 
 function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const q = useQuery(apiToolQuery(id));
   const [keyFor, setKeyFor] = useState<Key | 'new' | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [dialog, setDialog] = useState<ApiDialog | null>(null);
   const t = q.data;
   const mcp = t?.mcp ?? null;
   const name = t?.tool.name ?? row?.name ?? 'Tool';
@@ -304,9 +364,28 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       </Button>
     ) : undefined);
   const last = t?.checks[0];
+  const more = t?.can_manage && (
+    <Menu trigger={<IconButton icon="more" label="More" />}>
+      <MenuItem label="Edit" onSelect={() => setDialog({ is: 'edit' })} />
+      {!mcp && <MenuItem label="Add many keys" onSelect={() => setDialog({ is: 'paste' })} />}
+      <MenuItem label="Add run setting" onSelect={() => setDialog({ is: 'setting', setting: null })} />
+    </Menu>
+  );
 
   return (
-    <Shell name={name} kind="api" mcp={!!mcp} lock={lock} problem={problem} fill={fill} state={stateOf(q)} onRetry={() => void q.refetch()} target={`tool:api:${id}`}>
+    <Shell
+      name={name}
+      kind="api"
+      mcp={!!mcp}
+      lock={lock}
+      problem={problem}
+      fill={fill}
+      more={more}
+      onRename={t?.can_manage ? (next) => void press('tools.editApi', { tool: id, name: next }, 'Not renamed') : undefined}
+      state={stateOf(q)}
+      onRetry={() => void q.refetch()}
+      target={`tool:api:${id}`}
+    >
       {t && (
         <>
           <Section name="What it is" target={`tool-about:${id}`}>
@@ -317,7 +396,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
               </LabelValue>
               {mcp?.tools != null && <LabelValue label="Tools">{mcp.read_only ? `${mcp.tools}, ${mcp.read_only} read-only` : String(mcp.tools)}</LabelValue>}
               {t.settings?.map((s) => (
-                <LabelValue key={s.id} label={s.name}>
+                <LabelValue key={s.id} label={s.name} onEdit={t.can_manage ? () => setDialog({ is: 'setting', setting: s }) : undefined}>
                   {s.value}
                 </LabelValue>
               ))}
@@ -356,9 +435,16 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                 {t.can_manage && (
                   <>
                     <IconButton icon="edit" label="Replace key" size="sm" onClick={() => setKeyFor(k)} />
-                    {k.can_remove !== false && (
-                      <IconButton icon="close" label="Remove key" size="sm" onClick={() => void press('tools.removeKey', { tool: id, key: k.id }, 'Not removed')} />
-                    )}
+                    <Menu trigger={<IconButton icon="more" label={`${k.name} options`} size="sm" />}>
+                      <MenuItem label="Show key" onSelect={() => setDialog({ is: 'reveal', key: k })} />
+                      {k.expires_source !== 'vendor' && <MenuItem label="Set end date" onSelect={() => setDialog({ is: 'expiry', key: k })} />}
+                      {k.can_remove !== false && (
+                        <>
+                          <MenuRule />
+                          <MenuItem label="Remove key" onSelect={() => void press('tools.removeKey', { tool: id, key: k.id }, 'Not removed')} />
+                        </>
+                      )}
+                    </Menu>
                   </>
                 )}
               </div>
@@ -406,6 +492,11 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             </Section>
           )}
           {keyFor && <KeyDialog tool={id} name={name} keyRow={keyFor === 'new' ? null : keyFor} onClose={() => setKeyFor(null)} />}
+          {dialog?.is === 'edit' && <EditApiDialog tool={id} settings={t.tool} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'paste' && <PasteDialog tool={id} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'setting' && <SettingDialog tool={id} setting={dialog.setting} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'expiry' && <ExpiryDialog tool={id} keyRow={dialog.key} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'reveal' && <RevealDialog credential={dialog.key.id} title={dialog.key.name} onClose={() => setDialog(null)} />}
         </>
       )}
     </Shell>
@@ -496,6 +587,8 @@ const VERB: Record<WebsiteTool['recent'][number]['verb'], string> = {
   upload: 'Uploaded to',
 };
 
+type SiteDialog = { is: 'sites' } | { is: 'password' | 'code'; account: string };
+
 function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
   const q = useQuery(websiteToolQuery(id));
   const t = q.data;
@@ -505,11 +598,13 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const lock = !!t?.accounts.some((a) => a.has_password);
   const [adding, setAdding] = useState(false);
   const [replacing, setReplacing] = useState<WebsiteTool['accounts'][number] | null>(null);
+  const [dialog, setDialog] = useState<SiteDialog | null>(null);
   return (
     <Shell
       name={name}
       kind="website"
       lock={lock}
+      onRename={t?.can_manage ? (next) => void press('tools.editWebsite', { tool: id, name: next }, 'Not renamed') : undefined}
       problem={t?.status.tone === 'fail' ? t.status.label : null}
       state={stateOf(q)}
       onRetry={() => void q.refetch()}
@@ -520,7 +615,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           <Section name="What it is">
             <Facts>
               <LabelValue label="Kind">{KIND.website}</LabelValue>
-              <LabelValue label="Site">
+              <LabelValue label={t.tool.sites.length > 1 ? 'Sites' : 'Site'} onEdit={t.can_manage ? () => setDialog({ is: 'sites' }) : undefined}>
                 <Code>{t.tool.sites.join(', ')}</Code>
               </LabelValue>
             </Facts>
@@ -533,6 +628,12 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
                   <Button variant="quiet" onClick={() => setReplacing(a)}>
                     Replace login
                   </Button>
+                  {a.can_use && (a.has_password || a.has_totp) && (
+                    <Menu trigger={<IconButton icon="more" label={`${a.username || 'Account'} options`} size="sm" />}>
+                      {a.has_password && <MenuItem label="Show password" onSelect={() => setDialog({ is: 'password', account: a.id })} />}
+                      {a.has_totp && <MenuItem label="Show sign-in code" onSelect={() => setDialog({ is: 'code', account: a.id })} />}
+                    </Menu>
+                  )}
                 </LabelValue>
               ))}
               {t.accounts.some((a) => a.has_password) && (
@@ -561,6 +662,9 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           )}
           {adding && <AddAccountDialog tool={id} onClose={() => setAdding(false)} />}
           {replacing && <ReplaceLoginDialog tool={id} account={replacing} onClose={() => setReplacing(null)} />}
+          {dialog?.is === 'sites' && <SitesDialog tool={id} sites={t.tool.sites} onClose={() => setDialog(null)} />}
+          {dialog?.is === 'password' && <RevealDialog credential={dialog.account} title="Password" onClose={() => setDialog(null)} />}
+          {dialog?.is === 'code' && <CodeDialog tool={id} account={dialog.account} onClose={() => setDialog(null)} />}
           {t.recent.length > 0 && (
             <Section name="Recent use">
               {t.recent.map((r) => (
@@ -663,8 +767,25 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
   const messages = useQuery(inboxMessagesQuery(inbox));
   const box = boxes.data?.find((b) => b.inbox_id === inbox);
   const name = box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address');
+  const [dialog, setDialog] = useState<'edit' | 'release' | null>(null);
+  const [reading, setReading] = useState<{ id: string; title: string } | null>(null);
+  const more = box && (
+    <Menu trigger={<IconButton icon="more" label="More" />}>
+      <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
+      <MenuRule />
+      <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
+    </Menu>
+  );
   return (
-    <Shell name={name} kind={number ? 'number' : 'mailbox'} problem={row && bad(row)} state={stateOf(boxes)} onRetry={() => void boxes.refetch()} target={`tool:${row?.id ?? inbox}`}>
+    <Shell
+      name={name}
+      kind={number ? 'number' : 'mailbox'}
+      problem={row && bad(row)}
+      more={more}
+      state={stateOf(boxes)}
+      onRetry={() => void boxes.refetch()}
+      target={`tool:${row?.id ?? inbox}`}
+    >
       <Section name="What it is">
         <Facts>
           <LabelValue label="Kind">{number ? KIND.number : KIND.tico}</LabelValue>
@@ -672,6 +793,7 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
             <Code>{box?.address ?? row?.detail ?? ''}</Code>
           </LabelValue>
           {box?.audience && <LabelValue label="For">{box.audience === 'company' ? 'The company' : 'One team'}</LabelValue>}
+          {box?.used_for && <LabelValue label="Used for">{box.used_for}</LabelValue>}
         </Facts>
       </Section>
       <Section name="How it connects">
@@ -686,19 +808,30 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
             const from = typeof m.from === 'string' ? m.from : '';
             const what = (typeof m.subject === 'string' && m.subject) || (typeof m.preview === 'string' && m.preview) || from;
             const at = typeof m.received_at === 'number' ? new Date(m.received_at * 1000) : null;
+            const id = typeof m.message_id === 'string' ? m.message_id : null;
             return (
-              <div key={String(m.message_id ?? m.seq)} className="row urow" title={what}>
+              <button
+                key={String(m.message_id ?? m.seq)}
+                type="button"
+                className="row urow"
+                title={what}
+                disabled={!id}
+                onClick={() => id && setReading({ id, title: what || 'Message' })}
+              >
                 <span className="urow-lead" title="Came in">
                   <Icon name="download" />
                 </span>
                 <span className="row-title">{what}</span>
                 <span className="row-ctx">{from}</span>
                 {at ? <Ago at={at} className="row-age" /> : <span className="row-age" />}
-              </div>
+              </button>
             );
           })}
         </Section>
       )}
+      {reading && <MessageDialog message={reading.id} title={reading.title} onClose={() => setReading(null)} />}
+      {box && dialog === 'edit' && <EditInboxDialog box={box} onClose={() => setDialog(null)} />}
+      {box && dialog === 'release' && <ReleaseDialog box={box} number={number} onClose={() => setDialog(null)} />}
     </Shell>
   );
 }
@@ -787,7 +920,69 @@ function AddressView({ row }: { row: ToolIndexRow | undefined }) {
   );
 }
 
-/* ---------------------------------------------------------------- Slack, GitHub, meetings, webhooks... */
+/* ---------------------------------------------------------------- Outgoing webhooks */
+
+const SENT: Record<string, string> = {
+  ready: 'Waiting',
+  sending: 'Sending',
+  delivered: 'Delivered',
+  failed: 'Failed',
+  canceled: 'Canceled',
+  withheld: 'Held back',
+};
+
+function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined }) {
+  const hook = useQuery(webhookQuery(id));
+  const sends = useQuery(webhookSendsQuery(id));
+  const w = hook.data?.webhook;
+  const paused = !!w?.paused_reason;
+  const more = w?.can_change && (
+    <Menu trigger={<IconButton icon="more" label="More" />}>
+      <MenuItem label="Send test" onSelect={() => void press('tools.testWebhook', { webhook: id }, 'The test did not send')} />
+      <MenuItem
+        label={paused ? 'Send again' : 'Pause'}
+        onSelect={() => void press('tools.pauseWebhook', { webhook: id, on: paused }, paused ? 'It did not restart' : 'It did not pause')}
+      />
+    </Menu>
+  );
+  return (
+    <Shell
+      name={w?.name ?? row?.name ?? 'Outgoing webhook'}
+      kind="webhook"
+      problem={(row && bad(row)) || w?.disabled_reason || null}
+      more={more}
+      state={stateOf(hook)}
+      onRetry={() => void hook.refetch()}
+      target={`tool:webhook:${id}`}
+    >
+      {w && (
+        <Section name="What it is">
+          <Facts>
+            <LabelValue label="Sends to">{w.url || w.host}</LabelValue>
+            <LabelValue label="Events">{w.events.length ? w.events.join(', ') : 'All'}</LabelValue>
+            <LabelValue label="State">{paused ? w.paused_reason : w.enabled ? 'On' : 'Off'}</LabelValue>
+            <LabelValue label="Last 7 days">
+              {`${w.last_7_days.delivered} delivered, ${w.last_7_days.failed} failed, ${w.last_7_days.pending} waiting`}
+            </LabelValue>
+          </Facts>
+        </Section>
+      )}
+      {sends.data && sends.data.length > 0 && (
+        <Section name="Recent sends" count={sends.data.length}>
+          {sends.data.map((x) => (
+            <div key={x.id} className="row urow" title={x.last_error || undefined}>
+              <span className="row-title">{x.subject || x.type}</span>
+              <span className="row-ctx">{x.last_status ? `${SENT[x.state] ?? x.state} (${x.last_status})` : (SENT[x.state] ?? x.state)}</span>
+              <Ago at={x.delivered_at ?? x.created_at} className="row-age" />
+            </div>
+          ))}
+        </Section>
+      )}
+    </Shell>
+  );
+}
+
+/* ---------------------------------------------------------------- Slack, GitHub, meetings... */
 
 function PlainView({ row, kind }: { row: ToolIndexRow | undefined; kind: string }) {
   if (!row) return <Shell name="Tool" kind={kind} state="loading" target={`tool:${kind}`} />;

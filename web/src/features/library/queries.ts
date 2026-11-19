@@ -4,6 +4,7 @@ import type {
   ApiTool,
   BotFile,
   DocSourceList,
+  DocSourceResult,
   ExternalDocResult,
   FileLibrary,
   InboundInboxes,
@@ -17,7 +18,9 @@ import type {
   LetterOutPage,
   LibraryFile,
   MailboxDetail,
+  SourceCreate,
   SourceDocumentList,
+  SourceEdit,
   ToolIndex,
   ToolIndexRow,
   ToolVendor,
@@ -26,6 +29,8 @@ import type {
   WebsiteTool,
   WebsiteToolCreate,
   WebsiteToolCreated,
+  WebhookSends,
+  WebhookShown,
 } from '@/api/schema';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 
@@ -158,6 +163,27 @@ export function refreshSource(id: string) {
     optimistic: (cur: DocSourceList | undefined) =>
       cur && { ...cur, sources: cur.sources.map((s) => (s.id === id ? { ...s, status: 'updating' as const } : s)) },
     send: (idempotencyKey) => api.post(`/api/v2/doc-sources/${enc(id)}/refresh`, {}, { idempotencyKey }),
+  });
+}
+
+/** Link an outside source: an address, and what to call it. The server reads it in the background. */
+export const addSource = (body: SourceCreate) =>
+  api.post<DocSourceResult>('/api/v2/doc-sources', body, { idempotencyKey: crypto.randomUUID() }).then(async (r) => {
+    await queryClient.invalidateQueries({ queryKey: sourcesQuery.queryKey });
+    return r.source;
+  });
+
+/** Change a source's address, name, description or branch; `archived` takes it off the list. */
+export function editSource(id: string, change: SourceEdit) {
+  const keep = Object.fromEntries(Object.entries(change).filter(([k, v]) => v != null && k !== 'archived'));
+  return write<unknown>({
+    key: sourcesQuery.queryKey,
+    optimistic: (cur: DocSourceList | undefined) =>
+      cur && {
+        ...cur,
+        sources: change.archived ? cur.sources.filter((x) => x.id !== id) : cur.sources.map((x) => (x.id === id ? { ...x, ...keep } : x)),
+      },
+    send: (idempotencyKey) => api.patch(`/api/v2/doc-sources/${enc(id)}`, change, { idempotencyKey }),
   });
 }
 
@@ -384,6 +410,7 @@ export interface Inbox {
   address: string;
   state: string;
   audience?: string;
+  used_for?: string | null;
 }
 export interface MailItem {
   id: string;
@@ -563,6 +590,178 @@ export function setAccess(tool: string, subject: string, level: 'read' | 'read_w
     send: (idempotencyKey) => api.put(`/api/v2/api-tools/${enc(tool)}/access/${enc(subject)}`, { level }, { idempotencyKey }),
   });
 }
+
+/* Changing a tool. Each reads the tool (and the list, whose name and status it shows) again once the server agrees. */
+
+const toolChanged = (key: readonly unknown[]) =>
+  Promise.all([queryClient.invalidateQueries({ queryKey: key }), queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey })]);
+/** After a change the list shows too (a name, a state): the list reads again. */
+const andList = async <T,>(sent: Promise<T>) => {
+  const r = await sent;
+  await queryClient.invalidateQueries({ queryKey: toolsQuery.queryKey });
+  return r;
+};
+
+export interface ApiToolChange {
+  name?: string;
+  service?: string;
+  base_url?: string;
+  auth_scheme?: string;
+  check_path?: string;
+}
+export function editApiTool(tool: string, change: ApiToolChange) {
+  return andList(
+    write<unknown>({
+      key: ['tools', 'api', tool],
+      optimistic: (cur: ApiTool | undefined) => cur && { ...cur, tool: { ...cur.tool, ...change } },
+      send: (idempotencyKey) => api.patch(`/api/v2/api-tools/${enc(tool)}`, change, { idempotencyKey }),
+    }),
+  );
+}
+
+/** A key's own end date (`''` clears it). A vendor's date is the vendor's: the server refuses a change to it. */
+export function setKeyExpiry(tool: string, key: string, expiresOn: string) {
+  return write<unknown>({
+    key: ['tools', 'api', tool],
+    optimistic: withKeys((keys) => keys.map((k) => (k.id === key ? { ...k, expires_on: expiresOn || null } : k))),
+    send: (idempotencyKey) => api.patch(`/api/v2/api-tools/${enc(tool)}/keys/${enc(key)}`, { expires_on: expiresOn }, { idempotencyKey }),
+  });
+}
+
+type Setting = NonNullable<ApiTool['settings']>[number];
+const withSettings = (f: (s: Setting[]) => Setting[]) => (cur: ApiTool | undefined) => cur && { ...cur, settings: f(cur.settings ?? []) };
+
+/** A run setting: a plain value a call carries (an account id, a region), never a secret. */
+export function saveSetting(tool: string, setting: { id?: string; name: string; value: string }) {
+  const { id, name, value } = setting;
+  return write<unknown>({
+    key: ['tools', 'api', tool],
+    optimistic: withSettings((list) =>
+      id ? list.map((s) => (s.id === id ? { ...s, name, value } : s)) : [...list, { id: `tmp:${Date.now()}`, name, value, updated_at: new Date().toISOString() }],
+    ),
+    send: (idempotencyKey) =>
+      id
+        ? api.patch(`/api/v2/api-tools/${enc(tool)}/settings/${enc(id)}`, { name, value }, { idempotencyKey })
+        : api.post(`/api/v2/api-tools/${enc(tool)}/settings`, { name, value }, { idempotencyKey }),
+  });
+}
+
+export function removeSetting(tool: string, id: string) {
+  return write<unknown>({
+    key: ['tools', 'api', tool],
+    optimistic: withSettings((list) => list.filter((s) => s.id !== id)),
+    send: (idempotencyKey) => api.delete(`/api/v2/api-tools/${enc(tool)}/settings/${enc(id)}`, { idempotencyKey }),
+  });
+}
+
+/**
+ * A stored secret, read once for the person who asked (the server logs it). Deliberately not a query: the value is
+ * never cached, and the caller keeps it in its own state only while it is shown.
+ */
+export const revealSecret = (credential: string) =>
+  api.post<{ value?: string; password?: string }>(`/api/v2/credentials/${enc(credential)}/reveal`, {}).then((r) => r.value ?? r.password ?? '');
+
+/** What a paste holds, item by item: names and masked previews, never the values. Nothing is stored. */
+export interface PasteItem {
+  role: string;
+  name: string;
+  preview: string;
+}
+export const classifyPaste = (text: string) => api.post<{ template?: string | null; items: PasteItem[] }>('/api/v2/tool-templates/classify', { text });
+/** Stores a paste on a tool in one step: each secret as a key, each plain value as a run setting. */
+export const pasteKeys = (tool: string, text: string) =>
+  api.post<{ keys: number; settings: number }>(`/api/v2/api-tools/${enc(tool)}/paste`, { text }).then(async (r) => {
+    await toolChanged(['tools', 'api', tool]);
+    return r;
+  });
+
+export interface WebsiteChange {
+  name?: string;
+  sites?: string[];
+  central_only?: boolean;
+}
+export function editWebsite(tool: string, change: WebsiteChange) {
+  return andList(
+    write<unknown>({
+      key: ['tools', 'website', tool],
+      optimistic: (cur: WebsiteTool | undefined) => cur && { ...cur, tool: { ...cur.tool, ...change } },
+      send: (idempotencyKey) => api.patch(`/api/v2/website-tools/${enc(tool)}`, change, { idempotencyKey }),
+    }),
+  );
+}
+
+/** The sign-in code the account's authenticator shows now. Not cached: it changes every half minute. */
+export const signInCode = (tool: string, account: string) =>
+  api.get<{ code: string; expires_in?: number }>(`/api/v2/website-tools/${enc(tool)}/accounts/${enc(account)}/code`);
+
+/** One message that came in, a page of its text at a time (it is untrusted: shown as text, never as a page). */
+export const readMessage = (message: string, offset = 0) =>
+  api.get<{ text: string; next_offset?: number | null }>(`/api/v2/inbound/messages/${enc(message)}${q({ offset: offset || undefined })}`);
+
+const inboxesChanged = () => toolChanged(inboxesQuery.queryKey);
+
+export const addTicoAddress = (name: string) =>
+  api.post<{ inbox_id?: string; inbox?: { inbox_id: string } }>('/api/v2/inbound/inboxes', { kind: 'email', name }).then(async (r) => {
+    await inboxesChanged();
+    return r.inbox_id ?? r.inbox?.inbox_id ?? null;
+  });
+
+/** Asks for a monthly US mobile number. No purchase: a quote comes back for a person to accept. */
+export const requestNumber = (name: string) => api.post<unknown>('/api/v2/inbound/phone-requests', { name }).then(inboxesChanged);
+
+export function editInbox(inbox: string, change: { name: string; used_for?: string | null }) {
+  return andList(
+    write<unknown>({
+      key: inboxesQuery.queryKey,
+      optimistic: (cur: Inbox[] | undefined) => cur?.map((b) => (b.inbox_id === inbox ? { ...b, ...change } : b)),
+      send: (idempotencyKey) => api.patch(`/api/v2/inbound/inboxes/${enc(inbox)}`, change, { idempotencyKey }),
+    }),
+  );
+}
+
+/** Retires an address, or stops renewing a number. `confirm`: the address typed back when something depends on it. */
+export const releaseInbox = (inbox: string, confirm: string) =>
+  api.post<unknown>(`/api/v2/inbound/inboxes/${enc(inbox)}/release`, { confirm }).then(inboxesChanged);
+
+export const connectMailbox = (address: string, shared: boolean) =>
+  made(api.post<{ mailbox: { id: string } }>('/api/v2/mailboxes', { address, shared }).then((r) => ({ id: r.mailbox.id })));
+
+/** A mailing address, shared or private, in one state. Paid monthly: the person's own order. */
+export const orderAddress = (body: { kind: 'shared' | 'private'; state: string; company_name: string }) =>
+  andList(api.post<unknown>('/api/v2/postal/orders', body, { idempotencyKey: crypto.randomUUID() }));
+
+/* An outgoing webhook: where it sends, what it sends, how its sends went. */
+
+export const webhookQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['tools', 'webhook', id],
+    queryFn: () => api.get<WebhookShown>(`/api/v2/webhooks/${enc(id)}`),
+    ...quiet,
+  });
+
+export const webhookSendsQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['tools', 'webhook', id, 'sends'],
+    queryFn: () => api.get<WebhookSends>(`/api/v2/webhooks/${enc(id)}/sends${q({ limit: 20 })}`).then((r) => r.items),
+    ...quiet,
+  });
+
+/** Pause or send again. */
+export function setWebhookOn(id: string, on: boolean) {
+  return andList(
+    write<unknown>({
+      key: ['tools', 'webhook', id],
+      optimistic: (cur: WebhookShown | undefined) => cur && { ...cur, webhook: { ...cur.webhook, paused_reason: on ? '' : 'Paused' } },
+      send: (idempotencyKey) => api.post(`/api/v2/webhooks/${enc(id)}/${on ? 'resume' : 'pause'}`, {}, { idempotencyKey }),
+    }),
+  );
+}
+
+/** A made-up event to the endpoint, to see that it answers. */
+export const sendTestEvent = (id: string) =>
+  api.post<unknown>(`/api/v2/webhooks/${enc(id)}/send`, { type: 'custom.test', subject: 'Test' }).then(() =>
+    queryClient.invalidateQueries({ queryKey: ['tools', 'webhook', id] }),
+  );
 
 export function cancelLetter(id: string) {
   return write<unknown>({

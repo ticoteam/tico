@@ -3,9 +3,28 @@ import { defineAction, s, type Schema } from '@/actions';
 import {
   addAccount,
   addApiTool,
+  addTicoAddress,
+  classifyPaste,
+  connectMailbox,
+  editApiTool,
+  editInbox,
+  editSource,
+  editWebsite,
+  orderAddress,
+  pasteKeys,
+  releaseInbox,
+  removeSetting,
+  requestNumber,
+  revealSecret,
+  saveSetting,
+  sendTestEvent,
+  setKeyExpiry,
+  setWebhookOn,
+  signInCode,
   addKey,
   addMcp,
   addNote,
+  addSource,
   addWebsite,
   approveProposal,
   cancelLetter,
@@ -31,6 +50,7 @@ import {
   type SkillRow,
 } from './queries';
 import type { ToolIndex } from '@/api/schema';
+import { viewing } from './viewing';
 
 /* Every view and change on the Library pages: Docs, a doc, Files, Skills, Tools, Contacts. Anything that sets a secret,
    adds a file from the person's own disk or answers an approval is the person's own (`tico: false`). */
@@ -155,6 +175,39 @@ export const docsRefreshSource = defineAction({
   target: (i) => ({ kind: 'source', id: i.source }),
 });
 
+const sourceBody = {
+  url: s.optional(s.string({ min: 1, max: 2000, pattern: /^https?:\/\// })),
+  title: s.optional(s.string({ max: 300 })),
+  description: s.optional(s.string({ max: 300 })),
+  reference: s.optional(s.string({ max: 256 })),
+};
+
+export const docsAddSource = defineAction({
+  id: 'docs.addSource',
+  title: 'Link an outside source of docs',
+  kind: 'change',
+  input: s.object({ ...sourceBody, url: s.string({ min: 1, max: 2000, pattern: /^https?:\/\// }) }),
+  run: async ({ router }, i) => {
+    const made = await addSource(i);
+    await go(router, '/library/docs', { tab: 'sources', panel: made.id });
+  },
+  did: (i) => `Linked ${i.title || i.url}`,
+  target: () => ({ kind: 'page', id: '/library/docs?tab=sources' }),
+});
+
+export const docsEditSource = defineAction({
+  id: 'docs.editSource',
+  title: 'Change or remove an outside source',
+  kind: 'change',
+  input: s.object({ source: id, ...sourceBody, archived: s.optional(s.boolean()) }),
+  run: async ({ router }, { source, ...change }) => {
+    await editSource(source, change);
+    if (change.archived) await go(router, '/library/docs', { tab: 'sources' });
+  },
+  did: (i) => (i.archived ? 'Removed the source' : 'Saved'),
+  target: (i) => ({ kind: 'source', id: i.source }),
+});
+
 // ---------------------------------------------------------------- files
 
 export const filesList = defineAction({
@@ -177,6 +230,16 @@ export const filesOpen = defineAction({
     return on(router, '/library/files') ? set(router, change) : go(router, '/library/files', change);
   },
   target: (i) => ({ kind: 'file', id: i.file }),
+});
+
+/** A file over whatever page is open (a task, a chat): a picture full size, anything else in a dialog. */
+export const filesView = defineAction({
+  id: 'files.view',
+  title: 'Show a file',
+  kind: 'view',
+  input: s.object({ file: s.nullable(id), version: s.optional(s.number({ int: true, min: 1 })) }),
+  run: (_ctx, i) => viewing.set(i.file ? { file: i.file, version: i.version } : null),
+  target: () => null,
 });
 
 export const filesUpload = defineAction({
@@ -281,6 +344,19 @@ export const toolsOpen = defineAction({
   target: (i) => (i.tool ? { kind: 'tool', id: i.tool } : { kind: 'page', id: '/library/tools' }),
   offer: ({ queryClient }) =>
     (queryClient.getQueryData<ToolIndex>(toolsQuery.queryKey)?.rows ?? []).slice(0, 50).map((t) => ({ input: { tool: t.id }, title: `Open ${t.name}` })),
+});
+
+/** Narrow the list to one kind of tool, or to the tools that need someone; nothing given shows them all. */
+export const toolsFilter = defineAction({
+  id: 'tools.filter',
+  title: 'Filter tools',
+  kind: 'view',
+  input: s.object({ kind: s.optional(text(40)), needs: s.optional(s.boolean()) }),
+  run: ({ router }, i) => {
+    const change = { kind: i.kind, needs: i.needs ? 1 : undefined };
+    return on(router, '/library/tools') ? set(router, change, true) : go(router, '/library/tools', change);
+  },
+  target: () => ({ kind: 'page', id: '/library/tools' }),
 });
 
 /** One tap: the provider's sign-in page, which comes back to the tool. */
@@ -477,6 +553,215 @@ export const toolsCancelLetter = defineAction({
   run: (_ctx, i) => cancelLetter(i.letter),
   did: () => 'Stopped the letter',
   target: (i) => ({ kind: 'letter', id: i.letter }),
+});
+
+/* Changing a tool. Tico may rename it, move its address, set a key's end date or a run setting: nothing secret is
+   typed. Reading a stored secret, a sign-in code, a paste of keys, or anything paid or for good is the person's own. */
+
+const api = (tool: string) => ({ kind: 'tool', id: `api:${tool}` });
+const site = (tool: string) => ({ kind: 'tool', id: `website:${tool}` });
+const day = s.string({ max: 10, pattern: /^$|^\d{4}-\d{2}-\d{2}$/ });
+
+export const toolsEditApi = defineAction({
+  id: 'tools.editApi',
+  title: 'Change an API tool',
+  kind: 'change',
+  input: s.object({
+    tool: id,
+    name: s.optional(s.string({ min: 1, max: 120 })),
+    service: s.optional(text(80)),
+    base_url: s.optional(text(500)),
+    auth_scheme: s.optional(s.string({ min: 1, max: 80, pattern: /^(bearer|basic_user|basic_password|(header|query):[\w-]+)$/ })),
+    check_path: s.optional(text(500)),
+  }),
+  run: (_ctx, { tool, ...change }) => editApiTool(tool, change),
+  did: () => 'Saved',
+  target: (i) => api(i.tool),
+});
+
+export const toolsSetKeyExpiry = defineAction({
+  id: 'tools.setKeyExpiry',
+  title: 'Set when a key ends',
+  kind: 'change',
+  input: s.object({ tool: id, key: id, expires_on: day }),
+  run: (_ctx, i) => setKeyExpiry(i.tool, i.key, i.expires_on),
+  did: (i) => (i.expires_on ? `Ends ${i.expires_on}` : 'No end date'),
+  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+});
+
+export const toolsSaveSetting = defineAction({
+  id: 'tools.saveSetting',
+  title: 'Add or change a run setting',
+  kind: 'change',
+  input: s.object({ tool: id, setting: s.optional(id), name: s.string({ min: 1, max: 80, pattern: /^[A-Z_][A-Z0-9_]*$/ }), value: s.string({ min: 1, max: 2000 }) }),
+  run: (_ctx, i) => saveSetting(i.tool, { id: i.setting, name: i.name, value: i.value }),
+  did: (i) => `Saved ${i.name}`,
+  target: (i) => ({ kind: 'tool-about', id: i.tool }),
+});
+
+export const toolsRemoveSetting = defineAction({
+  id: 'tools.removeSetting',
+  title: 'Remove a run setting',
+  kind: 'change',
+  input: s.object({ tool: id, setting: id }),
+  run: (_ctx, i) => removeSetting(i.tool, i.setting),
+  did: () => 'Removed',
+  target: (i) => ({ kind: 'tool-about', id: i.tool }),
+});
+
+/** A stored key or website password, shown to the person who asked. The value is the result's `out` only. */
+export const toolsReveal = defineAction({
+  id: 'tools.reveal',
+  title: 'Show a stored key or password',
+  kind: 'change',
+  tico: false,
+  input: s.object({ credential: id }),
+  run: (_ctx, i) => revealSecret(i.credential),
+  did: () => 'Shown',
+  target: () => null,
+});
+
+/** Look at a paste first: what it holds, by name, with nothing stored. */
+export const toolsCheckPaste = defineAction({
+  id: 'tools.checkPaste',
+  title: 'See what a paste of keys holds',
+  kind: 'view',
+  tico: false,
+  input: s.object({ text: s.string({ min: 1, max: 100_000 }) }),
+  run: (_ctx, i) => classifyPaste(i.text),
+  target: () => null,
+});
+
+export const toolsPasteKeys = defineAction({
+  id: 'tools.pasteKeys',
+  title: 'Add many keys at once',
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool: id, text: s.string({ min: 1, max: 100_000 }) }),
+  run: (_ctx, i) => pasteKeys(i.tool, i.text),
+  did: (_i, out) => (out ? `Added ${out.keys} ${out.keys === 1 ? 'key' : 'keys'} and ${out.settings} ${out.settings === 1 ? 'setting' : 'settings'}` : 'Added'),
+  target: (i) => ({ kind: 'tool-keys', id: i.tool }),
+});
+
+export const toolsEditWebsite = defineAction({
+  id: 'tools.editWebsite',
+  title: 'Rename a website tool or change its sites',
+  kind: 'change',
+  input: s.object({
+    tool: id,
+    name: s.optional(s.string({ min: 1, max: 80 })),
+    sites: s.optional(s.array(s.string({ min: 1, max: 300 }), { max: 50 })),
+    central_only: s.optional(s.boolean()),
+  }),
+  run: (_ctx, { tool, ...change }) => editWebsite(tool, change),
+  did: () => 'Saved',
+  target: (i) => site(i.tool),
+});
+
+/** The sign-in code the account's authenticator shows now: the person's own, like a password. */
+export const toolsSignInCode = defineAction({
+  id: 'tools.signInCode',
+  title: 'Show a sign-in code',
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool: id, account: id }),
+  run: (_ctx, i) => signInCode(i.tool, i.account),
+  did: () => 'Shown',
+  target: () => null,
+});
+
+export const toolsAddTicoAddress = defineAction({
+  id: 'tools.addTicoAddress',
+  title: 'Make a Tico address',
+  kind: 'change',
+  input: s.object({ name: s.string({ min: 1, max: 80 }) }),
+  run: async ({ router }, i) => {
+    const made = await addTicoAddress(i.name.trim());
+    if (made) await opened(router, `tico:${made}`);
+  },
+  did: (i) => `Made ${i.name}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** A monthly number has a price: asking for one is the person's own. */
+export const toolsRequestNumber = defineAction({
+  id: 'tools.requestNumber',
+  title: 'Ask for a US mobile number',
+  kind: 'change',
+  tico: false,
+  input: s.object({ name: s.string({ min: 1, max: 80 }) }),
+  run: (_ctx, i) => requestNumber(i.name.trim()),
+  did: () => 'Asked for a number',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsEditInbox = defineAction({
+  id: 'tools.editInbox',
+  title: 'Rename an address or number',
+  kind: 'change',
+  input: s.object({ inbox: id, name: s.string({ min: 1, max: 80 }), used_for: s.optional(s.nullable(text(1000))) }),
+  run: (_ctx, i) => editInbox(i.inbox, { name: i.name.trim(), used_for: i.used_for === undefined ? undefined : i.used_for?.trim() || null }),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'tool', id: `tico:${i.inbox}` }),
+});
+
+/** For good: an address is retired, a number is not renewed. */
+export const toolsReleaseInbox = defineAction({
+  id: 'tools.releaseInbox',
+  title: 'Stop using an address or number',
+  kind: 'change',
+  tico: false,
+  input: s.object({ inbox: id, confirm: s.optional(text(160)) }),
+  run: async ({ router }, i) => {
+    await releaseInbox(i.inbox, i.confirm ?? '');
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Stopped',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** Gives Tico a company mailbox: the server takes it only from a person signed in as themselves. */
+export const toolsConnectMailbox = defineAction({
+  id: 'tools.connectMailbox',
+  title: 'Connect a mailbox',
+  kind: 'change',
+  tico: false,
+  input: s.object({ address: s.string({ min: 3, max: 320 }), shared: s.boolean() }),
+  run: async ({ router }, i) => opened(router, `mailbox:${(await connectMailbox(i.address.trim().toLowerCase(), i.shared)).id}`),
+  did: (i) => `Connected ${i.address}`,
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** Paid monthly: the person's own. */
+export const toolsOrderAddress = defineAction({
+  id: 'tools.orderAddress',
+  title: 'Get a mailing address',
+  kind: 'change',
+  tico: false,
+  input: s.object({ kind: s.oneOf(['shared', 'private'] as const), state: s.oneOf(['DE', 'CA', 'TX', 'FL', 'NV'] as const), company_name: s.string({ min: 1, max: 200 }) }),
+  run: (_ctx, i) => orderAddress({ ...i, company_name: i.company_name.trim() }),
+  did: () => 'Asked for a mailing address',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+export const toolsPauseWebhook = defineAction({
+  id: 'tools.pauseWebhook',
+  title: 'Pause or restart an outgoing webhook',
+  kind: 'change',
+  input: s.object({ webhook: id, on: s.boolean() }),
+  run: (_ctx, i) => setWebhookOn(i.webhook, i.on),
+  did: (i) => (i.on ? 'Sending again' : 'Paused'),
+  target: (i) => ({ kind: 'tool', id: `webhook:${i.webhook}` }),
+});
+
+export const toolsTestWebhook = defineAction({
+  id: 'tools.testWebhook',
+  title: 'Send a test to an outgoing webhook',
+  kind: 'change',
+  input: s.object({ webhook: id }),
+  run: (_ctx, i) => sendTestEvent(i.webhook),
+  did: () => 'Sent a test',
+  target: (i) => ({ kind: 'tool', id: `webhook:${i.webhook}` }),
 });
 
 // ---------------------------------------------------------------- contacts

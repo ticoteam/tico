@@ -12,24 +12,30 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { press, ToolGlyph } from './parts';
+import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog } from './ToolDialogs';
 import { probeMcp, type LoginAdd, type McpProbe } from './queries';
 
 /* Add tool (tools.js addMenu; the old app's tools-api, tools-mcp and tools-website dialogs): an API, an MCP server
    or a website. Secrets typed here are only sent: nothing typed comes back to the page. */
 
-export type Adding = 'api' | 'mcp' | 'website';
+export type Adding = 'api' | 'mcp' | 'website' | 'mailbox' | 'tico' | 'number' | 'address';
 
-const ADD: Array<[Adding, string]> = [
-  ['api', 'API'],
-  ['mcp', 'MCP server'],
-  ['website', 'Website'],
+/** The mock's Add menu, in its order; each with the glyph its tool shows. */
+const ADD: Array<[Adding, string, string]> = [
+  ['api', 'API', 'api'],
+  ['mcp', 'MCP server', 'mcp'],
+  ['website', 'Website', 'website'],
+  ['mailbox', 'Email', 'mailbox'],
+  ['tico', 'Tico address', 'mailbox'],
+  ['number', 'Phone number', 'number'],
+  ['address', 'Mailing address', 'address'],
 ];
 
 export function AddMenu({ trigger, onPick }: { trigger: ReactElement; onPick: (a: Adding) => void }) {
   return (
     <Menu trigger={trigger}>
-      {ADD.map(([k, label]) => (
-        <MenuItem key={k} label={label} lead={<ToolGlyph kind={k} />} onSelect={() => onPick(k)} />
+      {ADD.map(([k, label, glyph]) => (
+        <MenuItem key={k} label={label} lead={<ToolGlyph kind={glyph} />} onSelect={() => onPick(k)} />
       ))}
     </Menu>
   );
@@ -38,11 +44,15 @@ export function AddMenu({ trigger, onPick }: { trigger: ReactElement; onPick: (a
 export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => void }) {
   if (adding === 'api') return <AddApi onClose={onClose} />;
   if (adding === 'mcp') return <AddMcp onClose={onClose} />;
+  if (adding === 'mailbox') return <ConnectMailboxDialog onClose={onClose} />;
+  if (adding === 'tico') return <NewAddressDialog onClose={onClose} />;
+  if (adding === 'number') return <RequestNumberDialog onClose={onClose} />;
+  if (adding === 'address') return <MailingAddressDialog onClose={onClose} />;
   return <AddWebsite onClose={onClose} />;
 }
 
 /** Cancel, then the one filled button. */
-function Foot({ onClose, label, busy, ready, onGo }: { onClose: () => void; label: string; busy: boolean; ready: boolean; onGo: () => void }) {
+export function Foot({ onClose, label, busy, ready, onGo }: { onClose: () => void; label: string; busy: boolean; ready: boolean; onGo: () => void }) {
   return (
     <>
       <Button onClick={onClose}>Cancel</Button>
@@ -54,7 +64,7 @@ function Foot({ onClose, label, busy, ready, onGo }: { onClose: () => void; labe
 }
 
 /** Runs one action; closes on success. */
-function useGo(onClose: () => void) {
+export function useGo(onClose: () => void) {
   const [busy, setBusy] = useState(false);
   const go = async (id: string, input: unknown, failed = 'Not added') => {
     setBusy(true);
@@ -65,12 +75,12 @@ function useGo(onClose: () => void) {
   return [busy, go] as const;
 }
 
-const trimmed = (v: string) => v.trim() || undefined;
+export const trimmed = (v: string) => v.trim() || undefined;
 
 /* ---------------------------------------------------------------- an API */
 
-type Scheme = 'bearer' | 'basic_user' | 'basic_password' | 'header' | 'query';
-const SCHEMES: Array<{ value: Scheme; label: string }> = [
+export type Scheme = 'bearer' | 'basic_user' | 'basic_password' | 'header' | 'query';
+export const SCHEMES: Array<{ value: Scheme; label: string }> = [
   { value: 'bearer', label: 'Bearer token' },
   { value: 'basic_user', label: 'Basic, key as user' },
   { value: 'basic_password', label: 'Basic, key as password' },

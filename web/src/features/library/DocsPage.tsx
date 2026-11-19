@@ -1,12 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
+import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { List, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
+import { Foot, trimmed, useGo } from './AddTool';
 import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
 import { docsListQuery, sourceDocsQuery, sourcesQuery, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
@@ -124,6 +129,7 @@ function SourcesPage({ panel }: { panel?: string }) {
   const docs = useQuery(docsListQuery);
   const sources = useQuery(sourcesQuery);
   const list = sources.data?.sources ?? [];
+  const [adding, setAdding] = useState(false);
 
   let state: PageState = 'ready';
   if (sources.isError) state = 'fault';
@@ -136,7 +142,15 @@ function SourcesPage({ panel }: { panel?: string }) {
       path="/library/docs?tab=sources"
       className="lib"
       tabs={tabs(docs.data?.docs.length, sources.data?.sources.length)}
-      actions={<OwnerButton page="docs" />}
+      actions={
+        <>
+          <OwnerButton page="docs" />
+          <Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-target="sources:new">
+            Connect
+          </Button>
+          {adding && <SourceDialog source={null} onClose={() => setAdding(false)} />}
+        </>
+      }
       state={state}
       empty={{ title: 'No outside sources yet' }}
       onRetry={() => void sources.refetch()}
@@ -178,8 +192,11 @@ function SourcesPage({ panel }: { panel?: string }) {
 /** One outside source beside the list: its documents, each opening as an outside doc. */
 function SourcePanel({ id }: { id: string }) {
   const src = useQuery(sourceDocsQuery(id));
+  const sources = useQuery(sourcesQuery);
+  const [editing, setEditing] = useState(false);
   const close = () => void press('docs.list', { tab: 'sources' });
   const s = src.data?.source;
+  const row = sources.data?.sources.find((x) => x.id === id);
   return (
     <SidePanel
       title={s?.title ?? 'Source'}
@@ -192,9 +209,11 @@ function SourcePanel({ id }: { id: string }) {
               <Icon name="popout" />
             </a>
           )}
+          {row && <IconButton icon="edit" label="Edit" onClick={() => setEditing(true)} />}
           <Button variant="quiet" icon="refresh" onClick={() => void press('docs.refreshSource', { source: id })}>
             Read again
           </Button>
+          {row && editing && <SourceDialog source={row} onClose={() => setEditing(false)} />}
         </>
       }
     >
@@ -212,5 +231,45 @@ function SourcePanel({ id }: { id: string }) {
         </Link>
       ))}
     </SidePanel>
+  );
+}
+
+/** Link an outside source, or change one (docs-editor.ts linkDialog): its address, a name, what it holds, and for a
+   repository the branch or tag it reads. Remove takes it off the list. */
+function SourceDialog({ source, onClose }: { source: DocSource | null; onClose: () => void }) {
+  const [url, setUrl] = useState(source?.url ?? '');
+  const [title, setTitle] = useState(source?.title ?? '');
+  const [about, setAbout] = useState(source?.description ?? '');
+  const [ref, setRef] = useState(source?.reference_override ?? '');
+  const [busy, go] = useGo(onClose);
+  const ready = /^https?:\/\/\S+$/.test(url.trim());
+  const save = () =>
+    source
+      ? go('docs.editSource', { source: source.id, url: url.trim(), title: title.trim() || source.title, description: about.trim(), reference: ref.trim() }, 'Not saved')
+      : go('docs.addSource', { url: url.trim(), title: trimmed(title), description: trimmed(about), reference: trimmed(ref) }, 'Not linked');
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={source ? 'Edit source' : 'Connect a source'}
+      actions={
+        <>
+          {source && (
+            <>
+              <Button variant="quiet" disabled={busy} onClick={() => void go('docs.editSource', { source: source.id, archived: true }, 'Not removed')}>
+                Remove
+              </Button>
+              <span className="grow" />
+            </>
+          )}
+          <Foot onClose={onClose} label={source ? 'Save' : 'Connect'} busy={busy} ready={ready} onGo={() => void save()} />
+        </>
+      }
+    >
+      <Field label="Address" value={url} onValueChange={setUrl} placeholder="https://github.com/acme/handbook" autoComplete="off" autoFocus />
+      <Field label="Name" value={title} onValueChange={setTitle} placeholder="The address" autoComplete="off" />
+      <Field label="What it holds" value={about} onValueChange={setAbout} autoComplete="off" />
+      <Field label="Branch or tag" value={ref} onValueChange={setRef} placeholder="The default branch" autoComplete="off" />
+    </Dialog>
   );
 }

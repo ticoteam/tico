@@ -12,8 +12,9 @@ import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Document, FilterRow, List, Section, type PageState } from '@/pagekinds';
-import { Face, Find, KindGlyph, More, press, size, when, Who } from './parts';
-import { fileQuery, fileSearchQuery, filesQuery, fileTextQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
+import { Preview } from './FileViewer';
+import { ChatWith, Face, Find, KindGlyph, More, press, size, when, Who } from './parts';
+import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
 import './library.css';
 
@@ -203,8 +204,6 @@ function UploadDialog({ files, onClose }: { files: File[]; onClose: () => void }
 
 /* ---------------------------------------------------------------- one file */
 
-const TEXT = /^(text\/|application\/(json|xml|csv|x-yaml|yaml|javascript))/;
-
 function FilePage({ id, version }: { id: string; version?: number }) {
   const f = useQuery(fileQuery(id));
   const versions = useQuery(fileVersionsQuery(id));
@@ -226,14 +225,17 @@ function FilePage({ id, version }: { id: string; version?: number }) {
       crumb={[{ label: 'Files', to: '/library/files' }]}
       className="lib"
       actions={
-        <a className="ib" href={url} download aria-label="Download" title="Download">
-          <Icon name="download" />
-        </a>
+        <>
+          <a className="ib" href={url} download aria-label="Download" title="Download">
+            <Icon name="download" />
+          </a>
+          {file?.bot && <ChatWith actor={file.bot.includes(':') ? file.bot : `bot:${file.bot}`} />}
+        </>
       }
       state={state}
       onRetry={() => void f.refetch()}
       framed
-      body={file && <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} />}
+      body={file && <Preview id={id} version={n ?? 1} mime={mime} kind={file.library_kind} title={file.title} url={url} name={shown?.name ?? file.name} />}
       side={
         file && (
           <div className="fv-side">
@@ -268,64 +270,5 @@ function FilePage({ id, version }: { id: string; version?: number }) {
         )
       }
     />
-  );
-}
-
-function Preview({ id, version, mime, kind, title, url }: { id: string; version: number; mime: string; kind: string; title: string; url: string }) {
-  if (mime.startsWith('image/') || kind === 'image')
-    return (
-      <div className="fv-desk">
-        <img className="fv-img" src={url} alt={title} />
-      </div>
-    );
-  if (mime === 'application/pdf') return <iframe className="fv-frame" src={url} title={title} />;
-  if (mime === 'text/html' || kind === 'page') return <iframe className="fv-frame" src={url} title={title} sandbox="" />;
-  if (TEXT.test(mime)) return <TextPreview id={id} version={version} csv={mime.includes('csv')} />;
-  return (
-    <div className="fv-none">
-      <Empty title="No preview" icon="file">
-        <a className="btn" href={url} download>
-          <Icon name="download" />
-          Download
-        </a>
-      </Empty>
-    </div>
-  );
-}
-
-function TextPreview({ id, version, csv }: { id: string; version: number; csv: boolean }) {
-  const t = useQuery(fileTextQuery(id, version));
-  if (t.isError) return <Empty title="This file did not load" icon="alert" />;
-  if (t.data === undefined) return null;
-  if (csv) {
-    const lines = t.data.split(/\r?\n/).filter(Boolean).slice(0, 500);
-    const cells = lines.map((l) => l.split(','));
-    return (
-      <div className="fv-main">
-        <table className="table">
-          <thead>
-            <tr>
-              {cells[0]?.map((c, i) => (
-                <th key={i}>{c}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {cells.slice(1).map((r, i) => (
-              <tr key={i}>
-                {r.map((c, j) => (
-                  <td key={j}>{c}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-  return (
-    <div className="fv-main">
-      <pre className="fv-text t-code">{t.data}</pre>
-    </div>
   );
 }

@@ -37,7 +37,11 @@ export function Who({ actor, name, className = 'doc-owner' }: { actor: string | 
  */
 export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | 'tools' }) {
   const bot = useQuery(pageOwnersQuery).data?.[page]?.bot ?? null;
-  const actor = bot && !bot.includes(':') ? `bot:${bot}` : bot;
+  return <ChatWith actor={bot && !bot.includes(':') ? `bot:${bot}` : bot} />;
+}
+
+/** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */
+export function ChatWith({ actor }: { actor: string | null }) {
   const who = useActor(actor);
   if (!actor) return null;
   const name = who?.name ?? 'the owner';
