@@ -62,6 +62,8 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   const segs = spend.data?.segments ?? [];
   const players = segs.flatMap((sg) => (sg.players ?? []).map((p) => ({ ...p, sells: sg.name, us: !!sg.self })));
   const daily = posts.data?.daily ?? [];
+  // Listening groups by UTC and omits days without posts.
+  const today = new Date().toISOString().slice(0, 10);
   const total = spend.data?.total?.spend_usd;
   const items = brief.data?.briefing?.items ?? [];
   const panel = search.panel ?? '';
@@ -74,7 +76,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   // The mock's four figures. Reachable and Our share are left out until the server has numbers for them.
   const figures: Figure[] = [
     { label: 'Market', value: total != null ? usdShort(total) : none, sub: spend.data?.name ?? undefined, target: 'figure:market' },
-    { label: 'Buyer posts', value: daily.length ? sum(daily.at(-1)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
+    { label: 'Buyer posts', value: daily.length ? sum(daily.find((d) => d.day === today)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
   ];
   const pending = (spend.isPending && brief.isPending) || (blank && owner && setup.isPending);
   const failed = spend.isError && brief.isError;

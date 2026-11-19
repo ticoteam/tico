@@ -28,12 +28,12 @@ const BUILT_IN = 'built-in';
 
 /** A group's lead as an actor id: the server names a person `person:<id>`, the app `human:<id>`. */
 const leadOf = (g: Team) => (g.lead ? g.lead.replace(/^person:/, 'human:') : null);
-const members = (g: Team) => [...g.people.map((p) => (p.includes(':') ? p : `human:${p}`)), ...g.bot_slugs.map((b) => `bot:${b}`)];
+const members = (g: Team) => [...g.people.map((p) => (p.includes(':') ? p : `human:${p}`)), ...g.bots.map((b) => `bot:${b}`)];
 
 type Subgroups = ReadonlyMap<string, Team[]>;
 
 function memberCount(team: Team, byParent: Subgroups): number {
-  return team.people.length + team.bot_slugs.length + (byParent.get(team.id) ?? []).reduce((n, child) => n + memberCount(child, byParent), 0);
+  return team.people.length + team.bots.length + (byParent.get(team.id) ?? []).reduce((n, child) => n + memberCount(child, byParent), 0);
 }
 
 export function OrgTab({ head, search }: { head: Head; search: { panel?: string } }) {
@@ -56,7 +56,8 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
     else byParent.set(parent, [group]);
   }
   const teams = byParent.get('') ?? [];
-  const mate = search.panel?.startsWith('mate:') ? search.panel.slice(5) : null;
+  const requested = search.panel?.startsWith('mate:') ? search.panel.slice(5) : null;
+  const mate = useActor(requested)?.id ?? requested;
   return (
     <List
       {...head}
@@ -246,7 +247,7 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
               Move
             </Button>
           )}
-          <Go to={teamPath(who)} className="btn">
+          <Go to={teamPath(agent && a?.slug ? a.slug : who)} className="btn">
             Open
           </Go>
         </>

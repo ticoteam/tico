@@ -71,18 +71,31 @@ export const floorQuery = queryOptions({
   queryFn: ({ signal }) => api.get<CompanyFloor>('/api/v2/company/floor', { signal }),
 });
 
-/** The open tasks in one stage, as the stage panel lists them. A task-list key, so the stream keeps it current. */
+/** One page of open tasks in a stage. A task-list key, so the stream keeps it current. */
 export const stageParams = (pipeline: string, stage: string) => ({ brief: true, pipeline, stage, status: 'open', snoozed: 'all', limit: 20 });
+type StageTasks = { tasks: TaskBrief[]; cursor?: string; next_after?: string | null };
+function readStageTasks(params: ReturnType<typeof stageParams> & { after?: string }, signal?: AbortSignal) {
+  const search = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
+  return api.get<StageTasks>(`/api/v2/tasks?${search}`, { signal });
+}
+
 export const stageTasksQuery = (pipeline: string, stage: string) => {
   const params = stageParams(pipeline, stage);
   return queryOptions({
     queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) =>
-      api.get<{ tasks: TaskBrief[]; cursor?: string }>(`/api/v2/tasks?${new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]))}`, {
-        signal,
-      }),
+    queryFn: ({ signal }) => readStageTasks(params, signal),
   });
 };
+
+export async function loadMoreStageTasks(pipeline: string, stage: string, after: string) {
+  const params = stageParams(pipeline, stage);
+  const page = await readStageTasks({ ...params, after });
+  queryClient.setQueryData<StageTasks>(keys.tasks.list(params), (current) => {
+    if (current?.next_after !== after) return current;
+    const seen = new Set(current.tasks.map((t) => t.id));
+    return { ...current, tasks: [...current.tasks, ...page.tasks.filter((t) => !seen.has(t.id))], next_after: page.next_after };
+  });
+}
 
 /** Revenue over the last seven days, in dollars; null when the person may not read finance. */
 export const revenueQuery = queryOptions({
@@ -400,19 +413,23 @@ export const groupsQuery = queryOptions({
   queryFn: ({ signal }) => api.get<Team[]>('/api/v2/groups', { signal }),
 });
 
-/** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. People go by
-    id, agents by slug (backend/groups.py update). */
+/** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. */
 export function moveTeammate(who: string, from: string, to: string) {
   const agent = who.startsWith('bot:');
   const bare = who.slice(who.indexOf(':') + 1);
   const kind = agent ? 'bots' : 'people';
-  const strip = (g: Team): Team => (agent ? { ...g, bots: g.bots.filter((b) => b !== bare), bot_slugs: g.bot_slugs.filter((b) => b !== bare) } : { ...g, people: g.people.filter((p) => p !== bare && p !== who) });
-  const add = (g: Team): Team => (agent ? { ...g, bots: [...g.bots, bare], bot_slugs: [...g.bot_slugs, bare] } : { ...g, people: [...g.people, bare] });
+  const source = agent ? queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((g) => g.id === from) : undefined;
+  const index = source?.bots.findIndex((id, i) => id === bare || source.bot_slugs[i] === bare) ?? -1;
+  const id = source?.bots[index] ?? bare;
+  const slug = source?.bot_slugs[index] ?? bare;
+  const strip = (g: Team): Team =>
+    agent ? { ...g, bots: g.bots.filter((b) => b !== id), bot_slugs: g.bot_slugs.filter((_, i) => g.bots[i] !== id) } : { ...g, people: g.people.filter((p) => p !== id && p !== who) };
+  const add = (g: Team): Team => (agent ? { ...g, bots: [...g.bots, id], bot_slugs: [...g.bot_slugs, slug] } : { ...g, people: [...g.people, id] });
   return write<Team>({
     key: groupsQuery.queryKey,
     optimistic: (gs: Team[] | undefined) => gs?.map((g) => (g.id === to ? add(strip(g)) : strip(g))),
     send: (idempotencyKey) =>
-      to ? api.patch<Team>(`/api/v2/groups/${enc(to)}`, { add: { [kind]: [bare] } }, { idempotencyKey }) : api.patch<Team>(`/api/v2/groups/${enc(from)}`, { remove: { [kind]: [bare] } }, { idempotencyKey }),
+      to ? api.patch<Team>(`/api/v2/groups/${enc(to)}`, { add: { [kind]: [id] } }, { idempotencyKey }) : api.patch<Team>(`/api/v2/groups/${enc(from)}`, { remove: { [kind]: [id] } }, { idempotencyKey }),
   });
 }
 

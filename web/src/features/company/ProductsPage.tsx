@@ -102,7 +102,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
           </tbody>
         </Table>
       }
-      panel={panel === 'new' ? <NewProduct /> : shown ? <ProductRecord p={shown} /> : null}
+      panel={panel === 'new' ? <NewProduct /> : shown ? <ProductRecord key={shown.id} p={shown} /> : null}
     />
   );
 }
@@ -210,7 +210,7 @@ function ProductRecord({ p }: { p: Product }) {
                 <span className="org-mark" aria-hidden="true">
                   {d.name.slice(0, 2).toUpperCase()}
                 </span>
-                <Go to="/library/contacts" search={{ contact: d.id }} className="row-title">
+                <Go to="/library/contacts" search={{ type: 'organization', panel: d.id }} className="row-title">
                   {d.name}
                 </Go>
                 {off('depends_on', d.id, d.name)}

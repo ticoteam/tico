@@ -114,6 +114,20 @@ function market(over: { spend?: MarketSpend; count?: number } = {}) {
 const at = (panel?: string) => `/company/strategy/market${panel ? `?panel=${panel}` : ''}`;
 
 describe('Market: what buyers say @s326', () => {
+  it('counts zero buyer posts today when the latest posts were yesterday', async () => {
+    serve(nothing);
+    market();
+    vi.setSystemTime(new Date('2026-11-19T05:00:00Z'));
+    try {
+      queryClient.setQueryData<ListeningStats>(listeningStatsQuery.queryKey, { daily: [{ day: '2026-11-18', sources: { Reddit: 7 } }] });
+      show(<StrategyPage tab="market" />, at());
+      const figures = await screen.findByRole('group', { name: 'Market figures' });
+      expect(within(figures).getByText('Buyer posts').parentElement?.querySelector('b')?.textContent).toBe('0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('lists the newest buyer posts with their site, each opening where it was written', async () => {
     serve(nothing);
     market();
