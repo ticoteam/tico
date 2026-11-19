@@ -5,8 +5,10 @@ tasks, a few hundred threads with posts, and a message history.
 
     nice -n 10 .venv/bin/python bench/perf-hub-overload.py
 
-Env: OPEN (default 1500), CLOSED (16500), THREADS (400), RUNS (5), PROFILE=<path> (cProfile one route),
-STATEMENTS=<path> (the statement shapes one call runs), DB=<file> (keep the seeded database there and reuse it),
+Env: OPEN (default 1500), CLOSED (16500), THREADS (400), MESSAGES (40000), FOLLOWS (30000), FOLLOW_PLAN (each
+person's followed task rooms, "human:ana=6500,..."), CONCURRENT (n: also n identical reads at once, shared and not),
+RUNS (5), PROFILE=<path> (cProfile one route),
+STATEMENTS=<path,...> (the statement shapes one call of each runs), DB=<file> (keep the seeded database there and reuse it),
 PATHS=<path,...> (the routes measured), ANSWERS=<file> (each route's answer as JSON, to compare two checkouts' on one DB),
 TOKENS=<token,...> (the readers, default ana-test,ben-test,cara-test), SLOW=<dir> (with STATEMENTS: each reader's statements
 written there whole, slowest first, as <token>-<n>.sql).
@@ -48,6 +50,10 @@ STAGES = (
 )
 PATHS = tuple(os.environ.get("PATHS", "/api/v2/bots,/api/v2/threads/rail,/api/v2/health,/api/v2/me").split(","))
 TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test,cara-test").split(","))
+MESSAGES = int(os.environ.get("MESSAGES", 40000))
+FOLLOWS = int(os.environ.get("FOLLOWS", 30000))
+FOLLOW_PLAN = os.environ.get("FOLLOW_PLAN", "human:ana=6500,human:ben=2800,human:cara=2300")
+CONCURRENT = int(os.environ.get("CONCURRENT", 0))  # also time this many identical reads at once, shared and not
 
 
 def seed(api):
@@ -120,6 +126,68 @@ def seed(api):
                     who = rnd.choice(people + ["bot:" + b for b in BOTS])
                     with contextlib.suppress(Problem):
                         threads.post(c, who, tid, f"Note {k}" + (" @ana" if rnd.random() < 0.15 else ""))
+    top_up(store, rnd)
+
+
+def top_up(store, rnd):
+    """TIDY's Nov 19 shape on top of the seeded company: MESSAGES messages in all (task rooms' talk, copied from a
+    thread note) and FOLLOWS followed threads, each person in FOLLOW_PLAN following that many task rooms (one followed
+    6,496), the bots following the rest."""
+    with store.transaction() as c:
+        rooms = [r[0] for r in c.execute("SELECT id FROM conversations WHERE task_id IS NOT NULL ORDER BY rowid")]
+        sample = c.execute(
+            "SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            "WHERE cv.task_id IS NULL AND m.body LIKE 'Note %' LIMIT 1"
+        ).fetchone()[0]
+        have = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    left = max(0, MESSAGES - have)
+    for start in range(0, left, 2000):
+        with store.transaction() as c:
+            for k in range(start, min(left, start + 2000)):
+                new = H.new_id()
+                c.execute(
+                    "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,origin_id,"
+                    "revision,restricted,legacy_audience,public) SELECT ?,?,?,recipient_id,kind,?,refs,?,?,revision,"
+                    "restricted,legacy_audience,public FROM messages WHERE id=?",
+                    (
+                        new,
+                        rooms[(k * 7919) % len(rooms)],
+                        rnd.choice(["human:ana", "human:ben", "human:cara"] + ["bot:" + b for b in BOTS]),
+                        f"Room note {k}",
+                        H.now(),
+                        new,
+                        sample,
+                    ),
+                )
+    plan = dict(part.split("=") for part in FOLLOW_PLAN.split(",") if part)
+    with store.transaction() as c:
+        for actor, want in plan.items():
+            want = int(want)
+            followed = [
+                r[0]
+                for r in c.execute("SELECT thread_id FROM thread_followers WHERE actor=? AND following=1", (actor,))
+            ]
+            if len(followed) > want:
+                for tid in followed[want:]:
+                    c.execute("UPDATE thread_followers SET following=0 WHERE actor=? AND thread_id=?", (actor, tid))
+                continue
+            held = set(followed)
+            for tid in [r for r in rooms if r not in held][: want - len(followed)]:
+                c.execute(
+                    "INSERT OR REPLACE INTO thread_followers(id,thread_id,actor,following,notify,reason,created_at,"
+                    "updated_at) VALUES(?,?,?,1,'live','manual',?,?)",
+                    (H.new_id(), tid, actor, H.now(), H.now()),
+                )
+        total = c.execute("SELECT count(*) FROM thread_followers").fetchone()[0]
+        k = 0
+        while total < FOLLOWS and k < len(rooms) * 2:
+            bot = "bot:" + BOTS[k % 12]
+            total += c.execute(
+                "INSERT OR IGNORE INTO thread_followers(id,thread_id,actor,following,notify,reason,created_at,"
+                "updated_at) VALUES(?,?,?,1,'live','manual',?,?)",
+                (H.new_id(), rooms[(k * 31) % len(rooms)], bot, H.now(), H.now()),
+            ).rowcount
+            k += 1
 
 
 class Timed:
@@ -171,12 +239,44 @@ def measure(api, path, token="ana-test"):
     return len(seen), statistics.median(times), len(r.content)
 
 
+def together(api, path, n, token="ana-test"):
+    """(statements, wall ms, computations) for `n` identical reads at once by one person (ten open apps on one event)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend import shared_reads
+
+    shared, seen = shared_reads.of(api.app.state.store), []
+    before = shared.computed
+    with counting(api.app.state.store, seen), ThreadPoolExecutor(n) as pool:
+        t = time.perf_counter()
+        answers = list(pool.map(lambda _: api.get(path, headers=headers(token)), range(n)))
+        took = (time.perf_counter() - t) * 1000
+    assert all(a.status_code == 200 for a in answers), [a.status_code for a in answers]
+    return len(seen), took, shared.computed - before
+
+
 def report(api):
     answers = {}
+    if CONCURRENT:
+        from backend import shared_reads
+
+        for share in (False, True):
+            kept = shared_reads.ROUTES
+            if not share:
+                shared_reads.ROUTES = frozenset()
+            try:
+                for path in PATHS:
+                    n, ms, computed = together(api, path, CONCURRENT)
+                    print(
+                        f"{'shared' if share else 'alone ':6s} {CONCURRENT} at once {path:28s} {n:6d} statements "
+                        f"{ms:9.1f} ms {computed} computed"
+                    )
+            finally:
+                shared_reads.ROUTES = kept
     with api.app.state.store.read() as c:
         counts = {
             t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            for t in ("bots", "tasks", "conversations", "messages", "visits", "requirements")
+            for t in ("bots", "tasks", "conversations", "messages", "thread_followers", "visits", "requirements")
         }
     print(counts)
     for path in PATHS:
@@ -190,13 +290,13 @@ def report(api):
                 answers[f"{path} {token}"] = answer
     if os.environ.get("ANSWERS"):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
-    if os.environ.get("STATEMENTS"):
+    for statements_path in [p for p in os.environ.get("STATEMENTS", "").split(",") if p]:
         for token in TOKENS:
             seen, started = [], []
             with counting(api.app.state.store, Timed(seen, started)):
-                api.get(os.environ["STATEMENTS"], headers=headers(token))
+                api.get(statements_path, headers=headers(token))
                 started.append(time.perf_counter())
-            print(f"--- {token}: {len(seen)} statements")
+            print(f"--- {statements_path} {token}: {len(seen)} statements")
             shapes = collections.Counter(re.sub(r"'[^']*'|\b\d+\b", "?", q)[:200] for q in seen)
             for q, k in shapes.most_common(25):
                 print(f"{k:5d}  {q}")
@@ -258,7 +358,14 @@ def main():
                 if keep:
                     with api.app.state.store.read() as c:
                         c.execute("VACUUM INTO ?", (keep,))
-            report(api)
+            from backend import shared_reads
+
+            fresh = shared_reads.FRESH_SECONDS
+            shared_reads.FRESH_SECONDS = -1.0  # each timed read computes: none is served the last one's answer
+            try:
+                report(api)
+            finally:
+                shared_reads.FRESH_SECONDS = fresh
         finally:
             install.close()
             shutil.rmtree(folder, ignore_errors=True)
