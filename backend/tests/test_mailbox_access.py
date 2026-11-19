@@ -529,3 +529,34 @@ def test_a_database_before_the_migration_answers_only_a_persons_own_email(api):
 
 
 # ------------------------------------------------------------------------------- a message bot made, not assigned
+
+
+def test_every_bots_mailboxes_at_once_are_each_bots_own(api):
+    """The messaging page reads every bot's mailboxes in one pass (bot_mailboxes); it must list exactly what
+    mailboxes_for lists a bot at a time: no stopped, awaiting or ungranted mailbox, nor an archived bot's, and one
+    outside the domain all the same."""
+    from backend.tests.helpers import engine as X
+
+    with tx(api) as c:
+        for slug in ("mailer", "reader", "gone"):
+            X.bot(c, slug, computer=False)
+        mailer, reader, gone = (bot(c, s) for s in ("mailer", "reader", "gone"))
+        own, support, out = personal(c, CARA), shared(c), shared(c, OUTSIDE)
+        stopping, waiting = shared(c, "stop@acme.example"), awaiting(c)
+        MA.grant(c, "person:cara", own["id"], "bot", "mailer", "read")
+        for row in (support, out, stopping):
+            MA.grant(c, "person:ben", row["id"], "bot", "mailer", "read_write")
+        MA.grant(c, "person:ben", support["id"], "bot", "reader", "read")
+        MA.grant(c, "person:ben", support["id"], "bot", "gone", "read")
+        MA.stop(c, "person:ben", stopping["id"])
+        c.execute(  # a grant no rule makes: on a mailbox whose person has not joined
+            "INSERT INTO mailbox_accesses(id,mailbox_id,grantee_type,grantee_id,level,granted_by,created_at,updated_at) "
+            "VALUES('w1',?,'bot',?,'read','person:ana',?,?)",
+            (waiting["id"], reader, H.now(), H.now()),
+        )
+        c.execute("UPDATE bots SET state='archived' WHERE id=?", (gone,))
+        bots = [row["id"] for row in c.execute("SELECT id FROM bots")]
+        each = {b: [box["address"] for box in MA.mailboxes_for(c, "bot:" + b)] for b in bots}
+        together = MA.bot_mailboxes(c)
+        assert {b: together.get(b, []) for b in bots} == each
+        assert each[mailer] == sorted([CARA, SUPPORT, OUTSIDE]) and each[reader] == [SUPPORT] and each[gone] == []

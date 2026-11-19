@@ -8,10 +8,11 @@ a mailbox's review count is Gmail's own count of its review labels, kept REVIEW_
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Request
 
-from . import routines
+from . import mailbox_access
 from .api_contract import api_v2, error
 from .mail import live_message_public, visible_addresses
 from . import slack_channels as SC
@@ -38,24 +39,49 @@ _REVIEW_LOCK = threading.Lock()
 def needs_review(c, address):
     """How many messages in the mailbox carry a review label now (Gmail's count per label, added up). A mailbox Gmail
     cannot answer for counts 0; its check error says why."""
+    return review_counts(c, [address])[address]
+
+
+def _review_count(address, token):
     from . import gmail_live
 
-    now = time.monotonic()
-    with _REVIEW_LOCK:
-        hit = _REVIEW.get(address)
-    if hit and hit[1] > now:
-        return hit[0]
     try:
-        count = sum(
-            gmail_live.label_total(c, address, row["id"])
-            for row in gmail_live.labels(c, address)
+        return sum(
+            gmail_live.label_total(None, address, row["id"], token=token)
+            for row in gmail_live.labels(None, address, token=token)
             if row["type"] == "user" and (row["name"].startswith(REVIEW_LABELS[0]) or row["name"] == REVIEW_LABELS[1])
         )
     except Problem:
-        count = 0
-    with _REVIEW_LOCK:
-        _REVIEW[address] = (count, now + REVIEW_SECONDS)
-    return count
+        return 0
+
+
+def review_counts(c, addresses):
+    """{address: needs_review} for these mailboxes, each kept REVIEW_SECONDS. The tokens are read here, in turn (they
+    read the database); the mailboxes not counted lately are then asked of Gmail at once, not one after another: a
+    page of 17 mailboxes waited on some 50 calls in a row (TIDY, Nov 19)."""
+    from . import gmail_live
+
+    now, out, todo = time.monotonic(), {}, {}
+    for address in dict.fromkeys(addresses):
+        with _REVIEW_LOCK:
+            hit = _REVIEW.get(address)
+        if hit and hit[1] > now:
+            out[address] = hit[0]
+            continue
+        try:
+            todo[address] = gmail_live._token(c, address)
+        except Problem:
+            out[address] = 0
+            with _REVIEW_LOCK:
+                _REVIEW[address] = (0, now + REVIEW_SECONDS)
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(gmail_live.WORKERS, len(todo))) as pool:
+            counted = dict(zip(todo, pool.map(lambda a: _review_count(a, todo[a]), todo), strict=True))
+        with _REVIEW_LOCK:
+            for address, count in counted.items():
+                _REVIEW[address] = (count, now + REVIEW_SECONDS)
+        out.update(counted)
+    return out
 
 
 def rule_hits(c, mailbox, ids):
@@ -75,9 +101,11 @@ def rule_hits(c, mailbox, ids):
     return out
 
 
-def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes):
+def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, addresses):
+    """The bot's sources. `addresses`: the mailboxes it works on (routines.inbox_of). An email source's `needs_review`
+    is None until `_catalog` counts every bot's mailboxes at once."""
     sources = []
-    for address in routines.inbox_of(c, bot)["mailboxes"]:
+    for address in addresses:
         if address not in allowed:
             continue
         row = mailboxes.get(address) or {}
@@ -89,7 +117,7 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
                 "synced_at": row.get("synced_at"),
                 "error": row.get("error"),
                 "message_count": 0,
-                "needs_review": needs_review(c, address),
+                "needs_review": None,
             }
         )
     if who.role == "owner":
@@ -125,32 +153,48 @@ def _catalog(c, who, auth, settings):
         "WHERE a.deleted_at IS NULL AND a.owner_id LIKE 'bot:%'"
     ):
         schedules.setdefault(row["owner_id"][4:], []).append(dict(row))
-    bots = []
+    # Every bot's configuration, status and last turn in one read each, not three a bot.
+    configs = {}
+    for row in c.execute(
+        f"SELECT bc.bot AS bot,{BS.CONFIG} AS config,bc.description,bc.owner_id,bc.revision FROM bot_config bc {BS.JOIN}"
+    ):
+        configs.setdefault(row["bot"], row)
+    statuses = {row["bot"]: dict(row) for row in c.execute("SELECT * FROM bot_status")}
+    turns = dict(
+        c.execute(
+            "SELECT bot_id, max(coalesce(settled_at,created_at)) FROM attempts "
+            "WHERE job_id IS NULL OR trigger IS NOT NULL GROUP BY bot_id"
+        ).fetchall()
+    )
+    inboxes = mailbox_access.bot_mailboxes(c)
+    shown = []
     covered_mail, covered_slack = set(), set()
     readable = auth.bot_accesses(c, who)
     for row in H.bots(c):
         bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute(
-            f"SELECT {BS.CONFIG} AS config,bc.description,bc.owner_id,bc.revision FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
-            (bot,),
-        ).fetchone()
+        config_row = configs.get(bot)
         config = _json(config_row["config"], {}) if config_row else {}
-        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes)
+        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, inboxes.get(bot, []))
         if not sources:
             continue
         covered_mail.update(s["name"] for s in sources if s["kind"] == "email")
         covered_slack.update(s["id"][6:] for s in sources if s["kind"] == "slack")
+        shown.append((row, config_row, config, sources))
+    counts = review_counts(c, [s["name"] for _, _, _, sources in shown for s in sources if s["kind"] == "email"])
+    bots = []
+    for row, config_row, config, sources in shown:
+        bot = row["id"]
+        for s in sources:
+            if s["kind"] == "email":
+                s["needs_review"] = counts[s["name"]]
         jobs = schedules.get(bot, [])
         fired = [r["last_fired_at"] for r in jobs if r["last_fired_at"]]
         due = [r["next_due_at"] for r in jobs if r["enabled"] and r["next_due_at"]]
-        turn = c.execute(
-            "SELECT max(coalesce(settled_at,created_at)) FROM attempts WHERE bot_id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
-            (bot,),
-        ).fetchone()[0]
+        turn = turns.get(bot)
         last = max(fired + ([turn] if turn else []), default=None)
-        status = H.status(c, bot) or {}
+        status = statuses.get(bot) or {}
         bots.append(
             {
                 "bot": bot,
@@ -218,7 +262,8 @@ def install_messaging(app, store, auth):
     def messaging_bots(request: Request):
         who = request.state.identity
         human_only(who)
-        with store.read() as c:
+        # One snapshot, so the per-bot checks share its rows (read_cache keeps them only inside a transaction).
+        with store.read_transaction() as c:
             return _catalog(c, who, auth, store.settings)
 
     @app.get("/api/v2/messaging/bots/{bot}")

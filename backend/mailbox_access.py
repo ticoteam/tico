@@ -351,6 +351,25 @@ def mailboxes_for(c, who, min_level="read"):
     return out
 
 
+def bot_mailboxes(c):
+    """{bot id: [address]}: the addresses `mailboxes_for(c, "bot:<id>")` lists, for every bot at once (a page that
+    shows each bot's mailboxes asked it once a bot, five statements each)."""
+    live = {row["id"] for row in c.execute("SELECT id, state FROM bots") if row["state"] != "archived"}
+    found = {}
+    for grant in c.execute(
+        "SELECT a.grantee_id AS grant_bot, a.level AS grant_level, m.* FROM mailbox_accesses a "
+        "JOIN mailboxes m ON m.id=a.mailbox_id WHERE a.grantee_type='bot'"
+    ):
+        row = dict(grant)
+        bot, level = row.pop("grant_bot"), row.pop("grant_level")
+        address = _addr(row["address"])
+        if bot not in live or not address or "@" not in address or row["status"] != "active" or awaiting(row):
+            continue
+        if level in GRANT_LEVELS:  # read_write outside the company's domains reads as read: listed either way
+            found.setdefault(bot, set()).add(address)
+    return {bot: sorted(addresses) for bot, addresses in found.items()}
+
+
 def best_level(c, principals, mailbox_address):
     """The most any of `principals` holds on one mailbox (a computer's turns asking for one token)."""
     facts, row, best = _Facts(c), _row(c, mailbox_address), "none"
