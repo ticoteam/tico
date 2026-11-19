@@ -1,0 +1,75 @@
+import type { ReactNode } from 'react';
+
+/** One step of the small trail above a title: the pages this one sits under, from the top. */
+export interface Crumb {
+  label: string;
+  /** A resolved address in the app ("/library/contacts"). */
+  to: string;
+}
+
+/** One tab of the page's tab row. Tabs are links: the address decides which one is on. */
+export interface PageTab {
+  label: string;
+  /** A resolved address ("/company/finance/pnl"). */
+  to: string;
+  /** A muted count after the words. */
+  count?: number;
+  /** On only at this exact address (default). False keeps it on for addresses under it too. */
+  exact?: boolean;
+  /** `<kind>:<id>` for Tico's flights. */
+  target?: string;
+}
+
+/** The head every kind but the centered card has: one height, title and trail on the left, controls and "⋯" on the right. */
+export interface HeadProps {
+  /** The page's name, the h1. Only the name: where it sits goes in `crumb`. */
+  title: string;
+  /** The page's address ("/company/finance"). The title carries `data-target="page:<path>"` so Tico's flights can land. */
+  path: string;
+  /** The small trail above the title. On a phone its last step becomes the back button. */
+  crumb?: readonly Crumb[];
+  /** Before the title: a back button, a face (36 at most), the Dot. */
+  lead?: ReactNode;
+  /** Right after the title: a date range and its steps, a version. */
+  after?: ReactNode;
+  /**
+   * Right of the title, in this order: scope pick, owner, a view switch, the one filled button. On a phone only the
+   * filled button and anything marked `data-phone` stay; the rest belong under "⋯".
+   */
+  actions?: ReactNode;
+  /** "⋯", always last: a menu node that brings its own trigger, or a function the plain "⋯" button calls. */
+  more?: ReactNode | (() => void);
+}
+
+/** Which body a page shows. The head (and tabs) stay in every state except no access. */
+export type PageState = 'ready' | 'loading' | 'empty' | 'fault' | 'no-access';
+
+export interface StateProps {
+  /** Leave out for the slots. Loading draws grey bars in the kind's own shape, after 150 ms. */
+  state?: PageState;
+  /** Empty: its one line ("Nothing in Review") and its one action. */
+  empty?: { title: string; action?: ReactNode };
+  /** Fault: "<title> did not load" with Try again, which calls this. */
+  onRetry?: () => void;
+  /** No access: who can share it ("Maya Okafor can share it with you.") and the ways out. */
+  noAccess?: { text?: string; actions?: ReactNode };
+}
+
+/** What every sheet kind takes: the head, its states, and an optional class for the page's own CSS. */
+export interface PageBaseProps extends HeadProps, StateProps {
+  /** Extra classes on the page sheet, for the page's own CSS (the mock's `rec`, `page-thread`...). */
+  className?: string;
+}
+
+/** One figure in a figures strip. */
+export interface Figure {
+  /** "Cash" */
+  label: string;
+  /** "$181,000": format it before it comes here. */
+  value: ReactNode;
+  /** "was $176,000" */
+  sub?: ReactNode;
+  /** A `<Sparkline>` from `@/kit/Chart`. */
+  spark?: ReactNode;
+  target?: string;
+}

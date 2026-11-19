@@ -1,0 +1,79 @@
+import type { ReactNode } from 'react';
+import { Skeleton } from '@/kit/Skeleton';
+import { Page, PageBody, SidePanel, SkRows, type SidePanelProps } from '@/pagekinds/_parts';
+import type { PageBaseProps, PageTab } from '@/pagekinds/types';
+
+export interface RecordProps extends PageBaseProps {
+  /** About, People, Threads, Files. */
+  tabs?: readonly PageTab[];
+  /** Label and value (`<Facts>` from `@/kit/LabelValue`); each saves at once. */
+  facts?: ReactNode;
+  /** A few stats (`<FiguresStrip>`). */
+  figures?: ReactNode;
+  /** Its rows: rules, dates, matters, tasks (`<Section>`s). */
+  sections?: ReactNode;
+  /** Facts in a column at the right. On a phone they fold in under `facts`. */
+  side?: ReactNode;
+}
+
+/** One thing: label and value, its own sections, a side column. Reached from a row; its crumb leads back. */
+export function Record({ tabs, facts, figures, sections, side, ...page }: RecordProps) {
+  return (
+    <Page kind="record" tabs={tabs} skeleton={<RecordSkeleton />} {...page}>
+      <PageBody>
+        <div className={side ? 'pk-rec has-side' : 'pk-rec'}>
+          {facts && <div className="pk-rec-facts">{facts}</div>}
+          {side && (
+            <aside className="pk-rec-side" aria-label="Details">
+              {side}
+            </aside>
+          )}
+          {figures && <div className="pk-rec-figs">{figures}</div>}
+          {sections && <div className="pk-rec-secs">{sections}</div>}
+        </div>
+      </PageBody>
+    </Page>
+  );
+}
+
+const FACT_W = [34, 52, 28, 46, 40];
+
+/** Label-and-value bars, then rows. */
+export function RecordSkeleton() {
+  return (
+    <PageBody>
+      <div className="pk-rec">
+        <div className="pk-rec-facts pk-sk-facts" aria-hidden="true">
+          {FACT_W.map((w, i) => (
+            <div key={i} className="pk-sk-fact">
+              <Skeleton width={60} />
+              <Skeleton width={w} />
+            </div>
+          ))}
+        </div>
+        <div className="pk-rec-secs" aria-hidden="true">
+          <SkRows rows={4} />
+        </div>
+      </div>
+    </PageBody>
+  );
+}
+
+export interface RecordPanelProps extends Omit<SidePanelProps, 'children'> {
+  facts?: ReactNode;
+  figures?: ReactNode;
+  sections?: ReactNode;
+}
+
+/** A record opened from its list as a side panel (Products, Risk): the same slots in one column. */
+export function RecordPanel({ facts, figures, sections, ...panel }: RecordPanelProps) {
+  return (
+    <SidePanel {...panel}>
+      <div className="pk-rec is-panel">
+        {facts && <div className="pk-rec-facts">{facts}</div>}
+        {figures && <div className="pk-rec-figs">{figures}</div>}
+        {sections && <div className="pk-rec-secs">{sections}</div>}
+      </div>
+    </SidePanel>
+  );
+}

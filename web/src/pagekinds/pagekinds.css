@@ -1,0 +1,224 @@
+/* The nine page kinds. Mock class names stay so parts.css draws them; this file holds what the mocks kept in their own
+   batch CSS (board, figures, settings split, centered card) and the choices that end the mocks' disagreements
+   (page-types.js DRIFT). A phone is `html[data-layout="cards"]`, set by the frame. */
+
+:root{
+  --head-h:var(--bar);                      /* one head height on every page (DRIFT: 56, 60 and 64 heads) */
+  --row-2:calc(var(--row) + var(--s-5));    /* a row with a second line; one-line rows keep --row */
+}
+
+.pk{container:page / inline-size}
+
+/* ---------- head: one height; a small trail above the title; the title holds only the name ---------- */
+.pk .pk-head{height:var(--head-h)}
+.pk-title{min-width:0;display:flex;flex-direction:column;justify-content:center}
+.pk-title h1{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pk-crumb a{white-space:nowrap}
+.pk-crumb a:hover{color:var(--ink)}
+.pk-acts{display:contents}
+.pk .pk-back{display:none}
+
+/* ---------- tabs: one underlined row right under the head, never pills (kit Tabs.css, at the page margin) ---------- */
+.pk .page-tabs{flex:none;margin-top:calc(var(--s-2) * -1);padding:0 var(--page-x);box-shadow:inset 0 -1px 0 var(--line)}
+.pk .page-tabs .docs{scroll-behavior:auto}
+.pk .page-tabs .doc-tab span{display:inline-grid;justify-items:center}
+.pk .page-tabs .doc-tab span::after{content:attr(data-t);height:0;overflow:hidden;visibility:hidden;font-weight:var(--w-strong)}
+
+/* ---------- the filter row (pages/1-tasks/list.css) ---------- */
+.filter-row{flex:none;display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));height:36px;padding:0 var(--s-3) var(--s-2) calc(var(--page-x) + var(--s-3));overflow-x:auto;scrollbar-width:none}
+.filter-row .scope{flex:none}
+.chip-clear{height:24px;flex:none;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--muted);font-size:var(--t-xs);white-space:nowrap}
+.chip-clear:hover{background:var(--hover);color:var(--ink)}
+
+/* ---------- body: rows hang their marks in the margin, so titles land on --page-x (parts.css .tasks-body) ---------- */
+.pk-body{padding:0 var(--s-3) var(--s-5) calc(var(--page-x) - var(--s-8));
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 28px),transparent);
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
+.pk-body.is-empty{display:flex;flex-direction:column;-webkit-mask-image:none;mask-image:none}
+.pk-loading{flex:1;min-height:0;display:flex;flex-direction:column}
+
+/* ---------- a side panel with no shell place: over the page's right side; a raised card on a phone ---------- */
+.pk-panel{position:absolute;top:0;right:0;bottom:0;width:var(--chat-w);z-index:var(--z-pop);display:flex}
+.pk-panel>.pane{flex:1;box-shadow:var(--lift-3)}
+.pk-panel-host{display:contents}
+
+/* ---------- figures: one strip across the width, a rule between (pages/3-company/finance.css) ---------- */
+.pk .widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:calc(var(--s-1) + var(--s-0)) calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x)}
+.widget{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--s-2);padding:0 var(--s-4);border-left:1px solid var(--line)}
+.widget:first-child{padding-left:0;border-left:0}
+.widget:last-child{padding-right:0}
+.widget-main{display:grid;gap:calc(var(--s-0) + 1px);min-width:0}
+.widget-title{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.widget b{font-family:var(--font-display);font-size:var(--t-lg);font-weight:var(--w-title);line-height:var(--lh-display);font-feature-settings:"ss09";letter-spacing:var(--track-title);font-variant-numeric:tabular-nums;white-space:nowrap}
+.widget-sub{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.pk-sk-fig{gap:var(--s-2)}
+/* two by two only in a narrow column and on a phone (DRIFT: the 2x2 grid on wide pages) */
+@container page (max-width:480px){
+  .pk .widgets{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:var(--s-4)}
+  .widget{padding:0 var(--s-3)}
+  .widget:nth-child(odd){padding-left:0;border-left:0}
+  .widget:nth-child(even){padding-right:0}
+  .widget .spark{width:52px}
+  .pk-widgets{grid-template-columns:minmax(0,1fr)}
+}
+
+/* ---------- board (pages/1-tasks/list.css): every stage a column; a card is the only raised thing ---------- */
+.card{--surface:var(--raised);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-2);padding:calc(var(--s-2) + var(--s-0));border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-ctl);transition:background var(--dur-fast) var(--ease)}
+.card:hover,.card.is-hover{background:var(--raised-hover)}
+.card:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.card-title{line-height:1.35;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.card-foot{display:flex;flex-wrap:wrap;align-items:center;gap:calc(var(--s-1) + var(--s-0))}
+.card-marks{flex:0 1 auto;max-width:100%;min-height:var(--av-sm);display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) calc(var(--s-1) + var(--s-0))}
+.card-end{flex:none;display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));margin-left:auto}
+.pk .board-wrap{position:relative;display:flex;overflow:hidden}
+.board{flex:1;min-width:0;margin:0 var(--s-3) 0 var(--page-x);overflow:auto;scrollbar-width:none;scroll-snap-type:x proximity;scroll-padding-left:2px;
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 28px),transparent);
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
+.board-in{display:flex;align-items:stretch;gap:calc(var(--s-2) + var(--s-0));width:max-content;min-width:100%;min-height:100%;padding:0 var(--s-0) calc(var(--s-6) + var(--s-1))}
+.col{flex:none;align-self:flex-start;width:var(--col-w,148px);scroll-snap-align:start;display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-1) + var(--s-0));align-content:start}
+.col-cards{display:contents}
+.col-head{height:40px;display:flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));padding:0 var(--s-0) 0 calc(var(--s-2) + var(--s-0));position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
+.col-head .sec-fold{height:auto;min-height:28px;gap:calc(var(--s-1) + 1px)}
+.col-head .sec-fold>span:first-child{display:block;white-space:normal}
+.col:not(.is-fold) .col-head .col-flow{margin-left:auto;gap:var(--s-1)}
+.col-flow{display:inline-flex;align-items:center;gap:calc(var(--s-1) + var(--s-0));flex:none;color:var(--ink);font-size:var(--t-xs);font-weight:var(--w-strong);font-variant-numeric:tabular-nums}
+.col-more{height:var(--ctl-sm);display:flex;align-items:center;padding:0 var(--s-3);border-radius:var(--r-row);color:var(--muted);font-size:var(--t-sm)}
+.col-more:hover{background:var(--hover);color:var(--ink)}
+.col.is-fold{width:40px;align-self:stretch;display:block;border-radius:var(--r-ctl);background:var(--well)}
+.col.is-fold .col-head{height:auto;margin:0;padding:calc(var(--s-1) + var(--s-0)) 0 var(--s-3);flex-direction:column;gap:calc(var(--s-2) + var(--s-0));background:none}
+.col.is-fold .sec-name{writing-mode:vertical-rl}
+.col.is-fold .sec-fold{width:28px;height:auto;margin:0;padding:var(--s-2) 0;gap:var(--s-2)}
+.col.is-fold .sec-fold>span:first-child{white-space:nowrap}
+.col.is-fold .sec-fold:hover{background:var(--well-2)}
+.col.is-fold .stage-n{writing-mode:horizontal-tb}
+.col.is-fold .col-flow{flex-direction:column;gap:var(--s-1)}
+.board.is-loading .board-in{width:auto}
+.board.is-loading .col{flex:1 1 0;width:auto;min-width:0}
+.card.is-skeleton{gap:calc(var(--s-2) + 1px);padding:calc(var(--s-3) + var(--s-0)) var(--s-3) calc(var(--s-2) + var(--s-0))}
+
+/* ---------- list and item (parts.css .page-thread): states and a skeleton in the list column ---------- */
+.tl .pk-loading .tl-list{overflow:hidden}
+
+/* ---------- record: facts with a side column at 30%; figures and sections under them ---------- */
+.pk-rec{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"facts" "figs" "secs"}
+.pk-rec.has-side{grid-template-columns:minmax(0,1fr) 30%;grid-template-areas:"facts side" "figs side" "secs side";column-gap:var(--s-6)}
+.pk-rec-facts{grid-area:facts;padding:var(--s-2) 0 var(--s-4) var(--page-x)}
+.pk-rec-side{grid-area:side;align-self:start;padding:var(--s-2) 0 var(--s-4)}
+.pk-rec-figs{grid-area:figs}
+.pk-rec-secs{grid-area:secs}
+.pk-rec.is-panel .pk-rec-facts{padding-left:0}
+.pk-sk-facts{display:grid;gap:var(--s-3)}
+.pk-sk-fact{display:grid;grid-template-columns:1fr 2fr;gap:var(--s-4)}
+
+/* ---------- document: one head, tabs right under it, reading text at the measure; outline at the right ---------- */
+.pk-doc{flex:1;min-height:0;display:flex}
+.pk-doc>.pk-body{flex:1;min-width:0}
+.pk .read-body{padding:var(--s-4) var(--page-x) var(--s-10)}
+.read{max-width:var(--measure)}
+.pk .pk-doc-body.is-framed{display:flex;padding:0;-webkit-mask-image:none;mask-image:none}
+.pk-doc-side{width:24%;flex:none;min-height:0;overflow:auto;scrollbar-width:none;padding:var(--s-4) var(--s-5) var(--s-10);border-left:1px solid var(--line)}
+.pk-foot{flex:none;display:flex;justify-content:flex-end;align-items:center;gap:var(--s-2);padding:var(--s-3) var(--s-3) var(--s-3) var(--page-x);box-shadow:inset 0 1px 0 var(--line)}
+.pk-sk-read{display:grid;gap:var(--s-3)}
+.pk-sk-gap{height:var(--s-2)}
+
+/* ---------- dashboard: figures, one wide chart, sections two to a row ---------- */
+.pk-chart{padding:0 calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x)}
+.pk-sk-chart{height:160px;margin:0 calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x);padding:0;border-radius:var(--r-card);background:var(--well)}
+.pk-widgets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--s-6);align-items:start}
+
+/* ---------- settings (pages/8-settings/settings.css): the section list, the open section ---------- */
+.split{flex:1;min-height:0;display:grid;grid-template-columns:160px minmax(0,1fr);box-shadow:inset 0 1px 0 var(--line)}
+.split>*{min-height:0;overflow:auto;scrollbar-width:none}
+.set-nav{padding:calc(var(--s-2) + var(--s-0)) var(--s-2) calc(var(--s-6) + var(--s-1)) var(--s-3);border-right:1px solid var(--line)}
+.set-link{height:30px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2);padding:0 var(--s-2);color:var(--ink-2)}
+.set-link[aria-current="page"]{color:var(--ink);font-weight:var(--w-strong)}
+.set-body{padding:calc(var(--s-1) + var(--s-0)) var(--s-2) calc(var(--s-6) + var(--s-1));
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 28px),transparent);
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  mask-image:linear-gradient(#000 calc(100% - 28px),transparent)}
+.pk-set-foot{margin-top:var(--s-6);padding-top:var(--s-4);box-shadow:inset 0 1px 0 var(--line)}
+
+/* ---------- calendar: the grid fills the body; an agenda waits for the phone ---------- */
+.pk-cal{display:flex;flex-direction:column}
+.pk-cal-grid{flex:1;min-height:0;display:flex;flex-direction:column}
+.pk-cal-agenda{display:none}
+.pk-sk-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--s-2);padding:var(--s-4) 0 0 var(--s-8)}
+.pk-sk-day{display:grid;gap:var(--s-2);align-content:start}
+.pk-sk-event{height:var(--s-10);border-radius:var(--r-chip)}
+
+/* ---------- centered card (pages/15-start/start.css) ---------- */
+.q{height:100vh;padding:var(--gap-pane);display:flex;flex-direction:column}
+.q-sheet{--surface:var(--sheet-mid);flex:1;box-shadow:var(--lift-1);align-items:center}
+.q-col{width:344px;max-width:calc(100% - 48px);margin-top:calc(clamp(var(--s-18) + var(--s-6),23.5vh,212px));display:flex;flex-direction:column;align-items:center;text-align:center}
+.q-col.is-wide{width:620px}
+.q-dot{height:112px;margin-bottom:calc(var(--s-8) + var(--s-0))}
+.q-col h1{white-space:normal;text-wrap:balance;line-height:var(--lh-title)}
+.q-col h1.is-fault{display:inline-flex;align-items:center;gap:calc(var(--s-2) + var(--s-0))}
+.q-col h1.is-fault .ico{width:22px;height:22px;stroke-width:2}
+.q-sub{margin-top:var(--s-2);color:var(--muted);line-height:var(--lh-read);text-wrap:pretty}
+.q-sub b{color:var(--ink);font-weight:var(--w-strong)}
+.q-form{width:100%;margin-top:calc(var(--s-6) + var(--s-1));display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-2) + var(--s-0))}
+.q-form .field{width:100%;height:var(--ctl-lg);padding:0 var(--s-3)}
+.q-form .btn{height:var(--ctl-lg);display:flex;align-items:center;gap:calc(var(--s-2) + var(--s-0))}
+.q-row{width:100%;margin-top:calc(var(--s-5) + var(--s-0));display:flex;justify-content:center;gap:var(--s-2)}
+.q-row .btn{height:var(--ctl-lg);padding:0 var(--s-4)}
+.q-foot{position:absolute;left:0;right:0;bottom:20px;text-align:center;font-size:var(--t-sm);color:var(--muted)}
+.q-foot a:hover{color:var(--ink)}
+
+/* ---------- the dev gallery's grey blocks ---------- */
+.pk-gallery{display:grid;gap:var(--s-6);padding:var(--s-6);background:var(--desk, var(--surface))}
+.pk-gallery h2{font-size:var(--t-md);font-weight:var(--w-strong)}
+.pk-gallery-frame{height:520px;display:flex;position:relative}
+.pk-gallery-frame>.pane,.pk-gallery-frame>.q{flex:1;height:auto}
+.pk-ph{display:block;height:var(--h, var(--row));margin:var(--s-1) var(--s-3) var(--s-1) var(--s-8);border-radius:var(--r-row);background:var(--well)}
+
+/* ---------- phone: each kind collapses to the back card (page-types.html, per type) ---------- */
+html[data-layout="cards"] .pk-crumb{display:none}
+html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
+html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}
+html[data-layout="cards"] .pk .page-tabs{margin-top:0;padding:0 0 0 var(--s-4)}
+html[data-layout="cards"] .pk .page-tabs .docs{padding-right:calc(var(--s-6) + var(--s-1));
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);
+  /* stylelint-disable-next-line color-no-hex -- mask */
+  mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}
+html[data-layout="cards"] .pk .page-tabs .doc-tab{min-width:44px;justify-content:center}
+html[data-layout="cards"] .pk-list .filter-row{display:none}
+html[data-layout="cards"] .pk-panel{left:0;width:auto;z-index:var(--z-overlay)}
+html[data-layout="cards"] .pk-panel>.side{display:flex}
+html[data-layout="cards"] .pk .widgets{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:var(--s-4);padding:0 var(--s-2) var(--s-4) var(--page-x)}
+html[data-layout="cards"] .widget{padding:0 var(--s-3)}
+html[data-layout="cards"] .widget:nth-child(odd){padding-left:0;border-left:0}
+html[data-layout="cards"] .widget:nth-child(even){padding-right:0}
+html[data-layout="cards"] .widget .spark{width:52px}
+/* board: one stage per swipe, the next one showing */
+html[data-layout="cards"] .board{margin:0;padding:0 var(--s-10) calc(var(--s-18) + var(--s-6)) var(--s-4);scroll-padding-left:var(--s-4);scroll-snap-type:x mandatory}
+html[data-layout="cards"] .board-in{gap:calc(var(--s-2) + var(--s-0))}
+html[data-layout="cards"] .col{width:296px;gap:var(--s-2)}
+html[data-layout="cards"] .col.is-fold{width:40px}
+html[data-layout="cards"] .card{padding:var(--s-3)}
+/* list and item: the list until a row opens, then the item alone */
+html[data-layout="cards"] .pk-split.is-list .tl{display:flex;flex:1;width:auto;border-right:0}
+html[data-layout="cards"] .pk-split.is-list .conv{display:none}
+/* record: one column, side facts fold in under the facts */
+html[data-layout="cards"] .pk-rec.has-side{grid-template-columns:minmax(0,1fr);grid-template-areas:"facts" "side" "figs" "secs"}
+html[data-layout="cards"] .pk-rec-side{padding:0 var(--s-3) var(--s-4) var(--page-x)}
+/* document: one column; the outline becomes the head's jump menu */
+html[data-layout="cards"] .pk-doc-side{display:none}
+html[data-layout="cards"] .pk-foot{padding:var(--s-2) var(--s-3) var(--s-3) var(--page-x)}
+/* dashboard: widgets stack */
+html[data-layout="cards"] .pk-widgets{grid-template-columns:minmax(0,1fr)}
+/* settings: the section list, then a section alone */
+html[data-layout="cards"] .split{grid-template-columns:minmax(0,1fr)}
+html[data-layout="cards"] .set-nav{border-right:0}
+html[data-layout="cards"] .set-link{height:44px}
+html[data-layout="cards"] .pk-settings.is-list .set-body,
+html[data-layout="cards"] .pk-settings.is-open .set-nav{display:none}
+/* calendar: Week and Month swap to the agenda */
+html[data-layout="cards"] .pk-cal.has-agenda .pk-cal-grid{display:none}
+html[data-layout="cards"] .pk-cal.has-agenda .pk-cal-agenda{display:block}
