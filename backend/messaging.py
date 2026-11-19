@@ -361,7 +361,10 @@ def install_messaging(app, store, auth):
             "getBotSlackPass",
             "The owner only: a Slack pass the agent was given before it read channels through its threads, kept read-only",
             "SlackPass",
-            responses={"403": error("forbidden: not the owner"), "404": error("not_found: no such agent, or no such pass")},
+            responses={
+                "403": error("forbidden: not the owner"),
+                "404": error("not_found: no such agent, or no such pass"),
+            },
         ),
     )
     def messaging_slack_digest(request: Request, bot: str, digest_id: str):
