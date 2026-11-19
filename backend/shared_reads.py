@@ -1,10 +1,11 @@
+# pyright: strict
 """One person's identical reads, computed once.
 
 Nov 19 relief for the hosted TIDY company: one person with the app open on ten computers and tabs sent ten identical
 GETs on every live event, each seconds of SQL, and the server fell behind. Here every GET under /api/ by one caller,
 with the same path, query and validators, is computed once for everyone who asks while it is being computed, and the
 answer serves the same request again for FRESH_SECONDS (TICO_READ_CACHE_SECONDS, default 5; 0 shares only while
-computing). An answer can be up to that long behind a change: a deliberate, short-lived trade for load.
+computing; below 0 shares nothing, as in tests, where concurrent readers must each run their own read). An answer can be up to that long behind a change: a deliberate, short-lived trade for load.
 
 - Never across callers: the key holds the caller's whole identity (actor, role, token, scope, view, ...).
 - Each request gets its own copy of the answer, then its own validators and wire encoding (backend/json_response.py).
@@ -27,13 +28,21 @@ UNSHARED = frozenset({"/api/v2/events", "/api/v2/email/sends/{sid}"})
 UNSHARED_PLACES = frozenset({"growth"})
 
 
+DEFAULT_SECONDS = 5.0
+
+
+def setting() -> float:
+    """TICO_READ_CACHE_SECONDS as set (default 5): below 0 turns sharing off."""
+    try:
+        return float(os.environ.get("TICO_READ_CACHE_SECONDS", DEFAULT_SECONDS))
+    except ValueError:
+        return DEFAULT_SECONDS
+
+
 def fresh_seconds() -> float:
     """How long one person's answer serves the same request again (TICO_READ_CACHE_SECONDS, default 5); 0 shares an
     answer only while it is being computed."""
-    try:
-        return max(0.0, float(os.environ.get("TICO_READ_CACHE_SECONDS", "5")))
-    except ValueError:
-        return 1.0
+    return max(0.0, setting())
 
 
 KEPT_BYTES = 64 * 1024 * 1024  # answers kept at once, for every caller together
@@ -236,7 +245,7 @@ def wrote(store: Any, request: Any) -> None:
 async def answer(store: Any, request: Any, route: str, compute: Compute) -> Response:
     """`compute()`'s answer for this request, shared with the same caller's identical requests (see above)."""
     key = key_of(request, route)
-    if key is None:
+    if key is None or setting() < 0:
         return await compute()
     # A short time-based cache (Nov 19 relief for TIDY): a person's identical reads within FRESH_SECONDS, or while one
     # is being computed, get one answer, whatever changed in between.
