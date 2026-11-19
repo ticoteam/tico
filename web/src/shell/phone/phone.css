@@ -126,6 +126,8 @@ html:has(.ph),html:has(.ph) body{height:100%;overflow:hidden;overscroll-behavior
 .ph .grab{position:absolute;left:50%;top:7px;z-index:2;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line-strong);opacity:0;touch-action:none;transition:opacity var(--dur) var(--ease)}
 .ph .grab::before{content:"";position:absolute;inset:-7px -40px -14px}
 .ph .ly.is-up>.grab{opacity:1}
+/* a resting card's grab is hidden: its wide hit area must not take a tap meant for the lip under it */
+.ph .ly:not(.is-up)>.grab{pointer-events:none}
 /* a raised card's head is where it is taken hold of */
 .ph .tico-head,.ph .m-head,.ph .c-head,.ph .call-head,.ph [data-grab]{touch-action:none}
 

@@ -3,8 +3,9 @@
    and come up over the page by tap, Enter or a drag. Which card is up is device state, but each raised card owns a
    history entry so Back closes it. Everything that follows a finger is written straight to the DOM, never through
    React state, so a drag or a scroll costs no render. */
+import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, PointerEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { Dot } from '@/tico/dot';
 import { watchKeyboard, stuckToBottom } from './keyboard';
 import type { Keys } from './keyboard';
@@ -364,10 +365,19 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     }
   };
 
-  // a place picked in the menu: the menu tucks and the page comes forward
-  const onMenuClick = (e: { target: EventTarget }) => {
-    if (!(e.target as HTMLElement).closest('a[href]')) return;
+  // a place picked in the menu: the menu tucks and the page comes forward. The menu's history entry gives way to the
+  // page it opens (a replace, before the link's own push), so Back goes to the page before, not to a stranded menu.
+  const router = useRouter({ warn: false });
+  const onMenuClick = (e: MouseEvent<HTMLDivElement>) => {
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+    if (!a) return;
     navigating.current = true;
+    const plain = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && !a.target && a.origin === location.origin;
+    if (router && plain && historyCard(window.history.state)) {
+      e.preventDefault();
+      e.stopPropagation();
+      void router.navigate({ href: a.pathname + a.search + a.hash, replace: true });
+    }
     tuck();
   };
 
@@ -400,7 +410,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
           {lip}
         </button>
         {act && <div className="lip-act">{act}</div>}
-        <div className="full" id={`${id}-${s}`} inert={!up} onClick={s === 'menu' ? onMenuClick : undefined}>
+        <div className="full" id={`${id}-${s}`} inert={!up} onClickCapture={s === 'menu' ? onMenuClick : undefined}>
           {full}
         </div>
       </section>

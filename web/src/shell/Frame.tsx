@@ -37,6 +37,13 @@ export interface FrameProps {
 
 const NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'the menu', list: 'the list', chat: 'the chat', page: 'the page', panel: 'the panel', widgets: 'widgets', stage: 'the call', side: 'the side' };
 
+/* The mounted frame's hand fold, for the `shell.fold` action: fold (true) or open (false) a sheet; undefined flips it. */
+let foldHand: ((id: SheetId, folded?: boolean) => void) | null = null;
+export function foldSheet(id: string, folded?: boolean): void {
+  if (!foldHand) throw new Error('the sheets are not drawn yet');
+  foldHand(id as SheetId, folded);
+}
+
 export function Frame(p: FrameProps) {
   return p.arrangement ? <Sheets {...p} arr={p.arrangement} /> : <Routed {...p} />;
 }
@@ -194,14 +201,30 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       return;
     }
     if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+    // handled here, so the action layer's key listener (on window, after this one) does not flip it back
     if (e.key === '[') {
       const two = find('menu') ?? find('list');
       if (two) onPress(two.id);
+      e.preventDefault();
     } else if (e.key === ']') {
       const side = find('widgets') ?? find('side');
       if (side) onPress(side.id);
+      e.preventDefault();
     }
   });
+  const onFold = useEffectEvent((id: SheetId, folded?: boolean) => {
+    const cur = find(id);
+    if (!cur) return;
+    const shut = cur.state !== 'open' && peeking !== id;
+    if (folded === undefined || folded !== shut) onPress(id);
+  });
+  useEffect(() => {
+    foldHand = (id, folded) => onFold(id, folded);
+    return () => {
+      foldHand = null;
+    };
+  }, []);
+
   useEffect(() => {
     const on = (e: globalThis.KeyboardEvent) => onKey(e);
     document.addEventListener('keydown', on);
@@ -324,6 +347,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
             style={{ left: x, width: w }}
             hidden={out && s.state !== 'over' && !shown}
             data-sheet={s.id}
+            data-target={`sheet:${s.id}`}
           >
             <SheetContext value={controls}>{content(s, folded)}</SheetContext>
           </div>

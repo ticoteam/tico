@@ -1,8 +1,9 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import { useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { usePhoneCards } from './phone';
 import { useSheet } from './Sheet';
 
 /* The menu: a port of PK.menu and its rail in the design's system/shell.js, with the mock's classes.
@@ -52,6 +53,8 @@ export interface MenuProps {
   openTeam?: string;
   /* drawn as icons; inside a Frame this follows the sheet's fold */
   folded?: boolean;
+  /* a note above the foot, open menu only: the offline bar */
+  note?: ReactNode;
   onSearch?: () => void;
   onPickCompany?: () => void;
   onAddTeammate?: () => void;
@@ -74,6 +77,8 @@ const slug = (s: string) => s.toLowerCase();
 /* the menu's paths are plain strings from the table above; the router resolves them under its base path */
 const to = (path: string) => path as LinkProps['to'];
 const ACTIVE = { className: 'is-active', 'aria-current': 'page' as const };
+/* a shut team shows this many faces, so its name keeps its room */
+const FACES = 5;
 
 /* the row or link already says the name */
 function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
@@ -90,6 +95,7 @@ function FlowMark() {
 
 export function Menu(p: MenuProps) {
   const sheet = useSheet();
+  const phone = usePhoneCards();
   const folded = p.folded ?? sheet.folded;
   const path = useLocation({ select: l => l.pathname.replace(/^\/next(?=\/|$)/, '') });
   const can = p.can ?? (() => true);
@@ -172,120 +178,153 @@ export function Menu(p: MenuProps) {
     return null;
   };
 
+  const pick = (
+    <button className="co-pick" type="button" aria-haspopup="menu" aria-expanded="false" onClick={p.onPickCompany}>
+      <span className="co-mark" aria-hidden="true">
+        {p.company.mark}
+      </span>
+      <span className="co-name">{p.company.name}</span>
+      <Icon name="chevdown" />
+      {p.company.needs ? <FlowMark /> : null}
+    </button>
+  );
+  const items = (
+    <div className="nav-items">
+      {rows.map(r => {
+        const kids = (KIDS[r.id] ?? []).filter(k => can(`${r.id}/${slug(k)}`));
+        return [
+          <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: !!KIDS[r.id] }}>
+            <Icon name={r.icon} />
+            <span className="nav-label">{r.label}</span>
+            {right(r.id)}
+          </Link>,
+          top === r.id && kids.length ? (
+            <div key={`${r.id}-kids`} className="nav-kids">
+              {kids.map(k => (
+                <Link key={k} className="nav-kid" to={to(`/${r.id}/${slug(k)}`)} activeProps={ACTIVE}>
+                  {k}
+                </Link>
+              ))}
+            </div>
+          ) : null,
+        ];
+      })}
+    </div>
+  );
+  const tree = (
+    <div className="tree">
+      <div className="tree-head">
+        <span>Team</span>
+        <IconButton icon="plus" label="Add a teammate" size="sm" onClick={p.onAddTeammate} />
+      </div>
+      <Link className="tree-row" to={to(p.me.to)} activeProps={ACTIVE}>
+        <Face m={p.me} size={22} />
+        <span className="tree-name">{p.me.name}</span>
+      </Link>
+      {p.teams.map(t =>
+        isOpen(t) ? (
+          [
+            <Link
+              key={t.id}
+              className="tree-team is-open"
+              to={to(t.to)}
+              activeProps={ACTIVE}
+              activeOptions={{ exact: true }}
+              aria-expanded="true"
+              onClick={e => {
+                if (path === t.to) {
+                  e.preventDefault();
+                  setShut(s => ({ ...s, [t.id]: true }));
+                }
+              }}
+            >
+              <span className="tree-chev">
+                <Icon name="chevron" />
+              </span>
+              <span className="tree-name">{t.name}</span>
+            </Link>,
+            ...t.members.map(m => (
+              <Link key={m.id} className="tree-row" to={to(m.to)} activeProps={ACTIVE}>
+                <Face m={m} size={22} />
+                <span className="tree-name">{m.name}</span>
+                {m.needs ? <FlowMark /> : null}
+              </Link>
+            )),
+          ]
+        ) : (
+          <Link
+            key={t.id}
+            className="tree-team"
+            to={to(t.to)}
+            activeProps={ACTIVE}
+            activeOptions={{ exact: true }}
+            aria-expanded="false"
+            onClick={() => setShut(s => ({ ...s, [t.id]: false }))}
+          >
+            <span className="tree-chev">
+              <Icon name="chevron" />
+            </span>
+            <span className="tree-name">{t.name}</span>
+            {t.needs ? <FlowMark /> : null}
+            <span className="faces">
+              {t.members.slice(0, FACES).map(m => (
+                <Face key={m.id} m={m} size={16} />
+              ))}
+            </span>
+          </Link>
+        ),
+      )}
+    </div>
+  );
+  const foot = (
+    <>
+      <Link className="me me-name" to={to(p.me.to)}>
+        <Face m={p.me} size={28} />
+        <span>{p.me.name}</span>
+      </Link>
+      <span className="grow" />
+      <IconButton icon="help" label="Tico support" onClick={p.onHelp} />
+      {can('settings') ? (
+        <Link className="ib" to={to('/settings')} aria-label="Settings" title="Settings">
+          <Icon name="gear" />
+        </Link>
+      ) : null}
+    </>
+  );
+
+  // on the phone the menu is a card (B/phone/phone.js menuFull): its head tucks it away, the list scrolls between
+  if (phone)
+    return (
+      <>
+        <header className="m-head">
+          {pick}
+          <span className="grow" />
+          <IconButton icon="search" label="Search" onClick={p.onSearch} />
+          <IconButton icon="chevdown" label="Tuck the menu away" quiet onClick={phone.tuck} />
+        </header>
+        <nav className="m-scroll" aria-label="Main">
+          {items}
+          {tree}
+        </nav>
+        {p.note}
+        <footer className="m-foot">{foot}</footer>
+      </>
+    );
+
   return (
     <nav className="pane nav" aria-label="Main">
       <header className="nav-head">
-        <button className="co-pick" type="button" aria-haspopup="menu" aria-expanded="false" onClick={p.onPickCompany}>
-          <span className="co-mark" aria-hidden="true">
-            {p.company.mark}
-          </span>
-          <span className="co-name">{p.company.name}</span>
-          <Icon name="chevdown" />
-          {p.company.needs ? <FlowMark /> : null}
-        </button>
+        {pick}
         <span className="grow" />
         <IconButton icon="search" label="Search" onClick={p.onSearch} />
         {sheet.canFold ? <IconButton icon="panel" label="Fold the menu" quiet onClick={sheet.toggleFold} /> : null}
       </header>
       <div className="nav-scroll">
-        <div className="nav-items">
-          {rows.map(r => {
-            const kids = (KIDS[r.id] ?? []).filter(k => can(`${r.id}/${slug(k)}`));
-            return [
-              <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: !!KIDS[r.id] }}>
-                <Icon name={r.icon} />
-                <span className="nav-label">{r.label}</span>
-                {right(r.id)}
-              </Link>,
-              top === r.id && kids.length ? (
-                <div key={`${r.id}-kids`} className="nav-kids">
-                  {kids.map(k => (
-                    <Link key={k} className="nav-kid" to={to(`/${r.id}/${slug(k)}`)} activeProps={ACTIVE}>
-                      {k}
-                    </Link>
-                  ))}
-                </div>
-              ) : null,
-            ];
-          })}
-        </div>
-        <div className="tree">
-          <div className="tree-head">
-            <span>Team</span>
-            <IconButton icon="plus" label="Add a teammate" size="sm" onClick={p.onAddTeammate} />
-          </div>
-          <Link className="tree-row" to={to(p.me.to)} activeProps={ACTIVE}>
-            <Face m={p.me} size={22} />
-            <span className="tree-name">{p.me.name}</span>
-          </Link>
-          {p.teams.map(t =>
-            isOpen(t) ? (
-              [
-                <Link
-                  key={t.id}
-                  className="tree-team is-open"
-                  to={to(t.to)}
-                  activeProps={ACTIVE}
-                  activeOptions={{ exact: true }}
-                  aria-expanded="true"
-                  onClick={e => {
-                    if (path === t.to) {
-                      e.preventDefault();
-                      setShut(s => ({ ...s, [t.id]: true }));
-                    }
-                  }}
-                >
-                  <span className="tree-chev">
-                    <Icon name="chevron" />
-                  </span>
-                  <span className="tree-name">{t.name}</span>
-                </Link>,
-                ...t.members.map(m => (
-                  <Link key={m.id} className="tree-row" to={to(m.to)} activeProps={ACTIVE}>
-                    <Face m={m} size={22} />
-                    <span className="tree-name">{m.name}</span>
-                    {m.needs ? <FlowMark /> : null}
-                  </Link>
-                )),
-              ]
-            ) : (
-              <Link
-                key={t.id}
-                className="tree-team"
-                to={to(t.to)}
-                activeProps={ACTIVE}
-                activeOptions={{ exact: true }}
-                aria-expanded="false"
-                onClick={() => setShut(s => ({ ...s, [t.id]: false }))}
-              >
-                <span className="tree-chev">
-                  <Icon name="chevron" />
-                </span>
-                <span className="tree-name">{t.name}</span>
-                {t.needs ? <FlowMark /> : null}
-                <span className="faces">
-                  {t.members.map(m => (
-                    <Face key={m.id} m={m} size={16} />
-                  ))}
-                </span>
-              </Link>
-            ),
-          )}
-        </div>
+        {items}
+        {tree}
       </div>
-      <footer className="nav-foot">
-        <Link className="me me-name" to={to(p.me.to)}>
-          <Face m={p.me} size={28} />
-          <span>{p.me.name}</span>
-        </Link>
-        <span className="grow" />
-        <IconButton icon="help" label="Tico support" onClick={p.onHelp} />
-        {can('settings') ? (
-          <Link className="ib" to={to('/settings')} aria-label="Settings" title="Settings">
-            <Icon name="gear" />
-          </Link>
-        ) : null}
-      </footer>
+      {p.note}
+      <footer className="nav-foot">{foot}</footer>
     </nav>
   );
 }

@@ -5,7 +5,8 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 const server = 'http://127.0.0.1:8765';
-const toServer = { target: server, changeOrigin: false };
+// The server refuses writes from another origin; through the proxy the page's writes come from the server's own.
+const toServer = { target: server, changeOrigin: false, headers: { origin: server } };
 
 export default defineConfig({
   // Assets stay under /next/ even after the switch; only the router's basepath changes (transition.md 1.3).

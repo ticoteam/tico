@@ -3,8 +3,9 @@ import { actionsCatalog, buildRegistry, registry } from './registry';
 import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
-vi.mock('@/data', () => ({ queryClient: {} }));
-vi.mock('@/search', () => ({ openSearch: vi.fn() }));
+// the real module, so feature actions that set up their queries on load still find what they use
+vi.mock('@/data', async (real) => ({ ...(await real<object>()), queryClient: {} }));
+vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi.fn() }));
 
 const make = () =>
   defineAction({ id: 'tasks.open', title: 'Open', kind: 'view', input: s.object({}), run: () => {} });

@@ -3,9 +3,10 @@ import { keyHandler, shortcutsOf, type Shortcut } from './keys';
 import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
-vi.mock('@/data', () => ({ queryClient: {} }));
-vi.mock('@/search', () => ({ openSearch: vi.fn() }));
-vi.mock('@/motion', () => ({ flight: vi.fn(), waitForTarget: vi.fn(), wash: vi.fn() }));
+// the real module, so feature actions that set up their queries on load still find what they use
+vi.mock('@/data', async (real) => ({ ...(await real<object>()), queryClient: {} }));
+vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi.fn() }));
+vi.mock('@/motion', async (real) => ({ ...(await real<object>()), flight: vi.fn(), waitForTarget: vi.fn(), wash: vi.fn() }));
 
 const act = (id: `${string}.${string}`, keys: Record<string, object>) =>
   defineAction({ id, title: id, kind: 'view', input: s.object({}), run: () => {}, keys }) as AnyAction;

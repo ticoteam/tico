@@ -1,4 +1,4 @@
-export { Frame } from './Frame';
+export { Frame, foldSheet } from './Frame';
 export type { FrameProps } from './Frame';
 export { Sheet, SheetHead, useSheet } from './Sheet';
 export type { SheetProps, SheetHeadProps, SheetControls } from './Sheet';

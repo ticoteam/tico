@@ -6,10 +6,11 @@ import { runIn, showIn } from './run';
 import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
-vi.mock('@/data', () => ({ queryClient: {} }));
-vi.mock('@/motion', () => ({ flight: vi.fn(), waitForTarget: vi.fn(), wash: vi.fn() }));
-vi.mock('@/live', () => ({ onTopic: vi.fn(() => () => {}) }));
-vi.mock('@/search', () => ({ openSearch: vi.fn() }));
+// the real module, so feature actions that set up their queries on load still find what they use
+vi.mock('@/data', async (real) => ({ ...(await real<object>()), queryClient: {} }));
+vi.mock('@/motion', async (real) => ({ ...(await real<object>()), flight: vi.fn(), waitForTarget: vi.fn(), wash: vi.fn() }));
+vi.mock('@/live', async (real) => ({ ...(await real<object>()), onTopic: vi.fn(() => () => {}) }));
+vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi.fn() }));
 
 const router = {} as AnyRouter;
 const did = vi.fn();
