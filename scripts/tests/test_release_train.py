@@ -2,8 +2,11 @@
 automatically when no person is needed), and that a failure reaches the release-train issue (scripts/release_train.py)."""
 
 from datetime import datetime, timedelta, timezone
+import io
 import re
 import sys
+from types import SimpleNamespace
+import zipfile
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -63,6 +66,8 @@ class FakeGitHub:
         self.numbers = iter(range(100, 100000))
         self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
         self.cut = set()  # the red run ids that fail fast cut short (some parts cancelled beside a failed one)
+        self.infra = {}  # per run id: what infrastructure_red says ([(job, cause, message)], or None)
+        self.reran = []  # the run ids whose failed jobs this run started again
 
     def _sha(self, ref):
         return self.tags_.get(ref) or (self.head_ if ref == "main" else ref)
@@ -95,6 +100,12 @@ class FakeGitHub:
 
     def cut_short(self, run_id):
         return run_id in self.cut
+
+    def infrastructure_red(self, run_id):
+        return self.infra.get(run_id)
+
+    def rerun_failed(self, run_id):
+        self.reran.append(run_id)
 
     def ceiling_stopped(self, run):
         return run.get("id") in self.ceiling_ids
@@ -601,6 +612,116 @@ def test_a_cut_short_run_names_the_parts_that_failed_not_the_ones_fail_fast_canc
     # failed beside it, and the run is not cut short by it.
     jobs[1].update(conclusion="cancelled", started_at="2026-11-18T08:00:00Z", completed_at="2026-11-18T08:45:03Z")
     assert gh.failed_tokens(12) is None and not gh.cut_short(12)
+
+
+SPOT = "AWS interrupted the EC2 Spot instance running this job. RunsOn can retry it after the workflow run finishes."
+SPOT_CAUSES = [("product", "Spot interrupted", SPOT)]
+
+
+def spot_red(attempt=1):
+    """C (main's head) validated incrementally on B, red at the given attempt because AWS took its product VM."""
+    gh = FakeGitHub([dict(run(C, conclusion="failure", id=7, anchor=B), run_attempt=attempt), out(B, id=2, at=MORNING)])
+    gh.failed, gh.infra = {7: {"product"}}, {7: SPOT_CAUSES}
+    finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200", B), "url": run_url(7)}
+    return gh, finished
+
+
+def run_url(number):
+    return "https://github.example/run/%d" % number
+
+
+def test_a_red_only_its_infrastructure_failed_runs_its_failed_jobs_again_once_whatever_its_diff_selects():
+    # v0.6.89: the train waited for a commit selecting "product" after AWS took the product part's Spot VM.
+    gh, finished = spot_red()
+    picked = rt.plan_step(gh, NOW, finished, checkout=FakeCheckout(since=set()), rerun_infrastructure=True)
+    assert picked["action"] == "rerun" and picked["rerun"]["id"] == 7
+    assert "failed on its infrastructure" in picked["why"]
+    assert rt.problems(picked)[1] == (
+        'Infrastructure rerun: %s (v0.5.201) failed on product: Spot interrupted ("%s"); its failed jobs run again once'
+        % (run_url(7), SPOT)
+    )
+    # Its second attempt is not run again, whatever stopped it: the red waits as any red does.
+    gh, finished = spot_red(attempt=2)
+    picked = rt.plan_step(gh, NOW, finished, checkout=FakeCheckout(since=set()), rerun_infrastructure=True)
+    assert picked["action"] == "wait" and gh.reran == []
+    # Nor is a red the rule cannot call infrastructure (a test failed), nor one read again by a later event or the
+    # guard (no finished run, or no annotations to read).
+    gh, finished = spot_red()
+    gh.infra = {7: None}
+    assert (
+        rt.plan_step(gh, NOW, finished, checkout=FakeCheckout(since=set()), rerun_infrastructure=True)["action"]
+        == "wait"
+    )
+    gh, finished = spot_red()
+    assert rt.plan_step(gh, NOW, checkout=FakeCheckout(since=set()), rerun_infrastructure=True)["action"] == "wait"
+    assert rt.plan_step(gh, NOW, finished, checkout=FakeCheckout(since=set()))["action"] == "wait"
+
+
+def test_the_train_job_runs_the_failed_jobs_again_and_records_the_case_on_the_issue(installs, tmp_path, monkeypatch):
+    gh, finished = spot_red()
+    gh = publishes(gh)
+    monkeypatch.setattr(rt.increment, "Checkout", lambda root: FakeCheckout(since=set()))
+    handed = dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch", VALIDATION_RUN="7")
+    # The guard cannot read annotations, but the new red is unreported, so the train job runs and decides.
+    assert guard(gh, handed, tmp_path, monkeypatch)["go"] == "true" and gh.reran == []
+    assert rt.cmd_step(gh, handed, NOW) == 1
+    assert gh.reran == [7] and gh.dispatched == [] and gh.tagged == []
+    body = gh.created[0]["body"]
+    assert "Candidate v0.5.201 at %s ended failure" % C[:12] in body and "Infrastructure rerun: %s" % run_url(7) in body
+
+
+def test_infrastructure_is_read_from_the_annotations_of_the_parts_that_failed(monkeypatch):
+    gh = rt.GitHub("ticoteam/tico", "token")
+    jobs = [
+        {"id": 1, "name": "product", "conclusion": "failure"},
+        {"id": 2, "name": "contracts-1", "conclusion": "cancelled"},  # fail fast's: not read
+        {"id": 3, "name": "release-check", "conclusion": "failure"},
+    ]
+    notes = {1: [{"message": "Process completed with exit code 137."}, {"message": SPOT}]}
+    reads = []
+
+    def pages(path, key=None, limit=10):
+        reads.append(path)
+        return jobs if "/jobs" in path else notes[int(path.split("/")[1])]
+
+    monkeypatch.setattr(gh, "pages", pages)
+    receipts = {"product": {"gate_state": "running"}}
+    asked = []
+    monkeypatch.setattr(gh, "gate_receipt", lambda run_id, name: asked.append((run_id, name)) or receipts.get(name))
+    assert gh.infrastructure_red(44490064278) == SPOT_CAUSES
+    assert reads == ["actions/runs/44490064278/jobs?per_page=100", "check-runs/1/annotations?per_page=50"]
+    assert asked == [(44490064278, "product")]
+    # The same annotations on a gate that finished with a failing exit are a test failure the runner was lost after.
+    gh.__dict__.pop("_failed_parts")
+    receipts["product"] = {"gate_state": "finished", "gate_exit": 1}
+    assert gh.infrastructure_red(44490064278) is None
+
+
+def test_a_gate_receipt_is_read_from_its_report_artifact(monkeypatch):
+    def archive(**files):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as handle:
+            for name, text in files.items():
+                handle.writestr(name.replace("_", "."), text)
+        return buffer.getvalue()
+
+    assert rt.receipt_from_zip(archive(run_json='{"gate_state": "running"}')) == {"gate_state": "running"}
+    assert rt.receipt_from_zip(archive(prepare_json="{}")) == {}  # the gate never started
+    assert rt.receipt_from_zip(b"not a zip") is None and rt.receipt_from_zip(archive(run_json="[1]")) is None
+    gh = rt.GitHub("ticoteam/tico", "token")
+    listed = {"artifacts": [{"id": 5, "name": "release-validation-9-1-product", "expired": False}]}
+    monkeypatch.setattr(gh, "get", lambda path: listed)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=archive(run_json='{"gate_state": "finished", "gate_exit": 1}'))
+
+    monkeypatch.setattr(rt.subprocess, "run", fake_run)
+    assert gh.gate_receipt(9, "product") == {"gate_state": "finished", "gate_exit": 1}
+    assert calls[0][:3] == ["gh", "api", "repos/ticoteam/tico/actions/artifacts/5/zip"]
+    listed["artifacts"] = []  # no report (expired, or the machine went before the upload): unreadable
+    assert gh.gate_receipt(9, "product") is None
 
 
 def test_a_stale_anchor_runs_the_full_validation_once_a_day():
