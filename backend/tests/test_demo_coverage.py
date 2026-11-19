@@ -51,6 +51,8 @@ PAGES = {
     # Company › Risk (ui/app/risk.ts): its risks, and the open disputes under them (backend/demo_sections/risk.py).
     "risk": page("risks", "risks"),
     "risk-disputes": page("matters", "matters", kind="dispute", open="true"),
+    # Risk › Obligations: the dates under the risks' standing rules (backend/demo_sections/risk.py DATES).
+    "risk-obligations": page("risk/obligations", "obligations"),
     "rules": page("rules", "rules"),
     # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).
     "rules-internal": page("rules", "rules", kind="internal"),

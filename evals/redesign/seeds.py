@@ -560,6 +560,54 @@ def risk(world):
     call("POST", "risks/risk:customer-theft-claims/links", {"linkable_type": "org_rule", "linkable_id": rule["id"]})
 
 
+@seed("risk-dates")
+def risk_dates(world):
+    """Risk's dates (ui/tests/risk-obligations.cts), on top of the "risk" seed, counted from the scenario's day (the
+    hub's clock): a court's dates on Murphy (one theirs to meet, two orders), Murphy's production met with a link, and
+    Randazzo's asked-for reply passed; a court order with no matter on Pro disputes, and one on the private Sealed claim
+    that only Dana and its owner read; and People & benefits, whose Principal premium (a contract) passed with no proof,
+    so it is unconfirmed and the risk is live."""
+    from .harness import DANA, LEAD_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    today = datetime.datetime.now(datetime.UTC).date()
+
+    def day(offset):
+        return (today + datetime.timedelta(days=offset)).isoformat()
+
+    tasks = {m["task"]["title"]: m["task"]["id"] for m in call("GET", "matters?limit=200")["matters"]}
+    call("POST", "risks", {"label": "People & benefits", "key": "people-benefits"})
+
+    def standing(text, risk):
+        made = call("POST", "rules", {"kind": "internal", "text": text, "who": {"everyone": True}})
+        call("POST", f"risks/{risk}/links", {"linkable_type": "org_rule", "linkable_id": made["id"]})
+        return made["id"]
+
+    def due(rule_id, offset, title, basis, task=None):
+        body = {"first_due": day(offset), "repeats": "once", "owner": LEAD_ID, "timezone": "UTC"}
+        body.update({"title": title, "basis": basis, **({"task_id": tasks[task]} if task else {})})
+        return call("POST", f"rules/{rule_id}/due", body)["id"]
+
+    courts = standing("Meet every date a court or arbitrator sets.", "risk:customer-theft-claims")
+    due(courts, 12, "Murphy claimant discovery", "theirs", "Murphy")
+    due(courts, 19, "Murphy discovery, Zoom notice", "order", "Murphy")
+    due(courts, 26, "Murphy final hearing", "order", "Murphy")
+    produced = due(courts, -6, "Murphy production", "order", "Murphy")
+    call(
+        "POST",
+        f"rule-due/{produced}/satisfied",
+        {"due_on": day(-6), "proof": {"kind": "link", "ref": "https://files.acme.example/murphy-production"}},
+    )
+    due(courts, -4, "Randazzo reply", "asked", "Randazzo")
+    pros = standing("Meet every date a court sets on a pro dispute.", "risk:pro-disputes")
+    due(pros, 1, "Paiva records", "order")
+    due(pros, 3, "Sealed claim answer", "order", "Sealed claim")
+    premiums = standing("Pay each insurance premium on time.", "risk:people-benefits")
+    due(premiums, -19, "Principal premium", "contract")
+
+
 @seed("priya-leads")
 def priya_leads(world):
     """Priya is the engineering manager on the chart: engineering-manager reports to her, so she is above the bots under it

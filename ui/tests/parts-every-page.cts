@@ -21,8 +21,8 @@ const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': ['threads-
 // the sidebar's links, a task's and a thread's from ones made on the hub.
 const ROUTES = [
   '#/home', '#/overview/company-page', '#/threads', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
-  '#/roadmap', '#/tags', '#/finance', '#/growth', '#/risk', '#/risk/disputes', '#/strategy', '#/strategy/goals', '#/strategy/org',
-  '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/products', '#/automations', '#/listening',
+  '#/roadmap', '#/tags', '#/finance', '#/growth', '#/risk', '#/risk/disputes', '#/risk/obligations', '#/strategy', '#/strategy/goals',
+  '#/strategy/org', '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/products', '#/automations', '#/listening',
   '#/rules', '#/company-page', '#/library/contacts', '#/library/skills', '#/library/files', '#/tools', '#/docs',
   '#/learnings', '#/usage', '#/replay', '#/sql', '#/mail', '#/messaging', '#/changelog', '#/settings',
   ...['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history', 'health', 'billing'].map(tab => '#/settings/' + tab),

@@ -5,9 +5,13 @@ A risk is a tag of kind risk (backend/risk.py); a matter is a task tagged with i
 forum). Everything goes through the API as Ana, the way the Legal page owner's `tico risk` calls would: one risk is live
 (a dispute arrived two days ago), one is open, two are quiet (one with a closed matter, one with none). The parties are
 the Contacts section's organizations (backend/demo_sections/directory.py runs first), and a rule and a document link to
-the risks they guard. Nothing names a real company or person.
+the risks they guard. Dates (rule_due_dates with a basis) sit under standing rules on three risks: a fire board's
+order tomorrow, a court's dates on Cedar Venues (one theirs to meet), a privacy reply met with a link, and an insurance
+premium that passed with no proof, so Product safety reads Unconfirmed and is live. Nothing names a real company or
+person.
 """
 
+from datetime import timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -70,6 +74,46 @@ MATTERS = (
 )
 RULE = "A fire board letter gets Ana's OK before any reply."
 SOURCE = "Customer terms"
+DATES = (
+    # (standing rule, its risk, ((days from today, title, basis, matter title or None, met with this link or None), ...))
+    (
+        "Meet every date a regulator sets.",
+        "Product safety",
+        (
+            (1, "Fire board inspection records", "order", "Fire board asks about the rig's wiring", None),
+            (-17, "Liability premium", "contract", None, None),
+        ),
+    ),
+    (
+        "Meet every date a court sets on a customer dispute.",
+        "Customer disputes",
+        (
+            (13, "Cedar Venues discovery", "theirs", "Cedar Venues hall damage claim", None),
+            (20, "Cedar Venues witness list", "order", "Cedar Venues hall damage claim", None),
+            (27, "Cedar Venues hearing", "order", "Cedar Venues hall damage claim", None),
+            (
+                -8,
+                "Cedar Venues photos",
+                "order",
+                "Cedar Venues hall damage claim",
+                "https://files.acme.example/cedar-photos",
+            ),
+        ),
+    ),
+    (
+        "Answer every privacy request within the time the law gives.",
+        "Data privacy",
+        (
+            (
+                -25,
+                "Deletion reply",
+                "law",
+                "Delete a former customer's account",
+                "https://files.acme.example/deletion-reply",
+            ),
+        ),
+    ),
+)
 
 
 def _key(label: str) -> str:
@@ -102,3 +146,26 @@ def seed(b: Any) -> None:  # backend.demo_seed.Builder
     b.call("POST", f"risks/{_key('Product safety')}/links", {"linkable_type": "org_rule", "linkable_id": rule})
     document = b.call("POST", "entities", {"type": "document", "match": {"name": SOURCE}, "name": SOURCE})["id"]
     b.call("POST", f"risks/{_key('Customer disputes')}/links", {"linkable_type": "entity", "linkable_id": document})
+    # Dates count from the server's today, so they stay where they are put however late the demo is built.
+    today = b.now.date()
+    for text, risk, dates in DATES:
+        b.at(days=30)
+        standing = b.call("POST", "rules", {"kind": "internal", "text": text, "who": {"everyone": True}})["id"]
+        b.call("POST", f"risks/{_key(risk)}/links", {"linkable_type": "org_rule", "linkable_id": standing})
+        for offset, title, basis, matter, link in dates:
+            on = (today + timedelta(days=offset)).isoformat()
+            body = {
+                "first_due": on,
+                "repeats": "once",
+                "owner": OWNER,
+                "timezone": "UTC",
+                "title": title,
+                "basis": basis,
+            }
+            if matter:
+                body["task_id"] = b.tasks["risk:" + matter]
+            b.at(days=30)
+            made = b.call("POST", f"rules/{standing}/due", body)["id"]
+            if link:
+                b.at(days=-offset + 1)
+                b.call("POST", f"rule-due/{made}/satisfied", {"due_on": on, "proof": {"kind": "link", "ref": link}})
