@@ -1,8 +1,9 @@
-import { keepPreviousData, queryOptions, type QueryClient, type QueryKey } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { NeedsYou, OkPreview, PagePublished, PageShown, PipelineSettingsList, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
+import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { sendMessage } from '@/conversation';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
+import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -71,19 +72,6 @@ export const taskDetailQuery = (id: string | undefined) =>
     enabled: !!id,
   });
 
-/** Load what the first paint needs, from a route's loader. A refusal is the page's to show, so it is not thrown here. */
-export async function loadTask(client: QueryClient, param: string): Promise<TaskData | null> {
-  try {
-    const id = await client.ensureQueryData(taskRefQuery(param));
-    // Its files are tabs too: read with it, so the tab that opens is picked once. A refusal leaves Details.
-    const [t] = await Promise.all([client.ensureQueryData(taskDetailQuery(id)), client.prefetchQuery(taskFilesQuery(id))]);
-    return t;
-  } catch {
-    // the page shows not found, no access or the fault
-    return null;
-  }
-}
-
 /** The task's files, pages first (GET /api/v2/tasks/{tid}/files). */
 export const taskFilesQuery = (id: string) =>
   queryOptions({
@@ -99,49 +87,17 @@ export const pageVersionQuery = (file: string, n: number) =>
     staleTime: Infinity,
   });
 
-export interface StageChoice {
-  id: string;
-  name: string;
-  side: boolean;
-}
-export interface PipelineStages {
-  id: string;
-  name: string;
-  stages: StageChoice[];
-}
-
-/** Each pipeline's stages, for the stage pick. Its own key: the board keeps its own shape under ['pipelines']. */
-export const pipelineStagesQuery = queryOptions({
-  queryKey: ['pipelines', 'stages'] as const,
-  queryFn: async ({ signal }): Promise<PipelineStages[]> =>
-    (await api.get<PipelineSettingsList>('/api/v2/pipelines', { signal })).pipelines.map((p) => ({
-      id: p.id,
-      name: p.name,
-      stages: p.stages.map((s) => ({ id: s.id, name: s.name, side: s.side })),
-    })),
-});
-
-export interface Waiting {
-  id: string;
-  number: number | null;
-  pipeline_id: string | null;
-}
+/** Ended tasks can stay in retired pipelines, which the shared pipeline list filters out. */
+export const retiredStagesQuery = (id: string) =>
+  queryOptions({
+    queryKey: [...pipelinesQuery.queryKey, 'stages', id] as const,
+    queryFn: async ({ signal }) => (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${enc(id)}`, { signal })).pipeline.stages,
+  });
 
 /** The tasks that wait on the person, in Flow's order (GET /api/v2/needs-you): Flow's next and previous. */
 export const waitingQuery = queryOptions({
-  queryKey: ['flow', 'waiting'] as const,
-  queryFn: async ({ signal }): Promise<Waiting[]> => {
-    const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200', { signal });
-    const seen = new Set<string>();
-    const out: Waiting[] = [];
-    for (const it of 'items' in r ? r.items : []) {
-      const t = it.task;
-      if (!t || seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push({ id: t.id, number: t.number, pipeline_id: t.pipeline_id });
-    }
-    return out;
-  },
+  ...flowQuery,
+  select: ({ items }) => items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id })),
 });
 
 /* ---------------------------------------------------------------- writes */
@@ -189,10 +145,11 @@ export const tagTask = (id: string, labels: string[]) => change(id, { labels }, 
 
 /** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. */
 export function moveTask(id: string, to: string, why?: string) {
-  const stages = queryClient.getQueryData<PipelineStages[]>(pipelineStagesQuery.queryKey);
+  const pipelines = queryClient.getQueryData(pipelinesQuery.queryKey);
   const shown = (t: TaskData): Fields => {
-    const stage = stages?.find((p) => p.id === t.pipeline_id)?.stages.find((s) => s.id === to);
-    if (stage && t.stage) return { stage_id: stage.id, stage: { ...t.stage, id: stage.id, name: stage.name, side: stage.side } };
+    const stages = pipelines?.find((p) => p.id === t.pipeline_id)?.stages ?? queryClient.getQueryData(retiredStagesQuery(t.pipeline_id ?? '').queryKey);
+    const stage = stages?.find((s) => s.id === to);
+    if (stage && t.stage) return { stage_id: stage.id, stage: { ...t.stage, id: stage.id, name: stage.name, side: !!stage.side } };
     if (to === 'closed') return { status: 'closed' };
     if (to === 'done') return { status: 'done' };
     if (to === 'reopen') return { status: 'open' };
@@ -224,7 +181,6 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
   const gone = (cur: unknown): unknown => {
-    if (Array.isArray(cur)) return (cur as Waiting[]).filter((w) => w.id !== id);
     const f = cur as { count?: number; items?: { id: string }[] } | undefined;
     if (!f?.items) return cur;
     const items = f.items.filter((w) => w.id !== id);
