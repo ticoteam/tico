@@ -1,7 +1,8 @@
-import { queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   BotDreamView,
+  BotFileList,
   BrowserControl,
   BrowserControlState,
   BrowserInput,
@@ -516,6 +517,134 @@ export const allTasksQuery = (since?: string) => {
     queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
   });
 };
+
+/* ---------------------------------------------------------------- its own lists (task tabs) */
+
+/**
+ * One row of a list's filter (backend/bot_task_tabs.py FIELDS): a task must match every row; a list value is "any of".
+ * Not in the generated schema: the route answers a plain dict.
+ */
+export interface ListRow {
+  field: string;
+  value: number | string | string[];
+}
+/** A list on an agent's page: a default (`builtin`) or one of its own, a saved filter. */
+export interface TaskTab {
+  builtin?: 'needs' | 'active' | 'blocked' | 'done' | null;
+  name: string;
+  show_count?: boolean;
+  conditions?: ListRow[];
+}
+export interface TaskTabs {
+  bot: string;
+  tabs: TaskTab[];
+  can_edit: boolean;
+  personal?: boolean;
+}
+
+/** Its lists in order (GET /api/v2/bots/{bot}/task-tabs). A list's key is its builtin name, else `c<place>`. */
+export const taskTabsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'tabs', slug] as const,
+    queryFn: ({ signal }) => api.get<TaskTabs>(`/api/v2/bots/${at(slug)}/task-tabs`, { signal }),
+    staleTime: QUIET_STALE_MS,
+  });
+
+export const listKey = (tabs: TaskTab[], i: number) => tabs[i]?.builtin ?? `c${i}`;
+
+export interface ListTasks {
+  tasks: OwnTask[];
+  count: number;
+}
+
+/**
+ * What one of its lists shows the viewer: the count and the newest 200 (GET /api/v2/bots/{bot}/task-tabs/tasks?tab=).
+ * Under the tasks root so the stream patches its rows; the filter is the server's, so a task event reads it again.
+ */
+export const listTasksQuery = (slug: string, tab: string) =>
+  queryOptions({
+    queryKey: keys.tasks.list({ bot_tab: slug, tab }),
+    queryFn: async ({ signal }): Promise<ListTasks> => {
+      const out = await api.get<{ tabs?: { key: string; count: number; ids: string[] }[]; tasks?: OwnTask[] }>(
+        `/api/v2/bots/${at(slug)}/task-tabs/tasks?${q({ tab })}`,
+        { signal },
+      );
+      const one = out.tabs?.find((t) => t.key === tab);
+      const byId = new Map((out.tasks ?? []).map((t) => [t.id, t]));
+      return { tasks: (one?.ids ?? []).flatMap((id) => byId.get(id) ?? []), count: one?.count ?? 0 };
+    },
+  });
+
+/** The layout as the server takes it back: a default keeps its own filter; Done recently has none. */
+const sendable = (t: TaskTab): TaskTab =>
+  t.builtin
+    ? { builtin: t.builtin, name: t.name, show_count: t.show_count ?? true, ...(t.builtin !== 'done' && t.conditions ? { conditions: t.conditions } : {}) }
+    : { name: t.name, show_count: t.show_count ?? true, conditions: t.conditions ?? [] };
+
+/**
+ * Save its lists: the whole list in order (PUT /api/v2/bots/{bot}/task-tabs, widgets left as they are). Each list's
+ * tasks are read again, since a key is a place and places move.
+ */
+export async function saveTabs(slug: string, change: (tabs: TaskTab[]) => TaskTab[]) {
+  const key = taskTabsQuery(slug).queryKey;
+  const held = queryClient.getQueryData(key) ?? (await queryClient.fetchQuery(taskTabsQuery(slug)));
+  const tabs = change(held.tabs).map(sendable);
+  const out = await write<TaskTabs>({
+    key,
+    optimistic: (cur: TaskTabs | undefined) => (cur ? { ...cur, tabs } : cur),
+    send: (idempotencyKey) => api.put<TaskTabs>(`/api/v2/bots/${at(slug)}/task-tabs`, { tabs }, { idempotencyKey }),
+    settle: (_cur: TaskTabs | undefined, answer) => answer,
+  });
+  void queryClient.invalidateQueries({
+    queryKey: ['tasks', 'list'],
+    predicate: (qy) => (qy.queryKey[2] as { bot_tab?: string } | undefined)?.bot_tab === slug,
+  });
+  return out;
+}
+
+/* ---------------------------------------------------------------- its files */
+
+export type AgentFile = BotFileList['files'][number];
+const FILE_PAGE = 20;
+
+/** The files it made or keeps, newest first (GET /api/v2/bots/{bot}/files), 20 a page. */
+export const agentFilesQuery = (slug: string) =>
+  infiniteQueryOptions({
+    queryKey: ['team', 'files', slug] as const,
+    queryFn: ({ signal, pageParam }) =>
+      api.get<BotFileList>(`/api/v2/bots/${at(slug)}/files?${q({ limit: FILE_PAGE, ...(pageParam ? { cursor: pageParam } : {}) })}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => (last.has_more && last.next_cursor) || undefined,
+    staleTime: QUIET_STALE_MS,
+  });
+
+/* ---------------------------------------------------------------- its last run */
+
+/** Why its last run ended without finishing (backend/execution.py last_stop). Not in the generated schema. */
+export interface LastStop {
+  kind?: string;
+  tone: 'alert' | 'soft';
+  needs_person: boolean;
+  action?: 'review' | null;
+  at?: string | null;
+  reason?: string | null;
+  text: string;
+}
+
+/** Its status line (GET /api/v2/status?bot=): only why the last run stopped is read from it. */
+export const lastStopQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'status', slug] as const,
+    queryFn: async ({ signal }): Promise<LastStop | null> => {
+      const out = await api.get<{ status?: { state?: string; last_stop?: LastStop | null } | null }>(`/api/v2/status?${q({ bot: slug })}`, { signal });
+      const s = out.status;
+      return s && (s.state === 'crashed' || s.state === 'idle') ? (s.last_stop ?? null) : null;
+    },
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** Read it again: its status moved on the stream. */
+export const lastStopAgain = (slug: string) => void queryClient.invalidateQueries({ queryKey: lastStopQuery(slug).queryKey });
 
 /* ---------------------------------------------------------------- changes */
 

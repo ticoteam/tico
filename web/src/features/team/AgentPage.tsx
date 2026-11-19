@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActors, type Actor } from '@/data';
@@ -19,9 +19,13 @@ import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type His
 import { ModelPicker } from './ModelPicker';
 import { CopiesSection, CopyFacts, CopyPick } from './Copies';
 import { CredentialDialog, WorksForDialog } from './dialogs';
+import { FilesSection } from './Files';
+import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
+import { ListEditor, ListSections, useLists } from './Lists';
 import { ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import {
+  agentFilesQuery,
   agentQuery,
   agentsQuery,
   changesQuery,
@@ -117,6 +121,8 @@ function AgentHead({
   const dream = useAction('agents.dream');
   const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
+  const [listing, setListing] = useState(false);
+  const { canEdit } = useLists(slug);
   const head: Head = {
     title: actor.name,
     path,
@@ -128,6 +134,7 @@ function AgentHead({
       <>
         <CopyPick slug={slug} botId={row?.id ?? bareId(actor.id)} />
         {paused && <Pill flag>Paused</Pill>}
+        <LastRun slug={slug} actor={actor} manage={row?.can_manage !== false} />
         {sub && <p className="col-sub">{sub}</p>}
       </>
     ),
@@ -135,6 +142,7 @@ function AgentHead({
       <IconButton
         icon="gear"
         label="Settings"
+        data-phone
         on={settings}
         aria-pressed={settings}
         onClick={() => void open.run({ who: slug, ...(settings ? {} : { tab: 'settings' }) })}
@@ -149,6 +157,7 @@ function AgentHead({
             <MenuItem label="Pause" icon="pause" onSelect={() => void pause.run({ slug })} />
           )}
           <MenuItem label="Dream" icon="asleep" onSelect={() => void dream.run({ slug })} />
+          {canEdit && !settings && <MenuItem label="New list" icon="list" onSelect={() => setListing(true)} />}
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
@@ -160,6 +169,7 @@ function AgentHead({
           verb="Archive"
           onConfirm={() => void archive.run({ slug })}
         />
+        <ListEditor open={listing} onOpenChange={setListing} slug={slug} />
       </>
     ),
   };
@@ -178,6 +188,9 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const update = useQuery(latestUpdateQuery(slug));
   const detail = useQuery(agentQuery(slug));
   const dream = useQuery(dreamQuery(slug));
+  const { lists } = useLists(slug);
+  const files = useInfiniteQuery(agentFilesQuery(slug));
+  const fileN = files.data?.pages[0]?.files?.length ?? 0;
 
   const tasks = open.data?.tasks ?? [];
   const nowId = detail.data?.status?.task_id;
@@ -195,7 +208,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     .filter(Boolean);
   const doneN = done.data?.tasks.length ?? 0;
 
-  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : !tasks.length && !lines.length && !doneN && !actor.working && !dream.data ? 'empty' : 'ready';
+  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : !tasks.length && !lines.length && !doneN && !actor.working && !dream.data && !lists.length && !fileN ? 'empty' : 'ready';
   return (
     <RecordPage
       {...head}
@@ -262,6 +275,8 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
             ))}
             {doneN > 0 && <Fold label="Done" text={`${doneN} this week`} />}
           </Section>
+          <ListSections slug={slug} me={me?.id} />
+          <FilesSection slug={slug} />
           <CopiesSection slug={slug} botId={bareId(actor.id)} actors={actors} />
         </>
       }
