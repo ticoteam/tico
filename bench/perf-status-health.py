@@ -6,8 +6,9 @@ an open pull request on most bot-owned open tasks, and a cloud machine for most 
     nice -n 10 .venv/bin/python bench/perf-status-health.py
 
 Env: as perf-hub-overload.py (OPEN, CLOSED, THREADS, RUNS, DB=<file> to keep and reuse the seeded database,
-TOKENS), plus PATHS (default the four reads above), ANSWERS=<file> (each read's answer as JSON, the clock's own fields
-blanked, to compare two checkouts on one DB) and STATEMENTS=1 (each read's repeated statement shapes).
+TOKENS), plus CONCURRENT=<n> (time n readers at once), PATHS (default the four reads above), ANSWERS=<file> (each
+read's answer as JSON, the clock's own fields blanked, to compare two checkouts on one DB), STATEMENTS=1 (each read's
+repeated statement shapes) and SIZES=1 (a list answer's bytes by field).
 
 Only fictional data, in a temporary folder removed afterwards (unless DB is given). Never point it at a real hub.
 """
@@ -42,6 +43,7 @@ PATHS = tuple(
 )
 TOKENS = tuple(os.environ.get("TOKENS", "ana-test,ben-test").split(","))
 RUNS = int(os.environ.get("RUNS", 5))
+CONCURRENT = int(os.environ.get("CONCURRENT", 0))  # readers at once for the timing; 0 times one read at a time
 # The answer's own clock: the same database read twice a few seconds apart differs here and nowhere else.
 CLOCK = {"server_time", "tick_age_s", "last_tick", "seq", "age_minutes", "quiet", "minutes", "cursor"}
 
@@ -106,6 +108,18 @@ def measure(api, path, token):
         t = time.perf_counter()
         api.get(path, headers=headers(token))
         times.append((time.perf_counter() - t) * 1000)
+    if CONCURRENT:
+        # Under load: CONCURRENT readers at once, as a busy hub's polls overlap. Each statement stepped then waits
+        # for the GIL behind the others' Python, so a read's statement count shows in its time.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def timed(_):
+            t = time.perf_counter()
+            api.get(path, headers=headers(token))
+            return (time.perf_counter() - t) * 1000
+
+        with ThreadPoolExecutor(CONCURRENT) as pool:
+            times = list(pool.map(timed, range(CONCURRENT * RUNS)))
     return seen, statistics.median(times), len(first.content), first.json()
 
 
