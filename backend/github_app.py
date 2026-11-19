@@ -538,7 +538,10 @@ class GitHubApp:
 
     def row(self, c=None):
         if c is not None:
-            return c.execute("SELECT * FROM github_app WHERE id='app'").fetchone()
+            # Once a snapshot (read_cache: a write starts it again): one Health read asks for it seven times.
+            from . import read_cache
+
+            return read_cache.one(c, "SELECT * FROM github_app WHERE id='app'")
         with self.store.read() as c:
             return self.row(c)
 
