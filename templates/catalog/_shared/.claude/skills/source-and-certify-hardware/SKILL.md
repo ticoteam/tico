@@ -82,7 +82,7 @@ one numbered message, save the answers there with the date, and work on the defa
 3. **Find and send.** Build a long list from the team's past suppliers (`tico doc search`, and `tico finance search`
    for vendors already paid), the designer's suggestions and directories. Cut to at least three that make this kind
    of part at this quantity. Send the identical RFQ to each on the same day with the same deadline
-   (`tico email draft`, `tico email send`). When one supplier asks a question, send the answer to all.
+   (`tico email draft`, `tico email send <mailbox> --draft <draft-id> --task <id>`). When one supplier asks a question, send the answer to all.
 4. **Normalise the quotes.** Put every quote in one table on the same basis: quantity tiers, currency and the exchange
    rate with its date, delivery terms, tooling and NRE, lead time for samples and for production, MOQ, payment terms,
    what the price includes, and how long the quote is valid. Write "not in quote" for anything missing and ask for
