@@ -6,11 +6,14 @@ import asyncio
 import io
 import json
 import logging
+import subprocess
+import sys
 import threading
 import wave
 from array import array
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1024,6 +1027,7 @@ def test_questions_across_silent_mic_pauses_are_stored_or_ask_for_a_repeat(meet,
             later = machine.pending[call_id] - original
         for future in later:
             future.result(5)
+        machine.clip_writer.submit(lambda: None).result(5)
         assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == ["Second question", "Fourth question"]
     finally:
         release.set()
@@ -1047,6 +1051,152 @@ def test_questions_across_silent_mic_pauses_are_stored_or_ask_for_a_repeat(meet,
     ]
     assert all(entry.keys() == {"call", "n", "ms", "outcome", "wait_ms"} for entry in fields)
     assert all(entry["call"] == call_id and int(entry["ms"]) >= 1400 and int(entry["wait_ms"]) >= 0 for entry in fields)
+
+
+def test_a_backlog_drop_is_reported_with_every_transcription_worker_busy(meet, monkeypatch, caplog):
+    busy, release = threading.Barrier(calls.WORKERS + 1), threading.Event()
+
+    def transcribe(base, key, audio):
+        if not release.is_set():
+            busy.wait(5)
+            assert release.wait(10)
+        return SYNTHETIC_SPEECH
+
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    call_id, machine = call["id"], meet.app.state.calls
+    audio = PCM_ONE_SECOND + SILENCE_ONE_SECOND
+    try:
+        for n in range(calls.WORKERS):
+            machine.ingest(call_id, "human:ana", audio, n * 3000)
+        busy.wait(5)
+        machine.ingest(call_id, "human:ana", audio, calls.WORKERS * 3000)
+        wait_until(lambda: any("outcome=dropped_backlog" in line for line in caplog.messages))
+        [line] = [line for line in caplog.messages if line.startswith("call_clip ")]
+        assert line.startswith(f"call_clip call={call_id} n=0 ms=1200 outcome=dropped_backlog wait_ms=")
+        assert get(meet, f"calls/{call_id}")["voice"]["note"] == calls.REPEAT_NOTE
+    finally:
+        release.set()
+    assert machine.settle()
+
+
+def test_a_completed_clip_moves_past_a_transcription_at_the_order_deadline(meet, monkeypatch, caplog):
+    started, release = threading.Event(), threading.Event()
+    now, timers = [1000.0], []
+
+    def transcribe(base, key, audio):
+        if not started.is_set():
+            started.set()
+            assert release.wait(10)
+            return "The late question"
+        return "The next question"
+
+    def timer(delay, wake, *, args):
+        return SimpleNamespace(start=lambda: timers.append((delay, wake, args)), cancel=lambda: None)
+
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    monkeypatch.setattr(call_media, "transcribe", transcribe)
+    monkeypatch.setattr(calls, "Timer", timer)
+    call = start_call(meet, thread(meet), speak_replies=False)
+    call_id, meeting_id, machine = call["id"], call["meeting_id"], meet.app.state.calls
+    machine.voice.clock = lambda: now[0]
+    try:
+        machine.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+        assert started.wait(5)
+        with machine.lock:
+            first = set(machine.pending[call_id])
+            machine.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 10_000)
+            second = machine.pending[call_id] - first
+        for future in second:
+            future.result(5)
+        machine.clip_writer.submit(lambda: None).result(5)
+        [(delay, wake, args)] = timers
+        assert delay == calls.CLIP_ORDER_WAIT_SECONDS and _chunks(meet, meeting_id) == []
+        now[0] += delay
+        wake(*args)
+        machine.clip_writer.submit(lambda: None).result(5)
+        assert [chunk["text"] for chunk in _chunks(meet, meeting_id)] == ["The next question"]
+    finally:
+        release.set()
+    assert machine.settle()
+    assert [line.split(" outcome=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
+        "late",
+        "stored",
+    ]
+
+
+def test_sparse_silence_packets_do_not_combine_two_questions(meet):
+    call = start_call(meet, thread(meet), speak_replies=False)
+    call_id, machine = call["id"], meet.app.state.calls
+    now = [0.0]
+
+    async def record():
+        async def frames():
+            size = 10 * call_voice.BYTES_PER_MS
+            for start, audio in [
+                (0, ms(240, SPEECH)),
+                (550, QUIET[:size]),
+                (1050, QUIET[:size]),
+                (1200, ms(240, SPEECH)),
+            ]:
+                for offset in range(0, len(audio), size):
+                    now[0] = (start + offset // call_voice.BYTES_PER_MS) / 1000
+                    frame = audio[offset : offset + size]
+                    yield SimpleNamespace(frame=SimpleNamespace(data=frame, samples_per_channel=len(frame) // 2))
+
+        loop = SimpleNamespace(time=lambda: now[0], call_later=asyncio.get_running_loop().call_later)
+        sdk = SimpleNamespace(AudioStream=lambda *args, **kwargs: frames())
+        recorder = call_media.Recorder(sdk, loop, "", "", machine._audio_for(call_id), machine._quiet_for(call_id))
+        recorder.joined_at = 0
+        await recorder._listen(None, "human:ana")
+
+    asyncio.run(record())
+    assert machine.settle()
+    with meet.app.state.store.read() as c:
+        starts = c.execute(
+            "SELECT start_ms FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (call["meeting_id"],)
+        ).fetchall()
+    assert [row[0] for row in starts] == [0, 1000]
+
+
+def test_a_clip_storage_failure_has_its_own_outcome_and_the_next_clip_stores(meet, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    call = start_call(meet, thread(meet), speak_replies=False)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("storage failed")
+
+    with monkeypatch.context() as failed:
+        failed.setattr(live_meetings, "append_chunks", refuse)
+        _speak(meet, call["id"], 0)
+    _speak(meet, call["id"], 5000)
+    assert len(_chunks(meet, call["meeting_id"])) == 1
+    assert [line.split(" outcome=")[1].split()[0] for line in caplog.messages if line.startswith("call_clip ")] == [
+        "store_failed",
+        "stored",
+    ]
+
+
+def test_call_clip_logging_writes_once_with_a_root_stdout_handler():
+    output = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            """import logging, sys
+from uvicorn import Config
+from backend.server import _logging_config
+
+root = logging.getLogger()
+root.setLevel(logging.INFO)
+root.addHandler(logging.StreamHandler(sys.stdout))
+Config(None, log_config=_logging_config('info'))
+logging.getLogger('tico.calls').info('call_clip outcome=stored')
+""",
+        ],
+        text=True,
+    )
+    assert output.count("call_clip outcome=stored") == 1
 
 
 def test_a_backlog_of_clips_is_bounded_and_freed_and_a_question_heard_too_long_ago_is_not_asked(meet, monkeypatch):

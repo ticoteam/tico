@@ -148,14 +148,15 @@ A Google Meet call still opens Meet in a tab of its own.
    screen's sound). Each speaker's audio is cut after about 450 ms of quiet. A fragment with less than 600 ms of speech
    gets 700 ms of quiet so the speaker has more time to continue. A clip keeps 200 ms before the first loud frame and
    after the last, and is cut at 60 seconds when nobody pauses. A clip needs at least 200 ms of speech.
-   If microphone frames stop coming, the recorder's timer uses the same pause threshold. The recorder flushes
-   immediately when the track ends. Each clip goes to the Gateway's speech-to-text (`tico-transcribe-1.1`; when the
-   Gateway answers 400 that it does not know that model, the call falls back once to `elevenlabs/scribe-v2` and logs
-   it). Clips are transcribed on workers, so the recorder never waits on the Gateway, and are stored in the order they
-   start, across people: a clip waits for the clips that start before it and for an utterance someone else began before
-   it and is still saying. The text becomes the call's live meeting chunks. Audio is held in memory until its clip is
-   stored and is never stored itself. At most 4 clips of a call wait for their text at once: past that the oldest is
-   dropped without waiting for its request to finish. In a 1:1 call with a bot, a dropped clip or one the Gateway
+   Gaps between microphone frames count as quiet, and the recorder's timer uses the same pause threshold when frames
+   stop coming. The recorder flushes when the track ends. Each clip goes to the Gateway's speech-to-text
+   (`tico-transcribe-1.1`; when the Gateway answers 400 that it does not know that model, the call falls back once to
+   `elevenlabs/scribe-v2` and logs it). Transcription workers handle Gateway requests while a separate worker writes
+   the chunks in speech order.
+   A ready clip can move past an earlier request that has been out for six seconds. That earlier clip is marked late.
+   A clip still waits for an utterance someone else began before it and is still saying. The text becomes the call's
+   live meeting chunks. Audio is held in memory until its clip is settled. At most 4 clips of a call wait for their text
+   at once. Past that the oldest is dropped. In a 1:1 call with a bot, a late or dropped clip or one the Gateway
    cannot turn into text shows `Please repeat that`. The server writes one `call_clip` line per clip with only its call
    ID, clip number, duration, outcome and elapsed time since the cut.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10 in the call, counting

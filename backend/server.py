@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import replace
+import logging
 import os
 import queue
 import secrets
@@ -9,6 +10,29 @@ import signal
 import socket
 import subprocess
 import threading
+
+
+def _logging_config(log_level):
+    from uvicorn.config import LOG_LEVELS, LOGGING_CONFIG
+    from .diagnostics import RING
+
+    level = LOG_LEVELS[log_level.lower()]
+    # One stdout path per call log. The warning ring still receives warnings at any console level.
+    call_logger = {"handlers": ["calls", "call_diagnostics"], "level": min(level, logging.WARNING), "propagate": False}
+    return {
+        **LOGGING_CONFIG,
+        "handlers": {
+            **LOGGING_CONFIG["handlers"],
+            "calls": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stdout",
+                "level": level,
+            },
+            "call_diagnostics": {"()": lambda: RING},
+        },
+        "loggers": {**LOGGING_CONFIG["loggers"], "tico.calls": call_logger, "tico.call_media": call_logger},
+    }
 
 
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
@@ -70,7 +94,6 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         # Imported after the relay is spawned, so its start overlaps the import instead of following it; inside this
         # try, so a failed import still stops the relay.
         import uvicorn
-        from uvicorn.config import LOGGING_CONFIG
         from .app import create_app
 
         line = lines.get(timeout=15)
@@ -100,22 +123,10 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
                 process.send_signal(signal.SIGTERM)
                 super().handle_exit(sig, frame)
 
-        # Uvicorn's default handlers only cover its own loggers. Keep the support ring on the root logger.
-        log_config = {
-            **LOGGING_CONFIG,
-            "handlers": {
-                **LOGGING_CONFIG["handlers"],
-                "calls": {"class": "logging.StreamHandler", "formatter": "default", "stream": "ext://sys.stdout"},
-            },
-            "loggers": {
-                **LOGGING_CONFIG["loggers"],
-                "tico.calls": {"handlers": ["calls"], "level": log_level.upper()},
-            },
-        }
         server = Server(
             uvicorn.Config(
                 create_app(settings),
-                log_config=log_config,
+                log_config=_logging_config(log_level),
                 log_level=log_level,
                 access_log=False,
                 proxy_headers=False,

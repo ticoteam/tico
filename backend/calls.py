@@ -36,6 +36,7 @@ import urllib.parse
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
+from threading import Timer
 from typing import Literal
 
 from fastapi import Request
@@ -71,6 +72,7 @@ PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
 WORKERS = 4  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
 BACKLOG = 4  # a call's clips waiting for their text at most: past it the oldest is dropped, and a repeat asked for
+CLIP_ORDER_WAIT_SECONDS = 6  # ready text can move past a transcription still out this long
 DRAIN_SECONDS = call_media.TRANSCRIBE_TIMEOUT + 15  # the longest a call's end waits for its last clips
 END_WAIT_SECONDS = 2  # End answers with the call ended when its last clips are in by then, else with it ending
 BOT_LIMIT = live_meetings.CALL_BOT_LIMIT  # bots in one call
@@ -469,14 +471,14 @@ class Calls:
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
         self.lock = threading.RLock()
-        self.pending = {}  # call_id -> the work still out for it (clips being transcribed), dropped as each is done
+        self.pending = {}  # call_id -> the work still out for it, dropped as each is done
         # call_id -> {"n": clips cut so far, "queue": the clips not yet stored, by where they start}: the transcript keeps
         # the order speech was said in, across people, whichever clip is transcribed first.
         self.order = {}
-        self.settling = {}  # call_id -> the lock held while its clips are stored
         self.closing = set()  # calls whose End stopped their listening; their speech already heard is still stored
         self.ending = {}  # call_id -> the thread finishing an ended call once its last clips are in
         self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
+        self.clip_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tico-meet-clip")
         self.voice = call_voice.Voice(app, store, self)
         self.starting = {}  # (actor, idempotency key) -> the lock a Google Meet start holds while it makes its space
         self.pollers = ThreadPoolExecutor(max_workers=POLL_WORKERS, thread_name_prefix="tico-meet-poll")
@@ -1516,19 +1518,24 @@ class Calls:
         takes its place in the call's queue by where it starts, and is stamped with when it was heard (the voice's
         clock), so a question is aged from then. A call has BACKLOG clips waiting for their text at most: past that the
         oldest is dropped, and in a 1:1 bot call the person is asked to repeat it."""
-        order = self.order.setdefault(call_id, {"n": 0, "queue": []})
+        order = self.order.setdefault(call_id, {"n": 0, "queue": [], "settling": False, "timer": None})
         buffer["heard"] = self.voice.clock()
         buffer["duration_ms"] = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
         clip = {"n": order["n"], "start": buffer["start_ms"], "identity": identity, "buffer": buffer}
-        clip.update(text=None, ready=False, dropped=False)
+        clip.update(text=None, ready=False, discard=None)
         order["n"] += 1
         bisect.insort(order["queue"], clip, key=lambda one: (one["start"], one["n"]))
-        out = sorted((one for one in order["queue"] if not one["ready"] and not one["dropped"]), key=lambda x: x["n"])
-        for oldest in out[: max(0, len(out) - BACKLOG)]:
-            oldest["dropped"] = True
-            oldest["ready"] = True  # a discarded clip can settle before its Gateway request returns
-            oldest["buffer"]["pcm"] = b""
+        out = sorted((one for one in order["queue"] if not one["ready"]), key=lambda x: x["n"])
+        if len(out) > BACKLOG:
+            for oldest in out[: len(out) - BACKLOG]:
+                self._discard_clip(oldest, "dropped_backlog")
+            self._kick(call_id)
         self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
+
+    @staticmethod
+    def _discard_clip(clip, outcome):
+        clip.update(ready=True, discard=outcome)
+        clip["buffer"]["pcm"] = b""
 
     def _track(self, call_id, future):
         """Keep a call's work until it is done (drain and settle wait on it), and no longer."""
@@ -1545,16 +1552,20 @@ class Calls:
         future.add_done_callback(done)
 
     def _kick(self, call_id):
-        """Store what can be stored now that a speaker stopped (self.lock held): a clip may have been waiting for them."""
+        """Schedule at most one writer per call (self.lock held). Gateway work cannot occupy the writer."""
         order = self.order.get(call_id)
-        if order and order["queue"] and order["queue"][0]["ready"]:
-            self._track(call_id, self.workers.submit(self._settle, call_id))
+        if order and order["queue"] and not order["settling"]:
+            order["settling"] = True
+            self._track(call_id, self.clip_writer.submit(self._settle, call_id))
 
     def drain(self, call_id):
         """Wait (up to DRAIN_SECONDS) for the clips a call is still transcribing, so its transcript has them all."""
-        with self.lock:
-            waiting = list(self.pending.get(call_id, ()))
-        wait(waiting, timeout=DRAIN_SECONDS)
+        deadline = time.monotonic() + DRAIN_SECONDS
+        while True:
+            with self.lock:
+                waiting = [future for future in self.pending.get(call_id, ()) if not future.done()]
+            if not waiting or wait(waiting, timeout=max(0, deadline - time.monotonic())).not_done:
+                return
 
     def finish_speech(self, call_id):
         """Send the speech still waiting for a call, and wait for it: the call's transcript must have every clip."""
@@ -1564,7 +1575,7 @@ class Calls:
     def _transcribe_clip(self, call_id, clip):
         text = None
         try:
-            if not clip["dropped"]:
+            if not clip["discard"]:
                 text = self._transcribe(call_id, clip["buffer"])
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
@@ -1572,9 +1583,9 @@ class Calls:
             report("calls_transcribe", call_id, exc, logger="tico.calls")
         finally:
             with self.lock:
-                if not clip["dropped"]:
+                if not clip["discard"]:
                     clip.update(text=text, ready=True)
-            self._settle(call_id)
+                    self._kick(call_id)
 
     def _transcribe(self, call_id, buffer):
         """The Gateway's text (possibly empty), or None when transcription was unavailable or the call ended."""
@@ -1603,33 +1614,57 @@ class Calls:
             for key, segmenter in self.buffers.items()
         )
 
-    def _settle(self, call_id):
-        """Store a call's transcribed clips in the order they start: a clip waits for the ones before it, and for an
-        utterance someone began before it and is still saying. Each clip's audio is let go once it is stored."""
+    def _wake_clip_writer(self, call_id):
         with self.lock:
-            if call_id not in self.order:
-                return
-            gate = self.settling.setdefault(call_id, threading.Lock())
-        with gate:
-            while True:
-                with self.lock:
-                    order = self.order.get(call_id)
-                    if not order or not order["queue"]:
-                        return
-                    clip = order["queue"][0]
-                    if not clip["ready"] or self._held_back(call_id, clip):
-                        return
-                    order["queue"].pop(0)
-                outcome = "untranscribed"
-                try:
-                    outcome = self._store_clip(call_id, clip)
-                except Exception as exc:  # noqa: BLE001 - one clip that cannot be stored must not hold up the rest
-                    from .batch_work import report
+            self._kick(call_id)
 
-                    report("calls_transcribe", call_id, exc, logger="tico.calls")
-                finally:
-                    clip["buffer"]["pcm"] = b""
-                    self._log_clip(call_id, clip, outcome)
+    def _next_clip(self, call_id, order):
+        """Take a clip to settle (self.lock held), or schedule a wakeup if a slow request is holding up ready text."""
+        if timer := order["timer"]:
+            timer.cancel()
+            order["timer"] = None
+        queue = order["queue"]
+        for index, clip in enumerate(queue):
+            if clip["discard"]:
+                return queue.pop(index)
+        if not queue or self._held_back(call_id, queue[0]):
+            return None
+        head = queue[0]
+        if head["ready"]:
+            return queue.pop(0)
+        if not any(clip["ready"] for clip in queue[1:]):
+            return None
+        delay = head["buffer"]["heard"] + CLIP_ORDER_WAIT_SECONDS - self.voice.clock()
+        if delay <= 0:
+            self._discard_clip(head, "late")
+            return queue.pop(0)
+        timer = Timer(delay, self._wake_clip_writer, args=(call_id,))
+        timer.daemon = True
+        order["timer"] = timer
+        timer.start()
+        return None
+
+    def _settle(self, call_id):
+        """Write clips in the order speech began. A discarded clip reports its outcome without blocking this order."""
+        while True:
+            with self.lock:
+                order = self.order.get(call_id)
+                if not order:
+                    return
+                clip = self._next_clip(call_id, order)
+                if clip is None:
+                    order["settling"] = False
+                    return
+            outcome = "store_failed"
+            try:
+                outcome = self._store_clip(call_id, clip)
+            except Exception as exc:  # noqa: BLE001 - one clip that cannot be stored must not hold up the rest
+                from .batch_work import report
+
+                report("calls_store_clip", call_id, exc, logger="tico.calls")
+            finally:
+                clip["buffer"]["pcm"] = b""
+                self._log_clip(call_id, clip, outcome)
 
     def _log_clip(self, call_id, clip, outcome):
         buffer = clip["buffer"]
@@ -1658,9 +1693,7 @@ class Calls:
                 if voiced and not row["ending_at"] and self.voice.answers_all(c, row):
                     self.voice._note(self.voice._call(call_id), REPEAT_NOTE)
                     self.voice.touch(call_id, c)
-                if clip["dropped"]:
-                    return "dropped_backlog"
-                return "empty" if text == "" else "untranscribed"
+                return clip["discard"] or ("empty" if text == "" else "untranscribed")
             previous = c.execute(
                 "SELECT COALESCE(MAX(start_ms),0) FROM live_meeting_chunks WHERE meeting_id=?", (meeting["id"],)
             ).fetchone()[0]
@@ -1764,7 +1797,8 @@ class Calls:
             for key in [key for key in self.buffers if key[0] == call_id]:
                 self.buffers.pop(key, None)
             order = self.order.pop(call_id, None)
-            self.settling.pop(call_id, None)
+            if order and order["timer"]:
+                order["timer"].cancel()
         if order:
             for clip in order["queue"]:
                 self._log_clip(call_id, clip, "ended")

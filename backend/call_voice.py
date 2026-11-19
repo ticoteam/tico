@@ -100,14 +100,14 @@ def loudness(frame: bytes) -> float:
 
 
 class Segmenter:
-    """One speaker's speech cut into utterances at their pauses, by loudness. Time is the audio's own (`start_ms` of
-    each piece fed), so the cut does not depend on when frames arrive. `flush` ends an utterance whose speaker stopped
-    sending (muted, left) or whose call is ending."""
+    """One speaker's speech cut into utterances at their pauses, by loudness. Gaps on the audio timeline count as
+    silence. `flush` ends an utterance whose speaker stopped sending (muted, left) or whose call is ending."""
 
     def __init__(self):
         self.rest = bytearray()  # the part of a frame not yet whole
         self.preroll = bytearray()
         self.pcm: bytearray | None = None  # the utterance under way, or None between utterances
+        self.end: int | None = None  # byte position of the next sample on the audio timeline
         self.start = self.voiced = self.quiet = 0
         self.at = 0.0  # wall time of the last piece fed (the call's idle flush reads it)
 
@@ -123,6 +123,23 @@ class Segmenter:
 
     def feed(self, pcm: bytes, start_ms: int) -> list[tuple[int, bytes]]:
         """Take one piece of speech; returns the utterances it ended, as (start_ms, pcm)."""
+        done: list[tuple[int, bytes]] = []
+        start = start_ms * BYTES_PER_MS
+        if self.end is not None:
+            if start_ms == self.end // BYTES_PER_MS:
+                start = self.end  # successive timestamps have millisecond precision, even for partial frames
+            elif start > self.end:
+                missing = start - self.end
+                # A pause and a full preroll suffice even when the speaker goes quiet for minutes.
+                pad = min(missing, (FRAGMENT_SILENCE_MS + PREROLL_MS + FRAME_MS) * BYTES_PER_MS)
+                done = self._feed(bytes(pad), self.end // BYTES_PER_MS)
+                if pad < missing:
+                    self.rest.clear()
+        self.end = start + len(pcm)
+        done.extend(self._feed(pcm, start_ms))
+        return done
+
+    def _feed(self, pcm: bytes, start_ms: int) -> list[tuple[int, bytes]]:
         data = self.rest + pcm
         base = start_ms - len(self.rest) // BYTES_PER_MS
         step = FRAME_MS * BYTES_PER_MS
