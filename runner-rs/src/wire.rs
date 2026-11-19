@@ -88,6 +88,9 @@ pub struct RunnerFrame {
     /// running turn of that bot to ask for its inputs and goal (drive.rs).
     #[serde(default)]
     pub bots: Vec<String>,
+    /// A voice hint's resident attempt. Servers from 0.6.81 until the stream kept the runner wire's name sent it as
+    /// `run_id`, as in their public answers (backend/events.py `_frame`): a hint from one of them still wakes.
+    #[serde(alias = "run_id")]
     pub attempt_id: Option<String>,
     pub call_id: Option<String>,
 }
