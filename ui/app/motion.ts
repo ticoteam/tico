@@ -100,7 +100,7 @@ function motionBuild(root: Element, st: MotionList): void {
     queueMicrotask(() => motionFlip(root, has, first));
   } else {
     for (const el of done.left) el.remove();
-    for (const el of root.querySelectorAll(has)) MOTION_FLIPS.get(el)?.cancel();
+    for (const el of root.querySelectorAll(has)) MOTION_FLIPS.get(el)?.finish();
   }
   Object.assign(st, {html, nodes: motionKids(root), keyed: !!root.querySelector(has)});
 }
@@ -113,12 +113,13 @@ function motionRects(root: Element, has: string): Map<Element, MotionRect> {
   return rects;
 }
 // Each kept element starts from where it was and settles where it is now. A slide still running is replaced by one
-// from where the element is on the screen, so a second change never jumps. An element inside a keyed one that slides
-// is carried by it and only makes up the difference; one off the screen before and after is left alone.
+// from where the element is on the screen, so a second change never jumps (it is ended, not cancelled: whoever waits
+// for the page's animations to finish is not refused). An element inside a keyed one that slides is carried by it and
+// only makes up the difference; one off the screen before and after is left alone.
 function motionFlip(root: Element, has: string, first: Map<Element, MotionRect>): void {
   if (!root.isConnected || document.hidden) return;
   const els = [...root.querySelectorAll(has)];
-  for (const el of els) MOTION_FLIPS.get(el)?.cancel();
+  for (const el of els) MOTION_FLIPS.get(el)?.finish();
   const last = els.map(el => el.getBoundingClientRect()), height = innerHeight;
   const carried = new Map<Element, {x: number; y: number}>();
   els.forEach((el, i) => {
@@ -171,7 +172,7 @@ let MOTION_PAGE: Animation | null = null;
 function motionPage(draw: () => void): void {
   const main: HTMLElement | null = $('#main'), was = main?.firstChild ?? null;
   draw();
-  MOTION_PAGE?.cancel(); MOTION_PAGE = null;
+  MOTION_PAGE?.finish(); MOTION_PAGE = null;
   if (!main || !main.animate || main.firstChild === was || motionStill() || document.hidden) return;
   MOTION_PAGE = main.animate({opacity: [0, 1]}, {duration: MOTION_FAST, easing: MOTION_EASE});
 }
