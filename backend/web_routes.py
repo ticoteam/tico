@@ -1,3 +1,4 @@
+# pyright: strict
 """The new web app at /next: the files its build wrote to build/web (settings.web_dir), beside today's UI.
 
 Registered before backend/ui_bundle_routes.py, whose mount at / would otherwise answer every /next path. Files under

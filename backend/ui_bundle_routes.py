@@ -1,6 +1,7 @@
 """The web UI's routes: its build (build/ui, scripts/build-ui.cjs) and the static folders."""
 
 import hashlib
+from pathlib import Path
 from .store import Problem
 from fastapi import Request
 from fastapi.responses import Response
@@ -11,10 +12,12 @@ from . import ui_build
 
 
 # Each sent file's ETag, by path, while its size and modified time stay the same. file_reply serves backend/web_routes.py too.
-_ETAGS = {}
+_ETAGS: dict[Path, tuple[tuple[int, int], str]] = {}
 
 
-def file_reply(request, path, media_type, cache_control=None, gz=None):
+def file_reply(
+    request: Request, path: Path, media_type: str, cache_control: str | None = None, gz: Path | None = None
+) -> Response:
     """The file at `path` with a strong ETag of its content (read again when it changes), its gzip copy `gz` to a
     browser that accepts it, and a 304 for a matching If-None-Match (a weak form too: Cloudflare sends one)."""
     from .json_response import accepts_gzip
