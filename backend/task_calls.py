@@ -586,6 +586,7 @@ def task_page_attach(
     note: str | None = None,
     changed: list[str] | None = None,
     answered: list[str] | None = None,
+    add: bool = False,
 ) -> Row:
     """Attach a page (task_pages.attach), as a task write: a private task's refusal keeps none of its words."""
     from . import task_pages
@@ -600,6 +601,7 @@ def task_page_attach(
         note=note,
         changed=changed,
         answered=answered,
+        add=add,
     )
 
 

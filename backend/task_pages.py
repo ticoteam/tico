@@ -319,6 +319,7 @@ def attach(
     note: str | None = None,
     changed: list[str] | None = None,
     answered: list[str] | None = None,
+    add: bool = False,
 ) -> Row:
     """Attach a page to a page requirement of the task's open visit. `requirement` is its id or its name (`name_of`),
     `ref` a `parse_ref` page. Who may: the task's owner, whoever holds it now, or any person. Refuses
@@ -328,7 +329,12 @@ def attach(
     quotes the person's last send back to them: page_rounds). `note`, `changed` and `answered` are what the bot says
     with this version (page_rounds.said), kept on the `page_attached` event. The route checks the caller may open the
     file. Returns the `requirement_pages` row, with `said` when the new version keeps a person's OK (`ok_kept`): what the
-    bot is told, as the task's history says it too."""
+    bot is told, as the task's history says it too.
+
+    On a document approval (`TR.document_of`) a different page replaces the pages submitted to it on this visit: their
+    role link to the task goes (`_replace_submitted`), as attaching again replaces a plain page. `add` keeps them, and
+    the approval then judges every page together. Without the replace, a page the decision model sent back kept the
+    approval not met beside a newer page it passed (D-2273, Nov 19: QA waited 15 minutes until a person unlinked it)."""
     from . import hubdb_core
     from . import page_rounds as R
     from . import task_engine as E
@@ -369,12 +375,33 @@ def attach(
         _refuse(conn, by, "lint", R.QUOTED, task_id)
     document = TR.document_of(found)
     if document:
+        replaced = [] if add else _replace_submitted(conn, row, found, document, file_id, by)
         _as_document(conn, by, task_id, document, file_id)
+        if replaced:
+            saying = {**saying, "replaced": replaced}
         made = _submit_pages(conn, row, found, document, file_id, version, by, saying=saying)
         if made is None:
             _refuse(conn, by, "task_requirement", "No such page", task_id)
+        if replaced:
+            made["replaced"] = replaced
         return made
     return _pin(conn, row, found, file_id, version, by, saying)
+
+
+def _replace_submitted(
+    conn: "sqlite3.Connection", row: Row, found: Row, document: str, file_id: str, by: str
+) -> list[str]:
+    """Take off the task, in this document role, each other page submitted to `found` on the task's open visit; gives
+    their `page:<file id>@<version>`. A page linked in the role but not submitted on this visit stays (another
+    stage's, or one left from an earlier visit): only what this stage visit judged is replaced."""
+    from . import page_links as L
+
+    replaced: list[str] = []
+    for page in current_pages(conn, row["visit"]["id"], found["id"]):
+        other = str(page["file_id"])
+        if other != file_id and L.unlink(conn, other, "task:" + str(row["id"]), document, by):
+            replaced.append(f"page:{other}@{page['version']}")
+    return replaced
 
 
 def _as_document(conn: "sqlite3.Connection", by: str, task_id: str, document: str, file_id: str) -> None:

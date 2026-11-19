@@ -20,9 +20,9 @@ ANA, OPS = X.ANA, "bot:ops"
 SPEC = "<h1>Export spec</h1><p>Rows export as CSV.</p>"
 
 
-def _flow(api, document="Spec"):
-    """A pipeline whose first stage approves the task's `document` (any person), then Build; a task there, owned by
-    bot:ops."""
+def _flow(api, document="Spec", who_oks="people_only"):
+    """A pipeline whose first stage approves the task's `document` (any person, or the decision model alone with
+    who_oks "none"), then Build; a task there, owned by bot:ops."""
     stages = (
         {
             "name": "Spec",
@@ -32,7 +32,7 @@ def _flow(api, document="Spec"):
                     "kind": "page",
                     "line": document,
                     "settings": {"document": document, "rubric": "States the goal."},
-                    "who_oks": "people_only",
+                    "who_oks": who_oks,
                 }
             ],
         },
@@ -254,10 +254,15 @@ def test_the_migration_names_documents_and_retires_pitch(api):
         ).fetchone()
 
 
-def _attach_second_spec(api, row, name="other.html"):
+def _attach_second_spec(api, row, name="other.html", add=True):
+    """Another page on the task's document approval: beside the first (`add`), or replacing it."""
     page = post(api, f"tasks/{row['id']}/files", {"name": name, "text": "<h1>Another spec</h1>"})
     entry = _entry(api, row["id"])
-    post(api, f"tasks/{row['id']}/pages", {"requirement": entry["requirement_id"], "page": "page:" + page["file_id"]})
+    page["attached"] = post(
+        api,
+        f"tasks/{row['id']}/pages",
+        {"requirement": entry["requirement_id"], "page": "page:" + page["file_id"], "add": add},
+    )
     return page
 
 
@@ -423,6 +428,72 @@ def test_a_report_cannot_borrow_another_pages_decision_model_round(api):
         _say(c, dict(page), "not_met")
     standing = _standing(api, row["id"])
     assert (standing.state, standing.on) == (R.NOT_MET, OPS)
+
+
+def _say_on(api, tid, file_id, verdict):
+    """The decision model's verdict on `file_id`'s version pinned now."""
+    with api.app.state.store.transaction() as c:
+        page = c.execute(
+            "SELECT p.* FROM requirement_pages p JOIN visits v ON v.id=p.visit_id "
+            "WHERE v.task_id=? AND v.left_at IS NULL AND p.file_id=? AND p.replaced_at IS NULL",
+            (tid, file_id),
+        ).fetchone()
+        _say(c, dict(page), verdict, "The proof is missing." if verdict == "not_met" else "")
+
+
+def _qa_report_links(api, tid):
+    with api.app.state.store.read() as c:
+        return [
+            r[0]
+            for r in c.execute("SELECT page_id FROM page_links WHERE target=? AND role='QA report'", ("task:" + tid,))
+        ]
+
+
+def test_a_newer_qa_page_replaces_the_one_sent_back_and_the_task_moves(api):
+    """D-2273 (Nov 19): the QA Owner's report failed the bar, the Release Owner attached a rebuilt one that passed, and
+    the old one kept the approval not met until a person unlinked it. Attaching another page replaces it now."""
+    _, row = _flow(api, "QA report", who_oks="none")
+    first = _write(api, row["id"], SPEC, "ana-test", "QA report")
+    _say_on(api, row["id"], first["file_id"], "not_met")
+    assert _standing(api, row["id"]).state == R.NOT_MET
+    second = _attach_second_spec(api, row, "rebuilt.html", add=False)
+    assert second["attached"]["replaced"] == [f"page:{first['file_id']}@1"]
+    assert _qa_report_links(api, row["id"]) == [second["file_id"]]
+    _say_on(api, row["id"], second["file_id"], "met")
+    assert _standing(api, row["id"]).met
+    with api.app.state.store.transaction() as c:
+        E.advance(c, row["id"])
+        assert E.task(c, row["id"])["stage_id"] == "approvals-build"
+        replaced = c.execute(
+            "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='page_attached' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+    assert json.loads(replaced[0])["replaced"] == [f"page:{first['file_id']}@1"]
+
+
+def test_two_qa_pages_kept_together_name_each_page_and_how_to_drop_one(api):
+    """With add, both pages stay and both must pass: the not-met line names each page it read and the unlink that
+    drops one; after that unlink the newer page alone meets it."""
+    from backend import page_links as L
+
+    _, row = _flow(api, "QA report", who_oks="none")
+    first = _write(api, row["id"], SPEC, "ana-test", "QA report")
+    _say_on(api, row["id"], first["file_id"], "not_met")
+    second = _attach_second_spec(api, row, "rebuilt.html", add=True)
+    assert "replaced" not in second["attached"]
+    _say_on(api, row["id"], second["file_id"], "met")
+    standing = _standing(api, row["id"])
+    assert (standing.state, standing.on) == (R.NOT_MET, OPS)
+    assert f"page:{first['file_id']}@1 not met" in standing.line
+    assert f"page:{second['file_id']}@1 passed" in standing.line
+    assert f"tico page unlink <file id> --task {row['id']} --as 'QA report'" in standing.line
+    with api.app.state.store.transaction() as c:
+        L.unlink(c, first["file_id"], "task:" + row["id"], "QA report", ANA)
+    assert _standing(api, row["id"]).met
+    with api.app.state.store.transaction() as c:
+        E.advance(c, row["id"])
+        assert E.task(c, row["id"])["stage_id"] == "approvals-build"
 
 
 def test_a_pages_spec_ok_does_not_approve_its_other_document_role(api):

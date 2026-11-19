@@ -842,6 +842,12 @@ def parser():
         help='with --req: "<point>: done|not done, <why>" for each point of the last send back (up to 12). '
         "Never quote their note back to them",
     )
+    s.add_argument(
+        "--add",
+        action="store_true",
+        help="with --req on a document approval (QA report, Spec): keep the pages already attached in this stage "
+        "beside this one, all judged together. Without it this page replaces them",
+    )
     s.set_defaults(fn="task attach")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
