@@ -553,8 +553,8 @@ def _meeting_run(c, settings, bot, model, runner_id, job_id):
 
 
 def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None):
-    """Voice calls keep the bot's own model at low effort with concise output. For another live-meeting reply, use
-    the meeting's model (its own, else the company's meeting model) at
+    """Voice calls keep the bot's own model at medium effort with concise output (warm, medium costs about 0.1 s more
+    than low). For another live-meeting reply, use the meeting's model (its own, else the company's meeting model) at
     low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
     no model keep the bot's own model. A Gateway meeting model that cannot run on the bot's computer (a Mac runs no
     Gateway model) is tried next as OpenRouter's Mercury when the company has OpenRouter on; a model that cannot be
@@ -578,7 +578,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
             c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (model or None, turn_id))
         return {
             **{k: v for k, v in config.items() if k != task_models.KEY},
-            "reasoning_effort": "low",
+            "reasoning_effort": "medium",
             "output_style": "Concise",
         }
     turn = c.execute("SELECT retries FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()

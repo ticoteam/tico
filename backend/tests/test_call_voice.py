@@ -487,7 +487,7 @@ def test_voice_uses_the_bots_model_with_low_effort_and_concise_output(meet, resi
         _speak(meet, call["id"], 0)
     attempt = _claim(meet, worker, "ops")
     keys = ("model", "reasoning_effort", "output_style")
-    assert [attempt["config"][key] for key in keys] == [model, "low", "Concise"]
+    assert [attempt["config"][key] for key in keys] == [model, "medium", "Concise"]
 
     prep = _claim(meet, worker, "ops")
     assert prep["message"]["refs"]["call_prep"] == call["id"]
