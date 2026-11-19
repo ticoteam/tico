@@ -683,7 +683,7 @@ def _one_page(
     Jev's send back is the owner's turn; on a page a person OKs anyway, the next send back on the same visit is that
     person's to decide. Jev unsure, or unable to check, on a stage a bot holds goes straight to the pipeline's manager bot
     for one look per version (`_unsure_to_bots`); the page's own bot is not woken to rewrite. On a stage a person OKs,
-    an unsure shows the person nothing from Jev. With no manager bot to look, a person decides once per visit: after a
+    an unsure shows the person nothing from Jev. The manager looks even when it holds the stage itself. With no manager bot to look, a person decides once per visit: after a
     person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's list. On a page a person OKs that is not a review (QA's), commits pushed after the reviews are a bot's to
     review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
     since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
@@ -1299,8 +1299,10 @@ def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, lin
     Nov 11 put this before a person). The pipeline's manager bot looks once per version: it gets Jev's line naming the
     part it can't tell, and OKs the page or sends it back, with why, as an answer on the task. The page's own bot is not
     sent back to rewrite on an unsure (task #351: after unsure, 76 reviews and 25 Validate pages were rewritten and
-    judged again); a part that is no still goes back to it (`_page`). None, so a person decides as before, when a person
-    holds the stage, or no manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check,
+    judged again); a part that is no still goes back to it (`_page`). The manager decides even on a stage it holds
+    itself: this page names no person to OK it, and a person is not paged for a bot's page (Tico Team, Nov 18: spec
+    Approval is the only person sign-off, yet QA pages the Engineering Manager held went to Chris). None, so a person
+    decides as before, when a person holds the stage or no manager bot is set. `failed` (Jev could not check,
     after its retries) goes the same way: the page may be fine and only Jev was down. A page a person OKs anyway (people
     only, or naming someone) never comes here. The line never carries the check's full wording."""
     from . import waiting_on as W
@@ -1311,7 +1313,7 @@ def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, lin
     said = sentence(line)
     pipeline: Row = task.get("pipeline") or {}
     manager: object = pipeline.get("manager_id")
-    if W.is_bot(manager) and manager != held:
+    if W.is_bot(manager):
         return Standing(requirement, WAITING, str(manager), f"{DECIDE} {said}")
     return None
 

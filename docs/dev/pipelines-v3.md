@@ -405,11 +405,11 @@ lists all of them. The list is never empty for an open task. Each state's look i
      someone), that person at once, every version, shown nothing from Jev; after a send back, the person who sent it
      back, with their words. On a stage a bot holds: the pipeline's manager bot looks once per page version, with the
      part Jev can't tell, and OKs it or sends it back and says why; the page's bot is not sent back to rewrite it.
-     With no manager bot, or when the manager holds the stage, a person as before. A bot never asks its own OK of a
+     The manager decides even on a stage it holds itself. With no manager bot, a person as before. A bot never asks its own OK of a
      page a person OKs already, nor a yes/no that shows that page: it attaches the new version. A plain yes/no
      question is still its to ask.
    - If not: Retried 3 times. Then, on a stage a bot holds and a page that is not people only, the pipeline's
-     manager bot decides it and says why; with no manager bot, or when the manager holds the stage, a person once
+     manager bot decides it and says why, even on a stage it holds; with no manager bot, a person once
      per visit, then the owner. A page a person OKs anyway goes to that person, shown nothing from Jev.
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.

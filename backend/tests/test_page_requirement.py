@@ -297,7 +297,7 @@ def test_jevs_unsure_wakes_the_manager_with_the_line_not_the_bot(store, seeded, 
 
 
 def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
-    """No manager bot, or the manager is the bot that holds the stage: a person decides, once per visit, as before."""
+    """No manager bot: a person decides, once per visit, as before."""
     rid = _pipeline(c)
     c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='product'")
     row = _task(c)
@@ -312,12 +312,19 @@ def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
     assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, WRITER), "a person decided one this visit"
 
 
-def test_unsure_on_the_managers_own_stage_is_a_persons(c, store):
-    _pipeline(c)
+def test_unsure_on_the_managers_own_stage_is_still_the_managers_to_decide(c, store):
+    """Tico Team, Nov 18: QA pages the Engineering Manager held went to Chris, though spec Approval is the only person
+    sign-off. A page no person OKs is the manager's to decide even on a stage it holds; it answers with why."""
+    rid = _pipeline(c)
     row = _owned(c, "bot:manager")
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid, by="bot:manager"), "unsure", "Can't tell")
-    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, None)
+    standing = _standing(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, "bot:manager") and standing.line.startswith(R.DECIDE)
+    done = A.answer(
+        c, row["id"], rid, "bot:manager", "ok", "Every part is there; the verdict is first", seen_version=_v(c, row)
+    )
+    assert done["stage"]["name"] == "Done"
 
 
 def test_unsure_on_a_persons_stage_is_theirs_at_once(c, store):
@@ -561,15 +568,15 @@ def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_o
     assert done["stage"]["name"] == "Done"
 
 
-def test_a_failed_check_on_the_managers_own_stage_is_a_persons(c, store):
+def test_a_failed_check_on_the_managers_own_stage_is_the_managers_to_decide(c, store):
     _pipeline(c)
     row = _owned(c, "bot:manager")
     _say(c, _attach(c, row, "page:" + _page(c, store)[0], by="bot:manager"), "unsure", "no model", failed=True)
     standing = _standing(c, row)
     assert (standing.state, standing.on, standing.line) == (
         R.WAITING,
-        None,
-        "Decision model couldn't check this: no model",
+        "bot:manager",
+        f"{R.DECIDE} Decision model couldn't check this: no model.",
     )
 
 

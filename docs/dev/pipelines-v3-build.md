@@ -567,7 +567,7 @@ page          no page attached                          not_met  owner   No page
               at_head and a linked PR's head moved      not_met  owner   New commits since the review
               verdict owed                               waiting  jev     Jev is checking
               verdict failed (3 tries), a bot holds it,  waiting  manager Decide if it meets the check: OK it or send it
-                manager bot set (not the holder)                          back, and say why. Jev couldn't check this:
+                manager bot set (even the holder)                         back, and say why. Jev couldn't check this:
                                                                           <error>
               not_met (not a Spec page a person OKs)     not_met  owner   Jev sent it back: <the missing parts, one line
                                                                           each, at most three>
@@ -576,11 +576,10 @@ page          no page attached                          not_met  owner   No page
               unsure or failed, a person OKs it anyway   waiting  person  [Version <n>, after the send back: "<notes>". ]
                 (people only or naming one: every version)               OK <name> (version <n>)  (nothing from Jev)
               unsure, a bot holds it, manager bot set    waiting  manager Decide if it meets the check: OK it or send it
-                (not the holder; woken once per version)                  back, and say why. Jev is unsure: <the parts
+                (even the holder; woken once per version)                 back, and say why. Jev is unsure: <the parts
                                                                           it can't tell>
               unsure or failed otherwise (a person       waiting  person  Jev is unsure: <parts> (once per visit, then
-                holds it, no manager bot, the manager                     not_met on the owner)
-                holds it)
+                holds it, no manager bot)                                 not_met on the owner)
               met, person_id set, no OK for this version waiting  person  [Version <n>, after the send back: "<notes>". ]
                                                                           OK <name> (version <n>)
               person said no for this version            not_met  owner   Sent back: <notes>[ Attach the new version; Tico
