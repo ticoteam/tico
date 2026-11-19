@@ -300,6 +300,13 @@ def registry() -> list[Raw | Column | Json]:
         Raw("github_app", "github_app", "id", lambda r: b"tico-github-app:v1", (GITHUB_KEY,)),
         Raw("github_user_token", "github_user_token", "id", lambda r: github_app.USER_AAD, (GITHUB_KEY,)),
         Raw(
+            "github_installation_tokens",
+            "github_installation_tokens",
+            "scope",
+            lambda r: github_app.TOKEN_AAD + str(r["scope"]).encode(),
+            (GITHUB_KEY,),
+        ),
+        Raw(
             "directory_credentials",
             "directory_credentials",
             "source",

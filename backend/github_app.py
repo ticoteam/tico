@@ -169,6 +169,8 @@ BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
 RECONNECT = "Reconnect GitHub in Tools."
 WEB = "https://github.com"  # the OAuth endpoints, which are not the REST API
 USER_AAD = b"tico-github-user-token:v1"
+# A kept installation token (github_installation_tokens) is sealed for its scope: a row moved to another scope opens none.
+TOKEN_AAD = b"tico-github-installation-token:v1:"
 ACCESS_MARGIN = 10 * 60  # a user token this close to its end is refreshed first
 NOT_AUTHORIZED = (
     "Tico is not authorized to create repositories in the personal account yet: authorize Tico in Tools > GitHub"
@@ -285,6 +287,16 @@ def _iso(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
+def _scope(key):
+    """A token cache key (repositories, permissions) as the text github_installation_tokens keeps it under."""
+    return json.dumps([list(key[0]), [list(pair) for pair in key[1]]], separators=(",", ":"))
+
+
+def _stamp(epoch):
+    """Epoch seconds in GitHub's own `expires_at` format, so the two compare as text."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
 def _ends(seconds):
     """The ISO time `seconds` from now, in the format the rest of the database keeps."""
     return H.shift(H.now(), seconds=int(seconds))
@@ -339,9 +351,14 @@ LOST_KEY = (
 class GitHubApp:
     """The stored app, its at-rest encryption, and installation-token minting."""
 
+    # Installation tokens the token route hands out are kept sealed in the database (keep_tokens), so a restart reuses
+    # them instead of minting every bot's again. Off for an App whose secrets are not sealed here (the reviewer App).
+    KEEPS_TOKENS = True
+
     def __init__(self, settings, store, vault=None):
         self.settings, self.store, self.vault = settings, store, vault
         self.cache = {}
+        self.signing = threading.Lock()  # one JWT signed at a time: after a restart every token request finds none
         self.audited_tokens = {}
         self.live = {}
         self.lock = threading.Lock()
@@ -431,10 +448,11 @@ class GitHubApp:
     def kms(self):
         return bool(self.settings.credential_kms_key and self.vault is not None)
 
-    def open_sealed(self, c, row, aad, table="github_app", where="id", value="app"):
+    def open_sealed(self, c, row, aad, table="github_app", where="id", value="app", reseal=True):
         """A sealed row's plaintext, or None when no key is there to open it. Under KMS a row saved before
         TICO_CREDENTIAL_KMS_KEY was set opens with github-app.key (if it is still on the data volume) and is
-        re-sealed with the vault key once. Raises when no key opens it."""
+        re-sealed with the vault key once; `reseal=False` (a read, which must not write) raises for it instead.
+        Raises when no key opens it."""
         key = self._key(c, create=False)
         if key is None:
             return None
@@ -443,7 +461,7 @@ class GitHubApp:
         return open_or_reseal(
             c,
             key,
-            self.key_file() if self.kms() else None,
+            self.key_file() if self.kms() and reseal else None,
             row["nonce"],
             row["ciphertext"],
             aad,
@@ -533,6 +551,7 @@ class GitHubApp:
             ),
         )
         c.execute("DELETE FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,))  # a new App's are learned anew
+        c.execute("DELETE FROM github_installation_tokens")  # the old App's tokens
         self.cache.clear()
         self.live.clear()
 
@@ -545,9 +564,9 @@ class GitHubApp:
         with self.store.read() as c:
             return self.row(c)
 
-    def private_key(self, c, row):
+    def private_key(self, c, row, reseal=True):
         try:
-            blob = self.open_sealed(c, row, b"tico-github-app:v1")
+            blob = self.open_sealed(c, row, b"tico-github-app:v1", reseal=reseal)
         except Problem:
             raise
         except Exception:
@@ -578,6 +597,7 @@ class GitHubApp:
             (PERMISSIONS_SEEN,),
         )
         c.execute("DELETE FROM service_health WHERE service=?", (GITHUB_HEALTH,))  # nothing left to be unhealthy
+        c.execute("DELETE FROM github_installation_tokens")
         self.cache.clear()
         self.live.clear()
 
@@ -811,28 +831,56 @@ class GitHubApp:
         return True
 
     # -- GitHub calls -----------------------------------------------------------------------
-    def app_jwt(self, c, row):
+    def app_jwt(self, c, row, reseal=True):
+        """`reseal=False` on a read: a row sealed before KMS raises instead of being re-sealed in place."""
         now = int(_now())
         with self.lock:
             hit = self.live.get("jwt")
             if hit and hit[0] == row["app_id"] and hit[1] - 60 > now:
                 return hit[2]
         # GitHub rejects an exp more than ten minutes out; iat is backdated for clock drift.
-        token = jwt.encode(
-            {"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])}, self.private_key(c, row), algorithm="RS256"
-        )
+        key = self.private_key(c, row) if reseal else self.private_key(c, row, reseal=False)
+        token = jwt.encode({"iat": now - 60, "exp": now + 540, "iss": str(row["app_id"])}, key, algorithm="RS256")
         with self.lock:
             self.live["jwt"] = (row["app_id"], now + 540, token)
         return token
 
     def _jwt(self):
-        """The app's JWT, from memory when one is still good: reading the row needs no write lock."""
+        """The app's JWT, from memory when one is still good. Signing a new one reads the stored key under a read: the
+        write lock is taken only when opening it may write (a vault key not created or not wrapped with KMS yet, or a
+        row sealed before KMS, re-sealed once), as before. One request signs while the others wait for its JWT."""
         with self.lock:
             hit = self.live.get("jwt")
             if hit and hit[1] - 60 > _now():
                 return hit[2]
-        with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
-            return self.app_jwt(c, self.row(c))
+        with self.signing:
+            with self.lock:
+                hit = self.live.get("jwt")
+                if hit and hit[1] - 60 > _now():
+                    return hit[2]
+            if self._key_ready():
+                try:
+                    with self.store.read() as c:
+                        row = self.row(c)
+                        if row:
+                            return self.app_jwt(c, row, reseal=False)
+                except Problem:
+                    pass  # the write path below opens it as before, or says why it cannot
+            with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
+                return self.app_jwt(c, self.row(c))
+
+    def _key_ready(self):
+        """Whether the at-rest key can be read without a write: always with the local key file; under KMS once the
+        vault's key is loaded (CredentialCipher.prepare loads an existing one, outside the write lock)."""
+        if not self.kms():
+            return True
+        cipher = self.vault.cipher
+        if cipher.cached is None:
+            try:
+                cipher.prepare(self.store)
+            except Problem:
+                return False
+        return cipher.cached is not None
 
     def _call(self, method, path, base=API, **kw):
         if self.settings.rehearsal:
@@ -1056,8 +1104,7 @@ class GitHubApp:
                 "Check the App's repository access and Administration permission",
                 409,
             )
-        with self.lock:
-            self.cache = {key: value for key, value in self.cache.items() if repository not in key[0]}
+        self.forget_tokens(repository)
         return {"repository": repository, "deleted": True}
 
     def mint(self, repos, permissions, diagnose=True, refresh_margin=REFRESH_MARGIN, include_cache_status=False):
@@ -1081,7 +1128,11 @@ class GitHubApp:
             except Problem as problem:
                 raise Problem(problem.code, problem.detail, problem.status, problem.retryable, problem.extra) from None
         try:
-            entry = self._mint(key, repos, permissions, diagnose)
+            # A token an earlier process minted for this scope and kept is as good as one in the cache.
+            entry = self._kept(key, refresh_margin)
+            cached = entry is not None
+            if entry is None:
+                entry = self._mint(key, repos, permissions, diagnose)
             flight.set_result(None)
         except BaseException as exc:
             flight.set_exception(exc)
@@ -1090,7 +1141,82 @@ class GitHubApp:
             with self.lock:
                 self.minting.pop((key, diagnose), None)
         result = (entry["token"], entry["expires_at"])
-        return (*result, False) if include_cache_status else result
+        return (*result, cached) if include_cache_status else result
+
+    def _remember(self, key, entry):
+        with self.lock:
+            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > _now()}
+            if len(self.cache) >= 256:
+                self.cache.pop(next(iter(self.cache)))
+            self.cache[key] = entry
+
+    def _kept(self, key, refresh_margin):
+        """The token kept for this scope (keep_tokens) while it still has `refresh_margin` seconds left, else None.
+        One primary-key read and no write; a row this server cannot open (its key replaced) is passed over."""
+        if not self.KEEPS_TOKENS or not self._key_ready():
+            return None
+        scope = _scope(key)
+        try:
+            with self.store.read() as c:
+                row = c.execute(
+                    "SELECT expires_at,nonce,ciphertext FROM github_installation_tokens WHERE scope=?", (scope,)
+                ).fetchone()
+                if not row or _iso(row["expires_at"]) - refresh_margin <= _now():
+                    return None
+                secret = self._key(c, create=False)
+                if secret is None:
+                    return None
+                token = AESGCM(secret).decrypt(row["nonce"], row["ciphertext"], TOKEN_AAD + scope.encode()).decode()
+        except Exception:  # noqa: BLE001 - a kept token is only a shortcut: GitHub mints a new one
+            log.info("A kept GitHub installation token could not be opened; minting a new one")
+            return None
+        entry = {"token": token, "expires_at": row["expires_at"], "exp": _iso(row["expires_at"]), "kept": True}
+        self._remember(key, entry)
+        return entry
+
+    def keep_tokens(self, c, values):
+        """Seal the cached tokens among `values` (minted by this process, not kept yet) into github_installation_tokens,
+        in the caller's write transaction (the token route's audit), so a restart reuses them until they near their end.
+        Never the token in the clear: sealed with the App secrets' key, for its scope. Expired rows go at the same time."""
+        if not self.KEEPS_TOKENS:
+            return
+        values = set(values)
+        with self.lock:
+            fresh = [
+                (key, entry) for key, entry in self.cache.items() if entry["token"] in values and not entry.get("kept")
+            ]
+        if not fresh:
+            return
+        secret = self._key(c, create=False)
+        if secret is None:
+            return
+        now = H.now()
+        for key, entry in fresh:
+            scope, nonce = _scope(key), os.urandom(12)
+            sealed = AESGCM(secret).encrypt(nonce, entry["token"].encode(), TOKEN_AAD + scope.encode())
+            c.execute(
+                "INSERT INTO github_installation_tokens(scope,expires_at,nonce,ciphertext,created_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(scope) DO UPDATE SET expires_at=excluded.expires_at,nonce=excluded.nonce,"
+                "ciphertext=excluded.ciphertext,created_at=excluded.created_at",
+                (scope, entry["expires_at"], nonce, sealed, now),
+            )
+            entry["kept"] = True
+        c.execute("DELETE FROM github_installation_tokens WHERE expires_at<?", (_stamp(_now()),))
+
+    def forget_tokens(self, repository=None):
+        """Drop the cached and kept installation tokens: every one, or those naming `repository` (`owner/name`). The next
+        request for a dropped scope mints a new token."""
+        with self.lock:
+            self.cache = {k: v for k, v in self.cache.items() if repository is not None and repository not in k[0]}
+        if not self.KEEPS_TOKENS:
+            return
+        with self.store.transaction() as c:
+            if repository is None:
+                c.execute("DELETE FROM github_installation_tokens")
+                return
+            for (scope,) in c.execute("SELECT scope FROM github_installation_tokens").fetchall():
+                if repository in json.loads(scope)[0]:
+                    c.execute("DELETE FROM github_installation_tokens WHERE scope=?", (scope,))
 
     def _mint(self, key, repos, permissions, diagnose):
         if not permissions:
@@ -1159,11 +1285,7 @@ class GitHubApp:
             )
         data = r.json()
         entry = {"token": data["token"], "expires_at": data["expires_at"], "exp": _iso(data["expires_at"])}
-        with self.lock:
-            self.cache = {k: v for k, v in self.cache.items() if v["exp"] > _now()}
-            if len(self.cache) >= 256:
-                self.cache.pop(next(iter(self.cache)))
-            self.cache[key] = entry
+        self._remember(key, entry)
         return entry
 
     def should_audit_token(self, bot, token):
@@ -2729,24 +2851,27 @@ def install_github_app(app, settings, store):
         newly_minted = [item for item in tokens if not item["cached"]]
         if issuer is service and (newly_minted or any(item["reachability_changed"] for item in tokens)):
             R.repository_health(service)
-        if newly_minted:
-            for item in newly_minted:
-                if issuer.should_audit_token(body.bot, item["token"]):
-                    with store.transaction() as c:
-                        # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
-                        H.event(
-                            c,
-                            who.actor,
-                            "github.token",
-                            body.bot,
-                            {
-                                "repository": repo,
-                                "repositories": item["repositories"],
-                                "attempt": who.attempt_id or None,
-                                **({"identity": "reviewer"} if issuer is reviewer else {}),
-                                **({"runs": runs} if body.bot == BOTOPS else {}),
-                            },
-                        )
+        audited = [item for item in newly_minted if issuer.should_audit_token(body.bot, item["token"])]
+        if audited or (newly_minted and issuer.KEEPS_TOKENS):
+            # One short write for the request, only when it minted: each new token's audit, and the tokens kept
+            # (sealed) so a restart hands them out again instead of minting. A token from the cache writes nothing.
+            with store.transaction() as c:
+                for item in audited:
+                    # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
+                    H.event(
+                        c,
+                        who.actor,
+                        "github.token",
+                        body.bot,
+                        {
+                            "repository": repo,
+                            "repositories": item["repositories"],
+                            "attempt": who.attempt_id or None,
+                            **({"identity": "reviewer"} if issuer is reviewer else {}),
+                            **({"runs": runs} if body.bot == BOTOPS else {}),
+                        },
+                    )
+                issuer.keep_tokens(c, [item["token"] for item in newly_minted])
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
         # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
         # to a later run, which may be allowed less.

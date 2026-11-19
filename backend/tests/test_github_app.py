@@ -339,7 +339,7 @@ def test_turn_token_asks_only_for_the_reads_the_installation_accepted(api, gh):
     asked = gh.of("/access_tokens")[-1][2]["permissions"]
     assert asked["checks"] == asked["statuses"] == "read" and "actions" not in asked
     calls = len(gh.of("/access_tokens"))
-    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.forget_tokens()
     assert turn_token(api).status_code == 200
     assert len(gh.of("/access_tokens")) == calls + 1  # remembered: no refused ask first
 
@@ -358,6 +358,91 @@ def test_turn_token_stops_when_github_refuses_even_the_base(api, gh):
     gh.refuse = (422, "The permissions requested are not granted to this installation.")
     assert turn_token(api).status_code == 409
     assert len(gh.of("/access_tokens")) == 2
+
+
+def _restart(service):
+    """What a new server process starts with: no token cache, no JWT, no audit marks, nothing learned live."""
+    with service.lock:
+        service.cache.clear()
+        service.live.clear()
+        service.audited_tokens.clear()
+
+
+def test_a_restart_hands_out_the_kept_token_without_github_or_a_write_while_it_has_the_margin(api, gh, monkeypatch):
+    connect(api)
+    runner_token(api, "cpo")
+    clock = [time.time()]
+    gh.clock = lambda: clock[0]
+    monkeypatch.setattr(G, "_now", lambda: clock[0])
+    store, service = api.app_state.store, api.app_state.github_app
+    first = turn_token(api).json()
+    mints = len(gh.of("/access_tokens"))
+    with store.read() as c:
+        rows = c.execute("SELECT * FROM github_installation_tokens").fetchall()
+        audits = c.execute("SELECT COUNT(*) FROM events WHERE action='github.token'").fetchone()[0]
+    # Kept sealed for its scope, never in the clear.
+    assert len(rows) == 1 and json.loads(rows[0]["scope"])[0] == ["Acme/emp-cpo"]
+    assert first["token"].encode() not in bytes(rows[0]["ciphertext"]) and rows[0]["expires_at"] == first["expires_at"]
+    with pytest.raises(Exception):
+        AESGCM(bytes(32)).decrypt(rows[0]["nonce"], rows[0]["ciphertext"], G.TOKEN_AAD + rows[0]["scope"].encode())
+
+    writes = []
+    original = store.transaction
+    monkeypatch.setattr(store, "transaction", lambda *a, **kw: writes.append(True) or original(*a, **kw))
+    _restart(service)
+    again = turn_token(api, purpose="git").json()
+    assert again == first  # the same answer, token and all
+    assert len(gh.of("/access_tokens")) == mints and not writes, "a kept token needs neither GitHub nor the write lock"
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.token'").fetchone()[0] == audits
+
+    # Kept only while it has the asker's margin: 44 minutes left serves a git call, not a new turn.
+    clock[0] += 16 * 60
+    _restart(service)
+    assert turn_token(api, purpose="git").json()["token"] == first["token"]
+    _restart(service)
+    turned = turn_token(api).json()
+    assert turned["token"] != first["token"] and len(gh.of("/access_tokens")) == mints + 1
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.token'").fetchone()[0] == audits + 1
+        assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 1  # replaced in place
+
+    # Forgetting the tokens (a repository refresh, or a test going past the cache) forgets the kept ones too.
+    service.forget_tokens()
+    assert turn_token(api, purpose="git").json()["token"] not in (first["token"], turned["token"])
+    # Disconnecting forgets every kept token with the App.
+    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
+    with store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM github_installation_tokens").fetchone()[0] == 0
+
+
+def test_a_kept_token_this_server_cannot_open_is_minted_again(api, gh):
+    connect(api)
+    runner_token(api, "cpo")
+    first = turn_token(api).json()
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE github_installation_tokens SET ciphertext=zeroblob(64)")
+    _restart(api.app_state.github_app)
+    again = turn_token(api)
+    assert again.status_code == 200 and again.json()["token"] != first["token"]
+
+
+def test_signing_the_app_jwt_takes_no_write_lock_and_a_mint_takes_one_short_write(api, gh, monkeypatch):
+    connect(api)
+    runner_token(api, "cpo")
+    service, store = api.app_state.github_app, api.app_state.store
+    assert turn_token(api).status_code == 200  # the installation is known, and the App's key loaded once
+    _restart(service)
+    writes = []
+    original = store.transaction
+    monkeypatch.setattr(store, "transaction", lambda *a, **kw: writes.append(True) or original(*a, **kw))
+    signed = service._jwt()
+    assert signed and not writes
+    assert jwt.decode(signed, options={"verify_signature": False})["iss"]
+    service.forget_tokens()
+    writes.clear()
+    assert turn_token(api).status_code == 200
+    assert len(writes) == 1  # the audit and the kept token, together
 
 
 def test_runner_refuses_bot_it_does_not_run_and_repo_outside_config(api, gh):
@@ -1128,7 +1213,7 @@ def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says
     ]
     assert turn_token(api).status_code == 200
     before = len(turns())
-    api.app_state.github_app.cache.clear()  # past the token cache: the next turn mints again
+    api.app_state.github_app.forget_tokens()  # past the token cache: the next turn mints again
     assert turn_token(api).status_code == 200
     asked = turns()[before:]
     assert len(asked) == 1 and "actions" not in asked[0]  # no second refused ask while it is remembered
