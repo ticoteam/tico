@@ -278,12 +278,15 @@ def test_a_claim_says_when_it_granted_the_turns_start_place(api):
     assert post(api, f"attempts/{second['id']}/start-place", {}, computer['token'])['reserved'] is False
     # The kept place starts with no start-place ask in between.
     assert post(api, f"attempts/{first['id']}/started", {'thread_id': 'kept'}, computer['token'])['started']
-    # An old claim without start_places is told nothing.
+
+
+def test_a_claim_without_start_places_is_not_told_its_place_was_granted(api):
+    computer = runner(api)
+    assign(api, computer, 'ops')
+    ready(api, computer, ['ops'])
     post(api, 'chat/ops', {'text': 'An old runner'})
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runner_states SET capacity=4 WHERE runner_id=?', (computer['runner_id'],))
     old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
-    assert old is None or 'start_reserved' not in old
+    assert old is not None and 'start_reserved' not in old
 
 
 def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):

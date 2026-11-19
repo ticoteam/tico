@@ -16,10 +16,11 @@
 //! can read them; they are the company's approved skills, which every bot may read anyway, and nobody but the runner
 //! can write them.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -608,12 +609,17 @@ async fn stage_and_report(
         "skills-receipt:{aid}:{}",
         &hex::encode(Sha256::digest(body.to_string().as_bytes()))[..16]
     );
-    // The receipt is the Skills page's record of what was staged, not something the turn needs: it goes beside the
-    // harness's start instead of before it. Its failure was only ever logged.
-    let (client, aid, bot) = (client.clone(), aid.to_string(), bot.to_string());
-    tokio::spawn(async move {
+    // The receipt is the Skills page's record of what was staged: it goes out beside `started` instead of before it,
+    // and the turn waits for it before its harness runs (`receipt_landed`), so a skill's use is never recorded against
+    // the previously staged copy (skill_runtime.py record_runner_usage). Its failure was only ever logged.
+    let (client, owner, bot) = (client.clone(), aid.to_string(), bot.to_string());
+    let sent = tokio::spawn(async move {
         if let Err(e) = client
-            .post(&format!("attempts/{aid}/skills/receipt"), &body, Some(&key))
+            .post(
+                &format!("attempts/{owner}/skills/receipt"),
+                &body,
+                Some(&key),
+            )
             .await
         {
             log(&format!(
@@ -621,7 +627,28 @@ async fn stage_and_report(
             ));
         }
     });
+    RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(aid.to_string(), sent);
     Ok(Some(dir))
+}
+
+/// Skills receipts still on their way, by attempt (`stage_and_report`).
+static RECEIPTS: OnceLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = OnceLock::new();
+
+/// Waits for the turn's skills receipt, if one is on its way: called once the hub has accepted `started`, before the
+/// harness runs. It went out a round trip earlier, so it has usually landed.
+pub async fn receipt_landed(aid: &str) {
+    let sent = RECEIPTS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(aid);
+    if let Some(sent) = sent {
+        let _ = sent.await;
+    }
 }
 
 #[cfg(test)]

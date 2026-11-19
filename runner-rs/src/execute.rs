@@ -1424,6 +1424,8 @@ impl Runner {
             {
                 Ok(_) => {
                     flags.start_acknowledged.store(true, Ordering::SeqCst);
+                    mark("acknowledged", &aid);
+                    crate::company_skills::receipt_landed(&aid).await;
                     return Ok(());
                 }
                 Err(e) if e.code == "start_wait" => {
@@ -2031,6 +2033,8 @@ impl Runner {
         if published_already(path, env).await {
             return Ok(self.published(bot, &repository, ("current", String::new())));
         }
+        // A push cannot be taken back: the hub is asked first, never a place kept since the claim (keep_start_place).
+        self.wait_start_place(attempt, flags).await?;
         let result = self
             .pre_start_lock(attempt, flags, async {
                 let _one = self
@@ -2536,6 +2540,14 @@ impl Runner {
                     if published == "failed" && detail.contains("unrelated history") {
                         return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                     }
+                    // A task refresh that may push product files asks the hub first: a push cannot be taken back.
+                    if !p.task.is_empty()
+                        && !p.disposable
+                        && (crate::product_files::unpushed(&bot)
+                            || crate::product_files::refresh_due(&bot, &attempt["config"]))
+                    {
+                        self.during_drain(&aid, self.wait_start_place(&start_attempt, &flags)).await?;
+                    }
                     let refresh = async {
                         self.refresh_checkout(p, &mut attempt, &env).await.map_err(Fail::runtime)?;
                         Ok(())
@@ -2859,6 +2871,8 @@ impl Runner {
                 Ok(())
             }).await?;
             mark("acknowledged", &aid);
+            // The skills receipt went out beside `started`; it lands before the harness can use a skill.
+            crate::company_skills::receipt_landed(&aid).await;
             // A rejected start can wait for another grant; it is still unstarted during that wait.
             if !self.drain.start(&aid) {
                 return Err(Fail::runtime(crate::drain::WAITING));
@@ -4043,6 +4057,8 @@ impl Runner {
         self.lanes.keep_vault(&bot, vault.values.clone());
         vault.remove_files();
         crate::harness_tools::turn_done(&aid);
+        // A turn that never started still drops its skills receipt's handle.
+        crate::company_skills::receipt_landed(&aid).await;
         flags.done.store(true, Ordering::SeqCst);
         flags.done_notify.notify_waiters();
         renewer.abort();
