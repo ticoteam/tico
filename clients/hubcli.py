@@ -1252,8 +1252,12 @@ def parser():
     s.add_argument("--confirm", metavar="ORG/NAME", help="the exact preview target, instead of typing it at a terminal")
     s.set_defaults(fn="repo product-create")
     skill = sub.add_parser(
-        "skill", help="a bot's skills: copy one to other bots, or propose one to the company's Skills directory"
+        "skill", help="skills: list and search them, copy one to other bots, or propose one to the company's directory"
     ).add_subparsers(dest="sub")
+    s = skill.add_parser("list", help="every skill on Library › Skills, by job function and search words")
+    s.add_argument("q", nargs="*", metavar="WORD", help="words to match in the name, description or function")
+    s.add_argument("--function", metavar="F", help="one job function, like legal or finance; other for the rest")
+    s.set_defaults(fn="skill list")
     s = skill.add_parser("copy", help="copy skills/<skill>/ from one bot into others, a commit in each (BotOps)")
     s.add_argument("skill", help="the skill's folder name under skills/")
     s.add_argument("--from", dest="bot", required=True, metavar="BOT", help="the bot that has the skill")

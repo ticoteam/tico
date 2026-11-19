@@ -123,12 +123,12 @@ function botResumeCommand(runtime: string | null | undefined, sid: string, slug:
 const SKILLS_ROUTE = '#/library/skills';
 // The redesign's router asks first (ui/app/redesign.ts).
 function skillsRoute(r: string) {
-  const [path = ''] = r.split('?');
+  const [path = '', query = ''] = r.split('?');
   if (!rdUnder(path, SKILLS_ROUTE)) return false;
   const parts = path.slice(SKILLS_ROUTE.length).split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
   if (parts[0] === 'proposals' && parts[1]) { void pageSkillProposal(parts[1]); return true; }
   if (parts.length) { void pageSkill(parts.join('/')); return true; }
-  void pageSkills();
+  void pageSkills(query);
   return true;
 }
 
