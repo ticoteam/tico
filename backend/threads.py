@@ -4597,19 +4597,16 @@ def _prime_names(c, v, rows):
 
     if v is None or read_cache.cache(c) is None:
         return
-    untitled = [
-        r
-        for r in rows
-        if not r.get("subject") or r.get("parent_message_id") or (r.get("kind") == "task" and r.get("task_id"))
-    ]
+    # A stored subject is the name, unless it is a parent message's line (_shown_title may hide it from this reader).
+    untitled = [r for r in rows if not r.get("subject") or r.get("parent_message_id")]
     roots = list({root["id"]: root for root in (root_of(c, r) for r in untitled) if root}.values())
     actors = {home_owner(root) for root in roots if audience_of(root) == "home"}
     others = [root for root in roots if audience_of(root) != "home"]
     members = _member_rows(c, v, [root["id"] for root in others])
     for root in others:
-        actors.update(_dm_members(c, root, members[root["id"]]))
-    # The viewer is never in a name it reads (_thread_name leaves them out).
-    display.lookup(c, [a for a in actors if a and a != v.actor and str(a).startswith(("human:", "bot:"))])
+        # The viewer is never in a name of people they read (_thread_name leaves them out); a Home of theirs is.
+        actors.update(a for a in _dm_members(c, root, members[root["id"]]) if a != v.actor)
+    display.lookup(c, [a for a in actors if a and str(a).startswith(("human:", "bot:"))])
 
 
 def _thread_name(c, v, root, stored):
