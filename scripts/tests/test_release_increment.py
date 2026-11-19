@@ -317,6 +317,20 @@ def test_selection_tokens_name_what_the_selection_runs():
     assert "ui/tests/sign-in-redirect.cjs" not in tokens
 
 
+def test_a_fix_to_the_isolation_suite_selects_the_product_part():
+    # v0.6.83: the isolation check went red and its fix (#4413) touched only runner_support/tests/isolation/fake_cli.py;
+    # the train read no product token from it and waited for a commit that would never come.
+    changed = ["runner_support/tests/isolation/fake_cli.py"]
+    assert ri.PRODUCT in ri.selection_tokens(selected(), changed)
+    assert ri.red_rule(
+        {"sha": "a" * 40, "url": "u", "conclusion": "failure", "failed": {ri.PRODUCT}},
+        "b" * 40,
+        ri.selection_tokens(selected(), changed),
+    )[0]
+    assert plan_of(selected(), changed=changed, smoke=(), gone=())["product"] is True
+    assert ri.PRODUCT not in ri.selection_tokens(selected(), ["runner_support/turns.py"])
+
+
 def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner(tmp_path, monkeypatch):
     plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=())
     (tmp_path / "backend/tests").mkdir(parents=True)
