@@ -41,6 +41,8 @@ PAGES = {
     # The sidebar's Inbox header opens the Threads page on its Inbox view: the same threads.
     "inbox": page("threads", "threads"),
     "strategy": page("strategy", "bets"),
+    # Company › Products (ui/app/products.ts): what Acme Lights sells (backend/demo_sections/products.py).
+    "products": page("products", "products"),
     # The Growth page is one read (backend/growth_core.py): its channels, and its retention grid from the demo's
     # customers (backend/demo_sections/growth.py).
     "growth": page("growth/read", "channels"),

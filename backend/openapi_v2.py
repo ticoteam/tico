@@ -71,6 +71,9 @@ TAGS = {
     "due dates and sources.",
     'Risk': "Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and "
     "documents linked to a risk.",
+    # Company › Products (backend/products.py): Contacts Product records our company owns.
+    'Products': "Our products: kind, status, tax kind, owner, code, the agreement each is sold under and the vendors it "
+    "depends on. Each is a Contacts Product record company/self owns.",
     'Strategy': "The team's strategy: what the owner saves is live at once as the next numbered version; the bets goals serve.",
     'Inbound': 'Shared company inbound email and SMS for people and agents; reads never consume messages.',
     'Triggers': 'Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again.',

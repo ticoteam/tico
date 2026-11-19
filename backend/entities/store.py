@@ -1053,6 +1053,84 @@ def linked_to(c: sqlite3.Connection, to_id: str, key: str) -> list[str]:
     return sorted(str(r["other"]) for r in rows)
 
 
+def links_from(c: sqlite3.Connection, from_ids: Sequence[str], key: str) -> list[Row]:
+    """The links of one key that start at these entities and hold today: begun (a link set to start later is not yet
+    current, so replacing today's links leaves it be) and not ended (a link ended today is gone, as a card reads it).
+    Each with its id, from_entity_id and to_entity_id. Callers show the far end only to a reader who sees it."""
+    if not from_ids:
+        return []
+    today = _today()
+    return _rows(
+        c,
+        "SELECT id, from_entity_id, to_entity_id FROM entity_links WHERE from_entity_id IN (SELECT value FROM json_each(?)) "
+        "AND link_key = ? AND (valid_from_on IS NULL OR valid_from_on <= ?) AND (valid_until_on IS NULL OR valid_until_on > ?) "
+        "ORDER BY created_at, id",
+        (json.dumps(list(from_ids)), key, today, today),
+    )
+
+
+def values_for(c: sqlite3.Connection, who: str, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """The values of many entities at once, by entity id then attribute key: a single value, or a list for a multiple
+    attribute. A list page reads this rather than a card per row. Sensitive attributes show only to who may read them;
+    the caller checks that `who` sees each entity."""
+    if not ids:
+        return {}
+    r = V.reader(c, who)
+    out: dict[str, dict[str, Any]] = {}
+    for row in _rows(
+        c,
+        "SELECT v.*, a.key AS attribute_key, a.value_type AS value_type, a.sensitive AS sensitive, a.multiple AS multiple "
+        "FROM entity_values v JOIN entity_attributes a ON a.id = v.entity_attribute_id "
+        "WHERE v.entity_id IN (SELECT value FROM json_each(?)) ORDER BY a.position, a.key, v.updated_at, v.id",
+        (json.dumps(list(ids)),),
+    ):
+        if not V.attribute_visible(r, row):
+            continue
+        values = out.setdefault(str(row["entity_id"]), {})
+        value = _value_of(row, row["value_type"])
+        if row["multiple"]:
+            values.setdefault(row["attribute_key"], []).append(value)
+        else:
+            values[row["attribute_key"]] = value
+    return out
+
+
+def clear_value(c: sqlite3.Connection, actor: str, entity_id: str, key: str, value: object = None) -> bool:
+    """Remove a value: a single-value field's current value, or one value of a multiple field (all of them when `value` is
+    None). What it held goes to history, as a replaced value does. True when something was removed."""
+    _writer(c, actor)
+    ent = _live(c, actor, entity_id)
+    attr = _attribute(c, actor, ent["type"], key)
+    if attr["owner_type"] == "connection" and actor != f"connection:{attr['owner_id']}":
+        _refuse(c, actor, "owner", f"{key} comes from its connection; change it there")
+    rows = _rows(
+        c, "SELECT * FROM entity_values WHERE entity_id = ? AND entity_attribute_id = ?", (ent["id"], attr["id"])
+    )
+    if attr["multiple"] and value is not None:
+        wanted = _coerce(c, actor, attr, value)["canonical"]
+        rows = [row for row in rows if _value_of(row, attr["value_type"]) == wanted]
+    now = H.now()
+    for row in rows:
+        c.execute(
+            "INSERT INTO entity_value_history (id, entity_id, entity_attribute_id, value, source_type, source_id, "
+            "evidence_id, confidence, active_from, active_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _id("hist"),
+                ent["id"],
+                attr["id"],
+                json.dumps(_value_of(row, attr["value_type"]), sort_keys=True),
+                row["source_type"],
+                row["source_id"],
+                row["evidence_id"],
+                row["confidence"],
+                row["updated_at"],
+                now,
+            ),
+        )
+        c.execute("DELETE FROM entity_values WHERE id = ?", (row["id"],))
+    return bool(rows)
+
+
 def entity_facts(c: sqlite3.Connection, ids: Iterable[str]) -> dict[str, Row]:
     """Each entity's type and, for an organization, its kind (the scope terms type: and kind: read these)."""
     rows = _rows(

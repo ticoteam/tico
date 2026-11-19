@@ -930,5 +930,19 @@
    "callWindowDraw",
    "callWindowStop"
   ]
+ },
+ "products": {
+  "files": [
+   "app/products.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageProduct",
+   "pageProducts"
+  ],
+  "calls": [],
+  "idle": [
+   "productsStop"
+  ]
  }
 }

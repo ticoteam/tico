@@ -22,7 +22,7 @@ const ONLY: Record<string, string[]> = {'#/task/': TASK, '#/thread/': ['threads-
 const ROUTES = [
   '#/home', '#/overview/company-page', '#/threads', '#/threads/new', '#/updates', '#/calendar', '#/meetings', '#/assistant', '#/assistant/learned',
   '#/roadmap', '#/tags', '#/finance', '#/growth', '#/strategy', '#/strategy/goals', '#/strategy/org',
-  '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/automations', '#/listening',
+  '#/strategy/budget', '#/strategy/market', '#/strategy/lenses', '#/strategy/brand', '#/products', '#/automations', '#/listening',
   '#/rules', '#/company-page', '#/library/contacts', '#/library/skills', '#/library/files', '#/tools', '#/docs',
   '#/learnings', '#/usage', '#/replay', '#/sql', '#/mail', '#/messaging', '#/changelog', '#/settings',
   ...['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history', 'health', 'billing'].map(tab => '#/settings/' + tab),

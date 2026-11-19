@@ -152,6 +152,19 @@ function directoryRoute(r: string): boolean {
   return true;
 }
 
+// app/products.ts
+const PRODUCTS_ROUTE = '#/products';
+// The redesign's router asks first (ui/app/redesign.ts): #/products is the list, #/products/<key> one product.
+function productsRoute(r: string): boolean {
+  const [path = ''] = r.split('?');
+  if (!rdUnder(path, PRODUCTS_ROUTE)) return false;
+  const rest = path.slice(PRODUCTS_ROUTE.length).replace(/^\//, '');
+  let key = rest;
+  try { key = decodeURIComponent(rest); } catch { /* an address typed by hand: use it as it is */ }
+  if (key) void pageProduct(key); else void pageProducts();
+  return true;
+}
+
 // app/mail.ts
 let MAIL_LOAD = 0, MAIL_SEARCH = 0;
 

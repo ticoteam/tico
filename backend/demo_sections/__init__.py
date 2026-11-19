@@ -16,6 +16,7 @@ from . import (
     growth,
     meeting_links,
     pages,
+    products,
     recruit,
     reach,
     schedules,
@@ -46,6 +47,7 @@ SECTIONS = (
     alerts,
     skills,
     directory,
+    products,
     software,
     floor,
 )
