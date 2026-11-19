@@ -1,0 +1,38 @@
+/* The app's two local pages. Token values copied from the design's system/tokens.css; no new colors or sizes. */
+:root {
+  color-scheme: light dark;
+  --font-text: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --t-sm: 13px; --t-base: 14px; --t-title: 26px;
+  --w-strong: 550; --w-title: 650;
+  --ctl: 32px; --bar: 60px; --r-ctl: 8px; --r-pane: 14px; --gap-pane: 8px;
+  --ground: #E9E9E9; --sheet: #FFFFFF; --well: #F3F3F3; --line-strong: #CECECE; --hover: #F3F3F3;
+  --ink: #111111; --muted: #5E5E5E; --fill: #111111; --fill-hover: #2B2B2B; --on-fill: #FFFFFF; --focus: #111111;
+  --raised: #FFFFFF;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0B0B0B; --sheet: #1A1A1A; --well: #222222; --line-strong: #3A3A3A; --hover: #222222;
+    --ink: #F2F2F2; --muted: #9C9C9C; --fill: #F0F0F0; --fill-hover: #FFFFFF; --on-fill: #111111; --focus: #F2F2F2;
+    --raised: #222222;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--ink); font: var(--t-base)/1.45 var(--font-text); display: grid; place-items: center; }
+/* The window has no title bar on macOS: the top band moves the window. */
+.drag { position: fixed; inset: 0 0 auto 0; height: var(--bar); -webkit-app-region: drag; }
+.local { width: min(360px, calc(100% - 32px)); background: var(--sheet); border-radius: var(--r-pane); padding: 32px 24px; display: grid; gap: 16px; }
+h1 { font-size: var(--t-title); font-weight: var(--w-title); letter-spacing: -.018em; margin: 0; line-height: 1.2; }
+form { display: grid; gap: 8px; margin: 0; }
+label { font-size: var(--t-sm); color: var(--muted); }
+input { height: var(--ctl); border: 1px solid var(--line-strong); border-radius: var(--r-ctl); background: var(--well); color: var(--ink); font: inherit; padding: 0 12px; }
+input:focus-visible, .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.row { display: flex; gap: 8px; margin-top: 8px; }
+.btn { height: var(--ctl); padding: 0 12px; border: 0; border-radius: var(--r-ctl); background: var(--raised); color: var(--ink); font: inherit; font-weight: var(--w-strong); cursor: default; }
+.btn:hover { background: var(--hover); }
+.btn-fill { background: var(--fill); color: var(--on-fill); }
+.btn-fill:hover { background: var(--fill-hover); }
+.btn[disabled] { opacity: .45; }
+.quiet { color: var(--muted); margin: 0; }
+.error { margin: 0; color: var(--ink); }
+[hidden] { display: none !important; }

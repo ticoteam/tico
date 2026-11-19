@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add company</title>
+<link rel="stylesheet" href="local.css">
+</head>
+<body>
+<div class="drag"></div>
+<main class="local">
+  <h1>Add company</h1>
+  <form id="form" novalidate>
+    <label for="server">Server address</label>
+    <input id="server" name="server" type="text" inputmode="url" autocomplete="url" spellcheck="false" autocapitalize="off" placeholder="acme.tico.team" required>
+    <p id="error" class="error" role="alert" hidden></p>
+    <div class="row">
+      <button type="submit" class="btn btn-fill" id="add">Add</button>
+      <button type="button" class="btn" id="cancel" hidden>Cancel</button>
+    </div>
+  </form>
+  <p class="quiet">On Tico Cloud?</p>
+  <div class="row"><button type="button" class="btn" id="signin">Sign in to Tico</button></div>
+</main>
+<script src="add.js"></script>
+</body>
+</html>
