@@ -1,3 +1,4 @@
+# pyright: strict
 """Risks and matters (Risk plan, slice 1).
 
 - A risk is a tag of kind `risk` (`tags.kind`), keyed `risk:{slug}`. Any task can carry it, in whatever pipeline it
@@ -17,19 +18,26 @@
 
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Any, Literal, cast
 
 from fastapi import Request
 from pydantic import Field
 
-from . import audit_log
+from . import audit_log as _audit_log
 from . import page_owners
-from . import task_privacy as privacy
-from . import teammate_access
+from . import task_privacy as _privacy
+from . import teammate_access as _teammate_access
 from .api_contract import api_v2
 from .entities import store as ES
 from .models import ID, Contract
-from .store import H, Problem
+from .store import H as _H, Problem
+
+# The untyped modules this one calls, as Any (their rows are dicts and sqlite3 rows).
+H = cast(Any, _H)
+audit_log = cast(Any, _audit_log)
+privacy = cast(Any, _privacy)
+teammate_access = cast(Any, _teammate_access)
+Row = dict[str, Any]
 
 KIND = "risk"
 PREFIX = "risk:"
@@ -90,15 +98,15 @@ class MatterWrite(Contract):
     product_id: ID | None = None
 
 
-def _via(who):
+def _via(who: Any) -> str:
     return who.via or H.VIA.get() or "api"
 
 
-def _mover(c, who):
+def _mover(c: Any, who: Any) -> bool:
     return who.role == "owner" or who.role == "human" and H.can_move(c, who.actor)
 
 
-def slug(text):
+def slug(text: object) -> str:
     """`Customer theft claims` -> `customer-theft-claims`: lower-case letters, digits and single hyphens."""
     text = str(text or "").strip().lower()
     if text.startswith(PREFIX):
@@ -106,17 +114,17 @@ def slug(text):
     return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:SLUG_MAX].strip("-")
 
 
-def _since(days):
+def _since(days: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def _visible_tasks(auth, c, who, columns="id"):
+def _visible_tasks(auth: Any, c: Any, who: Any, columns: str = "id") -> str:
     """The tasks `who` reads, as a derived table: the audience clause names the tasks table's columns unqualified, so it
     stays inside its own SELECT before anything is joined to it."""
     return f"(SELECT {columns} FROM tasks WHERE ({auth.task_sql(c, who)}))"
 
 
-def risk_rows(c, who, ids=None):
+def risk_rows(c: Any, who: Any, ids: list[str] | None = None) -> list[Row]:
     """The risks `who` may list (every teammate lists every risk), by label."""
     sql, args = "SELECT * FROM tags WHERE kind=?", [KIND]
     if ids is not None:
@@ -128,7 +136,7 @@ def risk_rows(c, who, ids=None):
     return privacy.tags_readable(c, who, rows)
 
 
-def require_risk(c, who, ident):
+def require_risk(c: Any, who: Any, ident: str) -> Row:
     row = H.tag(c, ident)
     if not row or row.get("kind") != KIND:
         # A plain tag `claims` does not hide the risk `risk:claims`.
@@ -158,14 +166,14 @@ CLAIMED_SQL = (
 )
 
 
-def standing(auth, c, who, ids=None):
+def standing(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[str, Row]:
     """{risk id: {open, closed, level, claimed, next_date}} over the tasks `who` reads."""
     visible = _visible_tasks(auth, c, who, "id, status, due_at, created_at")
-    only, args = "", []
+    only, args = "", cast(list[str], [])
     if ids is not None:
         only = f" AND g.id IN ({','.join('?' * len(ids))})" if ids else " AND 0"
         args = list(ids)
-    out = {}
+    out: dict[str, Row] = {}
     for r in c.execute(STANDING_SQL.format(visible=visible, only=only), [_since(NEW_DAYS), *args]):
         level = "live" if r["new"] else "open" if r["open"] else "quiet"
         out[r["risk_id"]] = {
@@ -181,21 +189,22 @@ def standing(auth, c, who, ids=None):
     return out
 
 
-EMPTY = {"open": 0, "closed": 0, "level": "quiet", "claimed": [], "next_date": None}
+EMPTY: Row = {"open": 0, "closed": 0, "level": "quiet", "claimed": [], "next_date": None}
 
 
-def risk_view(row, counts=None, *, brief=False):
-    value = {
+def risk_view(row: Row, counts: Row | None = None, *, brief: bool = False) -> Row:
+    value: Row = {
         k: row.get(k) for k in ("id", "key", "label", "owner", "version", "bot_writers", "created_at", "updated_at")
     }
     value["kind"] = KIND
     if not brief:
         value["markdown"] = row.get("markdown") or ""
-    value.update(dict(counts or EMPTY, claimed=list((counts or EMPTY)["claimed"])))
+    shown = counts or EMPTY
+    value.update({**shown, "claimed": list(cast(list[Row], shown["claimed"]))})
     return value
 
 
-def list_risks(auth, c, who, task=None):
+def list_risks(auth: Any, c: Any, who: Any, task: str | None = None) -> Row:
     ids = None
     if task:
         tid = auth.resolve_task(c, who, task)
@@ -217,13 +226,13 @@ def list_risks(auth, c, who, task=None):
 # ----------------------------------------------------------------------------- matters
 
 
-def _current(c, ids):
+def _current(c: Any, ids: Any) -> dict[str, str]:
     """{stored id: the id it answers as now}: a merged record answers as the one it was merged into (ES._follow), whose
     sources say who may see it; the merged row itself has none left, and a record with none shows to everyone."""
-    return {ident: ES._follow(c, [ident])[0] for ident in dict.fromkeys(ids)}
+    return {ident: ES._follow(c, [ident])[0] for ident in dict.fromkeys(ids)}  # pyright: ignore[reportPrivateUsage]
 
 
-def _entity(c, actor, ident, field):
+def _entity(c: Any, actor: str, ident: str, field: str) -> str:
     """The live Directory record a matter fact names, followed through a merge, when `actor` may see it."""
     row = c.execute("SELECT id, type, deleted_at FROM entities WHERE id=?", (_current(c, [ident])[ident],)).fetchone()
     if not row or row["deleted_at"] or not ES.visible_ids(c, actor, [row["id"]]):
@@ -235,16 +244,16 @@ def _entity(c, actor, ident, field):
     return row["id"]
 
 
-def matter_view(c, actor, row):
+def matter_view(c: Any, actor: str | None, row: Any) -> Row | None:
     """A matters row as JSON. A Directory record shows only to a reader the Directory lets see it: anyone else gets
     null for it."""
     if not row:
         return None
     row = dict(row)
     now = _current(c, [row[COLUMNS[f]] for f in COLUMNS if row.get(COLUMNS[f])])
-    seen = ES.visible_ids(c, actor, set(now.values())) if now else set()
+    seen: set[str] = ES.visible_ids(c, actor or "", set(now.values())) if now else set()
     names = ES.entity_names(c, seen) if seen else {}
-    value = {
+    value: Row = {
         "task_id": row["task_id"],
         "kind": row["kind"],
         "amount": row["amount"],
@@ -265,13 +274,13 @@ def matter_view(c, actor, row):
     return value
 
 
-def matter_of(c, who, task_id):
+def matter_of(c: Any, who: Any, task_id: str) -> Row | None:
     """The matter of a task its reader is shown (the full task view), or None."""
     row = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
     return matter_view(c, who.actor if who is not None else None, row) if row else None
 
 
-def _task_risks(c, task_id):
+def _task_risks(c: Any, task_id: str) -> list[Row]:
     return [
         H._tag_view(r)
         for r in c.execute(
@@ -282,7 +291,7 @@ def _task_risks(c, task_id):
     ]
 
 
-def may_set_matter(c, who, row, risks):
+def may_set_matter(c: Any, who: Any, row: Row, risks: list[Row]) -> bool:
     """Whoever may update the task (task_update's identity rule), or a bot a risk on it lets tag tasks (bot_writers)
     on a task it reads."""
     if H.may_change_readers(c, who.actor, row, _mover(c, who)):
@@ -294,7 +303,7 @@ def may_set_matter(c, who, row, risks):
     )
 
 
-def set_matter(auth, c, who, tid, body):
+def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Row:
     auth.domain(who)
     task_id = auth.resolve_task(c, who, tid)
     row = auth.task(c, who, task_id)
@@ -416,7 +425,7 @@ MATTER_FIELDS = (
 )
 
 
-def _page(limit, offset):
+def _page(limit: Any, offset: Any) -> tuple[int, int]:
     try:
         limit, offset = int(limit), int(offset)
     except (TypeError, ValueError):
@@ -424,12 +433,23 @@ def _page(limit, offset):
     return max(1, min(limit, LIMIT_MAX)), max(0, offset)
 
 
-def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMIT_DEFAULT, offset=0):
+def matters(
+    auth: Any,
+    c: Any,
+    who: Any,
+    *,
+    risk_id: str | None = None,
+    kind: str | None = None,
+    open_only: bool | None = None,
+    limit: Any = LIMIT_DEFAULT,
+    offset: Any = 0,
+) -> Row:
     """One page of matters `who` reads: {matters: [{task, matter, risks}], next_offset}."""
     limit, offset = _page(limit, offset)
     if kind is not None and kind not in MATTER_KINDS:
         raise Problem("validation", "kind is one of " + ", ".join(MATTER_KINDS), 422)
-    where, args = [], []
+    where: list[str] = []
+    args: list[Any] = []
     if kind:
         where.append("m.kind=?")
         args.append(kind)
@@ -445,7 +465,7 @@ def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMI
     rows = c.execute(sql, [*([risk_id] if risk_id else []), *args, limit + 1, offset]).fetchall()
     page = rows[:limit]
     ids = [r["id"] for r in page]
-    tags = {}
+    tags: dict[str, list[Row]] = {}
     if ids:
         for r in c.execute(
             f"SELECT tt.task_id AS on_task, g.* FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
@@ -455,7 +475,7 @@ def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMI
             tags.setdefault(r["on_task"], []).append(H._tag_view(r))
     shown = {g["id"] for g in privacy.tags_readable(c, who, [g for found in tags.values() for g in found])}
     known = teammate_access.Known(c, who, auth)  # an owner the reader may not see reads "", as on the task itself
-    out = []
+    out: list[Row] = []
     for r in page:
         task = {k: r[k] for k in TASK_FIELDS}
         task["owner_id"] = known.task({k: r[k] for k in (*TASK_FIELDS, *MASK_FIELDS)})["owner_id"]
@@ -473,7 +493,7 @@ def matters(auth, c, who, *, risk_id=None, kind=None, open_only=None, limit=LIMI
     return {"matters": out, "next_offset": offset + limit if len(rows) > limit else None}
 
 
-def redact_audit(c, auth, who, found):
+def redact_audit(c: Any, auth: Any, who: Any, found: list[Row]) -> None:
     """The audit rows of matters (backend/audit_log.py `rows`), with the facts shown only to a reader of the task now:
     anyone else, the owner included, reads only which task it was. Changed in place."""
     tasks = {
@@ -500,12 +520,12 @@ def redact_audit(c, auth, who, found):
 # ----------------------------------------------------------------------------- links
 
 
-def links(c, who, risk_id):
+def links(c: Any, who: Any, risk_id: str) -> dict[str, list[Row]]:
     """{rules, sources, coverage}: the rules linked to a risk (every teammate reads every rule), and the documents a
     reader may see, as sources and as the policies that cover it."""
     rows = c.execute("SELECT * FROM risk_links WHERE risk_id=? ORDER BY created_at, id", (risk_id,)).fetchall()
     rule_ids = [r["linkable_id"] for r in rows if r["linkable_type"] == "org_rule"]
-    rules = {}
+    rules: dict[str, Row] = {}
     if rule_ids:
         for r in c.execute(
             f"SELECT id, kind, text, status, if_broken FROM org_rules WHERE id IN ({','.join('?' * len(rule_ids))})",
@@ -513,10 +533,10 @@ def links(c, who, risk_id):
         ):
             rules[r["id"]] = dict(r)
     now = _current(c, [r["linkable_id"] for r in rows if r["linkable_type"] == "entity"])
-    seen = ES.visible_ids(c, who.actor, set(now.values())) if now else set()
+    seen: set[str] = ES.visible_ids(c, who.actor, set(now.values())) if now else set()
     facts = ES.entity_facts(c, seen) if seen else {}
     names = ES.entity_names(c, seen) if seen else {}
-    out = {"rules": [], "sources": [], "coverage": []}
+    out: dict[str, list[Row]] = {"rules": [], "sources": [], "coverage": []}
     for r in rows:
         if r["linkable_type"] == "org_rule" and r["linkable_id"] in rules:
             out["rules"].append({"link_id": r["id"], **rules[r["linkable_id"]]})
@@ -532,7 +552,7 @@ def links(c, who, risk_id):
     return out
 
 
-def _link_target(c, who, body):
+def _link_target(c: Any, who: Any, body: RiskLink) -> tuple[str, str]:
     roles = LINK_ROLES[body.linkable_type]
     role = body.role or roles[0]
     if role not in roles:
@@ -550,12 +570,12 @@ def _link_target(c, who, body):
     return row["id"], role
 
 
-def _editable(c, who, row):
+def _editable(c: Any, who: Any, row: Row) -> None:
     if not H.tag_can_edit(c, who.actor, row, _mover(c, who)):
         raise Problem("forbidden", "A risk is changed by its owner or a task mover", 403)
 
 
-def link(c, who, row, body):
+def link(c: Any, who: Any, row: Row, body: RiskLink) -> Row:
     _editable(c, who, row)
     target, role = _link_target(c, who, body)
     if c.execute(
@@ -578,7 +598,7 @@ def link(c, who, row, body):
     return {"link": after}
 
 
-def unlink(c, who, row, body):
+def unlink(c: Any, who: Any, row: Row, body: RiskLink) -> Row:
     _editable(c, who, row)
     roles = LINK_ROLES[body.linkable_type]
     role = body.role or roles[0]
@@ -604,7 +624,7 @@ def unlink(c, who, row, body):
 # ----------------------------------------------------------------------------- risks
 
 
-def create(auth, c, who, body):
+def create(auth: Any, c: Any, who: Any, body: RiskCreate) -> Row:
     auth.domain(who)
     made = slug(body.key or body.label)
     if not made:
@@ -630,7 +650,7 @@ def create(auth, c, who, body):
     return {"risk": risk_view(row)}
 
 
-def update(auth, c, who, row, body):
+def update(auth: Any, c: Any, who: Any, row: Row, body: RiskUpdate) -> Row:
     auth.domain(who)
     _editable(c, who, row)
     if row["version"] != body.version:
@@ -645,7 +665,7 @@ def update(auth, c, who, row, body):
     return {"risk": risk_view(after, standing(auth, c, who, [row["id"]]).get(row["id"]))}
 
 
-def detail(auth, c, who, row, limit=LIMIT_DEFAULT, offset=0):
+def detail(auth: Any, c: Any, who: Any, row: Row, limit: Any = LIMIT_DEFAULT, offset: Any = 0) -> Row:
     counts = standing(auth, c, who, [row["id"]]).get(row["id"])
     page = matters(auth, c, who, risk_id=row["id"], limit=limit, offset=offset)
     return {
@@ -656,8 +676,8 @@ def detail(auth, c, who, row, limit=LIMIT_DEFAULT, offset=0):
     }
 
 
-def install(app, store, auth, mutate):
-    def reader(request):
+def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
+    def reader(request: Request) -> Any:
         who = request.state.identity
         auth.domain(who)
         return who
@@ -666,7 +686,7 @@ def install(app, store, auth, mutate):
         "/api/v2/risks",
         **api_v2("Risk", "listRisks", "Every risk with its level, counts, claimed and next date", "RiskList"),
     )
-    def list_route(request: Request, task: str | None = None):
+    def list_route(request: Request, task: str | None = None) -> Any:  # pyright: ignore[reportUnusedFunction]
         """Every risk, live first. Counts, claimed totals and the next date come from the tasks the caller reads.
         `task` lists only the risks that task carries."""
         who = reader(request)
@@ -674,18 +694,18 @@ def install(app, store, auth, mutate):
             return list_risks(auth, c, who, task)
 
     @app.post("/api/v2/risks", **api_v2("Risk", "createRisk", "Add a risk: a tag of kind risk", "RiskResult"))
-    def create_route(request: Request, body: RiskCreate):
-        return mutate(request, body, lambda c: create(auth, c, request.state.identity, body))
+    def create_route(request: Request, body: RiskCreate) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return mutate(request, body, lambda c: create(auth, c, request.state.identity, body))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.get("/api/v2/matters", **api_v2("Risk", "listMatters", "Matters the caller reads, newest first", "MatterList"))
-    def matters_route(
+    def matters_route(  # pyright: ignore[reportUnusedFunction]
         request: Request,
         kind: str | None = None,
         open: bool | None = None,
         risk: str | None = None,
         limit: int = LIMIT_DEFAULT,
         offset: int = 0,
-    ):
+    ) -> Any:
         """Tasks carrying a risk that the caller reads, with their facts. `kind=dispute&open=true` is the Disputes tab."""
         who = reader(request)
         with store.read() as c:
@@ -696,13 +716,13 @@ def install(app, store, auth, mutate):
         "/api/v2/tasks/{tid}/matter",
         **api_v2("Risk", "setTaskMatter", "Set or clear a task's matter facts", "MatterResult"),
     )
-    def matter_route(request: Request, tid: str, body: MatterWrite):
-        return mutate(request, body, lambda c: set_matter(auth, c, request.state.identity, tid, body))
+    def matter_route(request: Request, tid: str, body: MatterWrite) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return mutate(request, body, lambda c: set_matter(auth, c, request.state.identity, tid, body))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.get(
         "/api/v2/risks/{risk_id}", **api_v2("Risk", "getRisk", "A risk, its matters, rules and sources", "RiskDetail")
     )
-    def get_route(request: Request, risk_id: str, limit: int = LIMIT_DEFAULT, offset: int = 0):
+    def get_route(request: Request, risk_id: str, limit: int = LIMIT_DEFAULT, offset: int = 0) -> Any:  # pyright: ignore[reportUnusedFunction]
         who = reader(request)
         with store.read() as c:
             return detail(auth, c, who, require_risk(c, who, risk_id), limit, offset)
@@ -710,8 +730,8 @@ def install(app, store, auth, mutate):
     @app.post(
         "/api/v2/risks/{risk_id}", **api_v2("Risk", "updateRisk", "Edit a risk using its current version", "RiskResult")
     )
-    def update_route(request: Request, risk_id: str, body: RiskUpdate):
-        def work(c):
+    def update_route(request: Request, risk_id: str, body: RiskUpdate) -> Any:  # pyright: ignore[reportUnusedFunction]
+        def work(c: Any) -> Any:
             who = request.state.identity
             return update(auth, c, who, require_risk(c, who, risk_id), body)
 
@@ -721,8 +741,8 @@ def install(app, store, auth, mutate):
         "/api/v2/risks/{risk_id}/links",
         **api_v2("Risk", "linkRisk", "Link a rule or a document to a risk", "RiskLinkResult"),
     )
-    def link_route(request: Request, risk_id: str, body: RiskLink):
-        def work(c):
+    def link_route(request: Request, risk_id: str, body: RiskLink) -> Any:  # pyright: ignore[reportUnusedFunction]
+        def work(c: Any) -> Any:
             who = request.state.identity
             auth.domain(who)
             return link(c, who, require_risk(c, who, risk_id), body)
@@ -733,8 +753,8 @@ def install(app, store, auth, mutate):
         "/api/v2/risks/{risk_id}/unlink",
         **api_v2("Risk", "unlinkRisk", "Remove a rule or document link from a risk", "RiskLinkResult"),
     )
-    def unlink_route(request: Request, risk_id: str, body: RiskLink):
-        def work(c):
+    def unlink_route(request: Request, risk_id: str, body: RiskLink) -> Any:  # pyright: ignore[reportUnusedFunction]
+        def work(c: Any) -> Any:
             who = request.state.identity
             auth.domain(who)
             return unlink(c, who, require_risk(c, who, risk_id), body)
