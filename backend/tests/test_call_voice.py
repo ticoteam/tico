@@ -794,11 +794,13 @@ def test_the_runner_stream_names_the_attempt_and_call_a_voice_hint_wakes(meet, m
     call = start_call(meet, _dm(meet), bots=["ops"])
     attempt = _claim(meet, worker, "ops")
     monkeypatch.setattr(events, "KEEPALIVE_SECONDS", 0.5)  # the server notices the closed stream and stops
+    # The doorbell alone wakes the stream: its shared look for other processes' writes never comes in this test.
+    monkeypatch.setattr(events.runner_bell(meet.app.state.store), "_every", 3600)
     with listening(meet.app) as open_stream:
         stream = open_stream(worker["token"], path="/api/v2/runners/me/events")
         stream.until(topic("ready"))
         _speak(meet, call["id"], 0)
-        hint = stream.until(topic("runner", kind="voice_inputs"))["data"]
+        hint = stream.until(topic("runner", kind="voice_inputs"), timeout=10)["data"]
     assert hint == {
         "seq": hint["seq"],
         "kind": "voice_inputs",
