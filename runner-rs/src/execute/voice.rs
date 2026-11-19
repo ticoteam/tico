@@ -24,8 +24,52 @@ pub(super) enum End {
     Restart,
 }
 
+/// One call question's runner-side clock, sent with its final message for the server's `call_voice_runner` line:
+/// how long the poll that brought the question took, and how long after it went to the model the first output and
+/// the first spoken text came back. It splits the runner's and the model's share of a slow answer.
+#[derive(Default)]
+pub(super) struct VoiceClock {
+    poll_ms: Option<u64>,
+    sent: Option<Instant>,
+    frame_ms: Option<u64>,
+    text_ms: Option<u64>,
+}
+
+impl VoiceClock {
+    pub(super) fn sent(poll_ms: Option<u64>) -> Self {
+        Self {
+            poll_ms,
+            sent: Some(Instant::now()),
+            ..Self::default()
+        }
+    }
+
+    fn since(&self) -> Option<u64> {
+        self.sent
+            .map(|at| u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX))
+    }
+
+    pub(super) fn frame(&mut self) {
+        if self.frame_ms.is_none() {
+            self.frame_ms = self.since();
+        }
+    }
+
+    pub(super) fn text(&mut self) {
+        self.frame();
+        if self.text_ms.is_none() {
+            self.text_ms = self.since();
+        }
+    }
+
+    pub(super) fn json(&self) -> Value {
+        json!({"poll_ms": self.poll_ms, "first_frame_ms": self.frame_ms, "first_text_ms": self.text_ms})
+    }
+}
+
 struct Turn {
     id: Option<String>,
+    clock: VoiceClock,
     question: Option<String>,
     spoken: String,
     answer: String,
@@ -33,9 +77,10 @@ struct Turn {
 }
 
 impl Turn {
-    fn new(question: Option<String>) -> Self {
+    fn new(question: Option<String>, poll_ms: Option<u64>) -> Self {
         Self {
             id: None,
+            clock: VoiceClock::sent(poll_ms),
             question,
             spoken: String::new(),
             answer: String::new(),
@@ -44,7 +89,7 @@ impl Turn {
     }
 }
 
-async fn in_flight<F: Future>(future: &mut Option<Pin<Box<F>>>) -> F::Output {
+pub(super) async fn in_flight<F: Future>(future: &mut Option<Pin<Box<F>>>) -> F::Output {
     match future {
         Some(future) => future.as_mut().await,
         None => pending().await,
@@ -132,13 +177,14 @@ impl Runner {
                 format!("For call replies, {brief}.\n{primer}")
             };
             starting = Some(Box::pin(begin(primer)));
-            Some(Turn::new(None))
+            Some(Turn::new(None, None))
         };
         let mut last = String::new();
         let mut interrupt_at = None;
         let mut closing = false;
         let mut warmed = start.resumed;
         let mut input_poll = None;
+        let mut poll_began = time::Instant::now();
         loop {
             tokio::select! {
                 ack = in_flight(&mut starting) => {
@@ -206,7 +252,9 @@ impl Runner {
                             let reply = if ev["status"] == "interrupted" { String::new() } else {
                                 voice_answer(&turn.spoken, &turn.answer)
                             };
-                            self.voice_event(d, "message", json!({"voice_turn": question, "text": reply, "final": true})).await?;
+                            self.voice_event(d, "message", json!({
+                                "voice_turn": question, "text": reply, "final": true, "timing": turn.clock.json(),
+                            })).await?;
                         } else if ev["status"] == "completed" {
                             // A thread/start reply has no persisted rollout yet, and a half-finished primer
                             // cannot stand for a warm thread after a crash.
@@ -216,8 +264,10 @@ impl Runner {
                             return Err(Fail::runtime("Codex did not complete the voice primer"));
                         }
                     } else if let Some(question) = turn.question.as_ref().filter(|_| interrupt_at.is_none()) {
+                        turn.clock.frame();
                         if kind == "delta" {
                             if let Some(text) = ev["text"].as_str().filter(|text| !text.is_empty()) {
+                                turn.clock.text();
                                 let piece = crate::hosts::add_piece(&mut turn.spoken, std::mem::take(&mut turn.next_message), text);
                                 self.voice_event(d, "delta", json!({"voice_turn": question, "text": piece})).await?;
                             }
@@ -227,6 +277,9 @@ impl Runner {
                             }
                             turn.next_message = true;
                             turn.answer = text_of(&ev["text"]);
+                            if !turn.answer.is_empty() {
+                                turn.clock.text();
+                            }
                         }
                     }
                 }
@@ -241,11 +294,13 @@ impl Runner {
                         return Err(Fail::runtime("Voice session lease ended"));
                     }
                     let phase = if active.is_some() || starting.is_some() { "busy" } else { "ready" };
+                    poll_began = time::Instant::now();
                     input_poll = Some(Box::pin(self.voice_inputs(d.aid, phase)));
                 }
                 input = in_flight(&mut input_poll) => {
                     input_poll = None;
                     let input = input?;
+                    let poll_ms = u64::try_from(poll_began.elapsed().as_millis()).unwrap_or(u64::MAX);
                     closing = input.is_null() || input["closed"] == true || d.flags.stopped.load(Ordering::SeqCst);
                     if let Some(turn) = &active {
                         let revoked = turn.question.as_ref().is_some_and(|id| input["turn"]["id"] != *id);
@@ -264,7 +319,7 @@ impl Runner {
                             let prompt = voice_question(&input["turn"], &mut notes_stamp);
                             last.clone_from(&question);
                             starting = Some(Box::pin(begin(prompt)));
-                            active = Some(Turn::new(Some(question)));
+                            active = Some(Turn::new(Some(question), Some(poll_ms)));
                         }
                     }
                 }

@@ -408,7 +408,8 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
     assert prep["message"]["refs"]["call_prep"] == call["id"]
     first, full = "Yes.", "Yes. Ops can take the reliability review."
-    with caplog.at_level(logging.WARNING, logger="tico.call_voice"):
+    caplog.set_level(logging.INFO, logger="tico.calls")
+    with caplog.at_level(logging.INFO, logger="tico.call_voice"):
         post(
             meet,
             f"{path}/events",
@@ -427,7 +428,16 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
             f"{path}/events",
             {
                 "events": [
-                    {"seq": 3, "kind": "message", "payload": {"voice_turn": turn["id"], "text": full, "final": True}},
+                    {
+                        "seq": 3,
+                        "kind": "message",
+                        "payload": {
+                            "voice_turn": turn["id"],
+                            "text": full,
+                            "final": True,
+                            "timing": {"poll_ms": 41, "first_frame_ms": 380, "first_text_ms": None},
+                        },
+                    },
                 ]
             },
             token,
@@ -436,6 +446,8 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     assert full in thread_texts(meet, cid)
     assert len(media.said) == 2
     assert first not in thread_texts(meet, cid)
+    runner = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_runner "))
+    assert runner.endswith(f"turn={turn['id']} poll_ms=41 first_frame_ms=380 first_text_ms=null")
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("call_voice_turn "))
     timing = dict(piece.split("=", 1) for piece in line.split()[1:])
     assert 0 <= int(timing["first_token_ms"]) <= int(timing["first_sentence_ms"]) <= int(timing["first_audio_ms"])
