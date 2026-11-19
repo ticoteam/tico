@@ -562,7 +562,7 @@ the value to the bot; preflight then reports whether every declared Credential a
 resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
 every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
 Tico holds. A bot that needs a service it holds no grant for stops and says so on the task; it never
-borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in a DM, which moves the value
+borrows another bot's credential. To let it use one, the owner grants it (Tools, under the Keys filter), or asks BotOps in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
 A run's MCP servers are `hub`, its granted MCP tools, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
@@ -637,7 +637,7 @@ Instructions and code. Narrowing GitHub access means a declared `github` Tool fo
 
 **Credentials are never part of it.** `env` is the variable's *name*. A value is refused, and so is
 anything that looks like a key, a token, a password or a URL with one in it; the check is a guard
-against pasting one by mistake, not a substitute for care. Store the value in **Tools → Credentials**
+against pasting one by mistake, not a substitute for care. Store the value as a key in **Tools → Add → Key**
 or its thread card, set its Bot variable name and grant it to the bot
 ([Credentials](credential-vault.md)). Until it is
 there the tool shows "Credential missing on <computer>".

@@ -37,7 +37,7 @@ Tico: use a supported API credential there, or a REST skill.
 
    - `url` is https (plain http only for localhost). `transport` is `http` (streamable HTTP, the default) or `sse`.
    - `headers` may use `${VAR}` for the entry's own `env` variable and nothing else. The value is never in the file.
-   - Store the value in **Tools → Credentials** or a Credential card and grant it to this bot.
+   - Store the value as a key (**Tools → Add → Key**) or on a Credential card and grant it to this bot.
      Its own secrets file and credential profiles are legacy migration sources; new runs do not load them.
      Nothing from the runner's own environment is used. A server whose variable is not
      granted is left out, and the run's log says which.

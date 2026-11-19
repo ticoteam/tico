@@ -656,6 +656,6 @@ also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose thread went
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
 With none ticked, **Skip for now** continues without a provider; bots wait until one is added.
 Settings > Models can also save with no providers enabled. After choosing providers, sign in on each computer
-from that page, or store the model key in **Tools > Credentials** and grant **Every computer**. For a model API key or token
+from that page, or add the model key in **Settings > Models** and give it to the computers. For a model API key or token
 named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`, a blank **Bot variable name** is
 inferred automatically; otherwise set the model's variable explicitly. Bot access still needs its own grant.

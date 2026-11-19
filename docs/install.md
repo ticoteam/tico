@@ -177,7 +177,7 @@ Paste this into its Setup DM (or replace it with your own facts):
 - **Offline** or **Missing bot repository or AGENTS.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
-  **Tools > Credentials**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
+  **Settings > Models**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
   Older computers show both paths. See [Harnesses](harnesses.md).
 - **Needs setup**: open the bot's page and press **Start onboarding**; tasks and routines wait until its onboarding is finished.
 - **A missing Tool or Credential**: use the bot's card or [Connect tools](connect-tools.md) and grant the credential to that bot.
@@ -635,14 +635,11 @@ In the app open **Settings > Computers > Add computer** (or step 4 of the Finish
 runs your bots"), pick the kind of computer, and copy the commands it shows. The one-time code works once and
 expires after 15 minutes. Adding a computer never assigns bots to it: choose it for each bot afterwards.
 
-**A new computer signs in to your model by itself when your team has given every computer its model key.** Store the key
-once under Credentials (a credential named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`,
-type API key or token), open **Manage access** on it and choose **Every computer**. Only a credential administrator can do this,
-and BotOps asks for a Confirm click first. From then on, when a new computer joins or gets its first job and its model is not
+**A new computer signs in to your model by itself when your team has given it a model key.** Add the key once in
+**Settings > Models** and give it to the computers that should use it ([API keys on a Computer](computers.md#api-keys-on-a-computer)).
+Only a credential administrator can do this. From then on, when a new computer joins or gets its first job and its model is not
 signed in, the runner (the software on the computer) asks the server for that key as itself, saves it in its own secrets folder
 and signs in the way it would with a key you had typed there. Nobody copies a key between computers, and the key is in no log.
-For those model-key names, a blank **Bot variable name** is inferred automatically; an explicit variable takes precedence.
-Older name-only model keys also offer **Every computer (signs models in)**, and granting one fills the missing variable.
 Tool Credentials need a grant per bot; `tico_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
@@ -778,15 +775,15 @@ docker exec -it -u bot '<container-name>' claude auth login              # Claud
 ```
 
 `claude setup-token` is not a sign-in: it prints a long-lived token and leaves Claude Code signed out. To use such a
-token, store it as a `CLAUDE_CODE_OAUTH_TOKEN` Credential for every computer instead (above).
+token, add it as a model key in **Settings > Models** and give it to the computers instead (above).
 
-Store API keys and other Credentials in **Tools > Credentials**, set their environment-variable name,
+Store API keys and other Credentials in **Tools > Add > Key**, set their environment-variable name,
 and grant them to each bot that needs them. A bot run receives only its grants; it does not inherit
 `_shared.env` or the runner's process credentials. On upgrade, each existing bot is granted its own keys and every
 key in its computer's `_shared.env`, so its access continues. Bots created after the upgrade start with none. See [Credentials](credential-vault.md).
 
-**Codex with an API key.** Model sign-in on a Computer may use a computer-local key or a team's model key shared
-with **Every computer (signs models in)**. The runner sends it to `codex login --with-api-key` on standard input,
+**Codex with an API key.** Model sign-in on a Computer may use a computer-local key or a team's model key given to it
+in **Settings > Models**. The runner sends it to `codex login --with-api-key` on standard input,
 with no key in a command line or log. This signs models in; tool Credentials still need a grant per bot.
 A key Codex refuses is tried again after ten minutes or when the key changes.
 The `.codex` folder in the volume belongs to `bot`, is group-writable and setgid, and its login files are
