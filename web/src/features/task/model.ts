@@ -1,5 +1,5 @@
 import { refusal, type RefusalToast, type Result } from '@/actions';
-import type { TaskDocument, TaskRequirement } from '@/api/schema';
+import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
 import type { TaskData } from './queries';
 
 /* Plain rules of the open task: its tabs and their marks, the decision that waits on the person, and its addresses. */
@@ -20,6 +20,10 @@ export interface TaskTab {
   label: string;
   mark?: TabMark;
   doc?: TaskDocument;
+  /** One of the task's other files, shown by its type. */
+  file?: TaskFileView;
+  /** An email the task asks about (`email:<id>` in what a requirement shows): its send's id. */
+  email?: string;
 }
 
 /** The requirement the person may answer now: Approve, Send back. */
@@ -29,19 +33,42 @@ export function decisionOf(t: TaskData): TaskRequirement | null {
 
 const fileOf = (r: TaskRequirement | null): string | null => r?.approval?.file_id ?? r?.page?.file_id ?? null;
 
-/** The stage's pages, each with its state, then Details (more.js taskflow). */
-export function tabsOf(t: TaskData): TaskTab[] {
-  const asked = fileOf(decisionOf(t));
+/** The stage's pages and Markdown files, each with its state (more.js taskflow); then the task's other files but its
+    pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; then each email its
+    requirements show; then Details. A page linked in two roles is one tab. */
+export function tabsOf(t: TaskData, files: TaskFileView[] = []): TaskTab[] {
+  const decision = decisionOf(t);
+  const asked = fileOf(decision);
   const used = new Set<string>();
-  const docs = (t.documents ?? []).map((doc): TaskTab => {
-    let slug = slugOf(doc.name);
+  const free = (name: string) => {
+    let slug = slugOf(name);
     while (used.has(slug) || slug === DETAILS) slug += '-2';
     used.add(slug);
+    return slug;
+  };
+  const seen = new Set<string>();
+  const docs = (t.documents ?? []).flatMap((doc): TaskTab[] => {
+    if (seen.has(doc.file_id)) return [];
+    seen.add(doc.file_id);
+    const slug = free(doc.name);
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
-    return { slug, label: doc.title || doc.name, mark: doc.file_id === asked ? 'ask' : ok ? 'ok' : 'none', doc };
+    return [{ slug, label: doc.title || doc.name, mark: doc.file_id === asked ? 'ask' : ok ? 'ok' : 'none', doc }];
   });
-  return [...docs, { slug: DETAILS, label: 'Details' }];
+  const others = files
+    .filter((f) => !f.archived && !seen.has(f.id) && !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/'))
+    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: f.title || f.name, file: f }));
+  const emails: TaskTab[] = [];
+  for (const r of t.to_leave ?? [])
+    for (const ref of r.shows ?? []) {
+      const email = ref.startsWith('email:') ? ref.slice(6) : '';
+      if (!email || emails.some((x) => x.email === email)) continue;
+      emails.push({ slug: free('Email'), label: 'Email', mark: r === decision ? 'ask' : r.met ? 'ok' : 'none', email });
+    }
+  return [...docs, ...others, ...emails, { slug: DETAILS, label: 'Details' }];
 }
+
+/** A document the server keeps as a page (its pages read answers for it); a Markdown file is a plain file. */
+export const isPage = (doc: TaskDocument): boolean => doc.kind !== 'markdown';
 
 /** With no tab in the address: the page that waits on the person, else the first page, else Details. */
 export function defaultTab(tabs: TaskTab[]): string {

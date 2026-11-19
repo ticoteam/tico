@@ -5,7 +5,7 @@ import { Dot } from '@/tico/dot';
 import { useTicoPower } from '@/tico/power';
 import { useArrangement } from './arrangement';
 import { useDesktopInset } from '@/desktop';
-import { IconButton } from '@/kit/IconButton';
+import { Icon } from '@/kit/Icon';
 import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
@@ -41,6 +41,13 @@ export interface FrameProps {
   onCloseChat?: () => void;
   onClosePanel?: () => void;
 }
+
+/* How long sheets take to move (motion.md E1-E3). A change of arrangement moves at E1's 620ms (--dur-sheet). A sheet
+   the person folds or opens moves about three times as fast, so the fold feels snappy; its content fades in to match.
+   Transform and opacity only; Off (and the system's reduced motion) jumps. */
+const SHEET_MOVE = { ms: 620, easing: 'cubic-bezier(.3,1,.3,1)', arriveMs: 340, fadeMs: 300, fadeDelayMs: 200 };
+const SHEET_FOLD = { ms: 200, easing: 'cubic-bezier(.3,1,.3,1)', arriveMs: 120, fadeMs: 100, fadeDelayMs: 70 };
+const SHEET_RESET = { ms: 240, easing: 'cubic-bezier(.2,0,0,1)', arriveMs: 340, fadeMs: 300, fadeDelayMs: 200 };
 
 /* the least head a sheet keeps beside the desktop window's buttons; narrower, its content starts below them */
 const BESIDE_LIGHTS = 160;
@@ -93,7 +100,7 @@ interface Drag {
   max: number;
   pointer: number;
 }
-type Cause = 'move' | 'reset' | null;
+type Cause = 'move' | 'fold' | 'reset' | null;
 interface Placed {
   x: number;
   folded: boolean;
@@ -127,7 +134,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     if (!cur) return;
     if (cur.state === 'tucked' || (cur.state === 'fold' && !cur.width && cur.why === 'room')) return setPeek(id);
     const r = press(width, spec, saved, id);
-    cause.current = 'move';
+    cause.current = 'fold';
     if (r.saved !== saved) update(now => withFold(now, arr, id, r.saved[arr]?.fold?.[id] === true));
     setPeek(r.peek);
   };
@@ -269,8 +276,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     before.current = { arr: p.arr, at };
     cause.current = null;
     if (!was || !why || dragging || motionLevel() === 'off' || typeof Element.prototype.animate !== 'function') return;
-    const dur = why === 'reset' ? 240 : 620;
-    const easing = why === 'reset' ? 'cubic-bezier(.2,0,0,1)' : 'cubic-bezier(.3,1,.3,1)';
+    const m = why === 'reset' ? SHEET_RESET : why === 'fold' ? SHEET_FOLD : SHEET_MOVE;
+    const { ms: dur, easing } = m;
     for (const [id, el] of places.current) {
       const a = was.at[id];
       const b = at[id];
@@ -278,7 +285,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       if (!a?.shown) {
         // a sheet arriving: from 60 to the right for a second chat (E5), and a fade
         el.animate([{ transform: id === 'chat' ? 'translateX(60px)' : 'none' }, { transform: 'none' }], { duration: dur, easing });
-        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 340, easing: 'cubic-bezier(.2,0,0,1)' });
+        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: m.arriveMs, easing: 'cubic-bezier(.2,0,0,1)' });
         continue;
       }
       if (a.x !== b.x) {
@@ -290,7 +297,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       }
       if (a.folded !== b.folded) {
         // folding or opening: the sheet's content fades in at its new form (E2, E3, E4)
-        for (const c of el.firstElementChild?.children ?? []) c.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: b.folded ? 0 : 200, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards' });
+        for (const c of el.firstElementChild?.children ?? []) c.animate([{ opacity: 0 }, { opacity: 1 }], { duration: m.fadeMs, delay: b.folded ? 0 : m.fadeDelayMs, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards' });
       }
     }
   });
@@ -405,17 +412,22 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   );
 }
 
-/* Tico folded: the Dot at the top, the panel icon at the foot. No number beside the Dot (motion.md R1). */
+/* Tico folded: the Dot at the top, the panel icon at the foot. No number beside the Dot (motion.md R1). The whole strip
+   is one button that opens Tico; the Dot and the icon inside it only draw. */
 function TicoStrip({ onOpen }: { onOpen: () => void }) {
   // folded, the strip's Dot still shows when Tico is off
   useTicoPower();
   return (
     <aside className="pane tico is-fold" aria-label="Tico">
-      <button className="tico-orb" type="button" aria-label="Open Tico" title="Open Tico" onClick={onOpen}>
-        <Dot size={30} />
+      <button className="tico-strip" type="button" aria-label="Open Tico" title="Open Tico" onClick={onOpen}>
+        <span className="tico-orb">
+          <Dot size={30} />
+        </span>
+        <span className="grow" />
+        <span className="ib ib-quiet" aria-hidden="true">
+          <Icon name="panel" />
+        </span>
       </button>
-      <span className="grow" />
-      <IconButton icon="panel" label="Open Tico" quiet onClick={onOpen} />
     </aside>
   );
 }

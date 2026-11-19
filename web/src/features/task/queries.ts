@@ -74,7 +74,9 @@ export const taskDetailQuery = (id: string | undefined) =>
 export async function loadTask(client: QueryClient, param: string): Promise<TaskData | null> {
   try {
     const id = await client.ensureQueryData(taskRefQuery(param));
-    return await client.ensureQueryData(taskDetailQuery(id));
+    // Its files are tabs too: read with it, so the tab that opens is picked once. A refusal leaves Details.
+    const [t] = await Promise.all([client.ensureQueryData(taskDetailQuery(id)), client.prefetchQuery(taskFilesQuery(id))]);
+    return t;
   } catch {
     // the page shows not found, no access or the fault
     return null;
@@ -86,13 +88,6 @@ export const taskFilesQuery = (id: string) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(id), 'files'] as const,
     queryFn: async ({ signal }) => (await api.get<TaskFileList>(`${taskPath(id)}/files?all=1`, { signal })).files,
-  });
-
-/** One of the task's pages, with the address it is drawn from (GET /api/v2/pages/{fid}). */
-export const taskPageQuery = (task: string, file: string) =>
-  queryOptions({
-    queryKey: [...keys.tasks.detail(task), 'page', file] as const,
-    queryFn: async ({ signal }) => (await api.get<PageShown>(`/api/v2/pages/${enc(file)}`, { signal })).page,
   });
 
 /** One version of a page as its text (GET /api/v2/files/{fid}?v=<n>). A version never changes once written. */
@@ -530,3 +525,29 @@ export async function deletePage(task: string, file: string) {
   await reread(task);
   return r;
 }
+
+/* ---------------------------------------------------------------- an email the task asks about */
+
+import type { EmailSendDetail } from '@/api/schema';
+
+/** A frozen file of the email (backend/email_content.py `attachments`): `part` names it in its download address. */
+export interface EmailFile {
+  part: number;
+  name: string;
+  size: number;
+  type?: string;
+}
+
+/** The email as it will be sent, frozen (GET /api/v2/email/sends/{sid}). Reading it is what lets the person's OK count:
+    the server records that it showed them the whole email. */
+export const emailSendQuery = (task: string, send: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(task), 'email', send] as const,
+    queryFn: async ({ signal }) => {
+      const r = await api.get<EmailSendDetail>(`/api/v2/email/sends/${enc(send)}`, { signal });
+      return { ...r, files: r.send.attachments as unknown as EmailFile[] };
+    },
+  });
+
+/** Where one of its frozen files downloads from (GET /api/v2/email/sends/{sid}/attachments/{part}). */
+export const emailFileUrl = (send: string, part: number) => `/api/v2/email/sends/${enc(send)}/attachments/${part}`;

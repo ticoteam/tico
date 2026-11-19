@@ -12,7 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
-import { DETAILS, failedToast, reasonOf } from './model';
+import { DETAILS, failedToast, isPage, reasonOf } from './model';
 import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery } from './queries';
 import type { Versions } from './Versions';
 
@@ -48,7 +48,8 @@ const when = (at: string) => `${fmtDate(at)}, ${clock.format(new Date(at))}`;
 /** A page's ⋯ at the tab row's end. What it offers follows what the server says this reader may do. */
 export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
   const file = vs.doc.file_id;
-  const shown = useQuery(pageShownQuery(task, file));
+  // What only a page offers (archive, delete) shows once the server has answered that it is one.
+  const shown = useQuery({ ...pageShownQuery(task, file), enabled: isPage(vs.doc) });
   const toDetails = useToDetails();
   const [open, setOpen] = useState<'delete' | null>(null);
   const p = shown.data?.page;

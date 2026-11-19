@@ -117,7 +117,8 @@ describe('one open task', () => {
     show(<TaskPage task="12" pipeline="p1" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const tabs = screen.getByRole('navigation', { name: 'Fix the sign-in page pages' });
-    expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page');
+    // the tab that opens is picked once the task's files are read (a file is a tab too)
+    await waitFor(() => expect(within(tabs).getByRole('link', { name: /QA report/ }).getAttribute('aria-current')).toBe('page'));
     expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/tasks/p1/12/spec');
     expect(within(tabs).getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/tasks/p1/12/details');
     expect(await screen.findByTitle('QA report')).toBeTruthy();

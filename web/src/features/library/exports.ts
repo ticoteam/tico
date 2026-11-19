@@ -4,8 +4,10 @@ export { DocPage } from './DocPage';
 export { DocsPage } from './DocsPage';
 export { FilesPage } from './FilesPage';
 // A file anywhere: `files.view` shows a picture over the page (FileViewerHost, mounted once at the root) and opens any
-// other file as its page; FilePreview draws one in place (a task's Details).
-export { FilePreview, FileViewerHost } from './FileViewer';
+// other file as its page; FilePreview draws one in place (a task's Details), FileFrame one whose type is known (a
+// task's file at a version, an email's attachment).
+export { FileFrame, FilePreview, FileViewerHost } from './FileViewer';
+export { size as fileSize } from './parts';
 export { SkillsPage } from './SkillsPage';
 // The skills helper's code out of the address at startup (router.tsx), held for the Skills page.
 export { takeHelperCode } from './helperCode';

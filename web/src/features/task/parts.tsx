@@ -33,7 +33,7 @@ export function Mark({ met }: { met: boolean }) {
 }
 
 /** An app link built from a resolved address (the router's own types want a route id). */
-export function Go({ to, search, className, children, ...rest }: { to: string; search?: Record<string, string | undefined>; className?: string; children: ReactNode; title?: string; 'aria-label'?: string }) {
+export function Go({ to, search, className, children, ...rest }: { to: string; search?: Record<string, string | number | undefined>; className?: string; children: ReactNode; title?: string; 'aria-label'?: string }) {
   return (
     <Link to={to as LinkProps['to']} search={(search ?? {}) as never} className={className} {...rest}>
       {children}

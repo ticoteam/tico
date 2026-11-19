@@ -148,3 +148,10 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .dt-meet{grid-template-columns:24px minmax(0,1fr) auto 38px}
 .dt-meet .row-mark .ico{width:15px;height:15px;stroke-width:1.8;color:var(--muted)}
 .dt-meet .row-stage{padding:0 var(--s-3h) 0 var(--s-4)}
+
+/* ---------- an email the task asks about (ui/app/email-preview.ts): its words, then its files ---------- */
+.tv-mail{flex:1;min-width:0;overflow:auto;padding:var(--s-5) var(--s-6) var(--s-10)}
+.tv-mail h2{font-size:var(--t-fig);font-weight:var(--w-title);overflow-wrap:anywhere}
+.tv-mail-to{margin:var(--s-1) 0 var(--s-4);font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
+.tv-mail-body{white-space:pre-wrap;overflow-wrap:anywhere}
+.tv-mail .file{margin:var(--s-3) var(--s-1h) 0 0}

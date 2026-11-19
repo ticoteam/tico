@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
+import type { ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument, TaskFileView } from '@/api/schema';
 import { meQuery } from '@/data';
-import { FilePreview } from '@/features/library/exports';
+import { FileFrame, FilePreview } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
@@ -14,7 +15,7 @@ import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import type { TaskSearch } from './exports';
 import { download } from './Files';
-import { DETAILS, failedToast, tabAddress } from './model';
+import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { pageShownQuery, taskFilesQuery, type TaskData } from './queries';
 
@@ -24,15 +25,35 @@ import { pageShownQuery, taskFilesQuery, type TaskData } from './queries';
 /** The sandbox a page drawn by an agent runs in: its own scripts, never this app's cookies (ui/app/visual-pictures.ts). */
 export const PAGE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
 
-export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
-  const page = useQuery(pageShownQuery(task, doc.file_id));
-  if (page.isError) return <Empty icon="alert" title={`${doc.title || doc.name} did not load`} />;
-  const src = page.data?.page.src;
+type FileVersion = TaskFileView['versions'][number];
+
+const currentOf = (f: TaskFileView): FileVersion | undefined => f.versions.find((x) => x.n === f.current_version) ?? f.versions.at(-1);
+
+/** A tab's content: a page from its page read (its own address, its live parts), or, when the server answers that it
+    is no page, `file` (the same file from its file read, in the file viewer). */
+function PageOrFile({ task, id, title, page, file }: { task: string; id: string; title: string; page: boolean; file: ReactNode }) {
+  const shown = useQuery({ ...pageShownQuery(task, id), enabled: page });
+  if (!page || shown.isError) return <div className="frame fv">{file}</div>;
+  const src = shown.data?.page.src;
   return (
     <div className="frame is-inset">
-      {src ? <iframe src={src} title={doc.title || doc.name} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" /> : <PageBones />}
+      {src ? <iframe src={src} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" /> : <PageBones />}
     </div>
   );
+}
+
+/** A document's tab: a page, or a Markdown file. */
+export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
+  return <PageOrFile task={task} id={doc.file_id} title={doc.title || doc.name} page={isPage(doc)} file={<FilePreview file={doc.file_id} version={doc.version} />} />;
+}
+
+/** One of the task's other files as a tab, at its current version: an HTML file may be a page linked to the task. */
+export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
+  const v = currentOf(f);
+  if (!v) return null;
+  const name = f.title || f.name;
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} />;
+  return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
 }
 
 const BONES = [38, 92, 86, 64, 90, 72, 48];
@@ -47,9 +68,8 @@ export function PageBones() {
   );
 }
 
-type FileVersion = TaskFileView['versions'][number];
 
-/** One version of a file as the frame draws it. */
+/** One version of a file as the frame draws it: a picture opens full size; anything else is the file viewer's. */
 function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?: () => void }) {
   const name = f.title || f.name;
   if (v.mime.startsWith('image/'))
@@ -60,9 +80,7 @@ function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?
     ) : (
       <img src={v.url} alt={`${name}, v${v.n}`} />
     );
-  if (v.mime.startsWith('video/')) return <video src={v.url} poster={v.poster_url ?? undefined} controls />;
-  if (v.mime.startsWith('text/html')) return <iframe src={v.url} title={`${name}, v${v.n}`} sandbox="" referrerPolicy="no-referrer" />;
-  return <FilePreview file={f.id} version={v.n} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} />;
 }
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
@@ -78,7 +96,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const details = tabAddress(t, DETAILS, flow);
   const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
   const back = flow ? { tab: DETAILS } : {};
-  const current = f?.versions.find((x) => x.n === f.current_version) ?? f?.versions.at(-1);
+  const current = f && currentOf(f);
   const v = (search.v && f?.versions.find((x) => x.n === search.v)) || current;
   const versions = [...(f?.versions ?? [])].sort((a, b) => b.n - a.n);
   const other = search.vs && search.vs !== v?.n ? f?.versions.find((x) => x.n === search.vs) : undefined;
@@ -88,7 +106,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const mayRemove = t.mover || [t.owner_id, t.requester_id].includes(me.data?.id ?? '');
   // The task's pictures, each at its current version: the full size view walks them.
   const pictures = list.flatMap((x) => {
-    const cur = x.versions.find((y) => y.n === x.current_version) ?? x.versions.at(-1);
+    const cur = currentOf(x);
     return cur?.mime.startsWith('image/') && cur.url.startsWith('/api/') ? [{ id: x.id, src: cur.url, name: x.title || x.name } satisfies Picture & { id: string }] : [];
   });
   const fullAt = full ? pictures.findIndex((p) => p.id === full) : -1;

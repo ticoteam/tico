@@ -15,12 +15,13 @@ import { whoHref } from '@/features/team/routing';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
-import { FileView } from './FileView';
+import { Email as EmailView } from './Email';
+import { FileTab, FileView } from './FileView';
 import { FlowSteps, FlowTop, MoreMenu, WhereLine } from './Head';
 import { defaultTab, DETAILS, failedToast, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
-import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
+import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { PageView, useVersions, VersionBar } from './Versions';
 import './task.css';
 
@@ -86,17 +87,21 @@ function markOf(x: TaskTab) {
 
 function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
   const navigate = useNavigate();
-  const tabs = tabsOf(t);
+  const files = useQuery(taskFilesQuery(t.id));
+  const tabs = tabsOf(t, files.data);
   const known = !!tab && tabs.some((x) => x.slug === tab);
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
-  // the address, and an answer that changes which page waits does not move the person off the page they read.
-  const [opened] = useState(() => defaultTab(tabs));
+  // the address, and an answer that changes which page waits does not move the person off the page they read. A
+  // file's tab is known once the files are read, so nothing is picked before.
+  const [first, setFirst] = useState<string | null>(null);
+  if (files.isFetched && first === null) setFirst(defaultTab(tabs));
+  const opened = first ?? defaultTab(tabs);
   const on = known ? (tab as string) : opened;
   useEffect(() => {
-    if (known) return;
+    if (known || first === null) return;
     const a = tabAddress(t, opened, flow);
     void navigate({ to: a.to as never, search: a.search as never, replace: true });
-  }, [known, opened, flow, t, navigate]);
+  }, [known, first, opened, flow, t, navigate]);
   const [adding, setAdding] = useState<Adding | null>(null);
   const search = useSearch({ strict: false }) as TaskSearch;
 
@@ -130,6 +135,10 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <Details t={t} flow={flow} adding={adding} onAdding={setAdding} />
     ) : versions ? (
       <PageView task={t.id} vs={versions} at={at} />
+    ) : current?.file ? (
+      <FileTab task={t.id} f={current.file} />
+    ) : current?.email ? (
+      <EmailView task={t.id} send={current.email} part={search.part} at={address} />
     ) : null;
 
   return (
