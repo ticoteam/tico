@@ -879,7 +879,7 @@ Merge → Validate → Done · Closed
 The stage ids are those Tico Team's live Product has where it has the stage: `product-spec`,
 `product-build`, `product-review-1`, `product-fixes-1`, `product-qa`,
 `product-merge`, `product-validate`; and `product-related`, `product-ok-spec`, `product-ok-release`. Each stage's
-purpose names the company skill it runs on: write-a-spec, build-and-open-a-pr and hand-off-to-review,
+purpose names the company skill it runs on: write-the-spec, build-and-open-a-pr and hand-off-to-review,
 fix-review-findings, make-the-qa-page, validate-in-production.
 
 One feature owner, the task's assignee, holds every stage but Review, QA and Merge, in one task and one session
