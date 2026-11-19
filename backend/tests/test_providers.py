@@ -21,6 +21,15 @@ def test_resolution_order_bot_then_company_then_first_provider_then_error():
     assert "Settings > Computers" in refused.value.detail and refused.value.status == 409
 
 
+def test_recommended_is_worked_out_once_and_answers_as_the_catalog_does():
+    # Pages ask resolve (and so recommended) of every bot: the answer is kept per provider, and is the catalog's own row.
+    for provider in [*P.PROVIDER_BY_ID, "unknown", ""]:
+        rows = P.provider_models(provider)
+        expected = next((row for row in rows if row.get("recommended")), rows[0] if rows else None)
+        assert P.recommended(provider) is expected
+        assert P.recommended(provider) is expected
+
+
 def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none(api):
     """Found by the Linux rehearsal: onboarding creates bots that follow the company default, and
     the runner got an empty runtime from the claim, so no turn ever started."""

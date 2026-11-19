@@ -778,10 +778,16 @@ def provider_models(provider, *, current=True, meeting=False):
     ]
 
 
+_RECOMMENDED: dict[object, dict | None] = {}
+
+
 def recommended(provider):
-    """The model a provider's bots get when nobody chose one, or None for an unknown provider."""
-    rows = provider_models(provider)
-    return next((row for row in rows if row.get("recommended")), rows[0] if rows else None)
+    """The model a provider's bots get when nobody chose one, or None for an unknown provider. Worked out once per
+    provider: the catalog is fixed at import, and resolve asks this for every bot on every page that lists them."""
+    if provider not in _RECOMMENDED:
+        rows = provider_models(provider)
+        _RECOMMENDED[provider] = next((row for row in rows if row.get("recommended")), rows[0] if rows else None)
+    return _RECOMMENDED[provider]
 
 
 def runtime_enabled(runtime, enabled, model_row=None):
