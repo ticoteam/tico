@@ -123,10 +123,9 @@ const perStage = (tasks: readonly TaskItem[], into: Record<string, number> = {})
  * A stage's open tasks: the server's count as read, moved by every row that has come or gone since (a move shown
  * first, a live one, a new task); the next read of the list sets it again. None when the read had no counts.
  */
-export function stageCount(page: TaskPage | undefined, stage: string): number | undefined {
-  if (!page?.counts) return undefined;
-  const now = page.tasks.reduce((n, t) => (t.stage_id === stage ? n + 1 : n), 0);
-  return Math.max(0, (page.counts.stage[stage] ?? 0) + now - (page.counted?.[stage] ?? 0));
+export function stageCount(page: TaskPage, stage: string, loaded: number): number | undefined {
+  if (!page.counts) return undefined;
+  return Math.max(0, (page.counts.stage[stage] ?? 0) + loaded - (page.counted?.[stage] ?? 0));
 }
 
 export interface Filters {
@@ -155,7 +154,7 @@ const PAGE = 500;
  * so a move or a new task lands in place; a search, a tag or Late make it read the list again instead.
  */
 export function listParams(pipeline: string, f: Filters): Record<string, string | number> {
-  const p: Record<string, string | number> = { pipeline, status: 'open', limit: PAGE, counts: 'stage' };
+  const p: Record<string, string | number> = { pipeline, status: 'open', limit: PAGE, counts: 'stage', brief: 'true' };
   if (f.owner) p.owner = f.owner;
   if (f.tag) p.label = f.tag;
   if (f.late) p.late = 'true';
