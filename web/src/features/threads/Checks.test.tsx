@@ -1,5 +1,5 @@
 import { InfiniteQueryObserver, QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, defaultParseSearch, defaultStringifySearch, RouterProvider } from '@tanstack/react-router';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -328,6 +328,19 @@ describe('An open mail @s159', () => {
     expect(await screen.findByRole('textbox', { name: 'Reply to Mara' })).toBeTruthy();
   });
 
+  it('returns to the selected mailbox and search when closing a letter from its back link', async () => {
+    openMail();
+    const selected = 'sales@example.test';
+    const words = '1203';
+    const reading = { box: selected, q: words, open: 'th1' };
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box, { address: selected }]);
+    const router = show(<MailPage box={selected} open="th1" q={words} />, `/threads/mail${defaultStringifySearch(reading)}`);
+    const letterLink = (await screen.findByTitle('Sam Lee: Invoice question')).getAttribute('href')!;
+    expect(defaultParseSearch(new URL(letterLink, location.origin).search)).toEqual(reading);
+    fireEvent.click(await screen.findByRole('link', { name: 'Back to Mail' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ box: selected, q: words }));
+  });
+
   it('has no reply box or Archive where the person may only read', async () => {
     openMail();
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ ...box, may: { send: false, organize: false } }]);
@@ -582,6 +595,31 @@ describe('Browse threads @s176', () => {
 });
 
 describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => {
+  it('looks past pages without a match and reports no matches when the feed is exhausted', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(35);
+    const recent = Array.from({ length: 50 }, (_, i) => update(`recent-${i}`, 'daily', '2026-01-07', `Recent note ${i}`));
+    serve((url) => {
+      if (!url.startsWith('/api/v2/updates?')) return;
+      const cursor = new URL(url, location.origin).searchParams.get('before');
+      if (cursor === 'second') return ok({ updates: [update('older', 'daily', '2026-01-05', 'Winter inventory')], unread: 0, next_before: null });
+      if (cursor === 'first') return ok({ updates: [update('middle', 'daily', '2026-01-06', 'A middle note')], unread: 0, next_before: 'second' });
+      return ok({ updates: recent, unread: 0, next_before: 'first' });
+    });
+    try {
+      show(<UpdatesPage />, '/updates');
+      expect(await screen.findByRole('feed', { name: 'Updates' })).toBeTruthy();
+      expect(all('GET', '/api/v2/updates')).toHaveLength(1);
+      const search = screen.getByRole('textbox', { name: 'Find an update' });
+      fireEvent.change(search, { target: { value: 'winter' } });
+      expect(screen.queryByRole('heading', { name: 'No matches' })).toBeNull();
+      expect(await screen.findByTitle('Winter inventory')).toBeTruthy();
+      fireEvent.change(search, { target: { value: 'spring' } });
+      expect(await screen.findByRole('heading', { name: 'No matches' })).toBeTruthy();
+    } finally {
+      height.mockRestore();
+    }
+  });
+
   it('finds updates by their words, and Weekly reads a section a week', async () => {
     serve((url) =>
       url.includes('/api/v2/updates')

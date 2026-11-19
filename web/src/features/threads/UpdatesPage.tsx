@@ -55,6 +55,15 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
   // An update archived or moved back stays in the cache flagged until the next read; each list shows its own side.
   const loaded = list.data.pages.flatMap((p) => p.updates).filter((u) => !!u.archived === archive);
   const all = find ? loaded.filter((u) => (u.body ?? '').toLowerCase().includes(find)) : loaded;
+  const noMatch = !!find && all.length === 0;
+  const nextBefore = list.data.pages.at(-1)?.next_before;
+  const { fetchNextPage, isFetching, isFetchNextPageError } = list;
+  useEffect(() => {
+    if (noMatch && nextBefore && !isFetching && !isFetchNextPageError) void fetchNextPage({ cancelRefetch: false });
+  }, [noMatch, nextBefore, isFetching, isFetchNextPageError, fetchNextPage]);
+  const searchingOlder = noMatch && !!nextBefore;
+  const searchState = isFetchNextPageError && !isFetching ? 'fault' : 'loading';
+  const listState = loaded.length || find ? 'ready' : 'empty';
   const unread = loaded.filter((u) => !u.read).length;
   // Weekly reads a section a week; the rest a section a day.
   const items: Item[] = byDay(all, tab === 'weekly').flatMap((g) => [
@@ -90,10 +99,11 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
           </PageMore>
         )
       }
-      state={loaded.length ? 'ready' : 'empty'}
+      state={searchingOlder ? searchState : listState}
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
+      onRetry={searchingOlder ? () => void fetchNextPage({ cancelRefetch: false }) : undefined}
       sections={
-        find && all.length === 0 ? (
+        noMatch ? (
           <Empty icon="search" title="No matches" />
         ) : (
         <VirtualList

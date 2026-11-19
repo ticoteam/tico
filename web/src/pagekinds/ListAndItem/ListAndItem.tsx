@@ -110,7 +110,7 @@ export interface ItemHeadProps {
   /** `<kind>:<id>` for Tico's flights. */
   target?: string;
   /** Where a phone's back button goes: the list. Shown only on a phone. */
-  back?: { to: string; label: string };
+  back?: { to: string; label: string; search?: LinkProps['search'] };
   /** Before the title: a face (36 at most). */
   lead?: ReactNode;
   /** Right of the title, before "⋯". */
@@ -154,7 +154,7 @@ export function ItemHead({ title, target, back, lead, actions, more, onRename, r
   return (
     <header className="conv-head">
       {back && (
-        <Link className="ib back" to={back.to as LinkProps['to']} aria-label={`Back to ${back.label}`}>
+        <Link className="ib back" to={back.to as LinkProps['to']} search={back.search} aria-label={`Back to ${back.label}`}>
           <Icon name="chevron" className="flip" />
         </Link>
       )}

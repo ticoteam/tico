@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
 import { Button } from '@/kit/Button';
@@ -184,10 +184,12 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
 
   /* ---- read up to the last message shown, while it is in view */
   const lastSeq = rows.reduce((n, m) => (typeof m.seq === 'number' && m.seq > n ? m.seq : n), 0);
-  useEffect(() => {
+  const readAtEnd = () => {
     if (!lastSeq || (scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
     markRead(id, lastSeq);
-  }, [id, lastSeq]);
+  };
+  const readOnMessage = useEffectEvent(readAtEnd);
+  useEffect(() => readOnMessage(), [id, lastSeq]);
 
   /* ---- the Dot, for Tico's own chat only */
   const doing = variant === 'tico' ? dotFor(rows, live) : null;
@@ -226,6 +228,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
       role="log"
       label={`Chat with ${name}`}
       className="chat-body"
+      onScroll={readAtEnd}
       onReachStart={() => {
         if (timeline.hasNextPage && !timeline.isFetchingNextPage) void timeline.fetchNextPage();
       }}
