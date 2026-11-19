@@ -20,6 +20,7 @@ from backend import hubdb as H
 from backend.store import Problem, encode
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
+from backend.tests.helpers.openapi_v2 import conforms
 from backend.tests.helpers.github_app import (
     EVENT_PERMISSIONS,
     FakeGitHub,
@@ -1804,3 +1805,77 @@ def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the
     assert done.status_code == 302, done.text
     assert done.headers["location"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
     assert len(gh.of("/conversions")) == 1
+
+
+# What no answer of the connect routes carries: the App's key, client secret and webhook secret (FakeGitHub's
+# conversion), and any installation or user token.
+SECRETS = ("BEGIN", "PRIVATE KEY", "whs", '"cs"', "ghs_", "gho_", "ghr_")
+
+
+def test_the_connect_routes_answer_their_v2_shapes_and_never_a_secret(api, gh):
+    document = api.get("/api/v2/openapi.json", headers=auth()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def answer(operation, response):
+        assert response.status_code == 200, (operation, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text)
+        assert not [s for s in SECRETS if s in response.text], (operation, response.text)
+        return response.json()
+
+    owner = {**auth(), "Idempotency-Key": str(uuid.uuid4())}
+    assert answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth())) == {
+        "connected": False,
+        "app_name": "Acme Tico",
+    }
+    page = api.get("/api/v2/github/app/manifest", params={"org": "Acme", "html": "true"}, headers=auth())
+    assert page.headers["content-type"].startswith("text/html")  # the hand-off page, which posts itself to GitHub
+    assert "action='https://github.com/organizations/Acme/settings/apps/new?state=" in page.text
+    asked = answer("getGitHubAppSetup", api.get("/api/v2/github/app/manifest", params={"org": "Acme"}, headers=auth()))
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])
+    assert api.get(CALLBACK, params={"code": code, "state": asked["state"]}, headers=auth()).status_code == 302
+    assert api.get("/api/v2/github/app/installed", headers=auth()).headers["location"] == (
+        "/#/tools/github?github=connected"
+    )
+    runner_token(api, "cpo")
+    assert turn_token(api).json()["token"].startswith("ghs_")  # an installation token the server now holds
+    state = answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth()))
+    assert state["connected"] and state["installed"] and state["install_url"] == G.INSTALL_PATH
+    answer("checkGitHubAppPermissions", api.post("/api/v2/github/app/check-permissions", headers=owner))
+    assert answer("replaceGitHubAppLostKey", api.post("/api/v2/github/app/replace-lost-key", headers=owner)) == {
+        "replaced": False  # the key is there: nothing is dropped
+    }
+    answer("disconnectGitHubApp", api.post("/api/v2/github/app/disconnect", headers=owner))
+
+    # A personal account, whose return came back with no owner session: the owner finishes it, then authorizes Tico.
+    personal(gh, "ana-dev")
+    asked = answer(
+        "getGitHubAppSetup", api.get("/api/v2/github/app/manifest", params={"org": "ana-dev"}, headers=auth())
+    )
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])
+    assert api.get(CALLBACK, params={"code": code, "state": asked["state"]}).json()["parked"] is True
+    done = answer("finishGitHubApp", api.post(FINISH, json={"state": asked["state"]}, headers=owner))
+    assert done["install_url"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
+    answer("getGitHubAuthorizeLink", api.get("/api/v2/github/app/authorize-link", headers=auth()))
+    authorize(api)
+    assert gh.issued  # the owner's user token is held now
+    assert answer("getGitHubApp", api.get("/api/v2/github/app", headers=auth()))["authorized"] is True
+
+
+def test_only_the_owner_reaches_the_connect_routes(api, gh):
+    """A signed-in person who is not the Owner is refused every connect route, and nothing changes."""
+    connect(api)
+    head = {**auth("person-test"), "Idempotency-Key": str(uuid.uuid4())}
+    for method, path, body in (
+        ("get", "/api/v2/github/app", None),
+        ("post", "/api/v2/github/app/check-permissions", None),
+        ("get", "/api/v2/github/app/manifest", None),
+        ("post", "/api/v2/github/app/replace-lost-key", None),
+        ("post", FINISH, {"state": "any"}),
+        ("get", "/api/v2/github/app/authorize-link", None),
+        ("post", "/api/v2/github/app/disconnect", None),
+    ):
+        r = api.get(path, headers=head) if method == "get" else api.post(path, json=body, headers=head)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", (path, r.text)
+    state = api.get("/api/v2/github/app", headers=auth()).json()
+    assert state["connected"] and state["slug"] == "acme-tico"  # nothing was disconnected or replaced
