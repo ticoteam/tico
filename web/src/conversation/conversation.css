@@ -101,6 +101,21 @@ button.react:hover{background:var(--well-2)}
 button.react[aria-pressed="true"]{box-shadow:inset 0 0 0 1px var(--line-strong)}
 button.react[aria-pressed="true"] b{font-weight:var(--w-strong);color:var(--ink-2)}
 
+/* Long words, links and inline code wrap inside the message wherever they must; a code block keeps its lines and
+   scrolls inside itself. A bubble and its column never grow past the row. */
+.msg-main,.bubble{overflow-wrap:anywhere}
+.msg code{overflow-wrap:anywhere}
+.msg pre{max-width:100%}
+.msg ul,.msg ol{grid-template-columns:minmax(0,1fr)}
+.msg li{min-width:0}
+.mine-col{min-width:0}
+.bubble{min-width:0;max-width:100%}
+
+/* a chat's head: its face and name go to the teammate's page */
+.head-face{display:inline-flex;flex:none}
+a.head-name{color:inherit;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;transition:text-decoration-color var(--dur-fast) var(--ease)}
+a.head-name:hover{text-decoration-color:var(--line-strong)}
+
 /* Reply and React on the message under the pointer, at its top corner; a phone has the long press instead. */
 .chat-body .msg{position:relative}
 .msg-acts{position:absolute;top:var(--s-2);right:0;display:flex;gap:var(--s-0);border-radius:var(--r-ctl);background:var(--surface-chat);opacity:0;transition:opacity var(--dur-fast) var(--ease)}

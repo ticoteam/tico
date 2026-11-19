@@ -6,9 +6,11 @@ import { ApiError } from '@/api/client';
 import { Conversation } from '@/conversation';
 import { useActor } from '@/data';
 import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
+import { whoHref } from '@/features/team/exports';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
@@ -170,8 +172,24 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
   return (
     <>
       <header className="side-head">
-        <Face id={t.owner_id} size={28} decorative />
-        <b>{name}</b>
+        {/* The face and the name go to the owner's page; one link is read out, the face's is for the pointer. */}
+        {owner ? (
+          <>
+            <Link className="head-face" href={whoHref(owner)} tabIndex={-1} aria-hidden>
+              <Face id={t.owner_id} size={28} decorative />
+            </Link>
+            <b>
+              <Link className="head-name" href={whoHref(owner)}>
+                {name}
+              </Link>
+            </b>
+          </>
+        ) : (
+          <>
+            <Face id={t.owner_id} size={28} decorative />
+            <b>{name}</b>
+          </>
+        )}
         <span className="grow" />
       </header>
       {t.conversation_id ? (

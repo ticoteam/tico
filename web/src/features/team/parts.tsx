@@ -32,7 +32,8 @@ export const waitsOn = (t: Pick<OwnTask, 'turn'>, me: string | undefined) => !!m
 export const taskHref = (t: Pick<OwnTask, 'pipeline_id' | 'number' | 'id'>) =>
   t.pipeline_id && t.number ? `/tasks/${encodeURIComponent(t.pipeline_id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`;
 
-/** A task on its owner's page: no face, since every row here is theirs (mates.js ownRow). */
+/** A task on its owner's page: no face, since every row here is theirs (mates.js ownRow). Only an open task is
+    Late, as in the old app (ui/app/task-row.ts taskLate): a done one keeps its grey row. */
 export function OwnRow({ task, me, sub }: { task: OwnTask; me: string | undefined; sub?: string }) {
   return (
     <TaskRow
@@ -40,7 +41,7 @@ export function OwnRow({ task, me, sub }: { task: OwnTask; me: string | undefine
       href={taskHref(task)}
       target={`task:${task.number ?? task.id}`}
       mark={waitsOn(task, me) ? <FlowMark /> : undefined}
-      late={!!task.late}
+      late={task.status === 'open' && !!task.late}
       pills={sub ? <span className="row-stage">{sub}</span> : undefined}
       at={task.updated_at ?? new Date(0).toISOString()}
     />

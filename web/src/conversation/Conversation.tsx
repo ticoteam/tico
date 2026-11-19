@@ -1,8 +1,9 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { toast } from '@/kit/Toast';
-import { meQuery } from '@/data';
+import { meQuery, useActor, type Actor } from '@/data';
 import { DidLine } from '@/kit/DidLine';
+import { Link } from '@/kit/Link';
 import { useFollow } from '@/live';
 import { Icon, type IconName } from '@/kit/Icon';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
@@ -92,6 +93,12 @@ function dotFor(rows: ChatMessage[], live: LiveRun[]): DotState | null {
   return rows.some((m) => m.pending === 'sending') ? 'think' : null;
 }
 
+/** A teammate's page, `/team/<agent slug or id>` as features/team's whoHref writes it; none for Tico or no one. */
+function teammateHref(actor: string | undefined, a: Actor | undefined): string | null {
+  if (!actor || !/^(bot|human):./.test(actor)) return null;
+  return `/team/${encodeURIComponent(a?.kind === 'agent' && a.slug ? a.slug : actor.slice(actor.indexOf(':') + 1))}`;
+}
+
 const herePage = (): PageRef => ({
   path: typeof location === 'undefined' ? '/' : location.pathname,
   title: typeof document === 'undefined' ? '' : document.title,
@@ -117,6 +124,8 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
 
   const items = itemsOf(rows, live, myId, newAfter);
   const name = variant === 'tico' ? 'Tico' : (title ?? 'Teammate');
+  const mate = useActor(actor);
+  const mateHref = teammateHref(actor, mate);
   const at = page === undefined ? herePage() : page;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
@@ -274,9 +283,15 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     );
   if (variant === 'side') {
     const who = whoOf({ sender_id: actor ?? '' }, variant, myId);
+    const face = <Face who={{ ...who, name }} size={28} />;
+    // The face and the name go to the teammate's page; one link is read out, the face's is for the pointer.
     return (
       <>
-        <SheetHead kind="side" title={name} lead={<Face who={{ ...who, name }} size={28} />} />
+        <SheetHead
+          kind="side"
+          title={mateHref ? <Link className="head-name" href={mateHref}>{name}</Link> : name}
+          lead={mateHref ? <Link className="head-face" href={mateHref} tabIndex={-1} aria-hidden>{face}</Link> : face}
+        />
         {list}
         {footer}
       </>

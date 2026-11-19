@@ -35,6 +35,7 @@ import {
   groupsQuery,
   instructionsQuery,
   latestUpdateQuery,
+  lastStopQuery,
   learnedQuery,
   modelsQuery,
   openTasksQuery,
@@ -122,6 +123,8 @@ function AgentHead({
   const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
   const [listing, setListing] = useState(false);
+  const [stopOpen, setStopOpen] = useState(false);
+  const { data: stop } = useQuery(lastStopQuery(slug));
   const { canEdit } = useLists(slug);
   const head: Head = {
     title: actor.name,
@@ -134,7 +137,7 @@ function AgentHead({
       <>
         <CopyPick slug={slug} botId={row?.id ?? bareId(actor.id)} />
         {paused && <Pill flag>Paused</Pill>}
-        <LastRun slug={slug} actor={actor} manage={row?.can_manage !== false} />
+        <LastRun slug={slug} actor={actor} manage={row?.can_manage !== false} open={stopOpen} onOpenChange={setStopOpen} />
         {sub && <p className="col-sub">{sub}</p>}
       </>
     ),
@@ -157,6 +160,7 @@ function AgentHead({
             <MenuItem label="Pause" icon="pause" onSelect={() => void pause.run({ slug })} />
           )}
           <MenuItem label="Dream" icon="asleep" onSelect={() => void dream.run({ slug })} />
+          {stop && <MenuItem label="Last run" icon="clock" onSelect={() => setStopOpen(true)} />}
           {canEdit && !settings && <MenuItem label="New list" icon="list" onSelect={() => setListing(true)} />}
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />

@@ -140,6 +140,15 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 /* Last run: the pill beside the name is the button that opens what happened */
 .last-stop{display:inline-flex;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer;border-radius:var(--r-chip)}
 .last-stop:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+/* The name keeps the head: what follows it gives way first (the title shrinks at a tenth of their rate), and on a
+   narrow page the pill leaves for ⋯, which opens the same dialog. */
+.rec .pk-head>.pk-title{flex-shrink:.1}
+.last-stop{min-width:0;overflow:hidden}
+.last-stop .pill{display:block;overflow:hidden;text-overflow:ellipsis}
+@container rec (width < 520px){.last-stop{display:none}}
+/* its dialog's labels and values wrap; nothing is cut */
+.lr-facts .fact>span:first-child,.lr-facts .fact-t{overflow:visible;white-space:normal;overflow-wrap:anywhere}
+.lr-facts .fact{align-items:start;padding-top:var(--s-1h);padding-bottom:var(--s-1h);line-height:var(--lh-read)}
 
 /* A list's filter: one row per line, its field, its value, then remove */
 .list-rows{display:grid;gap:var(--s-2);margin-top:var(--s-3)}

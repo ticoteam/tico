@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAction } from '@/actions';
 import type { Actor } from '@/data';
 import { Button } from '@/kit/Button';
@@ -18,9 +18,10 @@ export function needed(stop: LastStop, manage: boolean): string {
 
 /**
  * Why its last run ended without finishing (backend/execution.py last_stop): a pill beside its name, Stopped when a
- * person must act, and Last run when nothing is needed. It opens what happened. Its status moving reads it again.
+ * person must act, and Last run when nothing is needed. It opens what happened (so does the head's ⋯, where a narrow
+ * page hides the pill). Its status moving reads it again.
  */
-export function LastRun({ slug, actor, manage }: { slug: string; actor: Actor; manage: boolean }) {
+export function LastRun({ slug, actor, manage, open, onOpenChange }: { slug: string; actor: Actor; manage: boolean; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { data: stop } = useQuery(lastStopQuery(slug));
   const signal = `${actor.working ? 1 : 0}|${actor.status ?? ''}`;
   const seen = useRef(signal);
@@ -29,28 +30,27 @@ export function LastRun({ slug, actor, manage }: { slug: string; actor: Actor; m
     seen.current = signal;
     lastStopAgain(slug);
   }, [signal, slug]);
-  const [open, setOpen] = useState(false);
   const review = useAction('agents.reviewStopped');
   if (!stop) return null;
   const reviewable = stop.action === 'review' && manage;
   return (
     <>
-      <button type="button" className="last-stop" title={stop.text} onClick={() => setOpen(true)}>
+      <button type="button" className="last-stop" title={stop.text} onClick={() => onOpenChange(true)}>
         <Pill flag={stop.needs_person}>{stop.needs_person ? 'Stopped' : 'Last run'}</Pill>
       </button>
       <Dialog
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={onOpenChange}
         title="Last run"
         description={stop.text}
         actions={
           <>
-            <Button onClick={() => setOpen(false)}>Close</Button>
+            <Button onClick={() => onOpenChange(false)}>Close</Button>
             {reviewable && (
               <Button
                 variant="primary"
                 onClick={() => {
-                  setOpen(false);
+                  onOpenChange(false);
                   void review.run({ slug });
                 }}
               >
@@ -60,11 +60,13 @@ export function LastRun({ slug, actor, manage }: { slug: string; actor: Actor; m
           </>
         }
       >
-        <Facts label="Last run">
-          {stop.reason && <LabelValue label="What happened">{stop.reason}</LabelValue>}
-          <LabelValue label="Is anything needed?">{needed(stop, manage)}</LabelValue>
-          {stop.at && <LabelValue label="When">{fmtDate(stop.at)}</LabelValue>}
-        </Facts>
+        <div className="lr-facts">
+          <Facts label="Last run">
+            {stop.reason && <LabelValue label="What happened">{stop.reason}</LabelValue>}
+            <LabelValue label="Is anything needed?">{needed(stop, manage)}</LabelValue>
+            {stop.at && <LabelValue label="When">{fmtDate(stop.at)}</LabelValue>}
+          </Facts>
+        </div>
       </Dialog>
     </>
   );

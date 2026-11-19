@@ -68,7 +68,8 @@ describe('a task’s chat', () => {
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     expect(chat.getAttribute('data-conversation')).toBe('c7');
-    expect(screen.getByText('Birch Builder', { selector: 'b' })).toBeTruthy();
+    // The name goes to the owner's page.
+    expect(screen.getByRole('link', { name: 'Birch Builder' }).getAttribute('href')).toBe('/team/a1');
   });
 });
 
