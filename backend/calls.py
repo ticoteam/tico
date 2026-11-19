@@ -472,6 +472,9 @@ class Calls:
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
         self.buffers = {}  # (call_id, identity) -> call_voice.Segmenter: one speaker's speech, cut at their pauses
+        # (call_id, identity) -> {"snapshot": the segmenter's early (start_ms, pcm), "future": its transcription}: started
+        # as the speaker's pause begins, and used by the clip the pause ends if that clip is the same audio.
+        self.early = {}
         self.lock = threading.RLock()
         self.pending = {}  # call_id -> the work still out for it, dropped as each is done
         # call_id -> {"n": clips cut so far, "queue": the clips not yet stored, by where they start}: the transcript keeps
@@ -1495,6 +1498,7 @@ class Calls:
                 self.voice.human_speaking(call_id)
             for start, clip in clips:
                 self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
+            self._transcribe_early(key, segmenter)
             if was and not segmenter.speaking and not clips:
                 self._kick(call_id)  # a cough, not speech: a clip it held back may be stored now
             return segmenter.idle_seconds()
@@ -1523,6 +1527,7 @@ class Calls:
                     self._submit(key[0], key[1], {"pcm": clip[1], "start_ms": clip[0]})
                 elif was:
                     self._kick(key[0])
+                self._drop_early(key)
 
     def _submit(self, call_id, identity, buffer):
         """Transcribe a clip on a worker, so the recorder's audio never waits on the Gateway (self.lock held). The clip
@@ -1533,7 +1538,13 @@ class Calls:
         buffer["heard"] = self.voice.clock()
         buffer["duration_ms"] = len(buffer["pcm"]) * 1000 // PCM_BYTES_PER_SECOND
         clip = {"n": order["n"], "start": buffer["start_ms"], "identity": identity, "buffer": buffer}
-        clip.update(text=None, ready=False, discard=None)
+        clip.update(text=None, ready=False, discard=None, early="none", reuse=None)
+        if early := self.early.pop((call_id, identity), None):
+            if early["snapshot"] == (buffer["start_ms"], buffer["pcm"]):
+                clip.update(early="hit", reuse=early["future"])
+            else:
+                clip["early"] = "miss"
+                early["future"].cancel()
         order["n"] += 1
         bisect.insort(order["queue"], clip, key=lambda one: (one["start"], one["n"]))
         out = sorted((one for one in order["queue"] if not one["ready"]), key=lambda x: x["n"])
@@ -1542,6 +1553,23 @@ class Calls:
                 self._discard_clip(oldest, "dropped_backlog")
             self._kick(call_id)
         self._track(call_id, self.workers.submit(self._transcribe_clip, call_id, clip))
+
+    def _transcribe_early(self, key, segmenter):
+        """Start transcribing an utterance as its pause begins (self.lock held), so its text can be ready when the pause
+        ends. The same `_transcribe` runs, on the same workers, ahead of the clip's own task, so the clip that waits on it
+        never waits on a task queued behind itself. Speech resuming (or a new pause) drops it; its text is then unused."""
+        early = self.early.get(key)
+        if early is not None and early["snapshot"] is segmenter.early:
+            return
+        self._drop_early(key)
+        if segmenter.early is not None:
+            future = self.workers.submit(self._transcribe, key[0], {"pcm": segmenter.early[1]})
+            self._track(key[0], future)
+            self.early[key] = {"snapshot": segmenter.early, "future": future}
+
+    def _drop_early(self, key):
+        if early := self.early.pop(key, None):
+            early["future"].cancel()
 
     @staticmethod
     def _discard_clip(clip, outcome):
@@ -1587,7 +1615,8 @@ class Calls:
         text = None
         try:
             if not clip["discard"]:
-                text = self._transcribe(call_id, clip["buffer"])
+                reuse = clip["reuse"]
+                text = reuse.result() if reuse else self._transcribe(call_id, clip["buffer"])
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
 
@@ -1680,11 +1709,12 @@ class Calls:
     def _log_clip(self, call_id, clip, outcome):
         buffer = clip["buffer"]
         log.info(
-            "call_clip call=%s n=%s ms=%s outcome=%s wait_ms=%s",
+            "call_clip call=%s n=%s ms=%s outcome=%s early=%s wait_ms=%s",
             call_id,
             clip["n"],
             buffer["duration_ms"],
             outcome,
+            clip["early"],
             max(0, round((self.voice.clock() - buffer["heard"]) * 1000)),
         )
 
@@ -1807,6 +1837,7 @@ class Calls:
         with self.lock:
             for key in [key for key in self.buffers if key[0] == call_id]:
                 self.buffers.pop(key, None)
+            self.early = {key: early for key, early in self.early.items() if key[0] != call_id}
             order = self.order.pop(call_id, None)
             if order and order["timer"]:
                 order["timer"].cancel()

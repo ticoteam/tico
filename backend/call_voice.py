@@ -114,6 +114,9 @@ class Segmenter:
         self.end: int | None = None  # byte position of the next sample on the audio timeline
         self.start = self.voiced = self.quiet = 0
         self.at = 0.0  # wall time of the last piece fed (the call's idle flush reads it)
+        # (start_ms, pcm) of the utterance under way once its pause reaches PREROLL_MS: byte for byte the clip `_take`
+        # returns if no loud frame comes first, so its transcription can start before the pause ends. None otherwise.
+        self.early: tuple[int, bytes] | None = None
 
     @property
     def speaking(self) -> bool:
@@ -171,15 +174,18 @@ class Segmenter:
             self.pcm += frame
             if loud:
                 self.voiced, self.quiet = self.voiced + FRAME_MS, 0
+                self.early = None
             else:
                 self.quiet += FRAME_MS
+                if self.quiet == PREROLL_MS and self.voiced >= MIN_SPEECH_MS:
+                    self.early = (self.start, bytes(self.pcm))
         if self.quiet >= self._pause_ms() or len(self.pcm) >= QUESTION_MAX_MS * BYTES_PER_MS:
             return self._take()
         return None
 
     def _take(self) -> tuple[int, bytes] | None:
         pcm, start, voiced, quiet = self.pcm, self.start, self.voiced, self.quiet
-        self.pcm, self.voiced, self.quiet = None, 0, 0
+        self.pcm, self.voiced, self.quiet, self.early = None, 0, 0, None
         if pcm is None or voiced < MIN_SPEECH_MS:
             return None
         # The pause that ended it is not speech: a short tail of it stays, so the last word is not cut.
