@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { Conversation, Message } from '@/conversation';
+import { callCard } from '@/features/calls/exports';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Count } from '@/kit/Count';
@@ -211,7 +212,7 @@ function CatchUpRow({ selected }: { selected: boolean }) {
 function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
-  return <Conversation id={id} variant="page" title={title || undefined} />;
+  return <Conversation id={id} variant="page" title={title || undefined} card={callCard} />;
 }
 
 /* ---------------------------------------------------------------- Catch up */
@@ -273,7 +274,7 @@ function CatchUpGroup({ it }: { it: CatchUpItem }) {
       </Link>
       <div className="cu-msgs">
         {it.messages.map((m, i) => (
-          <Message key={m.id} m={m} variant="page" me={me} cont={i > 0 && it.messages[i - 1]?.sender_id === m.sender_id} />
+          <Message key={m.id} m={m} variant="page" me={me} cont={i > 0 && it.messages[i - 1]?.sender_id === m.sender_id} card={callCard} />
         ))}
       </div>
     </section>

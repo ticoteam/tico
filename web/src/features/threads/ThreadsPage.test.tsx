@@ -7,6 +7,7 @@ import { queryClient } from '@/data';
 import { ItemHead } from '@/pagekinds';
 import type { Thread, ThreadList } from './model';
 import { renameThread, threadKeys } from './queries';
+import { ThreadHead } from './ThreadHead';
 import { ThreadsPage } from './ThreadsPage';
 import { UpdatesPage } from './UpdatesPage';
 
@@ -122,6 +123,21 @@ describe('Threads', () => {
     queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [], next: null }], pageParams: [null] });
     show(<ThreadsPage pane="catch-up" />, '/threads');
     expect(await screen.findByRole('heading', { name: 'No threads yet' })).toBeTruthy();
+  });
+});
+
+describe('A thread head', () => {
+  it('offers Join while a call is on in the thread', async () => {
+    const live = { id: 'c1', state: 'live', provider: 'tico', thread_id: 't1', participants: [], bots: [], started_at: at(3) };
+    serve((url) => {
+      if (url.includes('/threads/t1/calls')) return { status: 200, body: { available: true, calls: [live], next_scheduled: null, next_before: null, providers: ['tico'] } };
+      if (url.includes('/calls/c1')) return { status: 200, body: live };
+      if (url.endsWith('/threads/t1')) return { status: 200, body: { ...thread('t1', 'Launch plan', 2), me: { can_post: true }, members: { members: [{ actor: 'human:me' }, { actor: 'human:ana' }] } } };
+      return { status: 200, body: {} };
+    });
+    show(<ThreadHead id="t1" />, '/threads/t1');
+    const join = await screen.findByRole('button', { name: 'Join call' });
+    await waitFor(() => expect((join as HTMLButtonElement).disabled).toBe(false));
   });
 });
 

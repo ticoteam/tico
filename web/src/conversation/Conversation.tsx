@@ -34,6 +34,8 @@ export interface ConversationProps {
   page?: (PageRef & { icon?: IconName }) | null;
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
   foot?: ReactNode;
+  /** What a message draws in place of its text, when it is more than words (a thread's call card). */
+  card?: (m: ChatMessage) => ReactNode;
 }
 
 type Item =
@@ -94,7 +96,7 @@ const herePage = (): PageRef => ({
 
 installConversationLive();
 
-export function Conversation({ id, variant, title, actor, page, foot }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, page, foot, card }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -200,6 +202,7 @@ export function Conversation({ id, variant, title, actor, page, foot }: Conversa
             onRetry={(m) => send(m.body ?? '', m.files ?? [], m.id)}
             rateIn={rate ? id : undefined}
             feedback={rate ? (ratings.find((f) => f.subject_id === it.m.id) ?? null) : null}
+            card={card}
           />
         );
       }}

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Outline } from '@/conversation';
+import { ThreadCallHead } from '@/features/calls/exports';
 import { Count } from '@/kit/Count';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -47,6 +48,7 @@ export function ThreadHead({ id }: { id: string }) {
         target={`thread:${id}`}
         back={{ to: '/threads', label: 'Threads' }}
         lead={other ? <Face actor={other} /> : undefined}
+        actions={t ? <ThreadCallHead thread={id} members={people} canPost={t.me?.can_post !== false} /> : undefined}
         more={more}
         onRename={manage ? (next) => void press('threads.rename', { thread: id, title: next }) : undefined}
         renaming={editing}

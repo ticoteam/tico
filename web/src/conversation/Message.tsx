@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type MouseEvent } from 'react';
-import { useAction } from '@/actions';
+import { useState, type MouseEvent, type ReactNode } from 'react';
+import { run, useAction } from '@/actions';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { ConfirmCard } from '@/kit/ConfirmCard';
 import { Fault } from '@/kit/Fault';
@@ -95,13 +95,16 @@ function Files({ files, pending, onPicture }: { files: Attachment[] | undefined;
     );
     if (pending) return <span key={f.id} className="file">{inner}</span>;
     const href = fileHref(f);
-    const open =
-      isPicture(f) && onPicture
-        ? (e: MouseEvent) => {
-            if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-            if (onPicture(href)) e.preventDefault();
-          }
-        : undefined;
+    // A picture opens full size here; any other file opens over the page. The link stays real for a new tab or a copy.
+    const open = (e: MouseEvent) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (isPicture(f) && onPicture) {
+        if (onPicture(href)) e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      void run('files.view', { file: f.id }, { via: 'click' });
+    };
     return (
       <a key={f.id} className="file" href={href} target="_blank" rel="noreferrer" onClick={open}>
         {inner}
@@ -189,11 +192,14 @@ export interface MessageProps {
   rateIn?: string;
   /** The person's own rating of it. */
   feedback?: Feedback | null;
+  /** What to draw in place of its text (a call's card), or nothing for a plain message. */
+  card?: (m: ChatMessage) => ReactNode;
 }
 
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
-export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null }: MessageProps) {
+export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null, card }: MessageProps) {
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
+  const shown = m.deleted ? null : card?.(m);
   const files = m.refs?.attachments;
   const pics = usePictures(m);
   if (m.pending || (me && m.sender_id === me)) {
@@ -201,11 +207,12 @@ export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null
     return (
       <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
         <div className="mine-col" onClick={pics.onClick}>
-          {text && (
-            <div className="bubble">
-              <Markdown text={text} compact />
-            </div>
-          )}
+          {shown ??
+            (text && (
+              <div className="bubble">
+                <Markdown text={text} compact />
+              </div>
+            ))}
           <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
           {failed && (
             <div className="msg-fail">
@@ -235,7 +242,7 @@ export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null
             <time dateTime={m.created_at}>{clock(m.created_at)}</time>
           </div>
         )}
-        {text && <Markdown text={text} compact />}
+        {shown ?? (text && <Markdown text={text} compact />)}
         <Steps run={m.run} />
         <Files files={files} pending={false} onPicture={pics.openAt} />
         {aid && <Proposal aid={aid} />}

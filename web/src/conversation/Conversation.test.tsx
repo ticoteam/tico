@@ -6,6 +6,7 @@ import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
 import { Composer } from './Composer';
 import { Conversation } from './Conversation';
+import { Message } from './Message';
 import type { ChatMessage } from './types';
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
@@ -20,6 +21,9 @@ vi.mock('@/live', async (actual) => ({
     return () => set.delete(h);
   },
 }));
+const ran = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+// The run module, not `@/actions`: the registry loads the conversation while `@/actions` itself is still loading.
+vi.mock('@/actions/run', async (actual) => ({ ...(await actual<Record<string, unknown>>()), run: ran }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
 const ME = 'human:me';
@@ -117,6 +121,7 @@ beforeEach(() => {
   seed([msg(1, 'bot:qa', 'Morning'), msg(2, ME, 'Hi')]);
 });
 afterEach(() => {
+  ran.mockClear();
   queryClient.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -198,6 +203,41 @@ describe('Conversation', () => {
     const line = screen.getByText('New').parentElement;
     expect(line?.className).toBe('day is-new');
     expect(line?.closest('.vl-item')?.nextElementSibling?.textContent).toContain('Fresh');
+  });
+});
+
+describe('Message', () => {
+  it('draws what `card` gives in place of the text, mine or another\'s, and the text when it gives nothing', () => {
+    seed([msg(1, 'bot:qa', 'Call', { refs: { call: { id: 'c1', card: true } } }), msg(2, ME, 'Call', { refs: { call: { id: 'c2', card: true } } }), msg(3, 'bot:qa', 'Plain words')]);
+    const card = (m: ChatMessage) => {
+      const c = m.refs?.call as { id?: string } | undefined;
+      return c?.id ? <div role="group" aria-label={`Card ${c.id}`} /> : null;
+    };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Conversation id={T} variant="page" title="Ana" card={card} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole('group', { name: 'Card c1' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Card c2' })).toBeTruthy();
+    expect(screen.queryByText('Call')).toBeNull();
+    expect(screen.getByText('Plain words')).toBeTruthy();
+  });
+
+  it('opens a file over the page on a plain click, and leaves a modified click to the browser', () => {
+    const files = [{ id: 'f1', name: 'brief.pdf', content_type: 'application/pdf' }];
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Message m={msg(1, 'bot:qa', 'See this', { refs: { attachments: files } })} variant="page" me={ME} />
+      </QueryClientProvider>,
+    );
+    const link = screen.getByRole('link', { name: /brief\.pdf/ });
+    expect(link.getAttribute('href')).toBe('/api/v2/files/f1');
+    expect(fireEvent.click(link)).toBe(false);
+    expect(ran).toHaveBeenCalledExactlyOnceWith('files.view', { file: 'f1' }, { via: 'click' });
+    expect(fireEvent.click(link, { metaKey: true })).toBe(true);
+    expect(fireEvent.click(link, { button: 1 })).toBe(true);
+    expect(ran).toHaveBeenCalledTimes(1);
   });
 });
 

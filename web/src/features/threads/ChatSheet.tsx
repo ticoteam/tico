@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
+import { callCard } from '@/features/calls/exports';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { isDm, othersOf } from './model';
@@ -36,5 +37,5 @@ export function ChatSheet({ chat }: ChatSheetProps) {
   if (!t) return null;
   const actor = actorOf(chat) ?? (isDm(t) ? othersOf(t, me)[0] : undefined);
   const name = (actor && nameOf(actor)) || title;
-  return <Conversation key={t.id} id={t.id} variant="side" title={name} actor={actor} />;
+  return <Conversation key={t.id} id={t.id} variant="side" title={name} actor={actor} card={callCard} />;
 }

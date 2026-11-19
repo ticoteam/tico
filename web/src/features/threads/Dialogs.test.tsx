@@ -31,7 +31,10 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     calls.push({ url: String(url), method });
-    const r = await reply(String(url), method);
+    // The head's call control: no calls in the thread.
+    const r = /\/threads\/[^/]+\/calls/.test(String(url))
+      ? ok({ available: true, calls: [], next_scheduled: null, next_before: null, providers: ['tico'] })
+      : await reply(String(url), method);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
