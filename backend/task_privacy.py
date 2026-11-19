@@ -1938,22 +1938,26 @@ def status_inputs(c, bots):
                     out[H.actor_id(party)]["tasks"].append(t)
         for bot, message in direct_marks(c, marks, actors):
             out[H.actor_id(bot)]["direct"].append(message)
-        _prime_focus(c, part)
+        if len(part) > 1:  # one bot's status reads its one task itself: no cheaper together
+            _prime_focus(c, part, out)
     return out
 
 
-def _prime_focus(c, bots):
+def _prime_focus(c, bots, inputs):
     """The task each bot's status names (bot_status.task_id), read for all of `bots` at once for `status`'s own lookup
-    of it: a status still naming a task that has finished or is gone is not among the bot's live tasks, so `status`
-    read it alone, one statement a bot on every poll (33 of TIDY's /api/status's 119, Nov 19). Inside a snapshot
-    only; elsewhere nothing would keep it."""
+    of it: a status still naming a task that has finished or is gone is not among the bot's live tasks (`inputs`), so
+    `status` read it alone, one statement a bot on every poll (33 of TIDY's /api/status's 119, Nov 19). Inside a
+    snapshot only; elsewhere nothing would keep it."""
     if read_cache.cache(c) is None:
         return
     marks = ",".join("?" * len(bots))
     named = sorted(
         {
-            row[0]
-            for row in c.execute(f"SELECT task_id FROM bot_status WHERE bot IN ({marks}) AND task_id IS NOT NULL", bots)
+            row["task_id"]
+            for row in c.execute(
+                f"SELECT bot,task_id FROM bot_status WHERE bot IN ({marks}) AND task_id IS NOT NULL", bots
+            )
+            if not any(t["id"] == row["task_id"] for t in inputs[row["bot"]]["tasks"])
         }
     )
     if not named:

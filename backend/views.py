@@ -537,14 +537,8 @@ def prime_machines(c, slugs):
     from .agents import CONFIG_SQL, ROW_SQL
     from .auth import OPERATOR_SQL
 
-    values = read_cache.cache(c)
-    if values is None:
+    if read_cache.cache(c) is None:
         return
-    # Every bot's configuration row (read_cache.configs, BS.ROW_SQL: bot_config's columns and the config), when this
-    # snapshot has it, answers the config and operator reads below: on TIDY the status and employees pages read the
-    # config three times over (Nov 19), each a json_patch of every bot's settings.
-    configured = values.get((BS.ROW_SQL, ()))
-    configured = {row["bot"]: row for row in configured} if configured is not None else None
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
         declared = {
@@ -562,10 +556,7 @@ def prime_machines(c, slugs):
             ),
             ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})"),
         ):
-            if configured is not None and statement in (CONFIG_SQL, OPERATOR_SQL):
-                found = {s: configured[s] for s in part if s in configured}
-            else:
-                found = {row["bot"]: row for row in c.execute(query, part)}
+            found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
 
 
@@ -706,13 +697,20 @@ def operation_issues(c, who, auth):
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
+    from .agents import ROW_SQL as AGENT_ROW_SQL, external_harness
+
     # The cloud machine each active bot with no computer may wait for (cloud_machines.coming, below), read together:
     # TIDY had 18 such bots, each read alone on every status poll (Nov 19).
     unplaced = (
         [
             b["id"]
             for b in bots
-            if b["id"] in status_inputs and b["state"] == "active" and not read_cache.one(c, ASSIGNED_SQL, (b["id"],))
+            if b["id"] in status_inputs
+            and b["state"] == "active"
+            and not read_cache.one(c, ASSIGNED_SQL, (b["id"],))
+            # An external agent never asks after a cloud machine (machine() answers its presence first).
+            and not read_cache.one(c, AGENT_ROW_SQL, (b["id"],))
+            and not external_harness(c, b["id"])
         ]
         if read_cache.cache(c) is not None
         else []
