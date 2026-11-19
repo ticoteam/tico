@@ -27,7 +27,7 @@ from . import rooms
 from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 
 
 class Note(M.Contract):
@@ -956,6 +956,16 @@ def install_media(
         return result
 
     @app.get("/api/meetings/sources")
+    @app.get(
+        "/api/v2/meetings/sources",
+        **api_v2(
+            "Meetings",
+            "listMeetingSources",
+            "Where meetings come from and how each source is doing: Import, Close and each importer that is on",
+            "MeetingSourceList",
+            responses={"403": error("identity: a person's read; bots are refused")},
+        ),
+    )
     def sources(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
@@ -981,7 +991,8 @@ def install_media(
                     "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                     ("recording:" + r["source"],),
                 ).fetchone()
-                detail = json.loads(health["detail"] or "{}") if health else {}
+                # Its own name: `detail` is Close's, which the Close row below reads.
+                seen = json.loads(health["detail"] or "{}") if health else {}
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
                 extra.append(
                     {
@@ -989,14 +1000,14 @@ def install_media(
                         "name": IMPORTERS[r["source"]]["name"],
                         "status": "needs_setup" if state == "waiting" else state,
                         "last_succeeded_at": health["last_succeeded_at"] if health else None,
-                        "last_attempt": detail.get("last_attempt"),
-                        "last_import": detail.get("last_import"),
+                        "last_attempt": seen.get("last_attempt"),
+                        "last_import": seen.get("last_import"),
                         "pending": 0,
-                        "imported": detail.get("imported_total", 0),
-                        "error_code": detail.get("error_code", ""),
+                        "imported": seen.get("imported_total", 0),
+                        "error_code": seen.get("error_code", ""),
                         # Why it fails, in words, so the Sources panel can say it to anyone who opens it.
-                        "error": (detail.get("message") or ERROR_TEXT.get(detail.get("error_code") or "", ""))
-                        if detail.get("error_code")
+                        "error": (seen.get("message") or ERROR_TEXT.get(seen.get("error_code") or "", ""))
+                        if seen.get("error_code")
                         else "",
                     }
                 )

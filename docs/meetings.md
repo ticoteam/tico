@@ -77,7 +77,9 @@ can also choose `review: "live"`. Computer importers keep using the same payload
 decides the review state for the person named in `owner_email`.
 
 `GET /api/v2/meetings?review=pending` returns `{"meetings": [...], "count": N, "pending_count": N}`.
-The default list is live; `review=dismissed` reads the person's dismissed meetings. Every listed
+The default list is live; `review=dismissed` reads the person's dismissed meetings, and `review=shared` the live
+meetings someone else filed that are shared with the reader (the Team, its participants or its attendees; not the ones
+the company owner may open only as owner). Every listed
 meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existing
 `GET /api/v2/updates/unread` also returns `meetings_pending`, scoped to the caller.
 `GET /api/v2/meetings/{id}` opens a meeting under the same access rules as the older detail route.

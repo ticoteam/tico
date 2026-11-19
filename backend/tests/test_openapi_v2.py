@@ -285,6 +285,10 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("savePlace", "put", "/api/v2/places/dashboard", json={})
     call("listCards", "get", "/api/v2/cards")
     call("searchMeetings", "get", "/api/v2/meetings/search")
+    call("listMeetings", "get", "/api/v2/meetings", params={"review": "shared"})
+    call("listMeetingSources", "get", "/api/v2/meetings/sources")
+    call("listMeetingImporters", "get", "/api/v2/meeting-importers")
+    call("configureMeetingImporter", "post", "/api/v2/meeting-importers/zoom", json={"enabled": False})
     call("searchDocs", "get", "/api/v2/context/search", params={"q": "plan"})
     doc = call(
         "createInternalDoc", "post", "/api/v2/docs", json={"title": "Refund policy", "body": "Refund in 30 days."}
