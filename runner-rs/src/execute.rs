@@ -5915,6 +5915,8 @@ mod tests {
     #[derive(Default)]
     struct VoiceStreamFixture {
         idle_attempt: &'static str,
+        /// Set once the app server has started the first question: the next busy poll is the one made during it.
+        armed: AtomicBool,
         held: AtomicBool,
         busy_poll: Notify,
         first_sentence: Notify,
@@ -6040,7 +6042,7 @@ mod tests {
                         let stream = voice.as_ref().and_then(|v| v.stream.as_ref());
                         let hold_busy_poll = stream.is_some_and(|stream| {
                             path.ends_with("voice=busy")
-                                && seen.iter().any(|(_, p, _)| p.ends_with("voice=ready"))
+                                && stream.armed.load(Ordering::SeqCst)
                                 && !stream.held.swap(true, Ordering::SeqCst)
                         });
                         if let Some(stream) = stream {
@@ -9859,6 +9861,9 @@ for line in sys.stdin:
             let result = runner.clone().execute(attempt(initial));
             let release = async {
                 let (mut socket, _) = gate.accept().await.unwrap();
+                // The first question is running. A poll answered after the primer completed can start it without a
+                // ready poll in between, so the hold waits for this, not for a ready poll.
+                stream.armed.store(true, Ordering::SeqCst);
                 stream.busy_poll.notified().await;
                 socket.write_all(b"y").await.unwrap();
                 // The hub holds the busy poll until it gets the complete commentary sentence.
