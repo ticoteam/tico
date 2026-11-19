@@ -302,8 +302,9 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
           {!phone && (
             <>
               <col className="t-col" />
-              <col className="t-n" />
-              <col className="t-n" />
+              {/* the shares' heads are two words: 76 less padding is narrower than "Cost share", which ran into its neighbors */}
+              <col className="t-col" />
+              <col className="t-col" />
             </>
           )}
         </colgroup>
@@ -401,11 +402,12 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
 function Trends({ read }: { read: GrowthRead }) {
   const s = read.series ?? [];
   const retention = valueKind(read) === 'retention';
-  const all: [string, string, (p: GrowthPoint) => number | null, (v: number) => string][] = [
-    ['signups', 'Sign-ups, by month', (p) => p.signups, (v) => count(v)],
-    ['new', 'New customers, by month', (p) => p.new_customers, (v) => count(v)],
-    ['cac', 'CAC, by month', (p) => p.cac, (v) => usd(v, true)],
-    ['kept', 'Kept, by month', (p) => p.kept, (v) => pct(v)],
+  // the fifth: a count, whose axis steps by whole numbers
+  const all: [string, string, (p: GrowthPoint) => number | null, (v: number) => string, boolean][] = [
+    ['signups', 'Sign-ups, by month', (p) => p.signups, (v) => count(v), true],
+    ['new', 'New customers, by month', (p) => p.new_customers, (v) => count(v), true],
+    ['cac', 'CAC, by month', (p) => p.cac, (v) => usd(v, true), false],
+    ['kept', 'Kept, by month', (p) => p.kept, (v) => pct(v), false],
   ];
   const charts = all.filter(([k, , pick]) => !(retention && (k === 'new' || k === 'cac')) && s.filter((p) => pick(p) != null).length > 1);
   const pairs = Array.from({ length: Math.ceil(charts.length / 2) }, (_, i) => charts.slice(i * 2, i * 2 + 2));
@@ -413,8 +415,8 @@ function Trends({ read }: { read: GrowthRead }) {
     <>
       {pairs.map((pair) => (
         <div key={pair[0]![0]} className="two-col">
-          {pair.map(([k, title, pick, fmt]) => (
-            <Trend key={k} title={title} points={s.map((p) => [p.period, pick(p)] as const)} fmt={fmt} />
+          {pair.map(([k, title, pick, fmt, whole]) => (
+            <Trend key={k} title={title} points={s.map((p) => [p.period, pick(p)] as const)} fmt={fmt} whole={whole} />
           ))}
         </div>
       ))}
@@ -423,7 +425,17 @@ function Trends({ read }: { read: GrowthRead }) {
 }
 
 /** One figure by month as a line, named at its end. */
-function Trend({ title, points, fmt }: { title: string; points: readonly (readonly [string, number | null])[]; fmt: (v: number) => string }) {
+function Trend({
+  title,
+  points,
+  fmt,
+  whole,
+}: {
+  title: string;
+  points: readonly (readonly [string, number | null])[];
+  fmt: (v: number) => string;
+  whole: boolean;
+}) {
   const have = points.filter((p): p is readonly [string, number] => p[1] != null);
   if (have.length < 2) return null;
   const pts = have.map((p) => p[1]);
@@ -438,7 +450,7 @@ function Trend({ title, points, fmt }: { title: string; points: readonly (readon
           left={52}
           right={62}
           width={360}
-          {...axis(pts)}
+          {...axis(pts, whole)}
           fmt={fmt}
           xl={[
             [0, label(have[0]![0])],
@@ -598,8 +610,11 @@ const HEALTH: Record<GrowthSource['health'], string> = { fresh: '', stale: 'Stal
 const words = (v: string[] | string | null | undefined) =>
   (Array.isArray(v) ? v : v ? [v] : []).map((x) => x.replace(/_/g, ' ')).map((x, i) => (i ? x : x.charAt(0).toUpperCase() + x.slice(1))).join(', ');
 
-/** Where Growth's numbers come from, and what each word means here. Reading only; the Growth Manager changes them. */
+/** Where Growth's numbers come from, and what each word means here. Reading only; the Growth Manager changes them. On a
+    phone: the source and its last sync (two word columns of 184 left the name none); a source's panel says what it
+    feeds and holds. */
 function GrowthSources({ search }: { search: GrowthSearch }) {
+  const phone = usePhone();
   const q = useQuery(growthSourcesQuery);
   const open = panelOf(search.panel);
   const picked = open?.[0] === 'source' ? open[1] : undefined;
@@ -622,22 +637,30 @@ function GrowthSources({ search }: { search: GrowthSearch }) {
             <Table label="Sources">
               <colgroup>
                 <col />
-                <col className="t-line" />
-                <col className="t-line" />
+                {!phone && (
+                  <>
+                    <col className="t-line" />
+                    <col className="t-line" />
+                  </>
+                )}
                 <col className="t-col" />
               </colgroup>
               <thead>
                 <tr>
                   <th scope="col">Source</th>
-                  <th scope="col">Feeds</th>
-                  <th scope="col">Holds</th>
+                  {!phone && (
+                    <>
+                      <th scope="col">Feeds</th>
+                      <th scope="col">Holds</th>
+                    </>
+                  )}
                   <th scope="col" className="num">
                     Last sync
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {list.length === 0 && <EmptyRow span={4}>No source connected</EmptyRow>}
+                {list.length === 0 && <EmptyRow span={phone ? 2 : 4}>No source connected</EmptyRow>}
                 {list.map((s) => (
                   <tr key={s.id} className={s.id === picked ? 'is-selected' : undefined} data-target={`source:${s.id}`}>
                     <td className="t-name">
@@ -652,8 +675,12 @@ function GrowthSources({ search }: { search: GrowthSearch }) {
                       </ActLink>
                       {HEALTH[s.health] && <Pill flag={s.health === 'failing'}>{HEALTH[s.health]}</Pill>}
                     </td>
-                    <td className="t-words">{words(s.fills)}</td>
-                    <td className="t-words">{words(s.truth_for)}</td>
+                    {!phone && (
+                      <>
+                        <td className="t-words">{words(s.fills)}</td>
+                        <td className="t-words">{words(s.truth_for)}</td>
+                      </>
+                    )}
                     <td className="num t-words">{s.last_run_at ? fmtAge(s.last_run_at) : ''}</td>
                   </tr>
                 ))}

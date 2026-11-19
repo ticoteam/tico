@@ -144,7 +144,7 @@ describe('Runs', () => {
     await screen.findByTitle('Morning numbers');
     fireEvent.click(screen.getByRole('button', { name: 'Filter runs' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Failed' }));
-    expect(await screen.findByText('No failed runs')).toBeTruthy();
+    expect(await screen.findByText('No failed runs in the last hour')).toBeTruthy();
     expect(router.state.location.search).toMatchObject({ tab: 'runs', status: 'failed' });
     expect(asked.some((u) => u.includes('status=failed') && u.includes('range=1h'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));

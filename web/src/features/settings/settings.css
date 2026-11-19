@@ -184,7 +184,8 @@ div.row{cursor:default}
 }
 /* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */
 .g-fleet>.fl-more{display:none}
-html[data-layout="cards"] .g-fleet>.fl-more{display:inline-flex;justify-self:end}
+/* inline-grid as every .ib: as a flex box its icon sat at the press's left, 24 in from its right edge, off the gutter */
+html[data-layout="cards"] .g-fleet>.fl-more{display:inline-grid;justify-self:end}
 /* Grouped by computer: the group's state opens its panel; a row drags onto another group. */
 .fl-sum{flex:none;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--s-2);border-radius:var(--r-chip);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;text-decoration:none}
 .fl-sum:hover,.fl-sum.is-on{background:var(--well-2);color:var(--ink)}

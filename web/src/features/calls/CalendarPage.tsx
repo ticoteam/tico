@@ -157,11 +157,12 @@ export function CalendarPage() {
               value={view}
               onValueChange={(v) => void navigate({ to: '/calendar', search: at({ view: v }) })}
             />
-            <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} data-phone />
+            {(!cards || view === 'list') && <IconButton icon="plus" label="New event" onClick={() => setAdding(true)} data-phone />}
             {!cards && <StartCall />}
           </>
         }
-        // A phone's head keeps New event and the ⋯; the view switch, Filter and Start call move into the ⋯.
+        // A phone's head keeps two controls and the ⋯: Previous and Next where the view steps through dates (New event
+        // then moves into the ⋯), New event in List. The view switch, Filter and Start call are always in the ⋯.
         more={
           view === 'list' || cards ? (
             <MeetingMenu>
@@ -177,6 +178,7 @@ export function CalendarPage() {
                       <FilterItems search={search} at={at} />
                     </MenuSub>
                   )}
+                  {view !== 'list' && <MenuItem label="New event" icon="plus" onSelect={() => setAdding(true)} />}
                   <MenuItem label="Start call" icon="call" onSelect={() => setCalling(true)} />
                   <MenuRule />
                 </>

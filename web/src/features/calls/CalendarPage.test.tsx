@@ -234,13 +234,12 @@ describe('Calendar on a phone', () => {
     delete document.documentElement.dataset.layout;
   });
 
-  it('keeps New event and the ⋯ in the head; the view switch, Filter and Start call are in the ⋯', async () => {
+  it('keeps Previous, Next and the ⋯ in the head; the view switch, Start call and New event are in the ⋯', async () => {
     seed('week', [occ({})]);
     seed('month', [occ({})]);
     const router = show(`/calendar?view=week&date=${DAY}`);
     const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
-    const newEvent = within(head).getByRole('button', { name: 'New event' });
-    expect(newEvent.hasAttribute('data-phone')).toBe(true);
+    expect(within(head).queryByRole('button', { name: 'New event' })).toBeNull();
     expect(within(head).queryByRole('button', { name: 'Start call' })).toBeNull();
     fireEvent.click(within(head).getByRole('button', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: /Meeting sources/ })).toBeTruthy();

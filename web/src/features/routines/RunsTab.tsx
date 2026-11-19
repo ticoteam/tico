@@ -18,6 +18,8 @@ import { runWords } from './words';
 
 const STATUS: Record<RunStatus, string> = { failed: 'Failed', waiting: 'Waiting', running: 'Running', done: 'Done' };
 const RANGE: Record<RunRange, string> = { '5m': 'Last 5 minutes', '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days' };
+/** "No runs in the last hour": an empty list names the range it looked at (the default is narrow). */
+const noRuns = (r: RunRange, status?: RunStatus) => `No ${status ? `${STATUS[status].toLowerCase()} ` : ''}runs in the ${RANGE[r].toLowerCase()}`;
 // Only these say something a row's words do not.
 const MARKED = new Set(['failed', 'waiting', 'held']);
 
@@ -44,7 +46,7 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; stat
       state={q.isPending ? 'loading' : q.isError ? 'fault' : runs.length ? 'ready' : 'empty'}
       onRetry={() => void q.refetch()}
       // the filter row shows only with rows, so an empty filtered list clears from here
-      empty={{ title: status ? `No ${STATUS[status].toLowerCase()} runs` : 'No runs', action: filters.length ? <Button onClick={() => show({})}>Clear filters</Button> : undefined }}
+      empty={{ title: noRuns(r, status), action: filters.length ? <Button onClick={() => show({})}>Clear filters</Button> : undefined }}
       actions={
         <Menu trigger={<IconButton icon="filter" label="Filter runs" on={filters.length > 0} data-phone />}>
           {RUN_STATUSES.map((x) => (

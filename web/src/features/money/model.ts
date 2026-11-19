@@ -77,15 +77,18 @@ export const budgetDay = (now = new Date()) => dayOf(now);
 /** This month's first and last day. */
 export const monthSpan = (ym: string) => ({ start: `${ym}-01`, end: lastDay(ym) });
 
-/** A chart's scale: round steps covering the values, three or four gridlines. */
-export function axis(values: readonly number[]) {
+/** A chart's scale: round steps covering the values, three or four gridlines. `whole` for counts: steps of whole numbers,
+    at least 1, so no two gridlines print the same label ("0, 1, 1" from steps of 0.5 when every month is 0). */
+export function axis(values: readonly number[], whole = false) {
   const lo = Math.min(...values);
   let hi = Math.max(...values);
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { min: 0, max: 1, ticks: [0, 1] };
   if (hi === lo) hi = lo + 1;
   const raw = (hi - lo) / 3;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = ([1, 2, 2.5, 5, 10].find((m) => m * mag >= raw) ?? 10) * mag;
+  const nice = whole ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10];
+  const fit = (nice.find((m) => m * mag >= raw) ?? 10) * mag;
+  const step = whole ? Math.max(1, Math.round(fit)) : fit;
   const min = Math.floor(lo / step) * step;
   const max = Math.ceil(hi / step) * step;
   const ticks: number[] = [];
