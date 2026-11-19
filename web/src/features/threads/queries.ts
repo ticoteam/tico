@@ -211,7 +211,7 @@ export function startNew(members: string[], body?: string, title?: string) {
 export async function startWithFiles(members: string[], text: string, files: File[], me: string, title?: string) {
   const t = await startNew(members, undefined, title);
   if (!t?.id) return t;
-  await queryClient.ensureInfiniteQueryData(timelineQuery(t.id)).catch(() => undefined);
+  await queryClient.ensureInfiniteQueryData(timelineQuery(t.id));
   void sendMessage({ id: t.id, variant: 'page', text, files, me });
   return t;
 }

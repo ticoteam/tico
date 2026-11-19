@@ -116,14 +116,12 @@ export function NewMessage({ draft }: { draft: NewDraft }) {
 /** The box: the first message. Sending makes the thread and lands in it. */
 export function NewMessageFoot({ draft }: { draft: NewDraft }) {
   const me = useMe();
-  const [fill, setFill] = useState<{ text: string } | null>(null);
   const { to, name } = draft;
   const navigate = useNavigate();
   const send = async (text: string, files: File[]) => {
     if (!to.length || (to.length >= 2 && !name.trim())) {
       toast({ text: to.length ? 'Name the thread first' : 'Choose who it goes to', kind: 'failed' });
-      setFill({ text });
-      return;
+      return false;
     }
     const members = to.map((a) => a.id);
     const title = name.trim() || undefined;
@@ -132,27 +130,27 @@ export function NewMessageFoot({ draft }: { draft: NewDraft }) {
       if (!r.ok) toast(refusal(r, "Couldn't send"));
       // A rule can hold the first message: no thread is made, and the words stay in the box (new-message.ts).
       else if (!(r.out as { id?: string } | undefined)?.id) toast({ text: 'Held by a rule', kind: 'failed' });
-      else return;
-      setFill({ text });
-      return;
+      else return true;
+      return false;
     }
     // Files are no action input: the DM is made, then the message goes up the conversation's own way.
     let refused: unknown;
     const t = await startWithFiles(members, text, files, me ?? '', title).catch((e: unknown) => ((refused = e), null));
-    if (t?.id) void navigate({ to: '/threads/$thread', params: { thread: t.id } });
-    else {
-      toast(refusalFor(refused, "Couldn't send"));
-      setFill({ text });
+    if (t?.id) {
+      void navigate({ to: '/threads/$thread', params: { thread: t.id } });
+      return true;
     }
+    toast(refusalFor(refused, "Couldn't send"));
+    return false;
   };
   if (!me) return null;
   return (
     <Composer
+      key={me}
       id="new"
       me={me}
       to={to.length ? to.map((a) => a.name).join(', ') : 'a teammate'}
-      onSend={(text, files) => void send(text, files)}
-      fill={fill}
+      onSend={send}
     />
   );
 }
