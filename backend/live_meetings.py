@@ -578,7 +578,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
             c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (model or None, turn_id))
         return {
             **{k: v for k, v in config.items() if k != task_models.KEY},
-            "reasoning_effort": "medium",
+            "reasoning_effort": calls.VOICE_EFFORT,
             "output_style": "Concise",
         }
     turn = c.execute("SELECT retries FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()
