@@ -177,7 +177,7 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         same(again, tag + ', Finance kept');
         assert.equal(shows(again.painted, 'finance'), true, tag + ': Finance from the first paint');
         const order = again.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(order.slice(5, 10), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
+        assert.deepEqual(order.slice(5, 11), ['overview', 'Company pages', 'strategy', 'products', 'finance', 'growth'], tag + ': Finance between Products and Growth');
         assert.deepEqual(again.errors, []);
         await again.page.close();
       }
