@@ -3895,15 +3895,17 @@ def install_runner(app, store, execution):
                     execution.contact(c, who)
 
         def start():
-            touch()
+            # Only the read before the response: a due contact stamp waits for the write lock beside the stream (Beat),
+            # as every keepalive's does, not ahead of it.
             with store.read() as c:
-                return latest(c), runner_latest(c)
+                due = execution.contact(c, who, check=True)
+                return latest(c), runner_latest(c), due
 
         def poll(cursor):
             with store.read() as c:
                 return runner_read(c, who.runner_id, who.actor, cursor)
 
-        now_seq, runner_seq = await asyncio.to_thread(start)
+        now_seq, runner_seq, contact_due = await asyncio.to_thread(start)
         doorbell.observe(runner_seq)
         cursor = after if after is not None and after >= 0 else now_seq
         from . import runner_versions
@@ -3920,6 +3922,8 @@ def install_runner(app, store, execution):
                     {"seq": now_seq, "after": cursor, "release": runner_versions.desired().get("version", "")},
                     RUNNER_EVENTS,
                 )
+                if contact_due:
+                    beat.start()
                 deadline = time.monotonic() + RUNNER_LIFETIME_SECONDS
                 # Contact is due every keepalive whatever is sent, so last_seen never lapses.
                 quiet_since = time.monotonic()

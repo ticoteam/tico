@@ -101,6 +101,31 @@ def test_a_quiet_stream_keeps_sending_keepalives_while_the_database_is_busy(api,
         holder.close()
 
 
+def test_a_stream_opens_while_the_database_is_busy_and_writes_its_contact_beside_it(api, live):
+    # Opening reads the computer's row; a due contact stamp waits for the write lock beside the stream, not before it.
+    import time
+
+    computer = runner(api, label="A")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen_at=NULL WHERE id=?", (computer["runner_id"],))
+    holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        stream = live(computer["token"], path="/api/v2/runners/me/events")
+        stream.until(topic("ready"), timeout=3)
+    finally:
+        holder.rollback()
+        holder.close()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        with store.read() as c:
+            if c.execute("SELECT last_seen_at FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0]:
+                return
+        time.sleep(0.1)
+    raise AssertionError("the open stream never wrote its contact")
+
+
 def test_keepalives_go_out_while_other_computers_changes_keep_ringing_the_bell(api, live, monkeypatch):
     # Every wait ends with a ring for a change this computer is not sent: only keepalives hold its stream open.
     computer = runner(api, label="A")
