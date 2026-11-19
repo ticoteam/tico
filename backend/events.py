@@ -2997,6 +2997,135 @@ def needs_baseline(c, auth, who, task_view):
     return {"marks": marks, "version": version}
 
 
+BASELINE_REUSE_SECONDS = 10.0  # a person's Needs-you baseline serves their streams that open this soon after it
+
+
+class _Baseline:
+    __slots__ = ("seq", "marks", "version", "at")
+
+    def __init__(self, seq, held, at):
+        self.seq, self.marks, self.version, self.at = seq, held["marks"], held["version"], at
+
+    def held(self):
+        """A stream's own copy: _needs_list moves it on for that stream alone."""
+        return {"marks": dict(self.marks), "version": self.version}
+
+
+# A change after a baseline's snapshot that may have moved that person's list: a `needs` row for them (what every
+# stream rebuilds on), or a page access change (which resets a stream reading across it).
+_BASELINE_MOVED_SQL = (
+    "SELECT 1 FROM changes WHERE topic='needs' AND seq>? AND seq<=? AND subject_id=? "
+    "UNION ALL SELECT 1 FROM changes WHERE topic='tasks' AND seq>? AND seq<=? AND kind='bulk' AND ref='page_access' "
+    "LIMIT 1"
+)
+
+
+class Baselines:
+    """The Needs-you baselines `needs=changes` streams start from (needs_baseline), built once per identity and Task
+    view however many of that person's streams open together: ten tabs waking at once, or every client reconnecting
+    after a release, build one list per person rather than one per stream. Each build takes its turn on Needs you's own
+    lane (backend/needs_lane.py), from one read snapshot that also gives the change number the stream starts at.
+
+    A stream that opens while a build of its identity is under way waits for it; one that opens at most
+    BASELINE_REUSE_SECONDS after a build takes it, when no change since that build's snapshot may have moved the list
+    (_BASELINE_MOVED_SQL), and starts at the newest change as before. Otherwise it builds its own. Keyed by the whole
+    identity (needs_cache.viewer), so two callers who may see different things never share one. Each stream is handed
+    its own copy of the marks."""
+
+    def __init__(self, store):
+        self.store = store
+        self._building = {}  # key: the asyncio task building it
+        self._built = {}  # key: the newest _Baseline
+
+    async def start(self, app, auth, who, task_view):
+        """(the change number the stream starts at, its baseline)."""
+        from . import needs_cache, needs_lane
+
+        key = (needs_cache.viewer(who), task_view)
+        loop = asyncio.get_running_loop()
+        task = self._building.get(key)
+        if task is None or task.get_loop() is not loop:
+            held = self._recent(key)
+            if held is not None:
+                newest = await asyncio.to_thread(self._still, held, who)
+                if newest is not None:
+                    return newest, held.held()
+            task = self._building.get(key)  # another stream may have begun one meanwhile
+            if task is None or task.get_loop() is not loop:
+                task = loop.create_task(needs_lane.run(app, self._build, auth, who, task_view))
+                self._building[key] = task
+                task.add_done_callback(lambda done: self._finished(key, done))
+                # Its snapshot opens after this stream asked: nothing before the stream is missing from it.
+                built = await asyncio.shield(task)
+                return built.seq, built.held()
+        # A build that may have opened its snapshot before this stream asked.
+        try:
+            built = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise  # this stream's own client left
+            built = None
+        except Exception:  # noqa: BLE001 - its own stream reports it; this one builds for itself
+            built = None
+        if built is not None:
+            newest = await asyncio.to_thread(self._still, built, who)
+            if newest is not None:
+                return newest, built.held()
+        built = await needs_lane.run(app, self._build, auth, who, task_view)
+        self._keep(key, built)
+        return built.seq, built.held()
+
+    def _build(self, auth, who, task_view):
+        with self.store.read() as c:
+            c.execute("BEGIN")  # one snapshot: the baseline and the change number it stands at agree
+            try:
+                at = _monotonic()
+                seq = latest(c)
+                return _Baseline(seq, needs_baseline(c, auth, who, task_view), at)
+            finally:
+                if c.in_transaction:
+                    c.rollback()
+
+    def _still(self, built, who):
+        """The newest change number when nothing since `built` may have moved the list, else None."""
+        with self.store.read() as c:
+            c.execute("BEGIN")
+            try:
+                newest = latest(c)
+                if newest == built.seq:
+                    return newest
+                moved = c.execute(_BASELINE_MOVED_SQL, (built.seq, newest, who.actor, built.seq, newest)).fetchone()
+                return None if moved else newest
+            finally:
+                if c.in_transaction:
+                    c.rollback()
+
+    def _recent(self, key):
+        now = _monotonic()
+        for gone in [k for k, held in self._built.items() if now - held.at > BASELINE_REUSE_SECONDS]:
+            del self._built[gone]
+        return self._built.get(key)
+
+    def _keep(self, key, built):
+        held = self._built.get(key)
+        if held is None or built.seq >= held.seq:
+            self._built[key] = built
+
+    def _finished(self, key, task):
+        if self._building.get(key) is task:
+            del self._building[key]
+        if not task.cancelled() and task.exception() is None:  # an exception is its streams' to report
+            self._keep(key, task.result())
+
+
+def baselines(store):
+    """The store's Needs-you baselines for streams that open (one per Store, so per database)."""
+    existing = getattr(store, "event_baselines", None)
+    if existing is None:
+        existing = store.event_baselines = Baselines(store)
+    return existing
+
+
 def _needs_list(view, rows, task_view, held=None):
     from .views import needs_bots, needs_items, needs_kinds, needs_marks, needs_stages
 
@@ -3006,7 +3135,18 @@ def _needs_list(view, rows, task_view, held=None):
     items = built[task_view]  # read only below: each stream's own marks and counts come from it
     if held is None:
         return [(rows[-1], {"count": len(items), "items": items})]
-    marks, version = needs_marks(items)
+    # The marks and whole-list facts of one list are the same for each of this identity's streams of the round.
+    facts = view.mine.setdefault("needs_facts", {})
+    if task_view not in facts:
+        marks, version = needs_marks(items)
+        facts[task_view] = (
+            marks,
+            version,
+            needs_bots(items, view.who.actor),
+            needs_stages(items),
+            needs_kinds(items),
+        )
+    marks, version, bots, stages, by_kind = facts[task_view]
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
     removed = [k for k in before if k not in marks]
@@ -3017,11 +3157,11 @@ def _needs_list(view, rows, task_view, held=None):
         "base": held.get("version"),
         "changed": None if many else changed,
         "removed": None if many else removed,
-        "bots": needs_bots(items, view.who.actor),
-        "stages": needs_stages(items),
-        "by_kind": needs_kinds(items),
+        "bots": dict(bots),
+        "stages": dict(stages),
+        "by_kind": dict(by_kind),
     }  # whole-list facts, even on a page
-    held.update(marks=marks, version=version)
+    held.update(marks=marks, version=version)  # shared, never changed: the next build replaces it whole
     return [(rows[-1], entry)]
 
 
@@ -3584,6 +3724,7 @@ def install(app, store, auth, task_views, task_view):
     doorbell = bell(store)
     shared = hydrated(store)
     served = rounds(store)
+    starting = baselines(store)
     on_screen = screen_actions.screens(store)
 
     @app.get("/api/v2/runs/{run_id}/steps/{seq}")
@@ -3654,12 +3795,6 @@ def install(app, store, auth, task_views, task_view):
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 
-        def start():
-            with store.read() as c:
-                if held is not None:
-                    held.update(needs_baseline(c, auth, who, task_view))
-                return latest(c)
-
         sign_in = SignIn(auth, request.headers, who)
         watch = Watch(store, auth, who, meetings, tasks)
 
@@ -3702,18 +3837,22 @@ def install(app, store, auth, task_views, task_view):
             with store.read() as c:
                 return latest(c)
 
-        now_seq = await asyncio.to_thread(start)
-        doorbell.observe(now_seq)
-        cursor = after if after is not None and after >= 0 else now_seq
-
         async def generate():
-            nonlocal cursor
+            # The stream opens at once: its Needs-you baseline, the one costly part of starting, comes before `ready`,
+            # built once for all of this person's streams that open together (Baselines).
+            yield "retry: 1000\n\n"
+            if held is not None:
+                now_seq, baseline = await starting.start(request.app, auth, who, task_view)
+                held.update(baseline)
+            else:
+                now_seq = await asyncio.to_thread(newest)
+            doorbell.observe(now_seq)
+            cursor = after if after is not None and after >= 0 else now_seq
             leave = doorbell.reader(store)
             # The person's app is open while a stream of theirs follows `screen` (backend/screen_actions.py).
             unfollow = on_screen.follow(who.actor) if "screen" in wanted and not agent else None
             every, beat = keepalive_seconds(store), Beat(check)
             try:
-                yield "retry: 1000\n\n"
                 yield _frame(
                     None,
                     "ready",
