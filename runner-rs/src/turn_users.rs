@@ -109,7 +109,11 @@ pub async fn share_workspace(paths: Vec<PathBuf>) -> Result<(), String> {
 }
 
 pub(crate) fn share_workspace_blocking(paths: &[PathBuf]) -> Result<(), String> {
+    // A chat's checkout is both its main and its execution path: each tree is walked once.
+    let mut seen = std::collections::HashSet::new();
+    let roots: Vec<&PathBuf> = paths.iter().filter(|p| seen.insert(*p)).collect();
     let status = crate::isolation::std_command(crate::env::python()).args(["-c", r#"import errno,os,stat,sys
+def wanted(m): return stat.S_IMODE(m)|0o060|(0o010 if m&0o111 else 0)
 def share(name,dir_fd=None):
  # Open relative to the pinned directory without following a link, then decide on the opened inode.
  try: fd=os.open(name,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW,dir_fd=dir_fd)
@@ -119,8 +123,8 @@ def share(name,dir_fd=None):
   raise
  try:
   s=os.fstat(fd)
-  if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink==1):
-   os.fchmod(fd,stat.S_IMODE(s.st_mode)|0o060|(0o010 if s.st_mode&0o111 else 0))
+  if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink==1) and wanted(s.st_mode)!=stat.S_IMODE(s.st_mode):
+   os.fchmod(fd,wanted(s.st_mode))
  finally: os.close(fd)
 for root in sys.argv[1:]:
  share(root)
@@ -129,8 +133,9 @@ for root in sys.argv[1:]:
    # Git beside the walk (another lane, a background fetch) removes its lock and temporary files: gone is fine.
    try: s=os.stat(name,dir_fd=fd,follow_symlinks=False)
    except FileNotFoundError: continue
-   if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)): share(name,fd)
-"#]).args(paths).env_clear().status().map_err(|e| e.to_string())?;
+   # Already shared: nothing to open or change. Anything else is decided again on the opened inode.
+   if s.st_uid==os.geteuid() and (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink==1) and wanted(s.st_mode)!=stat.S_IMODE(s.st_mode): share(name,fd)
+"#]).args(roots).env_clear().status().map_err(|e| e.to_string())?;
     if status.success() {
         Ok(())
     } else {
@@ -566,6 +571,56 @@ mod tests {
         shared.unwrap();
         assert_eq!(mode, 0o660);
     }
+    fn share_tree(files: usize) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("tico-share-{}", uuid::Uuid::new_v4().simple()));
+        for n in 0..files {
+            let dir = root.join(format!("src/d{}", n / 100));
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join(format!("f{n}.rs"));
+            std::fs::write(&file, "x").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        root
+    }
+
+    /// A checkout shared by an earlier turn is not written again: its files keep their change time, and one named
+    /// twice (a chat's main and execution path) is walked once.
+    #[test]
+    fn a_shared_checkout_is_not_changed_again() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let root = share_tree(3);
+        let file = root.join("src/d0/f1.rs");
+        share_workspace_blocking(&[root.clone(), root.clone()]).unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        let before = std::fs::metadata(&file).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        share_workspace_blocking(&[root.clone(), root.clone()]).unwrap();
+        let after = std::fs::metadata(&file).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(mode, 0o660);
+        assert_eq!(
+            (after.ctime(), after.ctime_nsec()),
+            (before.ctime(), before.ctime_nsec()),
+            "an already shared file was written again"
+        );
+    }
+
+    /// Bench, not run by CI: sharing a 20,000-file checkout named as both main and execution path, first while its
+    /// files are owner-only, then again once shared. `cargo test --release bench_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_share_a_checkout_named_twice() {
+        let root = share_tree(20_000);
+        for pass in ["first share", "already shared"] {
+            let began = std::time::Instant::now();
+            share_workspace_blocking(&[root.clone(), root.clone()]).unwrap();
+            println!("{pass}: {} ms", began.elapsed().as_millis());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn only_reserved_non_supervisor_ids_can_be_leased() {
         assert_eq!(parse("10100-10163").unwrap().len(), 64);
