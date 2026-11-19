@@ -537,8 +537,14 @@ def prime_machines(c, slugs):
     from .agents import CONFIG_SQL, ROW_SQL
     from .auth import OPERATOR_SQL
 
-    if read_cache.cache(c) is None:
+    values = read_cache.cache(c)
+    if values is None:
         return
+    # Every bot's configuration row (read_cache.configs, BS.ROW_SQL: bot_config's columns and the config), when this
+    # snapshot has it, answers the config and operator reads below: on TIDY the status and employees pages read the
+    # config three times over (Nov 19), each a json_patch of every bot's settings.
+    configured = values.get((BS.ROW_SQL, ()))
+    configured = {row["bot"]: row for row in configured} if configured is not None else None
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
         declared = {
@@ -556,7 +562,10 @@ def prime_machines(c, slugs):
             ),
             ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})"),
         ):
-            found = {row["bot"]: row for row in c.execute(query, part)}
+            if configured is not None and statement in (CONFIG_SQL, OPERATOR_SQL):
+                found = {s: configured[s] for s in part if s in configured}
+            else:
+                found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
 
 
