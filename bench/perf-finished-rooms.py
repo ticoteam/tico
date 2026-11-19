@@ -5,7 +5,7 @@ rooms with a bot's post Ana has not read from before it finished, and a few hund
 
     nice -n 10 .venv/bin/python bench/perf-finished-rooms.py
 
-Reads, each as Ana and as Ben: the rail, Catch up and its count, the sidebar, Needs you, Health, the Floor, and the live
+Reads, each as Ana and as Ben: the rail, Catch up, Browse, the sidebar, Needs you, Health, the Floor, and the live
 stream's setup (Needs you's baseline) and one round after a handful of writes. Per read it prints the statements one call
 takes and the median wall time of RUNS calls. Env as bench/perf-hub-overload.py (OPEN, CLOSED, THREADS, RUNS, DB=<file>
 to keep the seeded database and reuse it, ANSWERS=<file> for each read's answer as JSON, STATEMENTS=<path> for the
@@ -55,6 +55,7 @@ ROUND_CHANGES = 40  # the changes one round reads, back from the newest
 PATHS = (
     "/api/v2/threads/rail",
     "/api/v2/threads/catch-up",
+    "/api/v2/threads/browse",
     "/api/v2/threads?limit=50",
     "/api/v2/needs-you",
     "/api/v2/health",
