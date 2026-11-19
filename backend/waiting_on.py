@@ -764,6 +764,9 @@ _TASK_READS = (
 )
 
 
+_PRIMED = ("waiting_on.prime",)  # the tasks whose waits this snapshot has read already
+
+
 def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]:
     """Read many tasks as `task_engine.task()` and `task_requirements.standings` read each one, a few statements in
     all, for the reads of each task that follow in this snapshot: a list of waits costs what one task's does. Gives
@@ -786,6 +789,16 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     stored = [read_cache.one(conn, _TASK_READS[0][0], (task_id,)) for task_id in ids]
     E.prime_parts(conn, (r["stage_id"] for r in stored if r), (r["pipeline_id"] for r in stored if r))
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
+    # What follows reads for each task only once a snapshot: Needs you primes the whole list, then its briefs and the
+    # reader's views prime parts of it again. The set lives in the read cache, so a write drops it with the rest.
+    primed: set[str] = values.setdefault(_PRIMED, set())
+    fresh = [row for row in rows if str(row["id"]) not in primed]
+    returned = {str(row["id"]): row for row in rows}
+    rows = fresh
+    ids = [str(row["id"]) for row in rows]
+    primed.update(ids)
+    if not ids:
+        return returned
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     task_depends.prime(conn, ids)  # the tasks each depends on that are still open
@@ -820,7 +833,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
-    return {str(row["id"]): row for row in rows}
+    return returned
 
 
 def waiting_on_many(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[Wait]]:
