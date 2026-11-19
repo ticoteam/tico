@@ -650,9 +650,10 @@ class _Line:
         self._given: dict[tuple[str, str], Row] | None = None
 
     def given(self) -> dict[tuple[str, str], Row]:
-        if self._given is None:
-            self._given = _MS()._given(self.c) or {}
-        return self._given
+        given = self._given
+        if given is None:
+            given = self._given = _MS()._given(self.c) or {}
+        return given
 
     def __contains__(self, sid: str) -> bool:
         if self.current is None:
