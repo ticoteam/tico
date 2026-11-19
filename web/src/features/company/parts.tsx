@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { useAction } from '@/actions';
+import { refusal as shared, useAction, type Result } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
-import { toast } from '@/kit/Toast';
+import { toast, type ToastInput } from '@/kit/Toast';
 
 /* The small parts Company, Strategy, Products and Risk share, ported from pages/3-company/company.js and
    pages/10-records/records.js. */
@@ -47,12 +47,10 @@ export function PanelLink({ panel, className, title, children, ...rest }: { pane
   );
 }
 
-/** A refusal in words: the server's reason from its code (`owner_not_found` is "Owner not found"), else that it failed. */
-export function refusal(error = ''): string {
-  if (error === 'not_allowed') return 'Not allowed';
-  if (error === 'librarian') return 'The Librarian is not running yet';
-  if (error.startsWith('bad_input')) return 'Check the fields';
-  return /^[a-z]+(_[a-z]+)*$/.test(error) ? error[0]!.toUpperCase() + error.slice(1).replace(/_/g, ' ') : "Couldn't save";
+/** A refusal's toast: "Couldn't save", then the server's reason. A bare code is never shown, not even made readable. */
+export function refusal(r: Result): ToastInput {
+  if (r.error === 'librarian') return { text: 'The Librarian is not running yet', kind: 'failed' };
+  return shared(r, r.error?.startsWith('bad_input') ? 'Check the fields' : "Couldn't save", 'Not allowed');
 }
 
 /** Run one of this feature's actions from a click; a refusal says why (the change is already taken back). */
@@ -62,7 +60,7 @@ export function useDo(id: string) {
     pending: a.pending,
     run: async (input: unknown): Promise<boolean> => {
       const r = await a.run(input);
-      if (!r.ok) toast({ text: refusal(r.error), kind: 'failed' });
+      if (!r.ok) toast(refusal(r));
       return r.ok;
     },
   };

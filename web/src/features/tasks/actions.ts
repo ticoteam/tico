@@ -1,5 +1,4 @@
-import { defineAction, s, type Schema } from '@/actions';
-import { ApiError } from '@/api/client';
+import { defineAction, refusalFor, s, type Schema } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
 import {
@@ -97,14 +96,14 @@ export const filterTasks = defineAction({
   target: () => ({ kind: 'tasks', id: 'filter' }),
 });
 
-/** The server's words for a refusal, else a plain line. */
-const reason = (e: unknown, fallback: string) => (e instanceof ApiError && e.status !== 0 && e.message ? e.message : fallback);
+/** A refusal's toast: the short words, then the server's reason when it gave a safe one. */
+const reason = (e: unknown, fallback: string) => refusalFor(e, fallback, fallback);
 
 async function said<T>(run: () => Promise<T>, fallback: string): Promise<T> {
   try {
     return await run();
   } catch (e) {
-    toast({ text: reason(e, fallback), kind: 'failed' });
+    toast(reason(e, fallback));
     throw e;
   }
 }
@@ -153,7 +152,7 @@ export const create = defineAction({
   }),
   run: async (_ctx, input) => {
     const { task, notMoved } = await said(() => createTask(input, listsOf(input.pipeline)), "Couldn't create the task");
-    if (notMoved) toast({ text: reason(notMoved, 'Filed in the first stage'), kind: 'failed' });
+    if (notMoved) toast(reason(notMoved, 'Filed in the first stage'));
     return task;
   },
   did: (_input, out) => (out?.number ? `Filed #${out.number}` : 'Filed a task'),

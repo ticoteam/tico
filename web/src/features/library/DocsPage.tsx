@@ -104,9 +104,9 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       path="/library/docs"
       className="lib"
       tabs={tabs(live.data?.docs.length, sources.data?.sources.length)}
+      search={<Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />}
       actions={
         <>
-          <Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />
           <OwnerButton page="docs" phone />
           <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
             New doc

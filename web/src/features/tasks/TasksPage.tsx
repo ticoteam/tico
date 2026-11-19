@@ -11,6 +11,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
 import { LatePill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
@@ -107,6 +108,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   const page = {
     ...head,
     title: 'Tasks',
+    search: <TaskFind search={search} />,
     actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={() => setNewIn({ stage: null })} />,
     more: p && <MoreMenu p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
     state,
@@ -177,6 +179,7 @@ function ArchivedPage({ pipeline, p, pipes, search, head, panel }: PageProps) {
       {...head}
       title="Archived"
       crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
+      search={<TaskFind search={search} />}
       actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} p={p} />}
       state={state}
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
@@ -226,8 +229,30 @@ function MoreMenu({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
   );
 }
 
-/** Search, Filter, the view switch, New task, Flow, the owner (list.js head); on a phone the owner's face is the ask
-    (Ask.tsx). Archived keeps search and filter. */
+/** The head's search (the page kind's `search` slot): a button until pressed, then the field; on a phone, where it has its
+    own line under the head, the field. Typing narrows the board after a short pause, not on every key. */
+function TaskFind({ search }: { search: TasksSearch }) {
+  const filter = useAction('tasks.filter');
+  const cards = useCards();
+  const [open, setOpen] = useState(!!search.q);
+  const [words, setWords] = useState(search.q ?? '');
+  // Cleared or set from elsewhere (Clear, Tico): the field follows the address.
+  const [seen, setSeen] = useState(search.q);
+  if (seen !== search.q) {
+    setSeen(search.q);
+    setWords(search.q ?? '');
+  }
+  useEffect(() => {
+    if (words.trim() === (search.q ?? '')) return;
+    const t = setTimeout(() => void filter.run({ q: words.trim() || null }), 250);
+    return () => clearTimeout(t);
+  }, [words, search.q, filter]);
+  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
+  return <Search label="Search tasks" value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
+}
+
+/** Filter, the view switch, New task, Flow, the owner (list.js head); on a phone the owner's face is the ask (Ask.tsx).
+    Archived keeps the filter. */
 function HeadActions({
   pipeline,
   view,
@@ -244,30 +269,10 @@ function HeadActions({
   onNew?: () => void;
 }) {
   const setView = useAction('tasks.setView');
-  const filter = useAction('tasks.filter');
   const actors = useActors();
   const tags = useQuery(tagsQuery).data ?? [];
-  const [open, setOpen] = useState(!!search.q);
-  const [words, setWords] = useState(search.q ?? '');
-  // Cleared or set from elsewhere (Clear, Tico): the field follows the address.
-  const [seen, setSeen] = useState(search.q);
-  if (seen !== search.q) {
-    setSeen(search.q);
-    setWords(search.q ?? '');
-  }
-  // Typing narrows the board after a short pause, not on every key.
-  useEffect(() => {
-    if (words.trim() === (search.q ?? '')) return;
-    const t = setTimeout(() => void filter.run({ q: words.trim() || null }), 250);
-    return () => clearTimeout(t);
-  }, [words, search.q, filter]);
   return (
     <>
-      {open ? (
-        <Search label="Search tasks" value={words} onValueChange={setWords} placeholder="Search" autoFocus />
-      ) : (
-        <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />
-      )}
       <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />
       {view !== 'archived' && (
         <span data-target="tasks:view">

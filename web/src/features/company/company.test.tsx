@@ -312,7 +312,7 @@ describe('Products and Risk', () => {
     expect(screen.getByRole('table', { name: 'Products' }).querySelector('.av')).toBeTruthy();
     refuse({ status: 409, body: { error: { code: 'owner_not_found', detail: 'No such teammate' } } });
     await waitFor(() => expect(queryClient.getQueryData<ProductList>(productsQuery.queryKey)?.products[0]?.owner_teammate).toBeNull());
-    expect(toasts).toHaveBeenCalledWith({ text: 'Owner not found', kind: 'failed' });
+    expect(toasts).toHaveBeenCalledWith({ text: "Couldn't save", name: 'No such teammate', kind: 'failed' });
   });
 
   it('shows the empty Risk list', async () => {

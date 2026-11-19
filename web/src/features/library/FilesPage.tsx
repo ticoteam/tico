@@ -100,9 +100,9 @@ function FilesList({ search }: { search: FilesSearch }) {
         title="Files"
         path="/library/files"
         className="lib"
+        search={<Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />}
         actions={
           <>
-            <Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />
             <Menu trigger={<IconButton icon="filter" label="Filter by kind" on={!!kind} />}>
               <MenuItem label="All files" on={!kind} onSelect={() => void press('files.list', { q: search.q })} />
               {KINDS.map(([k, label]) => (

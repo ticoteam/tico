@@ -1,7 +1,7 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import type { UsageFigures } from '@/api/schema';
 import { directoryQuery } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -287,7 +287,7 @@ function ClearQueue() {
     const r = await run('usage.clearQueue', { scope: 'company' }, { via: 'click' });
     setBusy(false);
     setAsking(false);
-    toast(r.ok ? { text: r.did ?? 'Cleared', kind: 'done' } : { text: "Couldn't clear", kind: 'failed' });
+    toast(r.ok ? { text: r.did ?? 'Cleared', kind: 'done' } : refusal(r, "Couldn't clear"));
   };
   return (
     <>

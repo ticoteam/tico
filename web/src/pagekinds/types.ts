@@ -41,6 +41,9 @@ export interface HeadProps {
    * filled button and anything marked `data-phone` stay; the rest belong under "⋯".
    */
   actions?: ReactNode;
+  /** The page's search or filter field: first of the controls on a wide screen, on its own line under the head (and
+      tabs) on a phone, where the head has no room for it. */
+  search?: ReactNode;
   /** "⋯", always last: a menu node that brings its own trigger, or a function the plain "⋯" button calls. */
   more?: ReactNode | (() => void);
   /** The title edits in place: click it, type, Enter saves, Escape puts it back. */

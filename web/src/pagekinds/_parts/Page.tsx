@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button, FillContext } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
+import { useCards } from '@/kit/Popover';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import '@/pagekinds/pagekinds.css';
 import type { PageBaseProps, PageTab, StateProps } from '@/pagekinds/types';
@@ -92,7 +93,9 @@ export interface PageProps extends PageBaseProps {
 }
 
 /** The page sheet every kind but the centered card stands in: head, tab row, the state's body. */
-export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, children, state, empty, onRetry, noAccess, ...head }: PageProps) {
+export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, children, state, empty, onRetry, noAccess, search, ...head }: PageProps) {
+  // A phone's head keeps two controls: the search gets its own line under the head.
+  const cards = useCards();
   const cls = `pane page pk pk-${kind}${className ? ` ${className}` : ''}`;
   if (state === 'no-access') {
     // The mock draws no head here: nothing of the page shows (15-start, noaccess).
@@ -107,9 +110,10 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
   return (
     <main className={cls} aria-label={head.title}>
       <FillContext value={headFills({ state, empty, onRetry })}>
-        <PageHead {...head} />
+        <PageHead {...head} search={cards ? undefined : search} />
         {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
       </FillContext>
+      {cards && search && <div className="pk-find">{search}</div>}
       {(state ?? 'ready') === 'ready' && under}
       <StateBody state={state} title={head.title} empty={empty} onRetry={onRetry} skeleton={skeleton}>
         {children}

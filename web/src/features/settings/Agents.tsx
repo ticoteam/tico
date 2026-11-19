@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { run } from '@/actions/run';
+import { reasonIn, refusal, run } from '@/actions';
 import { configQuery, meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -64,7 +64,7 @@ function SignInDialog({ kind, onClose }: { kind: 'claude_login' | 'codex_login';
       () => {
         void run('settings.connect', { kind }, { via: 'click' }).then((r) => {
           if (gone) return;
-          if (!r.ok) return setError(r.error ?? "Couldn't start");
+          if (!r.ok) return setError(reasonIn(r) ?? "Couldn't start");
           const got = (r.out as SignIn | null | undefined) ?? null;
           if (!got) return setError('No computer can sign in yet');
           if (got.id) setLogin(got);
@@ -484,7 +484,7 @@ function AddComputer() {
     setBusy(true);
     const r = await run('settings.addComputer', {}, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't make a code", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't make a code"));
     setCode((r.out as { code?: string } | undefined)?.code ?? null);
   };
   const [main, ...more] = code
@@ -564,7 +564,7 @@ function Hosted() {
   const start = async (id: string) => {
     const r = await run('settings.startServer', { server: id }, { via: 'click' });
     const out = r.out as { state?: string; message?: string } | undefined;
-    if (!r.ok) return toast({ text: "Couldn't start", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't start"));
     if (out?.state !== 'started') setSaid((s) => ({ ...s, [id]: out?.message ?? 'Not started' }));
   };
   return (

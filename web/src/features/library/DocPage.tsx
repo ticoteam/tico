@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -149,7 +149,7 @@ function EditDoc({ doc: shown }: { doc: Doc }) {
       { via: 'click' },
     );
     setBusy(false);
-    if (!r.ok) toast({ text: /stale|conflict|version/.test(r.error ?? '') ? 'Someone changed it meanwhile. Copy your text and open it again.' : 'Not saved', kind: 'failed' });
+    if (!r.ok) toast(/stale|conflict|version/.test(r.error ?? '') ? { text: 'Someone changed it meanwhile. Copy your text and open it again.', kind: 'failed' } : refusal(r, 'Not saved'));
   };
   return (
     <Document

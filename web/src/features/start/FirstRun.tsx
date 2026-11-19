@@ -371,7 +371,7 @@ function GithubForm() {
     const r = await action.run(i);
     if (r.ok) return;
     if (keyLost(r.error)) setLost(true);
-    else setError(reasonOf(r.error));
+    else setError(reasonOf(r));
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();

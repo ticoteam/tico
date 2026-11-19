@@ -15,7 +15,7 @@ const to = (path: string) => path as LinkProps['to'];
  * the name (aaa-audit-a, Breadcrumb). Then the controls, "⋯" last, then a button for each sheet the frame tucked
  * behind the page.
  */
-export function PageHead({ title, path, crumb, lead, after, actions, more, onRename, sub, size, top }: PageHeadProps) {
+export function PageHead({ title, path, crumb, lead, after, actions, search, more, onRename, sub, size, top }: PageHeadProps) {
   const sheet = useSheet();
   const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
@@ -77,7 +77,12 @@ export function PageHead({ title, path, crumb, lead, after, actions, more, onRen
       </div>
       {after}
       <span className="grow" />
-      {actions && <div className="pk-acts">{actions}</div>}
+      {(search || actions) && (
+        <div className="pk-acts">
+          {search}
+          {actions}
+        </div>
+      )}
       {typeof more === 'function' ? <IconButton icon="more" label="More" onClick={more} /> : more}
       {sheet.tucked.map((t) => (
         <IconButton key={t.id} icon="panel" label={t.label} quiet onClick={t.open} />

@@ -14,6 +14,7 @@ import { count, monthName, pct, statusWord } from './model';
 import { ActLink, Pfig, Prow, Ptrace, usePress, Who } from './parts';
 import {
   channelMonthsQuery,
+  channelSeriesQuery,
   growthCustomersQuery,
   growthManager,
   growthSourcesQuery,
@@ -66,19 +67,22 @@ function Failed({ what, retry }: { what: string; retry: () => unknown }) {
   );
 }
 
-/** A channel's months, newest first, each opening its numbers and where they came from (growth-channels.ts gcMonths). */
+/** A channel's months, newest first, each opening its numbers and where they came from (growth-channels.ts gcMonths). A
+    channel fed only by pushed rows has none in /cohorts: its own read's months stand in, as plain rows (the month panel
+    reads /cohorts). */
 export function ChannelMonths({ channel }: { channel: string }) {
   const q = useQuery(channelMonthsQuery(channel));
   const rows = [...(q.data?.cohorts ?? [])].sort((a, b) => b.month.localeCompare(a.month));
+  const none = !!q.data && rows.length === 0;
+  const read = useQuery({ ...channelSeriesQuery(channel), enabled: none });
+  const pushed = none ? (read.data?.series ?? []).filter((m) => m.new_customers != null || m.cost != null).reverse() : [];
   return (
-    <Section name="Months" count={q.data ? rows.length : undefined}>
-      {q.isPending ? (
+    <Section name="Months" count={q.data && !read.isLoading ? rows.length || pushed.length : undefined}>
+      {q.isPending || read.isLoading ? (
         <SkeletonRows rows={3} />
-      ) : q.isError ? (
-        <Failed what="Months" retry={q.refetch} />
-      ) : rows.length === 0 ? (
-        <p className="row-sub">No months yet</p>
-      ) : (
+      ) : q.isError || read.isError ? (
+        <Failed what="Months" retry={q.isError ? q.refetch : read.refetch} />
+      ) : rows.length > 0 ? (
         rows.map((c) => (
           <Prow
             key={c.month}
@@ -98,6 +102,10 @@ export function ChannelMonths({ channel }: { channel: string }) {
             fig={count(c.new_customers)}
           />
         ))
+      ) : pushed.length > 0 ? (
+        pushed.map((m) => <Prow key={m.period} name={monthName(m.period)} fig={count(m.new_customers)} />)
+      ) : (
+        <p className="row-sub">No months yet</p>
       )}
     </Section>
   );
@@ -228,18 +236,33 @@ const host = (ref: string) => {
   }
 };
 
+const claims = (v: string[] | string | null | undefined) => (Array.isArray(v) ? v : v ? [v] : []).map((x) => x.trim().toLowerCase()).filter(Boolean);
+
+/** The other live sources that claim a number this one is the truth for, when the read names it a conflict; '' when none. */
+export function alsoClaimed(read: { sources: GrowthSource[]; conflicts?: string[] } | undefined, s: GrowthSource): string {
+  const clash = new Set(claims(read?.conflicts));
+  const mine = claims(s.truth_for).filter((n) => clash.has(n));
+  if (!mine.length) return '';
+  return (read?.sources ?? [])
+    .filter((o) => o.id !== s.id && !o.retired_at && claims(o.truth_for).some((n) => mine.includes(n)))
+    .map((o) => o.name ?? o.system ?? o.id)
+    .join(', ');
+}
+
 /** One source: what it is the truth for, how agents reach it, and its last sync (growth-sources.ts gsrcDialog, gsrcResult). */
 export function SourcePanel({ id }: { id: string }) {
   const press = usePress();
   const q = useQuery(growthSourcesQuery);
   const s = q.data?.sources.find((x) => x.id === id && !x.retired_at);
   if (!s) return null;
+  const also = alsoClaimed(q.data, s);
   const reach = s.reach_kind ? (REACH[s.reach_kind] ?? words(s.reach_kind)) : '';
   return (
     <SidePanel title={s.name ?? s.system ?? s.id} target={`source:${s.id}`} onClose={() => void press('growth.closePanel', {})}>
       <div className="money">
         <Facts label="Source">
           {words(s.truth_for) && <LabelValue label="Truth for">{words(s.truth_for)}</LabelValue>}
+          {also && <LabelValue label="Also claimed by">{also}</LabelValue>}
           {words(s.fills) && <LabelValue label="Fills">{words(s.fills)}</LabelValue>}
           {reach && (
             <LabelValue label="Reached by">

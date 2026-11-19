@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import { configQuery, directoryQuery, meQuery, useActor } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
@@ -111,7 +111,7 @@ function AddPerson() {
     setBusy(true);
     const r = await run('settings.invite', { email: email.trim(), ...(name.trim() ? { name: name.trim() } : {}) }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: r.error ?? "Couldn't add", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't add"));
     setOpen(false);
     setEmail('');
     setName('');
@@ -153,7 +153,7 @@ function OwnerDialog({ p, ownerName, onClose }: { p: AccessPerson; ownerName: st
     setBusy(true);
     const r = await run('settings.makeOwner', { person: p.id, keepAdmin: keep }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't change the owner", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't change the owner"));
     // The owner's controls are gone from this screen: start again from the top.
     window.location.assign('/');
   };
@@ -195,7 +195,7 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
     setBusy(true);
     const r = await run('settings.changeEmail', { email: to, again: again.trim().toLowerCase() }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't change the email", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't change the email"));
     // This browser signed in with the old address: a proxy session signs in again as the new one.
     if ((me.data as { proxy_session?: boolean } | undefined)?.proxy_session) {
       await tellDesktopSigningOut();
@@ -462,7 +462,7 @@ function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) =
     );
     setBusy(false);
     if (!r.ok && r.error === 'github_key_missing') return setLostKey(true);
-    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : { text: "Couldn't save", kind: 'failed' });
+    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : refusal(r, "Couldn't save"));
   };
 
   const makeToken = async () => {
@@ -470,14 +470,14 @@ function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) =
     const r = await run('settings.scimToken', {}, { via: 'click' });
     const made = r.ok ? (r.out as { token?: string } | undefined)?.token : undefined;
     if (made) onToken(made);
-    else toast({ text: "Couldn't make a token", kind: 'failed' });
+    else toast(refusal(r, "Couldn't make a token"));
   };
 
   const look = async () => {
     setBusy(true);
     const r = await run('settings.previewDirectory', {}, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't read the directory", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't read the directory"));
     setReviewed(false);
     setPreview(r.out as DirectoryPreview);
   };
@@ -490,7 +490,7 @@ function SyncForm({ v, onToken }: { v: DirectoryView; onToken: (token: string) =
     setBusy(true);
     const r = await run('settings.syncDirectory', { plan: p.hash, confirm: needs && reviewed }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't sync", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't sync"));
     toast({ text: r.did ?? 'Synced', kind: 'done' });
     if ((r.out as DirectorySynced | undefined)?.applied) setPreview(null);
   };
@@ -661,7 +661,7 @@ function Tokens() {
     setBusy(true);
     const r = await run('settings.createToken', { label: label.trim() }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: r.error ?? "Couldn't make it", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't make it"));
     setMaking(false);
     setLabel('');
     // The secret is shown once, here, and never read back.

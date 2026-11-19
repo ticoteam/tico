@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import { desktopApp, useCallWindow, type UpdateState } from '@/desktop';
 import { isCallActive, useCall } from '@/features/calls/exports';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -55,7 +55,7 @@ function Desktop({ version }: { version: string }) {
   };
   const showLog = async () => {
     const r = await run('settings.showLog', {}, { via: 'click' });
-    if (!r.ok) toast({ text: "Couldn't open the log", kind: 'failed' });
+    if (!r.ok) toast(refusal(r, "Couldn't open the log"));
   };
   const setOpenAtLogin = async (want: boolean) => {
     setLogin(want);
@@ -63,7 +63,7 @@ function Desktop({ version }: { version: string }) {
     if (r.ok && typeof r.out === 'boolean') return setLogin(r.out);
     if (!r.ok) {
       setLogin(!want);
-      toast({ text: "Couldn't save", kind: 'failed' });
+      toast(refusal(r, "Couldn't save"));
     }
   };
 

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useId, useState, type ReactNode } from 'react';
-import { registry } from '@/actions';
+import { reasonIn, registry } from '@/actions';
 import { runIn } from '@/actions/run';
 import type { Result } from '@/actions/types';
 import { meQuery, useActor, useActors } from '@/data';
@@ -55,7 +55,9 @@ export function useRun() {
   };
 }
 
-export const why = (e: string | undefined) => (e?.startsWith('failed: ') ? e.slice(8) : e === 'not_allowed' ? 'Not allowed' : "Couldn't save");
+/** A refusal's words for the dialog's line: this feature's own ("failed: …"), else the server's reason, else short words. */
+export const why = (r: Result) =>
+  r.error?.startsWith('failed: ') ? r.error.slice(8) : (reasonIn(r) ?? (r.error === 'not_allowed' ? 'Not allowed' : "Couldn't save"));
 
 /** A dialog that asks for something: its fields, a line for what went wrong, Cancel and the act. */
 export function Ask({
@@ -126,7 +128,7 @@ export function useAsk(onOpenChange: Open) {
     setError('');
     const r = await run(id, input);
     setBusy(false);
-    if (!r.ok) return setError(why(r.error));
+    if (!r.ok) return setError(why(r));
     onOpenChange(false);
     after?.(r);
   };

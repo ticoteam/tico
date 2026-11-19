@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import type { MailboxDetail } from '@/api/schema';
 import { meQuery, useActors } from '@/data';
 import { Button } from '@/kit/Button';
@@ -16,7 +16,7 @@ import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
-import { Face, press, refusal, when } from './parts';
+import { Face, press, when } from './parts';
 import {
   agentSendingQuery,
   googleQuery,

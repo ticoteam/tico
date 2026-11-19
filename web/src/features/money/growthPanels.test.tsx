@@ -111,6 +111,20 @@ describe('Growth panels @s480 @s481 @s482 @s484 @s486', () => {
     expect(await screen.findByText('No months yet')).toBeTruthy();
   });
 
+  it('a channel fed only by pushed rows lists the months its own read holds, newest first', async () => {
+    const point = (period: string, n: number | null) => ({ period, signups: null, new_customers: n, cost: n && n * 25, cac: null, kept: null });
+    serve({
+      '/growth/cohorts': ok({ cohorts: [] }),
+      '/growth/read': ok({ ...READ, series: [point('2026-08', 9), point('2026-09', 12), point('2026-10', null)] }),
+    });
+    show('/company/growth?panel=channel:search');
+    const panel = await screen.findByRole('complementary', { name: 'Search ads' });
+    expect(await within(panel).findByText('September 2026')).toBeTruthy();
+    const months = [...panel.querySelectorAll('.prow .row-title')].map((r) => r.textContent);
+    expect(months).toEqual(['September 2026', 'August 2026']);
+    expect(within(panel).queryByText('No months yet')).toBeNull();
+  });
+
   it('months that fail offer Try again', async () => {
     serve({ '/growth/cohorts': broken });
     show('/company/growth?panel=channel:search');
@@ -228,6 +242,26 @@ describe('Growth panels @s480 @s481 @s482 @s484 @s486', () => {
     expect(within(panel).getByText('Read, Write notes')).toBeTruthy();
     expect(within(panel).getByText('Failing')).toBeTruthy();
     expect(within(panel).getByText('Sign-in expired')).toBeTruthy();
+  });
+
+  it('a source says which other source claims the same number, and only then', async () => {
+    serve({
+      '/growth/sources': ok({
+        sources: [
+          { id: 'src1', name: 'Ledger', health: 'fresh', truth_for: ['spend'] },
+          { id: 'src2', name: 'Books', health: 'fresh', truth_for: 'Spend' },
+          { id: 'src3', name: 'Sheet', health: 'fresh', truth_for: 'revenue' },
+        ],
+        conflicts: ['spend'],
+      }),
+    });
+    show('/company/growth?tab=sources&panel=source:src1');
+    const panel = await screen.findByRole('complementary', { name: 'Ledger' });
+    expect(within(panel).getByText('Also claimed by')).toBeTruthy();
+    expect(within(panel).getByText('Books')).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Sheet' }));
+    const sheet = await screen.findByRole('complementary', { name: 'Sheet' });
+    expect(within(sheet).queryByText('Also claimed by')).toBeNull();
   });
 
   it('a source never synced has no last sync', async () => {

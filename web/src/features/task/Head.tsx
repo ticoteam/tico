@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
-import { run } from '@/actions';
+import { run, type Result } from '@/actions';
 import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -14,15 +14,14 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { PageMore } from '@/pagekinds';
-import { earlierStages, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
+import { earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { Face, FlowMark, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
    and next, and "⋯" with the rest. */
 
-const failed = (error: string | undefined, action?: { label: string; run: () => void }) =>
-  toast({ text: reasonOf(error), kind: 'failed', ...(action && { action }) });
+const failed = (r: Result, action?: { label: string; run: () => void }) => toast({ ...failedToast(r), ...(action && { action }) });
 
 /** The task's pipeline's stages, in order. */
 function useStages(t: TaskData) {
@@ -59,7 +58,7 @@ export function StagePick({ t }: { t: TaskData }) {
     if (r.ok) return;
     const refusal = refusalOf(r.error);
     if (refusal.code === 'task_not_met') setHeld({ to, name, refusal });
-    else failed(r.error);
+    else failed(r);
   };
   return (
     <>
@@ -139,7 +138,7 @@ function useGive(t: TaskData, then?: () => void) {
     const r = await run('task.give', { task: t.id, owner, ...(setAnyway && { setAnyway }) }, { via: 'click' });
     if (r.ok) return then?.();
     // A stage rule refused this owner: a person may give it anyway (ui/app/task-api.ts taskReassign).
-    failed(r.error, r.error?.startsWith('task_stage_rule') ? { label: 'Give anyway', run: () => void give(owner, true) } : undefined);
+    failed(r, r.error?.startsWith('task_stage_rule') ? { label: 'Give anyway', run: () => void give(owner, true) } : undefined);
   };
 }
 
@@ -270,7 +269,7 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
   const moveBack = async (to: string) => {
     const r = await run('task.moveBack', { task: t.id, to }, { via: 'click' });
     if (r.ok) order.next();
-    else failed(r.error);
+    else failed(r);
   };
   const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const close = () => setAsking(null);
@@ -302,7 +301,7 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             <MenuItem
               label="Mark done"
               icon="check"
-              onSelect={() => void run('task.done', { task: t.id }, { via: 'click' }).then((r) => (r.ok ? undefined : failed(r.error)))}
+              onSelect={() => void run('task.done', { task: t.id }, { via: 'click' }).then((r) => (r.ok ? undefined : failed(r)))}
             />
           </>
         )}

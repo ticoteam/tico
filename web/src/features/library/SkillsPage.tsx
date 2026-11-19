@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { meQuery, useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -21,7 +21,7 @@ import { Markdown } from '@/kit/Markdown';
 import { MenuItem } from '@/kit/Menu';
 import { Foot, useGo } from './AddTool';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
-import { Face, Find, OwnerButton, press, refusal, when, Who } from './parts';
+import { Face, Find, OwnerButton, press, when, Who } from './parts';
 import {
   accessRoleQuery,
   installTargetsQuery,
@@ -109,9 +109,9 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       title="Skills"
       path="/library/skills"
       className="lib"
+      search={<Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />}
       actions={
         <>
-          <Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q })} />
           <OwnerButton page="skills" phone />
           <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
             New skill
@@ -225,19 +225,21 @@ function SkillLine({ s, use }: { s: SkillRow; use: SkillUse | undefined }) {
 
 const proposer = (p: Proposal) => `${p.proposed_by.type === 'Bot' ? 'bot' : 'human'}:${p.proposed_by.id}`;
 
+/** Who a proposal waits on, for a reader who cannot decide it (a member reads only their own). */
+const WAITS = 'Waits on an admin';
+
 function AskLine({ p, skill, use }: { p: Proposal; skill: SkillRow | undefined; use: SkillUse | undefined }) {
   const from = useActor(proposer(p));
+  const decider = useDecider();
   const what = p.base_version ? 'Change' : 'New';
   return (
     <Row className="lrow skillrow is-ask" title={p.name} href={`/library/skills?proposal=${encodeURIComponent(p.id)}`} target={`proposal:${p.id}`}>
-      <span className="lead" title="Waits on you">
-        <FlowMark />
-      </span>
+      <span className="lead">{decider && <FlowMark />}</span>
       <span className="skill-name">
         <span className="row-title">{p.name}</span>
         <span className="skill-does">{p.description}</span>
       </span>
-      <span className="row-ctx">{from ? `${what} from ${from.name}` : what}</span>
+      <span className="row-ctx">{!decider ? WAITS : from ? `${what} from ${from.name}` : what}</span>
       <Stack on={skill?.on ?? []} total={onCount(skill)} />
       <Uses use={use} has={onCount(skill) > 0} />
     </Row>
@@ -380,15 +382,15 @@ function SkillPage({ name }: { name: string }) {
 /** A change waiting on this skill, over its text (tools.css `.sp-wait`). */
 function AskBar({ p }: { p: Proposal }) {
   const from = useActor(proposer(p));
+  // The mark says it waits on the reader: only for one who can approve it.
+  const decider = useDecider();
   return (
     <Link className="sp-wait" href={`/library/skills?proposal=${encodeURIComponent(p.id)}`} data-target={`proposal:${p.id}`}>
-      <FlowMark />
+      {decider && <FlowMark />}
       <b>{from ? `Change from ${from.name}` : 'A change'}</b>
       <span>{p.note ?? ''}</span>
       <span className="grow" />
-      <em>
-        <Ago at={p.created_at} />
-      </em>
+      <em>{decider ? <Ago at={p.created_at} /> : WAITS}</em>
     </Link>
   );
 }

@@ -62,7 +62,7 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>): 
   return sent;
 }
 const nothing = (): Reply => ({ status: 404, body: { detail: 'not_found' } });
-const refused = (status: number, code: string): Reply => ({ status, body: { error: { code, detail: code } } });
+const refused = (status: number, code: string, detail?: string): Reply => ({ status, body: { error: { code, ...(detail && { detail }) } } });
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({ component: Outlet });

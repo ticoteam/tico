@@ -98,7 +98,8 @@ function allowed(a: AnyAction, ctx: Ctx, input: unknown): boolean {
   }
 }
 
-function refused(e: unknown): Result {
+/** A thrown error as a refused result: its code, and the server's reason when it gave a safe one. */
+export function refused(e: unknown): Result {
   const why = whyOf(e);
   return why ? { ok: false, error: problem(e), why } : { ok: false, error: problem(e) };
 }
@@ -111,8 +112,13 @@ const UNSAFE = /^\s*[[{]|"\s*:|\n\s*at \S|Traceback \(|https?:|www\.|\/\/|\/api\
     when it reads like data rather than words. A thrown error that is not the server's says nothing here. */
 export function whyOf(e: unknown): string | undefined {
   if (!(e instanceof ApiError) || e.status < 400 || e.code.startsWith('http_')) return undefined;
-  if (UNSAFE.test(e.message)) return undefined;
-  const text = e.message.replace(/\s+/g, ' ').trim();
+  return sayable(e.message);
+}
+
+/** Words fit for a toast's second part: the first sentence, cut short; undefined when empty or when it reads like data. */
+export function sayable(words: string): string | undefined {
+  if (UNSAFE.test(words)) return undefined;
+  const text = words.replace(/\s+/g, ' ').trim();
   if (!text) return undefined;
   const first = /^.+?[.!?](?=\s|$)/.exec(text)?.[0] ?? text;
   const space = first.lastIndexOf(' ', MAX_WHY - 1);

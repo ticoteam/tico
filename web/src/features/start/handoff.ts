@@ -1,3 +1,4 @@
+import { reasonIn, type Result } from '@/actions';
 import type { GitHubAppSetup } from '@/api/schema';
 
 /* The hand-off to GitHub: a form posted to GitHub's "new app" page with the manifest, as the server's own hand-off page
@@ -39,11 +40,11 @@ function rememberSetup(state: string): void {
 
 export const refused = (code: string, reason: string) => Object.assign(new Error(reason), { code: `${code}: ${reason}` });
 
-/** What a refused press says: the server's reason ("code: reason"), else a short line. */
-export function reasonOf(error: string | undefined): string {
-  if (error === 'not_allowed') return 'Only the owner can do that';
-  const i = error?.indexOf(': ') ?? -1;
-  return (error && i >= 0 && error.slice(i + 2).trim()) || 'That did not go through. Try again.';
+/** What a refused press says: the server's reason, else a short line. */
+export function reasonOf(r: Pick<Result, 'error' | 'why'>): string {
+  const why = reasonIn(r);
+  if (r.error === 'not_allowed' && !why) return 'Only the owner can do that';
+  return why ?? 'That did not go through. Try again.';
 }
 
 /** The lost-key refusal: the owner is asked before anything is replaced. */

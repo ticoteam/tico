@@ -15,7 +15,7 @@ import type { TaskSearch } from './exports';
 import { FileView } from './FileView';
 import { FlowCover } from './FlowCover';
 import { FlowSteps, FlowTop, MoreMenu, WhereLine } from './Head';
-import { defaultTab, DETAILS, reasonOf, tabAddress, tabsOf, type TaskTab } from './model';
+import { defaultTab, DETAILS, failedToast, tabAddress, tabsOf, type TaskTab } from './model';
 import { Face, FlowMark } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
 import { PageView, useVersions, VersionBar } from './Versions';
@@ -108,7 +108,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const details = on === DETAILS;
   const rename = async (title: string) => {
     const r = await run('task.rename', { task: t.id, title }, { via: 'click' });
-    if (!r.ok) toast({ text: reasonOf(r.error), kind: 'failed' });
+    if (!r.ok) toast(failedToast(r));
   };
 
   const pageTabs: PageTab[] = tabs.map((x) => {

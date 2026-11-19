@@ -1,6 +1,6 @@
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
 import { type MouseEvent, type ReactNode } from 'react';
-import { registry } from '@/actions';
+import { refusal, registry } from '@/actions';
 import { runIn } from '@/actions/run';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -18,7 +18,7 @@ export function usePress() {
   const router = useRouter();
   return async (id: string, input: unknown): Promise<boolean> => {
     const r = await runIn(registry, id, input, 'click', router);
-    if (!r.ok) toast(r.error === 'needs_approval' ? { text: 'Sent for approval' } : { text: "Couldn't save", kind: 'failed' });
+    if (!r.ok) toast(r.error === 'needs_approval' ? { text: 'Sent for approval' } : refusal(r, "Couldn't save"));
     return r.ok;
   };
 }

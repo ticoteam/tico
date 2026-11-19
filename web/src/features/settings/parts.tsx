@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import { Icon, type IconName } from '@/kit/Icon';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
@@ -10,7 +10,7 @@ import { toast } from '@/kit/Toast';
 /** Run an action from a click; a refusal says so in a toast (the write has already been taken back). */
 export async function act(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: "Couldn't save", kind: 'failed' });
+  if (!r.ok) toast(refusal(r, "Couldn't save"));
   return r.ok;
 }
 

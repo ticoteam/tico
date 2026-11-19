@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import type { ApiTool, LetterOut, ToolIndexRow, WebsiteTool } from '@/api/schema';
 import { meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
@@ -32,7 +32,7 @@ import {
   SettingDialog,
   SitesDialog,
 } from './ToolDialogs';
-import { Face, Held, KindTile, More, OwnerButton, press, refusal, when } from './parts';
+import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
 import {
   apiToolQuery,
   inboxesQuery,

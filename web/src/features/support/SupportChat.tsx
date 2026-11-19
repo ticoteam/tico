@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { run } from '@/actions/run';
+import { reasonIn, run } from '@/actions';
 import { Composer, Message, type ChatMessage } from '@/conversation';
 import { configQuery, meQuery } from '@/data';
 import { Button } from '@/kit/Button';
@@ -121,7 +121,7 @@ export function SupportChat() {
       : ticket === 'new'
         ? await press('support.newTicket', { message, key })
         : await press('support.send', { message, key, ...(ticket && { ticket }) });
-    if (!r.ok) setError(`Not sent. ${r.error?.replace(/^[a-z_]+: /, '') || 'Try again.'}`);
+    if (!r.ok) setError(`Not sent. ${reasonIn(r) ?? 'Try again.'}`);
   };
 
   const head = (
@@ -275,7 +275,7 @@ export function SupportChat() {
               onClick={async () => {
                 setAsking(false);
                 const r = await press('support.deleteHistory');
-                if (!r.ok) setError(r.error?.replace(/^[a-z_]+: /, '') || 'Could not delete. Try again.');
+                if (!r.ok) setError(reasonIn(r) ?? 'Could not delete. Try again.');
               }}
             >
               Delete

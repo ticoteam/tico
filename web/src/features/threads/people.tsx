@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { directoryQuery, meQuery, useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
 import { toast } from '@/kit/Toast';
@@ -34,6 +34,6 @@ export function Face({ actor, size = 22, name }: { actor: string; size?: AvatarS
 /** Press an action as the person's click; say so when the server refuses it. */
 export async function press(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: "Couldn't save", kind: 'failed' });
+  if (!r.ok) toast(refusal(r, "Couldn't save"));
   return r.ok;
 }

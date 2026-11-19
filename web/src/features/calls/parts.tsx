@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore, type CSSProperties, type MouseEvent } from 'react';
 import type { CalendarOccurrence, Call } from '@/api/schema';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { directoryQuery, meQuery, useActor } from '@/data';
 import { isCallWindow, useCallWindow } from '@/desktop';
 import { Avatar, Faces, type AvatarSize } from '@/kit/Avatar';
@@ -33,7 +33,7 @@ export function useInCall(id: string): boolean {
 /** Press an action as the person's click; say so when the server refuses it. */
 export async function press(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: "Couldn't save", name: r.why, kind: 'failed' });
+  if (!r.ok) toast(refusal(r, "Couldn't save"));
   return r.ok;
 }
 

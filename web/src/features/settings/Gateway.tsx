@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -51,7 +51,7 @@ function GatewayDialog({ v, onClose }: { v: GatewayView; onClose: () => void }) 
     setBusy(false);
     if (r.ok) return onClose();
     // Cancel on the held move saved nothing, and says nothing.
-    if (!r.error?.includes('Nothing was saved')) toast({ text: "Couldn't save", kind: 'failed' });
+    if (!r.error?.includes('Nothing was saved')) toast(refusal(r, "Couldn't save"));
   };
   return (
     <>

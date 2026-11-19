@@ -321,7 +321,7 @@ function NewFactory({ onClose }: { onClose: () => void }) {
     const r = await make.run({ name: name.trim(), ...(goal.trim() ? { goal: goal.trim() } : {}) });
     if (r.ok) onClose();
     else if (r.error === 'factory_name') setTaken(name.trim());
-    else toast({ text: refusal(r.error), kind: 'failed' });
+    else toast(refusal(r));
   };
   const bad = tried && !name.trim() ? 'Name it' : taken && taken === name.trim() ? 'Name taken' : undefined;
   return (

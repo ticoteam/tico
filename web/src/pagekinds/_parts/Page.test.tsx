@@ -9,7 +9,10 @@ import { showPage } from './test-page';
 /* One filled button to a page: an empty page's action carries it in the empty state and the head's draws plain; a page
    with rows carries it in the head. */
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete document.documentElement.dataset.layout;
+});
 
 const add = (
   <Button variant="primary" onClick={() => {}}>
@@ -59,5 +62,28 @@ describe('the one filled button', () => {
     );
     expect(fills(main)).toHaveLength(1);
     expect(fills(main)[0]!.closest('.empty')).not.toBeNull();
+  });
+});
+
+/* A head's search box: first of the controls on a wide screen; on a phone (whose head shows only the phone's controls)
+   on its own line under the head. */
+describe('the search slot', () => {
+  const find = <input className="search" aria-label="Search watches" />;
+  const page = () => <List title="Listening" path="/listening" search={find} actions={add} state="ready" sections={<p>A watch</p>} />;
+
+  it('sits first in the head on a wide screen', async () => {
+    const main = await showPage(page());
+    const box = within(main).getByRole('textbox', { name: 'Search watches' });
+    expect(box.closest('.pk-acts')?.firstElementChild).toBe(box);
+    expect(main.querySelector('.pk-find')).toBeNull();
+  });
+
+  it('moves under the head on a phone', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    const main = await showPage(page());
+    const box = within(main).getByRole('textbox', { name: 'Search watches' });
+    expect(box.closest('.pk-find')).not.toBeNull();
+    expect(box.closest('header')).toBeNull();
+    expect(within(main.querySelector('header')!).getByRole('button', { name: 'Add watch' })).toBeTruthy();
   });
 });

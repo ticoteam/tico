@@ -1,5 +1,6 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
+import { refusalFor } from '@/actions';
 import { Composer } from '@/conversation';
 import { useActors, type Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -113,10 +114,11 @@ export function NewMessageFoot({ draft }: { draft: NewDraft }) {
       return;
     }
     // Files are no action input: the DM is made, then the message goes up the conversation's own way.
-    const t = await startWithFiles(members, text, files, me ?? '', title).catch(() => null);
+    let refused: unknown;
+    const t = await startWithFiles(members, text, files, me ?? '', title).catch((e: unknown) => ((refused = e), null));
     if (t?.id) void navigate({ to: '/threads/$thread', params: { thread: t.id } });
     else {
-      toast({ text: "Couldn't send", kind: 'failed' });
+      toast(refusalFor(refused, "Couldn't send"));
       setFill({ text });
     }
   };

@@ -145,12 +145,8 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}
-      actions={
-        <>
-          {section === 'agents' && !searching && <AddAgentButton />}
-          <Search label="Search settings" placeholder="Search settings" value={q} onValueChange={setQ} />
-        </>
-      }
+      actions={section === 'agents' && !searching && <AddAgentButton />}
+      search={<Search label="Search settings" placeholder="Search settings" value={q} onValueChange={setQ} />}
       state={state}
       onRetry={() => void main.refetch()}
       body={

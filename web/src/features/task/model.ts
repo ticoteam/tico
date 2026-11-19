@@ -1,3 +1,4 @@
+import { refusal, type RefusalToast, type Result } from '@/actions';
 import type { TaskDocument, TaskRequirement } from '@/api/schema';
 import type { TaskData } from './queries';
 
@@ -71,6 +72,9 @@ export function reasonOf(error: string | undefined): string {
   const i = head.indexOf(': ');
   return (i >= 0 && head.slice(i + 2).trim()) || 'Not saved';
 }
+
+/** A refused press's toast: "Not saved", then why. */
+export const failedToast = (r: Pick<Result, 'error' | 'why'>): RefusalToast => refusal(r, 'Not saved', 'You can’t do that on this task');
 
 export interface Refusal {
   code: string;

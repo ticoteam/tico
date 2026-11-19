@@ -1,14 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, type ReactNode } from 'react';
-import { run, type Result } from '@/actions';
+import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
-import { toast, type ToastInput } from '@/kit/Toast';
+import { useCards } from '@/kit/Popover';
+import { toast } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
 
@@ -65,8 +66,10 @@ export function ChatWith({ actor }: { actor: string | null }) {
   return <KitOwnerButton name={who?.name ?? 'the owner'} kind={kind} hue={who?.hue} live={who?.working} href={href} />;
 }
 
-/** The head's search: a button until pressed, then the field. Typing narrows the page after a short pause. */
+/** The head's search (the page kind's `search` slot): a button until pressed, then the field; on a phone, where it has its
+    own line, the field. Typing narrows the page after a short pause. */
 export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
+  const cards = useCards();
   const [open, setOpen] = useState(!!value);
   const [words, setWords] = useState(value ?? '');
   // Cleared or set from elsewhere (Tico, Back): the field follows the address.
@@ -80,13 +83,8 @@ export function Find({ label, value, onFind }: { label: string; value: string | 
     const t = setTimeout(() => onFind(words.trim() || undefined), 250);
     return () => clearTimeout(t);
   }, [words, value, onFind]);
-  if (!open) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
-  return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus />;
-}
-
-/** A refusal's toast: what did not happen, then the server's reason when it gave one. */
-export function refusal(r: Result, failed: string, denied = 'You cannot do that here'): ToastInput {
-  return { text: r.error === 'not_allowed' && !r.why ? denied : failed, name: r.why, kind: 'failed' };
+  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
+  return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus={!cards} />;
 }
 
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */

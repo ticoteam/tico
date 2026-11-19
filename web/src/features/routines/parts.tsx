@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -15,7 +15,7 @@ import { toast } from '@/kit/Toast';
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule
    row and its marks, a face for any owner id, and the press that says why a refusal happened. */
 
-/** Run an action from a click; a refusal toasts its reason ("code: reason" reads as the reason). */
+/** Run an action from a click; a refusal toasts "Couldn't save" and its reason. */
 export async function press(id: string, input: unknown): Promise<boolean> {
   return !!(await pressOut(id, input));
 }
@@ -24,9 +24,7 @@ export async function press(id: string, input: unknown): Promise<boolean> {
 export async function pressOut<T>(id: string, input: unknown): Promise<{ out: T | undefined } | null> {
   const r = await run(id, input, { via: 'click' });
   if (!r.ok) {
-    // the server's reason, else one this feature gave ("code: reason"); never a thrown error's own words ("failed: …")
-    const said = r.error?.includes(': ') && !r.error.startsWith('failed:') ? r.error.slice(r.error.indexOf(': ') + 2).trim() : '';
-    toast({ text: r.why || said || "Couldn't save", kind: 'failed' });
+    toast(refusal(r, "Couldn't save"));
     return null;
   }
   return { out: r.out as T | undefined };

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type HTMLAttributes } from 'react';
-import { run } from '@/actions/run';
+import { refusal, run } from '@/actions';
 import { directoryQuery, meQuery, type Actor } from '@/data';
 import { ModelPicker, agentsQuery, computersQuery, type AgentRow } from '@/features/team/exports';
 import { Avatar } from '@/kit/Avatar';
@@ -98,7 +98,7 @@ function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: 
       { via: 'click' },
     );
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't change the model", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't change the model"));
     toast({ text: r.did ?? 'Changed', kind: 'done' });
     onDone?.();
     onClose();
@@ -312,7 +312,7 @@ function StoppedDialog({ bot, jobs, onClose }: { bot: string; jobs: StoppedRun[]
       { agent: bot, job: j.id, run: j.run_id, decision, ...(note.trim() ? { detail: note.trim() } : {}) },
       { via: 'click' },
     );
-    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : { text: "Couldn't save", kind: 'failed' });
+    toast(r.ok ? { text: r.did ?? 'Saved', kind: 'done' } : refusal(r, "Couldn't save"));
     if (r.ok && jobs.length === 1) onClose();
   };
   return (
@@ -474,7 +474,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
     setBusy(true);
     const r = await run('settings.taskModel', { agent: slug, model, ...(model && effort ? { effort } : {}) }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return toast({ text: "Couldn't change it", kind: 'failed' });
+    if (!r.ok) return toast(refusal(r, "Couldn't change it"));
     toast({ text: r.did ?? 'Changed', kind: 'done' });
     onClose();
   };
@@ -700,7 +700,7 @@ export function AgentList({ open }: { open?: string }) {
 
   const moveTo = async (agents: string[], computer: string) => {
     const r = await run('settings.moveAgents', { agents, computer }, { via: 'click' });
-    toast(r.ok ? { text: r.did ?? 'Moved', kind: 'done' } : { text: "Couldn't move them", kind: 'failed' });
+    toast(r.ok ? { text: r.did ?? 'Moved', kind: 'done' } : refusal(r, "Couldn't move them"));
     if (r.ok) setPicked(new Set());
   };
   const move = (m: Machine) => moveTo(checked, m.id);

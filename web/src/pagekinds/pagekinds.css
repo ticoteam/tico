@@ -234,6 +234,9 @@ html[data-layout="cards"] .pk .read-body{padding-right:var(--s-4);padding-left:v
 html[data-layout="cards"] .pk-crumb{display:none}
 html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
 html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}
+/* the head's search, on its own line under the head (Page draws it here only on a phone); edges as the body's rows */
+html[data-layout="cards"] .pk-find{flex:none;padding:var(--s-1h) var(--s-2) 0}
+html[data-layout="cards"] .pk-find .search{width:100%}
 html[data-layout="cards"] .pk .page-tabs{margin-top:0;padding:0 0 0 var(--s-4)}
 html[data-layout="cards"] .pk .page-tabs .docs{margin-right:0;padding-right:calc(var(--s-6) + var(--s-1));
   /* stylelint-disable-next-line color-no-hex -- mask */

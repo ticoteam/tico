@@ -1,4 +1,4 @@
-import { defineAction, s } from '@/actions';
+import { defineAction, refusalFor, s } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
@@ -50,15 +50,15 @@ const team = s.string({ min: 1, max: 100, what: "a team's id" });
 const page = (who: string) => `/team/${encodeURIComponent(who)}`;
 const onPage = (who: string) => ({ kind: 'page', id: page(who) });
 
-/** The server's words for a refusal, else a plain line. */
-const reason = (e: unknown, fallback: string) => (e instanceof ApiError && e.status !== 0 && e.message ? e.message : fallback);
+/** A refusal's toast: the short words, then the server's reason when it gave a safe one. */
+const reason = (e: unknown, fallback: string) => refusalFor(e, fallback, fallback);
 
 /** Run a change; on refusal say so (the change on screen is already taken back) and pass the refusal on. */
 async function said<T>(fallback: string, send: () => Promise<T>): Promise<T> {
   try {
     return await send();
   } catch (e) {
-    toast({ text: reason(e, fallback), kind: 'failed' });
+    toast(reason(e, fallback));
     throw e;
   }
 }
@@ -222,7 +222,7 @@ export const profile = defineAction({
       return await setProfile(slug, profile, dropRules);
     } catch (e) {
       // Leaving Custom: the page asks, then sends it again with dropRules.
-      if (!(e instanceof ApiError && e.code === 'conflict')) toast({ text: reason(e, "Couldn't change it"), kind: 'failed' });
+      if (!(e instanceof ApiError && e.code === 'conflict')) toast(reason(e, "Couldn't change it"));
       throw e;
     }
   },

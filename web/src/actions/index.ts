@@ -6,6 +6,8 @@ export type { Action, AnyAction, Ctx, Via, Result, Target } from './types';
 export { registry, actionsCatalog } from './registry';
 export type { CatalogEntry } from './registry';
 export { run, useAction, ctxFor } from './run';
+export { refusal, refusalFor, reasonIn } from './refusal';
+export type { RefusalToast } from './refusal';
 export { installKeys, shortcuts } from './keys';
 export type { Shortcut } from './keys';
 export { startScreen } from './screen';

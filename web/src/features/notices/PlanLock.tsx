@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { run, useAction } from '@/actions';
+import { refusal, run, useAction } from '@/actions';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { toast } from '@/kit/Toast';
@@ -30,7 +30,7 @@ function Locked({ reason }: { reason: string | null }) {
   const check = useAction('notices.checkPlan');
   const again = async () => {
     const r = await check.run({});
-    if (!r.ok) toast({ text: r.error?.startsWith('still_locked') ? 'Your plan still needs attention' : "Couldn't check your plan", kind: 'failed' });
+    if (!r.ok) toast(r.error?.startsWith('still_locked') ? { text: 'Your plan still needs attention', kind: 'failed' } : refusal(r, "Couldn't check your plan"));
   };
   return (
     <Cover label="Your plan needs attention">

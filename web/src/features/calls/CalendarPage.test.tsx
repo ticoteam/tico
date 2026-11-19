@@ -86,7 +86,7 @@ beforeEach(() => {
     fetches.push(String(url));
     if (init?.method === 'DELETE') {
       await new Promise<void>((r) => (refuse = r));
-      return new Response(JSON.stringify({ detail: 'no' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'Only the organizer can remove it' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     }
     return new Response(JSON.stringify(events([])), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
@@ -221,7 +221,8 @@ describe('Calendar', () => {
     await waitFor(() => expect(screen.queryAllByTitle(/^Pricing review,/)).toHaveLength(0));
     refuse();
     await waitFor(() => expect(block('Pricing review')).toBeTruthy());
-    expect(await screen.findByText("Couldn't save")).toBeTruthy();
+    const reason = await screen.findByText('Only the organizer can remove it');
+    expect(reason.parentElement?.textContent).toBe("Couldn't save: Only the organizer can remove it");
   });
 });
 

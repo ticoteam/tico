@@ -277,7 +277,7 @@ export function ShareDialog({ line, onOpenChange }: { line: string; onOpenChange
     ask.setBusy(true);
     const r = await run(id, input);
     ask.setBusy(false);
-    if (!r.ok) return ask.setError(why(r.error));
+    if (!r.ok) return ask.setError(why(r));
     onOpenChange(false);
   };
   const from = !a ? '' : a.source === 'rule' ? (a.rule_name ? `Rule: ${a.rule_name}` : 'Rule') : a.source === 'tags' ? 'Tags' : '';

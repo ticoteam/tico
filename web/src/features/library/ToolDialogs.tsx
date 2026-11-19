@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import type { ApiTool, ApiToolSettings } from '@/api/schema';
 import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
@@ -13,7 +13,7 @@ import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Foot, SCHEMES, trimmed, useGo, type Scheme } from './AddTool';
-import { More, press, refusal } from './parts';
+import { More, press } from './parts';
 import { readMessage, type Inbox, type PasteItem } from './queries';
 
 /* The dialogs an open tool raises (the old app's tools-api, tools-website and inboxes dialogs). A secret shown here

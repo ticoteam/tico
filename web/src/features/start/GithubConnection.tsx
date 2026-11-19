@@ -53,7 +53,7 @@ function usePress(id: string) {
   const press = async (input: unknown = {}) => {
     setError(null);
     const r = await action.run(input);
-    if (!r.ok) setError(reasonOf(r.error));
+    if (!r.ok) setError(reasonOf(r));
     return r.ok;
   };
   return { press, pending: action.pending, error };

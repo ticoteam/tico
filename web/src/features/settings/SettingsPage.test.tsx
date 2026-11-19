@@ -118,7 +118,9 @@ describe('Settings', () => {
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
     await act(async () => refuse());
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Agents send reports to Tico support' }).getAttribute('aria-checked')).toBe('true'));
-    expect(await screen.findByText("Couldn't save")).toBeTruthy();
+    // The short words first, the server's reason second.
+    const reason = await screen.findByText('Owners only');
+    expect(reason.parentElement?.textContent).toBe("Couldn't save: Owners only");
   });
 
   it('says when a section is for owners and admins only', async () => {

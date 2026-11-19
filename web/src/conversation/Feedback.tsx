@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
-import { useAction } from '@/actions';
+import { refusal, useAction, type Result } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
@@ -18,7 +18,7 @@ export function canRate(m: Pick<ChatMessage, 'sender_id' | 'pending' | 'deleted'
   return a.startsWith('human:');
 }
 
-const failed = () => toast({ text: "Couldn't save", kind: 'failed' });
+const failed = (r: Result) => toast(refusal(r, "Couldn't save"));
 
 export interface RateControls {
   rating: Rating | null;
@@ -41,13 +41,16 @@ function useRate(chat: string, m: ChatMessage, feedback: Feedback | null): RateC
 
   const give = async (r: Rating, extra: { reason?: string; tellAgent?: boolean } = {}) => {
     const out = await rate.run({ chat, message: m.id, rating: r, ...extra });
-    if (!out.ok) failed();
+    if (!out.ok) failed(out);
     return out.ok;
   };
+  const take = async (id: string) => {
+    const r = await unrate.run({ chat, feedback: id, message: m.id });
+    if (!r.ok) failed(r);
+  };
   const good = async () => {
-    if (rating === 'up' && feedback) {
-      if (!(await unrate.run({ chat, feedback: feedback.id, message: m.id })).ok) failed();
-    } else await give('up');
+    if (rating === 'up' && feedback) await take(feedback.id);
+    else await give('up');
   };
   const notGood = async () => {
     if (rating === 'down') return setSheet('view');
@@ -75,7 +78,7 @@ function useRate(chat: string, m: ChatMessage, feedback: Feedback | null): RateC
           onEdit={() => setSheet('reasons')}
           onRemove={async () => {
             setSheet(null);
-            if (!(await unrate.run({ chat, feedback: feedback.id, message: m.id })).ok) failed();
+            await take(feedback.id);
           }}
           onClose={() => setSheet(null)}
         />
@@ -182,7 +185,7 @@ function MakeRule({ chat, feedback, onClose }: { chat: string; feedback: Feedbac
   const words = text ?? draft.data?.text ?? '';
   const save = async () => {
     const r = await make.run({ chat, feedback: feedback.id, text: words, allAgents: all });
-    if (!r.ok) return failed();
+    if (!r.ok) return failed(r);
     onClose();
     toast({ text: r.did ?? 'Rule added' });
   };

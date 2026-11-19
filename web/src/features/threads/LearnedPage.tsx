@@ -49,7 +49,7 @@ export function LearnedPage() {
       title="Learned"
       path="/learned"
       lead={<Dot still size={28} />}
-      actions={<Search label="Search" placeholder="Search" value={words} onValueChange={setWords} />}
+      search={<Search label="Search" placeholder="Search" value={words} onValueChange={setWords} />}
       state={state}
       empty={{ title: 'Nothing learned yet' }}
       onRetry={() => void learned.refetch()}

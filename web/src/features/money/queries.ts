@@ -717,6 +717,15 @@ export const channelMonthsQuery = (channel: string) =>
     ...quiet,
   });
 
+/** A channel's own read with its last twelve months (GET /api/v2/growth/read at the channel's scope, `series`): the months
+    its pushed rows hold, which /cohorts does not list (it lists typed and computed months only). */
+export const channelSeriesQuery = (channel: string) =>
+  queryOptions({
+    queryKey: ['growth', 'read', `channel:${channel}`, 'last', 'series'],
+    queryFn: ({ signal }) => api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'series' })}`, { signal }),
+    ...quiet,
+  });
+
 export interface GrowthKeptFigure {
   value: number | null;
   status: string;

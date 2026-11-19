@@ -179,11 +179,12 @@ interface Sent {
   closed?: string;
 }
 
-/* What the person reads under the box: the server's own words for a refusal, else that it did not get there. */
-function said(e: unknown): Error {
-  if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.message) return new Error(e.message);
-  if (e instanceof ApiError) return new Error('Could not reach Tico support. Try again in a moment.');
-  return e instanceof Error ? e : new Error(String(e));
+/* What the person reads under the box: a refusal goes on as the server's own error (the action layer reads its words,
+   filtered), a failed server as "could not reach". */
+function said(e: unknown): unknown {
+  if (e instanceof ApiError && e.status >= 400 && e.status < 500) return e;
+  if (e instanceof ApiError) return Object.assign(new Error('Could not reach Tico support'), { code: 'unreachable: Could not reach Tico support' });
+  return e;
 }
 
 /** A message to Tico support: shown at once, sent after; refused, it stays in the list as not sent, with Retry. */
