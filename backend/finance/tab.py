@@ -457,10 +457,11 @@ def _stream(
     fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: int
 ) -> tuple[list[tuple[tuple[str, str], Row]], tuple[str, str] | None, bool]:
     """Up to `most` visible rows after `mark` (newest first), where the scan stopped, and whether the source ran out.
-    It looks through at most SCAN rows, so a viewer who sees few of many rows still gets an answer quickly."""
+    Past SCAN rows it stops once it has any row to hand back, so a viewer who sees few of many rows still gets an
+    answer quickly; it never hands back an empty page short of the end."""
     out: list[tuple[tuple[str, str], Row]] = []
     scanned, at = 0, mark
-    while len(out) < most and scanned < SCAN:
+    while len(out) < most and (scanned < SCAN or not out):
         batch = fetch(at, most * 2)
         if not batch:
             return out, at, True
@@ -547,16 +548,19 @@ def transactions(
         return str(r["money_account_id"]) in seen_money or str(r["card_id"] or "") in seen_cards
 
     def fetch_feed(mark: tuple[str, str] | None, n: int) -> list[Any]:
-        accounts = [money_account_id] if money_account_id else sorted(money)
+        # What the viewer may see is read in SQL (their money accounts, or the cards they follow), and so is a line
+        # filter (an entry with a line on it), so a page is not spent on rows that show_feed would drop.
         return SK.feed_page(
             c,
             before=mark,
             most=n,
-            money_account_ids=accounts,
+            money_account_ids=[money_account_id] if money_account_id else sorted(seen_money),
+            card_ids=None if money_account_id else sorted(seen_cards),
             status=status or "",
             start=start_day,
             end=end_day,
             q=text,
+            line_account_ids=sorted(wanted) if wanted else None,
         )
 
     def show_feed(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
