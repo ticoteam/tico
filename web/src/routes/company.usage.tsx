@@ -1,6 +1,23 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { loadUsage, UsagePage, type UsageSearch } from '@/features/settings/exports';
 
+const RANGES = ['today', '7d', '30d', 'month'] as const;
+type Range = (typeof RANGES)[number];
+
+/* `/company/usage`: spend (the default) or `?view=limits`; `?range=`, `?by=model`, and `?open=<agent>` for the agent
+   opened in either view. */
 export const Route = createFileRoute('/company/usage')({
-  component: () => <Placeholder title="Usage" />,
+  validateSearch: (raw: Record<string, unknown>): UsageSearch => ({
+    ...(raw.view === 'limits' ? { view: 'limits' as const } : {}),
+    ...(RANGES.includes(raw.range as Range) ? { range: raw.range as Range } : {}),
+    ...(raw.by === 'model' ? { by: 'model' as const } : {}),
+    ...(typeof raw.open === 'string' && raw.open ? { open: raw.open } : {}),
+  }),
+  loaderDeps: ({ search }) => ({ view: search.view, range: search.range }),
+  loader: ({ deps, context: { queryClient } }) => loadUsage(queryClient, deps),
+  component: UsageRoute,
 });
+
+function UsageRoute() {
+  return <UsagePage search={Route.useSearch()} />;
+}
