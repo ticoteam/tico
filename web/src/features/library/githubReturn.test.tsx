@@ -34,7 +34,12 @@ function serve(rows: unknown[]) {
   const reads: string[] = [];
   vi.stubGlobal('fetch', async (url: string) => {
     reads.push(String(url));
-    const body = String(url).includes('/tool-index') ? { rows } : {};
+    const github = (rows as { kind?: string; status?: { tone?: string } }[]).find((r) => r.kind === 'github');
+    const body = String(url).includes('/tool-index')
+      ? { rows }
+      : String(url).endsWith('/github/app') && github
+        ? { connected: true, org: 'sample-org', installed: github.status?.tone === 'ok', administration: true }
+        : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   return reads;
@@ -83,7 +88,8 @@ describe("GitHub's return", () => {
     serve([githubRow('wait')]);
     const router = show('/library/tools?tool=github&github=connected');
     expect(await screen.findByText(GITHUB_WHY.pending as string)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy();
+    // the owner's GitHub app section offers the install
+    expect(await screen.findByRole('button', { name: 'Install' })).toBeTruthy();
     expect(screen.queryByText(/^Connected/)).toBeNull();
     await waitFor(() => expect(query(router)).toEqual({ tool: 'github' }));
   });
