@@ -18,6 +18,11 @@ from clients import skills as bundles
 from backend.tests.helpers.skills import NEWER, SKILL, approve, bundle, decide, proposal, publish, screen
 
 
+def directory(api, token="ana-test"):
+    """The list's rows from the directory (the skills Tico ships are listed beside them)."""
+    return [s for s in get(api, "skills", token)["skills"] if s["source"] == "directory"]
+
+
 def skill_row(api, name="triage"):
     with api.app.state.store.read() as c:
         return c.execute("SELECT * FROM skills WHERE name=?", (name,)).fetchone()
@@ -183,7 +188,7 @@ def test_approval_waits_for_the_exact_screened_version_and_its_base(api):
     first = approve(api, pid).json()
     assert first["version"]["number"] == 1 and first["proposal"]["status"] == "approved"
     assert [v["number"] for v in versions(api)] == [1]
-    assert get(api, "skills")["skills"][0]["latest"]["number"] == 1
+    assert directory(api)[0]["latest"]["number"] == 1
 
     # Ana proposes an update based on v1; Ben's own update lands first, so v1 is no longer the latest.
     update = proposal(api, bundle(NEWER), token="ana-test", base_version=1)
@@ -240,7 +245,7 @@ def test_events_name_the_skill_and_never_hold_its_text(api):
 def test_installs_are_explicit_pinned_or_latest_and_show_what_is_staged(api):
     publish(api)
     publish(api, bundle(NEWER), name="triage")
-    assert get(api, "skills")["skills"][0]["latest"]["number"] == 2
+    assert directory(api)[0]["latest"]["number"] == 2
     install = {"target_type": "Bot", "target_id": "ops", "version_policy": "pinned", "pinned_version": 1}
     made = api.post("/api/v2/skills/triage/installs", json=install, headers=headers("ana-test")).json()
     assert made["version_policy"] == "pinned" and made["desired"]["number"] == 1 and made["staged"] is None
@@ -318,11 +323,11 @@ def test_the_directory_names_who_a_skill_is_on_only_where_the_caller_may_see_and
         )
         assert r.status_code == 200, r.text
 
-    admin = get(api, "skills", "ben-test")["skills"][0]
+    admin = directory(api, "ben-test")[0]
     assert admin["installs_count"] == 4
     assert len(admin["on"]) == 3 and [t["type"] for t in admin["on"]] == ["Bot", "Bot", "Human"]  # bots first
 
-    member = get(api, "skills", "cara-test")["skills"][0]
+    member = directory(api, "cara-test")[0]
     assert {(t["type"], t["id"]) for t in member["on"]} == {("Bot", finance), ("Human", "cara")}, (
         "a bot she can't see and another person's install stay hidden"
     )

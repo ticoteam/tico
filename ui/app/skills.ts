@@ -1,11 +1,14 @@
 /* ui/app/skills.ts — Library › Skills (#/library/skills): one page, no tabs. On top, the proposals waiting for an OK
-   (pending only, hidden when there are none: a decided proposal is history, kept as the skill's versions); then the
-   company's skills, each with who it is on, its version and when it was last used; then an admin's Suggestions and Not
-   in directory. A skill's own page is where it is installed, removed, and its versions and files are read. Backend:
-   backend/skills.py (directory, versions, proposals, installs), backend/skill_usage.py (usage, install targets) and
-   backend/skill_suggestions.py (admins' Remove / Ask to submit suggestions); docs/skills.md.
+   (pending only, hidden when there are none: a decided proposal is history, kept as the skill's versions); then every
+   skill, the directory's and the ones Tico ships with its roles (backend/skill_catalog.py; Tico in the Version column),
+   each with who it is on, its version and when it was last used; then an admin's Suggestions and Not in directory. The
+   header's search and its one filter, the job function (`metadata.function` in SKILL.md), narrow the list. A skill's own
+   page is where it is installed, removed, and its versions and files are read; a skill Tico ships shows its files, its
+   roles and the bots made from them. Backend: backend/skills.py (directory, versions, proposals, installs),
+   backend/skill_usage.py (usage, install targets) and backend/skill_suggestions.py (admins' Remove / Ask to submit
+   suggestions); docs/skills.md.
    Addresses:
-     #/library/skills                              the list (an old ?tab= shows it too)
+     #/library/skills?function=legal&q=contract    the list, one function and the search (an old ?tab= shows it too)
      #/library/skills/<name>                       one skill: versions, files, Install, Remove, usage
      #/library/skills/proposals/<id>               one proposal: screening, diff, Approve / Decline
    The server decides who sees what (admins see who used a skill; anyone else totals and their own rows); this page
@@ -16,15 +19,19 @@
 // reads may be absent or null; a field the page reads only inside a check is optional.
 interface SkillActor { id?: string; type?: string; name?: string | null; }
 interface SkillRef { number: number; }
-interface SkillRow { name: string; description?: string | null; installs_count?: number; latest?: SkillRef | null; on?: SkillActor[]; }
+interface SkillRow {
+  name: string; description?: string | null; installs_count?: number; latest?: SkillRef | null; on?: SkillActor[];
+  // `function` as SKILL.md names it; `source` tico for a skill only Tico ships, `on_count` all it is on (backend/skills.py).
+  function?: string | null; source?: string; on_count?: number;
+}
 interface SkillUsageRow { name: string; uses: number; last_used_at?: string | null; }
-interface SkillUsageTotals { uses?: number; people?: number; bots?: number; by_trigger?: Record<string, number>; }
+interface SkillUsageTotals { uses?: number; people?: number | null; bots?: number; by_trigger?: Record<string, number> | null; }
 interface SkillUsageActor extends SkillActor { uses: number; last_used_at?: string | null; }
 interface SkillUsageRecent { actor?: SkillActor | null; requested_by?: SkillActor | null; trigger?: string; used_at?: string; task_id?: string | null; thread_id?: string | null; }
 interface SkillInstallCoverage { id?: string; target?: SkillActor | null; coverage: string; uses_30d: number; pinned_version?: number | null; removable?: boolean; }
 interface SkillElsewhere { name: string; uses: number; bots: SkillActor[]; bots_count: number; }
 interface SkillUsage {
-  admin?: boolean; totals?: SkillUsageTotals; actors?: SkillUsageActor[]; recent?: SkillUsageRecent[];
+  source?: string; admin?: boolean; totals?: SkillUsageTotals; actors?: SkillUsageActor[]; recent?: SkillUsageRecent[];
   installs?: SkillInstallCoverage[]; skills?: SkillUsageRow[]; popular_elsewhere?: SkillElsewhere[];
 }
 interface SkillIdea { id: string; kind: string; name: string; target: SkillActor | null; uses_30d?: number; bots?: number; }
@@ -42,8 +49,10 @@ interface SkillScreening {
 }
 interface SkillFileRow { path: string; content: string; }
 interface SkillVersionRow { number: number; sha256?: string | null; approved_at?: string | null; approved_by_id?: string | null; }
-interface SkillInfo { name: string; description?: string | null; latest?: SkillRef | null; }
-interface SkillDetail { skill: SkillInfo; versions?: SkillVersionRow[]; }
+interface SkillInfo { name: string; description?: string | null; latest?: SkillRef | null; function?: string | null; source?: string; }
+// What Tico ships of a skill: the roles that have it, the live bots made from them, and (a skill only Tico ships) its files.
+interface SkillShipped { roles?: {template: string; name: string}[]; bots?: {id: string; name?: string | null}[]; bots_count?: number; files?: SkillFileRow[]; }
+interface SkillDetail { skill: SkillInfo; versions?: SkillVersionRow[]; shipped?: SkillShipped | null; }
 interface SkillTargetRef { type?: string; id: string; }
 interface SkillInstallTargets {
   me?: { type?: string; id: string } | null;
@@ -62,6 +71,30 @@ const SKILLS_TRIGGERS: [string, string][] = [['model', 'Model'], ['person', 'Per
 const SKILLS_SCREEN_CAP = 50;   // waiting proposals whose screening risk is read for the list
 let SKP: SkillsPage | null = null;                 // {run}: the page on screen, so a slow answer for a page left behind draws nothing
 let SKILLS_Q = '';                                 // the list's search, kept across redraws
+let SKILLS_FN = '';                                // the list's function filter ('' all), from the address
+let SKILLS_ROWS: SkillRow[] = [];                  // the list on screen, for the filter menu's counts
+// The job functions (clients/skills.py FUNCTIONS), in the menu's order; any other value, or none, is Other.
+const SKILLS_FUNCTIONS = ['tico', 'legal', 'marketing', 'growth', 'sales', 'customers', 'finance', 'product', 'engineering',
+  'people', 'operations', 'hardware', 'data', 'security'];
+const skillsFnGroup = (f: string | null | undefined) => { const w = String(f || '').trim().toLowerCase(); return SKILLS_FUNCTIONS.includes(w) ? w : 'other'; };
+const skillsFnLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+// The list's address: its function and search (the search is kept quietly as it is typed, see skillsQuietAddress).
+function skillsListHref(fn = SKILLS_FN, q = SKILLS_Q.trim()) {
+  const p = new URLSearchParams();
+  if (fn) p.set('function', fn);
+  if (q) p.set('q', q);
+  const s = p.toString();
+  return SKILLS_ROUTE + (s ? '?' + s : '');
+}
+// Keeps the address in step with the search box without a hashchange (the router would redraw and drop focus).
+function skillsQuietAddress() {
+  const href = skillsListHref();
+  if (location.hash !== href) history.replaceState(history.state, '', href);
+  S.route = href;
+}
+// A row's words for the search: its name, description and function.
+const skillsFind = (s: SkillRow) => [s.name, s.description || '', s.function || ''].join(' ').toLowerCase();
+const skillsMatches = (find: string, q: string) => q.split(/\s+/).filter(Boolean).every(w => find.includes(w));
 
 const skillsHref = (name: string) => SKILLS_ROUTE + '/' + encodeURIComponent(name);
 const skillsProposalHref = (id: string) => SKILLS_ROUTE + '/proposals/' + encodeURIComponent(id);
@@ -100,10 +133,26 @@ const skillsStatusPill = (s: string) => s === 'pending' ? '' : `<span class="pil
 // lives in ⋯ (style guide "Top bars: one line": what is used less than daily goes in ⋯). The shared menu popover
 // (#task-filter-pop, task-list-menus.ts) holds a Suggestions row's ⋯.
 function skillsHead() {
+  const on = SKILLS_FN ? 1 : 0, label = skillsFnLabel(SKILLS_FN);
   return pageHead({title: 'Skills', hook: 'sk-head',
-    tools: `<input type="search" class="sk-q" data-sk-q placeholder="Search" aria-label="Search skills" autocomplete="off" spellcheck="false" value="${esc(SKILLS_Q)}">`,
+    tools: `<input type="search" class="sk-q" data-sk-q placeholder="Search" aria-label="Search skills" autocomplete="off" spellcheck="false" value="${esc(SKILLS_Q)}">`
+      + `<button type="button" class="tl-ib${on ? ' active' : ''}" data-sk-filter aria-haspopup="menu" aria-expanded="false" aria-label="${on ? 'Function, 1 active' : 'Function'}" title="Function">${filterIcon(13)}<span class="ph-fold-word" aria-hidden="true">Function</span><span class="tl-fbadge tnum" aria-hidden="true"${on ? '' : ' hidden'}>1</span></button>`,
     more: '<button type="button" data-sk-helper>Use in my Claude Code</button>' + PAGE_HEAD_COPY})
-    + '<div id="task-filter-pop" class="tl-pop" popover></div>';
+    + '<div id="task-filter-pop" class="tl-pop" popover></div>'
+    // The function in force, as a chip under the header (as Contacts' and the Tasks list's filters are).
+    + (on ? `<div class="tl-bar sk-active"><span class="tl-chip"><button type="button" class="tl-chip-main" data-sk-filter-chip aria-haspopup="menu" aria-label="${esc('Function: ' + label + '. Change')}"><span class="k">Function</span><span class="v">${esc(label)}</span></button>`
+      + `<a class="tl-chip-x" href="${skillsListHref('')}" data-sk-filter-clear aria-label="Remove Function filter">${TL_ICON.x}</a></span></div>` : '');
+}
+// The function menu: All, then each function with its count under the search; a pick is a link, so the address keeps it.
+function skillsFilterMenu(button: HTMLElement) {
+  const anchor = button.closest('.ph-menu') ? button.closest('header.ph')?.querySelector<HTMLElement>(':scope > .ph-more') || button : button;
+  const q = SKILLS_Q.trim().toLowerCase(), counts: Record<string, number> = {};
+  SKILLS_ROWS.forEach(s => { if (skillsMatches(skillsFind(s), q)) { const g = skillsFnGroup(s.function); counts[g] = (counts[g] || 0) + 1; } });
+  const items: [string, string, number | null][] = [['', 'All', null],
+    ...[...SKILLS_FUNCTIONS, 'other'].filter(f => counts[f] || f === SKILLS_FN).map((f): [string, string, number | null] => [f, skillsFnLabel(f), counts[f] || 0])];
+  tasksMenu(SK_MENU, anchor, `<div class="tl-menu sk-filter-menu" role="menu" aria-label="Function">${items.map(([f, label, n]) =>
+    `<a class="tl-mi" role="menuitemradio" aria-checked="${f === SKILLS_FN}" href="${skillsListHref(f)}" data-sk-fn-pick="${esc(f)}"><span class="tl-mi-t">${esc(label)}</span>${n === null ? '' : `<span class="tl-mi-n tnum">${n}</span>`}<span class="tl-mi-on" aria-hidden="true">${f === SKILLS_FN ? '✓' : ''}</span></a>`).join('')}</div>`,
+  pop => { pop.onclick = ev => { if (eventElement(ev)?.closest('a[data-sk-fn-pick]')) tasksMenuClose(); }; });
 }
 // A skill's or a proposal's own page: Skills › its name, and the page's one filled button where it has one.
 const skillsSubHead = (title: string, primary = '') => pageHead({title, hook: 'sk-head', back: {href: SKILLS_ROUTE, label: 'Skills'}, primary, more: PAGE_HEAD_COPY});
@@ -151,9 +200,12 @@ const skillsDialogError = (dialog: HTMLDialogElement, e: unknown) => {
 };
 
 // ----------------------------------------------------------------- the list
-async function pageSkills() {
+async function pageSkills(query = '') {
   const run = (SKP?.run || 0) + 1;
   SKP = {run};
+  const want = new URLSearchParams(query);
+  SKILLS_FN = (want.get('function') || '').trim().toLowerCase();
+  SKILLS_Q = want.get('q') || '';
   $('#main').innerHTML = `<div class="tt sk" id="skills-root" data-sk-page="skills">${skillsHead()}
     <div data-sk-body>${skelRows(5)}</div></div>`;
   const root = $('#skills-root');
@@ -161,7 +213,9 @@ async function pageSkills() {
   const body = root.querySelector('[data-sk-body]');
   // The header's search narrows the skills list as it is typed (wherever the header keeps it: the row, or ⋯).
   const q: HTMLInputElement | null = $('#skills-root [data-sk-q]');
-  if (q) q.oninput = () => { SKILLS_Q = q.value; skillsFilter(body); };
+  if (q) q.oninput = () => { SKILLS_Q = q.value; skillsQuietAddress(); skillsFilter(body); };
+  root.querySelectorAll('[data-sk-filter], [data-sk-filter-chip]').forEach((b: HTMLElement) => { b.onclick = () => skillsFilterMenu(b); });
+  skillsWireMenu();
   try { await skillsList(body, run); } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); }
 }
 
@@ -179,11 +233,13 @@ async function skillsList(body: HTMLElement, run: number) {
   if (!skillsLive(run)) return;
   const used = Object.fromEntries((usage.skills || []).map((u): [string, SkillUsageRow] => [u.name, u]));
   const rows = list.skills || [];
+  SKILLS_ROWS = rows;
+  // A skill only Tico ships has no version: Tico in its place, muted, marks it.
   const table = rows.length ? `<table class="tt-list sk-list"><thead><tr><th>Skill</th><th>On</th><th>Version</th><th>Last used</th></tr></thead>
-    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-find="${esc((s.name + ' ' + (s.description || '')).toLowerCase())}">
+    <tbody>${rows.map(s => { const u: Partial<SkillUsageRow> = used[s.name] || {}; return `<tr data-sk-row="${esc(s.name)}" data-sk-fn="${esc(skillsFnGroup(s.function))}" data-sk-find="${esc(skillsFind(s))}">
       <td class="sk-name"><a href="${skillsHref(s.name)}"><strong>${esc(s.name)}</strong></a></td>
       <td class="sk-on" data-sk-on>${skillsOnHTML(s)}</td>
-      <td class="sk-ver tnum">${s.latest ? 'v' + s.latest.number : ''}</td>
+      <td class="sk-ver tnum">${s.latest ? 'v' + s.latest.number : s.source === 'tico' ? '<span class="muted" data-sk-source="tico">Tico</span>' : ''}</td>
       <td class="sk-when">${u.last_used_at ? agoSpan(u.last_used_at) : '<span class="muted">Never</span>'}</td></tr>`; }).join('')}</tbody></table>`
     : '<div class="empty" data-sk-empty>No skills yet.</div>';
   body.innerHTML = skillsWaitingHTML(pending, screens) + table + skillsIdeasHTML(ideas.suggestions || []) + skillsElsewhereHTML(usage.popular_elsewhere || []);
@@ -193,12 +249,15 @@ async function skillsList(body: HTMLElement, run: number) {
 }
 // Who a skill is on: the first few the server names (the ones the caller may see), then +N for the rest of its installs.
 function skillsOnHTML(s: SkillRow) {
-  const on = s.on || [], more = Math.max(0, (s.installs_count || 0) - on.length);
+  const on = s.on || [], more = Math.max(0, (s.on_count ?? s.installs_count ?? 0) - on.length);
   return esc(on.map(skillsWho).join(', ')) + (more ? `${on.length ? ' ' : ''}<span class="muted">+${more}</span>` : '');
 }
+// The search (every word, in the name, description or function) and the function filter, on the rows drawn.
 function skillsFilter(body: HTMLElement) {
   const q = SKILLS_Q.trim().toLowerCase();
-  body.querySelectorAll<HTMLElement>('tr[data-sk-row]').forEach(tr => { tr.hidden = !!q && !(tr.dataset.skFind || '').includes(q); });
+  body.querySelectorAll<HTMLElement>('tr[data-sk-row]').forEach(tr => {
+    tr.hidden = !skillsMatches(tr.dataset.skFind || '', q) || (!!SKILLS_FN && tr.dataset.skFn !== skillsFnGroup(SKILLS_FN));
+  });
 }
 // The proposals waiting for an OK; nothing at all when none are.
 function skillsWaitingHTML(pending: SkillProposal[], screens: Record<string, SkillScreening | null | undefined>) {
@@ -255,7 +314,10 @@ function skillsBindIdeas(box: HTMLElement, ideas: SkillIdea[]) {
       pop.onclick = ev => { if (!eventElement(ev)?.closest('[data-sk-idea-dismiss]')) return; tasksMenuClose(); void dismiss(); };
     });
   });
-  // The row ⋯ says whether its menu is open; Esc or a click away gives the focus back to it.
+  skillsWireMenu();
+}
+// The open menu's button (a row ⋯ or the filter) says whether it is open; Esc or a click away gives the focus back to it.
+function skillsWireMenu() {
   const pop = document.getElementById('task-filter-pop');
   if (pop && !pop.dataset.skWired) {
     pop.dataset.skWired = '1';
@@ -329,26 +391,42 @@ async function pageSkill(name: string) {
       get<SkillUsage>(`/v2/skills/${encodeURIComponent(name)}/usage?days=${page.days}`, {fresh: true})]);
   } catch (e) { if (skillsLive(run)) body.innerHTML = skillsErr(e); return; }
   if (!skillsLive(run)) return;
-  const versions = d.versions || [];
-  // Install is the page's one filled button, in the header; the description is the first line under it.
+  const versions = d.versions || [], shipped = d.shipped || null, tico = d.skill.source === 'tico';
+  // Install is the page's one filled button, in the header; the description is the first line under it, then its
+  // function, a link to the list of that function.
   const head = $('#skills-root > header.ph');
   if (head && d.skill.latest) pageHeadSet(head, 'primary', '<button type="button" class="primary ph-go" data-sk-install>Install</button>');
-  body.innerHTML = `${d.skill.description ? `<p class="muted sk-desc">${esc(d.skill.description)}</p>` : ''}
+  const fn = d.skill.function ? skillsFnGroup(d.skill.function) : '';
+  // A skill only Tico ships: its files as the catalog holds them, the roles that have it and the bots made from them,
+  // in place of versions and installs. One the directory has too keeps those, and adds its roles.
+  const files = tico ? `<section class="card" id="skill-files"><header><h2>Files</h2></header><div data-sk-files></div></section>`
+    : `<section class="card" id="skill-files"><header><h2>Files</h2><span class="spacer"></span>
+        ${versions.length ? `<select data-sk-version aria-label="Version">${versions.map(v => `<option value="${v.number}">v${v.number}</option>`).join('')}</select>` : ''}</header>
+        <div data-sk-files>${versions.length ? skelRows(2) : '<p class="muted">No version yet.</p>'}</div></section>`;
+  const roles = shipped ? `<section class="card" id="skill-roles"><header><h2>Roles</h2></header>
+      <table class="tt-who-table">${(shipped.roles || []).map(r => `<tr data-sk-role="${esc(r.template)}"><td class="tt-who-name">${esc(r.name)}</td></tr>`).join('')}</table></section>` : '';
+  const bots = shipped && tico ? `<section class="card" id="skill-bots"><header><h2>Bots</h2></header>${(shipped.bots || []).length
+      ? `<table class="tt-who-table">${(shipped.bots || []).map(b => `<tr data-sk-bot="${esc(b.id)}"><td class="tt-who-name">${esc(skillsWho({type: 'Bot', id: b.id, name: b.name ?? null}))}</td></tr>`).join('')}</table>`
+      : '<p class="muted">None.</p>'}</section>` : '';
+  const line = [d.skill.description ? esc(d.skill.description) : '',
+    fn ? `<a class="muted" href="${skillsListHref(fn, '')}" data-sk-fn-link="${esc(fn)}">${esc(skillsFnLabel(fn))}</a>` : ''].filter(Boolean);
+  body.innerHTML = `${line.length ? `<p class="muted sk-desc">${line.join('<span aria-hidden="true">·</span>')}</p>` : ''}
     <div class="tt-cols"><div class="tt-col">
       <section class="card" id="skill-usage"><header><h2>Usage</h2><span class="spacer"></span>
         <div class="theme-seg" role="radiogroup" aria-label="Days">${[7, 30].map(n =>
           `<button type="button" role="radio" data-sk-days="${n}" aria-checked="${page.days === n}">${n}d</button>`).join('')}</div></header>
         <div data-sk-usage>${skillsUsageHTML(usage)}</div></section>
-      <section class="card" id="skill-files"><header><h2>Files</h2><span class="spacer"></span>
-        ${versions.length ? `<select data-sk-version aria-label="Version">${versions.map(v => `<option value="${v.number}">v${v.number}</option>`).join('')}</select>` : ''}</header>
-        <div data-sk-files>${versions.length ? skelRows(2) : '<p class="muted">No version yet.</p>'}</div></section>
-    </div><div class="tt-col">
+      ${files}
+    </div><div class="tt-col">${tico ? roles + bots : `
       <section class="card" id="skill-versions"><header><h2>Versions</h2></header>
         ${versions.length ? `<table class="tt-who-table">${versions.map(v => `<tr data-sk-v="${v.number}"><td class="tt-who-name"><strong>v${v.number}</strong> ${skillsSha(v.sha256)}</td>
           <td class="tt-used muted">${v.approved_at ? agoSpan(v.approved_at) : ''}${v.approved_by_id ? ' · ' + esc(actorLabel('human:' + v.approved_by_id)) : ''}</td></tr>`).join('')}</table>`
           : '<p class="muted">None yet.</p>'}</section>
       <section class="card" id="skill-installs"><header><h2>Installs</h2></header><div data-sk-installs>${skillsCoverageHTML(usage.installs || [])}</div></section>
+      ${roles}`}
     </div></div>`;
+  const shippedFiles: HTMLElement | null = body.querySelector('[data-sk-files]');
+  if (tico && shippedFiles) skillsFilesInto(shippedFiles, shipped?.files || []);
   $('#skills-root [data-sk-install]')?.addEventListener('click', () => skillsInstallDialog(d.skill, versions));
   skillsBindRemove(body);
   body.querySelector('#skill-usage .theme-seg').onclick = async (ev: MouseEvent) => {
@@ -364,15 +442,17 @@ async function pageSkill(name: string) {
   const pick = body.querySelector('[data-sk-version]');
   if (pick) { pick.onchange = () => skillsFiles(name, Number(pick.value), run); void skillsFiles(name, versions[0]?.number, run); }
 }
+// A skill only Tico ships is counted per day from bots' runs (backend/skill_usage.py): what triggered it and who asked
+// are not known there, so those figures and the recent uses are left out rather than shown as nought.
 function skillsUsageHTML(u: SkillUsage) {
-  const t: SkillUsageTotals = u.totals || {}, by = t.by_trigger || {};
+  const t: SkillUsageTotals = u.totals || {}, by = t.by_trigger, tico = u.source === 'tico';
   const actors = (u.actors || []).slice().sort((a, b) => b.uses - a.uses);
   const recent = u.recent || [];
   const link = (r: SkillUsageRecent) => r.task_id ? `<a href="#/task/${encodeURIComponent(r.task_id)}">Task</a>`
     : r.thread_id ? `<a href="${threadHref(r.thread_id)}">Thread</a>` : '';
   return `<div class="sk-stats"><div class="sk-stat"><strong class="tnum" data-sk-total>${skillsN(t.uses)}</strong><span class="muted">Uses</span></div>
-      ${SKILLS_TRIGGERS.map(([k, label]) => `<div class="sk-stat"><strong class="tnum" data-sk-trigger="${k}">${skillsN(by[k])}</strong><span class="muted">${label}</span></div>`).join('')}
-      <div class="sk-stat"><strong class="tnum">${skillsN(t.people)}</strong><span class="muted">People</span></div>
+      ${by ? SKILLS_TRIGGERS.map(([k, label]) => `<div class="sk-stat"><strong class="tnum" data-sk-trigger="${k}">${skillsN(by[k])}</strong><span class="muted">${label}</span></div>`).join('') : ''}
+      ${t.people === null ? '' : `<div class="sk-stat"><strong class="tnum">${skillsN(t.people)}</strong><span class="muted">People</span></div>`}
       <div class="sk-stat"><strong class="tnum">${skillsN(t.bots)}</strong><span class="muted">Bots</span></div></div>
     ${actors.length ? `<h3 class="sk-sub">${u.admin ? 'By who' : 'Mine'}</h3><table class="tt-who-table" data-sk-actors>${actors.map(a => `<tr data-sk-actor="${esc(a.id)}">
       <td class="tt-who-name">${esc(skillsWho(a))}</td><td class="tnum tt-used" data-sk-actor-uses>${skillsUses(a.uses)}</td>
@@ -381,7 +461,7 @@ function skillsUsageHTML(u: SkillUsage) {
       <td class="tt-log-what"><strong>${esc(skillsWho(r.actor))}</strong>${r.requested_by ? `<span class="muted">for ${esc(skillsWho(r.requested_by))}</span>` : ''}</td>
       <td class="muted">${esc((SKILLS_TRIGGERS.find(([k]) => k === r.trigger) || [, r.trigger])[1])}</td>
       <td class="muted">${agoSpan(r.used_at)}</td><td>${link(r)}</td></tr>`).join('')}</tbody></table>`
-      : '<p class="muted" data-sk-no-uses>No uses.</p>'}`;
+      : tico && t.uses ? '' : '<p class="muted" data-sk-no-uses>No uses.</p>'}`;
 }
 function skillsCoverageHTML(installs: SkillInstallCoverage[]) {
   if (!installs.length) return '<p class="muted">Not installed.</p>';

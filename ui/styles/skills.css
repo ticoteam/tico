@@ -7,6 +7,7 @@
 .sk-on{color:var(--muted);overflow-wrap:anywhere}
 .sk-list tr[hidden]{display:none}
 .sk-ver,.sk-when{white-space:nowrap}
+.sk-active{margin:-4px 0 12px}   /* the function chip under the header (task-list.css .tl-bar, .tl-chip) */
 .sk-waiting .sk-screen,.sk-waiting .sk-when{white-space:nowrap}
 .sk-act{width:1%;text-align:right}
 .sk-sha{font:var(--t-xs, .8rem) var(--mono);color:var(--muted)}

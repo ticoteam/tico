@@ -768,6 +768,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "setup show",
     "skill",
     "skill copy",
+    "skill list",
     "skill submit",
     "slack",
     "slack channel",

@@ -201,6 +201,47 @@ def files(template, directory=None):
     return layered
 
 
+SKILL_FILE = re.compile(r"^(?:\.claude/)?skills/([^/]+)/SKILL\.md$")
+
+
+def skill_folders(template, directory=None, found=None):
+    """{skill name: its folder on disk} of the skills a bot made from `template` starts with, layered as `files` lays
+    them (`_base/`, the card's `shared_files`, the template's own) but reading only the skill folders, so the whole
+    catalog is cheap to index. A skill under `.claude/skills/` wins over one of the same name under `skills/`. `found`
+    is the template's card when the caller already has it."""
+    source = template_dir(template, directory)
+    found = found if found is not None else card(template, directory) or {}
+    root = catalog_dir(directory)
+    skip = _paths(found, "base_skip", template)
+    layered = {}
+
+    def own(folder, keep=lambda rel: True):
+        for parent in ("skills", ".claude/skills"):
+            for path in sorted((folder / parent).glob("*/SKILL.md")):
+                rel = f"{parent}/{path.parent.name}/SKILL.md"
+                if keep(rel):
+                    layered[rel] = path.parent
+
+    own(root / BASE, lambda rel: not _under(rel, skip))
+    for rel in _paths(found, "shared_files", template):
+        path = root / SHARED / rel
+        if path.is_dir():
+            for file in sorted(path.rglob("SKILL.md")):
+                inner = f"{rel}/{file.relative_to(path).as_posix()}"
+                if SKILL_FILE.match(inner):
+                    layered[inner] = file.parent
+        elif path.is_file():
+            if SKILL_FILE.match(rel):
+                layered[rel] = path.parent
+        else:
+            raise ValueError(f"The {template} card shares {rel}, which {root / SHARED} does not have")
+    own(source)
+    out = {}
+    for rel in sorted(layered, key=lambda rel: rel.startswith(".claude/")):
+        out[SKILL_FILE.match(rel).group(1)] = layered[rel]
+    return out
+
+
 # ----------------------------------------------------------------------------- materializing one
 def fill(text, values):
     """A template's text with this installation's names in place of the placeholders."""

@@ -283,6 +283,8 @@ def run(args, who=None):
         return product_repo_create(client, args.name, confirm=args.confirm)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
+    if fn == "skill list":
+        return via_tool(client, args)
     if fn == "bot app-shot":
         return via_tool(client, args)  # it writes the PNG on this computer
     if args.cmd in ("template", "bot"):  # `bot create`, `check` and `model`; the other bot leaves are specs

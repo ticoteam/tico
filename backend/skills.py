@@ -21,6 +21,7 @@ from clients import skills as bundles
 from . import brand
 from . import hubdb as H
 from . import models as M
+from . import skill_catalog as SC
 from .store import Problem
 from .api_contract import api_v2
 
@@ -375,6 +376,82 @@ def _installed_on(c, auth, who, skill_ids):
     return out
 
 
+def _holds(row, q):
+    """Whether the row's name, description and function hold every word of `q`."""
+    words = (q or "").lower().split()
+    text = " ".join((row["name"], row["description"] or "", row["function"] or "")).lower()
+    return all(word in text for word in words)
+
+
+def _in_function(row, function):
+    """Whether the row is under `function`: one of the known functions or `other` by its group, any other value as written."""
+    want = (function or "").strip().lower()
+    if not want:
+        return True
+    if want in bundles.FUNCTIONS or want == bundles.OTHER:
+        return bundles.function_group(row["function"]) == want
+    return (row["function"] or "").strip().lower() == want
+
+
+def _function_counts(rows):
+    """[{function, count}] of the rows per function, in the functions' order, `other` last, none that is empty."""
+    counts = {}
+    for row in rows:
+        group = bundles.function_group(row["function"])
+        counts[group] = counts.get(group, 0) + 1
+    return [{"function": f, "count": counts[f]} for f in (*bundles.FUNCTIONS, bundles.OTHER) if counts.get(f)]
+
+
+def _seen_bots(c, auth, who, bots):
+    """The ids, of these bots, the caller may see: an admin all of them."""
+    ids = sorted({bot["id"] for bot in bots})
+    if not ids or _admin(auth, who):
+        return set(ids)
+    return {b for b, level in auth.bot_accesses(c, who, ids).items() if level.get("see")}
+
+
+def _shipped_rows(c, auth, who, entries):
+    """The list's rows of skills Tico ships that the directory does not have: on the live bots made from a role that
+    ships it (the first ON_CAP the caller may see, `on_count` all of them)."""
+    if not entries:
+        return []
+    by_template = SC.bots_by_template(c)
+    seen = _seen_bots(c, auth, who, [bot for bots in by_template.values() for bot in bots])
+    out = []
+    for entry in entries:
+        bots = SC.bots_with(entry, by_template)
+        out.append(
+            {
+                "id": None,
+                "name": entry["name"],
+                "description": entry["description"],
+                "function": entry["function"],
+                "source": "tico",
+                "latest": None,
+                "installs_count": 0,
+                "on": [{"type": "Bot", **bot} for bot in bots if bot["id"] in seen][:ON_CAP],
+                "on_count": len(bots),
+            }
+        )
+    return out
+
+
+def _shipped_view(c, auth, who, store, entry, with_files):
+    """A skill Tico ships: the roles that ship it, the live bots made from them the caller may see, and its files."""
+    names = SC.role_names(store.settings.catalog_dir)
+    by_template = SC.bots_by_template(c)
+    bots = SC.bots_with(entry, by_template)
+    seen = _seen_bots(c, auth, who, bots)
+    value = {
+        "roles": [{"template": t, "name": names.get(t, t)} for t in entry["templates"]],
+        "bots": [{"type": "Bot", **bot} for bot in bots if bot["id"] in seen],
+        "bots_count": len(bots),
+    }
+    if with_files:
+        value["files"] = SC.files(entry)
+    return value
+
+
 def propose(c, auth, who, body):
     """A new skill, or an update of one from `base_version` (or its latest). Replaces this proposer's pending proposal for the name."""
     files = [{"path": item.path, "content": item.content} for item in body.files]
@@ -479,18 +556,32 @@ def approve(c, auth, who, pid, acknowledged):
     ):
         raise Problem("unchanged", f"{row['name']} already has this exact version", 409)
     now, approver = H.now(), H.actor_id(who.actor)
+    # The job function the approved SKILL.md names, kept on the skill so the list never reads a version's files.
+    function = bundles.function_of(_json(row["files"], []))
     if skill:
         skill_id = skill["id"]
         number = c.execute(
             "SELECT COALESCE(MAX(number), 0) + 1 FROM skill_versions WHERE skill_id=?", (skill_id,)
         ).fetchone()[0]
-        c.execute("UPDATE skills SET description=?, updated_at=? WHERE id=?", (row["description"], now, skill_id))
+        c.execute(
+            "UPDATE skills SET description=?, function=?, updated_at=? WHERE id=?",
+            (row["description"], function, now, skill_id),
+        )
     else:
         skill_id, number = _id("sk_"), 1
         c.execute(
-            "INSERT INTO skills (id, name, description, latest_version_id, created_by_type, created_by_id, deleted_at, created_at, "
-            "updated_at) VALUES (?,?,?,NULL,?,?,NULL,?,?)",
-            (skill_id, row["name"], row["description"], row["proposed_by_type"], row["proposed_by_id"], now, now),
+            "INSERT INTO skills (id, name, description, function, latest_version_id, created_by_type, created_by_id, deleted_at, "
+            "created_at, updated_at) VALUES (?,?,?,?,NULL,?,?,NULL,?,?)",
+            (
+                skill_id,
+                row["name"],
+                row["description"],
+                function,
+                row["proposed_by_type"],
+                row["proposed_by_id"],
+                now,
+                now,
+            ),
         )
     version_id = _id("skv_")
     c.execute(
@@ -724,47 +815,89 @@ def install(app, store, auth, mutate):
         **api_v2(
             "Skills",
             "listSkills",
-            "The directory: each skill with its latest approved version, install count and the first few it is on",
+            "Every skill the company has, the directory's and the ones Tico ships with its roles, by job function and words",
         ),
     )
-    def skills_list(request: Request):
-        """The directory: each skill with its latest approved version, how many installs it has, and the first few of
-        them the caller may see (`on`)."""
+    def skills_list(
+        request: Request,
+        q: str = Query(default="", max_length=200, description="Words the name, description or function holds"),
+        function: str = Query(
+            default="", max_length=80, description="One job function, or `other` for any other value or none"
+        ),
+    ):
+        """Every skill the company has, one row per name: the directory's (each with its latest approved version, how
+        many installs it has and the first few of them the caller may see, `on`) and the ones Tico ships in its role
+        templates (`source: tico`, on the bots made from those roles). `q` keeps the rows whose name, description and
+        function hold every word; `function` keeps one job function. `functions` counts the rows `q` keeps, per function."""
         who = reader(request)
+        shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
             rows = c.execute(
-                "SELECT s.id, s.name, s.description, v.number, v.sha256, v.approved_at, "
+                "SELECT s.id, s.name, s.description, s.function, v.number, v.sha256, v.approved_at, "
                 "(SELECT COUNT(*) FROM skill_installs i WHERE i.skill_id = s.id) AS installs_count "
                 "FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id "
                 "WHERE s.deleted_at IS NULL ORDER BY s.name LIMIT ?",
                 (LIST_CAP,),
             ).fetchall()
             on = _installed_on(c, auth, who, [r["id"] for r in rows])
-            return {
-                "skills": [
-                    {
-                        "id": r["id"],
-                        "name": r["name"],
-                        "description": r["description"],
-                        "latest": {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
-                        if r["number"] is not None
-                        else None,
-                        "installs_count": r["installs_count"],
-                        "on": on.get(r["id"], []),
-                    }
-                    for r in rows
-                ]
-            }
+            found = [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "description": r["description"],
+                    "function": r["function"] or (shipped[r["name"]]["function"] if r["name"] in shipped else None),
+                    "source": "directory",
+                    "latest": {"number": r["number"], "sha256": r["sha256"], "approved_at": r["approved_at"]}
+                    if r["number"] is not None
+                    else None,
+                    "installs_count": r["installs_count"],
+                    "on": on.get(r["id"], []),
+                    "on_count": r["installs_count"],
+                }
+                for r in rows
+            ]
+            listed = {r["name"] for r in rows}
+            extra = [entry for name, entry in shipped.items() if name not in listed]
+            found += _shipped_rows(c, auth, who, extra)
+        found = sorted((row for row in found if _holds(row, q)), key=lambda row: row["name"])
+        return {
+            "skills": [row for row in found if _in_function(row, function)],
+            "functions": _function_counts(found),
+        }
 
     @app.get(
         "/api/v2/skills/{name}",
-        **api_v2("Skills", "getSkill", "One skill: its versions and the installs the caller may see"),
+        **api_v2(
+            "Skills",
+            "getSkill",
+            "One skill: its versions and the installs the caller may see, or the roles and bots of one Tico ships",
+        ),
     )
     def skill_detail(request: Request, name: str):
-        """One skill: its versions (no files) and the installs the caller may see."""
+        """One skill: its versions (no files) and the installs the caller may see. One Tico ships also has `shipped`: the
+        roles that ship it and the bots made from them the caller may see, and its files when the directory has no
+        version of it."""
         who = reader(request)
+        entry = SC.shipped(store.settings.catalog_dir).get(name)
         with store.read() as c:
-            skill = _skill_or_404(c, name)
+            skill = None if name in bundles.RESERVED else _skill(c, name)
+            extra = {"shipped": _shipped_view(c, auth, who, store, entry, with_files=not skill)} if entry else {}
+            if not skill:
+                if not entry:
+                    raise Problem("not_found", f"No skill named {name}", 404)
+                return {
+                    "skill": {
+                        "id": None,
+                        "name": name,
+                        "description": entry["description"],
+                        "function": entry["function"],
+                        "source": "tico",
+                        "latest": None,
+                    },
+                    "versions": [],
+                    "installs": [],
+                    **extra,
+                }
             versions = c.execute(
                 "SELECT * FROM skill_versions WHERE skill_id=? ORDER BY number DESC", (skill["id"],)
             ).fetchall()
@@ -779,10 +912,13 @@ def install(app, store, auth, mutate):
                     "id": skill["id"],
                     "name": skill["name"],
                     "description": skill["description"],
+                    "function": skill["function"] or (entry["function"] if entry else None),
+                    "source": "directory",
                     "latest": _version_view(latest) if latest else None,
                 },
                 "versions": [_version_view(row) for row in versions],
                 "installs": installs,
+                **extra,
             }
 
     @app.get(

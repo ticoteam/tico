@@ -1,8 +1,24 @@
 # Skills directory
 
-Library › Skills is the company's list of approved skills: who has each one, and which version. A skill is a folder of text
-files with a `SKILL.md` at its root (`skills/<name>/` in a bot's repository, or `.claude/skills/<name>/`). Nothing reaches a bot
-or a person until it is installed explicitly.
+Library › Skills is one list of every skill: the company's approved skills (who has each one, and which version) and the
+skills Tico ships with its roles. A skill is a folder of text files with a `SKILL.md` at its root (`skills/<name>/` in a bot's
+repository, or `.claude/skills/<name>/`). Nothing from the directory reaches a bot or a person until it is installed explicitly.
+
+## Function
+
+Each skill has one job function, its main tag, in its `SKILL.md` frontmatter:
+
+    ---
+    name: review-a-contract
+    description: Reads a contract and lists the clauses to raise
+    metadata:
+      function: legal
+    ---
+
+The functions are `tico` (working inside Tico itself), `legal`, `marketing`, `growth`, `sales`, `customers`, `finance`,
+`product`, `engineering`, `people`, `operations`, `hardware`, `data` and `security`. Any other value is kept as written and
+listed under **Other**, as is a skill with none. A proposal without one is never refused. The directory takes it from each
+approved version.
 
 ## Propose a skill
 
@@ -88,12 +104,17 @@ Library › Skills (`#/library/skills`) is one page.
   screening (summary, findings by file and line, pattern hits, **Re-run** when it wasn't screened), its diff (or its files
   when it's new) and a Stale flag when the skill moved on. **Approve** for a high-risk or unsafe screen needs the "I've read
   this" tick, as the server does (422 `acknowledgement_required`). **Decline** asks for a reason.
-- **Skills**: every approved skill with who it's on (the first few bots and people you can see, then +N), its version and
-  when it was last used, with a search box. A skill opens its page: versions (when and by whom each was approved), the files
+- **Skills**: every approved skill and every skill Tico ships, once per name, with who it's on (the first few bots and people
+  you can see, then +N), its version (**Tico** for one only Tico ships) and when it was last used. The search matches the name,
+  description and function, every word; the **Function** filter keeps one function, with counts. The address keeps both:
+  `#/library/skills?function=legal&q=contract`. A skill opens its page: versions (when and by whom each was approved), the files
   of any version, **Install** (for yourself, a bot you can write, a person if you're an admin, or a team: a team installs for
   its current members at once, and nobody who joins later), its installs (Used, Unused or Unknown, a pinned one's version, and
   **Remove** where you have the rights to install it), and its usage over 7 or 30 days by trigger (model, person, nested), by
   who and the last 20 uses.
+- A skill Tico ships opens its files, the roles that have it, and the live bots made from those roles (what the catalog
+  gives them; a bot may have changed its copy since). Its usage is the bots' daily counts (below), so who triggered it and
+  people aren't shown.
 
 **Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
 `curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.
@@ -114,8 +135,9 @@ reporting on), has had the install for 30 days, and has no use
 in those 30 days. Anything else is Unknown, never Unused.
 
 Not in directory. A bot's use of a skill the directory doesn't have (its repository's own, one in its home) is kept only as a
-daily count by name and bot, 90 days. Admins see the most used below the skills as **Not in directory**: name, uses in 30 days,
-bots. People's own computers report directory skills only, so no person is counted there.
+daily count by name and bot, 90 days. That count is a Tico-shipped skill's usage. Admins see the most used of the rest below the
+skills as **Not in directory**: name, uses in 30 days, bots. People's own computers report directory skills only, so no person
+is counted there.
 
 ## Suggestions
 
@@ -123,7 +145,7 @@ The maintenance run's Suggest step looks at this install's own data each day (no
 of suggestion on the Skills page for admins:
 
 - **Remove**: an install that is Unused (above). Unknown is never suggested.
-- **Ask to submit**: a skill outside the directory that 2 or more bots, or 10 or more uses, ran in 30 days. It names the bot that
+- **Ask to submit**: a skill outside the directory, and not one Tico ships, that 2 or more bots, or 10 or more uses, ran in 30 days. It names the bot that
   used it most; **Ask to submit** sends that bot your message asking it to run `tico skill submit <name>`.
 
 Nothing is removed, sent or submitted until an admin clicks. Each subject (an install, a skill's name) has one suggestion: open
@@ -133,7 +155,11 @@ carries Gateway suggestions only.
 
 ## API
 
-Under `/api/v2/skills`: the directory (`GET skills`, each with its install count and the first few it's `on`), a skill with its versions and installs (`GET skills/{name}`), a version with
+    tico skill list [WORDS...] [--function F]
+
+lists every skill as the page does (the `tico_skill_list` tool, for bots). Under `/api/v2/skills`: every skill (`GET skills`,
+`?function=` one function or `other`, `?q=` words; each with its `function`, its `source` (`directory` or `tico`), its install
+count and the first few it's `on`, plus `functions`: the count per function after `q`), a skill with its versions and installs (`GET skills/{name}`; one Tico ships adds `shipped`: its roles, bots and, when only Tico ships it, files), a version with
 its files (`GET skills/{name}/versions/{number}`), proposals (`POST skills/proposals`, `GET skills/proposals`: the pending ones, or `?status=` one status or `all`,
 `GET skills/proposals/{id}`, and `approve`, `decline`, `withdraw`, `rescreen` under it), and installs (`POST skills/{name}/installs`,
 `POST skills/{name}/installs/bulk`, `GET skills/installs?target_type=&target_id=`, `DELETE skills/installs/{id}`), and an approved

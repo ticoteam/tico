@@ -1,6 +1,8 @@
 // Library › Skills (ui/app/skills.ts) over a fake API in backend/skills.py's and backend/skill_usage.py's shapes.
 // Covers: one page with no tabs (an old ?tab= shows it too): Waiting for OK lists pending proposals only and is gone
-// when none wait; the skills with who each is on (+N past the first few), version and last used; search; a proposal
+// when none wait; the skills with who each is on (+N past the first few), version and last used, a skill only Tico ships
+// marked Tico; search by name, description or function; the function filter (menu with counts, Other, the address, the
+// chip and its ✕); a shipped skill's page (its files, roles and bots, no Install, no usage it cannot know); a proposal
 // rated high risk needs "I've read this" before Approve (and the server's 422 is mirrored when the tick is missing);
 // Decline with a reason; an unscreened proposal says why, what to do and its judge call, and a Re-run that fails again
 // says so, and one still screening when its watch ends says it is still screening; the proposal's crumb is Skills › name; one skill's usage,
@@ -29,12 +31,20 @@ function skillsFake({admin = true, waiting = true, stayPending = false}: {admin?
   const fake = {writes: [] as Write[], asked: [] as string[]} as SkillFake;
   const skills = [
     {id: 's1', name: 'refund-check', description: 'Checks a refund request against the 30-day policy and the unit\'s warranty, step by step, with every exception named',
-      latest: {number: 2, sha256: SHA(2), approved_at: at(30)}, installs_count: 5,
+      latest: {number: 2, sha256: SHA(2), approved_at: at(30)}, installs_count: 5, function: 'customers', source: 'directory',
       on: [who('Bot', 'b-support', 'Support'), who('Bot', 'b-qa', 'Support QA'), who('Human', 'ben', 'Ben')]},
-    {id: 's2', name: 'calibration-redo', description: 'Walks an owner through a projector calibration redo', latest: {number: 1, sha256: SHA(3), approved_at: at(300)}, installs_count: 2,
+    {id: 's2', name: 'calibration-redo', description: 'Walks an owner through a projector calibration redo', latest: {number: 1, sha256: SHA(3), approved_at: at(300)}, installs_count: 2, function: 'Operations', source: 'directory',
       on: [who('Human', admin ? 'ana' : 'cara', admin ? 'Ana' : 'Cara')]},
-    {id: 's3', name: 'weekly-spend', description: 'Summarizes ad spend against plan for the week', latest: {number: 1, sha256: SHA(4), approved_at: at(600)}, installs_count: 0, on: []},
+    {id: 's3', name: 'weekly-spend', description: 'Summarizes ad spend against plan for the week', latest: {number: 1, sha256: SHA(4), approved_at: at(600)}, installs_count: 0, on: [], function: 'adtech', source: 'directory'},
+    // One only Tico ships (backend/skill_catalog.py): no version, on the bots made from its roles.
+    {id: null, name: 'review-a-contract', description: 'Reads a contract and lists the clauses to raise', latest: null, installs_count: 0,
+      function: 'legal', source: 'tico', on: [who('Bot', 'b-legal', 'Legal')], on_count: 3},
   ];
+  const shipped = {skill: {id: null, name: 'review-a-contract', description: skills[3]!.description, latest: null, function: 'legal', source: 'tico'},
+    versions: [], installs: [], shipped: {roles: [{template: 'legal', name: 'Legal'}], bots: [{id: 'b-legal', name: 'Legal'}], bots_count: 1,
+      files: [{path: 'SKILL.md', content: '---\nname: review-a-contract\nmetadata:\n  function: legal\n---\nRead it.'}, {path: 'clauses.md', content: '# Clauses'}]}};
+  const shippedUsage = {skill: 'review-a-contract', source: 'tico', days: 30, admin,
+    totals: {uses: 6, by_trigger: null, people: null, bots: 1, last_used_at: at(3)}, actors: [{...who('Bot', 'b-legal', 'Legal'), uses: 6, last_used_at: at(3)}], recent: [], installs: []};
   const usage = {days: 30, admin, skills: [
     {name: 'refund-check', uses: 74, by_trigger: {model: 74, person: 0, nested: 0}, people: 1, bots: 3, last_used_at: at(2),
       top: [{...who('Bot', 'b-support', 'Support'), uses: 46}]},
@@ -124,6 +134,8 @@ function skillsFake({admin = true, waiting = true, stayPending = false}: {admin?
       return {proposal: row};
     }
     if ((m = p.match(/^\/api\/v2\/skills\/installs\/([^/]+)$/)) && method === 'DELETE') return {id: m[1], deleted: true};
+    if (p === '/api/v2/skills/review-a-contract/usage') return shippedUsage;
+    if (p === '/api/v2/skills/review-a-contract') return shipped;
     if ((m = p.match(/^\/api\/v2\/skills\/([^/]+)\/usage$/))) return skillUsage(Number(url.searchParams.get('days')));
     if ((m = p.match(/^\/api\/v2\/skills\/([^/]+)\/versions\/(\d+)$/))) return {skill: m[1], version: {...detail.versions.find(v => v.number === Number(m![2])), files: versionFiles[m[2] as string]}};
     if ((m = p.match(/^\/api\/v2\/skills\/([^/]+)\/installs\/bulk$/))) return {installs: (body.targets as {target_type: string; target_id: string}[]).map((t, i) => ({id: 'n' + i}))};
@@ -161,7 +173,7 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       {
         const {page, seen} = await start(browser, '#/library/skills', {width, ready: 'tr[data-sk-row]'});
         assert.equal(await page.locator('.sk-tabs, [data-sk-tab], .tt-tabs').count(), 0, `${tag}: no tabs`);
-        assert.equal(await page.locator('tr[data-sk-row]').count(), 3, `${tag}: every skill`);
+        assert.equal(await page.locator('tr[data-sk-row]').count(), 4, `${tag}: every skill, the directory's and Tico's`);
         assert.deepEqual(await page.locator('[data-sk-waiting] tr[data-sk-proposal]').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.skProposal)),
           ['p-lead', 'p-invoice', 'p-refund'], `${tag}: only the pending proposals wait`);
         const lead = page.locator('tr[data-sk-proposal="p-lead"]');
@@ -182,9 +194,17 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await page.locator('tr[data-sk-row="calibration-redo"] [data-sk-on]').innerText(), 'You +1', `${tag}: my own install is You`);
         assert.equal(await page.locator('tr[data-sk-row="weekly-spend"] [data-sk-on]').innerText(), '', `${tag}: on nobody`);
         assert.match(await page.locator('tr[data-sk-row="weekly-spend"]').innerText(), /Never/, `${tag}: never used`);
-        // Search narrows the skills by name.
+        // A skill only Tico ships: Tico in place of a version, and +N from all it is on.
+        const contract = page.locator('tr[data-sk-row="review-a-contract"]');
+        assert.equal(await contract.locator('[data-sk-source="tico"]').innerText(), 'Tico', `${tag}: shipped by Tico`);
+        assert.equal(await contract.locator('[data-sk-on]').innerText(), 'Legal +2', `${tag}: on the bots of its roles`);
+        // Search narrows the skills by name, description or function, every word; the address keeps it.
+        const visible = () => page.locator('tr[data-sk-row]:visible').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.skRow));
         await page.locator('[data-sk-q]').fill('spend');
-        assert.deepEqual(await page.locator('tr[data-sk-row]:visible').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.skRow)), ['weekly-spend'], `${tag}: search`);
+        assert.deepEqual(await visible(), ['weekly-spend'], `${tag}: search`);
+        await page.locator('[data-sk-q]').fill('customers refund');
+        assert.deepEqual(await visible(), ['refund-check'], `${tag}: search by function`);
+        assert.equal(await page.evaluate(() => location.hash), '#/library/skills?q=customers+refund', `${tag}: the address keeps the search`);
         await page.locator('[data-sk-q]').fill('');
         if (tag === 'desktop') {
           await page.locator('#side a[data-nav="skills"].cur').waitFor({state: 'attached'});
@@ -365,6 +385,37 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         await page.close();
       }
     }
+    // The function filter: a menu of the functions there are, with counts (an unknown one is Other), a pick is the
+    // address, a chip says what is in force and its ✕ clears it; a shipped skill's page shows its files, roles and bots.
+    {
+      const {page, seen} = await start(browser, '#/library/skills', {ready: 'tr[data-sk-row]'});
+      await page.locator('[data-sk-filter]').click();
+      assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(r => r.map(x => (x as HTMLElement).innerText.replace(/\s+/g, ' ').trim())),
+        ['All ✓', 'Legal 1', 'Customers 1', 'Operations 1', 'Other 1'], 'the menu: functions there are, with counts');
+      await page.locator('#task-filter-pop [data-sk-fn-pick="legal"]').click();
+      await page.waitForFunction(() => location.hash === '#/library/skills?function=legal');
+      await page.locator('[data-sk-filter-chip]').waitFor();
+      const visible = () => page.locator('tr[data-sk-row]:visible').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.skRow));
+      await page.waitForFunction(() => document.querySelectorAll('tr[data-sk-row]').length === 4);
+      assert.deepEqual(await visible(), ['review-a-contract'], 'function: legal');
+      assert.match(await page.locator('[data-sk-filter-chip]').innerText(), /Function\s*Legal/, 'the chip names it');
+      await page.locator('[data-sk-filter-clear]').click();
+      await page.waitForFunction(() => location.hash === '#/library/skills' && !document.querySelector('[data-sk-filter-chip]'));
+      await page.evaluate(() => { location.hash = '#/library/skills?function=other'; });
+      await page.waitForFunction(() => document.querySelector('[data-sk-filter-chip]') && document.querySelectorAll('tr[data-sk-row]').length === 4);
+      assert.deepEqual(await visible(), ['weekly-spend'], 'function: other holds an unknown value');
+      await page.locator('tr[data-sk-row="review-a-contract"] a').evaluate(a => (a as HTMLElement).click());
+      await page.locator('#skill-files [data-sk-file]').waitFor();
+      assert.equal(await page.locator('[data-sk-install], #skill-versions, #skill-installs, [data-sk-version]').count(), 0, 'shipped: no Install, versions or installs');
+      assert.deepEqual(await page.locator('#skill-files [data-sk-path]').allInnerTexts(), ['SKILL.md', 'clauses.md'], 'shipped: its files');
+      assert.equal(await page.locator('#skill-roles [data-sk-role]').innerText(), 'Legal', 'shipped: its roles');
+      assert.equal(await page.locator('#skill-bots [data-sk-bot]').innerText(), 'Legal', 'shipped: the bots made from them');
+      assert.equal(await page.locator('[data-sk-trigger], [data-sk-no-uses]').count(), 0, 'shipped: no trigger split or "No uses" it cannot know');
+      assert.equal(await page.locator('[data-sk-total]').innerText(), '6', 'shipped: its uses');
+      assert.equal(await page.locator('[data-sk-fn-link]').getAttribute('href'), '#/library/skills?function=legal', 'shipped: its function links to the list');
+      assert.deepEqual(seen.errors, [], 'function filter errors');
+      await page.close();
+    }
     // A member: no Suggestions and no Not in directory, and the page never asks for them; Dismiss on an admin's.
     {
       const {page, seen, api} = await start(browser, '#/library/skills', {admin: false, ready: 'tr[data-sk-row]'});
@@ -399,6 +450,6 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       assert.deepEqual(seen.errors, [], 'member errors');
       await page.close();
     }
-    console.log('Skills: one list (no tabs, Waiting for OK pending only and hidden when empty, On, search, old ?tab= addresses), Suggestions (Remove, Ask to submit, Dismiss), Not in directory, approve needs the tick (and the 422), Decline, Re-run (reason, judge call, fails again, still screening), crumb, usage, coverage, files, Install for a team, Remove on the skill page, Claude Code command, member view, phone');
+    console.log('Skills: one list (no tabs, Tico\'s shipped skills, function filter and search by function, Waiting for OK pending only and hidden when empty, On, search, old ?tab= addresses), Suggestions (Remove, Ask to submit, Dismiss), Not in directory, approve needs the tick (and the 422), Decline, Re-run (reason, judge call, fails again, still screening), crumb, usage, coverage, files, Install for a team, Remove on the skill page, Claude Code command, member view, phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
