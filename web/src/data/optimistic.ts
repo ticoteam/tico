@@ -81,6 +81,12 @@ export async function write<T>(w: Write<T>): Promise<T> {
     answer = await (isOffline() ? hold(send) : send().catch((err: unknown) => (holdable && isNetworkError(err) ? hold(send) : Promise.reject(err))));
   } catch (err) {
     for (const { queryKey, before, after } of shown) {
+      // Nothing was read here before: what shows is made up. setQueryData(undefined) does nothing, so reset it
+      // (an open view reads it again).
+      if (before === undefined) {
+        void queryClient.resetQueries({ queryKey, exact: true });
+        continue;
+      }
       if (w.revert) queryClient.setQueryData(queryKey, (current: unknown) => (w.revert as NonNullable<Write<T>['revert']>)(current, err));
       else if (queryClient.getQueryData(queryKey) === after) queryClient.setQueryData(queryKey, before);
       else void queryClient.invalidateQueries({ queryKey });

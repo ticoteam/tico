@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from 'react';
+import { adaptMe, type SignedIn } from '@/api/adapt';
 import { ApiError, api } from '@/api/client';
-import { connectionChanged } from '@/data/held';
+import type { GetMeResponse } from '@/api/schema';
+import { clearHeld, connectionChanged } from '@/data/held';
+import { keys } from '@/data/keys';
 import { refetchQuiet } from '@/data/optimistic';
 import { queryClient } from '@/data/query-client';
 import { tabId } from '@/lib/tab';
@@ -153,14 +156,19 @@ function connect(): void {
 
   source.addEventListener('ready', (e) => {
     if (!mine()) return;
-    // A first stream starts from now; a resumed one keeps its own number, and the server replays from it.
-    if (after == null) after = seqOf(parse(e));
     clearOffline();
-    setStatus('live');
-    if (wasDown) {
-      wasDown = false;
-      refetchQuiet();
+    if (after == null) {
+      // A first stream starts from now. What was read before it opened may have missed a change in between: read
+      // what is on screen once more (not the person: the gate would take a failed read for a fault).
+      after = seqOf(parse(e));
+      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== keys.me()[0] });
+      return isLive();
     }
+    // A resumed stream keeps its own number, and the server replays from it. The cookie may be someone else's by
+    // now (another tab signed in): ask who it is before held changes go out under it.
+    void probe(false).then((same) => {
+      if (same && mine()) isLive();
+    });
   });
   source.addEventListener('cursor', (e) => {
     if (mine()) advance(seqOf(parse(e)));
@@ -205,6 +213,14 @@ function connect(): void {
   };
 }
 
+function isLive(): void {
+  setStatus('live');
+  if (wasDown) {
+    wasDown = false;
+    refetchQuiet();
+  }
+}
+
 const jitter = (ms: number) => Math.round(ms * (0.8 + Math.random() * 0.4));
 
 function down(source: EventSource): void {
@@ -230,27 +246,59 @@ function clearOffline(): void {
   offlineTimer = undefined;
 }
 
-/** Ask the server who is signed in: a 401 stops the stream until the person signs in again. */
-async function probe(reconnect: boolean): Promise<void> {
-  let out = false;
+/**
+ * Ask the server who is signed in. A 401 signs the app out; someone other than the person on screen (another tab
+ * signed in as them) starts the app again as that person. True when it is still the same person, or the server
+ * could not say.
+ */
+async function probe(reconnect: boolean): Promise<boolean> {
+  let who: SignedIn | null = null;
+  let refused: ApiError | null = null;
   try {
-    await api.get('/api/v2/me');
+    who = adaptMe(await api.get<GetMeResponse>('/api/v2/me'));
   } catch (err) {
-    out = err instanceof ApiError && err.status === 401;
+    if (err instanceof ApiError && err.status === 401) refused = err;
   }
-  if (!started) return;
-  if (out) return signedOut();
+  if (!started) return false;
+  if (refused) {
+    signedOut(refused);
+    return false;
+  }
+  const shown = queryClient.getQueryData<SignedIn>(keys.me());
+  if (who && shown && who.id !== shown.id) {
+    switched();
+    return false;
+  }
   // Still signed in (another tab signed in again after `expired`): reconnect after a pause.
   if (reconnect && !es) retryTimer = setTimeout(connect, jitter(BACKOFF_MS[BACKOFF_MS.length - 1] as number));
+  return true;
 }
 
-function signedOut(): void {
+function halt(): void {
   clearTimeout(retryTimer);
   clearTimeout(restartTimer);
   clearOffline();
   es?.close();
   es = null;
+}
+
+/**
+ * Signed out: held changes are dropped, everything read as the person goes, and the person's own read takes the
+ * 401, which is how the root decides to show its signed-out card (features/start/gate.ts).
+ */
+function signedOut(error: ApiError): void {
+  halt();
   setStatus('signed-out');
+  clearHeld();
+  queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== keys.me()[0] });
+  queryClient.getQueryCache().find({ queryKey: keys.me(), exact: true })?.setState({ status: 'error', error, data: undefined, fetchStatus: 'idle' });
+}
+
+/** Someone else is signed in now: nothing of the last person's goes out, and the app opens again as the new one. */
+function switched(): void {
+  halt();
+  clearHeld();
+  location.reload();
 }
 
 /** Reconnect now, from where the stream was (back from sleep, the network, the browser's page cache). */

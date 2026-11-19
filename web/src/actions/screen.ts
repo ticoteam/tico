@@ -1,5 +1,5 @@
 import { api } from '@/api/client';
-import { tabId } from '@/lib/tab';
+import { newId } from '@/lib/ids';
 import { onTopic } from '@/live';
 import { run, show } from './run';
 import type { Result } from './types';
@@ -73,7 +73,9 @@ const postResult = (id: string, r: ScreenResult) => api.post(resultPath(id), r);
 export function startScreen(): () => void {
   const visible = () => document.visibilityState === 'visible';
   const h = screenHandler({
-    tab: tabId(),
+    // This document's own id, not the tab id kept in sessionStorage: a duplicated tab copies that one, and two
+    // windows holding one id would both take the same claim and run a request twice.
+    tab: newId(),
     channel: typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null,
     inFront: () => visible() && document.hasFocus(),
     visible,

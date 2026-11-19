@@ -39,7 +39,8 @@ export function registerTargetResolver(fn: VirtualResolver): () => void {
   };
 }
 
-const quote = (s: string) => `"${s.replace(/["\\]/g, '\\$&')}"`;
+// Any id, even one with a quote or a line break, makes a valid selector.
+const quote = (s: string) => `"${CSS.escape(s)}"`;
 
 export function findTarget(kind: string, id: string | number, opts: FindOpts = {}): Element | null {
   const key = `${kind}:${id}`;

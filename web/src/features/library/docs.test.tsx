@@ -8,6 +8,7 @@ import { run } from '@/actions';
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
 import { ContactsPage } from './ContactsPage';
+import { DocPage } from './DocPage';
 import { DocsPage } from './DocsPage';
 import {
   archivedDocsQuery,
@@ -15,7 +16,9 @@ import {
   cardQuery,
   contactsQuery,
   countsQuery,
+  docQuery,
   docsListQuery,
+  docVersionsQuery,
   installTargetsQuery,
   skillQuery,
   skillUsageQuery,
@@ -108,6 +111,36 @@ describe('archived docs', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archived' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ archived: 1 }));
+  });
+});
+
+describe('editing a doc', () => {
+  it('keeps what the person typed when the save is refused, and sends the version they started from again', async () => {
+    const full = { ...doc('d1', 'Notes'), body: 'Old text', archived: false, created_at: '', created_by_id: '', created_by_name: '' };
+    const patches: unknown[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        patches.push(JSON.parse(String(init.body)));
+        return Response.json({ error: { code: 'doc_version_conflict', detail: 'Changed meanwhile' } }, { status: 409 });
+      }
+      // the conflict reads the doc again: someone else's newer text
+      if (String(url) === '/api/v2/docs/d1') return Response.json({ doc: { ...full, version: 4, body: 'Their text' } });
+      return Response.json({ docs: [], next_cursor: null, versions: [] });
+    });
+    queryClient.setQueryData(docQuery('d1').queryKey, full);
+    queryClient.setQueryData(docVersionsQuery('d1').queryKey, []);
+    at('/library/d1?edit=1', <DocPage doc="d1" search={{ edit: 1 }} />);
+    const text = await screen.findByRole('textbox', { name: 'Text' });
+    fireEvent.change(text, { target: { value: 'My text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(queryClient.getQueryData<{ version: number }>(docQuery('d1').queryKey)?.version).toBe(4));
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Text' }).value).toBe('My text');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches).toEqual([
+      { version: 3, body: 'My text' },
+      { version: 3, body: 'My text' },
+    ]);
   });
 });
 

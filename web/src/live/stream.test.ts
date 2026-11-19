@@ -1,5 +1,7 @@
 import { QueryObserver } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApiError } from '@/api/client';
+import { clearHeld, heldCount, hold } from '@/data/held';
 import { queryClient } from '@/data/query-client';
 import { FakeEventSource, frame, opening, task, taskFrame } from './fake-stream';
 import { flushFrame } from './frame';
@@ -18,6 +20,7 @@ beforeEach(() => {
 afterEach(() => {
   offs.splice(0).forEach((off) => off());
   stopLive();
+  clearHeld();
   resetFollows();
   queryClient.clear();
   expect(vi.getTimerCount()).toBe(0);
@@ -132,7 +135,7 @@ describe('the stream', () => {
     window.dispatchEvent(new Event('online'));
     expect(FakeEventSource.all).toHaveLength(opened + 1);
     FakeEventSource.last.feed(opening(905, 900));
-    expect(liveStatus()).toBe('live');
+    return vi.waitFor(() => expect(liveStatus()).toBe('live'));
   });
 
   it('ends with expired: asks who is signed in and stops on a 401', async () => {
@@ -140,6 +143,82 @@ describe('the stream', () => {
     startLive();
     FakeEventSource.last.feed(opening(900) + 'event: expired\ndata: {}\n\n');
     await vi.waitFor(() => expect(liveStatus()).toBe('signed-out'));
+  });
+});
+
+describe('who is signed in', () => {
+  const me = { id: 'human:a', email: '', role: 'person', slug: null };
+  const answer = (actor: string) => vi.fn(async () => Response.json({ actor, email: '', role: 'human' }));
+
+  it('on a 401, drops held changes and what was read, and the person read takes the 401 (the root signs out)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { code: 'unauthenticated', detail: 'x' } }, { status: 401 })));
+    queryClient.setQueryData(['me'], me);
+    queryClient.setQueryData(['tasks', 'detail', 't1'], { id: 't1' });
+    startLive();
+    FakeEventSource.last.feed(opening(900));
+    FakeEventSource.last.fail();
+    const send = vi.fn(async () => 'sent');
+    const held = hold(send);
+    vi.advanceTimersByTime(250);
+    FakeEventSource.last.fail();
+    await expect(held).rejects.toThrow();
+    await vi.waitFor(() => expect(liveStatus()).toBe('signed-out'));
+    expect(send).not.toHaveBeenCalled();
+    expect(heldCount()).toBe(0);
+    expect(queryClient.getQueryData(['tasks', 'detail', 't1'])).toBeUndefined();
+    const person = queryClient.getQueryState(['me']);
+    expect(person?.status).toBe('error');
+    expect((person?.error as ApiError).status).toBe(401);
+    expect(queryClient.getQueryData(['me'])).toBeUndefined();
+  });
+
+  it('back with someone else signed in: held changes never go out under them, and the app opens again', async () => {
+    vi.stubGlobal('fetch', answer('human:b'));
+    const reload = vi.fn();
+    vi.stubGlobal('location', { reload });
+    queryClient.setQueryData(['me'], me);
+    startLive();
+    FakeEventSource.last.feed(opening(900));
+    FakeEventSource.last.fail();
+    const send = vi.fn(async () => 'sent');
+    const held = hold(send);
+    vi.advanceTimersByTime(250);
+    FakeEventSource.last.feed(opening(905, 900));
+    await expect(held).rejects.toThrow();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    expect(liveStatus()).not.toBe('live');
+  });
+
+  it('back as the same person: goes live and sends what was held', async () => {
+    vi.stubGlobal('fetch', answer('human:a'));
+    queryClient.setQueryData(['me'], me);
+    startLive();
+    FakeEventSource.last.feed(opening(900));
+    FakeEventSource.last.fail();
+    const held = hold(async () => 'sent');
+    vi.advanceTimersByTime(250);
+    FakeEventSource.last.feed(opening(905, 900));
+    await expect(held).resolves.toBe('sent');
+    expect(liveStatus()).toBe('live');
+  });
+});
+
+describe('the first connection', () => {
+  it('reads what is on screen once more, since a change may have come between the read and the stream', () => {
+    const key = ['tasks', 'list', { status: 'open' }];
+    const read = vi.fn(async () => ({ tasks: [], cursor: '900.a' }));
+    queryClient.setQueryData(key, { tasks: [], cursor: '900.a' });
+    queryClient.setQueryData(['me'], { id: 'human:a' });
+    offs.push(new QueryObserver(queryClient, { queryKey: key, queryFn: read }).subscribe(() => {}));
+    startLive();
+    FakeEventSource.last.feed(opening(905));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryState(['me'])?.isInvalidated).toBe(false);
+    FakeEventSource.last.fail();
+    vi.advanceTimersByTime(250);
+    FakeEventSource.last.feed(opening(910, 905)); // a resumed one replays instead
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });
 

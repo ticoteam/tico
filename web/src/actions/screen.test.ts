@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { api } from '@/api/client';
+import { onTopic } from '@/live';
 import { run, show } from './run';
-import { actOn, screenHandler } from './screen';
+import { actOn, screenHandler, startScreen } from './screen';
 import type { ScreenEvent } from './wire';
 
 vi.mock('./run', () => ({ run: vi.fn(), show: vi.fn() }));
@@ -81,6 +83,24 @@ describe('screen', () => {
     const h = screenHandler({ tab: 'A', channel: null, inFront: () => true, visible: () => false, act, post: vi.fn() });
     await h.handle(event());
     expect(act).not.toHaveBeenCalled();
+  });
+
+  it('a duplicated tab (same sessionStorage) is still its own tab: one request acts once', async () => {
+    const join = bus();
+    vi.stubGlobal('BroadcastChannel', function BroadcastChannel() {
+      return join();
+    });
+    vi.mocked(run).mockResolvedValue({ ok: true, did: 'Opened #412' });
+    vi.mocked(api.post).mockResolvedValue({});
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const stops = [startScreen(), startScreen()]; // the original, then its duplicate (which claims last)
+    for (const [, handler] of vi.mocked(onTopic).mock.calls) handler([event()]);
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(run).toHaveBeenCalledTimes(1);
+    stops.forEach((stop) => stop());
+    focus.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it('done shows only; otherwise it runs as Tico', async () => {

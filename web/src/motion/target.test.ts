@@ -23,6 +23,14 @@ describe('findTarget', () => {
     expect(findTarget('field', 'fees')).toBe(document.querySelector('[aria-label="Fees"]'));
   });
 
+  it('finds an id with a quote or a line break in it', () => {
+    const el = document.createElement('div');
+    el.dataset.target = 'doc:a"b\nc';
+    document.body.append(el);
+    place(el, 100);
+    expect(findTarget('doc', 'a"b\nc')).toBe(el);
+  });
+
   it('lands on the folded section that holds it', () => {
     document.body.innerHTML =
       '<section data-target="section:money" aria-label="Money"><div hidden><div data-target="field:fees"></div></div></section>';
