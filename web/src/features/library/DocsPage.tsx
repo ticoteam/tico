@@ -12,7 +12,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
-import { List, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
+import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Foot, trimmed, useGo } from './AddTool';
 import { Face, Find, KindGlyph, OwnerButton, press, Who } from './parts';
 import { archivedDocsQuery, docsListQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocRow } from './queries';
@@ -55,10 +55,10 @@ function DocsMore({ archived }: { archived: boolean }) {
   };
   return (
     <>
-      <Menu trigger={<IconButton icon="more" label="More" />}>
+      <PageMore>
         <MenuItem label="Import a file" onSelect={() => pick.current?.click()} />
         <MenuItem label="Archived" on={archived} onSelect={() => void press('docs.list', { archived: !archived })} />
-      </Menu>
+      </PageMore>
       <input
         ref={pick}
         type="file"

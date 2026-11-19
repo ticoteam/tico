@@ -4,8 +4,8 @@ import { useAction } from '@/actions';
 import { directoryQuery, meQuery, type Actor } from '@/data';
 import { useFollow } from '@/live/follow';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
-import { FiguresStrip, List, Section, type PageState } from '@/pagekinds';
+import { MenuItem } from '@/kit/Menu';
+import { FiguresStrip, List, PageMore, Section, type PageState } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
@@ -93,9 +93,9 @@ export function TeamPage({ group, add }: TeamPageProps) {
         }
         more={
           reach?.you?.manage ? (
-            <Menu trigger={<IconButton icon="more" label="More" />}>
+            <PageMore>
               <MenuItem label="Access" icon="lock" onSelect={() => setAccess(true)} />
-            </Menu>
+            </PageMore>
           ) : undefined
         }
         state={state}

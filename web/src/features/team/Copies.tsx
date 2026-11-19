@@ -9,6 +9,7 @@ import { Link } from '@/kit/Link';
 import { LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
+import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
 import { bareId } from './model';
 import { ConfirmDialog, MateRow, PickDialog } from './parts';
@@ -45,10 +46,9 @@ export function CopyPick({ slug, botId }: { slug: string; botId: string }) {
       <Menu
         align="start"
         trigger={
-          <button className="scope-pick copy-pick" type="button" aria-label={`Copy: ${here}`}>
-            <span>{here}</span>
-            <Icon name="chevdown" />
-          </button>
+          <ValueButton look="scope" className="copy-pick" label={`Copy: ${here}`}>
+            {here}
+          </ValueButton>
         }
       >
         <MenuItem label="Original" on={b.original === botId} onSelect={() => original && void open.run({ who: original.slug })} />

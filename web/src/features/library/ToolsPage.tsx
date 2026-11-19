@@ -16,7 +16,7 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { BrowserDialog } from '@/features/team/exports';
-import { FilterRow, ItemHead, ListAndItem, Section, type PageState } from '@/pagekinds';
+import { FilterRow, ItemHead, ListAndItem, PageMore, Section, type PageState } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import {
   CodeDialog,
@@ -368,11 +368,11 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
     ) : undefined);
   const last = t?.checks[0];
   const more = t?.can_manage && (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Edit" onSelect={() => setDialog({ is: 'edit' })} />
       {!mcp && <MenuItem label="Add many keys" onSelect={() => setDialog({ is: 'paste' })} />}
       <MenuItem label="Add run setting" onSelect={() => setDialog({ is: 'setting', setting: null })} />
-    </Menu>
+    </PageMore>
   );
 
   return (
@@ -780,11 +780,11 @@ function InboxView({ inbox, row, number }: { inbox: string; row: ToolIndexRow | 
   const [dialog, setDialog] = useState<'edit' | 'release' | null>(null);
   const [reading, setReading] = useState<{ id: string; title: string } | null>(null);
   const more = box && (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Edit" onSelect={() => setDialog('edit')} />
       <MenuRule />
       <MenuItem label="Stop using" onSelect={() => setDialog('release')} />
-    </Menu>
+    </PageMore>
   );
   return (
     <Shell
@@ -947,13 +947,13 @@ function WebhookView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const w = hook.data?.webhook;
   const paused = !!w?.paused_reason;
   const more = w?.can_change && (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Send test" onSelect={() => void press('tools.testWebhook', { webhook: id }, 'The test did not send')} />
       <MenuItem
         label={paused ? 'Send again' : 'Pause'}
         onSelect={() => void press('tools.pauseWebhook', { webhook: id, on: paused }, paused ? 'It did not restart' : 'It did not pause')}
       />
-    </Menu>
+    </PageMore>
   );
   return (
     <Shell

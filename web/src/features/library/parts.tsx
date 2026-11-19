@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, type ReactNode } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
@@ -7,6 +7,7 @@ import { Avatar } from '@/kit/Avatar';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { toast } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 
@@ -43,19 +44,17 @@ export function OwnerButton({ page }: { page: 'docs' | 'skills' | 'contacts' | '
 /** A teammate's face that opens their chat beside the page (a file's maker, a page's owner). */
 export function ChatWith({ actor }: { actor: string | null }) {
   const who = useActor(actor);
+  // `chat` is the shell's, in no route's search schema: built as an address, it keeps the page's own filters.
+  const href = useLocation({
+    select: (l) => {
+      const q = new URLSearchParams(l.searchStr);
+      if (actor) q.set('chat', actor);
+      return `${l.pathname}?${q.toString()}`;
+    },
+  });
   if (!actor) return null;
-  const name = who?.name ?? 'the owner';
-  return (
-    <Link
-      to="."
-      search={(prev: Record<string, unknown>) => ({ ...prev, chat: actor })}
-      className="pg-owner"
-      aria-label={`Chat with ${name}`}
-      title={`Chat with ${name}`}
-    >
-      <Face actor={actor} size={28} />
-    </Link>
-  );
+  const kind = who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person');
+  return <KitOwnerButton name={who?.name ?? 'the owner'} kind={kind} hue={who?.hue} live={who?.working} href={href} />;
 }
 
 /** The head's search: a button until pressed, then the field. Typing narrows the page after a short pause. */

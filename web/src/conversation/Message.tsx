@@ -3,7 +3,6 @@ import { useState, type MouseEvent, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
 import { ConfirmCard } from '@/kit/ConfirmCard';
-import { Fault } from '@/kit/Fault';
 import { Icon } from '@/kit/Icon';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
@@ -164,22 +163,6 @@ function Proposal({ aid }: { aid: string }) {
 }
 
 /* ---------------------------------------------------------------- lines */
-
-export interface DidLineProps {
-  text: string;
-  /** Tico could not do it: the fault mark, in ink. */
-  fault?: boolean;
-}
-
-/** What Tico did on the page: "Opened Agents", with the done tick. No Undo in the first build. */
-export function DidLine({ text, fault }: DidLineProps) {
-  return (
-    <div className={fault ? 'did is-fault' : 'did'}>
-      <span className="did-ico">{fault ? <Fault label="Could not do it" /> : <Icon name="check" />}</span>
-      <span>{text}</span>
-    </div>
-  );
-}
 
 export interface MessageProps {
   m: ChatMessage;

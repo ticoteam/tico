@@ -7,12 +7,11 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Menu } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { fmtDate } from '@/lib';
-import { List, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
+import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
 import { Face, HeadSwitch, press, RemoveItem, RuleRow, useConfirmRemove, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
@@ -175,9 +174,9 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
         </>
       }
       more={
-        <Menu trigger={<IconButton icon="more" label="More" />}>
+        <PageMore>
           <RemoveItem disabled={tmp} onSelect={() => remove.confirm(w.name || 'this watch', () => void press('listening.remove', { watch: id }))} />
-        </Menu>
+        </PageMore>
       }
       sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} open={match} />}
     />

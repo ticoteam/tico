@@ -10,10 +10,10 @@ import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
+import { PageMore } from '@/pagekinds';
 import { earlierStages, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { Face, FlowMark, Go, Mark } from './parts';
 import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
@@ -278,7 +278,7 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
 
   return (
     <>
-      <Menu trigger={<IconButton icon="more" label="More" />}>
+      <PageMore>
         {flow && t.status === 'open' && (
           <>
             <MenuSub label="Give to" icon="people">
@@ -306,7 +306,7 @@ export function MoreMenu({ t, flow = false }: { t: TaskData; flow?: boolean }) {
             />
           </>
         )}
-      </Menu>
+      </PageMore>
 
       <Dialog
         open={asking === 'due'}

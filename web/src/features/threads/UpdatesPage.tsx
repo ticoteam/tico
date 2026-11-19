@@ -4,11 +4,11 @@ import { useActor } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
-import { Document, List, type PageTab } from '@/pagekinds';
+import { Document, List, PageMore, type PageTab } from '@/pagekinds';
 import { byDay, dayLabel, updateParagraphs, updateTitle, type Update } from './model';
 import { Face, press } from './people';
 import { updateListQuery, updateQuery, type UpdateTab } from './queries';
@@ -77,9 +77,9 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       }
       more={
         archive ? undefined : (
-          <Menu trigger={<IconButton icon="more" label="More" />}>
+          <PageMore>
             <MenuItem label="Archive" icon="archive" onSelect={() => void press('updates.openArchive', {})} />
-          </Menu>
+          </PageMore>
         )
       }
       state={state}
@@ -155,7 +155,7 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
   }, [u]);
   const title = u ? updateTitle(u) : 'Update';
   const more = u && (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Mark unread" icon="updates" onSelect={() => void press('updates.markRead', { ids: [u.id], read: false })} />
       <MenuRule />
       {u.archived ? (
@@ -163,7 +163,7 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
       ) : (
         <MenuItem label="Archive update" icon="archive" onSelect={() => void press('updates.archive', { ids: [u.id] })} />
       )}
-    </Menu>
+    </PageMore>
   );
   const parts = u ? updateParagraphs(u) : [];
   const slides = u?.slides;

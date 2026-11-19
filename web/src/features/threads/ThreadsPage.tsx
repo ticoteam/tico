@@ -9,11 +9,10 @@ import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { MenuItem } from '@/kit/Menu';
 import { Row, ThreadRow } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
-import { ItemHead, ListAndItem, type PageTab } from '@/pagekinds';
+import { ItemHead, ListAndItem, PageMore, type PageTab } from '@/pagekinds';
 import { Browse } from './Browse';
 import { isDm, othersOf, rowsOf, unreadOf, type Thread } from './model';
 import { NewMessage, NewMessageFoot, useNewDraft } from './NewMessage';
@@ -107,10 +106,10 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
       path="/threads"
       actions={<NewButton />}
       more={
-        <Menu trigger={<IconButton icon="more" label="More" />}>
+        <PageMore>
           <MenuItem label="Browse threads" icon="search" onSelect={() => setBrowsing(true)} />
           <MenuItem label="Learned" icon="spark" onSelect={() => void press('learned.open', {})} />
-        </Menu>
+        </PageMore>
       }
       search={<Search label="Find a thread" placeholder="Find a thread" value={words} onValueChange={setWords} wide />}
       tabs={threadTabs(here)}

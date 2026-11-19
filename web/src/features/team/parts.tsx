@@ -8,6 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Link as KitLink } from '@/kit/Link';
+import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
 import { Row, TaskRow } from '@/kit/Row';
 import { Select, type SelectOption } from '@/kit/Select';
@@ -78,11 +79,7 @@ export function OwnerButton({ actor }: { actor: string }) {
     },
   });
   if (!who) return null;
-  return (
-    <KitLink href={href} className="pg-owner" aria-label={`Chat with ${who.name}`} title={`Chat with ${who.name}`}>
-      <Avatar kind={who.kind} name={who.name} hue={who.hue} live={who.working} size={28} />
-    </KitLink>
-  );
+  return <KitOwnerButton name={who.name} kind={who.kind} hue={who.hue} live={who.working} href={href} />;
 }
 
 /** A page's rare verbs as one quiet line, never red (mates.css `.rec .foot`). */

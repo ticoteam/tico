@@ -148,16 +148,7 @@ div.row{cursor:default}
 .set-picks,.set-level,.set-stop{display:grid;gap:var(--s-1)}
 .set-stop .open-foot{margin-top:0;padding:var(--s-1) 0 0;box-shadow:none}
 
-/* Agents as one screen (a trial, Nov 19). A value you change where it stands: its words, a small chevron; a wash under
-   the pointer and while its menu is open. */
-.dd{max-width:calc(100% + 12px);min-width:0;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-1);justify-self:start;margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer;transition:background var(--dur-fast) var(--ease)}
-.dd>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.dd>.ico{width:13px;height:13px;flex:none;color:var(--faint);stroke-width:2}
-.dd:hover,.dd[aria-expanded="true"]{background:var(--well-2);color:var(--ink)}
-.dd:hover>.ico,.dd[aria-expanded="true"]>.ico{color:var(--ink-2)}
-.dd.is-same{color:var(--muted)}
-.dd:disabled{cursor:default;background:none}
-.dd:disabled>.ico{display:none}
+/* Agents as one screen (a trial, Nov 19). */
 .row-own{display:grid}
 /* over the table: search (or what to do with the checked rows) at the left, how it is grouped at the right */
 .fl-tools .bulk{margin-left:0}
@@ -180,7 +171,7 @@ div.row{cursor:default}
 /* a narrow page: the model for tasks and the owner give way */
 @container page (max-width:740px){
   .g-bots.g-fleet{--g:16px var(--av-sm) minmax(0,1fr) 176px 72px 34px}
-  .g-fleet .c-tasks,.g-fleet .c-own,.dd-more{display:none}
+  .g-fleet .c-tasks,.g-fleet .c-own{display:none}
 }
 
 /* ---- usage (anchor) ---- */

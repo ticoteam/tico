@@ -5,9 +5,8 @@ import { Outline } from '@/conversation';
 import { ThreadCallHead } from '@/features/calls/exports';
 import { Count } from '@/kit/Count';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
-import { ItemHead } from '@/pagekinds';
+import { MenuItem, MenuRule } from '@/kit/Menu';
+import { ItemHead, PageMore } from '@/pagekinds';
 import { AddPeople, Members } from './Members';
 import { isDm, isMuted, othersOf } from './model';
 import { Face, press, useMe, useTitle } from './people';
@@ -30,7 +29,7 @@ export function ThreadHead({ id }: { id: string }) {
   const other = t && isDm(t) ? people[0] : undefined;
 
   const more = (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Rename" icon="edit" disabled={!manage} onSelect={() => setEditing(true)} />
       <MenuItem label="People" icon="people" onSelect={() => setOpen('people')} />
       <MenuItem label={muted ? 'Unmute' : 'Mute'} icon="asleep" onSelect={() => void press('threads.mute', { thread: id, muted: !muted })} />
@@ -38,7 +37,7 @@ export function ThreadHead({ id }: { id: string }) {
       <MenuItem label="Settings" icon="gear" onSelect={() => setOpen('settings')} />
       <MenuRule />
       <MenuItem label="Archive thread" icon="archive" disabled={!manage} onSelect={() => void press('threads.archive', { thread: id })} />
-    </Menu>
+    </PageMore>
   );
 
   return (

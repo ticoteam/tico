@@ -12,6 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
+import { PageMore } from '@/pagekinds';
 import { CallBars, Dot, dot } from '@/tico/dot';
 import { CallSide } from './CallSide';
 import { running } from './model';
@@ -173,10 +174,10 @@ function SmallWindowControls() {
   };
   return (
     <>
-      <Menu trigger={<IconButton icon="more" label="More" />}>
+      <PageMore>
         <MenuItem label="Keep on top" on={onTop} onSelect={flip} />
         <MenuItem label="Copy link" onSelect={copyLink} />
-      </Menu>
+      </PageMore>
       <IconButton icon="expand" label="Back to the app" onClick={() => void press('calls.backToApp', {})} />
     </>
   );

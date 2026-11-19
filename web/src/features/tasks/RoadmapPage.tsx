@@ -11,7 +11,7 @@ import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
-import { List, Section, type PageState } from '@/pagekinds';
+import { List, PageMore, Section, type PageState } from '@/pagekinds';
 import { usePref } from '@/prefs';
 import { fmtDate } from '@/lib';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
@@ -67,7 +67,7 @@ export function RoadmapPage({ search }: { search: RoadmapSearch }) {
         path="/roadmap"
         className="tasks-page"
         actions={p && <HeadActions p={p} search={search} onNew={newFeature} none={state === 'empty'} />}
-        more={p && <PageMore p={p} />}
+        more={p && <MoreMenu p={p} />}
         state={state}
         empty={
           p
@@ -118,14 +118,14 @@ function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapS
   );
 }
 
-function PageMore({ p }: { p: Pipeline }) {
+function MoreMenu({ p }: { p: Pipeline }) {
   const openTasks = useAction('tasks.open');
   const edit = useAction('tasks.editPipeline');
   return (
-    <Menu trigger={<IconButton icon="more" label="More" data-target="roadmap:more" />}>
+    <PageMore target="roadmap:more">
       <MenuItem icon="tasks" label={`Open ${p.name}`} onSelect={() => void openTasks.run({ pipeline: p.id })} />
       {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
-    </Menu>
+    </PageMore>
   );
 }
 

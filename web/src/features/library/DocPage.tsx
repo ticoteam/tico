@@ -7,7 +7,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
-import { Document, type PageState } from '@/pagekinds';
+import { Document, PageMore, type PageState } from '@/pagekinds';
 import { headings, Markdown } from '@/kit/Markdown';
 import { Face, OwnerButton, press, when } from './parts';
 import { docQuery, docVersionQuery, docVersionsQuery, externalDocQuery, type Doc } from './queries';
@@ -78,9 +78,9 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
           )}
           <OwnerButton page="docs" />
           {doc && !past && !doc.archived && (
-            <Menu trigger={<IconButton icon="more" label="More" />}>
+            <PageMore>
               <MenuItem label="Archive" onSelect={() => void press('docs.archive', { doc: id, version: doc.version, archived: true }, 'Not archived')} />
-            </Menu>
+            </PageMore>
           )}
         </>
       }

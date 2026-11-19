@@ -10,13 +10,13 @@ import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
-import { Icon } from '@/kit/Icon';
 import { Facts } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
+import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
 import { Foot, Line, SwitchLine, Verb, act, usd } from './parts';
 import {
@@ -437,26 +437,6 @@ export function modelWords(r?: Row): string {
     .join(', ');
 }
 
-/** A value changed where it stands: its words and a small chevron. `more` shows on a wide table only. */
-function dd(text: string, o: { label: string; more?: string; title?: string; cls?: string; disabled?: boolean; onClick?: () => void }) {
-  return (
-    <button
-      type="button"
-      className={o.cls ? `dd ${o.cls}` : 'dd'}
-      title={o.title ?? text}
-      aria-label={o.label}
-      disabled={o.disabled}
-      onClick={o.onClick}
-    >
-      <span>
-        {text}
-        {o.more && <span className="dd-more">{`, ${o.more}`}</span>}
-      </span>
-      <Icon name="chevdown" />
-    </button>
-  );
-}
-
 function MoveItems({ machines, rows, onPick }: { machines: Machine[]; rows: Row[]; onPick: (m: Machine) => void }) {
   return (
     <>
@@ -599,15 +579,27 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
       <Link to="/settings/$section" params={{ section: 'agents' }} search={open ? {} : { open: slug }} className="row-title" aria-expanded={open}>
         {a.name}
       </Link>
-      {dd(modelWords(r) || 'None', { label: `${a.name}'s model`, disabled: !manage, onClick: edit('model') })}
-      {tm?.model || tm?.effort
-        ? dd(tasks || 'Same', { label: `${a.name}'s tasks`, more: cap(tm.effort), cls: 'c-tasks', disabled: !manage, onClick: edit('tasks') })
-        : dd('Same', { label: `${a.name}'s tasks`, title: "The agent's own model", cls: 'c-tasks is-same', disabled: !manage, onClick: edit('tasks') })}
+      <ValueButton label={`${a.name}'s model`} disabled={!manage} onClick={edit('model')}>
+        {modelWords(r) || 'None'}
+      </ValueButton>
+      {tm?.model || tm?.effort ? (
+        <ValueButton label={`${a.name}'s tasks`} more={cap(tm.effort)} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
+          {tasks || 'Same'}
+        </ValueButton>
+      ) : (
+        <ValueButton label={`${a.name}'s tasks`} title="The agent's own model" className="c-tasks" muted disabled={!manage} onClick={edit('tasks')}>
+          Same
+        </ValueButton>
+      )}
       <span className="row-own c-own">{owner && <Avatar kind="person" name={owner.name} hue={owner.hue} />}</span>
       {by === 'team' ? (
         <Menu
           align="start"
-          trigger={dd(computer ?? 'No computer', { label: `${a.name}'s computer`, cls: computer ? undefined : 'is-same', disabled: !manage })}
+          trigger={
+            <ValueButton label={`${a.name}'s computer`} muted={!computer} disabled={!manage}>
+              {computer ?? 'No computer'}
+            </ValueButton>
+          }
         >
           {machines.map((m) => (
             <MenuItem

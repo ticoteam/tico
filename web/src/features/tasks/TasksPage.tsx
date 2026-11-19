@@ -14,7 +14,8 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
-import { Board, BoardColumn, FilterRow, List, Section, type FilterChip, type PageState } from '@/pagekinds';
+import { ValueButton } from '@/kit/ValueButton';
+import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
@@ -106,7 +107,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
     ...head,
     title: 'Tasks',
     actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} owner={p?.owner ?? null} onNew={() => setNewIn({ stage: null })} />,
-    more: p && <PageMore p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
+    more: p && <MoreMenu p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
     state,
     empty: p
       ? {
@@ -194,10 +195,9 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
     <Menu
       align="start"
       trigger={
-        <button className="scope-pick" type="button" data-target="tasks:pipeline">
+        <ValueButton look="scope" data-target="tasks:pipeline">
           {current.name}
-          <Icon name="chevdown" />
-        </button>
+        </ValueButton>
       }
     >
       {pipelines.map((x) => (
@@ -208,11 +208,11 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
 }
 
 /** The page's "⋯" (list.js moreItems): Archived, Select, then Edit pipeline. */
-function PageMore({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
+function MoreMenu({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
   const setView = useAction('tasks.setView');
   const edit = useAction('tasks.editPipeline');
   return (
-    <Menu trigger={<IconButton icon="more" label="More" data-target="tasks:more" />}>
+    <PageMore target="tasks:more">
       <MenuItem icon="archive" label="Archived" onSelect={() => void setView.run({ pipeline: p.id, view: 'archived' })} />
       <MenuItem icon="square" label="Select" onSelect={onSelect} />
       {p.mayChange && (
@@ -221,7 +221,7 @@ function PageMore({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
           <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />
         </>
       )}
-    </Menu>
+    </PageMore>
   );
 }
 

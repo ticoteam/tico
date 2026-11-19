@@ -14,10 +14,6 @@
 .day.is-new{color:var(--ink);font-weight:var(--w-strong)}
 .day.is-new::before,.day.is-new::after{background:var(--line-strong)}
 
-.did.is-fault{color:var(--ink);font-weight:var(--w-strong)}
-.did.is-fault .did-ico{color:var(--ink)}
-.did.is-fault{align-items:flex-start}
-.did.is-fault span:last-child{white-space:normal;overflow:visible;line-height:18px;padding-top:var(--s-0)}
 .ask-said{margin-top:var(--s-1h);font-size:var(--t-xs);color:var(--muted)}
 .msg p .fmark{margin-right:var(--s-0)}
 

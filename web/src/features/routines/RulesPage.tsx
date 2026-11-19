@@ -2,10 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { MenuItem } from '@/kit/Menu';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
-import { List, Section, type PageTab } from '@/pagekinds';
+import { List, PageMore, Section, type PageTab } from '@/pagekinds';
 import { ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf } from './CompanyRules';
 import { press, RemoveItem, RuleRow, useConfirmRemove, useName } from './parts';
@@ -72,10 +71,10 @@ export function RulesPage({ search }: { search: RulesSearch }) {
   const body = useTab(t, search, remove.confirm);
   const [reading, setReading] = useState(false);
   const more = (
-    <Menu trigger={<IconButton icon="more" label="More" />}>
+    <PageMore>
       <MenuItem label="Add due date" icon="calendar" onSelect={() => void press('rules.newDue', {})} />
       <MenuItem label="Add document" icon="file" onSelect={() => setReading(true)} />
-    </Menu>
+    </PageMore>
   );
   return (
     <List

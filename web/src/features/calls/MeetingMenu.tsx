@@ -8,11 +8,11 @@ import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
-import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { PageMore } from '@/pagekinds';
 import { PeoplePick } from './PeoplePick';
 import { press } from './parts';
 import { granolaQuery, importersQuery, meetingSettingsQuery, pollGranola, sourcesQuery } from './queries';
@@ -29,13 +29,13 @@ export function MeetingMenu() {
   const close = useCallback(() => setOpen(null), []);
   return (
     <>
-      <Menu trigger={<IconButton icon="more" label="More" />}>
+      <PageMore>
         <MenuItem label="Log a meeting" icon="edit" onSelect={() => setOpen('log')} />
         <MenuItem label="Meeting sources" icon="list" meta={connected ? String(connected) : undefined} onSelect={() => setOpen('sources')} />
         {granola && !granola.connected && <MenuItem label="Connect Granola" icon="link" onSelect={() => setOpen('granola')} />}
         <MenuRule />
         <MenuItem label="Calendar settings" icon="gear" onSelect={() => setOpen('settings')} />
-      </Menu>
+      </PageMore>
       <Dialog open={open === 'log'} onOpenChange={(o) => !o && close()} title="Log a meeting">
         {open === 'log' && <LogForm done={close} />}
       </Dialog>

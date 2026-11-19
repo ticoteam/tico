@@ -11,7 +11,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
-import { List, Section, SidePanel, type PageState } from '@/pagekinds';
+import { List, PageMore, Section, SidePanel, type PageState } from '@/pagekinds';
 import { plural, useFinanceHead } from './head';
 import { cash, count } from './model';
 import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
@@ -67,10 +67,6 @@ function Page({
     <List {...head} state={stateOf(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} panel={panel || undefined} sections={children} />
   );
 }
-
-/** The page's ⋯ with its items, or nothing when it has none. */
-const More = ({ children }: { children: ReactNode[] }) =>
-  children.some(Boolean) ? <Menu trigger={<IconButton icon="more" label="More" />}>{children}</Menu> : null;
 
 /** `failure`: a books sign-in that came back unconnected (useBooksReturn), shown beside Sources until put away. */
 export function BooksPage({ tab, failure = null, onDismiss = () => {} }: { tab: FinanceTab; failure?: string | null; onDismiss?: () => void }) {
@@ -384,15 +380,15 @@ function Payables() {
         // The owner or an admin sets the bills address; anyone else copies it (finance-docs.ts finDocEmailDraw).
         // The dialog sits with its menu: with no bills the page shows only its empty state.
         <>
-          <More>
+          <PageMore>
             {[
               may('finance.admin') ? (
                 <MenuItem key="set" label="Bills address" meta={email || 'None'} onSelect={() => setSetting(true)} />
               ) : (
-                email && <MenuItem key="copy" label={`Copy ${email}`} onSelect={() => copied(email)} />
+                email ? <MenuItem key="copy" label={`Copy ${email}`} onSelect={() => copied(email)} /> : null
               ),
             ]}
-          </More>
+          </PageMore>
           {setting && <BillsAddressDialog address={email} onOpenChange={setSetting} />}
         </>
       }
@@ -512,7 +508,7 @@ function Balance() {
       q={q}
       more={
         <>
-          <More>{[may('finance.book') && <MenuItem key="import" label="Import history" onSelect={() => setImporting(true)} />]}</More>
+          <PageMore>{[may('finance.book') && <MenuItem key="import" label="Import history" onSelect={() => setImporting(true)} />]}</PageMore>
           {importing && <ImportDialog onOpenChange={setImporting} />}
         </>
       }

@@ -9,10 +9,10 @@ import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { fmtDate, fmtMoney } from '@/lib';
-import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
+import { FiguresStrip, PageMore, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
@@ -139,7 +139,7 @@ function AgentHead({
     ),
     more: (
       <>
-        <Menu trigger={<IconButton icon="more" label="More" />}>
+        <PageMore>
           {paused ? (
             <MenuItem label="Resume" icon="play" onSelect={() => void resume.run({ slug })} />
           ) : (
@@ -147,7 +147,7 @@ function AgentHead({
           )}
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
-        </Menu>
+        </PageMore>
         <ConfirmDialog
           open={archiving}
           onOpenChange={setArchiving}
