@@ -573,13 +573,16 @@ def _allocate(total: int, weights: Sequence[int]) -> list[int]:
 
 # ------------------------------------------------------------------------------------------------ payouts
 def _payout(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
-    """The balance paid out, on the payout's day: the amount is in transit until a Stripe-looking deposit of it arrives
-    within MATCH_DAYS (or has already)."""
+    """The balance paid out, on the payout's day: its gross (what the bank receives) is in transit until a deposit of it
+    arrives within MATCH_DAYS (or has already), and an instant payout's fee is a fee. Only a deposit that looks like
+    Stripe's clears it."""
     fid = str(row["id"])
-    entry = banking.post_row(ctx, fid, t, [banking.feed_line(_transit(ctx).id, -t.amount)], _gl_of(ctx, money).id, [])
+    gross, fee = F.stripe_parts(t.raw)
+    lines = [banking.feed_line(_transit(ctx).id, -gross)] + ([banking.feed_line(_fees(ctx).id, fee)] if fee else [])
+    entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
     start, end = _window(t.txn_date)
-    found = SK.stripe_deposits(ctx.c, ctx.book.id, start=start, end=end, amount=-t.amount, most=WAITING_MOST)
+    found = SK.stripe_deposits(ctx.c, ctx.book.id, start=start, end=end, amount=-gross, most=WAITING_MOST)
     if len(found) > 1:
         _ask(ctx, fid, "several bank deposits could be this payout", "ambiguous")
     elif found:
@@ -587,8 +590,10 @@ def _payout(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
 
 
 def _payout_back(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
-    """A payout the bank or Stripe sent back to the balance: its transit amount returns. A payout already cleared at the
-    bank cannot be returned by this path, so a person is asked. A payout not yet here waits as new."""
+    """A payout the bank or Stripe sent back to the balance: its transit amount returns. When it returns an instant
+    payout's fee with it, the part past the payout's gross (at most that fee) comes off fees, so transit returns only
+    what it holds. A payout already cleared at the bank cannot be returned by this path, so a person is asked. A payout
+    not yet here waits as new."""
     fid = str(row["id"])
     link = str(t.raw.get("link") or "")
     payout = SK.stripe_source(ctx.c, str(money["id"]), ("payout",), link) if link else None
@@ -597,7 +602,12 @@ def _payout_back(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
     if SK.stripe_cleared(ctx.c, str(payout["id"])):
         _ask(ctx, fid, "its payout already reached the bank", "cleared")
         return
-    entry = banking.post_row(ctx, fid, t, [banking.feed_line(_transit(ctx).id, -t.amount)], _gl_of(ctx, money).id, [])
+    gross, fee = F.stripe_parts(SK.loads(payout["raw"]))
+    fee_back = t.amount + gross if 0 < t.amount + gross <= fee else 0  # gross is negative: past it is the fee
+    lines = [banking.feed_line(_transit(ctx).id, -(t.amount - fee_back))]
+    if fee_back:
+        lines.append(banking.feed_line(_fees(ctx).id, -fee_back))
+    entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
 
 

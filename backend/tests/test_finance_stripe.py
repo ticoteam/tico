@@ -45,7 +45,7 @@ def _source(kind: str, tid: str, link: str, name: str) -> dict[str, Any]:
     """The object a balance transaction came from, as the expanded list shows it."""
     if kind in ("charge", "payment"):
         return {"id": f"ch_{tid}", "object": "charge", "billing_details": {"name": name}}
-    if kind in ("refund", "payment_refund", "refund_failure"):
+    if kind in ("refund", "payment_refund", "payment_failure_refund", "refund_failure"):
         return {"id": f"re_{tid}", "object": "refund", "charge": link}
     if kind == "adjustment":
         return {"id": f"dp_{tid}", "object": "dispute", "charge": link}
@@ -446,6 +446,93 @@ def test_an_unrelated_receipt_of_the_same_amount_never_clears_a_payout(books):
     with books.read() as c:
         assert _named_sum(c, "Stripe payouts in transit") == 9_680
         assert _entries(c, "stripe:clear:") == 0
+        assert _every_entry_balances(c)
+
+
+@pytest.mark.parametrize("deposit_first", [False, True])
+def test_an_instant_payout_puts_what_the_bank_gets_in_transit_and_its_fee_to_fees(books, deposit_first):
+    """An instant payout's balance transaction moves its gross plus Stripe's fee out of the balance; the bank gets the
+    gross. The gross is in transit and clears the smaller deposit; the fee is a payment processing fee."""
+    connect(books, FakeMercury())
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("charge", 110_000, 0, "Acme Buyer")
+    stripe.add("payout", -100_000, 1_500)  # net -101,500: what left the balance
+    if deposit_first:
+        deposit(books, 100_000, "pay-instant")
+        stripe_pass(books, stripe)
+    else:
+        stripe_pass(books, stripe)
+        deposit(books, 100_000, "pay-instant")
+    with books.read() as c:
+        assert _named_sum(c, "Stripe payouts in transit") == 0
+        assert (_sum(c, "1050"), _sum(c, _bank_code(c)), _sum(c, "6200")) == (8_500, 100_000, 1_500)
+        assert _entries(c, "stripe:clear:") == 1
+        assert _every_entry_balances(c)
+
+
+def test_two_stripe_deposits_of_an_instant_payouts_gross_ask_which_one(books):
+    connect(books, FakeMercury())
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("charge", 110_000, 0, "Acme Buyer")
+    stripe.add("payout", -100_000, 1_500)
+    deposit(books, 100_000, "pay-x")
+    deposit(books, 100_000, "pay-y", day="2026-10-11")
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert _asked(c, "txn_0002", "ambiguous") == 1 and _entries(c, "stripe:clear:") == 0
+
+
+def test_a_failed_instant_payout_returns_its_gross_to_transit_and_its_fee_off_fees(books):
+    """Stripe returns a failed instant payout's gross and fee in one balance transaction: transit gives back the gross
+    it holds and the fee is no longer an expense."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("charge", 110_000, 0, "Acme Buyer")
+    stripe.add("payout", -100_000, 1_500)
+    stripe.add("payout_failure", 101_500, link="po_txn_0002")
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert (_sum(c, "1050"), _named_sum(c, "Stripe payouts in transit"), _sum(c, "6200")) == (110_000, 0, 0)
+        assert _every_entry_balances(c)
+
+
+def test_a_payout_never_clears_a_brex_deposit_whose_sign_is_still_unchecked(books):
+    """A Brex cash row waits unposted until its connection's sign is checked: its amount is not trusted, so a payout
+    never takes it as its deposit."""
+    from backend.tests.helpers.finance_brex import CASH, FakeBrex, brex_pass, cash_txn, connect_brex
+
+    brex = FakeBrex()
+    connect_brex(books, brex)
+    assert brex_pass(books, brex) == "ok"
+    with books.transaction() as c:
+        c.execute(
+            "UPDATE fin_connections SET settings=json_set(settings, '$.sign', 'unverified') WHERE provider='brex'"
+        )
+    row = cash_txn("cash_stripe", "PAYMENT", 9_680, day="2026-10-12")
+    row["description"] = "STRIPE TRANSFER"
+    brex.cash_txns[CASH].append(row)
+    assert brex_pass(books, brex, "2026-10-15T13:00:00.000000Z") == "ok"
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("charge", 10_000, 320, "Acme Buyer")
+    stripe.add("payout", -9_680)
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        assert _feed(c, "cash_stripe")["entry_id"] is None
+        assert _named_sum(c, "Stripe payouts in transit") == 9_680 and _entries(c, "stripe:clear:") == 0
+
+
+def test_a_bank_debit_payment_that_fails_after_posting_reverses_its_sale(books):
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("payment", 10_000, 80, "Acme Buyer")
+    stripe.add("payment_failure_refund", -10_000, link="ch_txn_0001")
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (0, 80, -80)
+        assert _named_sum(c, "Stripe suspense") == 0 and _kind_asks(c, "payment_failure_refund") == 0
         assert _every_entry_balances(c)
 
 

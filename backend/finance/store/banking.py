@@ -1641,12 +1641,12 @@ def stripe_transit(
     c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
 ) -> list[Any]:
     """Stripe payouts still in transit: posted, not returned, and not cleared by a bank deposit. `amount` is the
-    payout's own (negative) amount when given."""
+    payout's own (negative) gross when given: what the bank receives, before an instant payout's fee."""
     return c.execute(
         "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
         "WHERE m.book_id=? AND m.kind='stripe' AND f.kind='payout' AND f.status='posted' AND "
-        "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR f.amount=?) AND NOT EXISTS (SELECT 1 FROM fin_feed_txns g "
-        "WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
+        "f.txn_date BETWEEN ? AND ? AND (? IS NULL OR json_extract(f.raw, '$.amount')=?) AND NOT EXISTS (SELECT 1 FROM "
+        "fin_feed_txns g WHERE g.money_account_id=f.money_account_id AND g.kind IN ('payout_failure', 'payout_cancel') AND "
         "json_extract(g.raw, '$.link')=json_extract(f.raw, '$.link')) AND NOT EXISTS (SELECT 1 FROM "
         f"fin_entries e WHERE e.book_id=m.book_id AND {_CLEARED}) ORDER BY f.txn_date, f.id LIMIT ?",
         (book_id, start, end, amount, amount, most),
@@ -1657,12 +1657,15 @@ def stripe_deposits(
     c: sqlite3.Connection, book_id: str, *, start: str, end: str, amount: int | None, most: int
 ) -> list[Any]:
     """Bank deposits that look like Stripe's (STRIPE in the counterparty or description) and wait for their payout:
-    new, settled, and not a card's or a request's."""
+    new, settled, not a card's or a request's, and not a Brex cash row still waiting for its connection's sign check
+    (banking._awaiting_sign: its amount is not trusted yet)."""
     return c.execute(
         "SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "LEFT JOIN fin_connections cn ON cn.id=m.connection_id "
         "WHERE m.book_id=? AND m.kind='bank' AND f.status='new' AND f.pending=0 AND f.entry_id IS NULL AND "
         "f.card_id IS NULL AND f.request_id IS NULL AND f.amount>0 AND f.txn_date BETWEEN ? AND ? AND "
         "(? IS NULL OR f.amount=?) AND (UPPER(f.counterparty) LIKE '%STRIPE%' OR UPPER(f.description) LIKE '%STRIPE%') "
+        "AND NOT (m.provider='brex' AND COALESCE(json_extract(cn.settings, '$.sign'), '')='unverified') "
         "ORDER BY f.txn_date, f.id LIMIT ?",
         (book_id, start, end, amount, amount, most),
     ).fetchall()
