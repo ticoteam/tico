@@ -398,6 +398,23 @@ TASK_DAYS = {
     "maximum": 366,
     "description": "A routine opens the owner's task this many days before each due day",
 }
+BASES = ["law", "order", "agency", "contract", "ours", "asked", "theirs"]
+OBLIGATION = {
+    "title": _s("What is due, such as Paiva records"),
+    "basis": _s(
+        "Where the date comes from: law, order (a court or arbitrator), agency (a government letter), contract, "
+        "ours (we promised it), asked (the other side wants it), theirs (the other side owes it)",
+        enum=BASES,
+    ),
+    "task": _s("The one task (a matter) it belongs to: only that task's readers see the date"),
+}
+
+
+def _obligation(args):
+    body = _present({"title": args.get("title"), "basis": args.get("basis")})
+    if args.get("task") is not None:
+        body["task_id"] = args["task"]
+    return body
 
 
 @tool(
@@ -411,12 +428,14 @@ TASK_DAYS = {
         "owner": _s("The bot or person who owns it, by name or id"),
         "timezone": _s("An IANA zone, such as America/Chicago"),
         "task_days": TASK_DAYS,
+        **OBLIGATION,
     },
     required=("id", "first_due", "repeats", "owner"),
     writes=True,
 )
 def rules_due_set(api, args):
     body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    body.update(_obligation(args))
     return _as_person(api).post(f"rules/{args['id']}/due", body, key=_key(args))
 
 
@@ -433,31 +452,63 @@ def rules_due_set(api, args):
         "timezone": _s("An IANA zone, such as America/Chicago"),
         "task_days": TASK_DAYS,
         "no_routine": {"type": "boolean", "description": "Turn the routine off"},
+        **OBLIGATION,
+        "no_task": {"type": "boolean", "description": "Take the date off its task"},
     },
     required=("id",),
     writes=True,
 )
 def rules_due_edit(api, args):
     body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    body.update(_obligation(args))
     if args.get("no_routine"):
         if "task_days" in body:
             raise APIError("validation", "Give task_days or no_routine, not both", 422)
         body["task_days"] = None
+    if args.get("no_task"):
+        if "task_id" in body:
+            raise APIError("validation", "Give task or no_task, not both", 422)
+        body["task_id"] = None
     return _as_person(api).post(f"rule-due/{args['id']}", body, key=_key(args))
+
+
+PROOF_KINDS = ("file", "email", "link")
+
+
+def _proof(value):
+    """`file:{id}`, `email:{id}` or `link:{https url}` as {kind, ref}."""
+    kind, _, ref = str(value).partition(":")
+    if kind not in PROOF_KINDS or not ref:
+        raise APIError("validation", "Proof is file:{id}, email:{id} or link:{https url}", 422)
+    return {"kind": kind, "ref": ref}
 
 
 @tool(
     "tico_rules_due_satisfied",
-    "Mark a rule's due date satisfied for its current occurrence. With more than one open, "
-    "due_on says which. The id is a due date's, or the rule's when it has one due date.",
-    {"id": _s("A due date's id, or its rule's"), "due_on": _s("YYYY-MM-DD, when more than one is open")},
+    "Mark a rule's due date met for its current occurrence, with its proof: a file you can read, an email that was "
+    "sent, or an https link (a draft is not proof). waive (a person, with a note) or missed say it was not met. With "
+    "more than one open, due_on says which. A day marked without proof takes proof, a waiver or a miss later. The id "
+    "is a due date's, or the rule's when it has one due date.",
+    {
+        "id": _s("A due date's id, or its rule's"),
+        "due_on": _s("YYYY-MM-DD, when more than one is open"),
+        "proof": _s("file:{id}, email:{id} (a sent email) or link:{https url}"),
+        "waive": {"type": "boolean", "description": "Waive it: a person only, with a note"},
+        "missed": {"type": "boolean", "description": "It was not paid or done"},
+        "note": _s("Why; a waiver needs one"),
+    },
     required=("id",),
     writes=True,
 )
 def rules_due_satisfied(api, args):
-    return _as_person(api).post(
-        f"rule-due/{args['id']}/satisfied", _present({"due_on": args.get("due_on")}), key=_key(args)
-    )
+    body = _present({"due_on": args.get("due_on"), "note": args.get("note")})
+    if args.get("waive") and args.get("missed"):
+        raise APIError("validation", "Give waive or missed, not both", 422)
+    if args.get("waive") or args.get("missed"):
+        body["outcome"] = "waived" if args.get("waive") else "missed"
+    if args.get("proof"):
+        body["proof"] = _proof(args["proof"])
+    return _as_person(api).post(f"rule-due/{args['id']}/satisfied", body, key=_key(args))
 
 
 @tool(
@@ -630,20 +681,31 @@ CLI = (
             Arg("repeats", positional=False),
             Arg("owner", positional=False),
         ),
-        example="tico rules due add r1 --first 2026-12-01 --repeats monthly --owner Ada",
+        example="tico rules due add r1 --first 2026-12-01 --repeats once --owner Ada --title 'Paiva records' "
+        "--basis order --task D18450",
     ),
     Command(
         "rules due edit",
         "change a due date; a new first day or repeat starts a new one, history kept",
-        args=(Arg("first_due", "--first", metavar=DAY), Arg("no_routine", default=None)),
-        exclusive=(("task_days", "no_routine"),),
+        args=(
+            Arg("first_due", "--first", metavar=DAY),
+            Arg("no_routine", default=None),
+            Arg("no_task", default=None),
+        ),
+        exclusive=(("task_days", "no_routine"), ("task", "no_task")),
         example="tico rules due edit d1 --task-days 3",
     ),
     Command(
         "rules due satisfied",
-        "mark the current occurrence satisfied",
-        args=(Arg("due_on", "--on", metavar=DAY),),
-        example="tico rules due satisfied d1",
+        "mark an occurrence met with its proof, or waived or missed",
+        args=(
+            Arg("due_on", "--on", metavar=DAY),
+            Arg("proof", metavar="file:ID|email:ID|link:URL"),
+            Arg("waive", default=None),
+            Arg("missed", default=None),
+        ),
+        exclusive=(("waive", "missed"), ("proof", "waive"), ("proof", "missed")),
+        example="tico rules due satisfied d1 --proof email:es_123",
     ),
     Command(
         "rules check",

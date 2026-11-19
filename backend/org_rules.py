@@ -211,16 +211,31 @@ def _via(who):
 def redact_audit(c, auth, who, found):
     """The audit rows of org rules (backend/audit_log.py `rows`), with each cite's quote shown only where the reader may
     read its file now, as `view` shows it. Changed in place: `before` and `after` of each row."""
-    memo = {}
+    memo, hidden = {}, {}
     for item in found:
         if not str(item.get("object") or "").startswith("org_rule:"):
             continue
         for key in ("before", "after"):
             snap = item.get(key)
+            if isinstance(snap, dict) and snap.get("due") and _due_hidden(c, auth, who, snap["due"], hidden):
+                # A date of a task the reader does not read: only which date it was.
+                due = snap["due"]
+                item[key] = {"due": due["id"] if isinstance(due, dict) else due}
+                continue
             cite = snap.get("cite") if isinstance(snap, dict) else None
             if not cite:
                 continue
             snap["cite"] = _cite(c, auth, who, cite, memo)
+
+
+def _due_hidden(c, auth, who, due, memo):
+    """Whether an audit snapshot's due date (its view, or its id) belongs to a task `who` does not read."""
+    due_id = due.get("id") if isinstance(due, dict) else due
+    if due_id not in memo:
+        row = D.one(c, str(due_id or ""))
+        task_id = (due.get("task_id") if isinstance(due, dict) else None) or (row or {}).get("task_id")
+        memo[due_id] = bool(task_id) and not D.readable(c, auth, who, [{"task_id": task_id}])
+    return memo[due_id]
 
 
 def _audit(c, actor, rule_id, before, after, who):
@@ -616,6 +631,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
     """A rule as the caller reads it. `quote=False` is what a write stores: the cite is re-read after the write, so a
     replayed response never carries a quote its file no longer lets the caller see."""
     dues = dues if dues is not None else D.views(c, D.live_rows(c, [row["id"]]))
+    dues = D.readable(c, auth, who, dues)  # a date of a task only to that task's readers
     reviewer = None
     if row["reviewer"]:
         reviewer = {"id": row["reviewer"], "name": _person_name(ctx, row["reviewer"])}
@@ -640,6 +656,8 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "due": [
             {
                 "id": d["id"],
+                "title": d["title"],
+                "basis": d["basis"],
                 "due_on": d["due_on"],
                 "status": d["status"],
                 "repeats": d["repeats"],
@@ -1019,20 +1037,50 @@ def decide_rule(c, auth, who, rule_id, body, action):
             },
             who.actor,
         )
-    return {"rule": view(c, auth, who, stored, ctx, quote=False), "due": D.views(c, D.live_rows(c, [rule_id]))}
+    due = D.readable(c, auth, who, D.views(c, D.live_rows(c, [rule_id])))
+    return {"rule": view(c, auth, who, stored, ctx, quote=False), "due": due}
 
 
-def due_row(c, text):
-    """A due date from its id, or from a rule that has exactly one due date in force."""
+def due_row(c, auth, who, text):
+    """A due date from its id, or from a rule that has exactly one due date in force. A date of a task the caller does
+    not read is not there for them."""
     found = D.one(c, text)
     if found:
+        if not D.readable(c, auth, who, [found]):
+            raise Problem("not_found", f"There is no due date {text}", 404)
         return found
-    rows = D.live_rows(c, [text])
+    rows = D.readable(c, auth, who, D.live_rows(c, [text]))
     if not rows:
         raise Problem("not_found", f"There is no due date {text}", 404)
     if len(rows) > 1:
         raise Problem("validation", "That rule has more than one due date: give the due date's id", 422)
     return rows[0]
+
+
+def _due_facts(c, auth, who, body, row=None):
+    """The title, basis and task a due date's add or edit sets, as columns: only the ones given. A task is one the
+    caller reads (its id, number or label); null or '' takes it off. `row` is the date an edit changes."""
+    out = {}
+    if body.get("title") is not None:
+        title = " ".join(str(body["title"]).split())
+        if len(title) > D.TITLE_MAX:
+            raise Problem("validation", f"A title is at most {D.TITLE_MAX} characters", 422)
+        out["title"] = title
+    if body.get("basis") is not None:
+        if body["basis"] not in ("", *D.BASES):
+            raise Problem("validation", "basis is " + ", ".join(D.BASES) + ", or '' for none", 422)
+        out["basis"] = body["basis"]
+    if "task_id" in body:
+        ident = str(body["task_id"] or "").strip()
+        if ident:
+            task_id = auth.resolve_task(c, who, ident)
+            auth.task(c, who, task_id, tags=False)
+            out["task_id"] = task_id
+        else:
+            out["task_id"] = None
+        if row is not None and out["task_id"] == row.get("task_id"):
+            del out["task_id"]
+    return out
 
 
 def _check_due_owner(c, auth, who, rule, owner):
@@ -1063,10 +1111,11 @@ def add_due(c, auth, who, rule_id, body):
     zone = D.parse_zone(body.get("timezone"))
     owner = owner_actor(c, body.get("owner"))
     _check_due_owner(c, auth, who, row, owner)
+    facts = _due_facts(c, auth, who, body)
     from . import rule_due_routine as RR
 
     days = RR.task_days_of(body)
-    due_id = D.add(c, who.actor, rule_id, first.isoformat(), repeats, zone, owner)
+    due_id = D.add(c, who.actor, rule_id, first.isoformat(), repeats, zone, owner, **facts)
     if days is not RR.UNCHANGED and days is not None:
         RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
@@ -1076,7 +1125,7 @@ def add_due(c, auth, who, rule_id, body):
 
 
 def edit_due(c, auth, who, due_text, body):
-    row = due_row(c, due_text)
+    row = due_row(c, auth, who, due_text)
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
@@ -1095,6 +1144,7 @@ def edit_due(c, auth, who, due_text, body):
         if changes["owner"] != row["owner"]:
             # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
             _check_due_owner(c, auth, who, rule, changes["owner"])
+    changes.update(_due_facts(c, auth, who, body, row))
     from . import rule_due_routine as RR
 
     days = RR.task_days_of(body)
@@ -1121,7 +1171,7 @@ def edit_due(c, auth, who, due_text, body):
 
 
 def remove_due(c, auth, who, due_text):
-    row = due_row(c, due_text)
+    row = due_row(c, auth, who, due_text)
     if row["retired_at"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
@@ -1148,17 +1198,32 @@ def remove_due(c, auth, who, due_text):
     return {"id": row["id"], "retired_at": stored["retired_at"]}
 
 
-def satisfy_due(c, auth, who, due_text, due_on=None):
-    row = due_row(c, due_text)
+def satisfy_due(c, auth, who, due_text, due_on=None, outcome="met", proof=None, note=""):
+    """Mark an occurrence: met (with proof, or without), waived (a person, with a note) or missed. `proof` is
+    {kind, ref}: a file the caller can read, a sent email, or an https link."""
+    row = due_row(c, auth, who, due_text)
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
     if who.actor != row["owner"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
         raise Problem("forbidden", "Only the due date's owner, or whoever can edit the rule, marks it satisfied", 403)
-    day = D.satisfy(c, who.actor, row, due_on, via="person")
-    _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day}, who)
-    _event(c, who.actor, "due_satisfied", rule["id"], {"due": row["id"], "due_on": day})
-    return {"due": D.views(c, [D.one(c, row["id"])])[0], "satisfied": day}
+    if outcome == "waived" and who.role == "bot":
+        raise Problem("forbidden", "A person waives a date; a bot says what it found", 403)
+    checked = D.check_proof(c, auth, who, proof.get("kind"), proof.get("ref")) if proof else None
+    day = D.satisfy(c, who.actor, row, due_on, via="person", outcome=outcome, proof=checked, note=note)
+    mark = dict(
+        c.execute("SELECT * FROM rule_due_status WHERE due_date_id=? AND due_on=?", (row["id"], day)).fetchone()
+    )
+    fields = D.mark_fields(mark)
+    _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day, **fields}, who)
+    _event(c, who.actor, "due_satisfied", rule["id"], {"due": row["id"], "due_on": day, "outcome": fields["outcome"]})
+    current = D.one(c, row["id"]) or row
+    return {
+        "due": D.views(c, [current])[0],
+        "satisfied": day,
+        "mark": {"due_on": day, "satisfied_by": mark["satisfied_by"], "satisfied_at": mark["satisfied_at"], **fields},
+        "state": D.occurrence_state(current["basis"], D.parse_date(day), D.local_today(current["timezone"]), mark),
+    }
 
 
 def add_source(c, who, body):
@@ -1336,7 +1401,7 @@ def _renderer(c, auth, who, ctx):
 
     def render(chunk):
         dues = D.due_rows(c, [r["id"] for r in chunk])
-        return [view(c, auth, who, r, ctx, dues.get(r["id"], [])) for r in chunk]
+        return [view(c, auth, who, r, ctx, dues.get(r["id"], [])) for r in chunk]  # view hides a task's dates
 
     return render
 
@@ -1414,6 +1479,12 @@ def teammate_rules(c, auth, who):
     }
 
 
+def _shown_proofs(c, auth, who, marks, memo):
+    """Marks with each proof as the caller reads it (rule_due.proof_view): a file or email they cannot open loses its
+    ref."""
+    return [{**m, "proof": D.proof_view(c, auth, who, m.get("proof"), memo)} for m in marks]
+
+
 def due_list(c, auth, who, args):
     """Due dates of rules in force: overdue always; the rest that fall due within `next` days."""
     auth.domain(who)
@@ -1428,7 +1499,9 @@ def due_list(c, auth, who, args):
     ctx = _ctx(c)
     active = {r["id"]: r for r in _active(c)}
     rows = []
-    for found in D.views(c, [r for r in D.live_rows(c) if r["rule_id"] in active]):
+    memo = {}
+    live = D.readable(c, auth, who, [r for r in D.live_rows(c) if r["rule_id"] in active])
+    for found in D.views(c, live):
         if want and found["status"] != want:
             continue
         today = D.local_today(found["timezone"])
@@ -1445,6 +1518,9 @@ def due_list(c, auth, who, args):
                     "kind": rule["kind"],
                     "source": ctx["sources"].get(rule["source_id"]),
                 },
+                "title": found["title"],
+                "basis": found["basis"],
+                "task_id": found["task_id"],
                 "due_on": found["due_on"],
                 "repeats": found["repeats"],
                 "owner": found["owner"],
@@ -1454,7 +1530,7 @@ def due_list(c, auth, who, args):
                 "task_days": found["task_days"],
                 "status": found["status"],
                 "open": found["open"],
-                "history": found["history"],
+                "history": _shown_proofs(c, auth, who, found["history"], memo),
                 "can_edit": manage,
                 "can_satisfy": manage or who.actor == found["owner"],
             }
@@ -1468,14 +1544,19 @@ def due_show(c, auth, who, due_id):
     """One due date in full, with its rule's sentence, its chain of edits and the occurrences still open."""
     auth.domain(who)
     row = D.one(c, due_id)
-    if not row:
+    if not row or not D.readable(c, auth, who, [row]):
         raise Problem("not_found", f"There is no due date {due_id}", 404)
     rule = _get(c, row["rule_id"])
     # The same check as the Due list's rows; a row that ended (edited or removed) or a retired rule is read only.
     live = rule["status"] == "active" and not row["retired_at"] and not row["ended_on"]
     manage = live and may_manage(c, auth, who, rule["who"])
+    found = D.detail(c, row)
+    memo = {}
+    found["history"] = _shown_proofs(c, auth, who, found["history"], memo)
+    for link in found["chain"]:
+        link["satisfied"] = _shown_proofs(c, auth, who, link["satisfied"], memo)
     return {
-        **D.detail(c, row),
+        **found,
         "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"], "status": rule["status"]},
         "can_edit": manage,
         "can_satisfy": manage or (live and who.actor == row["owner"]),
@@ -1486,7 +1567,7 @@ def counts(c, auth, who):
     auth.domain(who)
     rows = _active(c)
     active = {r["id"] for r in rows}
-    dues = [r for r in D.live_rows(c) if r["rule_id"] in active]
+    dues = D.readable(c, auth, who, [r for r in D.live_rows(c) if r["rule_id"] in active])
     return {
         "internal": sum(1 for r in rows if r["kind"] == "internal"),
         "external": sum(1 for r in rows if r["kind"] == "external"),
@@ -1548,6 +1629,13 @@ class RuleDecide(Contract):
     who: RuleScope | None = None
 
 
+BASIS_FIELD = Field(
+    default=None,
+    description="Where the date comes from: law, order (a court or arbitrator), agency (a government letter), contract, "
+    "ours (we promised it), asked (the other side wants it), theirs (the other side owes it); '' for none",
+)
+
+
 class DueAdd(Contract):
     first_due: str = Field(min_length=10, max_length=10)
     repeats: Literal["once", "weekly", "monthly", "quarterly", "yearly"]
@@ -1558,6 +1646,11 @@ class DueAdd(Contract):
         ge=0,
         le=366,
         description="Open the owner's task this many days before each due day (a routine); absent or null for none",
+    )
+    title: str | None = Field(default=None, max_length=300, description="What is due, such as Paiva records")
+    basis: Literal["", "law", "order", "agency", "contract", "ours", "asked", "theirs"] | None = BASIS_FIELD
+    task_id: str | None = Field(
+        default=None, max_length=100, description="The one task (a matter) it belongs to; only its readers see the date"
     )
 
 
@@ -1572,10 +1665,29 @@ class DueEdit(Contract):
         le=366,
         description="The routine's lead time in days; null turns the routine off, absent leaves it as it is",
     )
+    title: str | None = Field(default=None, max_length=300)
+    basis: Literal["", "law", "order", "agency", "contract", "ours", "asked", "theirs"] | None = BASIS_FIELD
+    task_id: str | None = Field(default=None, max_length=100, description="The task it belongs to; null or '' for none")
+
+
+class DueProof(Contract):
+    kind: Literal["file", "email", "link"]
+    ref: str = Field(min_length=1, max_length=2000, description="The file's id, the sent email's id, or the https link")
 
 
 class DueSatisfied(Contract):
     due_on: str | None = Field(default=None, max_length=10)
+    outcome: Literal["met", "waived", "missed"] = Field(
+        default="met", description="met (the default), waived (a person, with a note) or missed"
+    )
+    proof: DueProof | None = Field(
+        default=None, description="A file you can read, an email that was sent, or an https link"
+    )
+    note: str = Field(default="", max_length=2000, description="Why; a waiver needs one")
+
+
+class DueRemove(Contract):
+    due_on: str | None = Field(default=None, max_length=10, description="Ignored; kept so old callers still work")
 
 
 class RuleSourceCreate(Contract):
@@ -1818,7 +1930,7 @@ def install(app, store, auth, mutate):
     @app.post(
         "/api/v2/rule-due/{due_id}/remove", **api_v2("Rules", "removeRuleDue", "Remove a due date; its history is kept")
     )
-    def rules_due_remove(request: Request, due_id: str, body: DueSatisfied):
+    def rules_due_remove(request: Request, due_id: str, body: DueRemove):
         """Remove a due date. Its history is kept."""
         who = request.state.identity
 
@@ -1829,15 +1941,22 @@ def install(app, store, auth, mutate):
 
     @app.post(
         "/api/v2/rule-due/{due_id}/satisfied",
-        **api_v2("Rules", "markRuleDueSatisfied", "Mark the current occurrence satisfied; due_on when two are open"),
+        **api_v2(
+            "Rules",
+            "markRuleDueSatisfied",
+            "Mark an occurrence met (with proof), waived or missed; due_on when two are open",
+        ),
     )
     def rules_due_satisfied(request: Request, due_id: str, body: DueSatisfied):
         """Mark an occurrence Satisfied. With more than one open occurrence, `due_on` says which one. `due_id` may be the
-        rule's id when it has exactly one due date."""
+        rule's id when it has exactly one due date. `proof` is a file you can read, a sent email or an https link;
+        `outcome` waived (a person, with a `note`) or missed. A day marked already takes proof, a waiver or a miss only
+        while its mark has no proof."""
         who = request.state.identity
+        proof = body.proof.model_dump() if body.proof else None
 
         def work(c):
-            return satisfy_due(c, auth, who, due_id, body.due_on)
+            return satisfy_due(c, auth, who, due_id, body.due_on, body.outcome, proof, body.note)
 
         return mutate(request, body, work)
 

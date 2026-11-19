@@ -28,7 +28,11 @@ SCHEMAS.update(
                 "open": "i",
                 "closed": "i",
                 "claimed": items(obj({"currency": "s", "amount": "i"})),
-                "next_date": "n",
+                "next_date": {
+                    "type": ["string", "null"],
+                    "description": "The soonest obligation still due (YYYY-MM-DD), from the dates the reader sees",
+                },
+                "unconfirmed": {"type": "integer", "description": "Occurrences of its dates that are unconfirmed"},
                 "created_at": "s",
                 "updated_at": "s",
             },
@@ -91,6 +95,56 @@ SCHEMAS.update(
             }
         ),
         "RiskLinkRow": obj({"link_id": "s"}),
+        "RiskObligation": obj(
+            {
+                "id": {"type": "string", "description": "The due date's id (POST /api/v2/rule-due/{id}/satisfied)"},
+                "due_on": {"type": "string", "description": "This occurrence's day, YYYY-MM-DD"},
+                "title": "s",
+                "basis": {"enum": ["", "law", "order", "agency", "contract", "ours", "asked", "theirs"]},
+                "state": {
+                    "enum": ["due", "met", "waived", "missed", "passed", "unconfirmed", None],
+                    "description": "null: theirs to meet and past; we only watch it",
+                },
+                "group": {"enum": ["unconfirmed", "next", "later", "past"]},
+                "repeats": "s",
+                "first_due_on": "s",
+                "timezone": "s",
+                "owner": "s",
+                "routine_id": "n",
+                "rule": obj({"id": "s", "kind": "s", "text": "s", "source": {"type": ["object", "null"]}}),
+                "task": {
+                    "oneOf": [obj({"id": "s", "label": "n", "title": "n", "status": "s"}), {"type": "null"}],
+                    "description": "The matter the date belongs to",
+                },
+                "risks": items(obj({"id": "s", "key": "s", "label": "s"})),
+                "mark": {
+                    "oneOf": [
+                        obj(
+                            {
+                                "satisfied_by": "s",
+                                "via": "s",
+                                "satisfied_at": "s",
+                                "task_id": "n",
+                                "outcome": {"enum": ["met", "waived", "missed"]},
+                                "proof": {
+                                    "oneOf": [obj({"kind": "s", "ref": "n", "name": "n"}), {"type": "null"}],
+                                    "description": "ref and name are null for a file or email the reader cannot open",
+                                },
+                                "note": "s",
+                                "confirmed_by_id": "n",
+                                "confirmed_at": "n",
+                            }
+                        ),
+                        {"type": "null"},
+                    ]
+                },
+                "can_edit": "b",
+                "can_satisfy": "b",
+                "can_waive": "b",
+            },
+            required=("id", "due_on", "title", "basis", "state", "group", "rule", "risks", "mark"),
+        ),
+        "RiskObligationList": obj({"obligations": items(ref("RiskObligation")), "next_offset": INT_N}),
         "RiskList": obj({"risks": items(ref("Risk"))}),
         "RiskResult": obj({"risk": ref("Risk")}),
         "RiskDetail": obj(
@@ -102,6 +156,7 @@ SCHEMAS.update(
                 "rules": items(ref("RiskLinkRow")),
                 "sources": items(ref("RiskLinkRow")),
                 "coverage": items(ref("RiskLinkRow")),
+                "obligations": items(ref("RiskObligation")),
             }
         ),
         "MatterList": obj({"matters": items(ref("MatterRow")), "next_offset": INT_N}),

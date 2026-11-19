@@ -91,3 +91,69 @@ def test_a_zone_names_the_day_the_occurrence_is_judged_in():
         assert getattr(exc, "status", None) == 422
     else:
         raise AssertionError("an unknown zone is refused")
+
+
+def test_the_obligation_state_table():
+    today = date(2026, 11, 18)
+    before, on_the_day, after = date(2026, 11, 19), today, date(2026, 11, 17)
+    met = {"outcome": "met", "proof_kind": ""}
+    proved = {"outcome": "met", "proof_kind": "email"}
+    # Before (or on) the day: due, whatever the basis.
+    for basis in ("", *D.BASES):
+        assert D.occurrence_state(basis, before, today, None) == "due"
+        assert D.occurrence_state(basis, on_the_day, today, None) == "due"
+    # After it with no mark: passed when only asked for, watched (None) when theirs, else unconfirmed.
+    assert D.occurrence_state("asked", after, today, None) == "passed"
+    assert D.occurrence_state("theirs", after, today, None) is None
+    for basis in ("", "law", "order", "agency", "contract", "ours"):
+        assert D.occurrence_state(basis, after, today, None) == "unconfirmed"
+    # Marked met: met, unless the basis binds us and there is no proof.
+    for basis in D.BINDING:
+        assert D.occurrence_state(basis, after, today, met) == "unconfirmed"
+        assert D.occurrence_state(basis, before, today, met) == "unconfirmed"  # an early mark proves nothing either
+        assert D.occurrence_state(basis, after, today, proved) == "met"
+    for basis in ("", "ours", "asked", "theirs"):
+        assert D.occurrence_state(basis, after, today, met) == "met"
+    # A mark from before slice 3 has no outcome column: it reads as met.
+    assert D.occurrence_state("", after, today, {"proof_kind": None}) == "met"
+    # Waived and missed stay so, binding or not.
+    assert D.occurrence_state("order", after, today, {"outcome": "waived"}) == "waived"
+    assert D.occurrence_state("asked", after, today, {"outcome": "missed"}) == "missed"
+
+
+def test_the_obligations_tab_groups_and_how_far_back_and_ahead_it_reads():
+    today = date(2026, 11, 18)
+    assert D.occurrence_group("unconfirmed", date(2026, 1, 1), today, None) == "unconfirmed"
+    assert D.occurrence_group("due", date(2026, 12, 2), today, None) == "next"  # 14 days ahead
+    assert D.occurrence_group("due", date(2026, 12, 3), today, None) == "later"
+    assert D.occurrence_group("passed", date(2026, 10, 19), today, None) == "past"  # 30 days back
+    assert D.occurrence_group("passed", date(2026, 10, 18), today, None) is None
+    assert D.occurrence_group(None, date(2026, 11, 1), today, None) == "past"
+    # A date met early sits with the past ones; an old date marked lately does too.
+    assert D.occurrence_group("met", date(2026, 11, 25), today, {"satisfied_at": "2026-11-18T10:00:00Z"}) == "past"
+    assert D.occurrence_group("met", date(2026, 6, 1), today, {"satisfied_at": "2026-11-10T10:00:00Z"}) == "past"
+    assert D.occurrence_group("waived", date(2026, 6, 1), today, {"satisfied_at": "2026-06-01T10:00:00Z"}) is None
+
+
+def test_a_weekly_premium_reads_back_a_year_ahead_to_its_horizon_or_to_its_next_day():
+    import sqlite3
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.execute(
+        "CREATE TABLE rule_due_status(due_date_id TEXT, due_on TEXT, satisfied_at TEXT, outcome TEXT, proof_kind TEXT)"
+    )
+    c.execute("INSERT INTO rule_due_status VALUES('w','2026-11-11','2026-11-11T09:00:00Z','met','link')")
+    weekly = {"id": "w", "first_due_on": "2026-10-28", "repeats": "weekly", "timezone": "UTC", "basis": "contract"}
+    today = date(2026, 11, 18)
+    seen = [(o["due_on"], o["state"], o["group"]) for o in D.obligations(c, [weekly], 21, today)]
+    assert seen == [
+        ("2026-10-28", "unconfirmed", "unconfirmed"),
+        ("2026-11-04", "unconfirmed", "unconfirmed"),
+        ("2026-11-11", "met", "past"),
+        ("2026-11-18", "due", "next"),  # today is still due
+        ("2026-11-25", "due", "next"),
+        ("2026-12-02", "due", "next"),
+        ("2026-12-09", "due", "later"),
+    ]
+    assert [o["due_on"] for o in D.obligations(c, [weekly], 21, today, only_next=True)][-1] == "2026-11-18"

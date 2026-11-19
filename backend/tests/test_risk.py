@@ -2,9 +2,12 @@
 its matter facts; rules and documents link to it. Every teammate lists every risk; its counts and sums follow task
 privacy, so a teammate who reads none of its tasks sees it with 0."""
 
+from datetime import timedelta
+
 import pytest
 
 from backend import hubdb as H
+from backend import rule_due as D
 from backend.entities import store as ES
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
 
@@ -306,6 +309,26 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     found = task(api, "Theft claim")
     label(api, found["id"], [RISK])
     set_ = matter(api, found["id"], {"kind": "dispute", "amount": 900, "currency": "USD"})
+    # A date of the matter, marked with proof, and one still unconfirmed.
+    with api.app.state.store.transaction() as c:
+        ts = H.now()
+        c.execute(
+            "INSERT INTO org_rules(id,kind,text,who,status,suggested_by,created_at,updated_at) "
+            "VALUES('rule_court','internal','Meet every date a court sets','{}','active',?,?,?)",
+            (ANA, ts, ts),
+        )
+    post(api, f"risks/{RISK}/links", {"linkable_type": "org_rule", "linkable_id": "rule_court"})
+    for title, first in (
+        ("Murphy discovery", D.local_today("UTC") - timedelta(days=20)),
+        ("Murphy hearing", D.local_today("UTC") - timedelta(days=10)),
+    ):
+        body = {"first_due": first, "repeats": "once", "owner": "ana", "timezone": "UTC", "title": title}
+        body["first_due"] = first.isoformat()
+        dated = post(api, "rules/rule_court/due", {**body, "basis": "order", "task_id": found["id"]})
+    post(api, f"rule-due/{dated['id']}/satisfied", {"proof": {"kind": "link", "ref": "https://aaa.example/r"}})
+    obligations = get(api, "risk/obligations?group=unconfirmed")
+    assert [(o["title"], o["mark"]) for o in obligations["obligations"]] == [("Murphy discovery", None)]
+    assert get(api, "risks/" + RISK)["risk"]["unconfirmed"] == 1
     document = get(api, "openapi.json")
     shape = {
         op["operationId"]: op["responses"]["200"]["content"]["application/json"]["schema"]
@@ -322,6 +345,7 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
         "unlinkRisk",
         "setTaskMatter",
         "listMatters",
+        "listRiskObligations",
     }
     for operation, answer in (
         ("createRisk", made),
@@ -329,6 +353,7 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
         ("listRisks", get(api, "risks")),
         ("getRisk", get(api, "risks/" + RISK)),
         ("listMatters", get(api, "matters")),
+        ("listRiskObligations", obligations),
     ):
         assert conforms(answer, shape[operation], document) is None, (
             operation,
@@ -337,10 +362,11 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     task_schema = document["components"]["schemas"]["Task"]
     assert conforms(get(api, "tasks/" + found["id"])["task"], task_schema, document) is None
     # Pending files run in any order and may run on a database that has the change: running it again changes nothing.
-    up = import_module("backend.migrations.20261119025516_risks_and_matters").up
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused):
             H.tag_create(c, ANA, "acme-other", kind="contract")  # a kind is '' or risk
-        up(c)
-        assert c.execute("SELECT kind FROM tags WHERE key=?", (RISK,)).fetchone()[0] == "risk"
-        assert c.execute("SELECT count(*) FROM matters").fetchone()[0] == 1
+    for name in ("20261119025516_risks_and_matters", "20261119034134_rule_due_proof"):
+        with api.app.state.store.transaction() as c:
+            import_module("backend.migrations." + name).up(c)
+            assert c.execute("SELECT kind FROM tags WHERE key=?", (RISK,)).fetchone()[0] == "risk"
+            assert c.execute("SELECT count(*) FROM matters").fetchone()[0] == 1

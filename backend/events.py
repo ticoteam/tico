@@ -520,6 +520,39 @@ TRIGGERS = [
     ("changes_matters_insert", "INSERT", "matters", None, _row("tasks", "matter", "NEW.task_id")),
     ("changes_matters_update", "UPDATE", "matters", None, _row("tasks", "matter", "NEW.task_id")),
     ("changes_matters_delete", "DELETE", "matters", None, _row("tasks", "matter", "OLD.task_id")),
+    # A matter's own dates (backend/rule_due.py, rule_due_dates.task_id) and their marks: the Risk page re-reads them.
+    (
+        "changes_rule_due_dates_insert",
+        "INSERT",
+        "rule_due_dates",
+        "NEW.task_id IS NOT NULL",
+        _row("tasks", "obligations", "NEW.task_id"),
+    ),
+    (
+        "changes_rule_due_dates_update",
+        "UPDATE",
+        "rule_due_dates",
+        "OLD.task_id IS NOT NULL OR NEW.task_id IS NOT NULL",
+        _row("tasks", "obligations", "OLD.task_id", where="OLD.task_id IS NOT NULL")
+        + _row(
+            "tasks", "obligations", "NEW.task_id", where="NEW.task_id IS NOT NULL AND NEW.task_id IS NOT OLD.task_id"
+        ),
+    ),
+    *(
+        (
+            f"changes_rule_due_status_{op.lower()}",
+            op,
+            "rule_due_status",
+            None,
+            _row(
+                "tasks",
+                "obligations",
+                f"(SELECT task_id FROM rule_due_dates WHERE id={rec}.due_date_id)",
+                where=f"(SELECT task_id FROM rule_due_dates WHERE id={rec}.due_date_id) IS NOT NULL",
+            ),
+        )
+        for op, rec in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
     (
         "changes_tags_update",
         "UPDATE",
@@ -1663,6 +1696,11 @@ TRIGGERS += SETUP_TRIGGERS
 # so a write never fails on a table this install does not have.
 NEEDS = {
     "changes_tags_update": ("task_tags",),
+    "changes_rule_due_dates_insert": ("rule_due_dates.task_id",),
+    "changes_rule_due_dates_update": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_insert": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_update": ("rule_due_dates.task_id",),
+    "changes_rule_due_status_delete": ("rule_due_dates.task_id",),
     "changes_blob_media_insert": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_blob_media_update": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_messages_update": ("messages.superseded_at",),
