@@ -41,6 +41,66 @@
       }
     },
     {
+      "id": "agents.addList",
+      "title": "Add a list to an agent's page: tasks matching a saved filter",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "enum": [
+                    "status",
+                    "assigned_to",
+                    "asked_by",
+                    "waiting_on",
+                    "needs",
+                    "created_within",
+                    "updated_within",
+                    "done_within",
+                    "due",
+                    "label"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "required": [
+                "field",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "conditions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.answerDream",
       "title": "Answer a dreaming agent's questions",
       "kind": "change",
@@ -89,6 +149,70 @@
         },
         "required": [
           "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.changeList",
+      "title": "Rename one of an agent's lists, or change its filter",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "list": {
+            "type": "string",
+            "pattern": "^c\\d{1,3}$",
+            "description": "a list's key (c0, c1…) as its page names it"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "enum": [
+                    "status",
+                    "assigned_to",
+                    "asked_by",
+                    "waiting_on",
+                    "needs",
+                    "created_within",
+                    "updated_within",
+                    "done_within",
+                    "due",
+                    "label"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "required": [
+                "field",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "slug",
+          "list"
         ],
         "additionalProperties": false
       }
@@ -187,6 +311,32 @@
       }
     },
     {
+      "id": "agents.removeList",
+      "title": "Remove one of an agent's lists (its tasks stay)",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "list": {
+            "type": "string",
+            "pattern": "^c\\d{1,3}$",
+            "description": "a list's key (c0, c1…) as its page names it"
+          }
+        },
+        "required": [
+          "slug",
+          "list"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.rename",
       "title": "Rename an agent",
       "kind": "change",
@@ -216,6 +366,26 @@
       "id": "agents.resume",
       "title": "Resume an agent",
       "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.reviewStopped",
+      "title": "Open an agent's stopped run, to try it again or let it go",
+      "kind": "view",
       "input": {
         "type": "object",
         "properties": {
@@ -1446,6 +1616,7 @@
           "view": {
             "enum": [
               "day",
+              "3day",
               "week",
               "month",
               "list"
@@ -2659,6 +2830,16 @@
       }
     },
     {
+      "id": "growth.askManager",
+      "title": "Open the Growth Manager's chat",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "growth.closePanel",
       "title": "Close the Growth panel",
       "kind": "view",
@@ -2683,6 +2864,79 @@
         },
         "required": [
           "channel"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "growth.openCustomers",
+      "title": "Open the customers behind a retention figure",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+            "description": "a month, 2026-11"
+          },
+          "day": {
+            "enum": [
+              "30",
+              "90",
+              "180"
+            ]
+          }
+        },
+        "required": [
+          "month",
+          "day"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "growth.openMonth",
+      "title": "Open a channel's month: each number and where it came from",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[\\w-]+$",
+            "description": "a channel slug"
+          },
+          "month": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+            "description": "a month, 2026-11"
+          }
+        },
+        "required": [
+          "channel",
+          "month"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "growth.openSource",
+      "title": "Open a Growth source: what it is the truth for and its last sync",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "source"
         ],
         "additionalProperties": false
       }
@@ -2889,6 +3143,56 @@
             "maxLength": 200
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "kpis.place",
+      "title": "Place a KPI in the KPI tree",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "kpi": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "feeds": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "north_star",
+                  "input",
+                  "guardrail",
+                  "check_signups",
+                  "check_new_customers",
+                  "check_cost"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kpi",
+          "feeds",
+          "role"
+        ],
         "additionalProperties": false
       }
     },
@@ -3246,6 +3550,146 @@
       }
     },
     {
+      "id": "market.acceptSize",
+      "title": "Accept an estimate as its segment's size",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "size"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "market.open",
+      "title": "Open Market or one of its panels",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "panel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^(segment:\\S+|player:\\S+|definition|briefing)$",
+            "description": "segment:<id>, player:<id>, definition or briefing"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "market.setParam",
+      "title": "Change a parameter of a market estimate",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "size",
+          "name",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "market.setUp",
+      "title": "Answer Market's set-up questions",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "answers": {
+            "type": "object",
+            "properties": {
+              "sell": {
+                "type": "string",
+                "maxLength": 4000
+              },
+              "buyers": {
+                "type": "string",
+                "maxLength": 4000
+              },
+              "competitors": {
+                "type": "string",
+                "maxLength": 4000
+              },
+              "watch": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "sell",
+              "buyers",
+              "competitors",
+              "watch"
+            ],
+            "additionalProperties": false
+          },
+          "step": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "action": {
+            "enum": [
+              "save",
+              "skip",
+              "finish"
+            ]
+          }
+        },
+        "required": [
+          "answers",
+          "step",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "market.size",
+      "title": "Ask for the market to be defined and sized",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "messaging.open",
       "title": "Open a text",
       "kind": "view",
@@ -3272,6 +3716,81 @@
       "input": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "org.move",
+      "title": "Move a teammate to another group",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^(human|bot):\\S+$",
+            "description": "human:<id> or bot:<slug>"
+          },
+          "from": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "to": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "who",
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "org.newFactory",
+      "title": "Make a factory",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "goal": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "org.openTeammate",
+      "title": "Open a teammate on the Org chart",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^(human|bot):\\S+$",
+            "description": "human:<id> or bot:<slug>"
+          }
+        },
+        "required": [
+          "who"
+        ],
         "additionalProperties": false
       }
     },
@@ -8045,6 +8564,25 @@
       }
     },
     {
+      "id": "tools.cancelNumberRequest",
+      "title": "Cancel a phone number request",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.check",
       "title": "Check a tool works",
       "kind": "change",
@@ -8060,6 +8598,26 @@
         "required": [
           "tool"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.checkGoogle",
+      "title": "Check the Google Workspace connection",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.checkLetters",
+      "title": "Check letters can go out",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -8334,6 +8892,76 @@
       }
     },
     {
+      "id": "tools.setAgentSending",
+      "title": "Change what one agent may send by email",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ask_first",
+                  "on_their_own",
+                  "never"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bot",
+          "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setIntake",
+      "title": "Choose where emailed letters come in",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "inbox": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "senders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 320
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "inbox",
+          "senders"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.setKeyExpiry",
       "title": "Set when a key ends",
       "kind": "change",
@@ -8361,6 +8989,249 @@
           "key",
           "expires_on"
         ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setLegalMail",
+      "title": "Choose who gets legal letters",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bot"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setLetterAccess",
+      "title": "Change who may read every letter",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "person",
+              "bot"
+            ]
+          },
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "read": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type",
+          "who",
+          "read"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setLettersOut",
+      "title": "Change how letters go out",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "enum": [
+              "ask_first",
+              "on_their_own",
+              "never"
+            ]
+          },
+          "monthly_cap_micros": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "return_address": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "line1": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "line2": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "city": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "state": {
+                    "type": "string",
+                    "pattern": "^[A-Z]{2}$",
+                    "description": "a two-letter state"
+                  },
+                  "postal_code": {
+                    "type": "string",
+                    "pattern": "^\\d{5}(-\\d{4})?$",
+                    "description": "a ZIP code"
+                  }
+                },
+                "required": [
+                  "name",
+                  "line1",
+                  "city",
+                  "state",
+                  "postal_code"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setMailMay",
+      "title": "Change what agents may do in Google",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "organize_mail": {
+            "type": "boolean"
+          },
+          "send_mail": {
+            "type": "boolean"
+          },
+          "change_calendar": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "organize_mail",
+          "send_mail",
+          "change_calendar"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.setSending",
+      "title": "Change what agents may send by email",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "enum": [
+              "ask_first",
+              "on_their_own",
+              "never"
+            ]
+          },
+          "what": {
+            "enum": [
+              "replies_only",
+              "replies_and_new"
+            ]
+          },
+          "to": {
+            "enum": [
+              "anyone",
+              "known_addresses",
+              "internal"
+            ]
+          },
+          "daily_cap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "mailbox_daily_cap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "company_daily_cap": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "max_outside_recipients": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "undo_seconds": {
+            "enum": [
+              0,
+              30,
+              120,
+              600
+            ]
+          },
+          "ask_new_address": {
+            "type": "boolean"
+          },
+          "ask_legal_money": {
+            "type": "boolean"
+          },
+          "ask_attachments": {
+            "type": "boolean"
+          },
+          "ask_many_recipients": {
+            "type": "boolean"
+          },
+          "ask_outside_cc": {
+            "type": "boolean"
+          },
+          "blocked_recipients": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 320
+            },
+            "maxItems": 500
+          }
+        },
         "additionalProperties": false
       }
     },
