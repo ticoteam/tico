@@ -423,6 +423,9 @@ def sign_out(c, who, rid, runtime, profile="", auth=None):
         "cleared_by=excluded.cleared_by",
         (rid, runtime, profile, now, who.actor),
     )
+    from . import residents
+
+    residents.revoke(c, "sign_in_changed", runner=rid)  # a process signed in with it ends with the login
     from .subscription_refresh import invalidate_signin
 
     invalidate_signin(c, rid, profile, runtime, now)

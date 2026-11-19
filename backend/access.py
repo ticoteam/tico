@@ -503,6 +503,10 @@ def leave(c, people, row):
     """Take one person off the chart: end their tokens and sessions and move their reports up.
     Mutates `people` (the caller's list) and returns the person's new row."""
     row = {**row, "hidden": True}
+    from . import residents
+
+    # A process an Assistant ran for them may hold what they could read (backend/residents.py).
+    residents.revoke(c, "person_left", everyone=True)
     # Their API tokens outlive a browser session by up to a year.
     c.execute("UPDATE human_tokens SET revoked_at=? WHERE human=? AND revoked_at IS NULL", (H.now(), row["id"]))
     c.execute("DELETE FROM oidc_sessions WHERE human=?", (row["id"],))
@@ -587,6 +591,10 @@ def edit_person(c, actor, roster, pid, body, access, owner_email):
         if row["email"] and row["email"] == owner_email:
             raise Problem("owner", "The owner can always sign in", 409)
         row["sign_in"], changed["sign_in"] = bool(body.sign_in), bool(body.sign_in)
+        if not body.sign_in:
+            from . import residents
+
+            residents.revoke(c, "person_left", everyone=True)  # as `leave`: an Assistant's process acted for them
     role = (
         body.role
         if body.role is not None

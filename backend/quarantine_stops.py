@@ -10,6 +10,10 @@ already did first.
 A restart (`restart`) is the same Tico Stop for another reason: a computer's model subscription changed under the
 run (backend/model_subscriptions.py), so its work goes back in the queue to start fresh on the new login. It is judged
 the same way.
+
+A resident stop (`resident`) is the same Tico Stop for a revocation: a change of access ended the resident session
+(backend/residents.py) the run was bound to. Its answer is never posted, and its work goes back in the queue to run
+again under the access the bot has now.
 """
 
 import json
@@ -72,8 +76,25 @@ def restart(c, row, line):
     return True
 
 
+def resident(c, row, line):
+    """Record a Tico Stop on a live attempt a revocation fenced (backend/residents.py): its renewal answers stop, its
+    answer is not posted, and its work goes back in the queue (`requeues`) to run again. A Stop already recorded
+    stands. Returns whether it was new."""
+    if row["stop_requested_at"]:
+        return False
+    c.execute(
+        "UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.TICO_ACTOR, row["id"])
+    )
+    H.event(c, H.TICO_ACTOR, "attempt.stop", row["id"], {"bot": row["bot_id"], "resident": line})
+    return True
+
+
 def _stop_detail(c, row):
-    if not row["stop_requested_at"] or row["stop_requested_at"] != H.TICO_ACTOR:
+    try:
+        stop = row["stop_requested_at"]
+    except (KeyError, IndexError):
+        stop = H.TICO_ACTOR  # a caller that holds only the ids of a run it knows Tico stopped (execution.expire)
+    if stop != H.TICO_ACTOR:
         return {}
     found = c.execute(
         "SELECT detail FROM events WHERE action='attempt.stop' AND target=? ORDER BY created_at DESC LIMIT 1",
@@ -83,15 +104,21 @@ def _stop_detail(c, row):
 
 
 def stopped_by(c, row):
-    """The line a Tico Stop on this attempt was recorded with (a quarantine's, or a restart's), or None for a
-    person's Stop or none."""
+    """The line a Tico Stop on this attempt was recorded with (a quarantine's, a restart's or a resident stop's), or
+    None for a person's Stop or none."""
     detail = _stop_detail(c, row)
-    return detail.get("quarantine") or detail.get("restart")
+    return detail.get("quarantine") or detail.get("restart") or detail.get("resident")
 
 
 def restarted(c, row):
     """Whether this attempt's Stop is a restart (`restart`), not a quarantine's."""
     return bool(_stop_detail(c, row).get("restart"))
+
+
+def kind(c, row):
+    """Which Tico Stop this is: "quarantine", "restart" or "resident"; None for a person's Stop or none."""
+    detail = _stop_detail(c, row)
+    return next((k for k in ("restart", "resident", "quarantine") if detail.get(k)), None)
 
 
 def requeues(c, row):
@@ -113,12 +140,18 @@ def requeues(c, row):
     )
 
 
-def resume_note(at):
-    """The note a run stopped by a quarantine resumes with: what stopped it, and to check what it already did first."""
+def resume_note(at, by="a quarantine"):
+    """The note a run stopped by a quarantine (or a change of access, `by`) resumes with: what stopped it, and to
+    check what it already did first."""
     return (
-        f"You were interrupted at {at} UTC by a quarantine. Check what already happened first, then continue from "
+        f"You were interrupted at {at} UTC by {by}. Check what already happened first, then continue from "
         "there. No consumed approval or named irreversible outside action was recorded."
     )
+
+
+def stopper_of(c, row):
+    """What a requeued run's resume note says stopped it."""
+    return "a change of access" if kind(c, row) == "resident" else "a quarantine"
 
 
 def requeue(c, row, at):
@@ -126,7 +159,7 @@ def requeue(c, row, at):
     the claim hands it to the bot with the run."""
     c.execute(
         "INSERT OR REPLACE INTO job_recovery(job_id,attempt_id,decision,note,actor,created_at) VALUES(?,?,?,?,?,?)",
-        (row["job_id"], row["id"], "resume", resume_note(at), H.TICO_ACTOR, H.now()),
+        (row["job_id"], row["id"], "resume", resume_note(at, stopper_of(c, row)), H.TICO_ACTOR, H.now()),
     )
 
 
@@ -134,6 +167,8 @@ def then(c, row, held):
     """What a stopped turn's notice says happens next."""
     if restarted(c, row):
         return RESTART_HELD if held else RESTARTED
+    if kind(c, row) == "resident":
+        return HELD if held else RESIDENT_REQUEUED
     return HELD if held else REQUEUED
 
 
@@ -146,3 +181,4 @@ HELD = (
 )
 RESTARTED = "This run goes back in the queue and starts fresh on the new sign-in."
 RESTART_HELD = HELD
+RESIDENT_REQUEUED = "This run goes back in the queue to run again."

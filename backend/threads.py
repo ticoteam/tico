@@ -3637,6 +3637,12 @@ def remove_member(c, principal, thread_id, actor):
         (_now(), actor, root["id"]),
     )
     c.execute("UPDATE conversations SET updated_at=? WHERE id=?", (_now(), root["id"]))
+    from . import residents
+
+    # A bot (or a group of bots) that loses the thread loses the processes that read it, in this write
+    # (backend/residents.py). A person who leaves may be whom an Assistant read it for, so every process on it ends.
+    bot = actor[4:] if str(actor).startswith("bot:") else None
+    residents.revoke(c, "thread_member_removed", bot=bot, roots=[str((root or {}).get("id"))])
     _event(c, me, "thread.member_removed", root["id"], {"actor": actor})
     _audit(c, me, "thread:" + root["id"], {"member": actor}, None)
     return {"thread_id": root["id"], "actor": actor, "removed": bool(gone)}
@@ -3719,6 +3725,10 @@ def set_audience(c, principal, thread_id, audience, *, audience_group_id=None):
         "UPDATE conversations SET audience=?, audience_group_id=?, updated_at=? WHERE root_id=?",
         (audience, group, _now(), root["id"]),
     )
+    from . import residents
+
+    # Its sessions were kept for the old readers.
+    residents.revoke(c, "audience_changed", roots=[str((root or {}).get("id"))])
     if audience == "members":
         now = _now()
         owner = root.get("owner_id") or actor

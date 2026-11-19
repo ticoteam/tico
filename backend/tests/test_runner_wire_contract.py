@@ -193,6 +193,25 @@ def test_the_retired_packet_capability_is_still_accepted_on_a_heartbeat(api):
     post(api, "runners/heartbeat", body, token=computer["token"])
 
 
+def test_a_heartbeat_over_the_capability_cap_is_refused_in_the_shape_the_runner_reads(api):
+    """The hub takes CAPABILITY_LIMIT capabilities. One more is a 422 on `capabilities` itself, with no element index,
+    which runner-rs/src/lanes.rs refused_field answers by dropping its newest capability: a runner that outgrows an
+    older hub's cap (0.6.0 takes 32) loses one capability there instead of its heartbeat."""
+    computer = runner(api)
+    assign(api, computer, "ops")
+    body = heartbeat_body("ops")
+    body["capabilities"] = (list(RUNNER_CAPABILITIES) * M.CAPABILITY_LIMIT)[: M.CAPABILITY_LIMIT]
+    post(api, "runners/heartbeat", body, token=computer["token"])
+    body["capabilities"].append(RUNNER_CAPABILITIES[0])
+    detail = post(api, "runners/heartbeat", body, token=computer["token"], expected=422)["error"]["detail"]
+    lanes = (W.ROOT / "runner-rs" / "src" / "lanes.rs").read_text()
+    caps = re.search(r'Regex::new\(r"([^"]*\bcapabilities\b[^"]*)"\)', lanes)
+    assert caps, "lanes.rs refused_field's capabilities pattern moved"
+    refused = re.search(caps.group(1), detail)
+    assert refused and refused.group(1) is None, detail
+    assert REQUESTS["$defs"]["Heartbeat"]["properties"]["capabilities"]["maxItems"] == M.CAPABILITY_LIMIT
+
+
 def test_todays_runner_no_longer_advertises_or_gates_the_retired_packet_capability():
     """The packet path is gone from runner-rs: its capability is neither advertised (lanes.rs CAPABILITIES) nor listed
     under the contract's `gated` (what today's runner may send), so the server accepts it only from older runners."""

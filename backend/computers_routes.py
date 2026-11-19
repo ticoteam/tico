@@ -90,6 +90,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
         # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
         # `run_timings`: a run's result may carry where its time went on the computer (`timings`; an older one refuses it).
+        # `resident_threads_v1`: this server takes the capability and the resident session routes (backend/residents.py);
+        # a runner keeps a session's process between turns only where this is set (an older server has no such routes).
         return {
             **runner_versions.desired(),
             "features": {
@@ -111,6 +113,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "capacity_continue": True,
                 "source_continue": True,
                 "run_timings": True,
+                "resident_threads_v1": True,
             },
         }
 

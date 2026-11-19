@@ -1629,6 +1629,12 @@ class RunnerErrors(Contract):
     panics: list[RunnerPanic] = Field(default_factory=list, max_length=20)
 
 
+# The most capabilities a heartbeat may name. Above what a runner sends (32 at most today, the 0.6.0 hub's cap), so
+# the room is here a release window before a runner needs it. An older hub refuses a longer list with a 422 on
+# `capabilities` that names no element, and runner-rs/src/lanes.rs refused_field drops the runner's newest one.
+CAPABILITY_LIMIT = 64
+
+
 class Heartbeat(Contract):
     worktrees: list[WorktreeStatus] | None = Field(default=None, max_length=1000)
     profiles: (
@@ -1681,8 +1687,10 @@ class Heartbeat(Contract):
             "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
             "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
             "push_hints_v1",  # a push to a bot's repository is told to its computer at once (backend/github.py tell_pushed)
+            # The runner keeps a session's provider process between its turns (backend/residents.py).
+            "resident_threads_v1",
         ]
-    ] = Field(default_factory=list, max_length=32)
+    ] = Field(default_factory=list, max_length=CAPABILITY_LIMIT)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2787,6 +2795,44 @@ class AttemptThread(Contract):
     thread_id: ID
     source_pending: bool = False
     source_continuation: SourceContinuation | None = None
+
+
+# Resident sessions (backend/residents.py), for a runner that advertises `resident_threads_v1`.
+ResidentState = Literal["live", "dormant"]
+
+
+class ResidentRegister(Contract):
+    # The provider session the live process continues, and the login or profile it runs under: one writer per pair.
+    provider_session_id: ID
+    binding: str = Field(default="", max_length=200)
+    # The runner's own session key for the turn (runner-rs execute.rs session_key): refused when it differs from the
+    # server's, so the two never reserve different sessions for one turn.
+    session_key: str | None = Field(default=None, max_length=300)
+    # The incarnation this one takes over on the same computer, after the runner lost the process behind it.
+    replaces: str | None = Field(default=None, max_length=64)
+
+
+class ResidentRenew(Contract):
+    state: ResidentState = "live"
+    provider_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ResidentRelease(Contract):
+    reason: str = Field(default="released", max_length=80)
+
+
+class ResidentBind(Contract):
+    resident_id: str = Field(min_length=1, max_length=64)
+
+
+class ResidentHeld(Contract):
+    id: str = Field(min_length=1, max_length=64)
+    state: ResidentState = "live"
+
+
+class ResidentReconcile(Contract):
+    # Every resident the runner holds now, live or dormant; the server ends any other it has on record for this computer.
+    residents: list[ResidentHeld] = Field(default_factory=list, max_length=500)
 
 
 class FailedTool(Contract):

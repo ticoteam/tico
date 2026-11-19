@@ -131,4 +131,7 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
         changed = True
     if changed:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (at, task_id))
+        from . import residents
+
+        residents.revoke(conn, "task_access_changed", tasks=[task_id])  # a role may be what let a bot read it
     return changed

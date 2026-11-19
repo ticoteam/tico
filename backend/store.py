@@ -1354,6 +1354,17 @@ class Store:
                         aid = operation.split("/")[4]
                     elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports", "/api/v2/files/dates"):
                         aid = body.get("attempt") or aid
+                if identity.role == "runner":
+                    from . import residents
+
+                    # A saved answer never outlives a revocation (backend/residents.py): a fenced turn's retried start,
+                    # input or output is stopped as a fresh request would be; only its completion receipt stands.
+                    if aid and operation.startswith("/api/v2/attempts/") and not operation.endswith("/complete"):
+                        residents.refuse_fenced(c, aid)
+                    if operation.startswith("/api/v2/residents/") and isinstance(result, dict):
+                        stopped = residents.stopped_view(c, result.get("id"))
+                        if stopped:
+                            return stopped
                 replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
                     from . import task_context

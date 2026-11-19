@@ -1393,6 +1393,11 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
         tool = dict(tool_row(c, tool_id))
         if body.everyone_reads:  # every bot reads it now: requests for Read on it close themselves
             access_requests.settled(c, who, resource_type="tool", resource_id=tool_id, via="everyone-reads")
+        else:
+            from . import residents
+
+            # Bots that read it by default were handed its value (backend/residents.py); which ones is not cheap here.
+            residents.revoke(c, "credential_revoked", everyone=True)
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
@@ -1460,6 +1465,10 @@ def key_gone(c, who, key, grants):
     if tool is not None:
         detail |= {"tool": tool["id"], "private": tool["audience"] is not None}
     H.event(c, who.actor, "credential.deleted", key["id"], detail)
+    from . import residents
+
+    # A process that read the key may still hold it (backend/residents.py); who held it is not cheap to tell.
+    residents.revoke(c, "credential_revoked", everyone=True)
     if tool is not None:
         H.event(c, who.actor, "tool.key_deleted", tool["id"], {"credential": key["id"], "name": key["name"]})
 
@@ -1483,6 +1492,11 @@ def set_audience(c, who, tool, value, admins, auth=None):
         return
     before = audience_of(tool)
     c.execute("UPDATE tools SET audience=?, updated_at=? WHERE id=?", (stored, H.now(), tool["id"]))
+    from . import residents
+
+    # Who may see the tool decides who reads its key by default, and that value goes to the run raw
+    # (credentials.runtime): a process outside the new audience may hold it (backend/residents.py).
+    residents.revoke(c, "credential_revoked", everyone=True)
     H.event(
         c,
         who.actor,
@@ -1766,6 +1780,9 @@ def _revoke(c, who, key_id, subject):
             "UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (H.now(), who.actor, grant["id"])
         )
         H.event(c, who.actor, "credential.revoked", key_id, {"grant": grant["id"], "subject": subject})
+        from . import residents
+
+        residents.revoke_for(c, "credential_revoked", subject)  # a process that read the key may still hold it
 
 
 def set_level(c, who, vault, tool_id, subject, level):
@@ -1785,11 +1802,18 @@ def set_level(c, who, vault, tool_id, subject, level):
     subject = subject_of(c, subject)
     if not subject.startswith(("bot:", "human:")):
         raise Problem("subject", "Choose a person or a bot", 422)
+    before = subject_level(c, tool_id, subject)
     deferred = access_requests.DEFERRED.set(True)  # the grant is made, then its level set: settled once both are
     try:
         _set_level(c, who, vault, tool, tool_id, subject, level)
     finally:
         access_requests.DEFERRED.reset(deferred)
+    after = subject_level(c, tool_id, subject)
+    if before and RANK.get(after or "", 0) < RANK[before]:
+        from . import residents
+
+        # A lowered level on the same key: a process may hold the Read and write value it had (backend/residents.py).
+        residents.revoke_for(c, "credential_revoked", subject)
     if subject.startswith("bot:") and level != "none":
         access_requests.settled(c, who, subject=subject, resource_type="tool", resource_id=tool_id)
     return {"subject": subject, "level": subject_level(c, tool_id, subject)}

@@ -1334,6 +1334,9 @@ class Files:
         ).fetchone()
         if not row or (who.role == "runner" and row["runner_id"] != who.runner_id):
             raise Problem("forbidden", "That turn is not this computer's", 403)
+        from . import residents
+
+        residents.refuse_fenced(c, attempt_id)  # a fenced turn publishes nothing (backend/residents.py)
         message, conversation = H.message(c, row["mid"]), H.conversation(c, row["conversation_id"])
         if not privacy.attempt_readable(c, "bot:" + bot, attempt_id):
             raise Problem("privacy", "This bot can no longer read the task for this turn", 403)

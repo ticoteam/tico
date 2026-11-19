@@ -98,3 +98,40 @@ claiming another. `voice=restart` returns a fresh primer and notes stamp with a 
 After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
 Older hubs negotiate the capability away through the heartbeat 422 fallback.
 With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `attempt_id` and `call_id`, and goes only to the computer still holding that attempt. It is sent for a new turn and when the active turn is skipped (its deadline passed). The runner fetches inputs on hints and reconnects, with a 3-second backup poll; while the server refuses the capability, or the stream is down or quiet past 25 seconds, it keeps the 400 ms poll.
+
+## Resident sessions
+
+A runner advertises `resident_threads_v1` to keep a session's provider process between its turns, only where
+`GET runners/desired` lists `features.resident_threads_v1`. Each turn is still an ordinary claim, start-place, started,
+events, renew and complete; only the process is reused. With this capability the runner's longest capability list is
+32 values, the 0.6.0 hub's cap. Today's hub takes 64 (`CAPABILITY_LIMIT`), so the room is there once 0.6.0 leaves
+the window; until then a 33rd value costs the runner its newest capability on a 0.6.0 hub, whose 422 on
+`capabilities` names no element (`lanes.rs` refused_field). A hub without this capability refuses the value with 422, and the
+runner drops it (`lanes.rs` refused_field) and runs every turn the ordinary way; its resident routes answer 404. The routes are outside the core contract, take the runner's
+credential, and answer 409 `resident_threads_off` to a runner that has not advertised the capability:
+
+- `POST attempts/{aid}/resident` `{provider_session_id, binding?, session_key?, replaces?}` registers the process of
+  this ordinary, authorized turn. The server keeps the session key the turn's privacy scope admits: a key outside it is
+  409 `session_key_mismatch`. One live process per bot, key and login binding: another is 409 `resident_taken`, unless
+  `replaces` names the incarnation this runner lost. 409 `resident_refused`: the turn keeps no process (access
+  narrowed after it was claimed, a Make page request, a job released to start fresh or fork, or 500 open on this
+  computer); it finishes as an ordinary turn.
+- `POST residents/{rid}/renew` `{state: live|dormant, provider_session_id?}` about every `renew_seconds` (60); a
+  resident unheard from for 5 minutes lapses. `POST residents/{rid}/release` `{reason}` ends one incarnation and never
+  touches its replacement.
+- `POST attempts/{aid}/resident-bind` `{resident_id}` hands a claimed turn to a live resident of its session; 409
+  `resident_stopped`, `resident_mismatch` (another bot, generation, runtime or sign-in), `resident_refused` or
+  `session_key_mismatch` means start the turn the ordinary way.
+- `POST runners/me/residents/reconcile` `{residents: [{id, state}]}` after a reconnect: the answer lists the residents
+  to keep (`residents`), to stop (`stops`, with `stop_reason` and `revoked`) and the turns a revocation fenced
+  (`fenced_attempts`). A resident registered in the last minute is never closed for missing from the list, since the
+  list may predate it.
+
+Every resident answer has `stop`; when true, end the process. A revocation (a bot paused or archived, moved or
+unassigned, a revoked computer, a removed thread member, a narrowed thread or task audience, a removed or lowered
+credential, tool or mailbox access, a cleared Gateway key, a changed sign-in) ends the residents it touches in its own
+write and fences their live turns, also one whose resident already closed: `started`, `thread`, `background-done`,
+skill staging, stream capture and file publication answer 409 `stale_lease` (a retried request too, never its saved
+answer), the turn's own token is refused, events are acknowledged as `historical` and dropped, `inputs` hands nothing,
+renew answers `stop`, and `complete` is taken content-free at the stored `last_seq`: its usage, pushes and undelivered
+inputs count, and nothing it wrote is posted or kept. A cleared session ends its residents without fencing a turn.

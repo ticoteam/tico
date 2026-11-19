@@ -1560,6 +1560,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                 (H.now(), who.actor, gid),
             )
             H.event(c, who.actor, 'credential.revoked', cid, {'grant': gid, 'subject': row['subject']})
+            from . import residents
+
+            # A process that read the credential may still hold it (backend/residents.py).
+            residents.revoke_for(c, 'credential_revoked', row['subject'])
             if vault.row(c, cid)['kind'] == LOGIN:
                 from .website_tools import _close
 
@@ -1699,6 +1703,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 raise Problem('forbidden', 'That run is not on this Computer', 403)
             if row['state'] not in ('leased', 'running'):
                 raise Problem('stale_lease', 'That run has ended', 409)
+            from . import residents
+
+            residents.refuse_fenced(c, attempt)  # a revocation fenced the run: no key from this write on
             from .gateway_connection import run_credentials_for
 
             return {'credentials': run_credentials_for(c, vault, store.settings, who, attempt)}

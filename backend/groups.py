@@ -170,6 +170,10 @@ def _set_bot(c, slug, gid):
         task_caps.forget(c, "bot:" + slug)  # its caps were its old group's (CONTRACT §3)
     was, declared["team"] = declared.get("team") or "", gid
     BS.write(c, slug, declared)
+    if was != gid:
+        from . import residents
+
+        residents.revoke(c, "group_changed", bot=slug)  # its old group's threads and access went with the move
     _follow(c, "bot:" + slug, was, gid)
     if was != gid:
         from .finance import actions as FA
@@ -488,6 +492,11 @@ def update(c, auth, settings, who, gid, body, via=None):
             raise Problem("not_found", "Unknown group: " + parent, 404)
         if parent and parent in P.group_and_below(gid, roster):
             raise Problem("hierarchy", "A group cannot be moved under itself or a group inside it", 422)
+        if parent != (group.get("parent") or ""):
+            from . import residents
+
+            # What a group's bots may read follows its place in the tree (backend/residents.py).
+            residents.revoke(c, "group_changed", everyone=True)
         group["parent"] = parent
     if body.name is not None:
         group["name"] = body.name.strip()

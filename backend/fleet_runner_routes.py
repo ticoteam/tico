@@ -2,7 +2,7 @@
 
 from . import built_on
 from .call_sessions import CLOSED_COMPLETION, VoicePhase, closed_attempt
-from . import runner_online
+from . import residents, runner_online
 from . import org_rule_check
 from . import placement as placing
 from .auth import Identity
@@ -653,11 +653,13 @@ def register(
         from . import stream_capture
 
         body = scrub_attempt(aid, body)  # a secret set in this run never reaches the record
-        return mutate(
-            request,
-            body,
-            lambda c: stream_capture.keep(c, execution.attempt(c, request.state.identity, aid, active=False), body),
-        )
+
+        def keep(c):
+            row = execution.attempt(c, request.state.identity, aid, active=False)
+            residents.refuse_fenced(c, aid)  # a fenced turn's stream is not kept (backend/residents.py)
+            return stream_capture.keep(c, row, body)
+
+        return mutate(request, body, keep)
 
     @app.post("/api/v2/attempts/{aid}/diagnostics")
     def attempt_diagnostics(request: Request, aid: str, body: M.AttemptStderr):
@@ -702,6 +704,28 @@ def register(
     def background_done(request: Request, aid: str, body: M.BackgroundDone):
         body = scrub_attempt(aid, body)  # a secret set in this run never reaches the wake
         return mutate(request, body, lambda c: execution.background_done(c, request.state.identity, aid, body))
+
+    # Resident sessions (backend/residents.py): only for a runner that advertises `resident_threads_v1`. Each turn
+    # stays an ordinary claim, start and completion; these routes reserve and reuse its process.
+    @app.post("/api/v2/attempts/{aid}/resident")
+    def resident_register(request: Request, aid: str, body: M.ResidentRegister):
+        return mutate(request, body, lambda c: residents.register(execution, c, request.state.identity, aid, body))
+
+    @app.post("/api/v2/attempts/{aid}/resident-bind")
+    def resident_bind(request: Request, aid: str, body: M.ResidentBind):
+        return mutate(request, body, lambda c: residents.bind(execution, c, request.state.identity, aid, body))
+
+    @app.post("/api/v2/residents/{rid}/renew")
+    def resident_renew(request: Request, rid: str, body: M.ResidentRenew):
+        return mutate(request, body, lambda c: residents.renew(execution, c, request.state.identity, rid, body))
+
+    @app.post("/api/v2/residents/{rid}/release")
+    def resident_release(request: Request, rid: str, body: M.ResidentRelease):
+        return mutate(request, body, lambda c: residents.release(execution, c, request.state.identity, rid, body))
+
+    @app.post("/api/v2/runners/me/residents/reconcile")
+    def resident_reconcile(request: Request, body: M.ResidentReconcile):
+        return mutate(request, body, lambda c: residents.reconcile(execution, c, request.state.identity, body))
 
 
 def register_placement(
@@ -1143,6 +1167,8 @@ def register_completion(
         with store.read() as c:
             if not org_rule_check.R.any_active(c):
                 return None  # no rule in force: the completion reads nothing more for its check
+            if residents.fenced(c, aid):
+                return None  # a fenced turn's reply is never posted (backend/residents.py), so it is not checked
             if store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                 return None  # a retry answers from its saved result; nothing is checked again
             row = c.execute(

@@ -1455,8 +1455,12 @@ def _restart(c, settings, runner_id, runtime):
     from . import quarantine_stops
     from .execution import lift_limited_on_computer
 
+    from . import residents
+
     line = _restart_line(c, runner_id, runtime)
     stopped = sum(quarantine_stops.restart(c, a, line) for a in _live(c, runner_id, runtime))
+    # A process signed in with the old login ends with it, its turn fenced as well as stopped (backend/residents.py).
+    residents.revoke(c, "sign_in_changed", runner=runner_id)
     reset = _reset(c, settings, runner_id, runtime)
     lift_limited_on_computer(c, settings, H.TICO_ACTOR, runner_id, runtime)
     return {"stopped": stopped, "sessions_reset": reset}
@@ -1487,6 +1491,10 @@ def _effect_changed(c, settings, sid):
         ).fetchone()
         if not (on_set and keeps_sessions(c, runner_id, runtime)):
             _reset(c, settings, runner_id, runtime)
+        from . import residents
+
+        # Its live processes still hold the sign-in that stopped counting (backend/residents.py).
+        residents.revoke(c, "sign_in_changed", runner=runner_id)
 
 
 def keeps_sessions(c, runner_id, runtime):
