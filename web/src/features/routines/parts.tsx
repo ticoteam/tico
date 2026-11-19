@@ -42,19 +42,14 @@ export const Verb = ({ children, onClick, target }: { children: string; onClick:
 
 /** A switch whose words only a screen reader hears (a panel or page head). */
 export const HeadSwitch = ({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (on: boolean) => void; disabled?: boolean }) => (
-  <Switch label={<span className="rr-sr">{label}</span>} checked={checked} onCheckedChange={onChange} disabled={disabled} />
+  <Switch label={label} labelHidden checked={checked} onCheckedChange={onChange} disabled={disabled} />
 );
 
-/** Any owner id the server sends (`bot:<slug>`, `person:<id>`, `human:<id>`, a bare id) as the directory's key. */
+/** Any owner id the server sends (`bot:<id>`, `bot:<slug>`, `person:<id>`, `human:<id>`, a bare id) as the directory's key. */
 export const actorKey = (id: string | null | undefined): string | undefined => (id ? id.replace(/^person:/, 'human:') : undefined);
 
-/** The person or agent behind an owner id; `byId` also answers a bare slug or id. */
-function useOwner(id: string | null | undefined) {
-  const key = actorKey(id);
-  const full = useActor(key);
-  const bare = useActor(key?.replace(/^(bot|human):/, ''));
-  return full ?? bare;
-}
+/** The person or agent behind an owner id. */
+const useOwner = (id: string | null | undefined) => useActor(actorKey(id));
 
 /** Their face, 22 unless asked; a gap the same size when the directory does not know them. */
 export function Face({ id, size = 22 }: { id: string | null | undefined; size?: 16 | 22 | 28 }) {

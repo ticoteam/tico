@@ -1,20 +1,18 @@
 /* Copied from pages/3-company/rules.css (parts 2 to 4): only the rules these pages use, class names unchanged, sizes on
-   the scale. Page parts sit under .rr (the page sheet); panel parts under .pnl, because a panel is drawn in the shell's
-   place, outside the page. Type comes from type.css classes (t-read) in the markup. Rows here hang no mark in the
+   the scale. Everything sits under .rr: the page sheet and each of its panels (drawn in the shell's place) carry it. Type comes from type.css classes (t-read) in the markup. Rows here hang no mark in the
    margin, so their padding puts the title on the section name's edge (--s-8). */
 
 /* ---------- shared: a word, a quiet verb, a muted line, the setting line ---------- */
-.rr-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-:is(.rr,.pnl) .word{display:inline-flex;align-items:center;gap:calc(var(--s-1) + 1px);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink);white-space:nowrap}
-:is(.rr,.pnl) .word .ico{width:14px;height:14px;stroke-width:2;flex:none}
-:is(.rr,.pnl) .verb{height:var(--ctl-sm);display:inline-flex;align-items:center;padding:0 var(--s-2);margin:0 calc(-1 * var(--s-1));border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap;text-decoration:none;transition:background var(--dur-fast) var(--ease)}
-:is(.rr,.pnl) .verb:hover{background:var(--well-2)}
-:is(.rr,.pnl) .row-sub{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
-:is(.rr,.pnl) .row-state{display:flex;justify-content:flex-end;align-items:center;color:var(--muted)}
-:is(.rr,.pnl) .row-state .ico{width:14px;height:14px}
-:is(.rr,.pnl) .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2)}
-:is(.rr,.pnl) .is-off .row-title{color:var(--muted)}
-:is(.rr,.pnl) .set-name{width:var(--set-w,92px);flex:none;color:var(--muted);font-size:var(--t-sm)}
+.rr .word{display:inline-flex;align-items:center;gap:calc(var(--s-1) + 1px);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink);white-space:nowrap}
+.rr .word .ico{width:14px;height:14px;stroke-width:2;flex:none}
+.rr .verb{height:var(--ctl-sm);display:inline-flex;align-items:center;padding:0 var(--s-2);margin:0 calc(-1 * var(--s-1));border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap;text-decoration:none;transition:background var(--dur-fast) var(--ease)}
+.rr .verb:hover{background:var(--well-2)}
+.rr .row-sub{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+.rr .row-state{display:flex;justify-content:flex-end;align-items:center;color:var(--muted)}
+.rr .row-state .ico{width:14px;height:14px}
+.rr .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2)}
+.rr .is-off .row-title{color:var(--muted)}
+.rr .set-name{width:var(--set-w,92px);flex:none;color:var(--muted);font-size:var(--t-sm)}
 .rr .rr-none{padding:var(--s-1h) 0 var(--s-2) var(--s-8)}
 
 /* ---------- the rule row (pages/1-tasks/more.css) ---------- */
@@ -77,18 +75,18 @@
 .rr .match-foot .pill{color:var(--ink-2)}
 
 /* ---------- a panel: facts, then short lists ---------- */
-.pnl .inst{max-width:var(--measure);margin-bottom:var(--s-2);color:var(--ink-2);white-space:pre-wrap}
-.pnl :is(.prun,.pstep,.pjob,.hold){margin:0 calc(-1 * var(--s-2))}
-.pnl .prun{grid-template-columns:84px minmax(0,1fr) auto;column-gap:var(--s-2h)}
-.pnl .run-at{white-space:nowrap;font-variant-numeric:tabular-nums}
-.pnl .pstep{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
-.pnl .pjob{height:48px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
-.pnl .pjob-main{min-width:0;display:grid;row-gap:calc(var(--s-0) / 2)}
-.pnl .hold{grid-template-columns:16px minmax(0,1fr) var(--av-sm) 44px;column-gap:var(--s-2h)}
-.pnl .hold-mark{display:grid;place-items:center;color:var(--muted)}
-.pnl .hold-mark .ico{width:14px;height:14px}
-.pnl .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
-.pnl .rr-once{display:grid;gap:var(--s-2);justify-items:start}
+.rr .inst{max-width:var(--measure);margin-bottom:var(--s-2);color:var(--ink-2);white-space:pre-wrap}
+.rr :is(.prun,.pstep,.pjob,.hold){margin:0 calc(-1 * var(--s-2))}
+.rr .prun{grid-template-columns:84px minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.rr .run-at{white-space:nowrap;font-variant-numeric:tabular-nums}
+.rr .pstep{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.rr .pjob{height:48px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.rr .pjob-main{min-width:0;display:grid;row-gap:calc(var(--s-0) / 2)}
+.rr .hold{grid-template-columns:16px minmax(0,1fr) var(--av-sm) 44px;column-gap:var(--s-2h)}
+.rr .hold-mark{display:grid;place-items:center;color:var(--muted)}
+.rr .hold-mark .ico{width:14px;height:14px}
+.rr .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
+.rr .rr-once{display:grid;gap:var(--s-2);justify-items:start}
 .rr-form{display:grid;gap:var(--s-3)}
 .rr-field{display:flex;align-items:center;gap:var(--s-2h)}
 

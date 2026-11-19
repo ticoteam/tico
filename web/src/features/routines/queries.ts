@@ -65,7 +65,7 @@ export const runsQuery = (id: string) =>
 /** What a new routine or an edit sends: the old app's one-step routine, an agent taking a turn on the instruction. */
 export interface RoutineFields {
   name: string;
-  /** `bot:<slug>`: the agent that runs it. */
+  /** `bot:<id>`: the agent that runs it. */
   agent: string;
   trigger: Trigger;
   instruction: string;
@@ -120,6 +120,17 @@ export function setRoutineOn(id: string, on: boolean, key: readonly unknown[] = 
     key: [key as unknown[], one as unknown[]],
     optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
     send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { enabled: on }, { idempotencyKey }),
+  });
+}
+
+/** Its spend limit: dollars each 30 minutes, or null for the agent's own limit (PATCH spend_cap). */
+export function setRoutineLimit(id: string, per30m: number | null) {
+  const cap = per30m === null ? null : { per_30m: Math.round(per30m * 100) / 100 };
+  const change = (r: Routine): Routine => ({ ...r, spend_cap: cap });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { spend_cap: cap }, { idempotencyKey }),
   });
 }
 
@@ -321,17 +332,6 @@ export const teamsQuery = queryOptions({
     const r = await api.get<Group[] | { groups: Group[] }>('/api/v2/groups', { signal });
     return Array.isArray(r) ? r : r.groups;
   },
-  ...quiet,
-});
-
-export interface Pipeline {
-  id: string;
-  name: string;
-  stages: { id: string; name: string; side?: boolean }[];
-}
-export const pipelinesQuery = queryOptions({
-  queryKey: ['rules', 'pipelines'],
-  queryFn: async ({ signal }) => (await api.get<{ pipelines: Pipeline[] }>('/api/v2/pipelines', { signal })).pipelines,
   ...quiet,
 });
 

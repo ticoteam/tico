@@ -29,6 +29,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
   const can = !!d?.can_change;
   return (
     <SidePanel
+      className="rr"
       title="Maintenance"
       target="routine:maintenance"
       onClose={onClose}
@@ -61,7 +62,8 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
                   <span className="row-sub">{s.last_ran_at ? `Last ran ${fmtDate(s.last_ran_at)}` : 'Not run yet'}</span>
                 </span>
                 <Switch
-                  label={<span className="rr-sr">{s.name}</span>}
+                  label={s.name}
+                  labelHidden
                   checked={s.enabled}
                   disabled={!can || !!s.fixed}
                   onCheckedChange={(on) => void press('routines.setMaintenance', { step: s.key, stepOn: on })}
@@ -95,7 +97,7 @@ function HeartbeatPanel({ onClose }: { onClose: () => void }) {
   const h = useQuery(heartbeatQuery);
   const d = h.data;
   return (
-    <SidePanel title="Heartbeat" target="routine:heartbeat" onClose={onClose}>
+    <SidePanel className="rr" title="Heartbeat" target="routine:heartbeat" onClose={onClose}>
       {h.isError && <Word>Heartbeat did not load</Word>}
       {d && (
         <>
@@ -129,7 +131,8 @@ function HeartbeatPanel({ onClose }: { onClose: () => void }) {
                 </span>
                 {s.switch ? (
                   <Switch
-                    label={<span className="rr-sr">{agentWords(s.name)}</span>}
+                    label={agentWords(s.name)}
+                    labelHidden
                     checked={s.on}
                     disabled={!s.can_change}
                     onCheckedChange={(on) => void press('routines.setJob', { job: s.key, on })}
@@ -163,7 +166,7 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
   const j = useQuery(systemJobsQuery);
   const jobs = j.data ?? [];
   return (
-    <SidePanel title="System jobs" target="routine:system" onClose={onClose}>
+    <SidePanel className="rr" title="System jobs" target="routine:system" onClose={onClose}>
       {j.isError && <Word>System jobs did not load</Word>}
       <section className="rail-sec">
         <h3>Jobs</h3>
@@ -177,7 +180,8 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
               <span className="row-age">{job.last ? <Ago at={job.last} /> : ''}</span>
             ) : (
               <Switch
-                label={<span className="rr-sr">{agentWords(job.name)}</span>}
+                label={agentWords(job.name)}
+                labelHidden
                 checked={job.on}
                 disabled={job.can_change === false}
                 onCheckedChange={(on) => void press('routines.setJob', { job: job.key, on })}

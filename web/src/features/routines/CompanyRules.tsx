@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useState, type ReactNode } from 'react';
-import { useActors } from '@/data';
+import { directoryQuery } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Section } from '@/pagekinds';
 import { RULES } from './actions';
-import { Face, press, RemoveItem, RuleRow, type How } from './parts';
+import { actorKey, Face, press, RemoveItem, RuleRow, type How } from './parts';
 import { holdsQuery, orgRulesQuery, reachQuery, teamsQuery } from './queries';
 import type { Group, OrgRule, Reach, ReachBook, ReachMode, RuleHold, Scope } from './types';
 import { orgParts } from './words';
@@ -40,14 +40,13 @@ const members = (g: Group) => [...g.bots.map((b) => `bot:${b}`), ...g.people.map
 
 /** A party's name: Everyone, a team, or whoever the directory knows by that id or slug. */
 export function useNamer() {
-  const actors = useActors();
+  const dir = useQuery(directoryQuery).data;
   const teams = useQuery(teamsQuery).data ?? [];
   return (party: string): string => {
     if (party === '*') return 'Everyone';
     if (party.startsWith('group:')) return teams.find((g) => g.id === party.slice(6))?.name ?? 'A team';
-    const bare = party.replace(/^(bot|human|person):/, '');
-    const a = actors.find((x) => x.id === party || x.slug === bare || x.id.endsWith(`:${bare}`));
-    return a?.name ?? (party.startsWith('bot:') ? 'An agent' : 'A person');
+    // Unknown only once the agent or person is gone from the company.
+    return dir?.byId[actorKey(party) ?? party]?.name ?? (party.startsWith('bot:') ? 'An agent' : 'A person');
   };
 }
 

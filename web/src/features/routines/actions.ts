@@ -22,6 +22,7 @@ import {
   setJob,
   setMaintenance,
   setReach,
+  setRoutineLimit,
   setRoutineOn,
   setWatchTrigger,
   stageRulesQuery,
@@ -51,7 +52,7 @@ export const BUILTINS = ['maintenance', 'heartbeat', 'system'] as const;
 export type Builtin = (typeof BUILTINS)[number];
 
 const id = s.string({ min: 1, max: 200 });
-const agent = s.string({ min: 1, max: 200, pattern: /^bot:\S+$/, what: 'bot:<slug>' });
+const agent = s.string({ min: 1, max: 200, pattern: /^bot:\S+$/, what: 'bot:<id>' });
 const party = s.string({ min: 1, max: 200, pattern: /^(\*|(group|bot|human):\S+)$/, what: '*, group:<id>, bot:<id> or human:<id>' });
 const cron = s.string({ min: 9, max: 100, pattern: /^\S+( \S+){4}$/, what: 'a five-part cron, like 0 9 * * 1-5' });
 const name = s.string({ min: 1, max: 200 });
@@ -192,6 +193,17 @@ export const pause = defineAction({
   can: (ctx, i) => cached(ctx, i.routine)?.can_pause !== false,
   run: (_ctx, i) => said(setRoutineOn(i.routine, false)),
   did: () => 'Paused',
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const setLimit = defineAction({
+  id: 'routines.setLimit',
+  title: "Set a routine's spend limit",
+  kind: 'change',
+  input: s.object({ routine: id, per30m: s.nullable(s.number({ min: 0, max: 100_000 })) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(setRoutineLimit(i.routine, i.per30m)),
+  did: (i) => (i.per30m === null ? "Uses the agent's limit" : 'Limit set'),
   target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 

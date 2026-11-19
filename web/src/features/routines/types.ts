@@ -41,7 +41,7 @@ export interface Trigger {
 export interface Step {
   id: string;
   type: string;
-  /** bot_turn: `bot:<slug>`. */
+  /** bot_turn: `bot:<id>` (`bot:<slug>` in older steps). */
   bot?: string;
   prompt?: string;
   [k: string]: unknown;
@@ -63,6 +63,8 @@ export type Routine = Omit<Automation, 'trigger' | 'steps' | 'last_run' | 'spend
   readonly?: boolean;
   updated_at?: string;
   listening?: { dot?: string; sources?: { id: string }[] } | null;
+  /** A "What wakes" routine's scope: `bot`, `department` (a name), `pipeline`, `task` or `team` (every agent). */
+  wakes?: { scope_kind: string; scope_id: string | null } | null;
 };
 
 export interface RunStep {
@@ -257,6 +259,8 @@ export interface Match {
   created_at: string;
   status: string;
   tag?: string | null;
+  /** The send that took it, once sending or sent: that run's task holds it. */
+  run_id?: string | null;
 }
 export interface WatchSource {
   id: string;

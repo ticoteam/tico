@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { MenuItem } from '@/kit/Menu';
+import { pipelinesQuery, type Pipeline } from '@/features/tasks/exports';
 import { List, Section, type PageTab } from '@/pagekinds';
 import { ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf } from './CompanyRules';
@@ -104,6 +105,7 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
   const stageSugg = useQuery(stageRulesQuery('suggested'));
   const holds = useQuery(holdsQuery).data;
   const teams = useQuery(teamsQuery).data ?? [];
+  const pipes = useQuery(pipelinesQuery).data ?? [];
   const panel = search.panel;
   const opened = (k: 'org' | 'stage', id: string) => panel === `${k}:${id}`;
   const removeOrg = (r: OrgRule) => () => confirm('this rule', () => void press('rules.remove', { rule: r.id, kind: 'org' }));
@@ -213,16 +215,12 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
     case 'on-tasks': {
       const list = (t === 'wakes' ? groups.data?.wakes : groups.data?.automations) ?? [];
       const byId = new Map((routines.data ?? []).map((r) => [r.id, r]));
-      const teamOf = (r: Routine | undefined) => {
-        const who = r && runnerOf(r);
-        const slug = who?.replace(/^bot:/, '');
-        return (slug && teams.find((g: Group) => g.bots.includes(slug))?.name) || 'Every agent';
-      };
+      const sectionOf = (r: Routine | undefined) => (t === 'wakes' ? wakeSection(r, teams, pipes) : pipelineSection(r, pipes));
       return {
         state: stateOf(groups, list.length),
         retry: () => void groups.refetch(),
         empty: t === 'wakes' ? 'No wakes yet' : 'No routines on tasks yet',
-        sections: grouped(list, (w) => teamOf(byId.get(w.id))).map(([g, ws]) => (
+        sections: grouped(list, (w) => sectionOf(byId.get(w.id))).map(([g, ws]) => (
           <Section key={g} name={g} count={ws.length}>
             {ws.map((w) => (
               <AutoRuleRow key={w.id} id={w.id} name={w.name} on={w.enabled} r={byId.get(w.id)} wake={t === 'wakes'} />
@@ -276,6 +274,53 @@ function useTab(t: RuleTab, search: RulesSearch, confirm: (what: string, go: () 
       };
     }
   }
+}
+
+const same = (a: string | null | undefined, b: string) => !!a && a.toLowerCase() === b.toLowerCase();
+
+/** A wake's section: the team it wakes, a pipeline's name, or Every agent (pages/3-company/rules.js WAKES). */
+function wakeSection(r: Routine | undefined, teams: Group[], pipes: Pipeline[]): string {
+  const w = r?.wakes;
+  const id = w?.scope_id ?? '';
+  const teamOfBot = (bot: string | null | undefined) => {
+    const key = bot?.replace(/^bot:/, '');
+    return key ? teams.find((g) => g.bots.includes(key))?.name : undefined;
+  };
+  switch (w?.scope_kind) {
+    case 'bot':
+      return teamOfBot(id) ?? 'Every agent';
+    case 'department':
+      return teams.find((g) => g.id === id || same(g.name, id))?.name ?? (id || 'Every agent');
+    case 'pipeline':
+      return pipes.find((p) => p.id === id || same(p.name, id))?.name ?? 'Every agent';
+    case 'team':
+      return 'Every agent';
+    default:
+      return teamOfBot(r && runnerOf(r)) ?? 'Every agent';
+  }
+}
+
+/** A routine on tasks' section: the one pipeline its filters name (`task.pipeline`, or a `task.stage` only one pipeline
+   has), else Every pipeline (pages/3-company/rules.js ONTASKS). The routine carries no pipeline of its own. */
+function pipelineSection(r: Routine | undefined, pipes: Pipeline[]): string {
+  const named = new Set<string>();
+  for (const step of r?.steps ?? []) {
+    if (step.type !== 'filter' || !Array.isArray(step.rules)) continue;
+    for (const rule of step.rules as { when?: { field?: string; value?: unknown }[] }[]) {
+      for (const c of rule.when ?? []) {
+        const v = typeof c.value === 'string' ? c.value : '';
+        if (c.field === 'task.pipeline') {
+          const p = pipes.find((x) => x.id === v || same(x.name, v));
+          if (p) named.add(p.name);
+        } else if (c.field === 'task.stage') {
+          const ps = pipes.filter((x) => x.stages.some((st) => st.id === v || same(st.name, v)));
+          if (ps.length === 1 && ps[0]) named.add(ps[0].name);
+        }
+      }
+    }
+  }
+  const [only] = named;
+  return named.size === 1 && only ? only : 'Every pipeline';
 }
 
 /** An outside rule's owner when nothing is due: the one agent or person it names. */

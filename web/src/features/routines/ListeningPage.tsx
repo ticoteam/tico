@@ -15,7 +15,8 @@ import { fmtDate } from '@/lib';
 import { List, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
 import { Face, HeadSwitch, press, RemoveItem, RuleRow, useConfirmRemove, Word } from './parts';
-import { matchesQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
+import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
+import { runLink } from './RoutinePanel';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
 import { agentWords, cap, limitsWords } from './words';
 import './routines.css';
@@ -229,6 +230,10 @@ function MatchRow({ watch, m }: { watch: string; m: Match }) {
 
 function MatchOpen({ watch, m }: { watch: string; m: Match }) {
   const at = m.posted_at ?? m.created_at;
+  // A sent match has no task of its own: the run that sent it started one with the batch (the last 20 runs are read).
+  const runs = useQuery({ ...runsQuery(watch), enabled: !!m.run_id }).data;
+  const run = m.run_id ? runs?.find((r) => r.id === m.run_id) : undefined;
+  const task = run && runLink(run);
   return (
     <article className="match-open" data-target={`match:${m.id}`}>
       <span className="row-sub">{srcOf(m)}</span>
@@ -242,6 +247,11 @@ function MatchOpen({ watch, m }: { watch: string; m: Match }) {
           <a className="verb" href={m.url} target="_blank" rel="noreferrer">
             Open source
           </a>
+        )}
+        {task?.startsWith('/task/') && (
+          <Link className="verb" href={task}>
+            Open task
+          </Link>
         )}
         <Link className="verb" href={listeningHref({ watch })}>
           Close

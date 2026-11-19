@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useActors } from '@/data';
+import { pipelinesQuery } from '@/features/tasks/exports';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -18,7 +19,7 @@ import { SidePanel } from '@/pagekinds';
 import type { RuleTab } from './actions';
 import { partiesOf, useNamer } from './CompanyRules';
 import { Face, press, RemoveItem, useConfirmRemove, useName } from './parts';
-import { holdsQuery, orgRulesQuery, pipelinesQuery, stageRulesQuery, teamsQuery } from './queries';
+import { holdsQuery, orgRulesQuery, stageRulesQuery, teamsQuery } from './queries';
 import type { OrgRule, RuleHold, StageRule } from './types';
 import { agentWords, BROKEN, cap, STAGE_EVENTS, STAGE_THENS, STAGE_TIMERS, stageParts } from './words';
 
@@ -34,7 +35,7 @@ export function RulePanel({ panel, tab, onClose }: { panel: string; tab: RuleTab
 
 function Gone({ title, loading, onClose }: { title: string; loading: boolean; onClose: () => void }) {
   return (
-    <SidePanel title={title} onClose={onClose}>
+    <SidePanel className="rr" title={title} onClose={onClose}>
       {!loading && <Empty icon="alert" title="This rule is gone" />}
     </SidePanel>
   );
@@ -69,6 +70,7 @@ function OrgView({ id, onClose }: { id: string; onClose: () => void }) {
   const tmp = r.id.startsWith('tmp:');
   return (
     <SidePanel
+      className="rr"
       title={r.kind === 'external' ? 'Outside rule' : 'Rule'}
       target={`rule:${r.id}`}
       onClose={onClose}
@@ -120,6 +122,7 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
 
   return (
     <SidePanel
+      className="rr"
       title={rule ? 'Rule' : outside ? 'New outside rule' : 'New rule'}
       target={rule ? `rule:${rule.id}` : 'panel:rule:new'}
       onClose={onClose}
@@ -166,6 +169,7 @@ function StageView({ id, onClose }: { id: string; onClose: () => void }) {
   const tmp = r.id.startsWith('tmp:');
   return (
     <SidePanel
+      className="rr"
       title={r.name || parts[0] || 'Rule'}
       target={`rule:${r.id}`}
       onClose={onClose}
@@ -247,6 +251,7 @@ function StageEditor({ rule, onDone, onClose }: { rule?: StageRule; onDone: () =
 
   return (
     <SidePanel
+      className="rr"
       title={rule ? rule.name || 'Rule' : 'New stage rule'}
       target={rule ? `rule:${rule.id}` : 'panel:rule:new'}
       onClose={onClose}

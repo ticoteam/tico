@@ -38,7 +38,7 @@ export function WebhookPanel({ id, onClose }: { id: string; onClose: () => void 
   const remove = useConfirmRemove();
   if (!h) {
     return (
-      <SidePanel title="Webhook" onClose={onClose}>
+      <SidePanel className="rr" title="Webhook" onClose={onClose}>
         {!hooks.isPending && <Empty icon="alert" title="This webhook is gone" />}
       </SidePanel>
     );
@@ -46,6 +46,7 @@ export function WebhookPanel({ id, onClose }: { id: string; onClose: () => void 
   const tmp = h.id.startsWith('tmp:');
   return (
     <SidePanel
+      className="rr"
       title={h.name}
       target={`hook:${h.id}`}
       onClose={onClose}

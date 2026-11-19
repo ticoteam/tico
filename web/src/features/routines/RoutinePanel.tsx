@@ -31,10 +31,11 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   const one = useQuery({ ...routineQuery(id), enabled: !listed && !id.startsWith('tmp:') });
   const r = listed ?? one.data;
   const [editing, setEditing] = useState(false);
+  const [limiting, setLimiting] = useState(false);
   const remove = useConfirmRemove();
   if (!r) {
     return (
-      <SidePanel title="Routine" onClose={onClose}>
+      <SidePanel className="rr" title="Routine" onClose={onClose}>
         {one.isError && <Empty icon="alert" title="This routine did not load" />}
       </SidePanel>
     );
@@ -45,6 +46,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   const tmp = r.id.startsWith('tmp:');
   return (
     <SidePanel
+      className="rr"
       title={r.name || 'Routine'}
       target={`routine:${r.id}`}
       onClose={onClose}
@@ -70,9 +72,13 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
             <Face id={step?.bot ?? r.owner_id} />
             <Runner id={step?.bot ?? r.owner_id} />
           </LabelValue>
-          {r.spend_cap?.per_30m ? <LabelValue label="Limit">{`${fmtMoney(r.spend_cap.per_30m, { cents: true })} each 30 minutes`}</LabelValue> : null}
+          <LabelValue label="Limit">
+            <span>{r.spend_cap?.per_30m != null ? `${fmtMoney(r.spend_cap.per_30m, { cents: true })} each 30 minutes` : "Agent's limit"}</span>
+            {r.can_edit && !tmp && !limiting && <Verb onClick={() => setLimiting(true)}>Change</Verb>}
+          </LabelValue>
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
+        {limiting && <LimitEditor routine={r} onDone={() => setLimiting(false)} />}
       </section>
       {step?.prompt && (
         <section className="rail-sec">
@@ -83,6 +89,39 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
       {!tmp && <Runs id={r.id} />}
       {remove.node}
     </SidePanel>
+  );
+}
+
+/** Its spend limit, as the old app's editor: dollars each 30 minutes, blank for the agent's own limit. */
+function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void }) {
+  const [value, setValue] = useState(routine.spend_cap?.per_30m != null ? String(routine.spend_cap.per_30m) : '');
+  const typed = value.trim() === '' ? null : Number(value);
+  const bad = typed !== null && !(typed >= 0);
+  const save = async (per30m: number | null) => {
+    if (await press('routines.setLimit', { routine: routine.id, per30m })) onDone();
+  };
+  return (
+    <div className="rr-form">
+      <Field
+        label="Dollars each 30 minutes"
+        type="number"
+        value={value}
+        onValueChange={setValue}
+        placeholder="Agent's limit"
+        error={bad ? 'Enter an amount in dollars' : undefined}
+        autoFocus
+      />
+      <div className="rr-field">
+        <Button variant="primary" disabled={bad} onClick={() => void save(typed)}>
+          Save
+        </Button>
+        {/* blank is the agent's own limit (the placeholder says so) */}
+        <Button onClick={() => void save(null)}>Clear</Button>
+        <Button variant="quiet" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -145,7 +184,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   // A trigger the editor cannot draw (a webhook, a due date, a message) is kept as it is.
   const fixed = !!t && t.type !== 'schedule' && t.type !== 'event';
   const [name, setName] = useState(routine?.name ?? '');
-  const [agent, setAgent] = useState<string | null>(step?.bot ?? (routine?.owner_id?.startsWith('bot:') ? routine.owner_id : null));
+  const [picked, setAgent] = useState<string | null>(step?.bot ?? (routine?.owner_id?.startsWith('bot:') ? routine.owner_id : null));
   const [start, setStart] = useState<Start>(t?.type === 'event' ? 'event' : 'schedule');
   const [sched, setSched] = useState(parseSchedule(t?.type === 'schedule' && t.cron ? t.cron : '0 9 * * 1-5'));
   const [event, setEvent] = useState(t?.type === 'event' && t.name ? t.name : 'task.created');
@@ -153,6 +192,8 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   const [busy, setBusy] = useState(false);
   const events = EVENT_CHOICES.some((e) => e.value === event) ? EVENT_CHOICES : [{ value: event, label: eventWords(event) }, ...EVENT_CHOICES];
   const options = agents.map((a) => ({ value: a.id, label: a.name }));
+  // An older step may name its agent by slug; the server takes the agent's id.
+  const agent = (picked && agents.find((a) => a.id === picked || `bot:${a.slug}` === picked)?.id) ?? picked;
   if (agent && !options.some((o) => o.value === agent)) options.unshift({ value: agent, label: agent.slice(4) });
   const ready = !!name.trim() && !!agent && !!instruction.trim();
 
@@ -168,6 +209,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
 
   return (
     <SidePanel
+      className="rr"
       title={routine ? routine.name || 'Routine' : 'New routine'}
       target={routine ? `routine:${routine.id}` : 'panel:routine:new'}
       onClose={onClose}
