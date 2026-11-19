@@ -1,6 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { RoutinesPage, loadRoutines, validateRoutinesSearch } from '@/features/routines/exports';
 
+/** Routines: `?tab=webhooks`; one routine, a built-in one or a webhook opens in `?panel=`. */
 export const Route = createFileRoute('/company/routines')({
-  component: () => <Placeholder title="Routines" />,
+  validateSearch: validateRoutinesSearch,
+  loaderDeps: ({ search }) => search,
+  loader: ({ context, deps }) => loadRoutines(context.queryClient, deps),
+  component: Page,
 });
+
+function Page() {
+  return <RoutinesPage search={Route.useSearch()} />;
+}

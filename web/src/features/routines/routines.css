@@ -1,0 +1,137 @@
+/* Copied from pages/3-company/rules.css (parts 2 to 4): only the rules these pages use, class names unchanged, sizes on
+   the scale. Page parts sit under .rr (the page sheet); panel parts under .pnl, because a panel is drawn in the shell's
+   place, outside the page. Type comes from type.css classes (t-read) in the markup. Rows here hang no mark in the
+   margin, so their padding puts the title on the section name's edge (--s-8). */
+
+/* ---------- shared: a word, a quiet verb, a muted line, the setting line ---------- */
+.rr-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+:is(.rr,.pnl) .word{display:inline-flex;align-items:center;gap:calc(var(--s-1) + 1px);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink);white-space:nowrap}
+:is(.rr,.pnl) .word .ico{width:14px;height:14px;stroke-width:2;flex:none}
+:is(.rr,.pnl) .verb{height:var(--ctl-sm);display:inline-flex;align-items:center;padding:0 var(--s-2);margin:0 calc(-1 * var(--s-1));border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:var(--w-strong);white-space:nowrap;text-decoration:none;transition:background var(--dur-fast) var(--ease)}
+:is(.rr,.pnl) .verb:hover{background:var(--well-2)}
+:is(.rr,.pnl) .row-sub{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+:is(.rr,.pnl) .row-state{display:flex;justify-content:flex-end;align-items:center;color:var(--muted)}
+:is(.rr,.pnl) .row-state .ico{width:14px;height:14px}
+:is(.rr,.pnl) .row-fig{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:var(--t-sm);color:var(--ink-2)}
+:is(.rr,.pnl) .is-off .row-title{color:var(--muted)}
+:is(.rr,.pnl) .set-name{width:var(--set-w,92px);flex:none;color:var(--muted);font-size:var(--t-sm)}
+.rr .rr-none{padding:var(--s-1h) 0 var(--s-2) var(--s-8)}
+
+/* ---------- the rule row (pages/1-tasks/more.css) ---------- */
+.rr .rule{height:30px;grid-template-columns:16px minmax(0,1fr) auto var(--ctl-sm);column-gap:var(--s-2h);margin:0;padding:0 var(--s-0) 0 var(--s-1h)}
+.rr .rule-how{display:grid;place-items:center;color:var(--muted)}
+.rr .rule-how .ico{width:15px;height:15px;stroke-width:1.8}
+.rr .rule-marks{display:flex;align-items:center;gap:var(--s-2h);padding-left:var(--s-3);color:var(--muted)}
+.rr .rule-marks .ico{width:14px;height:14px;stroke-width:1.8}
+.rr .rule-marks>span{display:grid}
+.rr .rule .ib{color:var(--faint)}
+.rr .rule:hover .ib{color:var(--muted)}
+.rr .rule.is-off .row-title{color:var(--muted)}
+/* the sentence is the link; it covers the row, the marks and "⋯" stay pressable over it */
+.rr .rule.is-link .row-title::before{content:"";position:absolute;inset:0;border-radius:inherit}
+.rr .rule.is-link .rule-marks>*,.rr .rule.is-link>.ib,.rr .rule.is-link>[aria-haspopup]{position:relative;z-index:var(--z-page)}
+.rr .rule-sep{display:inline-grid;vertical-align:-2px;margin:0 calc(var(--s-1) + 1px);color:var(--faint)}
+.rr .rule-sep .ico{width:12px;height:12px;stroke-width:2.2}
+.rr .rule-nb{white-space:nowrap}
+.rr .rule-marks>.rule-src{display:block;width:104px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:right;font-size:var(--t-sm)}
+.rr .rule-marks>.rule-at{display:block;width:44px}
+.rr .rule-marks>.rule-gap{width:var(--av-sm)}
+.rr .rule-marks>.rule-hold{display:grid;place-items:center}
+.rr .rule.is-fixed{grid-template-columns:16px minmax(0,1fr) auto 0}
+
+/* ---------- Company: who on the left, what applies to them on the right ---------- */
+.rr .split{flex:none;min-height:auto;grid-template-columns:228px minmax(0,1fr);box-shadow:none}
+.rr .split>*{overflow:visible}
+.rr .scope-col{position:sticky;top:0;align-self:start;padding:var(--s-2h) var(--s-2) calc(var(--s-6) + var(--s-1)) var(--s-3);border-right:1px solid var(--line)}
+.rr .scope-main{min-width:0;padding-top:var(--s-1h)}
+.rr .scope-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto;column-gap:var(--s-2);padding:0 var(--s-2h) 0 var(--s-1h)}
+.rr .scope-row.is-kid{padding-left:var(--s-6)}
+.rr .scope-row.is-selected .row-title{font-weight:var(--w-strong)}
+.rr .scope-ico{display:grid;place-items:center;color:var(--muted)}
+.rr .scope-ico .ico{width:16px;height:16px}
+.rr .scope-ico.is-chev{color:var(--faint)}
+.rr .scope-ico.is-chev .ico{width:14px;height:14px;stroke-width:2.2}
+.rr .scope-ico.is-open .ico{transform:rotate(90deg)}
+.rr .scope-select{display:none}
+.rr .sets{--set-w:116px;padding-bottom:var(--s-1h)}
+.rr .set{min-height:40px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2) 0 var(--s-8)}
+.rr .set-from{margin-left:auto;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.rr .field.is-num{width:64px;height:var(--ctl-sm)}
+.rr .field.is-num input{font-variant-numeric:tabular-nums}
+
+/* ---------- routine, webhook, watch and match rows ---------- */
+.rr .auto{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) 70px var(--av-sm) 36px;column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .auto-lock{justify-content:center;color:var(--faint)}
+.rr .hook{grid-template-columns:minmax(0,.9fr) minmax(0,1fr) 84px 72px 44px var(--ctl-sm);column-gap:var(--s-3);padding:0 var(--s-0) 0 var(--s-8)}
+.rr .hook .row-title{color:inherit;text-decoration:none}
+.rr .hook .row-title::before{content:"";position:absolute;inset:0;border-radius:inherit}
+.rr .hook .ib{position:relative;z-index:var(--z-page)}
+.rr .watch{grid-template-columns:minmax(0,1fr) 78px 70px var(--av-sm) 36px;column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .watch .ib{margin:0 calc(-1 * var(--s-1h))}
+.rr .match{height:30px;grid-template-columns:140px minmax(0,1fr) auto 36px;column-gap:var(--s-3);padding-left:var(--s-8)}
+.rr .match .pill{margin-left:var(--s-1)}
+.rr .match-open{display:grid;grid-template-columns:140px minmax(0,1fr) 36px;column-gap:var(--s-3);align-items:start;margin:var(--s-0) 0 var(--s-1h);padding:calc(var(--s-2) + 1px) var(--s-2) var(--s-1h) var(--s-8);border-radius:var(--r-row);background:var(--selected)}
+.rr .match-open .row-sub,.rr .match-open .row-age{line-height:22px}
+.rr .match-text{max-width:var(--measure);color:var(--ink)}
+.rr .match-foot{grid-column:2/-1;display:flex;align-items:center;gap:var(--s-3h);min-height:32px;margin-top:var(--s-1);color:var(--muted);font-size:var(--t-sm)}
+.rr .match-foot .pill{color:var(--ink-2)}
+
+/* ---------- a panel: facts, then short lists ---------- */
+.pnl .inst{max-width:var(--measure);margin-bottom:var(--s-2);color:var(--ink-2);white-space:pre-wrap}
+.pnl :is(.prun,.pstep,.pjob,.hold){margin:0 calc(-1 * var(--s-2))}
+.pnl .prun{grid-template-columns:84px minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.pnl .run-at{white-space:nowrap;font-variant-numeric:tabular-nums}
+.pnl .pstep{grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.pnl .pjob{height:48px;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-2h)}
+.pnl .pjob-main{min-width:0;display:grid;row-gap:calc(var(--s-0) / 2)}
+.pnl .hold{grid-template-columns:16px minmax(0,1fr) var(--av-sm) 44px;column-gap:var(--s-2h)}
+.pnl .hold-mark{display:grid;place-items:center;color:var(--muted)}
+.pnl .hold-mark .ico{width:14px;height:14px}
+.pnl .rr-addr{font-family:var(--font-code);font-size:var(--t-sm);overflow-wrap:anywhere;color:var(--ink)}
+.pnl .rr-once{display:grid;gap:var(--s-2);justify-items:start}
+.rr-form{display:grid;gap:var(--s-3)}
+.rr-field{display:flex;align-items:center;gap:var(--s-2h)}
+
+@media (max-width:760px){
+  .rr .set{min-height:48px}
+
+  /* the rule row on a phone: the sentence wraps, because a rule cut off is not a rule */
+  .rr .rule{height:auto;min-height:var(--row);grid-template-columns:16px minmax(0,1fr) auto var(--ctl)}
+  .rr .rule .row-title{white-space:normal;line-height:1.35;padding:calc(var(--s-2h) + 1px) 0}
+  .rr .rule>.rule-how{align-self:start;margin-top:calc(var(--s-3) + 1px)}
+  .rr .rule.is-fixed{grid-template-columns:16px minmax(0,1fr) auto 0}
+  .rr .rule-marks{padding-left:var(--s-1);gap:var(--s-2)}
+  /* a rule that carries cells puts them on a line of their own under the sentence, so the sentence keeps the width */
+  .rr .rule.has-cells{grid-template-columns:16px minmax(0,1fr) var(--ctl);grid-template-areas:"how title more" ". marks more"}
+  .rr .rule.has-cells.is-fixed{grid-template-columns:16px minmax(0,1fr) 0}
+  .rr .rule.has-cells>.rule-how{grid-area:how}
+  .rr .rule.has-cells>.row-title{grid-area:title;padding-bottom:calc(var(--s-1) + 1px)}
+  .rr .rule.has-cells>.rule-marks{grid-area:marks;padding:0 0 calc(var(--s-2h) + 1px);justify-content:flex-start;min-height:22px}
+  .rr .rule.has-cells>:last-child{grid-area:more}
+  .rr .rule-marks>.rule-src,.rr .rule-marks>.rule-at{width:auto;text-align:left}
+  .rr .rule-marks>.rule-gap,.rr .rule-marks>.rule-src:empty,.rr .rule-marks>.rule-at:empty{display:none}
+  .rr .rule-marks>.verb{margin-left:auto;position:relative}
+  .rr .verb::before{content:"";position:absolute;inset:calc(-1 * var(--s-2)) calc(-1 * var(--s-1))}
+
+  .rr .split{display:block}
+  .rr .scope-col{display:none}
+  .rr .scope-select{display:block;padding:var(--s-2h) var(--s-2) var(--s-1h) var(--s-8)}
+  .rr .set-from{display:none}
+  .rr .sets{--set-w:104px}
+
+  .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) 32px;column-gap:var(--s-2h)}
+  .rr :is(.auto,.watch,.hook) .row-sub{display:none}
+  .rr .watch{grid-template-columns:minmax(0,1fr) 64px var(--av-sm) 32px;column-gap:var(--s-2h)}
+  .rr .hook{grid-template-columns:minmax(0,1fr) auto 64px 40px;column-gap:var(--s-2h);padding-right:var(--s-2)}
+  .rr .hook .ib{display:none}
+
+  .rr .match{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) auto 32px;grid-template-areas:"src pill age" "text text text";row-gap:var(--s-0);padding:var(--s-2) var(--s-2) var(--s-2) var(--s-8)}
+  .rr .match .row-sub{grid-area:src}
+  .rr .match .row-title{grid-area:text;white-space:normal;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .rr .match .pill{grid-area:pill}
+  .rr .match .row-age{grid-area:age}
+  .rr .match-open{grid-template-columns:minmax(0,1fr) 32px;padding:var(--s-2) var(--s-2) var(--s-1) var(--s-8)}
+  .rr .match-open .match-text{grid-column:1/-1;grid-row:2}
+  .rr .match-foot{grid-column:1/-1;min-height:44px;gap:var(--s-2h)}
+  .rr .match-foot .verb{position:relative}
+}

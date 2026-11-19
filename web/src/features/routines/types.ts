@@ -1,0 +1,269 @@
+import type { Automation, AutomationRun, HeartbeatView } from '@/api/schema';
+
+/* What the server sends for Routines, Rules and Listening, narrowed where the generated schema says only "an object".
+   The fields come from backend/automations.py view(), triggers.py summary(), org_rules.py view(), stage_rules.py and
+   reach.py listing(). */
+
+// ---------------------------------------------------------------- routines (the old Automations)
+
+export interface ListenSource {
+  id: string;
+  kind: 'search' | 'page' | 'github' | 'push' | string;
+  site?: string;
+  target?: string;
+}
+export interface ListenRule {
+  do: 'keep' | 'drop' | string;
+  tag?: string;
+  text: string;
+}
+
+/** `type` says which of the others it carries (backend/automation_flow.py). */
+export interface Trigger {
+  type: string;
+  cron?: string;
+  tz?: string;
+  /** event: `task.created`, `custom.<x>`. */
+  name?: string;
+  /** webhook: the incoming webhook's id. */
+  id?: string;
+  first_due?: string;
+  repeats?: string;
+  open_days?: number;
+  inbox?: string;
+  to?: string;
+  sources?: ListenSource[];
+  rules?: ListenRule[];
+  limits?: { count: number; per: string }[];
+  at?: string;
+}
+
+export interface Step {
+  id: string;
+  type: string;
+  /** bot_turn: `bot:<slug>`. */
+  bot?: string;
+  prompt?: string;
+  [k: string]: unknown;
+}
+
+export interface LastRun {
+  id: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export type Routine = Omit<Automation, 'trigger' | 'steps' | 'last_run' | 'spend_cap'> & {
+  trigger: Trigger;
+  steps?: Step[];
+  last_run?: LastRun | null;
+  spend_cap?: { per_30m?: number } | null;
+  builtin?: boolean;
+  readonly?: boolean;
+  updated_at?: string;
+  listening?: { dot?: string; sources?: { id: string }[] } | null;
+};
+
+export interface RunStep {
+  id?: string;
+  type?: string;
+  status?: string;
+  outputs?: { ref?: unknown; thread?: unknown; turn?: { task?: unknown } } | null;
+}
+export type Run = Omit<AutomationRun, 'steps'> & { steps: RunStep[] | null; error?: string | null };
+
+// ---------------------------------------------------------------- built in: Maintenance, Heartbeat, System jobs
+
+export interface MaintenanceStep {
+  key: string;
+  name: string;
+  enabled: boolean;
+  frequency?: string;
+  last_ran_at?: string | null;
+  fixed?: boolean;
+}
+export interface Maintenance {
+  settings: { schedule: string; paused: boolean };
+  steps: MaintenanceStep[];
+  last_run?: { started_at?: string } | null;
+  can_change: boolean;
+}
+export interface MaintenanceRun {
+  id: string;
+  started_at: string;
+  finished_at?: string | null;
+  ok?: boolean | null;
+  result?: string | null;
+  steps?: unknown[];
+}
+export type Heartbeat = HeartbeatView;
+export interface SystemJob {
+  key: string;
+  name: string;
+  what?: string;
+  schedule?: string;
+  on: boolean;
+  /** It has a switch at all. */
+  switch?: boolean;
+  can_change?: boolean;
+  last?: string | null;
+}
+
+// ---------------------------------------------------------------- incoming webhooks (/v2/triggers)
+
+export interface Hook {
+  id: string;
+  name: string;
+  /** The address without its secret; '' for a built-in one. */
+  url: string;
+  builtin?: boolean;
+  created_by?: string;
+  last_received?: string | null;
+  received_24h?: number;
+  refused_24h?: number;
+  signed?: boolean;
+  preset?: string;
+  automations?: { id: string; name: string; owner_id?: string }[];
+}
+export interface Delivery {
+  delivery: string;
+  received_at: string;
+  outcome: 'accepted' | 'refused' | 'rate_limited' | 'replayed' | 'duplicate' | string;
+  reason?: string | null;
+  type?: string | null;
+  tasks?: number;
+}
+/** What a create or a new secret gives back once: the full address, secret included. */
+export interface ShownOnce {
+  id: string;
+  url: string;
+}
+
+// ---------------------------------------------------------------- rules
+
+export interface Scope {
+  everyone?: boolean;
+  all_bots?: boolean;
+  groups?: { id: string; name?: string }[];
+  bots?: { id: string; name?: string }[];
+  people?: { id: string; name?: string }[];
+}
+/** A company rule (org_rules.py view): free text, who follows it, and what happens when it is broken. */
+export interface OrgRule {
+  id: string;
+  kind: 'internal' | 'external';
+  text: string;
+  status: string;
+  version: number;
+  can_edit: boolean;
+  who?: Scope | null;
+  source?: { id: string; name: string; kind?: string } | null;
+  if_broken?: 'block' | 'escalate' | 'warn' | null;
+  reviewer?: { id: string; name?: string } | null;
+  updated_at?: string;
+  suggested_by?: string | null;
+  created_at?: string;
+}
+/** A stage rule: When (event, timer), If (cond, jev: the decision model's question), Then. */
+export interface StageRule {
+  id: string;
+  name: string;
+  pipeline_id: string;
+  pipeline_name?: string;
+  stages: string[];
+  stage_names?: string[];
+  scope: 'stage' | 'pipeline' | 'company';
+  event: string;
+  timer?: { kind?: string; hours?: number } | null;
+  cond?: Record<string, unknown> | null;
+  jev?: string | null;
+  then: string;
+  then_params?: Record<string, unknown> | null;
+  reason?: string | null;
+  status: string;
+  revision: number;
+  created_by?: string;
+  updated_at?: string;
+  can_edit?: boolean;
+  not_acting?: string | null;
+  suggests?: string | null;
+}
+export interface BuiltInRule {
+  name: string;
+  what?: string;
+}
+export interface RuleGroups {
+  wakes: { id: string; name: string; enabled: boolean }[];
+  automations: { id: string; name: string; enabled: boolean }[];
+  built_in: BuiltInRule[];
+}
+export interface DueDate {
+  id: string;
+  due_on: string;
+  repeats?: string;
+  status: 'overdue' | 'due_soon' | 'upcoming' | 'satisfied' | string;
+  task_days?: number;
+  owner?: string | null;
+  rule: { id: string; text: string };
+}
+export interface RuleHold {
+  id: string;
+  state: string;
+  task_id?: string | null;
+  author?: string;
+  author_name?: string;
+  created_at: string;
+  rules: { id: string }[];
+  outcome?: string;
+  /** Who the held message or task was for. */
+  to?: string[];
+  operation?: string;
+}
+export interface Group {
+  id: string;
+  name: string;
+  parent?: string;
+  bots: string[];
+  people: string[];
+}
+
+export type ReachMode = 'open' | 'nearby' | 'closed';
+export type ReachBook = 'anyone' | 'nearby' | 'none';
+export interface ReachValues {
+  mode?: ReachMode | null;
+  book?: ReachBook | null;
+  chats_per_day?: number | null;
+  tasks_per_day?: number | null;
+}
+export interface Reach {
+  defaults: Required<ReachValues>;
+  settings: (ReachValues & { party: string })[];
+  effective: Record<string, ReachValues & { from?: Record<string, string | null> }>;
+  may_edit: string[];
+}
+
+// ---------------------------------------------------------------- listening
+
+export interface Match {
+  id: string;
+  source?: string | null;
+  site?: string | null;
+  url?: string | null;
+  author?: string | null;
+  title?: string | null;
+  text?: string | null;
+  posted_at?: string | null;
+  created_at: string;
+  status: string;
+  tag?: string | null;
+}
+export interface WatchSource {
+  id: string;
+  key?: string;
+  kind: string;
+  site?: string;
+  target?: string;
+  status?: string;
+  last_read_at?: string | null;
+}
