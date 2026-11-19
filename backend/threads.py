@@ -4162,9 +4162,12 @@ def _subtree_mark(c, v):
 
 
 def _subtree_unread_sql(c, v, root_ids):
-    """(SQL, args) for unread candidates in these roots' open subtrees. The human half seeks messages_thread_human;
-    the bot half starts at this reader's deliveries. Neither scans plain bot history to discover it is not unread.
-    A delivery is unique per (message, recipient), and the halves are disjoint, so UNION ALL counts each once."""
+    """(SQL, args) for unread candidates in these roots' open subtrees. Both halves start at the subtree's threads with
+    something unread past the reader's mark and seek its messages from that mark: the human half through
+    messages_thread_human, the bot half through messages_thread_seq, each message then probing the one delivery of it to
+    this reader. Starting at the reader's deliveries instead walked all of them (thousands on a busy hub) per chunk of
+    roots. The thread is the message's own, not the delivery's copy of it. A delivery is unique per (message,
+    recipient), and the halves are disjoint, so UNION ALL counts each once."""
     mark, subtree = _subtree_mark(c, v), _SUBTREE.format(me=":me")
     args = {"me": v.actor, **{f"root{i}": root for i, root in enumerate(root_ids)}}
     marks = ",".join(f":root{i}" for i in range(len(root_ids)))
@@ -4178,11 +4181,9 @@ def _subtree_unread_sql(c, v, root_ids):
         f"m.conversation_id=s.id WHERE {where} AND m.sender_id LIKE 'human:%' "
         f"AND {unread_message_sql(me=':me')} UNION ALL "
         + columns
-        + "FROM message_deliveries d INDEXED BY message_deliveries_recipient "
-        "CROSS JOIN messages m ON m.id=d.message_id "
-        f"CROSS JOIN {subtree}WHERE s.id=m.conversation_id AND d.recipient=:me "
-        f"AND m.sender_id NOT LIKE 'human:%' AND {where} "
-        f"AND {unread_message_sql(me=':me', delivery='d')}",
+        + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_seq ON m.conversation_id=s.id "
+        "CROSS JOIN message_deliveries d ON d.message_id=m.id AND d.recipient=:me "
+        f"WHERE {where} AND m.sender_id NOT LIKE 'human:%' AND {unread_message_sql(me=':me', delivery='d')}",
         args,
     )
 

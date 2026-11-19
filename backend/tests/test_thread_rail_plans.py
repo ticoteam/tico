@@ -14,8 +14,10 @@ from backend.store import H
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the fixture and its helper)
 from backend.tests.helpers.thread_rail_batches import (  # noqa: F401  (the runner fixture)
     EARLIER,
+    home,
     runner,
     seed_finished_task_replies,
+    seed_replies,
 )
 
 READERS = {"human:ana": "ana-test", "human:ben": "ben-test", "human:cara": "cara-test"}
@@ -219,3 +221,86 @@ def test_the_rails_lists_read_the_open_thread_index_in_title_order(api):
             assert not [
                 p for p in plan if re.match(r"SCAN (r|rd|rt|t|tasks|conversations)\b(?! USING INDEX conv)", p)
             ], plan
+
+
+def old_subtree_unread_sql(c, v, root_ids):
+    """_subtree_unread_sql as it was: the bot half starting at every delivery to the reader."""
+    mark, subtree = threads._subtree_mark(c, v), threads._SUBTREE.format(me=":me")
+    args = {"me": v.actor, **{f"root{i}": root for i, root in enumerate(root_ids)}}
+    marks = ",".join(f":root{i}" for i in range(len(root_ids)))
+    columns = (
+        "SELECT s.root_id AS root, s.id AS thread, s.last_unread_seq, m.id, m.seq, "
+        "(m.restricted=0 AND m.legacy_audience IS NULL) AS plain "
+    )
+    where = f"s.root_id IN ({marks}) AND {threads._SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND m.seq>{mark}"
+    return (
+        columns + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_human ON "
+        f"m.conversation_id=s.id WHERE {where} AND m.sender_id LIKE 'human:%' "
+        f"AND {threads.unread_message_sql(me=':me')} UNION ALL "
+        + columns
+        + "FROM message_deliveries d INDEXED BY message_deliveries_recipient "
+        "CROSS JOIN messages m ON m.id=d.message_id "
+        f"CROSS JOIN {subtree}WHERE s.id=m.conversation_id AND d.recipient=:me "
+        f"AND m.sender_id NOT LIKE 'human:%' AND {where} "
+        f"AND {threads.unread_message_sql(me=':me', delivery='d')}",
+        args,
+    )
+
+
+def test_unread_candidates_start_at_the_roots_and_answer_as_from_the_deliveries(api, monkeypatch):
+    """The bot half of the unread candidates seeks each open sub-thread's messages past the reader's mark and probes
+    the one delivery of each, instead of walking every delivery to the reader; every reader gets the same rows, and the
+    same rail and Catch up, as from the deliveries: bot replies delivered to Ben in his Home and in a sub-thread, read
+    part way, some restricted or under a legacy audience, deliveries whose own copy of the thread is missing or another
+    thread's, and delivered replies moved to another thread since (the message's thread places it)."""
+    _seed(api)
+    ops = home(api, "bot:ops")["id"]
+    seed_replies(api, ops, 6, "u")
+    with api.app.state.store.transaction() as c:
+        asked = threads.post(c, "human:ben", ops, "One more question")
+        sub = threads.post(c, "human:ben", ops, "In a branch", parent_message_id=asked["id"])
+        branch = sub.get("thread_id") or sub.get("conversation_id")
+        for k in range(3):
+            threads.post(c, "bot:ops", branch, f"Branch answer {k}", in_reply_to=sub["id"])
+        replies = [
+            r[0]
+            for r in c.execute(
+                "SELECT m.id FROM messages m JOIN message_deliveries d ON d.message_id=m.id AND d.recipient='human:ben' "
+                "WHERE m.sender_id='bot:ops' AND m.conversation_id IN (?,?) ORDER BY m.seq",
+                (ops, branch),
+            )
+        ]
+        assert len(replies) == 9, replies
+        mark = c.execute("SELECT seq FROM messages WHERE id=?", (replies[1],)).fetchone()[0]
+        c.execute("UPDATE thread_followers SET last_read_seq=? WHERE thread_id=? AND actor='human:ben'", (mark, ops))
+        c.execute("UPDATE messages SET restricted=1 WHERE id IN (?,?)", (replies[2], replies[-2]))
+        c.execute("UPDATE messages SET legacy_audience='[\"bot:ops\"]' WHERE id=?", (replies[3],))
+        c.execute("UPDATE message_deliveries SET thread_id=NULL WHERE message_id=?", (replies[4],))
+        c.execute("UPDATE message_deliveries SET thread_id=? WHERE message_id=?", (branch, replies[5]))
+        c.execute("UPDATE messages SET conversation_id=? WHERE id=?", (ops, replies[-1]))
+    with api.app.state.store.read_transaction() as c:
+        roots = [r[0] for r in c.execute("SELECT id FROM conversations WHERE parent_id IS NULL")]
+        for actor in READERS:
+            v = threads.actor_viewer(c, actor)
+            new_sql, args = threads._subtree_unread_sql(c, v, roots)
+            old_sql, _ = old_subtree_unread_sql(c, v, roots)
+            got = sorted(tuple(r) for r in c.execute(new_sql, args))
+            assert got == sorted(tuple(r) for r in c.execute(old_sql, args)), actor
+            if actor == "human:ben":
+                found = {r[3]: r[1] for r in got}
+                assert not {replies[0], replies[1]} & set(found), found  # read
+                assert {found.get(m) for m in replies[2:6]} == {ops} and found.get(replies[-1]) == ops, found
+            plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + new_sql, args)]
+            assert not any("message_deliveries_recipient" in p for p in plan), plan
+            assert any(
+                re.search(r"SEARCH m USING INDEX messages_thread_seq \(conversation_id=\? AND seq>\?\)", p)
+                for p in plan
+            ), plan
+    paths = ("threads/rail", "threads/catch-up")
+    new = {(p, t): _pages(api, t, p) for p in paths for t in READERS.values()}
+    monkeypatch.setattr(threads, "_subtree_unread_sql", old_subtree_unread_sql)
+    for (path, token), pages in new.items():
+        assert _pages(api, token, path) == pages, f"{path} changed for {token}"
+    assert any(r["id"] == ops for r in new[("threads/rail", "ben-test")][0]["unread"]), new[
+        ("threads/rail", "ben-test")
+    ][0]
