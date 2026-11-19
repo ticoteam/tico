@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarOccurrence } from '@/api/schema';
@@ -74,6 +74,27 @@ describe('Start page', () => {
     seed([]);
     show(<StartPage />);
     expect(await screen.findByRole('heading', { name: 'Nothing needs you' })).toBeTruthy();
+  });
+
+  it('a part that did not load says so in its place, with Try again; the rest of the page still draws @s1196', async () => {
+    queryClient.setQueryData(needsQuery.queryKey, { count: 1, items: [{ id: 'n1', kind: 'ask', title: 'Approve the launch plan', sub: undefined, href: '/task/t1', at: '2026-01-02T10:00:00Z', from: 'bot:ada' }] });
+    queryClient.setQueryData(['directory'], { actors: [ADA], byId: { [ADA.id]: ADA } });
+    let up = false;
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url).includes('/calendar/events')
+        ? up
+          ? new Response(JSON.stringify({ occurrences: [{ occurrence_id: 'o1', title: 'Weekly review', start: '2026-01-02T15:00:00Z' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+          : new Response('{}', { status: 500, headers: { 'Content-Type': 'application/json' } })
+        : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    show(<StartPage />);
+    const main = await screen.findByRole('main');
+    expect(await within(main).findByRole('heading', { name: 'Today did not load' })).toBeTruthy();
+    expect(within(main).getByTitle('Approve the launch plan')).toBeTruthy();
+    up = true;
+    fireEvent.click(within(main).getByRole('button', { name: 'Try again' }));
+    expect(await within(main).findByTitle('Weekly review')).toBeTruthy();
+    expect(within(main).queryByRole('heading', { name: 'Today did not load' })).toBeNull();
   });
 });
 

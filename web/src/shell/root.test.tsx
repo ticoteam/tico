@@ -1,10 +1,11 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data/query-client';
 import { Route as root } from '@/routes/__root';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
+import { run } from '@/actions/run';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
@@ -67,6 +68,17 @@ vi.mock('@/pagekinds', async (orig) => ({
   ...(await orig<object>()),
    PanelHost: () => null, usePagePanelOpen: () => false }));
 vi.mock('@/search', async (orig) => ({ ...(await orig<object>()), openSearch: vi.fn() }));
+// Every press goes through the action layer as in the app; signing out stops there (it would leave the page).
+vi.mock('@/actions/run', async (orig) => {
+  const actual = await orig<{ run: typeof run }>();
+  return { ...actual, run: vi.fn((id: string, input: unknown, opts: { via: 'click' }) => (id === 'settings.signOut' ? Promise.resolve({ ok: true }) : actual.run(id, input, opts))) };
+});
+
+const MAYA = { id: 'human:maya', kind: 'person', name: 'Maya Okafor' };
+const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'Engineering' };
+// the directory knows each teammate by their full id and their bare one, as buildDirectory does
+const people = (...actors: { id: string }[]) =>
+  queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.id.slice(a.id.indexOf(':') + 1), a]])) });
 
 function show(at: string) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
@@ -84,7 +96,10 @@ function fakeDesktop() {
     version: '1.0.0',
     platform: 'mac',
     companies: {
-      list: vi.fn(async () => [{ id: 'c1', origin: 'http://x', name: 'Fernhill', email: 'maya@example.com', active: true, self: true, signedOut: false, needs: 0 }]),
+      list: vi.fn(async () => [
+        { id: 'c1', origin: 'http://x', name: 'Fernhill', email: 'maya@example.com', active: true, self: true, signedOut: false, needs: 0 },
+        { id: 'c2', origin: 'http://y', name: 'Okafor Garden Tours', email: 'maya@example.com', active: false, self: false, signedOut: false, needs: 3 },
+      ]),
       switchTo: vi.fn(),
       add: vi.fn(),
       remove: vi.fn(),
@@ -129,6 +144,28 @@ describe('the root', () => {
     expect(screen.queryByText('call bar')).toBeNull();
   });
 
+  it('draws a teammate’s chat as the second chat beside the page, from ?chat= @s1192', async () => {
+    people(MAYA, QA);
+    show('/?chat=bot:qa');
+    const sheet = await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    expect(sheet.textContent).toContain('a teammate chat');
+    expect(screen.getByRole('heading', { name: 'Home' })).toBeTruthy();
+    expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('chat');
+  });
+
+  it('your name at the menu’s foot opens the account menu: you, My page, Settings, the theme, Sign out @s1189 @s1206', async () => {
+    people(MAYA, QA);
+    show('/');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    fireEvent.click(await within(nav).findByRole('button', { name: 'Maya Okafor' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('maya@example.com')).toBeTruthy();
+    expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['My page', 'Settings', 'Sign out']);
+    expect(within(menu).getByRole('group', { name: 'Theme' })).toBeTruthy();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
+    expect(vi.mocked(run)).toHaveBeenCalledWith('settings.signOut', {}, { via: 'click' });
+  });
+
   it('draws the call in the frame without ?window=1', async () => {
     show('/call/abc');
     expect(await screen.findByText('call page')).toBeTruthy();
@@ -169,6 +206,30 @@ describe('the desktop app', () => {
     } finally {
       call.phase = 'idle';
     }
+  });
+
+  it('the company at the menu’s head lists every company the app holds, and picking one switches the window @s1160', async () => {
+    const t = fakeDesktop();
+    show('/');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    await waitFor(() => expect(t.companies.list).toHaveBeenCalled());
+    fireEvent.click(await within(nav).findByRole('button', { name: 'Fernhill' }));
+    const menu = await screen.findByRole('menu');
+    await within(menu).findByRole('menuitem', { name: /Okafor Garden Tours/ });
+    expect(within(menu).getByRole('menuitem', { name: /Fernhill/ }).className).toContain('is-on');
+    expect(within(menu).getByRole('menuitem', { name: /Okafor Garden Tours/ }).textContent).toContain('3');
+    expect(within(menu).getByRole('menuitem', { name: /Add company/ })).toBeTruthy();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Okafor Garden Tours/ }));
+    expect(vi.mocked(run)).toHaveBeenCalledWith('shell.switchCompany', { id: 'c2' }, { via: 'click' });
+    await waitFor(() => expect(t.companies.switchTo).toHaveBeenCalledWith('c2'));
+  });
+
+  it('in a browser, the company pick holds this company only, with no Add company @s1160', async () => {
+    show('/');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    fireEvent.click(await within(nav).findByRole('button', { name: 'Fernhill' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['FFernhill']);
   });
 
   it('in a browser, nothing is reported and nothing breaks', async () => {

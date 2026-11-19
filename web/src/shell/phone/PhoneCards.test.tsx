@@ -17,7 +17,7 @@ const cards = (extra: { chat?: boolean } = {}) => (
 );
 
 describe('PhoneCards', () => {
-  it('rests with the page behind and a lip for Tico, the menu and an open chat', () => {
+  it('rests with the page behind and a lip for Tico, the menu and an open chat @s1191', () => {
     render(cards());
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open Tico' }).getAttribute('aria-expanded')).toBe('false');
