@@ -4,7 +4,8 @@
 A segment has a slug and a name; its customer rule in plain words (when someone becomes a customer, and when they
 churn); `churn_days`, the inactivity window churn waits on (0 when churn is a cancel date), which delays every retention
 window of its customers (backend/growth_computed.py); and its own revenue per customer month, margin and minimum cohort,
-each falling back to the settings when blank.
+each falling back to the settings when blank; and its `value_kind`, what a customer is worth to it: `revenue` (the default)
+or `retention`, whose read shows kept and cost per retained customer instead of LTV (backend/growth_core.py).
 
 A customer belongs to the segment its `segment` label names, by slug or name, any case; a label that names none, or a
 blank one, is No segment. A channel's spend is for one segment (`growth_channels.segment_id`) or company-wide (NULL).
@@ -43,6 +44,7 @@ FIELDS = (
     "min_cohort",
     "sort",
     "owner_ref",
+    "value_kind",
     "retired_at",
 )
 
@@ -140,7 +142,7 @@ def update(c: sqlite3.Connection, actor: str, slug: str, fields: Row) -> Row:
     row = find(c, slug)
     if not row:
         raise Problem("not_found", f"No segment {slug}", 404)
-    for required in ("name", "customer_rule", "churn_days", "sort"):
+    for required in ("name", "customer_rule", "churn_days", "sort", "value_kind"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
     if fields.get("name"):

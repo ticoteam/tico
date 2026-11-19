@@ -3607,6 +3607,7 @@ class GrowthSegmentCreate(Contract):
     min_cohort: int | None = Field(default=None, ge=5, le=100000)
     sort: int = 0
     owner_ref: str | None = Field(default=None, max_length=200)
+    value_kind: Literal["revenue", "retention"] = "revenue"
 
 
 class GrowthSegmentUpdate(Contract):
@@ -3618,6 +3619,7 @@ class GrowthSegmentUpdate(Contract):
     min_cohort: int | None = Field(default=None, ge=5, le=100000)
     sort: int | None = None
     owner_ref: str | None = Field(default=None, max_length=200)
+    value_kind: Literal["revenue", "retention"] | None = None
 
 
 class GrowthLineUse(Contract):
@@ -3730,6 +3732,21 @@ class GrowthCustomersLoad(Contract):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, defer_build=True)
     csv: str | None = Field(default=None, max_length=20_000_000)
     rows: list[dict[str, str | float | int | None]] | None = Field(default=None, max_length=200_000)
+
+    @model_validator(mode="after")
+    def one_shape(self):
+        if (self.csv is None) == (self.rows is None):
+            raise ValueError("send csv or rows, not both")
+        return self
+
+
+# Growth core pushes (backend/growth_core.py): cohort rows or costs of one source, as CSV text or rows as objects. The
+# cells are checked by the push itself, so a refusal names the column and row, never a value.
+class GrowthCorePush(Contract):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False, defer_build=True)
+    source: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9:_.-]{0,79}$")]
+    csv: str | None = Field(default=None, max_length=5_000_000)
+    rows: list[dict[str, str | float | int | None]] | None = Field(default=None, max_length=20_000)
 
     @model_validator(mode="after")
     def one_shape(self):

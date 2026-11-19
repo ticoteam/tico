@@ -52,6 +52,7 @@ years) computes in a few seconds.
 """
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from typing import Any, cast
@@ -142,6 +143,11 @@ class _Group:
 
 def today(conf: Row) -> date:
     return datetime.now(GC.zone(conf.get("time_zone"))).date()
+
+
+def maturity(facts: Iterable[Fact], segs: Segments) -> int:
+    """The days a cohort's kept windows wait past their length: the longest churn delay of its customers' segments."""
+    return max((int((segs.of(f) or {}).get("churn_days") or 0) for f in facts), default=0) if segs.rows else 0
 
 
 def period(became: date, grain: str) -> tuple[str, date, date]:
@@ -383,7 +389,7 @@ def _cohort(
     if own and own.get("min_cohort"):
         min_cohort = max(MIN_COHORT_FLOOR, int(own["min_cohort"]))
     few = n < min_cohort
-    wait = max((int((segs.of(f) or {}).get("churn_days") or 0) for f, _ in rows), default=0) if segs.rows else 0
+    wait = maturity((f for f, _ in rows), segs)
     view: Row = {
         "cut": cut,
         "value": group.value,

@@ -352,6 +352,8 @@ def load(
 
     G: Any = _growth_untyped
     settings: dict[str, Any] = G.settings(c)
+    if c.execute("SELECT 1 FROM growth_cohort_rows WHERE source=? LIMIT 1", (source,)).fetchone():
+        refuse("source", f"Nothing loaded: {source} holds pushed cohort rows; a source holds one kind. Use another.")
     spells = check(headers, rows, zone(settings.get("time_zone")))
     first_seen: dict[tuple[str, str], tuple[str | None, str | None, str | None, str | None]] = {
         (r[0], r[1]): (r[2], r[3], r[4], r[5])

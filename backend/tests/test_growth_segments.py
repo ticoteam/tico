@@ -10,9 +10,8 @@ import pytest
 
 from backend import growth_computed as GX
 from backend.tests.helpers.api import get, headers, post, put
-from backend.tests.helpers.growth_computed import HEADER, TODAY, as_csv, customer
-
-FULL = HEADER + ["net_d90", "net_d180", "net_d365", "attribution"]
+from backend.tests.helpers.growth_computed import TODAY
+from backend.tests.helpers.growth_segments import FULL, load, people, team
 
 
 @pytest.fixture(autouse=True)
@@ -30,28 +29,6 @@ def cohort(result, value, period):
     return next(r for r in result["cohorts"] if r["value"] == value and r["period"] == period)
 
 
-def people(start, n, first, attribution="", **more):
-    """`n` customers from key `start`, one a day from `first` (a date)."""
-    return [
-        {**customer(start + i, (first + timedelta(days=i % 28)).isoformat(), **more), "attribution": attribution}
-        for i in range(n)
-    ]
-
-
-def team(api):
-    post(api, "growth/segments", {"slug": "consumer", "name": "Consumer", "revenue_month": 20, "margin_pct": 50})
-    post(
-        api,
-        "growth/segments",
-        {"slug": "rental", "name": "Rental", "churn_days": 30, "min_cohort": 10, "customer_rule": "a booked stay"},
-    )
-    post(api, "growth/channels", {"slug": "search-ads", "name": "Search ads", "segment": "consumer"})
-    post(api, "growth/channels", {"slug": "partners", "name": "Partners", "segment": "Rental"})
-    post(api, "growth/channels", {"slug": "brand", "name": "Brand"})
-    for ch, spend in (("search-ads", 1200), ("partners", 400), ("brand", 700)):
-        put(api, "growth/cohorts", {"channel": ch, "month": "2026-09", "spend": spend})
-
-
 def september():
     """40 Consumer (30 from search ads, 10 from brand, labels in either case), 20 Rental (2 of them from search ads,
     Consumer's channel) and 10 in no segment (a label naming none, or blank)."""
@@ -64,10 +41,6 @@ def september():
     rows += people(500, 5, sep, channel="brand", segment="hotels")
     rows += people(600, 5, sep, channel="brand")
     return rows
-
-
-def load(api, rows, expected=200):
-    return post(api, "growth/customers", {"csv": as_csv(rows, FULL)}, expected=expected)
 
 
 # ----------------------------------------------------------------------------- the segments themselves

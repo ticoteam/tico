@@ -645,7 +645,9 @@ KEEP = (
             "brand_versions",
             "gtm_sources",
             "growth_channels",
+            "growth_cohort_rows",  # counts per cohort cell (backend/growth_core.py): no customer keys
             "growth_cohorts",
+            "growth_costs",  # costs by month, channel, kind and purpose: no customer keys
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
             "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
