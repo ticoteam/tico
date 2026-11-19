@@ -28,7 +28,6 @@ first; a rename is carried.
 import time
 
 from . import hubdb as H
-from . import row_clock
 from .store import Problem
 
 # A walk that read a message naming a file records this node; such a row is not settled, and the node is not kept.
@@ -49,16 +48,38 @@ def names_file(refs):
     return "\\" in text or any(f'"{key}"' in text for key in PAGE_MESSAGE_KEYS)
 
 
-class _Recorded(dict):
-    """`conversation_tasks` that records the rooms the walk reads."""
+class _Rooms:
+    """`conversation_tasks` for the walk: a room's task by its key, read when the walk first asks about the room and
+    kept for the write. Records the rooms the walk reads."""
 
-    def __init__(self, rows, nodes):
-        super().__init__(rows)
-        self.nodes = nodes
+    def __init__(self, c, nodes):
+        self.c, self.nodes, self.found = c, nodes, {}
 
     def get(self, cid, default=None):
         self.nodes.add("c:" + str(cid))
-        return super().get(cid, default)
+        if not isinstance(cid, str):
+            return default  # a room id is text: no room has this key
+        if cid not in self.found:
+            row = self.c.execute("SELECT task_id FROM conversations WHERE id=?", (cid,)).fetchone()
+            self.found[cid] = (row[0],) if row else None
+        hit = self.found[cid]
+        return hit[0] if hit else default
+
+
+class _Tasks:
+    """`known_task` for the walk: whether a task has this id, read by its key when first asked and kept for the write.
+    Records every string asked about as a task."""
+
+    def __init__(self, c, nodes):
+        self.c, self.nodes, self.found = c, nodes, {}
+
+    def __call__(self, tid):
+        self.nodes.add("t:" + str(tid))
+        if not isinstance(tid, str):
+            return False  # a task id is text: no task has this key
+        if tid not in self.found:
+            self.found[tid] = self.c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None
+        return self.found[tid]
 
 
 class _Everything:
@@ -79,19 +100,20 @@ class Walk:
         from .auth import Identity
         from .privacy_index import ReadIndex
 
-        # Built under the sweep's write lock, once per write: no per-task readability (every task is private here,
-        # and nothing is denied), and the task ids and room map the server already shares (backend/row_clock.py). A
+        # Built under the sweep's write lock, once per write, so it reads nothing up front: no per-task readability
+        # (every task is private here, and nothing is denied), no meeting-room scan (the walk asks `meetings` room by
+        # room), and no table of every task id and room (`_Tasks`, `_Rooms` read the ones the walk reaches by key). A
         # Walk that worked out every private task's readers and read every room held the lock 0.25 s on TIDY before
-        # its first row (0.03 s now), seconds on a busy host, so each write settled one row while other writers, the
-        # Slack gateway's among them, gave up after their 10 s wait ("database is locked").
-        self.index = ReadIndex(c, Identity("keeper", "owner"), rooms=True, denials=False)
+        # its first row, seconds on a busy host. The shared task-and-room map that replaced it is never shared inside a
+        # write transaction (backend/row_clock.py), so each write reread all 37,000 rows: TIDY logged 500 sweep writes
+        # holding the lock 5-40 s in two days, most of them caught in that read.
+        self.index = ReadIndex(c, Identity("keeper", "owner"), denials=False)
         self.c, self.nodes = c, set()
         index = self.index
         index.private = _Everything(self.nodes)
         index.denied = set()
-        tasks, rooms = row_clock.refs(c)
-        index.known_task = lambda tid: self.nodes.add("t:" + str(tid)) or tid in tasks
-        index.conversation_tasks = _Recorded(rooms, self.nodes)
+        index.known_task = _Tasks(c, self.nodes)
+        index.conversation_tasks = _Rooms(c, self.nodes)
         index.target_message = self._message
         index.string_sources = index._string_sources
         index.message_sources = index._message_sources

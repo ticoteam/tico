@@ -223,3 +223,30 @@ def test_a_slow_row_ends_the_write_after_the_row_that_passes_the_budget(api, mon
     assert settled == 2 and calls == [keys[:1], keys[1:2]]
     assert left == sorted(keys[2:])
     assert set(keys[:2]) <= index and not index & set(keys[2:])
+
+
+def test_a_sweep_write_reads_no_whole_task_or_room_table_under_the_lock(api):
+    """Every sweep write builds a Walk under the write lock, where the shared task-and-room map is never shared
+    (row_clock): reading every task id and every room's task there held TIDY's writer for seconds per write. The walk
+    reads the rooms and tasks it reaches by key, and still records them and refuses an unknown task."""
+    from backend import row_clock
+
+    store = api.app.state.store
+    backlog(store, 3)
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
+            "VALUES('names-missing','history','human:ana','bot:ops','say','Synthetic history',?,?)",
+            (H.now(), encode({"task": "no-such-task"})),
+        )
+    statements = []
+    with store.read() as c:
+        c.set_trace_callback(statements.append)
+        read_deps.sweep(c)
+        c.set_trace_callback(None)
+        assert c.execute("SELECT 1 FROM read_index WHERE key='m:old-2'").fetchone()
+        assert not c.execute("SELECT 1 FROM read_index WHERE key='m:names-missing'").fetchone()
+        deps = {dep for (dep,) in c.execute("SELECT dep FROM read_deps WHERE key='m:names-missing'")}
+    assert {"c:history", "t:no-such-task"} <= deps
+    assert not [s for s in statements if s.strip() in (row_clock.TASK_IDS, row_clock.ROOM_TASKS)]
+    assert not [s for s in statements if "room_key" in s and "substr" in s]
