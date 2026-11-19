@@ -142,8 +142,11 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     await go(page, '#/rules?rule=' + outside.id);
     await page.waitForFunction(() => document.querySelector('#ru-side [data-unchip="outside_editions"]'), null, {timeout: t(10000)});
     await page.locator('#ru-side form:not([data-old]) textarea[name=description]').fill('Editions go through this.');
+    // The panel draws again once the save and its reload are done; the old form already holds the typed words, so wait
+    // for the new one. Leaving earlier opens the next rule while that reload is still running.
+    await page.evaluate(() => { document.querySelector<HTMLFormElement>('#ru-side form')!.dataset.old = '1'; });
     await page.locator('#ru-side button[type=submit]').click();
-    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#ru-side textarea[name=description]')?.value === 'Editions go through this.', null, {timeout: t(10000)});
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#ru-side form:not([data-old]) textarea[name=description]')?.value === 'Editions go through this.', null, {timeout: t(10000)});
     assert.equal((await ok<Rule>(page, 'GET', '/v2/rules/' + outside.id)).who.outside_editions, true, 'a panel save keeps it');
     await go(page, '#/rules?rule=' + ruleId);
 
