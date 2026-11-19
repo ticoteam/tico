@@ -343,3 +343,30 @@ def test_one_persons_streams_of_a_round_decide_each_thread_once_and_read_what_ea
         assert [(s, t, dict(d)) for s, t, d in result[0]] == [(s, t, dict(d)) for s, t, d in alone_ben[0]]
     assert [(s, t, dict(d)) for s, t, d in got[5][0]] == [(s, t, dict(d)) for s, t, d in alone_cara[0]]
     assert private["id"] not in str(got[5][0]) and private["id"] in str(got[0][0])
+
+
+def test_one_persons_streams_of_a_round_build_needs_you_once_and_each_keeps_its_own_marks(api, monkeypatch):  # noqa: F811
+    from backend import views
+
+    after = cursor(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('needs','thread','human:ben',?)", (H.now(),)
+        )
+    builds = []
+    real = views.needs_items
+
+    def counted(c, auth, person, *args, **kwargs):
+        builds.append(person.actor)
+        return real(c, auth, person, *args, **kwargs)
+
+    monkeypatch.setattr(views, "needs_items", counted)
+    ben, cara = who(api, "ben-test"), who(api, "cara-test")
+    held = [{} for _ in range(3)]
+    polls = [(ben, after, {"topics": ("needs",), "needs_held": mine}, lambda: None) for mine in held]
+    got = round_of(api, *polls, (cara, after, {"topics": ("needs",)}, lambda: None))
+    assert builds == ["human:ben"]  # Cara has no needs change of her own in this round
+    assert all(not isinstance(result, Exception) for result in got), got
+    for result, mine in zip(got[:3], held, strict=True):
+        assert [t for _, t, _ in result[0]] == ["needs"] and mine["version"] == held[0]["version"]
+    assert got[3][0] == []
