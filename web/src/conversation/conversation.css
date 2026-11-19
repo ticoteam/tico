@@ -55,13 +55,26 @@ textarea.composer-text::placeholder{color:var(--muted)}
 .rate.is-rated .fold[aria-pressed="false"]{visibility:hidden}
 .msg:hover .rate.is-rated .fold,.rate.is-rated:focus-within .fold{visibility:visible}
 @media (hover:none){.rate{opacity:1}}
+/* on a phone a long press on a message opens its actions as a sheet (platforms.md 2.8): the row under it keeps only a
+   chosen rating, and the pressed text is not selected instead */
+:where(html[data-layout="cards"]){
+  @media (hover:none){
+    .rate:not(.is-rated){display:none}
+    .msg:not(.st-list .msg){-webkit-user-select:none;user-select:none}
+  }
+}
 .rate-chips{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
 .rate-chip{height:28px;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:var(--well-2);color:var(--ink-2);font-family:inherit;font-size:var(--t-sm);cursor:pointer}
 .rate-chip:hover{color:var(--ink)}
 .rate-chip[aria-pressed="true"]{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .rate-note{color:var(--muted);font-size:var(--t-sm)}
-.msg-from{text-decoration:none}
+.msg-from{text-decoration:none;cursor:pointer;font-family:inherit}
 .msg-from:hover{color:var(--ink)}
+
+/* the Slack thread a message came from, every message in full, in a dialog-high scroller */
+.st-list{max-height:60dvh;overflow:auto}
+.st-list .msg:first-child{padding-top:0}
+.st-text{white-space:pre-wrap}
 
 /* the Outline: one row per prompt, in a dialog-high scroller */
 .co-list{max-height:60dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}

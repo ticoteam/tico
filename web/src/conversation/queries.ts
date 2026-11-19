@@ -335,6 +335,51 @@ export const outlineQuery = (id: string) =>
     staleTime: 0,
   });
 
+/* ---------------------------------------------------------------- a Slack thread a message came from */
+
+/** Where in Slack a message was said, and an agent that reads that channel (the server reads it as that agent). */
+export interface SlackPlace {
+  bot: string;
+  channel: string;
+  thread: string;
+}
+
+/** A message that came in from Slack (`refs.slack`, backend/slack_gateway.py refs_for): its thread, read as the agent
+    it was routed to. Null when the message did not come from Slack or names no agent. */
+export function slackPlaceOf(m: Pick<ChatMessage, 'refs'>): SlackPlace | null {
+  const s = m.refs?.slack;
+  const routing = m.refs?.routing as { recipients?: { bot?: unknown }[] } | undefined;
+  const bot = routing?.recipients?.find((r) => typeof r.bot === 'string' && r.bot)?.bot as string | undefined;
+  const thread = typeof s?.thread_ts === 'string' && s.thread_ts ? s.thread_ts : typeof s?.ts === 'string' ? s.ts : '';
+  if (!bot || typeof s?.channel !== 'string' || !s.channel || !thread) return null;
+  return { bot: bot.replace(/^bot:/, ''), channel: s.channel, thread };
+}
+
+/** One Slack message (backend/messaging.py _slack_message). */
+export interface SlackLine {
+  event_id: string;
+  ts: string;
+  author?: string | null;
+  text?: string | null;
+  deleted?: boolean;
+  url?: string | null;
+}
+
+quietRoot('slackThread');
+
+/** The Slack thread, oldest first (up to 100). The server gives it to the owner only. Read when opened. */
+export const slackThreadQuery = ({ bot, channel, thread }: SlackPlace) =>
+  queryOptions({
+    queryKey: ['slackThread', bot, channel, thread] as const,
+    queryFn: async ({ signal }) =>
+      (
+        await api.get<{ messages?: SlackLine[] | null }>(
+          `/api/v2/messaging/bots/${enc(bot)}/slack-thread?${new URLSearchParams({ channel, thread_ts: thread }).toString()}`,
+          { signal },
+        )
+      ).messages ?? [],
+  });
+
 /* ---------------------------------------------------------------- feedback on a message */
 
 quietRoot('feedback');

@@ -1,15 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type MouseEvent, type ReactNode } from 'react';
+import { useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
+import { meQuery } from '@/data';
 import { Avatar, type AvatarKind, type AvatarSize } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
 import { ConfirmCard } from '@/kit/ConfirmCard';
+import { Dialog } from '@/kit/Dialog';
+import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { ContextMenu, MenuItem } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
+import { SkeletonRows } from '@/kit/Skeleton';
+import { toast } from '@/kit/Toast';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
-import { Rate } from './Feedback';
-import { proposalQuery, type Feedback } from './queries';
+import { Rate, Rated, type RateControls } from './Feedback';
+import { proposalQuery, slackPlaceOf, slackThreadQuery, type Feedback, type SlackPlace } from './queries';
 import type { Attachment, ChatMessage, LiveRun, Variant } from './types';
 
 export interface Who {
@@ -112,17 +120,84 @@ function Files({ files, pending, onPicture }: { files: Attachment[] | undefined;
   });
 }
 
-/** Said in Slack: a link to the message there (the app cannot read a Slack thread for a person yet). */
-function FromSlack({ m }: { m: ChatMessage }) {
-  const s = m.refs?.slack;
-  const href = typeof s?.permalink === 'string' && /^https:\/\//.test(s.permalink) ? s.permalink : null;
-  if (!href) return null;
-  const where = s?.channel_name ? `#${s.channel_name.replace(/^#/, '')}` : 'Slack';
+const slackHref = (m: ChatMessage) => {
+  const link = m.refs?.slack?.permalink;
+  return typeof link === 'string' && /^https:\/\//.test(link) ? link : null;
+};
+const slackChannel = (m: ChatMessage) => (m.refs?.slack?.channel_name ? `#${m.refs.slack.channel_name.replace(/^#/, '')}` : '');
+
+/** Said in Slack: where, as a link to the message there. The owner reads the whole Slack thread here instead. */
+function FromSlack({ m, onRead }: { m: ChatMessage; onRead: () => void }) {
+  const { data: me } = useQuery(meQuery);
+  const href = slackHref(m);
+  const readable = me?.role === 'owner' && !!slackPlaceOf(m);
+  if (!href && !readable) return null;
+  const where = slackChannel(m) ? `Slack ${slackChannel(m)}` : 'Slack';
+  if (!readable)
+    return (
+      <a className="fold msg-from" href={href!} target="_blank" rel="noreferrer" title="Open in Slack">
+        <Icon name="popout" />
+        <span>{where}</span>
+      </a>
+    );
   return (
-    <a className="fold msg-from" href={href} target="_blank" rel="noreferrer" title="Open in Slack">
-      <Icon name="popout" />
-      <span>{where === 'Slack' ? 'Slack' : `Slack ${where}`}</span>
-    </a>
+    <button type="button" className="fold msg-from" onClick={onRead}>
+      <Icon name="threads" />
+      <span>{where}</span>
+    </button>
+  );
+}
+
+const slackTime = (ts: string) => {
+  const t = Number(ts) * 1000;
+  return Number.isFinite(t) ? clock(new Date(t).toISOString()) : '';
+};
+
+/** The Slack thread a message came from, every message in full, as the server keeps it. */
+function SlackThread({ place, m, onClose }: { place: SlackPlace; m: ChatMessage; onClose: () => void }) {
+  const q = useQuery(slackThreadQuery(place));
+  const lines = q.data ?? [];
+  const link = slackHref(m) ?? lines[0]?.url ?? null;
+  return (
+    <Dialog
+      open
+      onOpenChange={(next) => !next && onClose()}
+      title="Slack thread"
+      description={slackChannel(m) || undefined}
+      actions={
+        <>
+          {link && /^https:\/\//.test(link) && (
+            <a className="btn" href={link} target="_blank" rel="noreferrer">
+              Open in Slack
+            </a>
+          )}
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        </>
+      }
+    >
+      {q.isPending ? (
+        <SkeletonRows rows={3} />
+      ) : q.isError || lines.length === 0 ? (
+        <Empty title={q.isError ? "Couldn't load the Slack thread" : 'No messages'} />
+      ) : (
+        <div className="st-list">
+          {lines.map((l) => (
+            <div key={l.event_id} className="msg">
+              <Avatar kind="person" name={l.author || 'Slack'} size={22} />
+              <div className="msg-main">
+                <div className="msg-meta">
+                  <b>{l.author || 'Slack'}</b>
+                  <time>{slackTime(l.ts)}</time>
+                </div>
+                <p className="st-text">{l.deleted ? 'Removed' : l.text}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Dialog>
   );
 }
 
@@ -180,60 +255,122 @@ export interface MessageProps {
 }
 
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
-export function Message({ m, variant, me, cont, onRetry, rateIn, feedback = null, card }: MessageProps) {
+export function Message(props: MessageProps) {
+  const { m, rateIn, feedback = null } = props;
+  if (!rateIn) return <Line {...props} rate={null} />;
+  return (
+    <Rated chat={rateIn} m={m} feedback={feedback}>
+      {(rate) => <Line {...props} rate={rate} />}
+    </Rated>
+  );
+}
+
+const copy = (text: string) =>
+  void (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(
+    () => toast({ text: 'Copied' }),
+    () => toast({ text: "Couldn't copy", kind: 'failed' }),
+  );
+
+/**
+ * On a phone there is no hover: a long press on a message opens its actions as a sheet, the same ones a computer
+ * shows under it (Good, Not good), and Copy, since the press takes the place of selecting the text.
+ */
+function Held({ text, rate, children }: { text: string; rate: RateControls | null; children: ReactElement }) {
+  const cards = useCards();
+  if (!cards || (!text && !rate)) return children;
+  return (
+    <ContextMenu
+      items={
+        <>
+          {text && <MenuItem icon="copy" label="Copy" onSelect={() => copy(text)} />}
+          {rate && (
+            <>
+              <MenuItem label="Good" on={rate.rating === 'up'} onSelect={() => void rate.good()} />
+              <MenuItem label="Not good" on={rate.rating === 'down'} onSelect={() => void rate.notGood()} />
+            </>
+          )}
+        </>
+      }
+    >
+      {children}
+    </ContextMenu>
+  );
+}
+
+function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { rate: RateControls | null }) {
+  const [reading, setReading] = useState(false);
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const shown = m.deleted ? null : card?.(m);
+  // What Copy takes: the words as written, not a card drawn in their place.
+  const words = m.deleted || m.pending || shown ? '' : text.trim();
   const files = m.refs?.attachments;
   const pics = usePictures(m);
+  const place = reading ? slackPlaceOf(m) : null;
+  // What opens over the page stays outside the long-pressed row: a press inside it is not a press on the message.
+  const over = (
+    <>
+      {pics.viewer}
+      {rate?.sheets}
+      {place && <SlackThread place={place} m={m} onClose={() => setReading(false)} />}
+    </>
+  );
   if (m.pending || (me && m.sender_id === me)) {
     const failed = m.pending === 'failed' || m.pending === 'held';
     return (
-      <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
-        <div className="mine-col" onClick={pics.onClick}>
-          {shown ??
-            (text && (
-              <div className="bubble">
-                <Markdown text={text} compact />
-              </div>
-            ))}
-          <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
-          {failed && (
-            <div className="msg-fail">
-              <Icon name="alert" />
-              <span>{m.pending === 'held' ? 'Held' : 'Not sent'}</span>
-              {m.pending === 'failed' && onRetry && (
-                <button type="button" onClick={() => onRetry(m)}>
-                  Retry
-                </button>
+      <>
+        <Held text={words} rate={null}>
+          <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
+            <div className="mine-col" onClick={pics.onClick}>
+              {shown ??
+                (text && (
+                  <div className="bubble">
+                    <Markdown text={text} compact />
+                  </div>
+                ))}
+              <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
+              {failed && (
+                <div className="msg-fail">
+                  <Icon name="alert" />
+                  <span>{m.pending === 'held' ? 'Held' : 'Not sent'}</span>
+                  {m.pending === 'failed' && onRetry && (
+                    <button type="button" onClick={() => onRetry(m)}>
+                      Retry
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
-        {pics.viewer}
-      </div>
+          </div>
+        </Held>
+        {over}
+      </>
     );
   }
   const who = whoOf(m, variant, me);
   const aid = typeof m.refs?.action === 'string' ? m.refs.action : null;
   return (
-    <div className={['msg', cont && 'is-cont'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
-      {cont ? <span className="av-gap av-22" /> : <Face who={who} size={22} />}
-      <div className="msg-main" onClick={pics.onClick}>
-        {!cont && (
-          <div className="msg-meta">
-            <b>{who.name}</b>
-            <time dateTime={m.created_at}>{clock(m.created_at)}</time>
+    <>
+      <Held text={words} rate={rate}>
+        <div className={['msg', cont && 'is-cont'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
+          {cont ? <span className="av-gap av-22" /> : <Face who={who} size={22} />}
+          <div className="msg-main" onClick={pics.onClick}>
+            {!cont && (
+              <div className="msg-meta">
+                <b>{who.name}</b>
+                <time dateTime={m.created_at}>{clock(m.created_at)}</time>
+              </div>
+            )}
+            {shown ?? (text && <Markdown text={text} compact />)}
+            <Steps run={m.run} />
+            <Files files={files} pending={false} onPicture={pics.openAt} />
+            {aid && <Proposal aid={aid} />}
+            {m.refs?.slack && <FromSlack m={m} onRead={() => setReading(true)} />}
+            {rate && <Rate rate={rate} />}
           </div>
-        )}
-        {shown ?? (text && <Markdown text={text} compact />)}
-        <Steps run={m.run} />
-        <Files files={files} pending={false} onPicture={pics.openAt} />
-        {aid && <Proposal aid={aid} />}
-        <FromSlack m={m} />
-        {rateIn && <Rate chat={rateIn} m={m} feedback={feedback} />}
-      </div>
-      {pics.viewer}
-    </div>
+        </div>
+      </Held>
+      {over}
+    </>
   );
 }
 

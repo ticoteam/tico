@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -20,11 +20,19 @@ export function canRate(m: Pick<ChatMessage, 'sender_id' | 'pending' | 'deleted'
 
 const failed = () => toast({ text: "Couldn't save", kind: 'failed' });
 
+export interface RateControls {
+  rating: Rating | null;
+  good: () => Promise<void>;
+  notGood: () => Promise<void>;
+  /** The dialogs Not good opens; drawn beside the message, so they open from the long-press sheet too. */
+  sheets: ReactNode;
+}
+
 /**
- * Good and Not good under a message. Not good is kept at once, then asks what was wrong; on an agent's work the reason
+ * Good and Not good on a message. Not good is kept at once, then asks what was wrong; on an agent's work the reason
  * can go to the agent or become a rule. Pressing a chosen one again: Good takes it back, Not good shows what was said.
  */
-export function Rate({ chat, m, feedback }: { chat: string; m: ChatMessage; feedback: Feedback | null }) {
+function useRate(chat: string, m: ChatMessage, feedback: Feedback | null): RateControls {
   const rate = useAction('conversation.rate');
   const unrate = useAction('conversation.unrate');
   const [sheet, setSheet] = useState<'reasons' | 'rule' | 'view' | null>(null);
@@ -46,14 +54,8 @@ export function Rate({ chat, m, feedback }: { chat: string; m: ChatMessage; feed
     if (await give('down')) setSheet('reasons');
   };
 
-  return (
-    <div className={rating ? 'rate is-rated' : 'rate'} role="group" aria-label="Rate this message">
-      <button type="button" className="fold" aria-pressed={rating === 'up'} onClick={() => void good()}>
-        Good
-      </button>
-      <button type="button" className="fold" aria-pressed={rating === 'down'} onClick={() => void notGood()}>
-        Not good
-      </button>
+  const sheets = (
+    <>
       {sheet === 'reasons' && (
         <Reasons
           agent={agent}
@@ -78,6 +80,26 @@ export function Rate({ chat, m, feedback }: { chat: string; m: ChatMessage; feed
           onClose={() => setSheet(null)}
         />
       )}
+    </>
+  );
+  return { rating, good, notGood, sheets };
+}
+
+/** A message the person may rate, drawn with its rating controls (its Good and Not good row, its long-press sheet). */
+export function Rated({ chat, m, feedback, children }: { chat: string; m: ChatMessage; feedback: Feedback | null; children: (rate: RateControls) => ReactNode }) {
+  return children(useRate(chat, m, feedback));
+}
+
+/** Good and Not good under a message (on a phone, a chosen one only: the long press has both). */
+export function Rate({ rate }: { rate: RateControls }) {
+  return (
+    <div className={rate.rating ? 'rate is-rated' : 'rate'} role="group" aria-label="Rate this message">
+      <button type="button" className="fold" aria-pressed={rate.rating === 'up'} onClick={() => void rate.good()}>
+        Good
+      </button>
+      <button type="button" className="fold" aria-pressed={rate.rating === 'down'} onClick={() => void rate.notGood()}>
+        Not good
+      </button>
     </div>
   );
 }

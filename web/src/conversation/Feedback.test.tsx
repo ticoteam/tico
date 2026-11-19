@@ -45,8 +45,8 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
   });
 }
 
-function show(messages: ChatMessage[]) {
-  queryClient.setQueryData(['me'], { id: ME, email: '', role: 'person', slug: null });
+function show(messages: ChatMessage[], role: 'person' | 'owner' = 'person') {
+  queryClient.setQueryData(['me'], { id: ME, email: '', role, slug: null });
   queryClient.setQueryData(['thread', T, 'timeline'], { pages: [{ messages, next_cursor: null, read_marks: {} }], pageParams: [null] });
   queryClient.setQueryData(feedbackKey(T), []);
   const root = createRootRoute({ component: () => <Conversation id={T} variant="page" /> });
@@ -117,5 +117,100 @@ describe('Good and Not good', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.method === 'POST' && (c.body as { tell_bot?: boolean; reason?: string }).tell_bot && (c.body as { reason?: string }).reason === 'Too long')).toBe(true),
     );
+  });
+});
+
+describe('Message actions, on a phone @s181', () => {
+  const writeText = vi.fn(async (_text: string) => {});
+  beforeEach(() => {
+    writeText.mockClear();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  });
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  it('a long press on what an agent said opens Copy, Good and Not good; Not good asks what was wrong', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/api/v2/feedback'))
+        return { status: 200, body: { id: 'f1', subject_type: 'message', subject_id: 'm2', rating: 'down', reason: '', outcome: 'none', note_status: null } };
+      if (url.includes('recent-reasons')) return { status: 200, body: { reasons: [] } };
+      return { status: 200, body: { items: [], counts: [] } };
+    });
+    show([msg(2, 'bot:qa', 'The plan is ready')]);
+    const said = await screen.findByText('The plan is ready');
+    act(() => {
+      fireEvent.contextMenu(said);
+    });
+    const sheet = await screen.findByRole('menu');
+    expect(sheet.className).toContain('is-sheet');
+    expect(screen.getByRole('menuitem', { name: 'Copy' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Good' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Not good' }));
+    await screen.findByRole('dialog', { name: 'Not good' });
+    expect(calls.some((c) => c.method === 'POST' && (c.body as { rating?: string }).rating === 'down')).toBe(true);
+  });
+
+  it('Copy takes the words as written', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    show([msg(1, ME, 'Send it **today**')]);
+    const mine = (await screen.findByText('today')).closest('.msg')!;
+    act(() => {
+      fireEvent.contextMenu(mine);
+    });
+    expect(screen.queryByRole('menuitem', { name: 'Good' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Send it **today**'));
+  });
+
+  it('on a computer a right click is left to the browser', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    show([msg(2, 'bot:qa', 'The plan is ready')]);
+    expect(fireEvent.contextMenu(await screen.findByText('The plan is ready'))).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
+describe('A message that came from a Slack thread @s190', () => {
+  const fromSlack = (): ChatMessage => ({
+    ...msg(3, 'human:ana', 'Can we ship Friday?'),
+    refs: {
+      slack: { channel: 'C1', channel_name: 'launch', ts: '1789800000.000200', thread_ts: '1789800000.000100', permalink: 'https://example.slack.com/archives/C1/p1' },
+      routing: { recipients: [{ bot: 'helper', confidence: 0.9 }] },
+    },
+  });
+
+  it('the owner reads the whole Slack thread over the page, each message in full', async () => {
+    const long = 'Line one of a long note.\nLine two, still there.';
+    serve((url) =>
+      url.includes('/slack-thread')
+        ? {
+            status: 200,
+            body: {
+              messages: [
+                { event_id: 'e1', ts: '1789800000.000100', author: 'Sam Rivera', text: long, deleted: false, url: 'https://example.slack.com/archives/C1/p1' },
+                { event_id: 'e2', ts: '1789800000.000200', author: 'Ana Lima', text: 'Can we ship Friday?', deleted: false, url: 'https://example.slack.com/archives/C1/p2' },
+              ],
+            },
+          }
+        : { status: 200, body: { items: [], counts: [] } },
+    );
+    show([fromSlack()], 'owner');
+    fireEvent.click(await screen.findByRole('button', { name: 'Slack #launch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Slack thread' });
+    await waitFor(() => expect(dialog.textContent).toContain('Sam Rivera'));
+    expect(dialog.textContent).toContain(long);
+    expect(calls.some((c) => c.url.includes('/api/v2/messaging/bots/helper/slack-thread?channel=C1&thread_ts=1789800000.000100'))).toBe(true);
+    expect(screen.getByRole('link', { name: 'Open in Slack' }).getAttribute('href')).toBe('https://example.slack.com/archives/C1/p1');
+  });
+
+  it('anyone else gets the link to the message in Slack', async () => {
+    serve(() => ({ status: 200, body: { items: [], counts: [] } }));
+    show([fromSlack()]);
+    const link = await screen.findByRole('link', { name: 'Slack #launch' });
+    expect(link.getAttribute('href')).toBe('https://example.slack.com/archives/C1/p1');
+    expect(screen.queryByRole('button', { name: 'Slack #launch' })).toBeNull();
   });
 });

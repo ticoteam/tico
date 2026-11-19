@@ -26,8 +26,9 @@ export interface Refs {
   /** Tico could not do something: shown as a fault line. */
   fault?: string;
   attachments?: Attachment[];
-  /** Said in Slack: the channel and the message's own link there. */
-  slack?: { channel?: string; channel_name?: string; permalink?: string };
+  /** Said in Slack: the channel, the message and its thread there (`thread_ts` is empty on a thread's first message),
+      and the message's own link. */
+  slack?: { channel?: string; channel_name?: string; ts?: string; thread_ts?: string | null; permalink?: string };
   [k: string]: unknown;
 }
 
