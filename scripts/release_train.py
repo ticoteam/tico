@@ -129,10 +129,15 @@ SPEED_MIN = 30
 SPEED_SLOWER = 2.0
 SPEED_FLOOR_MS = 200
 SPEED_TARGET_MS = 1000
+# The flight recorder's p95 is the upper edge of a bucket 1.25x wide: a route counts as SPEED_SLOWER only when its
+# bucket's lower edge is, so rounding never makes 1.96x look like 2.4x.
+SPEED_BUCKET = 1.25
 # Not judged: routes whose time is mostly another service's (a vendor behind the tool proxy, GitHub's token minting,
-# a model provider, HQ, a live Gmail or calendar read, a fetched page) and pages that are not the API. The event
-# streams are judged: the flight recorder times a streamed answer to its first byte, which is its setup.
+# a model provider, HQ, a live Gmail or calendar read, a fetched page), routes that wait on purpose (the inbound mail
+# long poll), and pages that are not the API. The event streams are judged: the flight recorder times a streamed
+# answer to its first byte, which is its setup.
 SPEED_OUTSIDE = (
+    "/inbound/wait",
     "/tool-proxy/",
     "/github/token",
     "/repositories/token",
@@ -1522,49 +1527,63 @@ def judged(route):
     return path.startswith("/api/") and not any(part in path for part in SPEED_OUTSIDE)
 
 
-def speed_check(target, version):
+def speed_check(target, version, base):
     """(lines, regressions) for an install that runs `version`: waits until it has run it SPEED_AFTER, then compares each
-    judged route's p95 since then with the hour before (SPEED_SLOWER with SPEED_MIN requests in each window and
-    SPEED_FLOOR_MS more), and lists the routes over SPEED_TARGET_MS. An answer it cannot read is one line and no
-    regression: an older release has no speed route, and the check never holds stable on a read that failed."""
-    want, name = rollout.plain(version), target["name"]
+    judged route's p95 since then with the last hour the install ran `base` (SPEED_SLOWER with SPEED_MIN requests in
+    each window and SPEED_FLOOR_MS more), and lists the routes over SPEED_TARGET_MS. An answer it cannot read is one
+    line and no regression: an older release has no speed route, and the check never holds stable on a read that
+    failed."""
+    want, name, base = rollout.plain(version), target["name"], rollout.plain(base)
+    path = SPEED_PATH + "?" + urllib.parse.urlencode({"base": base})
 
     def read():
         try:
-            code, data = rollout.call(target, "GET", SPEED_PATH)
-        except rollout.Stop:
+            code, data = rollout.call(target, "GET", path)
+        except Exception:  # noqa: BLE001 - a truncated or refused answer is "not checked", never a crash or a hold
             return None
-        ok = code == 200 and isinstance(data, dict) and isinstance(data.get("routes"), list)
-        return data if ok and rollout.plain(data.get("release")) == want and data.get("since") else None
+        if code != 200 or not isinstance(data, dict) or not isinstance(data.get("routes"), list):
+            return None
+        if rollout.plain(data.get("release")) != want or data.get("base") != base:
+            return None
+        if not all(isinstance(data.get(k), int) for k in ("since", "now")) or data["now"] < data["since"]:
+            return None
+        return data
 
     data = read()
-    if data:
-        left = SPEED_AFTER - (int(data.get("now") or 0) - int(data["since"]))
-        if left > 0:
-            note("Speed: waiting %d s for %s to run v%s %d minutes" % (left, name, want, SPEED_AFTER // 60))
-            sleep(left)
-            data = read()
+    if data and data["now"] - data["since"] < SPEED_AFTER:
+        left = SPEED_AFTER - (data["now"] - data["since"])
+        note("Speed: waiting %d s for %s to run v%s %d minutes" % (left, name, want, SPEED_AFTER // 60))
+        sleep(left)
+        data = read()
     if not data:
-        return ["Speed: %s's speed since v%s cannot be read; not checked" % (name, want)], []
-    lines, regressions, over = [], [], []
+        return ["Speed: %s's speed on v%s against v%s cannot be read; not checked" % (name, want, base)], []
+    regressions, over, judged_routes = [], [], 0
     for r in data["routes"]:
-        route = r.get("route") or ""
-        if not judged(route):
-            continue
-        before, after = r.get("before") or {}, r.get("after") or {}
-        b, a = float(before.get("p95") or 0), float(after.get("p95") or 0)
-        if int(after.get("n") or 0) < SPEED_MIN:
-            continue
-        if a > SPEED_TARGET_MS:
-            over.append("%s %.0f ms (%d requests)" % (route, a, after["n"]))
-        if int(before.get("n") or 0) >= SPEED_MIN and b and a >= SPEED_SLOWER * b and a - b >= SPEED_FLOOR_MS:
-            regressions.append(
-                "%s p95 %.0f ms, was %.0f ms (%d and %d requests)" % (route, a, b, after["n"], before["n"])
+        route = r.get("route") if isinstance(r, dict) else ""
+        before, after = (r.get("before") or {}, r.get("after") or {}) if isinstance(r, dict) else ({}, {})
+        try:
+            b, a, nb, na = (
+                float(before.get("p95") or 0),
+                float(after.get("p95") or 0),
+                int(before.get("n") or 0),
+                int(after.get("n") or 0),
             )
-    window = "%d minutes on v%s" % ((int(data["now"]) - int(data["since"])) // 60, want)
-    lines.append(
-        "Speed: %s, %s: %s" % (name, window, "; ".join("SLOWER " + x for x in regressions) or "no route twice as slow")
-    )
+        except (TypeError, ValueError):
+            continue
+        if not judged(route) or na < SPEED_MIN:
+            continue
+        judged_routes += 1
+        if a > SPEED_TARGET_MS:
+            over.append("%s %.0f ms (%d requests)" % (route, a, na))
+        if nb >= SPEED_MIN and b and a / SPEED_BUCKET >= SPEED_SLOWER * b and a - b >= SPEED_FLOOR_MS:
+            regressions.append("%s p95 %.0f ms, was %.0f ms on v%s (%d and %d requests)" % (route, a, b, base, na, nb))
+    window = "%d minutes on v%s against v%s" % ((data["now"] - data["since"]) // 60, want, base)
+    if not judged_routes:
+        return ["Speed: %s, %s: no route had %d requests; not checked" % (name, window, SPEED_MIN)], []
+    lines = [
+        "Speed: %s, %s, %d routes: %s"
+        % (name, window, judged_routes, "; ".join("SLOWER " + x for x in regressions) or "none twice as slow")
+    ]
     if over:
         lines.append("Speed: %s routes over %d ms at p95: %s" % (name, SPEED_TARGET_MS, "; ".join(over)))
     return lines, regressions
@@ -1604,7 +1623,7 @@ def promote(gh, env):
     """Canary -> stable, when the canary runs a stable release ahead of stable's, that release is approved (by a person,
     or automatically: approval_state) and not held, the canary runs it healthy and no route answers twice as slowly on
     the canary (speed_check). Stable's update closes the release's approval record, and older ones, saying how it was
-    approved. Returns the release stable took, else None."""
+    approved. Returns (the release stable took, the one it ran before), else None."""
     canary, stable = install("CANARY", env), install("STABLE", env)
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
@@ -1640,18 +1659,37 @@ def promote(gh, env):
     if waits:
         note("Promote: holding %s on the canary, %s" % (want, "; ".join(waits)))
         return
-    lines, slower = speed_check(canary, want)
+    # Against the release stable runs, so a slower release held here is never the baseline of the next one.
+    lines, slower = speed_check(canary, want, have)
     for line in lines:
         note(line)
     if slower and (env.get("RELEASE_SPEED_HOLD") or "on").strip().lower() != "off":
         raise Fail(
-            "promote %s: holding, the canary answers %d route(s) at least %gx slower than before it (RELEASE_SPEED_HOLD=off "
-            "promotes anyway): %s" % (want, len(slower), SPEED_SLOWER, "; ".join(slower))
+            "promote %s: holding, the canary answers %d route(s) at least %gx slower than on %s (RELEASE_SPEED_HOLD=off "
+            "promotes anyway): %s" % (want, len(slower), SPEED_SLOWER, have, "; ".join(slower))
         )
+    # The check may have waited minutes: the canary, the approval and the holds are read again before stable moves.
+    try:
+        status = read_status(canary)
+    except Fail as exc:
+        raise Fail("promote: holding, %s" % exc) from exc
+    approval, held, why = approval_state(gh, issue, env) if issue else ("", False, "")
+    waits, faults = promotion_gate(
+        version=want,
+        canary_status=status,
+        approval_waits=approval_waits(issue, approval, held, why),
+        hold=env.get("RELEASE_HOLD", ""),
+        blockers=gh.issues(BLOCKER_LABEL),
+    )
+    if faults:
+        raise Fail("promote %s: holding, %s" % (want, "; ".join(faults)))
+    if waits:
+        note("Promote: holding %s on the canary, %s" % (want, "; ".join(waits)))
+        return None
     note("Promote: stable %s -> %s (%s)" % (have, want, approval))
     update_install(stable, want)
     retire_approvals(gh, want, "Promoted to stable (TIDY), %s." % approval, inclusive=True)
-    return want
+    return want, have
 
 
 # ---- the release-train issue ----
@@ -1804,9 +1842,11 @@ def cmd_step(gh, env, now=None):
             step("rerun", lambda: gh.rerun_failed(plan["rerun"]["id"]))
     shipped_to_stable = [v for v in promoted if v]
     if shipped_to_stable:
-        # Last, so its wait holds up nothing else: stable's speed on the release it just took, listed and never held.
+        # Last, so its wait holds up nothing else: stable's speed on the release it just took against the one before,
+        # listed and never held.
         def stable_speed():
-            for line in speed_check(install("STABLE", env), shipped_to_stable[-1])[0]:
+            want, had = shipped_to_stable[-1]
+            for line in speed_check(install("STABLE", env), want, had)[0]:
                 note(line)
 
         step("speed", stable_speed)

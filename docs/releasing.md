@@ -179,20 +179,32 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
 - **Promotion.** Right after the canary takes a release, in the same step, and again at each later train step (the
   backstop runs one every 20 minutes, for a person's approval), stable takes the canary's release once it is approved, not held, nothing holds stable (`RELEASE_HOLD`, an open `release-blocker` issue) and the canary runs it
   healthy. Stable's update closes the issue, and the issue says who approved it, or that it was approved automatically.
-- **Speed check.** Before stable takes a release, the train reads the canary's `GET /api/v2/system/update/speed`. It
-  waits until the canary has run the release 6 minutes. That route gives each route's request count and p95 since the
-  canary took the release (its first 2 minutes left out) and in the hour before. A route that answers at least twice as
-  slowly, with at least 30 requests in both windows and at least 200 ms more, holds stable: the step fails and says
-  which routes. The next train step reads the canary again, so stable goes ahead once the routes recover. The
-  repository variable `RELEASE_SPEED_HOLD=off` lets stable through anyway. After stable takes a release, the train
-  waits the same 6 minutes at the end of its step and lists stable's comparison, which never holds anything. For both
-  installs the job summary also lists every route over 1 s at p95 (with 30 requests or more), the target for every
-  API route. Routes whose time is mostly another service's (the tool proxy, GitHub token minting, model subscription
-  calls, HQ support, live mail and calendar reads, the market import; `SPEED_OUTSIDE` in `scripts/release_train.py`)
-  and pages outside `/api/` are not judged. The event streams (`GET /api/v2/events`, `GET /api/v2/runners/me/events`)
-  are judged on their setup: the flight recorder times a streamed answer to its first byte. An answer that cannot be
-  read (a canary on a release without the route, or with the flight recorder off) is one line in the summary and
-  never a hold.
+- **Speed check.** Before stable takes a release, the train reads the canary's
+  `GET /api/v2/system/update/speed?base=<stable's release>`. It waits until the canary has run the release 6 minutes,
+  then re-reads the canary's status, the approval and the holds. That route gives each route's request count and p95
+  in two windows: since the canary took the release (its first 2 minutes left out), and the last hour it ran the
+  release stable runs. Comparing with stable's release means a slower release held on the canary is never the
+  baseline for the next one.
+
+  A route counts as slower when, with at least 30 requests in both windows, the lower edge of its p95 bucket is at
+  least twice the old p95 and the p95 is at least 200 ms more. The recorder's buckets are 1.25x wide, so this rule
+  never rounds 1.96x up to 2x. A slower route holds stable: the step fails and names it, and the next train step
+  reads the canary again, so stable goes ahead once the route recovers. The repository variable
+  `RELEASE_SPEED_HOLD=off` lets stable through anyway. After stable takes a release, the train waits the same
+  6 minutes at the end of its step and lists stable's comparison with the release it ran before; that never holds
+  anything.
+
+  For both installs, the job summary also lists every route over 1 s at p95 (with 30 requests or more). That is the
+  target for every API route. Some routes are not judged, listed in `SPEED_OUTSIDE` in `scripts/release_train.py`:
+  - Routes whose time is mostly another service's: the tool proxy, GitHub token minting, model subscription calls,
+    HQ support, live mail and calendar reads, and the market import.
+  - Routes that wait on purpose: the inbound mail long poll.
+  - Pages outside `/api/`.
+
+  The event streams (`GET /api/v2/events`, `GET /api/v2/runners/me/events`) are judged on their setup, since the
+  flight recorder times a streamed answer to its first byte. An answer that cannot be read (a canary on a release
+  without the route, the flight recorder off, or no route with 30 requests) is one line in the summary and never a
+  hold.
 - **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
   canary update failed is closed too, as not on the canary: there is nothing to approve.
 - **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
