@@ -72,7 +72,7 @@ function seed(view: 'day' | 'week', list: CalendarOccurrence[]) {
   queryClient.setQueryData(eventsQuery(r.from, r.to).queryKey, events(list));
 }
 
-function show(path: string) {
+function show(path: string, basepath = '/') {
   const root = createRootRoute({
     component: () => (
       <>
@@ -84,7 +84,7 @@ function show(path: string) {
   const cal = createRoute({ getParentRoute: () => root, path: '/calendar', validateSearch: calendarSearch, component: CalendarPage });
   const tools = createRoute({ getParentRoute: () => root, path: '/library/tools', component: () => null });
   const routines = createRoute({ getParentRoute: () => root, path: '/company/routines', component: () => <p>Routines</p> });
-  const router = createRouter({ routeTree: root.addChildren([cal, tools, routines]), history: createMemoryHistory({ initialEntries: [path] }) });
+  const router = createRouter({ basepath, routeTree: root.addChildren([cal, tools, routines]), history: createMemoryHistory({ initialEntries: [path] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -162,6 +162,23 @@ const openMeeting = async () => {
 const seedPending = (m: MeetingMore) => seedList('pending', { ...m, review_state: 'pending' });
 
 describe('Meetings in List', () => {
+  it('copies a meeting link that includes the app base path', async () => {
+    seedMeeting(meeting());
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      show('/next/calendar?view=list&panel=meeting%3Amt1', '/next');
+      const panel = await screen.findByRole('complementary', { name: 'Weekly sync' });
+      fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy link' }));
+      expect(writeText).toHaveBeenCalledWith(`${location.origin}/next/calendar?view=list&panel=meeting%3Amt1`);
+    } finally {
+      if (previous) Object.defineProperty(navigator, 'clipboard', previous);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it('Shared: All meetings lists the shared meetings under Past, and one opens seen by the Team @s993', async () => {
     seedList('live', meeting());
     queryClient.setQueryData(meetingsQuery('pending').queryKey, { meetings: [], count: 0, pending_count: 0 });

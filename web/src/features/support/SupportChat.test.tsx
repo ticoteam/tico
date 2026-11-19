@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ActionsRoot, actionsCatalog } from '@/actions';
 import { run } from '@/actions/run';
 import { queryClient } from '@/data';
-import type { SupportList } from './queries';
+import { sendToSupport, ticketsQuery, type SupportList } from './queries';
 import { SupportChat } from './SupportChat';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -155,6 +155,32 @@ describe('Tico support', () => {
     await say('Hello');
     expect(await screen.findByText('Not sent. Too long')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('keeps a later reply available to retry when an earlier reply finishes first', async () => {
+    const ticket = OPEN.tickets[0]!;
+    queryClient.setQueryData(ticketsQuery.queryKey, OPEN);
+    let finishFirst!: (response: Response) => void;
+    let finishSecond!: (response: Response) => void;
+    const first = new Promise<Response>((resolve) => (finishFirst = resolve));
+    const second = new Promise<Response>((resolve) => (finishSecond = resolve));
+    vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second));
+    const sent = sendToSupport({ message: 'First reply', to: ticket.id, key: 'first' });
+    const failed = sendToSupport({ message: 'Second reply', to: ticket.id, key: 'second' });
+
+    finishFirst(Response.json({
+      ...ticket,
+      messages: [...(ticket.messages ?? []), { id: 2, from: 'person', body: 'First reply', created_at: at(3) }],
+    }));
+    await sent;
+    const refused = expect(failed).rejects.toMatchObject({ status: 422 });
+    finishSecond(Response.json({ error: { code: 'validation', detail: 'Too long' } }, { status: 422 }));
+    await refused;
+
+    expect(queryClient.getQueryData(ticketsQuery.queryKey)?.tickets[0]?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ body: 'First reply' }),
+      expect.objectContaining({ body: 'Second reply', pending: 'failed' }),
+    ]));
   });
 
   it('shows starters when there is nothing yet, and says when support is off', async () => {
