@@ -15,9 +15,7 @@ import { lineDiff, paragraphs } from './diff';
 import { GoalsPage, type GoalsSearch } from './GoalsPage';
 import { MarketTab, spendOf } from './MarketPage';
 import { OrgTab } from './OrgPage';
-import { Face, Go, NameOf, refusal, usdShort, useDo } from './parts';
-import { useAction } from '@/actions';
-import { toast } from '@/kit/Toast';
+import { Face, Go, NameOf, usdShort, useDo } from './parts';
 import {
   brandProposalsQuery,
   brandQuery,
@@ -31,7 +29,7 @@ import {
   type Bet,
   type Brand,
   type BrandBody,
-  type BrandHit,
+  type BrandProposal,
   type StrategyDiff,
   type StrategyVersion,
   type VersionRow,
@@ -566,6 +564,7 @@ function BrandEdit({ brand }: { brand: Brand }) {
   const save = useDo('brand.save');
   const publish = useDo('brand.publish');
   const close = useDo('brand.edit');
+  const suggested = useQuery(brandProposalsQuery).data ?? [];
   const base = brand.draft?.body ?? brand.published?.body ?? {};
   const [body, setBody] = useState<BrandBody>(base);
   const [note, setNote] = useState('');
@@ -578,7 +577,7 @@ function BrandEdit({ brand }: { brand: Brand }) {
   return (
     <Document
       {...head('brand')}
-      side={<BrandRail />}
+      side={suggested.length > 0 ? <BrandRail list={suggested} /> : undefined}
       body={
         <div className="brand-edit">
           <h2>Name</h2>
@@ -686,88 +685,36 @@ function tidy(k: BookKey, v: BrandBody[BookKey]): unknown {
   }
 }
 
-// ---------------------------------------------------------------- Brand: what is suggested, and checking copy
+// ---------------------------------------------------------------- Brand: what is suggested
 
-/** Beside the draft: the changes teammates suggest (brand_draft proposals), each added to the draft or declined, and
-    Check copy against the published book (brand-page.ts brandEditHtml's rail). */
-function BrandRail() {
-  const props = useQuery(brandProposalsQuery);
+/** Beside the draft: the changes teammates suggest (brand_draft proposals), each added to the draft or declined
+    (brand-page.ts brandEditHtml's rail). */
+function BrandRail({ list }: { list: readonly BrandProposal[] }) {
   const decide = useDo('brand.decide');
-  const check = useAction('brand.check');
-  const [text, setText] = useState('');
-  const [hits, setHits] = useState<BrandHit[] | null>(null);
-  const run = async () => {
-    if (!text.trim()) return;
-    const r = await check.run({ text });
-    if (!r.ok) return void toast(refusal(r));
-    setHits((r.out as BrandHit[] | undefined) ?? []);
-  };
-  const list = props.data ?? [];
   return (
-    <>
-      {list.length > 0 && (
-        <section className="rail-sec" aria-label="Suggested">
-          <h3>
-            Suggested<span>{list.length}</span>
-          </h3>
-          {list.map((p) => (
-            <div key={p.id} className="br-prop" data-target={`proposal:${p.id}`}>
-              <p>{p.reason || p.card?.title || Object.keys(p.payload?.sections ?? {}).join(', ') || 'Brand change'}</p>
-              <p className="chg-by">
-                <span>
-                  <NameOf id={p.proposed_by} />
-                </span>
-                <time>{fmtDate(p.proposed_at)}</time>
-              </p>
-              <div className="an-row">
-                <Button variant="quiet" disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'reject' })}>
-                  Decline
-                </Button>
-                <Button disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'confirm' })}>
-                  Accept
-                </Button>
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
-      <section className="rail-sec" aria-label="Check copy">
-        <h3>Check copy</h3>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run();
-          }}
-        >
-          <Field
-            label="Copy"
-            labelHidden
-            area
-            value={text}
-            onValueChange={(v) => {
-              setText(v);
-              setHits(null);
-            }}
-          />
-          <Button type="submit" busy={check.pending}>
-            Check
-          </Button>
-        </form>
-        {hits &&
-          (hits.length ? (
-            <ul className="br-hits">
-              {hits.map((h, i) => (
-                <li key={i} title={h.rule}>
-                  <span>“{h.match}”</span>
-                  <Pill flag={h.level === 'block'}>{h.level === 'block' ? 'Block' : 'Warn'}</Pill>
-                  {h.rule && <span className="none">{h.rule}</span>}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="none">Nothing to fix</p>
-          ))}
-      </section>
-    </>
+    <section className="rail-sec" aria-label="Suggested">
+      <h3>
+        Suggested<span>{list.length}</span>
+      </h3>
+      {list.map((p) => (
+        <div key={p.id} className="br-prop" data-target={`proposal:${p.id}`}>
+          <p>{p.reason || p.card?.title || Object.keys(p.payload?.sections ?? {}).join(', ') || 'Brand change'}</p>
+          <p className="chg-by">
+            <span>
+              <NameOf id={p.proposed_by} />
+            </span>
+            <time>{fmtDate(p.proposed_at)}</time>
+          </p>
+          <div className="an-row">
+            <Button variant="quiet" disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'reject' })}>
+              Decline
+            </Button>
+            <Button disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'confirm' })}>
+              Accept
+            </Button>
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }

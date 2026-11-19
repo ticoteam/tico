@@ -39,7 +39,6 @@ import { keys, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
   FileSearch,
   GetGoalsNeedsYouResponse,
-  LibrarianResearchFiled,
   Matter,
   MatterResult,
   MatterWrite,
@@ -51,7 +50,6 @@ import type {
   TaskFileView,
   TaskResult,
 } from '@/api/schema';
-import { newId } from '@/lib';
 
 /* Company, Strategy, Products and Risk. None of these has a live topic: each root is read again after the person's
    own writes, on reconnect and on open when older than 60 s. Three widgets on Company read other areas' endpoints
@@ -974,34 +972,6 @@ export function decideBrandProposal(id: string, decision: 'confirm' | 'reject') 
       void queryClient.invalidateQueries({ queryKey: brandQuery.queryKey, exact: true });
       return out;
     },
-  });
-}
-
-/** Every rule of the published book some copy breaks (POST /api/v2/brand/check). */
-export interface BrandHit {
-  kind: string;
-  match: string;
-  rule?: string;
-  level?: 'warn' | 'block';
-}
-export const checkCopy = (text: string) => api.post<{ hits?: BrandHit[] }>('/api/v2/brand/check', { text }).then((r) => r.hits ?? []);
-
-// Market: the owner asks the Librarian to research a segment, or cites it in a bet.
-export type CitableBet = Bet & { cites?: string[] };
-export type CitableStrategy = Omit<Strategy, 'bets'> & { bets: CitableBet[]; draft?: { revision?: number | null } | null };
-
-export const researchSegment = (target: string, instructions: string) =>
-  api.post<LibrarianResearchFiled>('/api/v2/librarian/research', { target, section: '', instructions }, { idempotencyKey: newId() });
-
-/** A segment into a bet's cites, shown at once. */
-export function citeInBet(bet: string, segment: string) {
-  const s = queryClient.getQueryData<CitableStrategy>(strategyQuery.queryKey);
-  const cites = [...(s?.bets.find((b) => b.id === bet)?.cites ?? []), segment];
-  const revision = s?.draft?.revision;
-  return write<unknown>({
-    key: strategyQuery.queryKey,
-    optimistic: (cur: CitableStrategy | undefined) => cur && { ...cur, bets: cur.bets.map((b) => (b.id === bet ? { ...b, cites } : b)) },
-    send: (idempotencyKey) => api.post<unknown>(`/api/v2/strategy/bets/${enc(bet)}`, { cites, ...(revision != null && { revision }) }, { idempotencyKey }),
   });
 }
 

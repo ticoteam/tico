@@ -41,7 +41,7 @@ export function FinancePage({ search }: { search: FinanceSearch }) {
   if (tab === 'mine') return <BudgetsPage search={search} mine />;
   if (tab === 'sources') return <SourcesPage failure={failure} onDismiss={dismiss} search={search} />;
   if (tab === 'access') return <AccessPage search={search} />;
-  return <BooksPage tab={tab} failure={failure} onDismiss={dismiss} />;
+  return <BooksPage tab={tab} />;
 }
 
 /** A page this viewer may not open: no access, without Try again. */

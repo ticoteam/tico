@@ -16,7 +16,7 @@ import { validateFinanceSearch, validateGrowthSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
-/* Tier 2 gaps: View as lands on the P&L and always keeps Stop; a line's split history; a Growth channel's "Where this
+/* Tier 2 gaps: View as lands on the P&L and always keeps Stop; a Growth channel's "Where this
    comes from" and cost chart; the Sources tab gone; Import history open to Tico. Made-up figures, keys and names only. */
 
 const posted: { path: string; body: Record<string, unknown> }[] = [];
@@ -115,44 +115,6 @@ describe('View as @s456', () => {
     expect(await screen.findByText("You don't have access to this page")).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Stop' }));
     await waitFor(() => expect((router.state.location.search as { as?: string }).as).toBeUndefined());
-  });
-});
-
-describe('Attributed to @s458', () => {
-  it('lists the line’s past splits, newest first, with who set each @s458', async () => {
-    const line = {
-      line_id: 't1',
-      amount: -1000,
-      can_change: true,
-      splits: [{ teammate: 'human:lee', team: '', share_bps: 10000, amount: -1000 }],
-      source: 'person',
-      set_by: 'human:me',
-      set_at: '2026-10-05T10:00:00Z',
-      rule_id: null,
-      rule_name: null,
-      tags: {},
-      history: [
-        { id: 'h2', set_at: '2026-10-05T10:00:00Z', set_by: 'human:me', source: 'person', rule_id: null, superseded_at: null, splits: [{ teammate: 'human:lee', team: '', share_bps: 10000 }] },
-        { id: 'h1', set_at: '2026-10-02T10:00:00Z', set_by: '', source: 'tags', rule_id: null, superseded_at: '2026-10-05T10:00:00Z', splits: [] },
-      ],
-    };
-    serve((u) =>
-      u.endsWith('/finance/access')
-        ? ACCESS
-        : u.includes('/attribution')
-          ? line
-          : u.includes('/finance/transactions')
-            ? { rows: [{ id: 't1', kind: 'entry', entry_id: 'e_t1', date: '2026-10-02', description: 'Ink Co', account: 'Software', amount: -1000 }], next: null }
-            : undefined,
-    );
-    show('finance', '/company/finance?tab=transactions');
-    fireEvent.click(await screen.findByRole('button', { name: 'More for Ink Co' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Attributed to' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Attributed to' });
-    const history = (await within(dialog).findByText('History')).closest('details') as HTMLElement;
-    const rows = [...history.querySelectorAll('.prow')].map((r) => [r.querySelector('.row-title')?.textContent, r.querySelector('.row-sub')?.textContent]);
-    expect(rows[0]).toEqual(['Lee 100%', expect.stringContaining('Me')]);
-    expect(rows[1]).toEqual(['No split', expect.stringContaining('Tags')]);
   });
 });
 

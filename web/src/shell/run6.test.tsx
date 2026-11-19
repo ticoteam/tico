@@ -9,11 +9,10 @@ import { arrangementFor } from './arrangement';
 import { Frame } from './Frame';
 import { PhoneCards } from './phone';
 import { Sheet } from './Sheet';
-import { SupportLine } from './SupportLine';
 import { tabTitle } from './title';
 
-/* Browser run 6, the shell's part: a page that breaks, the phone's page-owned chats, hidden cards, the tab's title
-   and the Tico support line. */
+/* Browser run 6, the shell's part: a page that breaks, the phone's page-owned chats, hidden cards and the tab's
+   title. */
 
 // the router module only: the app's pages are not needed to know what it draws for a page that breaks
 vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
@@ -210,29 +209,5 @@ describe('the browser tab’s title', () => {
     expect(tabTitle('')).toBe('Tico');
     expect(tabTitle('Tasks')).toBe('Tasks - Tico');
     expect(tabTitle('Tasks')).not.toContain('·');
-  });
-});
-
-describe('the Tico support line', () => {
-  it('says Tico support is signed in, with the time left and Stop to the setting', async () => {
-    const until = new Date(Date.now() + 2 * 3600_000 + 60_000).toISOString();
-    inRouter(() => <SupportLine session={{ expires_at: until }} />, '/tasks');
-    const line = await screen.findByRole('status');
-    expect(line.textContent).toContain('Tico support is signed in, 2 hours left');
-    expect(within(line).getByRole('link', { name: 'Stop' }).getAttribute('href')).toBe('/settings/security');
-  });
-
-  it('shows nothing while no one is signed in', async () => {
-    inRouter(
-      () => (
-        <>
-          <h1>Tasks</h1>
-          <SupportLine session={null} />
-        </>
-      ),
-      '/tasks',
-    );
-    await screen.findByRole('heading', { name: 'Tasks' });
-    expect(screen.queryByRole('status')).toBeNull();
   });
 });

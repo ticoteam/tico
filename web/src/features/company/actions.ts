@@ -528,15 +528,12 @@ import type { Schema } from '@/actions';
 import {
   addMatter,
   addMatterFile,
-  checkCopy,
-  citeInBet,
   decideBrandProposal,
   decideNeed,
   editRisk,
   listValues,
   markDate,
   productsQuery,
-  researchSegment,
   riskQuery,
   setProductList,
   updateProduct as renameProduct,
@@ -679,36 +676,6 @@ export const brandDecide = defineAction({
   run: (_ctx, { proposal, decision }) => decideBrandProposal(proposal, decision),
   did: ({ decision }) => (decision === 'confirm' ? 'Added it to the draft' : 'Declined it'),
   target: () => ({ kind: 'page', id: BRAND }),
-});
-
-/** Copy against the published book: the words it avoids, names spelled wrong, claims it never makes. */
-export const brandCheck = defineAction({
-  id: 'brand.check',
-  title: 'Check copy against the brand book',
-  kind: 'view',
-  input: s.object({ text: s.string({ min: 1, max: 20000 }) }),
-  run: (_ctx, { text }) => checkCopy(text),
-  did: (_i, hits) => (hits?.length ? `${hits.length} to fix` : 'Nothing to fix'),
-});
-
-export const marketResearch = defineAction({
-  id: 'market.research',
-  title: 'Ask the Librarian to research a market segment',
-  kind: 'change',
-  input: s.object({ segment: id, instructions: s.string({ min: 1, max: 4000 }) }),
-  run: (_ctx, { segment, instructions }) => researchSegment(segment, instructions.trim()),
-  did: () => 'Asked the Librarian',
-  target: ({ segment }) => ({ kind: 'segment', id: segment }),
-});
-
-export const marketCite = defineAction({
-  id: 'market.cite',
-  title: 'Cite a market segment in a bet',
-  kind: 'change',
-  input: s.object({ bet: id, segment: id }),
-  run: (_ctx, { bet, segment }) => citeInBet(bet, segment),
-  did: () => 'Cited it',
-  target: ({ segment }) => ({ kind: 'segment', id: segment }),
 });
 
 // ---------------------------------------------------------------- a matter's own facts

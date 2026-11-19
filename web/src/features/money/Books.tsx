@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { useActor } from '@/data';
-import { fmtAge, fmtDate } from '@/lib';
+import { fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -12,46 +12,37 @@ import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
 import { Segmented } from '@/kit/Segmented';
-import { FilterRow, List, PageMore, Section, SidePanel } from '@/pagekinds';
+import { FilterRow, List, PageMore, Section } from '@/pagekinds';
 import { AddBillDialog, EntryDialog, NewInvoiceDialog } from './BillForms';
 import { CardPanel, DocPanel, TxPanel, useBookSearch } from './BookPanels';
 import { acctKey, asOfDay, compareDay, type AsOf } from './ledger';
 import { FIN, plural, useFinanceHead } from './head';
-import { cash, count } from './model';
-import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
-import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, StatementDialog, ViewAsDialog, type RuleRow } from './forms';
+import { cash } from './model';
+import { CardDialog, ConfirmDialog, TransferDialog, useMay } from './dialogs';
+import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, type RuleRow } from './forms';
 import { ActLink, Meter, readState, usePhone, usePress, useViewAs, Who } from './parts';
 import {
-  accessQuery,
   cachedTx,
   draftsQuery,
   filtered,
   txFilteredQuery,
   type DocKind,
-  BOOKS,
   balanceQuery,
   billsQuery,
   cardsQuery,
-  hooksQuery,
   invoicesQuery,
-  KEY_SOURCES,
   loadMoreTransactions,
   payFromQuery,
   rulesQuery,
-  sourcesQuery,
   taxQuery,
   transactionsQuery,
-  type AccessTeammate,
   type DocRow,
-  type KeyProvider,
-  type SourceGroup,
-  type SourceRow,
   type Tx,
 } from './queries';
 import { panelOf, TX_STATUSES, type FinanceTab } from './search';
 
 /* The rest of Finance, each a list read from its endpoint and drawn as the mock draws it, with the old app's dialogs
-   for a transfer, a card, connecting a source, the books, Stripe's webhook and the access defaults. */
+   for a transfer and a card. */
 
 type Read = { isPending: boolean; isError: boolean; error: unknown; refetch: () => unknown };
 
@@ -94,8 +85,7 @@ function usePanel(kind: 'bill' | 'invoice' | 'card' | 'tx'): string | null {
   return open && open[0] === kind ? open[1] : null;
 }
 
-/** `failure`: a books sign-in that came back unconnected (useBooksReturn), shown beside Sources until put away. */
-export function BooksPage({ tab, failure = null, onDismiss = () => {} }: { tab: FinanceTab; failure?: string | null; onDismiss?: () => void }) {
+export function BooksPage({ tab }: { tab: Exclude<FinanceTab, 'overview' | 'pnl' | 'budgets' | 'mine' | 'sources' | 'access'> }) {
   switch (tab) {
     case 'transactions':
       return <Transactions />;
@@ -109,12 +99,8 @@ export function BooksPage({ tab, failure = null, onDismiss = () => {} }: { tab: 
       return <Cards />;
     case 'tax':
       return <Tax />;
-    case 'attribution':
-      return <Attribution />;
-    case 'sources':
-      return <Sources failure={failure} onDismiss={onDismiss} />;
     default:
-      return <Access />;
+      return <Attribution />;
   }
 }
 
@@ -869,7 +855,7 @@ function Tax() {
   );
 }
 
-// ---------------------------------------------------------------- Attribution, Sources, Access
+// ---------------------------------------------------------------- Attribution
 
 function SplitTo({ team, teammate, share }: { team: string; teammate: string; share: number }) {
   const who = useActor(teammate || null);
@@ -932,239 +918,6 @@ function Attribution() {
           </div>
         ))}
       </Section>
-    </Page>
-  );
-}
-
-const holds = (r: SourceRow) =>
-  [r.last4 && `Ends in ${r.last4}`, r.entries && plural(r.entries, 'entry', 'entries'), r.bills && plural(r.bills, 'bill'), r.invoices && plural(r.invoices, 'invoice')]
-    .filter(Boolean)
-    .join(', ');
-const failing = (r: SourceRow) => r.sync?.status === 'error' || r.sync?.status === 'failed' || !!r.sync?.last_error;
-
-type SourceDialog =
-  | { kind: 'key'; provider: KeyProvider }
-  | { kind: 'books'; provider: keyof typeof BOOKS }
-  | { kind: 'mirror' | 'stop' | 'disconnect'; row: SourceRow; books: boolean }
-  | { kind: 'hook' }
-  | { kind: 'statement'; row: SourceRow };
-
-const ADS: [string, string][] = [
-  ['google-ads', 'Google Ads'],
-  ['meta-ads', 'Meta Ads'],
-];
-const live = (r: SourceRow) => r.sync?.status === 'active' || r.sync?.status === 'new';
-const mirroring = (r: SourceRow) => r.mirror === 'mirror' || r.mirror === 'exporting';
-const booksName = (r: SourceRow) => BOOKS[r.provider as keyof typeof BOOKS] ?? r.name;
-
-/** Each feed, with a finance admin's way to connect another and, per source, the books, its webhook and Disconnect. */
-function Sources({ failure, onDismiss }: { failure: string | null; onDismiss: () => void }) {
-  const press = usePress();
-  const may = useMay();
-  const admin = may('finance.admin');
-  const q = useQuery(sourcesQuery(useViewAs()));
-  const hooks = useQuery({ ...hooksQuery, enabled: admin });
-  const [open, setOpen] = useState<SourceDialog | null>(null);
-  const [shown, setShown] = useState<[string, string][] | null>(null);
-  const groups = q.data?.groups ?? [];
-  const rows = groups.flatMap((g) => g.rows.map((r) => ({ g, r })));
-  const hooked = (hooks.data?.triggers ?? []).some((t) => t.preset === 'stripe_finance');
-  const close = (o: boolean) => !o && setOpen(null);
-
-  // What a source's ⋯ holds (finance-admin.ts, the source rail's controls).
-  const items = (g: SourceGroup, r: SourceRow) => {
-    const books = g.group === 'accounting' && r.kind === 'connection';
-    const out: ReactNode[] = [];
-    if (books && may('finance.book') && live(r))
-      out.push(
-        mirroring(r) ? (
-          <MenuItem key="stop" label="Stop using as books" onSelect={() => setOpen({ kind: 'stop', row: r, books })} />
-        ) : (
-          <MenuItem key="mirror" label="Use as books" onSelect={() => setOpen({ kind: 'mirror', row: r, books })} />
-        ),
-      );
-    // A bank or card account's statement file, for whoever keeps the books (finance-admin.ts `upload`).
-    if ((r.kind === 'bank' || r.kind === 'card_program') && may('finance.book'))
-      out.push(<MenuItem key="statement" label="Upload statement" onSelect={() => setOpen({ kind: 'statement', row: r })} />);
-    if (admin && r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe') && hooks.data && !hooked)
-      out.push(<MenuItem key="hook" label="Add webhook" onSelect={() => setOpen({ kind: 'hook' })} />);
-    if (admin && r.kind === 'connection' && r.sync?.status !== 'disconnected') {
-      if (out.length) out.push(<MenuRule key="rule" />);
-      out.push(<MenuItem key="off" label={`Disconnect ${r.name}`} onSelect={() => setOpen({ kind: 'disconnect', row: r, books })} />);
-    }
-    return out;
-  };
-
-  const connect = admin && (
-    <Menu trigger={<Button variant="primary">Add source</Button>}>
-      {(Object.keys(KEY_SOURCES) as KeyProvider[]).map((p) => (
-        <MenuItem key={p} label={KEY_SOURCES[p]} onSelect={() => setOpen({ kind: 'key', provider: p })} />
-      ))}
-      {(Object.keys(BOOKS) as (keyof typeof BOOKS)[]).map((p) => (
-        <MenuItem key={p} label={BOOKS[p]} onSelect={() => setOpen({ kind: 'books', provider: p })} />
-      ))}
-      <MenuRule />
-      {ADS.map(([id, name]) => (
-        // Ad spend is set up on the platform's page in Tools.
-        <MenuItem key={id} label={name} onSelect={() => void press('finance.addSource', {})} />
-      ))}
-    </Menu>
-  );
-  const dialogs = (
-    <>
-      {open?.kind === 'key' && <ConnectKeyDialog provider={open.provider} onOpenChange={close} />}
-      {open?.kind === 'books' && <ConnectBooksDialog provider={open.provider} onOpenChange={close} />}
-      {open?.kind === 'mirror' && (
-        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use as books" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
-      )}
-      {open?.kind === 'stop' && <ConfirmDialog title={`Stop using ${booksName(open.row)}`} submit="Stop" action="finance.stopMirror" input={{}} onOpenChange={close} />}
-      {open?.kind === 'disconnect' && (
-        <ConfirmDialog
-          title={`Disconnect ${open.row.name}`}
-          submit="Disconnect"
-          action="finance.disconnect"
-          input={{ connection: open.row.id, ...(open.books ? { books: true } : {}) }}
-          onOpenChange={close}
-        />
-      )}
-      {open?.kind === 'statement' && <StatementDialog account={open.row} onOpenChange={close} />}
-      {open?.kind === 'hook' && <WebhookDialog onOpenChange={close} onShown={setShown} />}
-      {shown && <ShownOnce title="Stripe webhook" pairs={shown} onClose={() => setShown(null)} />}
-    </>
-  );
-  // The books sign-in that came back unconnected: what happened, and the way to connect again.
-  const panel = failure && (
-    <SidePanel
-      title="Books not connected"
-      target="source:books"
-      onClose={onDismiss}
-      foot={
-        admin &&
-        (Object.keys(BOOKS) as (keyof typeof BOOKS)[]).map((p) => (
-          <Button
-            key={p}
-            onClick={() => {
-              onDismiss();
-              setOpen({ kind: 'books', provider: p });
-            }}
-          >
-            {`Connect ${BOOKS[p]}`}
-          </Button>
-        ))
-      }
-    >
-      <p className="t-read">{failure}</p>
-    </SidePanel>
-  );
-  return (
-    <Page
-      q={q}
-      actions={
-        <>
-          {connect}
-          {dialogs}
-        </>
-      }
-      panel={panel}
-      empty={q.data !== undefined && rows.length === 0 ? { title: 'No source connected' } : undefined}
-    >
-      <div className="t-scroll">
-        <Table label="Sources" stick>
-          <colgroup>
-            <col />
-            <col className="t-line" />
-            <col className="t-line" />
-            <col className="t-col" />
-            <col className="t-act" />
-          </colgroup>
-          <thead>
-            <tr>
-              <Th>Source</Th>
-              <Th>Feeds</Th>
-              <Th>Holds</Th>
-              <Th num>Last sync</Th>
-              <Th />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ g, r }) => {
-              const more = items(g, r);
-              return (
-                <tr key={`${g.group}:${r.id}`} data-target={`source:${r.id}`}>
-                  <td className="t-name">
-                    {r.name}
-                    {failing(r) && <Pill flag>Sign in again</Pill>}
-                  </td>
-                  <td className="t-words">{g.name}</td>
-                  <td className="t-words">{r.manual ? 'Entered by hand' : holds(r)}</td>
-                  <td className="num t-words">{r.sync?.last_ok_at ? fmtAge(r.sync.last_ok_at) : ''}</td>
-                  <td className="t-act">{more.length > 0 && <Menu trigger={<IconButton icon="more" label={`More for ${r.name}`} size="sm" quiet />}>{more}</Menu>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      </div>
-    </Page>
-  );
-}
-
-const SEES: Record<AccessTeammate['default'], string> = {
-  everything: 'Everything',
-  team_expenses: "Their team's lines",
-  own_expenses: 'What they spend',
-  none: 'Nothing',
-};
-
-function Access() {
-  const [editing, setEditing] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const viewing = !!useViewAs();
-  const q = useQuery(accessQuery);
-  const all = q.data?.teammates ?? [];
-  const sees = all.filter((t) => t.default !== 'none' || (t.grants?.length ?? 0) > 0);
-  const rest = all.length - sees.length;
-  return (
-    <Page
-      q={q}
-      actions={
-        !viewing && (
-          <>
-            {q.data?.can_view_as && <Button onClick={() => setPicking(true)}>View as</Button>}
-            {q.data?.can_edit_defaults && <Button onClick={() => setEditing(true)}>Edit defaults</Button>}
-            {editing && <DefaultsDialog defaults={q.data?.defaults ?? {}} onOpenChange={setEditing} />}
-            {picking && <ViewAsDialog onOpenChange={setPicking} />}
-          </>
-        )
-      }
-      empty={q.data === null ? { title: "You don't see who has access" } : undefined}
-    >
-      <Table label="Access" stick>
-        <colgroup>
-          <col />
-          <col className="t-line" />
-          <col className="t-line" />
-        </colgroup>
-        <thead>
-          <tr>
-            <Th>Teammate</Th>
-            <Th>Sees</Th>
-            <Th>Approves</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {sees.map((t) => (
-            <tr key={t.teammate}>
-              <td className="t-name">
-                <Who id={t.teammate} />
-              </td>
-              <td className="t-words">{SEES[t.default] ?? ''}</td>
-              <td className="t-words">{t.rights?.includes('approve') ? 'Yes' : ''}</td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-      {rest > 0 && <div className="fold">{`${count(rest)} ${rest === 1 ? 'other sees' : 'others see'} nothing`}</div>}
     </Page>
   );
 }

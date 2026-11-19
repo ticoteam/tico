@@ -114,7 +114,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
       {open?.kind === 'key' && <ConnectKeyDialog provider={open.provider} onOpenChange={close} />}
       {open?.kind === 'books' && <ConnectBooksDialog provider={open.provider} onOpenChange={close} />}
       {open?.kind === 'mirror' && (
-        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use as books" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
+        <ConfirmDialog title={`Use ${booksName(open.row)} as the books`} submit="Use" action="finance.startMirror" input={{ connection: open.row.id }} onOpenChange={close} />
       )}
       {open?.kind === 'stop' && <ConfirmDialog title={`Stop using ${booksName(open.row)}`} submit="Stop" action="finance.stopMirror" input={{}} onOpenChange={close} />}
       {open?.kind === 'disconnect' && (

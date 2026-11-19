@@ -686,7 +686,7 @@ describe('Finance tabs and sources', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More for Ledger books' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Use as books' }));
     const use = await screen.findByRole('dialog', { name: 'Use QuickBooks as the books' });
-    fireEvent.click(within(use).getByRole('button', { name: 'Use as books' }));
+    fireEvent.click(within(use).getByRole('button', { name: 'Use' }));
     await waitFor(() => expect(posted).toEqual([{ kind: 'mirror_start', payload: { connection_id: 'qb' } }]));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Use QuickBooks as the books' })).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'More for Bank feed' }));

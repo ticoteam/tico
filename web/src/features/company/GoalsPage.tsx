@@ -900,7 +900,7 @@ function NeedItem({ n }: { n: GoalNeed }) {
                 ))}
               </ul>
             )}
-            <Button variant={o.pick ? 'primary' : 'plain'} disabled={answer.pending} onClick={() => say('confirm', i)}>
+            <Button disabled={answer.pending} onClick={() => say('confirm', i)}>
               {options.length > 1 ? `Approve ${i + 1}` : 'Approve'}
             </Button>
           </div>
@@ -942,7 +942,7 @@ function NeedItem({ n }: { n: GoalNeed }) {
           <Button disabled={answer.pending} onClick={() => say('reject')}>
             Reject
           </Button>
-          <Button variant="primary" disabled={answer.pending} onClick={() => say('confirm')}>
+          <Button disabled={answer.pending} onClick={() => say('confirm')}>
             Accept
           </Button>
         </div>

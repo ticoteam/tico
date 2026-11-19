@@ -567,12 +567,10 @@ function Kpis({ metrics }: { metrics: readonly GrowthMetric[] }) {
   );
 }
 
-const FIGURE_NAME = { signups: 'Sign-ups', new_customers: 'New customers', cost: 'Cost' } as const;
-
-/** The read's health, quiet: checks that match (both figures on open), checks not filled, and when nothing is loud, the
-    unknown share. */
+/** The read's health, quiet: the KPIs it reconciles with, checks not filled, and when nothing is loud, the unknown share. */
 function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly: boolean }) {
   const checks = h.checks ?? [];
+  const matched = [...new Set(checks.filter((c) => c.agrees === true).map((c) => c.kpi))];
   const unknown =
     !quietOnly && h.unknown_share ? `${pct(h.unknown_share)} of ${h.basis === 'signups' ? 'sign-ups' : 'new customers'} have no known channel` : '';
   // When each source last pushed: one quiet line; a stale one is already said out loud above.
@@ -580,21 +578,13 @@ function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly:
   if (!checks.some((c) => c.agrees !== false) && !unknown && !pushed.length) return null;
   return (
     <div className="gr-health" data-target="growth:health">
-      {checks.map((c) =>
-        c.agrees === true ? (
-          <details key={`${c.figure}:${c.kpi}`} className="gr-match">
-            <summary>
-              <Icon name="check" />
-              Matches {c.kpi}
-            </summary>
-            <span>
-              {FIGURE_NAME[c.figure]}: {count(c.growth)} here, {count(c.outside)} there
-            </span>
-          </details>
-        ) : c.agrees === null ? (
-          <p key={`${c.figure}:${c.kpi}`}>{c.kpi} not filled</p>
-        ) : null,
+      {matched.length > 0 && (
+        <p className="gr-match">
+          <Icon name="check" />
+          {`Reconciled with ${matched.join(', ')}`}
+        </p>
       )}
+      {checks.map((c) => (c.agrees === null ? <p key={`${c.figure}:${c.kpi}`}>{c.kpi} not filled</p> : null))}
       {unknown && <p>{unknown}</p>}
       {pushed.length > 0 && (
         <p>

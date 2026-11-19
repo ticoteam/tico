@@ -15,9 +15,6 @@ import {
   goalNeedsQuery,
   goalsTreeQuery,
   groupsQuery,
-  marketBriefingQuery,
-  marketCountQuery,
-  marketSpendQuery,
   matterDatesQuery,
   matterFilesQuery,
   mattersQuery,
@@ -25,12 +22,9 @@ import {
   productsQuery,
   riskQuery,
   risksQuery,
-  strategyQuery,
-  valueChainQuery,
   waitingTasksQuery,
   type Brand,
   type GoalNeed,
-  type MarketSpend,
   type Team,
 } from './queries';
 import { RiskPage, type RiskView } from './RiskPage';
@@ -281,7 +275,7 @@ describe('One product @n:re:product', () => {
   });
 });
 
-// ---------------------------------------------------------------- 4. Brand edit: suggested changes and Check copy
+// ---------------------------------------------------------------- 4. Brand edit: suggested changes
 
 const book: Brand = { published: { n: 2, body: { name: 'Fieldkit Co' } }, draft: null, versions: [], may_edit: true };
 
@@ -298,68 +292,6 @@ describe('Brand edit @s308', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Suggested' })).toBeNull());
   });
 
-  it('checks copy against the published book and lists what breaks it', async () => {
-    const sent = serve((url, method) => (method === 'POST' && url === '/api/v2/brand/check' ? ok({ n: 2, hits: [{ kind: 'avoid', match: 'bundle', rule: 'Say kit', level: 'warn' }] }) : nothing()));
-    queryClient.setQueryData(brandQuery.queryKey, book);
-    queryClient.setQueryData(brandProposalsQuery.queryKey, []);
-    show(strategy('brand'), '/company/strategy/brand?edit=true');
-    const check = await screen.findByRole('region', { name: 'Check copy' });
-    fireEvent.change(within(check).getByRole('textbox', { name: 'Copy' }), { target: { value: 'Our spring bundle' } });
-    fireEvent.click(within(check).getByRole('button', { name: 'Check' }));
-    expect(await within(check).findByText('“bundle”')).toBeTruthy();
-    expect(within(check).getByText('Warn')).toBeTruthy();
-    expect(sent).toEqual([{ url: '/api/v2/brand/check', method: 'POST', body: { text: 'Our spring bundle' } }]);
-  });
-});
-
-// ---------------------------------------------------------------- 5. Market segment: research it, cite it
-
-const spend: MarketSpend = { name: 'Dog grooming in Ohio', year: 2026, total: { spend_usd: 48_000_000 }, segments: [{ id: 's1', name: 'Mobile grooming', size: { id: 'z1', spend_usd: 12_000_000, accepted: true } }] };
-function market() {
-  queryClient.setQueryData(['me'], { ...person, role: 'owner' });
-  queryClient.setQueryData(marketSpendQuery.queryKey, spend);
-  queryClient.setQueryData(marketBriefingQuery.queryKey, { briefing: null });
-  queryClient.setQueryData(valueChainQuery.queryKey, { layers: [] });
-  queryClient.setQueryData(marketCountQuery.queryKey, 2);
-  queryClient.setQueryData(['market', 'setup'], { answers: {}, step: 0, skipped: false });
-}
-
-describe('Market segment @s357', () => {
-  it("lets the owner ask the Librarian to research the segment", async () => {
-    const sent = serve((_url, method) => (method === 'POST' ? ok({ task_id: 't5', bot: 'librarian', kind: 'research', target: 's1' }) : nothing()));
-    market();
-    show(strategy('market'), '/company/strategy/market?panel=segment:s1');
-    const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Research this segment' }));
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'What to find' }), { target: { value: 'Prices of the top five vans' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Start' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/librarian/research', method: 'POST', body: { target: 's1', section: '', instructions: 'Prices of the top five vans' } }]));
-  });
-
-  it('cites the segment in an active bet that does not cite it yet', async () => {
-    const sent = serve((_url, method) => (method === 'POST' ? ok({ bet: {}, revision: 5 }) : nothing()));
-    market();
-    queryClient.setQueryData(strategyQuery.queryKey, {
-      current: null,
-      draft: { revision: 4 },
-      bets: [
-        { id: 'b1', statement: 'Own mobile grooming', status: 'active', cites: ['e7'] },
-        { id: 'b2', statement: 'Sell to vets', status: 'active', cites: ['s1'] },
-      ],
-    } as never);
-    show(strategy('market'), '/company/strategy/market?panel=segment:s1');
-    const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Cite in a bet' }));
-    fireEvent.click(within(panel).getByRole('combobox', { name: 'Bet' }));
-    const option = await screen.findByRole('option', { name: /Own mobile grooming/ });
-    expect(screen.queryByRole('option', { name: /Sell to vets/ })).toBeNull();
-    fireEvent.pointerDown(option, { pointerType: 'mouse' });
-    fireEvent.click(option);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Cite' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/strategy/bets/b1', method: 'POST', body: { cites: ['e7', 's1'], revision: 4 } }]));
-  });
 });
 
 // ---------------------------------------------------------------- 6. One matter: dates, files, party and product

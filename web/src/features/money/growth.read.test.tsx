@@ -130,7 +130,7 @@ describe('Growth on the one read @s400', () => {
 
     const loud = (await screen.findByText('31% of new customers have no known channel')).closest('[role="status"]') as HTMLElement;
     expect(within(loud).getByText('Cost is off from Finance: 31,200 here, 33,900 there')).toBeTruthy();
-    expect(screen.getByText('Matches Orders')).toBeTruthy();
+    expect(screen.getByText('Reconciled with Orders')).toBeTruthy();
 
     // Revenue tiles: CAC and LTV to CAC, payback under it, kept with its cohort.
     const tiles = screen.getByRole('group', { name: 'Headline' });

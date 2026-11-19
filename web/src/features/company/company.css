@@ -385,8 +385,6 @@
 .co .is-due-soon,.pnl .is-due-soon{color:var(--ink);font-weight:var(--w-strong)}
 .co .br-prop{padding:var(--s-2) 0;border-top:1px solid var(--line);font-size:var(--t-sm);color:var(--ink-2)}
 .co .br-prop:first-of-type{border-top:0}
-.co .br-hits{list-style:none;margin:var(--s-2) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s-1h);font-size:var(--t-sm)}
-.co .br-hits li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1h)}
 .pnl .mkt-ask{display:flex;flex-direction:column;gap:var(--s-2);width:100%}
 .pnl .fld-v{height:var(--ctl-sm);margin-right:calc(-1 * var(--s-2));padding:0 var(--s-1h) 0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font:inherit;display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;transition:background var(--dur-fast) var(--ease)}
 .pnl .fld-v:hover{background:var(--hover)}
