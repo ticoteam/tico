@@ -96,11 +96,16 @@ export function CalendarPage() {
       <MeetingPanel id={open.id} onClose={close} />
     ) : undefined;
 
+  const find = <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />;
   const grid =
     view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <ListView list={list} now={now} today={today} at={at} search={search} />
+      <>
+        {/* a phone's head keeps two controls: the search sits under it */}
+        {cards && <div className="cl-find">{find}</div>}
+        <ListView list={list} now={now} today={today} at={at} search={search} />
+      </>
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
@@ -141,9 +146,7 @@ export function CalendarPage() {
         }
         actions={
           <>
-            {view === 'list' && (
-              <ListFind q={search.q ?? ''} onFind={(q) => void navigate({ to: '/calendar', search: at({ q: q || undefined }), replace: true })} />
-            )}
+            {view === 'list' && !cards && find}
             {view === 'list' && <ListFilter search={search} at={at} />}
             <Segmented
               label="View"

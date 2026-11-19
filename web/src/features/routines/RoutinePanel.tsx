@@ -72,7 +72,8 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
             onChange={(next) => void press(next ? 'routines.resume' : 'routines.pause', { routine: r.id })}
           />
           <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
-            <MenuItem label="Edit" icon="edit" disabled={!r.can_edit} onSelect={() => setEditing(true)} />
+            {/* an inbox board is edited a part at a time, in the board below */}
+            {!board && <MenuItem label="Edit" icon="edit" disabled={!r.can_edit} onSelect={() => setEditing(true)} />}
             <MenuItem label="Test run" icon="play" disabled={r.readonly} onSelect={() => setTesting(true)} />
             <MenuItem label="Versions" icon="clock" onSelect={() => setVersions(true)} />
             {takesTemplate(r) && <MenuItem label="Apply template" icon="mail" onSelect={() => setApplying(true)} />}

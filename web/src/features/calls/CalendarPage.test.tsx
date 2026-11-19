@@ -267,4 +267,15 @@ describe('Calendar on a phone', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Filter' }));
     expect(await screen.findByRole('menuitem', { name: 'Shared with me' })).toBeTruthy();
   });
+
+  it("List's search sits under the head, and stays while it searches", async () => {
+    const router = show('/calendar?view=list');
+    const head = (await screen.findByRole('heading', { name: 'Calendar' })).closest('header') as HTMLElement;
+    expect(within(head).queryByRole('searchbox')).toBeNull();
+    const box = screen.getByRole('searchbox', { name: 'Find a meeting' });
+    expect(box.closest('.cl-find')).toBeTruthy();
+    fireEvent.change(box, { target: { value: 'sync' } });
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync' }));
+    expect(screen.getByRole('searchbox', { name: 'Find a meeting' })).toBe(box);
+  });
 });

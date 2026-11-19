@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
 import { useEffect, useState, type ReactNode } from 'react';
-import { run } from '@/actions';
+import { run, type Result } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
-import { toast } from '@/kit/Toast';
+import { toast, type ToastInput } from '@/kit/Toast';
 import { pageOwnersQuery } from './queries';
 import { chatAddress } from '@/lib';
 
@@ -84,10 +84,15 @@ export function Find({ label, value, onFind }: { label: string; value: string | 
   return <Search label={label} value={words} onValueChange={setWords} placeholder="Search" autoFocus />;
 }
 
+/** A refusal's toast: what did not happen, then the server's reason when it gave one. */
+export function refusal(r: Result, failed: string, denied = 'You cannot do that here'): ToastInput {
+  return { text: r.error === 'not_allowed' && !r.why ? denied : failed, name: r.why, kind: 'failed' };
+}
+
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */
 export async function press(id: string, input: unknown, failed = 'That did not work'): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : failed, kind: 'failed' });
+  if (!r.ok) toast(refusal(r, failed));
   return r.ok;
 }
 

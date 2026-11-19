@@ -16,7 +16,7 @@ import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Foot, useGo } from './AddTool';
-import { Face, press, when } from './parts';
+import { Face, press, refusal, when } from './parts';
 import {
   agentSendingQuery,
   googleQuery,
@@ -151,7 +151,7 @@ function SetupDialog({ domain: was, onClose }: { domain: string; onClose: () => 
     const r = await run('tools.googleSetup', { domain: domain.trim() }, { via: 'click' });
     setBusy(false);
     if (r.ok && typeof r.out === 'string') setCommand(r.out);
-    else toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : 'Not made', kind: 'failed' });
+    else toast(refusal(r, 'Not made'));
   };
   return (
     <Dialog

@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/client';
 import { flight, waitForTarget, wash } from '@/motion';
 import { bind } from './bind';
 import { runIn, showIn } from './run';
@@ -139,6 +140,34 @@ describe('run', () => {
     expect(await runIn(actions, 'task.setOwner', { task: 1, owner: 'x' }, 'click', router)).toEqual({ ok: false, error: 'not_allowed' });
     did.mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 404, code: 'task_not_found' }));
     expect(await runIn(actions, 'task.setOwner', { task: 1, owner: 'x' }, 'click', router)).toEqual({ ok: false, error: 'task_not_found' });
+  });
+
+  it("carries the server's reason as one short sentence, the code unchanged", async () => {
+    const input = { task: 1, owner: 'x' };
+    did.mockRejectedValueOnce(new ApiError(422, 'skill_bundle', 'the skill has no SKILL.md at its root. Add one and send it again.'));
+    expect(await runIn(actions, 'task.setOwner', input, 'click', router)).toEqual({ ok: false, error: 'skill_bundle', why: 'The skill has no SKILL.md at its root.' });
+    did.mockRejectedValueOnce(new ApiError(403, 'forbidden', 'Only an owner or an admin approves a skill'));
+    expect(await runIn(actions, 'task.setOwner', input, 'click', router)).toEqual({ ok: false, error: 'not_allowed', why: 'Only an owner or an admin approves a skill' });
+    did.mockRejectedValueOnce(new ApiError(409, 'busy', `${'word '.repeat(60)}end`));
+    const long = (await runIn(actions, 'task.setOwner', input, 'click', router)).why ?? '';
+    expect(long.length).toBeLessThanOrEqual(140);
+    expect(long.endsWith('…')).toBe(true);
+  });
+
+  it('never carries JSON, a stack, an address, a proxy page or a thrown error of our own', async () => {
+    const input = { task: 1, owner: 'x' };
+    for (const e of [
+      new ApiError(422, 'validation', '{"loc":["body","name"],"msg":"field required"}'),
+      new ApiError(500, 'internal', 'Traceback (most recent call last):\n  File "x"'),
+      new ApiError(400, 'bad', 'TypeError: boom\n    at run (app.js:1:2)'),
+      new ApiError(409, 'moved', 'It moved to https://example.test/secret?code=1'),
+      new ApiError(502, 'http_502', 'Bad Gateway'),
+      new ApiError(0, 'network', 'The server did not answer', true),
+      Object.assign(new Error('no words'), { status: 409, code: 'conflict' }),
+    ]) {
+      did.mockRejectedValueOnce(e);
+      expect(await runIn(actions, 'task.setOwner', input, 'click', router)).not.toHaveProperty('why');
+    }
   });
 
   it('done from Tico shows only: no write, then the flight', async () => {

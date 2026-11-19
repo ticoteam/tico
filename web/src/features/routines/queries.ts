@@ -2,7 +2,8 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates, EventTypeList, Webhook, WebhookCreate, WebhookCreated, WebhookList, WebhookUpdate } from '@/api/schema';
 import type { Dest } from './board';
-import { QUIET_STALE_MS, quietRoot, write } from '@/data';
+import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { webhookQuery } from '@/features/library/exports';
 import type {
   Delivery,
   DocFile,
@@ -451,14 +452,17 @@ export async function createEndpoint(body: WebhookCreate): Promise<{ id?: string
   return { id: r.webhook.id, secret: r.webhook.secret, replayed: !!r.webhook.replayed };
 }
 
-export function updateEndpoint(id: string, body: WebhookUpdate) {
-  return write<{ webhook: Webhook }>({
+export async function updateEndpoint(id: string, body: WebhookUpdate) {
+  const made = await write<{ webhook: Webhook }>({
     key: endpointsQuery.queryKey,
     optimistic: (list: Webhook[] | undefined) =>
       list?.map((h) => (h.id === id ? { ...h, ...(body.name ? { name: body.name } : {}), ...(body.events ? { events: body.events } : {}) } : h)),
     send: (idempotencyKey) => api.post<{ webhook: Webhook }>(`/api/v2/webhooks/${enc(id)}/update`, body, { idempotencyKey }),
     settle: (list: Webhook[] | undefined, made) => list?.map((h) => (h.id === id ? made.webhook : h)),
   });
+  // The same webhook on its Tools page: read it again there too.
+  void queryClient.invalidateQueries({ queryKey: webhookQuery(id).queryKey });
+  return made;
 }
 
 // ---------------------------------------------------------------- rules

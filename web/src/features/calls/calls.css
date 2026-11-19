@@ -372,6 +372,9 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 /* ---------- a phone ---------- */
 :where(html[data-layout="cards"]){
   .cl-body{padding:var(--s-1h) var(--s-2) calc(var(--cards-h) + var(--s-5))}
+  .cl-find{padding:var(--s-1h) var(--s-2) 0}
+  .cl-find .search{width:100%}
+  .cl-find+.cl-body.is-empty{flex:1;height:auto}
   .cl-row,.cl-row.is-live{grid-template-columns:62px 16px minmax(0,1fr) auto;padding:0 var(--s-2)}
   .cl-row .row-pills,.cl-kept,.cl-len,.er-who{display:none}
   .cv{--gut:66px;padding-right:var(--s-2)}

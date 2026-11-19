@@ -6,14 +6,16 @@ import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { toast } from '@/kit/Toast';
 import type { Held } from './actions';
-import { pressOut, Word } from './parts';
+import { press, pressOut, Word } from './parts';
 import { eventTypesQuery, type Endpoint } from './queries';
 
-/* Outgoing webhooks on Routines › Webhooks (settings-webhooks.ts whHooks, whHookDialog): a row each, and the New or
+/* Outgoing webhooks on Routines › Webhooks (settings-webhooks.ts whHooks, whHookDialog): a row each (its ⋯ opens it on
+   Tools, where Sends for, New secret and Remove are), and the New or
    Edit dialog: name, address, plain http for an http address, events (all, or chosen by area) and custom headers. A
    new endpoint's signing secret shows once, in this dialog's state only. Changing the address while secret headers are
    saved asks first: send them to the new address, or clear them. */
@@ -68,6 +70,10 @@ export function EndpointRow({ h, onEdit }: { h: Endpoint; onEdit: () => void }) 
       <span className="row-state">{!h.enabled ? <Word icon="pause">Paused</Word> : week.failed ? <Word>{`${week.failed} failed`}</Word> : null}</span>
       <span className="row-fig">{`${week.delivered} in 7 d`}</span>
       <span className="row-age" />
+      {/* what it sends for, its secret and removing it live on its Tools page */}
+      <Menu trigger={<IconButton icon="more" label="More" size="sm" quiet />}>
+        <MenuItem label="Open in Tools" icon="library" onSelect={() => void press('tools.open', { tool: `webhook:${h.id}` })} />
+      </Menu>
     </Row>
   );
 }

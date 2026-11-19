@@ -414,6 +414,20 @@ export const skillRecentQuery = (name: string) =>
     ...quiet,
   });
 
+/** The reader's company role as Access gives it ('owner', 'admin'); null for anyone Access refuses (a member). */
+export const accessRoleQuery = queryOptions({
+  queryKey: ['skills', 'access-role'],
+  queryFn: async ({ signal }) => {
+    try {
+      return (await api.get<{ you?: string }>('/api/v2/access', { signal })).you ?? null;
+    } catch (e) {
+      if ((e as { status?: number }).status === 403) return null;
+      throw e;
+    }
+  },
+  ...quiet,
+});
+
 export const proposalQuery = (id: string) =>
   queryOptions({
     queryKey: ['skills', 'proposal', id],

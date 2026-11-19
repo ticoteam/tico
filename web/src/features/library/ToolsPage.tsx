@@ -32,7 +32,7 @@ import {
   SettingDialog,
   SitesDialog,
 } from './ToolDialogs';
-import { Face, Held, KindTile, More, OwnerButton, press, when } from './parts';
+import { Face, Held, KindTile, More, OwnerButton, press, refusal, when } from './parts';
 import {
   apiToolQuery,
   inboxesQuery,
@@ -373,7 +373,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
     const r = await run('tools.connect', { tool: id }, { via: 'click' });
     if (!r.ok) {
       setConnecting(false);
-      toast({ text: r.error === 'not_allowed' ? 'You cannot do that here' : 'Not connected', kind: 'failed' });
+      toast(refusal(r, 'Not connected'));
     }
   };
   const fill =

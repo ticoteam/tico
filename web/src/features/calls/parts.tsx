@@ -33,7 +33,7 @@ export function useInCall(id: string): boolean {
 /** Press an action as the person's click; say so when the server refuses it. */
 export async function press(id: string, input: unknown): Promise<boolean> {
   const r = await run(id, input, { via: 'click' });
-  if (!r.ok) toast({ text: "Couldn't save", kind: 'failed' });
+  if (!r.ok) toast({ text: "Couldn't save", name: r.why, kind: 'failed' });
   return r.ok;
 }
 
