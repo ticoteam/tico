@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { CancelledError, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -17,6 +17,7 @@ import {
   limitsQuery,
   modelsQuery,
   screeningQuery,
+  settingsCatalogQuery,
   sleepQuery,
   subscriptionsQuery,
   usageQuery,
@@ -106,6 +107,35 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Settings', () => {
+  it('links from a phone section back to the settings list', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      serve(() => ({ status: 200, body: ACCESS }));
+      queryClient.setQueryData(accessQuery.queryKey, ACCESS);
+      const router = show(<SettingsPage section="people" />, '/settings/people');
+      fireEvent.click(await screen.findByRole('link', { name: 'Back to Settings' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
+  it('ignores results for the previous search while new words settle', async () => {
+    serve(() => ({ status: 200, body: ACCESS }));
+    queryClient.setQueryData(accessQuery.queryKey, ACCESS);
+    queryClient.setQueryData(settingsCatalogQuery('billing').queryKey, [
+      { key: 'plan', name: 'Billing plan', card: '#/settings/billing' },
+    ]);
+    const router = show(<SettingsPage section="people" />, '/settings/people');
+    const field = await screen.findByRole('textbox', { name: 'Search settings' });
+    fireEvent.change(field, { target: { value: 'billing' } });
+    expect(await screen.findByRole('link', { name: 'Billing plan' })).toBeTruthy();
+    fireEvent.change(field, { target: { value: 'computers' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.queryByRole('link', { name: 'Billing plan' })).toBeNull();
+    expect(router.state.location.pathname).toBe('/settings/people');
+  });
+
   it('lists the sections as links and marks the open one @s1065', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
@@ -167,6 +197,15 @@ describe('Settings', () => {
     serve(() => ({ status: 500, body: { error: { code: 'down', detail: 'down' } } }));
     show(<SettingsPage section="history" />, '/settings/history', () => loadSection(queryClient, 'history'));
     expect(await screen.findByText('The router’s fault page')).toBeTruthy();
+  });
+
+  it('completes the section load when a shell observer cancels a shared read', async () => {
+    const read = vi.spyOn(queryClient, 'ensureQueryData').mockRejectedValueOnce(new CancelledError({ revert: true }));
+    try {
+      await expect(loadSection(queryClient, 'general')).resolves.toBeUndefined();
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it('says so when there are no API tokens', async () => {

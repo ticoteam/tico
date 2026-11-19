@@ -26,20 +26,20 @@ export function SearchDialog() {
   );
 }
 
-/** Where the menu starts, which is where the palette drops from (more.js sets the same from `.app > .nav`). */
+/** Drop from the visible menu sheet's top edge. */
 function dropAt(): CSSProperties {
-  const r = document.querySelector('.app > .nav')?.getBoundingClientRect();
-  return r ? { left: Math.round(r.left), top: Math.round(r.top) } : {};
+  const r = document.querySelector('.shell-frame .nav')?.getBoundingClientRect();
+  return r?.width ? { left: Math.round(r.left), top: Math.round(r.top) } : {};
 }
 
 function Palette({ opened }: { opened: string }) {
   const [q, setQ] = useState(opened);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [on, setOn] = useState(0);
+  const [results, setResults] = useState<{ query: string; groups: Group[] }>({ query: opened, groups: [] });
+  const [selected, setSelected] = useState<string | null>();
   const [at] = useState(dropAt);
 
   useEffect(() => {
-    const app = document.querySelector('.app');
+    const app = document.querySelector('.shell-frame');
     app?.classList.add('is-search');
     return () => app?.classList.remove('is-search');
   }, []);
@@ -58,18 +58,24 @@ function Palette({ opened }: { opened: string }) {
     const stop = new AbortController();
     const show = (g: Group[]) => {
       if (stop.signal.aborted) return;
-      setGroups(g);
-      setOn(0);
+      setResults({ query: q, groups: g });
     };
     void gather(q, from, registry.values(), ctxFor('search'), stop.signal, show).then(show);
     return () => stop.abort();
   }, [q, from]);
 
+  const groups = results.query === q ? results.groups : [];
   const ask = q.trim() && registry.has('tico.ask') ? q.trim() : '';
   const hits = groups.flatMap((g) => g.hits);
   const count = hits.length + (ask ? 1 : 0);
+  const on = selected === null && ask ? hits.length : Math.max(0, hits.findIndex((hit) => hit.key === selected));
   const starts = groups.map((_, g) => groups.slice(0, g).reduce((sum, x) => sum + x.hits.length, 0));
 
+  const changeQuery = (value: string) => {
+    setQ(value);
+    setSelected(undefined);
+  };
+  const select = (i: number) => setSelected(hits[i]?.key ?? null);
   const choose = (i: number) => {
     closeSearch();
     const hit = hits[i];
@@ -82,7 +88,7 @@ function Palette({ opened }: { opened: string }) {
     if (!count) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      setOn((i) => (i + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
+      select((on + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       choose(on);
@@ -92,7 +98,7 @@ function Palette({ opened }: { opened: string }) {
     id: `pal-${i}`,
     role: 'option',
     'aria-selected': i === on,
-    onPointerMove: () => setOn(i),
+    onPointerMove: () => select(i),
     onClick: () => choose(i),
   });
 
@@ -119,10 +125,10 @@ function Palette({ opened }: { opened: string }) {
           aria-controls="pal-list"
           aria-activedescendant={count ? `pal-${on}` : undefined}
           autoComplete="off"
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => changeQuery(e.target.value)}
           onKeyDown={keys}
         />
-        {q && <IconButton icon="close" label={copy.clear} size="sm" onClick={() => setQ('')} />}
+        {q && <IconButton icon="close" label={copy.clear} size="sm" onClick={() => changeQuery('')} />}
       </label>
       <div className="pal-list" id="pal-list" role="listbox" aria-label={copy.label}>
         {groups.map((g, gi) => (
