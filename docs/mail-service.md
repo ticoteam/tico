@@ -56,7 +56,8 @@ Writing (all go through the guardrails below)
   tico email draft-update <address> <draft-id> [--to ...] [--subject ...] [--body-file <path>] [--attach ...]
   tico email discard <address> <draft-id>
   tico email send    <address> --draft <draft-id>      queue it with Tico, which decides
-  tico email reply   <address> --thread <thread-id> --body-file <path>   draft, then queue it
+  tico email reply   <address> --thread <thread-id> [--all] --body-file <path>   draft, then queue it
+  tico email forward <address> <message-id> --to <addr> [--body ...]   with its files; draft, then queue it
   tico email unsubscribe <address> <message-id>        one RFC 8058 one-click request
 Calendar
   tico calendar free --who human:ana --minutes 20      free times within working hours

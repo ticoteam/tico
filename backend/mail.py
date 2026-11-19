@@ -246,8 +246,11 @@ class DraftBody(Contract):
     to: list[str] = Field(default_factory=list, max_length=50)
     cc: list[str] = Field(default_factory=list, max_length=50)
     subject: str = Field(default="", max_length=900)
-    body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
+    # The email text; a forward may have none (the forwarded message follows it).
+    body: str = Field(default="", max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)  # a thread id: the reply answers its newest message from others
+    reply_all: bool = False  # with reply_to: to the sender and everyone else on the message, the mailbox left out
+    forward: str = Field(default="", max_length=200)  # a message id: forwarded with its files, after the text
     # Tico files to attach, in order: FILE (its current version) or FILE@N, each one the caller may download.
     attachments: list[str] = Field(default_factory=list, max_length=ATTACHMENTS_MAX)
     operation_id: str = Field(default="", max_length=200)
@@ -260,6 +263,7 @@ class LintBody(Contract):
     subject: str = Field(default="", max_length=900)
     body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)
+    reply_all: bool = False
 
 
 class DraftUpdateBody(Contract):
@@ -411,7 +415,10 @@ def answered(c, addr, body):
 
 
 def recipients(addr, body, original):
-    """(to, cc) the email goes to: as named, or for a reply with no `to`, the answered message's sender."""
+    """(to, cc) the email goes to: as named; for a reply with no `to`, the answered message's sender; for a reply to
+    all, everyone on the answered message but the mailbox."""
+    if original and body.reply_all:
+        return mail_compose.reply_all(addr, original, body.to, body.cc)
     if original:
         return mail_compose.addresses(body.to) or mail_compose.addresses(
             [original.get("from")]
@@ -421,7 +428,27 @@ def recipients(addr, body, original):
 
 def compose(c, who, addr, body, mid, files=(), original=None):
     """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint. `files` are the
-    attachments' (name, content type, bytes), in order. `original` is the answered message when already read."""
+    attachments' (name, content type, bytes), in order; a forward carries the forwarded message's own files first.
+    `original` is the answered message when already read."""
+    forwarded = getattr(body, "forward", "")
+    if forwarded and body.reply_to:
+        raise Problem("forward", "A forward is a new email: give forward or reply_to, not both", 422)
+    if body.reply_all and not body.reply_to:
+        raise Problem("reply_all", "reply_all answers a thread: give reply_to too", 422)
+    if forwarded:
+        source = gmail_live.message(c, addr, forwarded)
+        raw, thread, to, subject = mail_compose.forward(
+            addr,
+            source,
+            body.body,
+            body.to,
+            mid,
+            cc=body.cc,
+            attachments=[*forwarded_files(c, addr, forwarded), *files],
+        )
+        return raw, thread, to, subject, None
+    if not body.body.strip():
+        raise Problem("body", "Give the email text", 422)
     original = original or answered(c, addr, body)
     if original:
         to, cc = recipients(addr, body, original)
@@ -440,6 +467,36 @@ def compose(c, who, addr, body, mid, files=(), original=None):
         attachments=files,
     )
     return raw, "", to, body.subject, None
+
+
+def message_attachments(c, addr, mid):
+    from .mail_lib import gmail as gm
+
+    return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
+
+
+def forwarded_files(c, addr, mid):
+    """The files of the message being forwarded, as (name, type, bytes), in order: each read from Gmail, at most
+    gmail_live.ATTACHMENT_MAX_BYTES (the email's own limit still applies when it is built)."""
+    from .mail_lib import Failure
+    from .mail_lib import gmail as gm
+
+    cap, out = gmail_live.ATTACHMENT_MAX_BYTES, []
+    for item in message_attachments(c, addr, mid):
+        if item["size"] > cap:
+            raise Problem("too_large", f"{item['name']} is over {cap // (1024 * 1024)} MB; forward it from Gmail", 413)
+        if item["inline"]:
+            encoded, size = item["_data"], item["size"]
+        elif item["attachment_id"]:
+            fetched = gmail_live.attachment(c, addr, mid, item["attachment_id"])
+            encoded, size = fetched["data"], max(item["size"], fetched["size"])
+        else:
+            continue
+        try:
+            out.append((item["name"], item["type"], gm.attachment_bytes(encoded, size, limit=cap)))
+        except Failure as bad:
+            raise Problem("attachment", bad.msg, 502) from bad
+    return out
 
 
 def attachment_file(c, app, auth, who, ref):
@@ -801,6 +858,8 @@ def install_mail(app, store, auth):
         found, files = attachment_files(store, app, auth, who, body.attachments)
         attached = [json.dumps([[f["ref"], f["digest"]] for f in found])] if found else []
         answers = ["answers:" + original["id"], *recipients(addr, body, original)] if original else []
+        # A reply to all and a forward are other drafts than the same words as a plain reply or a new email.
+        kind = (["reply_all"] if body.reply_all else []) + (["forward:" + body.forward] if body.forward else [])
         key = mail_compose.key(
             who.actor,
             addr,
@@ -812,6 +871,7 @@ def install_mail(app, store, auth):
             body.body,
             *attached,
             *answers,
+            *kind,
         )
         mid = mail_compose.message_id("draft", key, addr)
         with store.read() as c:
@@ -847,6 +907,12 @@ def install_mail(app, store, auth):
             "cc": cc,
             "subject": subject,
             "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in found],
+            # A forward carries the forwarded message's files first, then the ones named here.
+            **(
+                {"forwarded": [a["name"] for a in snap["attachments"][: len(snap["attachments"]) - len(found)]]}
+                if body.forward
+                else {}
+            ),
             "created": made["created"],
             # The second reviewer on a bot's own draft: send, stop (rewrite it), or None when it could not answer.
             # `review_reason` says why in words whenever it is not send (backend/email_sending.py `reviewed`).
@@ -1002,10 +1068,7 @@ def install_mail(app, store, auth):
             found = ES.lint_findings(c, who.actor, addr, snapshot(raw, addr), original["id"] if original else "")
         return {"mailbox": addr, "ok": not found["errors"], "errors": found["errors"], "warnings": found["warnings"]}
 
-    def _attachments(c, addr, mid):
-        from .mail_lib import gmail as gm
-
-        return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
+    _attachments = message_attachments
 
     @app.get("/api/v2/mail/messages/{msg_id}/attachments")
     def attachments(request: Request, msg_id: str, mailbox: str = ""):

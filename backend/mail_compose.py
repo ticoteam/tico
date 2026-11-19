@@ -152,8 +152,17 @@ def reply(
     return raw, str(original.get("thread_id") or ""), to, subject
 
 
-def forward(mailbox: str, original: Json, note: str, to: object, mid: str) -> tuple[str, str, list[str], str]:
-    """`original` forwarded to `to` with `note` first: a new message, outside the original's thread."""
+def forward(
+    mailbox: str,
+    original: Json,
+    note: str,
+    to: object,
+    mid: str,
+    cc: object = (),
+    attachments: Sequence[Attachment] = (),
+) -> tuple[str, str, list[str], str]:
+    """`original` forwarded to `to` with `note` first: a new message, outside the original's thread, carrying
+    `attachments` (the original's files, then any added)."""
     to = addresses(to)
     if not to:
         raise Problem("to", "A forward needs `to`", 422)
@@ -166,7 +175,23 @@ def forward(mailbox: str, original: Json, note: str, to: object, mid: str) -> tu
         to=", ".join(recipients),
         body=original.get("body") or "",
     )
-    return build(to, subject, body, from_addr=mailbox, message_id=mid), "", to, subject
+    raw = build(to, subject, body, from_addr=mailbox, message_id=mid, cc=addresses(cc), attachments=attachments)
+    return raw, "", to, subject
+
+
+def reply_all(mailbox: str, original: Json, to: object = (), cc: object = ()) -> tuple[list[str], list[str]]:
+    """(to, cc) of a reply to everyone on `original`: its sender and its other recipients in To, its Cc in Cc, the
+    mailbox itself left out; any `to` and `cc` named are added first."""
+    me = mailbox.lower()
+    to_all: list[str] = []
+    for a in [*addresses(to), *addresses([original.get("from")]), *addresses(original.get("to") or [])]:
+        if a != me and a not in to_all:
+            to_all.append(a)
+    cc_all: list[str] = []
+    for a in [*addresses(cc), *addresses(original.get("cc") or [])]:
+        if a != me and a not in to_all and a not in cc_all:
+            cc_all.append(a)
+    return to_all, cc_all
 
 
 def answered_in(mailbox: str, messages: Iterable[Json]) -> Json | None:

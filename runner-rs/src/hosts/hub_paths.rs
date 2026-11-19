@@ -319,6 +319,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "email draft-show",
     "email draft-update",
     "email drafts",
+    "email forward",
     "email important",
     "email inbox",
     "email label",

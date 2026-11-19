@@ -969,3 +969,56 @@ def test_whole_threads_are_organized_past_500_messages_and_their_drafts_are_left
     assert done["count"] == 502 and "dm-old" not in done["ids"]  # every message, the unsent reply left out
     assert all("TRASH" in labels_of(organized, mid) for mid in done["ids"])
     assert "TRASH" not in labels_of(organized, "dm-old")
+
+
+# ------------------------------------------------------------------------------------------------- reply-all, forward
+def test_a_forward_carries_the_messages_files_and_waits_for_the_send_gate(api, box, monkeypatch, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import hubcli, remotecli
+
+    box.box(BOX)["messages"]["m1"]["payload"]["parts"].append(
+        {"filename": "invoice.pdf", "mimeType": "application/pdf", "body": {"attachmentId": "att1", "size": 5}}
+    )
+    box.box(BOX)["attachments"][("m1", "att1")] = b"%PDF1"
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "ana-test")
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    capsys.readouterr()
+    argv = ["email", "forward", BOX, "m1", "--to", "books@vendor.example", "--body", "For the books."]
+    assert hubcli.main(argv) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["draft"]["forwarded"] == ["invoice.pdf"] and out["send"]["state"] == "waiting_approval"
+    mime = box.drafts(BOX)[out["draft"]["draft"]]
+    assert b"To: books@vendor.example" in mime and b"Subject: Fwd: Invoice 4471" in mime
+    text = mime.decode()
+    assert text.index("For the books.") < text.index("Forwarded message") < text.index("Please pay invoice 4471.")
+    assert files_of(mime)[1] == [("invoice.pdf", b"%PDF1")]
+    # Held for a person's OK: the drain delivers nothing, and nothing ever went around the gate.
+    S.drain(api.app.state.store, api.app.state.auth)
+    assert box.sent == []
+    refused = api.post(
+        "/api/v2/mail/drafts",
+        json={"mailbox": BOX, "forward": "m1", "reply_to": "t1", "to": [SENDER]},
+        headers=headers(),
+    )
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "forward"
+
+
+def test_a_reply_to_all_goes_to_everyone_on_the_message_but_the_mailbox(api, box):
+    box.add(
+        BOX,
+        "m5",
+        thread="t5",
+        sender=SENDER,
+        to=[BOX, "ap@vendor.example"],
+        cc=["cfo@vendor.example", BOX],
+        subject="Invoice 4480",
+        body="Second invoice.",
+    )
+    made = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t5", "reply_all": True, "body": "Paid, thanks."})
+    assert (made["to"], made["cc"], made["thread"]) == (["ap@vendor.example", SENDER], ["cfo@vendor.example"], "t5")
+    mime = box.drafts(BOX)[made["draft"]]
+    assert f"To: {SENDER}, ap@vendor.example".encode() in mime and b"Cc: cfo@vendor.example" in mime
+    plain = post(api, "mail/drafts", {"mailbox": BOX, "reply_to": "t5", "body": "Paid, thanks."})
+    assert plain["draft"] != made["draft"] and plain["to"] == [SENDER] and plain["cc"] == []
+    post(api, "mail/drafts", {"mailbox": BOX, "reply_all": True, "to": [SENDER], "body": "Hi."}, expected=422)

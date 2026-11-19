@@ -226,7 +226,19 @@ tico email reply ana@acme.example --thread 18f2c9a3b4d5e6f7 --body-file out/repl
 ```
 
 Drafts, then queues the send with Tico, with the same answer as `send`. This is the command to use on a thread;
-`draft` plus `send` is the same thing in two steps.
+`draft` plus `send` is the same thing in two steps. `--all` replies to everyone on the message: its sender and its
+other To recipients in To, its Cc in Cc, the mailbox itself left out (`draft --reply-to <thread> --reply-all` drafts
+it alone).
+
+### Forward
+
+```bash
+tico email forward ana@acme.example 18f2c9a3b4d5e6f7 --to books@acme.example --body "For the books."
+```
+
+Forwards the message with its files (your text first, then the forwarded message), as a draft queued with Tico like
+`reply`: the same sending policy, OKs and undo window, never delivered around them. `draft --forward <message-id>
+--to <addr>` drafts it alone; `--attach` adds files after the forwarded ones.
 
 ## Lint on its own
 

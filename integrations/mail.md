@@ -77,6 +77,8 @@ tico email draft-update owner@example.com r-882... --body-file out/draft.txt   #
 tico email discard owner@example.com r-882...                    # a draft id or its message id; only an unsent draft
 tico email send owner@example.com --draft r-882...               # queues it with Tico (prints send id, state, task)
 tico email reply owner@example.com --thread 18f2... --body-file out/reply.txt   # draft, then queue it with Tico
+tico email reply owner@example.com --thread 18f2... --all --body-file out/reply.txt   # to everyone on it
+tico email forward owner@example.com 18f2... --to person@example.org --body "For you."   # with its files; queued
 tico email lint owner@example.com --body-file out/draft.txt --subject "..." [--to addr]
 tico email unsubscribe owner@example.com 18f2...                 # one RFC 8058 one-click request
 tico email policy --bot <slug>                                   # your sending policy, as Tico answers it
