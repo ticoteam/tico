@@ -4090,3 +4090,55 @@ def test_a_failed_sign_in_lets_the_machine_pause_and_out_of_credit_starts_nothin
     cloud.hq.calls.clear()
     assert _connect(cloud, expected=409)["error"]["code"] == "offline"
     assert "start" not in cloud.tick(10)
+
+
+def test_a_machine_made_again_keeps_a_persons_plans_when_its_bot_left_the_old_computer_meanwhile(cloud):
+    # Tico Team, Nov 18: Reviewer 1's and Reviewer 2's machines were made again. adopt() saves the row with the new
+    # attempt's runner (None until it enrolls), so enrolled() saw no old computer, and the bot was no longer assigned
+    # to the old one either: only the company's ChatGPT came back (lend_plans), and Chris's Claude set was lost.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    sid = add(cloud.api)["id"]
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert people(cloud, old["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    first = cloud.row()["machine_id"]
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("not_found", 404)]
+    cloud.hq.machines[first]["state"] = "deleted"
+    for _ in range(4):
+        cloud.tick(10)
+        if cloud.row()["machine_id"] != first:
+            break
+    assert cloud.row()["machine_id"] != first and cloud.hq.calls[-1][0] == "create"
+    assert cloud.row()["runner_id"] is None  # made again: adopt() saved the new attempt with no runner yet
+    with cloud.store.transaction() as c:  # meanwhile the bot left the revoked computer (moved, or placed elsewhere)
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert placed(cloud)["ops"] == new["runner_id"] != old["runner_id"]
+    assert people(cloud, new["runner_id"]) == {"claude": "human:ana", "codex": ""}
+    assert given(cloud, new["runner_id"]) == {"claude": sid, "codex": csid}
+    carried = events(cloud, "subscription.carried_over")
+    assert {json.loads(e["detail"])["from"] for e in carried} == {old["runner_id"]}
+
+
+def test_a_replaced_machine_keeps_a_persons_plans_when_its_bot_left_the_old_computer_meanwhile(cloud):
+    # The same through a Replace: deleted() clears the row's computer before the new one enrolls.
+    from backend.tests.helpers.api import put
+
+    setup(cloud.api)
+    company(cloud.api)
+    on(cloud.api, "ops", "codex", "gpt-6.2-sol")
+    add(cloud.api)
+    old = own_computer(cloud)
+    put(cloud.api, "computer-subscriptions", {"runner_id": old["runner_id"], "runtime": "claude", "person": "ana"})
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    new = enroll_made(cloud, "ops")
+    assert people(cloud, new["runner_id"])["claude"] == "human:ana"
