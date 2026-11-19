@@ -1523,6 +1523,478 @@
  {
   "argv": [
    "rules",
+   "due",
+   "add",
+   "r1",
+   "--first",
+   "2026-12-01",
+   "--repeats",
+   "once",
+   "--owner",
+   "Ada",
+   "--title",
+   "Paiva records",
+   "--basis",
+   "order",
+   "--task",
+   "D18450"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_set",
+    {
+     "basis": "order",
+     "first_due": "2026-12-01",
+     "id": "r1",
+     "operation_id": null,
+     "owner": "Ada",
+     "repeats": "once",
+     "task": "D18450",
+     "title": "Paiva records"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/due",
+    {
+     "first_due": "2026-12-01",
+     "repeats": "once",
+     "owner": "Ada",
+     "title": "Paiva records",
+     "basis": "order",
+     "task_id": "D18450"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "add",
+   "r1",
+   "--first",
+   "2026-12-01",
+   "--repeats",
+   "once",
+   "--owner",
+   "Ada",
+   "--basis",
+   "weekly"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules due add: error: argument --basis: invalid choice: 'weekly' (choose from , law, order, agency, contract, ours, asked, theirs)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--title",
+   "Murphy discovery",
+   "--basis",
+   "order",
+   "--task",
+   "D18450"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "basis": "order",
+     "id": "d1",
+     "operation_id": null,
+     "task": "D18450",
+     "title": "Murphy discovery"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "title": "Murphy discovery",
+     "basis": "order",
+     "task_id": "D18450"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--no-task"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "id": "d1",
+     "no_task": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "task_id": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--basis",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "basis": "",
+     "id": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "basis": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--task",
+   "D18450",
+   "--no-task"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules due edit: error: argument --no-task: not allowed with argument --task",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--proof",
+   "email:es_123"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "operation_id": null,
+     "proof": "email:es_123"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "proof": {
+      "kind": "email",
+      "ref": "es_123"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--on",
+   "2026-11-01",
+   "--proof",
+   "link:https://bank.example/r/1",
+   "--note",
+   "Paid by phone"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "due_on": "2026-11-01",
+     "id": "d1",
+     "note": "Paid by phone",
+     "operation_id": null,
+     "proof": "link:https://bank.example/r/1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "due_on": "2026-11-01",
+     "note": "Paid by phone",
+     "proof": {
+      "kind": "link",
+      "ref": "https://bank.example/r/1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--proof",
+   "bank:txn_1"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "operation_id": null,
+     "proof": "bank:txn_1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"Proof is file:{id}, email:{id} or link:{https url}\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--waive",
+   "--note",
+   "They withdrew the request"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "note": "They withdrew the request",
+     "operation_id": null,
+     "waive": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "note": "They withdrew the request",
+     "outcome": "waived"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--missed",
+   "--note",
+   "Not paid"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "missed": true,
+     "note": "Not paid",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "note": "Not paid",
+     "outcome": "missed"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--waive",
+   "--missed"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "missed": true,
+     "operation_id": null,
+     "waive": true
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"Give waive or missed, not both\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--proof",
+   "file:f1",
+   "--waive"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "operation_id": null,
+     "proof": "file:f1",
+     "waive": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "outcome": "waived",
+     "proof": {
+      "kind": "file",
+      "ref": "f1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
    "check",
    "Sending the deck now",
    "--to",

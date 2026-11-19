@@ -14,6 +14,10 @@
   teammate (backend/org_rules.py); a Directory record (party, place, product, document) shows only to a reader the
   Directory lets see it, read as Contacts reads it: as the caller (who.actor), and as the record it was merged into.
 - Every write: one permission check and an audit_log row (`risk:<tag id>`, `matter:<task id>`, `risk_link:<id>`).
+- Obligations (slice 3) are rule due dates (backend/rule_due.py) with a title, a basis and, for a matter's own date, its
+  task. A risk's obligations are the dates in force on the rules linked to it and the dates of the tasks that carry it;
+  a task's date shows only to that task's readers. An unconfirmed date, or a binding one (law, order, agency, contract)
+  due within 14 days, makes the risk live; the next date is the soonest one still due.
 """
 
 import re
@@ -24,7 +28,9 @@ from fastapi import Request
 from pydantic import Field
 
 from . import audit_log as _audit_log
+from . import org_rules as _org_rules
 from . import page_owners
+from . import rule_due as _rule_due
 from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
 from .api_contract import api_v2
@@ -34,6 +40,8 @@ from .store import H as _H, Problem
 
 # The untyped modules this one calls, as Any (their rows are dicts and sqlite3 rows).
 H = cast(Any, _H)
+D = cast(Any, _rule_due)
+OR = cast(Any, _org_rules)
 audit_log = cast(Any, _audit_log)
 privacy = cast(Any, _privacy)
 teammate_access = cast(Any, _teammate_access)
@@ -57,6 +65,9 @@ LABEL_MAX = 200
 MARKDOWN_MAX = 20_000
 CLAIM_MAX = 2_000
 FORUM_MAX = 200
+GROUPS = ("unconfirmed", "next", "later", "past")  # the Obligations tab, in its order
+DAYS_DEFAULT = 90
+DAYS_MAX = 366
 
 
 class RiskCreate(Contract):
@@ -146,14 +157,13 @@ def require_risk(c: Any, who: Any, ident: str) -> Row:
     return row
 
 
-# The open and closed matters of each risk among the tasks a viewer reads, whether any open one arrived in the last
-# NEW_DAYS, and the soonest due date of an open one. Driven from the risk tags' task_tags rows; each task is looked up
-# by its key under the viewer's rule.
+# The open and closed matters of each risk among the tasks a viewer reads, and whether any open one arrived in the last
+# NEW_DAYS. Driven from the risk tags' task_tags rows; each task is looked up by its key under the viewer's rule. The
+# next date comes from the risk's obligations (`dates`), not from the tasks.
 STANDING_SQL = (
     "SELECT tt.tag_id AS risk_id, "
     "coalesce(sum(t.status='open'),0) AS open, coalesce(sum(t.status<>'open'),0) AS closed, "
-    "coalesce(max(t.status='open' AND coalesce(m.created_at, t.created_at) >= ?),0) AS new, "
-    "min(CASE WHEN t.status='open' THEN t.due_at END) AS next_date "
+    "coalesce(max(t.status='open' AND coalesce(m.created_at, t.created_at) >= ?),0) AS new "
     "FROM tags g JOIN task_tags tt ON tt.tag_id=g.id JOIN {visible} t ON t.id=tt.task_id "
     "LEFT JOIN matters m ON m.task_id=t.id WHERE g.kind='risk'{only} GROUP BY tt.tag_id"
 )
@@ -167,8 +177,8 @@ CLAIMED_SQL = (
 
 
 def standing(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[str, Row]:
-    """{risk id: {open, closed, level, claimed, next_date}} over the tasks `who` reads."""
-    visible = _visible_tasks(auth, c, who, "id, status, due_at, created_at")
+    """{risk id: {open, closed, level, claimed, next_date, unconfirmed}} over the tasks and dates `who` reads."""
+    visible = _visible_tasks(auth, c, who, "id, status, created_at")
     only, args = "", cast(list[str], [])
     if ids is not None:
         only = f" AND g.id IN ({','.join('?' * len(ids))})" if ids else " AND 0"
@@ -181,15 +191,186 @@ def standing(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[
             "closed": r["closed"],
             "level": level,
             "claimed": [],
-            "next_date": r["next_date"],
+            "next_date": None,
+            "unconfirmed": 0,
         }
     for r in c.execute(CLAIMED_SQL.format(visible=visible, only=only), args):
         if r["risk_id"] in out:
             out[r["risk_id"]]["claimed"].append({"currency": r["currency"] or "", "amount": r["amount"]})
+    for risk_id, found in dates(auth, c, who, ids).items():
+        entry = out.setdefault(risk_id, {**EMPTY, "claimed": []})
+        entry["next_date"], entry["unconfirmed"] = found["next_date"], found["unconfirmed"]
+        if found["unconfirmed"] or found["soon"]:
+            entry["level"] = "live"
     return out
 
 
-EMPTY: Row = {"open": 0, "closed": 0, "level": "quiet", "claimed": [], "next_date": None}
+EMPTY: Row = {"open": 0, "closed": 0, "level": "quiet", "claimed": [], "next_date": None, "unconfirmed": 0}
+
+
+# ----------------------------------------------------------------------------- obligations
+
+# Every date in force on an active rule linked to a risk, and every date of a task that carries a risk, with the risk.
+# The second part starts from the dates that have a task (rule_due_dates_task, a partial index) and is held to that
+# order with CROSS JOIN: left to itself, SQLite started from the risk tags and walked every active rule.
+DATES_SQL = (
+    "SELECT rl.risk_id AS on_risk, d.* FROM risk_links rl JOIN rule_due_dates d ON d.rule_id=rl.linkable_id "
+    "JOIN org_rules r ON r.id=d.rule_id WHERE rl.linkable_type='org_rule' AND rl.role='rule' AND r.status='active' "
+    "AND d.retired_at IS NULL AND d.ended_on IS NULL{linked} "
+    "UNION "
+    "SELECT tt.tag_id AS on_risk, d.* FROM rule_due_dates d CROSS JOIN task_tags tt ON tt.task_id=d.task_id "
+    "CROSS JOIN tags g ON g.id=tt.tag_id JOIN org_rules r ON r.id=d.rule_id WHERE d.task_id IS NOT NULL AND g.kind='risk' "
+    "AND r.status='active' AND d.retired_at IS NULL AND d.ended_on IS NULL{tagged}"
+)
+
+
+def date_rows(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> tuple[list[Row], dict[str, list[str]]]:
+    """The dates of these risks (every risk with None) that `who` may be shown, and {date id: [risk ids]}."""
+    linked = tagged = ""
+    args: list[str] = []
+    if ids is not None:
+        if not ids:
+            return [], {}
+        marks = ",".join("?" * len(ids))
+        linked, tagged = f" AND rl.risk_id IN ({marks})", f" AND tt.tag_id IN ({marks})"
+        args = [*ids, *ids]
+    rows: dict[str, Row] = {}
+    on: dict[str, list[str]] = {}
+    for r in c.execute(DATES_SQL.format(linked=linked, tagged=tagged), args):
+        row = dict(r)
+        risk_id = row.pop("on_risk")
+        rows.setdefault(row["id"], row)
+        if risk_id not in on.setdefault(row["id"], []):
+            on[row["id"]].append(risk_id)
+    return D.readable(c, auth, who, list(rows.values())), on
+
+
+def dates(auth: Any, c: Any, who: Any, ids: list[str] | None = None) -> dict[str, Row]:
+    """{risk id: {unconfirmed, soon, next_date}}: how many of its occurrences are unconfirmed, whether a binding one is
+    due within 14 days, and the soonest day still due."""
+    rows, on = date_rows(auth, c, who, ids)
+    out: dict[str, Row] = {}
+    for item in D.obligations(c, rows, DAYS_MAX, only_next=True):
+        for risk_id in on[item["row"]["id"]]:
+            entry = out.setdefault(risk_id, {"unconfirmed": 0, "soon": False, "next_date": None})
+            if item["state"] == "unconfirmed":
+                entry["unconfirmed"] += 1
+            elif item["state"] == "due":
+                if item["group"] == "next" and item["row"]["basis"] in D.BINDING:
+                    entry["soon"] = True
+                if entry["next_date"] is None or item["due_on"] < entry["next_date"]:
+                    entry["next_date"] = item["due_on"]
+    return out
+
+
+def _order(item: Row) -> tuple[int, str]:
+    """Unconfirmed and past: newest first; next and later: soonest first."""
+    group = GROUPS.index(item["group"])
+    if item["group"] in ("next", "later"):
+        return group, item["due_on"]
+    mark: Row = item["mark"] or {}
+    recent = max(item["due_on"], str(mark.get("satisfied_at") or "")[:10])
+    return group, "".join(chr(0x10FFFF - ord(ch)) for ch in recent)  # descending
+
+
+def obligations(
+    auth: Any,
+    c: Any,
+    who: Any,
+    *,
+    risk_id: str | None = None,
+    state: str | None = None,
+    group: str | None = None,
+    days: Any = DAYS_DEFAULT,
+    limit: Any = LIMIT_MAX,
+    offset: Any = 0,
+) -> Row:
+    """The Obligations tab: {obligations: [...], next_offset}. Unconfirmed first (newest first), then due within 14 days
+    and later (soonest first), then what was settled or passed in the last 30 days (newest first)."""
+    limit, offset = _page(limit, offset)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        raise Problem("validation", "days is a whole number", 422) from None
+    if not 1 <= days <= DAYS_MAX:
+        raise Problem("validation", f"days is from 1 to {DAYS_MAX}", 422)
+    if state is not None and state not in (*D.STATES, "watched"):
+        raise Problem("validation", "state is one of " + ", ".join((*D.STATES, "watched")), 422)
+    if group is not None and group not in GROUPS:
+        raise Problem("validation", "group is one of " + ", ".join(GROUPS), 422)
+    rows, on = date_rows(auth, c, who, [risk_id] if risk_id else None)
+    found = [
+        item
+        for item in D.obligations(c, rows, days)
+        if (state is None or (item["state"] or "watched") == state) and (group is None or item["group"] == group)
+    ]
+    found.sort(key=lambda item: (*_order(item), item["row"]["id"]))
+    page = found[offset : offset + limit]
+    risks = {r["id"]: r for r in risk_rows(c, who, sorted({i for item in page for i in on[item["row"]["id"]]}))}
+    task_ids = sorted({item["row"]["task_id"] for item in page if item["row"].get("task_id")})
+    tasks: dict[str, Row] = {}
+    if task_ids:
+        for r in c.execute(
+            f"SELECT id, number, prefix, title, status FROM tasks WHERE id IN ({','.join('?' * len(task_ids))})",
+            task_ids,
+        ):
+            label = f"{r['prefix']}{r['number']}" if r["prefix"] and r["number"] is not None else None
+            tasks[r["id"]] = {"id": r["id"], "label": label, "title": r["title"], "status": r["status"]}
+    ctx: Row = OR._ctx(c) if page else {}  # pyright: ignore[reportPrivateUsage]
+    rules: dict[str, Row] = {}
+    memo: dict[Any, Any] = {}
+    out: list[Row] = []
+    for item in page:
+        row = item["row"]
+        if row["rule_id"] not in rules:
+            rule = OR._get(c, row["rule_id"])  # pyright: ignore[reportPrivateUsage]
+            rules[row["rule_id"]] = {
+                "view": {
+                    "id": rule["id"],
+                    "kind": rule["kind"],
+                    "text": rule["text"],
+                    "source": ctx["sources"].get(rule["source_id"]) if rule["source_id"] else None,
+                },
+                "manage": OR.may_manage(c, auth, who, rule["who"], ctx),
+            }
+        rule = rules[row["rule_id"]]
+        mark = item["mark"]
+        # As backend/org_rules.py satisfy_due: the date's owner, or a person who may edit the rule.
+        satisfy = who.actor == row["owner"] or (who.role != "bot" and bool(rule["manage"]))
+        fields: Row = D.mark_fields(mark) if mark else {}
+        out.append(
+            {
+                "id": row["id"],
+                "due_on": item["due_on"],
+                "title": row.get("title") or "",
+                "basis": row.get("basis") or "",
+                "state": item["state"],
+                "group": item["group"],
+                "repeats": row["repeats"],
+                "first_due_on": row["first_due_on"],
+                "timezone": row["timezone"],
+                "owner": row["owner"],
+                "routine_id": row["routine_id"],
+                "rule": rule["view"],
+                "task": tasks.get(row.get("task_id") or ""),
+                "risks": [{k: risks[i][k] for k in ("id", "key", "label")} for i in on[row["id"]] if i in risks],
+                "mark": None
+                if not mark
+                else {
+                    "satisfied_by": mark["satisfied_by"],
+                    "via": mark["via"],
+                    "satisfied_at": mark["satisfied_at"],
+                    "task_id": mark["task_id"],
+                    **fields,
+                    "proof": D.proof_view(c, auth, who, fields["proof"], memo),
+                },
+                "can_edit": bool(rule["manage"]) and who.role != "bot",
+                "can_satisfy": satisfy,
+                "can_waive": satisfy and who.role != "bot",
+            }
+        )
+    more = offset + limit < len(found)
+    return {"obligations": out, "next_offset": offset + limit if more else None}
 
 
 def risk_view(row: Row, counts: Row | None = None, *, brief: bool = False) -> Row:
@@ -670,6 +851,7 @@ def detail(auth: Any, c: Any, who: Any, row: Row, limit: Any = LIMIT_DEFAULT, of
         "editable": H.tag_can_edit(c, who.actor, row, _mover(c, who)),
         **page,
         **links(c, who, row["id"]),
+        "obligations": obligations(auth, c, who, risk_id=row["id"])["obligations"],
     }
 
 
@@ -708,6 +890,29 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             risk_id = require_risk(c, who, risk)["id"] if risk else None
             return matters(auth, c, who, risk_id=risk_id, kind=kind, open_only=open, limit=limit, offset=offset)
+
+    @app.get(
+        "/api/v2/risk/obligations",
+        **api_v2("Risk", "listRiskObligations", "Every risk's dates, unconfirmed first", "RiskObligationList"),
+    )
+    def obligations_route(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
+        risk: str | None = None,
+        state: str | None = None,
+        group: str | None = None,
+        days: int = DAYS_DEFAULT,
+        limit: int = LIMIT_MAX,
+        offset: int = 0,
+    ) -> Any:
+        """The dates of every risk (or of `risk`) the caller may see: unconfirmed ones back a year, due ones up to `days`
+        ahead, and those settled or passed in the last 30 days. `state` (due, met, waived, missed, passed, unconfirmed,
+        watched) or `group` (unconfirmed, next, later, past) narrows it."""
+        who = reader(request)
+        with store.read() as c:
+            risk_id = require_risk(c, who, risk)["id"] if risk else None
+            return obligations(
+                auth, c, who, risk_id=risk_id, state=state, group=group, days=days, limit=limit, offset=offset
+            )
 
     @app.post(
         "/api/v2/tasks/{tid}/matter",

@@ -346,6 +346,82 @@
  {
   "argv": [
    "risk",
+   "obligations",
+   "--group",
+   "unconfirmed"
+  ],
+  "tools": [
+   [
+    "tico_risk_obligations",
+    {
+     "group": "unconfirmed",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risk/obligations?group=unconfirmed",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "obligations",
+   "--risk",
+   "risk:customer-theft-claims",
+   "--state",
+   "watched",
+   "--days",
+   "30",
+   "--limit",
+   "10",
+   "--offset",
+   "10"
+  ],
+  "tools": [
+   [
+    "tico_risk_obligations",
+    {
+     "days": 30,
+     "limit": 10,
+     "offset": 10,
+     "operation_id": null,
+     "risk": "risk:customer-theft-claims",
+     "state": "watched"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "risk/obligations?risk=risk%3Acustomer-theft-claims&state=watched&days=30&limit=10&offset=10",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
    "link",
    "risk:customer-theft-claims",
    "--document",

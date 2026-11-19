@@ -78,6 +78,23 @@ def risk_matters(api, args):
 
 
 @tool(
+    "tico_risk_obligations",
+    "The dates of every risk (or one) you can see: unconfirmed first, then due within 14 days, later, and settled or "
+    "passed in the last 30 days. Each says its basis, state and proof. Mark one with tico_rules_due_satisfied.",
+    {
+        "risk": RISK,
+        "state": _s("Only this state", enum=["due", "met", "waived", "missed", "passed", "unconfirmed", "watched"]),
+        "group": _s("Only this group", enum=["unconfirmed", "next", "later", "past"]),
+        "days": {"type": "integer", "minimum": 1, "maximum": 366, "description": "How far ahead (default 90)"},
+        **PAGE,
+    },
+)
+def risk_obligations(api, args):
+    query = _present({k: args.get(k) for k in ("risk", "state", "group", "days", "limit", "offset")})
+    return _as_person(api).get("risk/obligations", **query)
+
+
+@tool(
     "tico_risk_add",
     "Add a risk (a tag risk:{slug}). The Risk page's owner bot may then tag any task it can read with it.",
     {
@@ -197,6 +214,11 @@ CLI = (
         "matters you can read, newest first",
         args=(Arg("open", default=None),),  # left out: open and closed alike
         example="tico risk matters --kind dispute --open",
+    ),
+    Command(
+        "risk obligations",
+        "the dates of every risk: unconfirmed, next 14 days, later, past 30 days",
+        example="tico risk obligations --group unconfirmed",
     ),
     Command(
         "risk link",
