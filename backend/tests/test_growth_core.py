@@ -477,3 +477,32 @@ def test_a_quiet_company_lists_its_channels_reads_nobody_and_measures_health_ove
     assert out["headline"]["kept"]["status"] == "nobody"
     # zero customer rows don't make customers the basis
     assert out["health"]["basis"] == "signups" and out["health"]["unknown_share"] == 1.0
+
+
+def test_check_kpis_reconcile_growth_with_outside_totals(api):
+    header = "anchor,period,channel,as_of,entered"
+    push(api, "rows", "db", lines(header, "signup,2026-10,,2026-11-12,100", "customer,2026-10,,2026-11-12,40"))
+    push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,,money,2000"))
+    assert read(api, "period=2026-10")["health"]["reconciled"] == "not_reconciled"
+
+    def check(name, role, value):
+        kpi = post(api, "kpis", {"name": name})["kpi"]["id"]
+        post(api, f"kpis/{kpi}", {"growth_role": role})
+        post(api, f"kpis/{kpi}/readings", {"value": value, "period_end": "2026-10-31"})
+
+    check("Stripe new paying", "check_new_customers", 41)  # within 1
+    check("Finance ad spend", "check_cost", 2050)  # within 5%
+    health = read(api, "period=2026-10")["health"]
+    assert health["reconciled"] == "reconciled" and [c["figure"] for c in health["checks"]] == ["new_customers", "cost"]
+    check("PostHog sign-ups", "check_signups", 130)
+    health = read(api, "period=2026-10")["health"]
+    assert health["reconciled"] == "off"
+    assert health["checks"][-1] == {
+        "figure": "signups",
+        "growth": 100.0,
+        "outside": 130.0,
+        "kpi": "PostHog sign-ups",
+        "agrees": False,
+    }
+    # a segment read shows the company's checks
+    assert read(api, "scope=segment:none&period=2026-10")["health"]["reconciled"] == "off"

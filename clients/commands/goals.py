@@ -372,8 +372,9 @@ KPI_TREE_PROPS = {
     "parent_kpi_id": _s("The KPI this one feeds in the growth tree; \"\" clears"),
     "growth_role": {
         "type": "string",
-        "enum": ["north_star", "input", "guardrail", ""],
-        "description": "One North Star at a time: naming a new one moves the role; \"\" clears",
+        "enum": ["north_star", "input", "guardrail", "check_signups", "check_new_customers", "check_cost", ""],
+        "description": "One North Star at a time: naming a new one moves the role; \"\" clears. check_*: an outside "
+        "total (Stripe, Finance, analytics) that Growth's health compares with its own figure for the month",
     },
     "stage": {
         "type": "string",

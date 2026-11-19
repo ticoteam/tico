@@ -57,7 +57,14 @@ CHANNEL_FIELDS = (
 )
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
 OWNER_PATCH = {"why", "stage", "budget_month", "input_kpi_id"}  # what the bot that owns a channel may change
-ROLES = ("north_star", "input", "guardrail")
+ROLES = (
+    "north_star",
+    "input",
+    "guardrail",
+    "check_signups",
+    "check_new_customers",
+    "check_cost",
+)  # check_*: an outside total health compares
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
 KPI_FIELDS = ("parent_kpi_id", "growth_role", "stage", "loop_name", "loop_step")
 

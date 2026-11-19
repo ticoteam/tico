@@ -8,7 +8,7 @@
 'use strict';
 
 const GKV_VIEWS: Array<[string, string]> = [['tree', 'Tree'], ['loops', 'Loops'], ['journey', 'Journey']];
-const GKV_ROLES: Array<[string, string]> = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail']];
+const GKV_ROLES: Array<[string, string]> = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail'], ['check_signups', 'Check: sign-ups'], ['check_new_customers', 'Check: new customers'], ['check_cost', 'Check: cost']];
 const GKV_KEY = 'tico.goals.kpiView';
 // A KPI as GET /api/v2/growth/kpis lists it (only the fields these views read).
 interface GkvKpi { id: string; name: string; parent_kpi_id: string | null; growth_role: string | null; stage: string | null; loop_name: string | null; loop_step: number | null; target: number | null; unit: string; latest: number | null; may_edit?: boolean }

@@ -941,8 +941,51 @@ def health(scope: Scope, month: str) -> Row:
         if r["source"] != TYPED:  # typed by hand: no source to go stale
             newest[r["source"]] = max(newest.get(r["source"], ""), str(r["as_of"]))
     line = (data.on - timedelta(days=STALE_DAYS)).isoformat()
-    out.update(reconciled="not_reconciled", stale_sources=sorted(s for s, at in newest.items() if at < line))
+    out.update(stale_sources=sorted(s for s, at in newest.items() if at < line))
     return out
+
+
+CHECK_FIGURES = {"check_signups": "signups", "check_new_customers": "new_customers", "check_cost": "cost"}
+CHECK_TOLERANCE = 0.05  # within 5% (or 1 for counts) reads as reconciled
+
+
+def reconcile(c: sqlite3.Connection, company: Scope, month: str, hidden: Iterable[str] = ()) -> Row:
+    """Each check KPI's reading for the month (an outside total: Stripe, Finance, analytics) against Growth's own
+    company-wide figure. `reconciled` when every check agrees, `off` when one doesn't, `not_reconciled` with none."""
+    own: dict[str, float | None] = {
+        "signups": company.entered("signup", month),
+        "new_customers": company.entered("customer", month),
+        "cost": company.cost(month, MONEY),
+    }
+    blocked = set(hidden)
+    checks: list[Row] = []
+    for k in H._rows(
+        c.execute(
+            "SELECT id, name, owner_id, growth_role FROM kpis WHERE archived_at IS NULL AND growth_role LIKE 'check_%' "
+            "ORDER BY created_at"
+        )
+    ):
+        figure = CHECK_FIGURES.get(str(k["growth_role"]))
+        if not figure or k["owner_id"] in blocked:
+            continue
+        found = c.execute(
+            "SELECT r.value FROM kpi_readings r WHERE r.kpi_id=? AND substr(coalesce(r.period_end, r.measured_at), 1, 7)=? "
+            "AND NOT EXISTS (SELECT 1 FROM kpi_readings s WHERE s.supersedes=r.id) "
+            "ORDER BY r.collected_at DESC, r.created_at DESC LIMIT 1",
+            (k["id"], month),
+        ).fetchone()
+        if found is None:
+            continue
+        outside, mine = float(found[0]), own[figure]
+        agrees = mine is not None and abs(mine - outside) <= max(
+            CHECK_TOLERANCE * max(abs(outside), abs(mine)), 0 if figure == "cost" else 1
+        )
+        checks.append(
+            {"figure": figure, "growth": _r(mine), "outside": _r(outside), "kpi": k["name"], "agrees": agrees}
+        )
+    if not checks:
+        return {"reconciled": "not_reconciled"}
+    return {"reconciled": "reconciled" if all(x["agrees"] for x in checks) else "off", "checks": checks}
 
 
 def series(scope: Scope, month: str, window: str | None) -> list[Row]:
@@ -1152,6 +1195,7 @@ def read(
             if isinstance(figure, dict) and "verdict" in figure:
                 figure["verdict"] = None
     out["health"] = health(seen, month)
+    out["health"].update(reconcile(c, Scope(data, "all", ""), month, hidden))
     out["metrics"] = metrics(c, seen, month, hidden)
     if "campaigns" in wanted:
         out["campaigns"] = campaigns(seen, month)
