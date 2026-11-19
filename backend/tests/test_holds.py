@@ -264,6 +264,9 @@ def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone
         assign(api, machine, slug)
     with store.transaction() as c:
         _usage_limit(api, c, rig)
+        # A hold on a login none of them signs in with: it stays when theirs is cleared, so every bot is judged again.
+        hold = {"runner_id": rig["runner_id"], "profile": "", "runtime": "other", "since": NOW, "until": LATER}
+        login_holds._save(c, {**hold, "reset": LATER})
     bots = ["ops", *extra]
     alone = {}
     for slug in bots:
@@ -282,6 +285,7 @@ def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone
     with store.transaction() as c:
         assert [holds.why(c, slug, kinds=holds.STOPS) for slug in bots[:3]] == [holds.USAGE_LIMIT] * 3
         login_holds.clear(c, rig["runner_id"], "", "fake")
+        assert c.execute(holds.ANY_LOGIN_HOLD_SQL).fetchone()  # the loads are read again, not skipped
         assert [holds.why(c, slug, kinds=holds.STOPS) for slug in bots] == [None] * len(bots)
 
 

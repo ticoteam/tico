@@ -2119,7 +2119,9 @@ def cooling_off_loads(c):
     """What cooling_off reads, for a page that asks it of many bots in one snapshot (holds._usage_limit): the claim's
     loads (backend/claim_loads.py: the company's providers and plans, every open hold and every assigned computer's
     row, read once, as Health passes them), with each bot's computer (PLACE_SQL) and configuration (BS.ONE_SQL) primed
-    in the snapshot's read cache. A row a page primed already stays. None outside a snapshot."""
+    in the snapshot's read cache. A row a page primed already stays. None outside a snapshot. Only computers not
+    revoked are in it: a revoked one is judged without loads (holds._usage_limit), as the loads read a revoked
+    computer differently in places (model_subscriptions.held_plan's live=True)."""
     from . import claim_loads
     from .read_cache import cache, prime
 
@@ -2132,7 +2134,9 @@ def cooling_off_loads(c):
     prime(c, PLACE_SQL, {(b,): places.get(b) for b in bots})
     runners = {
         r["id"]: r
-        for r in c.execute("SELECT * FROM runners_with_state WHERE id IN (SELECT runner_id FROM assignments)")
+        for r in c.execute(
+            "SELECT * FROM runners_with_state WHERE id IN (SELECT runner_id FROM assignments) AND revoked_at IS NULL"
+        )
     }
     return claim_loads.read(c, None, runners, ())
 

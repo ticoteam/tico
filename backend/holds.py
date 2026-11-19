@@ -500,6 +500,9 @@ def _usage_limit(a: _Ask) -> bool:
             asked.add(a.bot)
             if len(asked) >= 3:
                 loads = RC.value(a.c, "holds.cooling_off.loads", lambda: EX.cooling_off_loads(a.c), True)
+                place = RC.one(a.c, EX.PLACE_SQL, (a.bot,))
+                if loads is not None and (not place or place["runner_id"] not in loads.runners):
+                    loads = None  # on no computer, or a revoked one: judged as one bot alone is
         return bool(EX.cooling_off(a.c, None, a.bot, loads))
 
     return bool(RC.value(a.c, ("holds.cooling_off", a.bot), judged, True))
