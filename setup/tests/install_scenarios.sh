@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs inside a distro container (see test_install_sh.py): scripts/install.sh against local release files, with
-# docker, systemctl, ss, df and uname stubbed so nothing on the host or the network (beyond apt) is touched.
+# docker, systemctl, ss, df and uname stubbed so nothing on the host or the network is touched: test_install_sh.py installs
+# curl and python3 before this script runs, so install.sh finds them and its apt-get never runs here.
 S=/stubs
 mkdir -p $S /work
 printf 'MemTotal:        2000000 kB\n' > $S/meminfo

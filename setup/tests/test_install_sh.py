@@ -1,7 +1,9 @@
 """scripts/install.sh in real distro containers (ubuntu:24.04, debian:12) with docker and friends stubbed.
 
-The scenarios are in install_scenarios.sh. They install curl and python3 from the distro's own packages, so the
-containers need network access; the tests skip when Docker is not available."""
+The scenarios are in install_scenarios.sh. The container first installs curl and python3 from the distro's own mirror,
+the one step that needs the network, bounded by PACKAGES_SECONDS: a slow or stalled mirror fails as `not ok packages`,
+not as a silent hang inside the installer's own apt-get. After it the scenarios read only local files. A container that still outlives SCENARIO_SECONDS fails with its last passed scenario and the
+processes still running in it. The tests skip when Docker is not available."""
 
 import hashlib
 import os
@@ -29,6 +31,56 @@ tag = sys.argv[sys.argv.index("--tico-version") + 1]
 fd = os.open(d / ".env", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 os.write(fd, ("TICO_DOMAIN=tico.example.com\\nTICO_OIDC_CLIENT_SECRET=" + os.environ.get("TICO_OIDC_CLIENT_SECRET", "") + "\\nTICO_TAG=" + tag + "\\n").encode())
 '''
+
+
+# ubuntu:24.04 points at archive.ubuntu.com and security.ubuntu.com, which can send tens of KB/s to a runner, so apt-get
+# update alone outlasts the test. The test is about install.sh, not Ubuntu's archive: the container uses Azure's Ubuntu
+# mirror, the one GitHub's runner images use (update and install in seconds). debian:12 keeps deb.debian.org, a CDN.
+# apt gives up on a mirror that sends nothing for 30 s and tries a request twice more; `timeout` bounds the whole step,
+# so a mirror that trickles cannot hold it either.
+UBUNTU_MIRROR = "http://azure.archive.ubuntu.com/ubuntu/"
+PACKAGES_SECONDS = 240
+SCENARIO_SECONDS = PACKAGES_SECONDS + 120
+CONTAINER = (
+    "if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then"
+    f" sed -i 's#^URIs: .*#URIs: {UBUNTU_MIRROR}#' /etc/apt/sources.list.d/ubuntu.sources; fi; "
+    "printf 'Acquire::http::Timeout \"30\";\\nAcquire::https::Timeout \"30\";\\nAcquire::Retries \"2\";\\n'"
+    " > /etc/apt/apt.conf.d/99tico-install-test; "
+    f"if timeout {PACKAGES_SECONDS} sh -c 'apt-get update -qq"
+    " && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl python3' >/dev/null; then"
+    " echo 'ok packages'; else"
+    f" echo 'not ok packages: apt-get could not install curl and python3 from the distro mirror in {PACKAGES_SECONDS} s'"
+    "; exit 1; fi; sh /scen.sh"
+)
+# Every process in the container with its command line, from /proc (the images have no ps).
+PROCESSES = 'for p in /proc/[0-9]*; do printf "%s %s\\n" "${p#/proc/}" "$(tr "\\0" " " < "$p/cmdline")"; done'
+
+
+def run_scenarios(command, name, image):
+    """(returncode, stdout, stderr) of the scenario container. One that outlives SCENARIO_SECONDS fails the test with
+    the scenario it last passed and the processes still running in it: the step it hung on."""
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = process.communicate(timeout=SCENARIO_SECONDS)
+        return process.returncode, stdout, stderr
+    except subprocess.TimeoutExpired:
+        running = subprocess.run(
+            ["docker", "exec", name, "sh", "-c", PROCESSES], capture_output=True, text=True, timeout=30
+        )
+        process.kill()
+        stdout, stderr = process.communicate()  # everything read so far, the part before the timeout too
+    passed = [line[3:] for line in stdout.splitlines() if line.startswith("ok ")]
+    pytest.fail(
+        "the %s container ran past %d s; last passed: %s\nstill running:\n%s\nstdout tail:\n%s\nstderr tail:\n%s"
+        % (
+            image,
+            SCENARIO_SECONDS,
+            passed[-1] if passed else "(none)",
+            running.stdout.strip() or running.stderr.strip(),
+            stdout[-1500:],
+            stderr[-1500:],
+        )
+    )
 
 
 def release(base: Path, source: Path, version: str, tamper: bool = False) -> None:
@@ -91,7 +143,7 @@ def test_installer_scenarios(image, rel, docker_ready):
         shutil.copytree(rel, staged / "rel")
         shutil.copy(Path(__file__).parent / "install_scenarios.sh", staged / "scen.sh")
         try:
-            r = subprocess.run(
+            returncode, stdout, stderr = run_scenarios(
                 [
                     "docker",
                     "run",
@@ -105,27 +157,27 @@ def test_installer_scenarios(image, rel, docker_ready):
                     image,
                     "sh",
                     "-c",
-                    "apt-get update -qq >/dev/null 2>&1; sh /scen.sh",
+                    CONTAINER,
                 ],
-                capture_output=True,
-                text=True,
-                timeout=900,
+                name,
+                image,
             )
         finally:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True)
-    if r.returncode != 0 and any(
-        message in r.stderr
+    if returncode != 0 and any(
+        message in stderr
         for message in ("Mounts denied", "is not shared from the host", "error while creating mount source path")
     ):
         pytest.skip(
             "Docker cannot bind-mount the staged installer fixtures; share the system temp directory in Docker Desktop"
         )
-    lines = r.stdout.splitlines()
+    lines = stdout.splitlines()
     failed = [l for l in lines if l.startswith("not ok")]
-    assert not failed, "\n".join(failed) + "\n" + r.stderr[-2000:]
-    assert lines and lines[-1] == "done", r.stdout[-2000:] + r.stderr[-2000:]
+    assert not failed, "\n".join(failed) + "\n" + stderr[-2000:]
+    assert lines and lines[-1] == "done", stdout[-2000:] + stderr[-2000:]
     passed = {l[3:] for l in lines if l.startswith("ok ")}
     for must in (
+        "packages",
         "preflight-memory",
         "preflight-disk",
         "preflight-port-80",
