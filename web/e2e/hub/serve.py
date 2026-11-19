@@ -62,6 +62,7 @@ def aws_env(profile):
         ["aws", "configure", "export-credentials", "--profile", profile, "--format", "process"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if out.returncode != 0:
         sys.exit(f"serve: no AWS credentials for profile {profile}: {out.stderr.strip()}")
@@ -109,7 +110,7 @@ def restore(replica, region, profile, scratch):
     say(f"Restoring the latest backup from {replica} (read only)")
     started = time.monotonic()
     env = {**os.environ, **aws_env(profile)}
-    done = subprocess.run([litestream(), "restore", "-config", str(config), str(db)], env=env)
+    done = subprocess.run([litestream(), "restore", "-config", str(config), str(db)], env=env, check=False)
     if done.returncode != 0 or not db.exists():
         sys.exit(f"serve: could not restore {replica}")
     say(f"Restored {db.stat().st_size // 2**20} MB in {time.monotonic() - started:.0f} s")
@@ -130,7 +131,7 @@ def make_copy(company, source, profile, region, days, port):
         if bundle:
             cmd += ["--profile", profile, "--region", region]
         say("Pruning it into a rehearsal copy (python -m backend.devcopy)")
-        done = subprocess.run(cmd, cwd=W, capture_output=True, text=True)
+        done = subprocess.run(cmd, cwd=W, capture_output=True, text=True, check=False)
         (folder / "devcopy.log").write_text(done.stdout + done.stderr)
         if done.returncode != 0:
             sys.exit(f"serve: devcopy failed (see {folder / 'devcopy.log'}):\n{done.stderr.strip()[-2000:]}")
@@ -194,7 +195,10 @@ def serve(company, port):
     say(f"Server: {url} (pid {server.pid}, rehearsal mode, log {folder / 'server.log'})")
     say(f"Sign in (browser, as the copy's owner): {url}/api/v2/local-signin?token=$(cat {token})")
     say(f'API: curl -H "Authorization: Bearer $(cat {token})" {url}/api/v2/me')
-    say("HUB " + json.dumps({"company": company, "url": url, "pid": server.pid, "token_file": str(token), "db": str(db)}))
+    say(
+        "HUB "
+        + json.dumps({"company": company, "url": url, "pid": server.pid, "token_file": str(token), "db": str(db)})
+    )
     # poll rather than wait(): a blocking wait holds the Popen lock, so stop()'s own wait stalls its full 30 s
     while server.poll() is None:
         time.sleep(1)
@@ -213,7 +217,11 @@ def main():
     args = parser.parse_args()
     folder = DATA / args.company
     if args.source or args.refresh or not (folder / "source.json").exists():
-        known = {} if args.source else companies().get(args.company) or sys.exit(f"serve: {args.company} is not in {SOURCES}")
+        known = (
+            {}
+            if args.source
+            else companies().get(args.company) or sys.exit(f"serve: {args.company} is not in {SOURCES}")
+        )
         make_copy(
             args.company,
             args.source or known["source"],
