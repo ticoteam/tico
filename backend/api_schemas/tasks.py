@@ -217,16 +217,6 @@ SCHEMAS.update(
                 "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
                 "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
             },
-            conversation_id={
-                "type": ["string", "null"],
-                "description": "The task's chat: the conversation its request, comments and bot replies are in (the "
-                "task's own read carries its messages). Null for a task with no chat",
-            },
-            links=items(ref("TaskLinkView"))
-            | {
-                "description": "What the task points to, oldest first: pull requests, issues, docs, pages, checkouts and "
-                "sessions. A list row leaves out a link's empty fields and its detail; the task's own read has them all"
-            },
             roles={
                 "type": "object",
                 "description": "Who is on the task, by role: each role a short name the team "
@@ -542,12 +532,26 @@ SCHEMAS.update(
         ),
         "TaskDetail": obj(
             {
-                # The task's own read always carries its chat and its links (on a list row they are there too, but the
-                # shared Task schema leaves them optional for the answers that build a task without them).
+                # The task's own read declares its chat and its links here, not on the shared Task: the old app's task
+                # types extend Task with their own spellings of both, which a declaration there would contradict.
                 "task": {
                     "allOf": [
                         ref("Task"),
-                        obj({"stage_since": "n", "conversation_id": "n", "links": items(ref("TaskLinkView"))}),
+                        obj(
+                            {
+                                "stage_since": "n",
+                                "conversation_id": {
+                                    "type": ["string", "null"],
+                                    "description": "The task's chat: the conversation its request, comments and bot "
+                                    "replies are in (this read carries its messages). Null for a task with no chat",
+                                },
+                                "links": items(ref("TaskLinkView"))
+                                | {
+                                    "description": "What the task points to, oldest first: pull requests, issues, "
+                                    "docs, pages, checkouts and sessions, each with its whole record"
+                                },
+                            }
+                        ),
                     ]
                 },
                 "events": "a",
