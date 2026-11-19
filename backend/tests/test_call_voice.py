@@ -480,7 +480,7 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
 
 
 @pytest.mark.parametrize("resident", [True, False], ids=["resident", "legacy"])
-def test_voice_uses_the_bots_model_with_low_effort_and_concise_output(meet, resident):
+def test_voice_uses_the_bots_model_with_medium_effort_and_concise_output(meet, resident):
     credential_setup(meet)
     company(meet)
     model = "claude-sonnet-5-5"
@@ -502,6 +502,7 @@ def test_voice_uses_the_bots_model_with_low_effort_and_concise_output(meet, resi
     give(meet, worker, "claude", add(meet)["id"])
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"], model="claude-opus-5-5", effort="medium")
+    assert call["effort"] == "medium"  # what the call shows is what its turns run at
     if not resident:
         _speak(meet, call["id"], 0)
     attempt = _claim(meet, worker, "ops")

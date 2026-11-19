@@ -68,6 +68,7 @@ log = logging.getLogger("tico.calls")
 ROOM_PREFIX = "tico-call-"
 TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
+VOICE_EFFORT = "medium"  # every spoken call turn runs at this effort, whatever the bot's own (live_meetings)
 PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
 WORKERS = 4  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
@@ -541,7 +542,7 @@ class Calls:
             "bots": bots,
             "speak_replies": bool(row["speak_replies"]),
             "model": None,
-            "effort": "low" if voiced else None,
+            "effort": VOICE_EFFORT if voiced else None,
             "voice": self.voice.view(call_id, bots, voiced),
             "holds": holds,
             "stage": self._stage_view(c, row, who),
