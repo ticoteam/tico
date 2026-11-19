@@ -368,6 +368,22 @@ def test_needs_you_asks_a_person_and_their_answer_wakes_the_bot(setup, tools):
     assert r.status_code == 403
 
 
+def test_needs_you_takes_a_named_task_by_its_short_id(setup, tools):
+    s = setup
+    task = s.tasks["ops"]
+    asked = post(
+        s.api,
+        "browser/needs-you",
+        {"site": "acme.example", "line": "Please sign in to Acme.", "task": task["id"][:8]},
+        token=s.ops["token"],
+    )
+    with s.api.app.state.store.read() as c:
+        row = c.execute(
+            "SELECT task_id FROM question_marks WHERE id=?", (asked["requirement_id"].removeprefix("qmark:"),)
+        ).fetchone()
+    assert row["task_id"] == task["id"]
+
+
 def test_the_frame_takes_at_most_one_screenshot_a_second(setup, tools):
     s = setup
     results = []

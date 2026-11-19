@@ -99,7 +99,7 @@ tico browser screenshot <site> [--out PATH]   # writes the JPEG (default ./scree
 tico browser download <site> [--out DIR]      # writes the newest download (default ./downloads), prints its path
 tico browser upload <site> <ref> <path>       # a file in your checkout, at most 10 MB
 tico browser close <site>                     # lets go of the account; the sign-in stays
-tico browser needs-you <site> "<line>"        # asks a person on your task to do a step only a person may
+tico browser needs-you <site> "<line>" [--task ID]  # asks a person on your task (from a chat: name it) to do a step only a person may
 tico login fill <site> username|password|code [--ref eN]
 tico login copy <site> username|password|code # onto this computer's clipboard, cleared after 30 s
 tico login code <site>                        # the current 2FA code and the seconds it has left

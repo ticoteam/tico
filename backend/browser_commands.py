@@ -1367,7 +1367,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             if task is None:
                 raise Problem(
                     "needs_a_task",
-                    "Asking a person needs a task; create a task and ask for browser help from its turn.",
+                    "Asking a person needs a task: name one of your open tasks (--task), or create one and ask from it.",
                     409,
                 )
             holder = str(picked.get("holder") or "")
@@ -1408,7 +1408,8 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
 
     def _turn_task(c: sqlite3.Connection, who: Any, named: str | None) -> dict[str, Any] | None:
         """The live task the bot in this turn owns: the one it names, else the task its turn's message is on."""
-        task_id = named
+        # A named task may be a short id or `#number`, as everywhere a bot names a task.
+        task_id = auth.resolve_task(c, who, named) if named else None
         if not task_id:
             row = c.execute(
                 "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)

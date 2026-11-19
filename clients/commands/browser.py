@@ -14,7 +14,7 @@ from pathlib import Path
 
 from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
-from clients.commands._schemas import _key, _s
+from clients.commands._schemas import TASK_ID, _key, _s
 from clients.tico import APIError
 
 SITE = _s("The website tool: a site such as app.example.com, a page URL on it, or the tool's name or id")
@@ -219,13 +219,18 @@ def browser_close(api, args):
 @tool(
     "tico_browser_needs_you",
     "Ask a person to do one step in this site's browser that only a person may: a code sent by text or email, a "
-    "captcha, a new-device check. It is an ask on your current task; their Done wakes you, then read the page again.",
-    {"site": SITE, "line": _s("What they should do, in one sentence", maxLength=300)},
+    "captcha, a new-device check. It is an ask on your current task (or the one you name with task, from a chat); their "
+    "Done wakes you, then read the page again.",
+    {
+        "site": SITE,
+        "line": _s("What they should do, in one sentence", maxLength=300),
+        "task": {**TASK_ID, "description": "Your task to ask on, when this turn is not on one (a chat)"},
+    },
     required=("site", "line"),
     writes=True,
 )
 def browser_needs_you(api, args):
-    body = {"site": args["site"], "line": args["line"]}
+    body = {"site": args["site"], "line": args["line"], **({"task": args["task"]} if args.get("task") else {})}
     return api.post("browser/needs-you", body, key=_key(args))
 
 
