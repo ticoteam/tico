@@ -459,10 +459,15 @@ def levels_many(c, viewer, targets, auth=None):
     ctx = _Context(c, viewer, auth)
     bots = [ident for kind, ident in parsed.values() if kind == "bot"]
     bot_out = bot_levels(c, viewer, bots, auth=auth, ctx=ctx) if bots else {}
-    # Each bot's owners for the manage rule, read with the rest (a fleet-wide page asked them once a bot).
-    from . import read_cache
-
-    configs = {r["bot"]: r for r in read_cache.configs(c, bots)} if bots else {}
+    # Each bot's owners for the manage rule, in one read (a fleet-wide page asked them once a bot).
+    configs = {}
+    for part in H.chunks(bots):
+        configs.update(
+            (r["bot"], r)
+            for r in c.execute(
+                "SELECT bot,owner_id,bot_owners FROM bot_config WHERE bot IN (%s)" % ",".join("?" * len(part)), part
+            )
+        )
     out = {}
     for target, (kind, ident) in parsed.items():
         if kind == "bot":
