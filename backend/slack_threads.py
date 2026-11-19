@@ -977,9 +977,9 @@ class Bridge:
         return self.post_in(event, link)
 
     def body_for(self, text):
-        """The Slack text as Tico reads it: markup decoded, and the Tico app's mention made `@<assistant>` the way the
-        gateway's persist makes it, so the wake rule sees it."""
-        return G.humanize(text, {self.gw.bot_user_id: self.settings.assistant_name})[: G.TEXT_CHARS]
+        """The Slack text as Tico reads it: markup decoded, each mention a name, and the Tico app's mention made
+        `@<assistant>` the way the gateway's persist makes it, so the wake rule sees it."""
+        return G.humanize(text, self.gw.names_for(text))[: G.TEXT_CHARS]
 
     def _note(self, link, channel, user, text, *, always=False):
         """A private note to the author, sent after the commit that decided it. Nothing here stops ingestion. A

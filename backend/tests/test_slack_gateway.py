@@ -159,6 +159,26 @@ def test_an_event_is_persisted_once_however_often_slack_delivers_it(gateway, hub
     assert gateway.tick()["events"] == []
 
 
+def test_a_stored_message_and_its_edit_name_the_people_they_mention_asking_slack_once_an_hour(gateway, hub):
+    """The app shows the stored text, so each `<@U…>` is stored as the person's name; a user Slack cannot answer for
+    keeps the id. The lookups share the bridge's users.info cache, so a busy channel costs no call per message."""
+    slack = gateway.slack
+    said = f"<@U2> and <@U9> please check, <@{BOT_USER}> too"
+    assert gateway.receive(channel_message(said, ts="1690000500.000100")) == "stored"
+    assert events(hub)[-1]["text"] == "@Ben and @U9 please check, @Tico too"
+    assert gateway.receive(channel_message("<@U2> again", ts="1690000501.000100")) == "stored"
+    assert events(hub)[-1]["text"] == "@Ben again"
+    edit = channel_message("", ts="1690000502.000100", subtype="message_changed")
+    edit["event"]["message"] = {"ts": "1690000500.000100", "text": "<@U2> please check", "user": "U1"}
+    assert gateway.receive(edit) == "edited"
+    assert rows(hub, "SELECT text FROM slack_events WHERE ts='1690000500.000100'")[0]["text"] == "@Ben please check"
+    asked = [call[1] for call in slack.calls if call[0] == "users.info"]
+    assert asked.count("U2") == 1 and BOT_USER not in asked
+    gateway.clock.advance(3601)
+    assert gateway.receive(channel_message("<@U2> later", ts="1690000503.000100")) == "stored"
+    assert [call[1] for call in slack.calls if call[0] == "users.info"].count("U2") == 2
+
+
 # ----------------------------------------------------------------------------- routing
 # ----------------------------------------------------------------------------- egress
 def _thread_of_reply(hub, message_id):

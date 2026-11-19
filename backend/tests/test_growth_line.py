@@ -185,7 +185,7 @@ def test_every_channel_together_counts_spend_from_named_channels_and_unknowns_cu
     every = row(line(api), "all")
     assert every["numbers"]["new_customers"]["value"] == 142 and every["sources"] == []
     assert every["economics"]["cac"]["trace"] == (
-        "$21,500 spend and bot cost from named channels only ÷ all 142 new customers, 14 of them from Unknown"
+        "$21,500 spend and agent cost from named channels only ÷ all 142 new customers, 14 of them from Unknown"
         " = $151 CAC"  # whole dollars from $10, as the page writes money
     )
 

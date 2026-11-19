@@ -84,7 +84,7 @@ HOMES = {"growth": "the Growth page", "person": "Company"}
 METRICS = {
     "new_customers": ("New customers", "count", "up", False),
     "spend": ("Spend", "usd", None, False),
-    "bot_cost": ("Bot cost", "usd", None, False),
+    "bot_cost": ("Agent cost", "usd", None, False),
     "cac": ("CAC", "usd", "down", False),
     "revenue_month": ("Revenue / customer", "usd", "up", False),
     "margin_pct": ("Margin", "pct", "up", False),
