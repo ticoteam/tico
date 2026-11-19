@@ -336,7 +336,7 @@ export function Agents({ open }: { open?: string }) {
               return (
                 <To
                   key={a.id}
-                  href={`/team/${encodeURIComponent(a.slug ?? a.id)}?tab=model`}
+                  href={`/team/${encodeURIComponent(a.slug ?? a.id)}?tab=settings`}
                   className={l?.blocked ? 'row g-bot is-bad' : 'row g-bot'}
                   title={a.name}
                   data-target={`agent:${a.slug ?? a.id}`}

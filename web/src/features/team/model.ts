@@ -1,0 +1,188 @@
+// Pure rules for the team pages: which teammate an address names, who manages a team, the model line, the figures.
+import type { Actor, Directory } from '@/data';
+import type { AgentRow, Change, Group, Learned, Model, PersonRow, Run } from './queries';
+
+/** The menu's address for a team: its name, lower case, words joined by "-" (shell/Menu teamSlug). */
+export const teamSlug = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+export type Who =
+  | { kind: 'agent'; actor: Actor }
+  | { kind: 'person'; actor: Actor }
+  | { kind: 'team'; group: Group };
+
+/** `/team/<who>`: an agent's slug, a person's id, or a team (its id or its name as the menu writes it). */
+export function resolveWho(who: string, dir: Directory | undefined, groups: readonly Group[] | undefined): Who | null {
+  const actor = dir?.byId[who] ?? dir?.byId[`human:${who}`];
+  if (actor) return actor.kind === 'agent' ? { kind: 'agent', actor } : { kind: 'person', actor };
+  const group = groups?.find((g) => g.id === who || teamSlug(g.name) === who);
+  return group ? { kind: 'team', group } : null;
+}
+
+/** The address of a teammate's page. */
+export const whoHref = (a: Pick<Actor, 'id' | 'kind' | 'slug'>) =>
+  `/team/${encodeURIComponent(a.kind === 'agent' && a.slug ? a.slug : a.id.slice(a.id.indexOf(':') + 1))}`;
+
+/** A `bot:<slug>` / `person:<id>` lead, or a bare slug or id, as a key the directory answers. */
+const leadKey = (lead: string) => lead.replace(/^(bot|person|human):/, '');
+
+/**
+ * A team's manager: its lead when one is set; otherwise the teammate most of its members report to, when that one is in
+ * the team (ui/app team pages took the same vote). A key the directory answers, or null.
+ */
+export function managerOf(group: Group, agents: readonly AgentRow[], people: readonly PersonRow[]): string | null {
+  if (group.lead) return leadKey(group.lead);
+  const members = new Set([...group.bots, ...group.people]);
+  const votes = new Map<string, number>();
+  for (const a of agents) if (group.bots.includes(a.slug) && a.reports_to) votes.set(a.reports_to, (votes.get(a.reports_to) ?? 0) + 1);
+  for (const p of people) if (group.people.includes(p.id) && p.reports_to) votes.set(p.reports_to, (votes.get(p.reports_to) ?? 0) + 1);
+  let best: string | null = null;
+  let most = 0;
+  for (const [k, n] of votes) if (members.has(k) && n > most) [best, most] = [k, n];
+  return best;
+}
+
+/** The teams directly inside `parent`, in their order. */
+export const subTeams = (groups: readonly Group[], parent: string) =>
+  groups.filter((g) => g.parent === parent && g.id !== parent).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+
+/** Every teammate in a team and the teams inside it. */
+export function membersUnder(groups: readonly Group[], id: string): { bots: string[]; people: string[] } {
+  const bots = new Set<string>();
+  const people = new Set<string>();
+  const walk = (gid: string, seen: Set<string>) => {
+    if (seen.has(gid)) return;
+    seen.add(gid);
+    const g = groups.find((x) => x.id === gid);
+    g?.bots.forEach((b) => bots.add(b));
+    g?.people.forEach((p) => people.add(p));
+    for (const s of subTeams(groups, gid)) walk(s.id, seen);
+  };
+  walk(id, new Set());
+  return { bots: [...bots], people: [...people] };
+}
+
+/** The team a teammate is in: its group. */
+export const teamOf = (groups: readonly Group[], kind: 'agent' | 'person', id: string) =>
+  groups.find((g) => (kind === 'agent' ? g.bots : g.people).includes(id));
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const EFFORT: Record<string, string> = { xhigh: 'XHigh' };
+export const effortLabel = (e: string | null | undefined) => (e ? (EFFORT[e] ?? cap(e)) : 'Default');
+
+/** "Opus 5.5, High": the model it runs and its effort, as the server resolved them. */
+export function modelLine(row: Pick<AgentRow, 'model' | 'resolved_model' | 'resolved_model_label' | 'reasoning_effort' | 'resolved_effort'>, models?: readonly Model[]) {
+  const id = row.resolved_model || row.model;
+  const label = models?.find((m) => m.id === id)?.label ?? row.resolved_model_label ?? id;
+  if (!label) return '';
+  return `${cap(label)}, ${effortLabel(row.reasoning_effort || null)}`;
+}
+
+/* ---------------------------------------------------------------- figures */
+
+export const startOfDay = (now: Date) => new Date(now.getFullYear(), now.getMonth(), now.getDate());
+/** Monday. */
+export const startOfWeek = (now: Date) => {
+  const d = startOfDay(now);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d;
+};
+export const startOfMonth = (now: Date) => new Date(now.getFullYear(), now.getMonth(), 1);
+
+const runAt = (r: Run) => r.finished_at ?? r.last_event_at ?? null;
+
+/** Turns since midnight and spend since the first of the month, from its newest runs. */
+export function runFigures(runs: readonly Run[], now: Date) {
+  const day = startOfDay(now).getTime();
+  const month = startOfMonth(now).getTime();
+  let turns = 0;
+  let spend = 0;
+  for (const r of runs) {
+    const at = runAt(r);
+    const t = at ? new Date(at).getTime() : NaN;
+    if (t >= day) turns++;
+    if (t >= month) spend += r.cost_usd ?? 0;
+  }
+  return { turns, spend };
+}
+
+/* ---------------------------------------------------------------- history */
+
+export interface HistLine {
+  key: string;
+  kind: 'run' | 'set' | 'learn';
+  title: string;
+  at: string;
+  /** A stopped run: its pill. */
+  bad?: string;
+  live?: boolean;
+  dur?: string;
+  cost?: number;
+  /** A run's task. */
+  task?: string;
+}
+
+/** "8m", "1h 12m". */
+export function fmtDuration(s: number | null | undefined): string {
+  if (!s || s < 0) return '';
+  const m = Math.round(s / 60);
+  if (m < 1) return `${Math.round(s)}s`;
+  if (m < 60) return `${m}m`;
+  return m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
+}
+
+const FIELD: Record<string, string> = {
+  model: 'Model changed',
+  definition: 'Profile changed',
+  instructions: 'Instructions changed',
+  rules: 'Rules changed',
+  machine: 'Computer changed',
+  tools: 'Tools changed',
+};
+
+const GOOD = new Set(['success', 'succeeded', 'done', 'ok', 'completed', '']);
+
+/** What it did, what changed in its settings and what it learned, as one list, newest first. */
+export function historyOf(runs: readonly Run[], learned: readonly Learned[], changes: readonly Change[]): HistLine[] {
+  const out: HistLine[] = [];
+  for (const r of runs) {
+    const at = runAt(r);
+    if (!at && r.state !== 'running') continue;
+    const live = r.state === 'running';
+    out.push({
+      key: `run:${r.id}`,
+      kind: 'run',
+      title: r.issue ? `Task ${r.issue}` : 'Chat turn',
+      at: at ?? new Date().toISOString(),
+      live,
+      bad: !live && r.outcome && !GOOD.has(r.outcome) ? 'Stopped' : undefined,
+      dur: fmtDuration(r.duration_s),
+      cost: r.cost_usd ?? undefined,
+      task: r.issue ?? undefined,
+    });
+  }
+  for (const c of changes) out.push({ key: `set:${c.id}`, kind: 'set', title: FIELD[c.field] ?? 'Settings changed', at: c.created_at });
+  for (const l of learned) out.push({ key: `learn:${l.sha}`, kind: 'learn', title: l.subject, at: l.when });
+  return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
+/* ---------------------------------------------------------------- computers */
+
+export const GB = 1024 ** 3;
+
+/** "Online", "Offline since 10:41 AM" and the disk, as the status line's short facts. */
+export function computerStatus(
+  c: { online: boolean; last_seen_at?: string | null; readiness?: { disk?: { free_bytes?: number; total_bytes?: number } } | null },
+  fmtTime: (d: Date) => string,
+): string[] {
+  const out = [c.online ? 'Online' : c.last_seen_at ? `Offline since ${fmtTime(new Date(c.last_seen_at))}` : 'Offline'];
+  const disk = c.readiness?.disk;
+  if (disk?.total_bytes) {
+    const used = Math.round((disk.total_bytes - (disk.free_bytes ?? 0)) / GB);
+    out.push(`Disk ${used} of ${Math.round(disk.total_bytes / GB)} GB`);
+  }
+  return out;
+}

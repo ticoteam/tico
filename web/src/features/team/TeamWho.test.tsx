@@ -1,0 +1,149 @@
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { directoryQuery, queryClient, type Actor } from '@/data';
+import { agentsQuery, changeAgent, groupsQuery, moveToTeam, type AgentRow, type Group } from './queries';
+import { TeamWho } from './TeamWho';
+
+vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+
+beforeAll(() => {
+  queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
+});
+
+type Reply = { status: number; body: unknown };
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply> | undefined) {
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    const r = (await reply(u, init?.method ?? 'GET')) ?? fallback(u);
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+  });
+}
+// Every read a page makes, answered empty unless a test says otherwise.
+const fallback = (url: string): Reply => {
+  if (url.includes('/api/v2/groups')) return { status: 200, body: groups };
+  if (url.includes('/api/employees')) return { status: 200, body: roster };
+  if (url.includes('/api/runs')) return { status: 200, body: [] };
+  if (url.includes('/api/v2/tasks')) return { status: 200, body: { tasks: [] } };
+  return { status: 200, body: {} };
+};
+
+function show(node: ReactNode, at: string) {
+  const root = createRootRoute({ component: () => node });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+const ana: Actor = { id: 'bot:ana', kind: 'agent', name: 'Ana', slug: 'ana' };
+const bo: Actor = { id: 'bot:bo', kind: 'agent', name: 'Bo', slug: 'bo' };
+const pat: Actor = { id: 'human:p1', kind: 'person', name: 'Pat Doe' };
+const actors = [ana, bo, pat];
+const byId = Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.slug ?? a.id.slice(6), a]]));
+const groups: Group[] = [
+  { id: 'g1', name: 'Design', parent: '', lead: '', bots: ['ana'], people: ['p1'] },
+  { id: 'g2', name: 'Brand', parent: 'g1', lead: '', bots: ['bo'], people: [] },
+  { id: 'g3', name: 'Sales', parent: '', lead: '', bots: [], people: [] },
+];
+const roster: AgentRow[] = [
+  { id: 'a1', slug: 'ana', display_name: 'Ana', description: 'Writes copy', revision: 3 },
+  { id: 'a2', slug: 'bo', display_name: 'Bo', revision: 1 },
+];
+
+const link = (title: string) => screen.queryAllByTitle(title).find((el) => el.tagName === 'A');
+
+beforeEach(() => {
+  queryClient.clear();
+  queryClient.setQueryData(['me'], { id: 'human:p1', email: '', role: 'person', slug: null });
+  queryClient.setQueryData(directoryQuery.queryKey, { actors, byId });
+  queryClient.setQueryData(groupsQuery.queryKey, groups);
+  queryClient.setQueryData(agentsQuery.queryKey, roster);
+});
+afterEach(() => vi.unstubAllGlobals());
+
+describe('Team pages', () => {
+  it('lists a team, the teams inside it, and each row opens that teammate’s page', async () => {
+    serve(() => undefined);
+    show(<TeamWho who="design" />, '/team/design');
+    await screen.findByRole('heading', { name: 'Design' });
+    await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
+    expect(link('Pat Doe')?.getAttribute('href')).toBe('/team/p1');
+    expect(link('Bo')?.getAttribute('href')).toBe('/team/bo');
+    expect(screen.getByText('Brand')).toBeTruthy();
+  });
+
+  it('moves a teammate out at once and puts them back when the server refuses', async () => {
+    let refuse!: () => void;
+    serve((_url, method) => (method === 'PATCH' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : undefined));
+    show(<TeamWho who="design" />, '/team/design');
+    await waitFor(() => expect(link('Ana')).toBeTruthy());
+    let done!: Promise<unknown>;
+    act(() => {
+      done = moveToTeam('agent', 'ana', 'g3').catch(() => 'refused');
+    });
+    await waitFor(() => expect(link('Ana')).toBeUndefined());
+    await waitFor(() => expect(refuse).toBeTypeOf('function'));
+    await act(async () => {
+      refuse();
+      expect(await done).toBe('refused');
+    });
+    await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
+  });
+
+  it('shows an agent’s new role at once and takes it back when the server refuses', async () => {
+    let refuse!: () => void;
+    serve((url, method) =>
+      method === 'POST' && url.includes('/definition') ? new Promise<Reply>((r) => (refuse = () => r({ status: 409, body: { detail: 'changed' } }))) : undefined,
+    );
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    expect(await screen.findByText('Writes copy')).toBeTruthy();
+    expect(link('Ana')).toBeUndefined();
+    let done!: Promise<unknown>;
+    act(() => {
+      done = changeAgent('ana', { description: 'Writes the newsletter' }).catch(() => 'refused');
+    });
+    expect(await screen.findByText('Writes the newsletter')).toBeTruthy();
+    await waitFor(() => expect(refuse).toBeTypeOf('function'));
+    await act(async () => {
+      refuse();
+      expect(await done).toBe('refused');
+    });
+    expect(await screen.findByText('Writes copy')).toBeTruthy();
+    expect(screen.queryByText('Writes the newsletter')).toBeNull();
+  });
+
+  it('links the agent’s computer and instructions as tabs of its own address', async () => {
+    serve((url) => (url.includes('/instructions') ? { status: 200, body: { content: 'Write short.' } } : undefined));
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    await screen.findByText('Write short.');
+    expect(screen.getByTitle('Open the instructions').getAttribute('href')).toBe('/team/ana?tab=instructions');
+    expect(screen.getByText('None').closest('a')?.getAttribute('href')).toBe('/team/ana?tab=computer');
+  });
+
+  it('says so for a team with nobody in it', async () => {
+    serve(() => undefined);
+    show(<TeamWho who="sales" />, '/team/sales');
+    expect(await screen.findByRole('heading', { name: 'No teammates yet' })).toBeTruthy();
+  });
+
+  it('says so for an address that names no one', async () => {
+    serve(() => undefined);
+    show(<TeamWho who="nobody" />, '/team/nobody');
+    expect(await screen.findByRole('heading', { name: 'No such teammate' })).toBeTruthy();
+  });
+
+  it('offers Try again when the directory does not load', async () => {
+    queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
+    queryClient.removeQueries({ queryKey: groupsQuery.queryKey });
+    serve(() => ({ status: 500, body: { detail: 'down' } }));
+    show(<TeamWho who="ana" />, '/team/ana');
+    expect(await screen.findByRole('heading', { name: 'Team did not load' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
