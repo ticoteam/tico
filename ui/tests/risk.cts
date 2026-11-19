@@ -89,9 +89,17 @@ async function flow(page: Page, tag: string, phone: boolean) {
   const hub = await startHub({seeds: ['org', 'toured', 'risk']});
   let browser: import('playwright').Browser | undefined;
   try {
+    // The hub's clock is the scenario's, not this computer's: the browser reads the same time, so a matter the seed
+    // made just now is New on the page as it is live on the hub.
+    const seeded = await fetch(hub.url + '/api/v2/matters?kind=dispute&open=true&limit=200', {headers: {Authorization: 'Bearer ' + hub.tokens['dana']}})
+      .then(r => r.json() as Promise<{matters: {task: {title: string; created_at: string}}[]}>);
+    const madeAt = seeded.matters.find(m => m.task.title === 'Randazzo')?.task.created_at;
+    if (!madeAt) throw new Error('the seed made no Randazzo');
+    const hubNow = new Date(Date.parse(madeAt) + 3600e3);
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     for (const phone of [false, true]) {
       const page = await pageAs(browser, hub, 'dana', {phone});
+      await page.clock.setFixedTime(hubNow);
       const errors: string[] = [];
       page.on('pageerror', e => errors.push(String(e)));
       try {
@@ -105,6 +113,7 @@ async function flow(page: Page, tag: string, phone: boolean) {
     }
     // A member reads the risks and disputes, without the private one.
     const member = await pageAs(browser, hub, 'omar');
+    await member.clock.setFixedTime(hubNow);
     try {
       await member.waitForFunction(() => document.querySelector('#main')?.children.length! > 0, null, {timeout: t(20000)});
       await go(member, '#/risk/disputes');

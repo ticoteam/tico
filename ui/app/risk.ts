@@ -375,7 +375,7 @@ async function rkSideSync(): Promise<void> {
   if (side.dataset['rkFor'] === tid) return;
   side.dataset['rkFor'] = tid;
   const close = rkWith('matter', '');
-  const headHTML = (title: string) => `<div class="rk-side-h"><h2>${esc(title)}</h2><span class="grow"></span><a class="rk-x" href="${esc(close)}" aria-label="Close">✕</a></div>`;
+  const headHTML = (title: string) => `<div class="rk-side-h"><h2>${esc(title)}</h2><span class="grow"></span><a class="rk-close" href="${esc(close)}" aria-label="Close" title="Close"><span class="nav-icon" aria-hidden="true">close</span></a></div>`;
   side.innerHTML = headHTML('Facts') + `<div class="rk-pad">${skelRows(4)}</div>`;
   const run = RKP.run;
   let task: RkTaskView;
@@ -472,7 +472,7 @@ function rkDialog(title: string, fields: string, save: string, work: (form: Form
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal rk-dlg';
   dlg.setAttribute('aria-label', title);
-  dlg.innerHTML = `<div class="tmodal-head"><b>${esc(title)}</b><span class="grow"></span><button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
+  dlg.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title">${esc(title)}</h2><button type="button" class="ghost tmodal-x" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <form class="tmodal-body rk-form" novalidate>${fields}<p class="rk-err" data-error hidden></p>
       <div class="rk-foot"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">${esc(save)}</button></div></form>`;
   document.body.appendChild(dlg);

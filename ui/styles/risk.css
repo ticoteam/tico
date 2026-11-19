@@ -81,8 +81,9 @@ a.rk-t:hover{text-decoration:underline}
 .rk-side[hidden]{display:none}
 .rk-side-h{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
 .rk-side-h h2{margin:0;min-width:0;font-size:var(--t-card);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rk-x{display:inline-grid;place-items:center;flex:none;width:28px;height:28px;border-radius:var(--r-ctl);color:var(--muted);text-decoration:none}
-.rk-x:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+.rk-close{display:inline-grid;place-items:center;flex:none;width:28px;height:28px;border-radius:var(--r-ctl);color:var(--muted);text-decoration:none}
+.rk-close .nav-icon{font-size:18px}
+.rk-close:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
 .rk-pad{padding:12px 16px}
 .rk-form{display:flex;flex-direction:column;gap:12px;padding:14px 16px}
 .rk-form label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
@@ -99,8 +100,6 @@ a.rk-t:hover{text-decoration:underline}
 .rk-err{margin:0;color:var(--ink);font-size:var(--t-sm)}
 .rk-foot{display:flex;justify-content:flex-end;gap:var(--s2)}
 .rk-dlg{width:min(480px,calc(100vw - 32px))}
-.rk-dlg .tmodal-head{display:flex;align-items:center;gap:var(--s2)}
-.rk-dlg .tmodal-head b{color:var(--ink);font-size:var(--t-card)}
 .rk-dlg .rk-form{padding:0}
 .rk-dlg textarea{resize:vertical}
 
@@ -115,7 +114,7 @@ a.rk-t:hover{text-decoration:underline}
   .rk-side{position:fixed;inset:0;z-index:60;max-height:none;border:0;padding-bottom:env(safe-area-inset-bottom)}
   html.strip .rk-side{top:var(--demo-h)}   /* below the demo banner */
   .rk-side-h{padding:max(10px,env(safe-area-inset-top)) 12px 10px}
-  .rk-x{width:40px;height:40px}
+  .rk-close{width:40px;height:40px}
   .rk-cat h2,.rk-gh{padding-left:8px}
   .rk-lbl{padding-left:8px}
   .rk-text{padding-left:8px}
