@@ -15,7 +15,7 @@ interface GpHeadline {
   ltv?: GpFig; ltv_cac?: GpFig; payback_months?: GpFig; value?: {kept_d30?: GpFig; cost_per_retained?: GpFig};
 }
 interface GpChannel {
-  slug: string; name?: string; new_customers: number; new_share: number | null; owner?: string | null; budget?: number | null; over_budget?: number | null;
+  slug: string; name?: string; signups?: number; new_customers: number; new_share: number | null; owner?: string | null; budget?: number | null; over_budget?: number | null;
   cost?: number | null; cac?: number | null; status?: string; cost_share?: number | null; verdict?: string | null; with_effort?: number | null;
 }
 interface GpPoint { period: string; signups: number | null; new_customers: number | null; cost: number | null; cac: number | null; kept: number | null }
@@ -209,16 +209,16 @@ function gpChannels(rows: GpChannel[]) {
   const td = (html: string) => `<td class="num">${html}</td>`;
   const share = (v: number | null | undefined) => td(v == null ? '' : esc(gpRate(v)));
   const row = (c: GpChannel) => {
-    if (c.slug === 'unknown') return `<tr data-channel="unknown"><th scope="row" class="muted">Unknown</th><td></td>${td(esc(gpCount(c.new_customers)))}<td></td><td></td><td></td><td></td>${share(c.new_share)}</tr>`;
+    if (c.slug === 'unknown') return `<tr data-channel="unknown"><th scope="row" class="muted">Unknown</th><td></td>${td(esc(gpCount(c.signups ?? 0)))}${td(esc(gpCount(c.new_customers)))}<td></td><td></td><td></td><td></td>${share(c.new_share)}</tr>`;
     const spend = c.status === 'no_spend' || c.status === 'not_split';
     const cac = c.cac != null ? esc(grUsd(c.cac)) + gpVerdict(c.verdict, 'down') : c.with_effort != null ? `${esc(grUsd(c.with_effort))} <small class="muted">effort</small>`
       : c.status === 'not_split' || c.status === 'no_customers' ? gpWord(c.status) : '';
     const budget = c.budget == null ? '' : esc(grUsd(c.budget)) + (c.over_budget ? ` <small class="gp-over">+${esc(grUsd(c.over_budget))}</small>` : '');
-    return `<tr data-channel="${esc(c.slug)}"><th scope="row">${esc(c.name || c.slug)}</th><td>${esc(grWho(c.owner))}</td>${td(esc(gpCount(c.new_customers)))}
+    return `<tr data-channel="${esc(c.slug)}"><th scope="row">${esc(c.name || c.slug)}</th><td>${esc(grWho(c.owner))}</td>${td(esc(gpCount(c.signups ?? 0)))}${td(esc(gpCount(c.new_customers)))}
       ${td(c.cost != null ? esc(grUsd(c.cost)) : spend ? gpWord(c.status) : '')}${td(cac)}${td(budget)}${share(c.cost_share)}${share(c.new_share)}</tr>`;
   };
   return `<section class="card gp-sec"><h2 class="gp-h">Channels</h2><div class="gp-scroll"><table class="grc-table gp-ch"><thead><tr><th scope="col">Channel</th><th scope="col">Owner</th>
-    <th scope="col" class="num">New</th><th scope="col" class="num">Cost</th><th scope="col" class="num">CAC</th><th scope="col" class="num">Budget</th>
+    <th scope="col" class="num">Sign-ups</th><th scope="col" class="num">New</th><th scope="col" class="num">Cost</th><th scope="col" class="num">CAC</th><th scope="col" class="num">Budget</th>
     <th scope="col" class="num">Cost share</th><th scope="col" class="num">New share</th></tr></thead><tbody>${rows.map(row).join('')}</tbody></table></div></section>`;
 }
 // Twelve months: counts as bars, rates and costs as lines, the picked month marked; a chart with nothing to draw

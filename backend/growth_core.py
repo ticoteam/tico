@@ -609,6 +609,8 @@ class Scope:
         for r in self.rows:
             self.by_month.setdefault((r["anchor"], r["period"]), []).append(r)
         self.first = {a: min((r["period"] for r in self.rows if r["anchor"] == a), default=None) for a in ANCHORS}
+        # The company's newest pushed month per anchor: a later month was not supplied, it is not a measured 0.
+        self.last = {a: max((r["period"] for r in data.rows if r["anchor"] == a), default=None) for a in ANCHORS}
         seg = segs.rows.get(slug) if kind == "segment" else None
         self.least = (
             max(GX.MIN_COHORT_FLOOR, int(seg["min_cohort"]))
@@ -620,9 +622,10 @@ class Scope:
         return self.by_month.get((anchor, month), [])
 
     def entered(self, anchor: str, month: str) -> int | None:
-        """The people who entered that month; None before the scope's first month of this anchor (or with none)."""
-        first = self.first[anchor]
-        if first is None or month < first:
+        """The people who entered that month; None before the scope's first month of this anchor (or with none), or
+        after the company's newest month of it."""
+        first, last = self.first[anchor], self.last[anchor]
+        if first is None or last is None or month < first or month > last:
             return None
         return sum(int(r["entered"]) for r in self.at(anchor, month))
 
@@ -846,6 +849,9 @@ def channels(scope: Scope, month: str) -> list[Row]:
     new: dict[str, int] = {}
     for r in scope.at("customer", month):
         new[r["channel"]] = new.get(r["channel"], 0) + int(r["entered"])
+    signups: dict[str, int] = {}
+    for r in scope.at("signup", month):
+        signups[r["channel"]] = signups.get(r["channel"], 0) + int(r["entered"])
     spent = {k["channel"] for k in scope.costs if k["period"] == month and k["channel"]}
     total_new = sum(new.values())
     total_cost = scope.cost(month, MONEY) or 0
@@ -853,10 +859,11 @@ def channels(scope: Scope, month: str) -> list[Row]:
     owned = {ch for ch in scope.owned if not data.lines[ch].get("retired_at")}
     if scope.kind == "channel" and scope.slug:
         owned.add(scope.slug)  # the channel shows, with its budget, even in a quiet month
-    for slug in sorted(set(new) | spent | owned):
+    for slug in sorted(set(new) | set(signups) | spent | owned):
         n = new.get(slug, 0)
         row: Row = {
             "slug": slug or GX.UNKNOWN,
+            "signups": signups.get(slug, 0),
             "new_customers": n,
             "new_share": round(n / total_new, 2) if total_new else None,
         }
@@ -896,7 +903,7 @@ def channels(scope: Scope, month: str) -> list[Row]:
         if effort is not None and n:
             row["with_effort"] = _r(((money or 0) + effort) / n)
         out.append(row)
-    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new_customers"]), str(r["slug"])))
+    out.sort(key=lambda r: (r["slug"] == GX.UNKNOWN, -int(r["new_customers"]), -int(r["signups"]), str(r["slug"])))
     return out
 
 
@@ -1131,7 +1138,8 @@ def read(
     if month >= data.on.isoformat()[:7]:
         # An unfinished month against full ones always looks down: no verdicts until it is over.
         out["partial"] = True
-        for figure in [*top.values(), *(top.get("value") or {}).values(), *out["channels"]]:
+        figures: list[object] = [*top.values(), *(top.get("value") or {}).values(), *out["channels"]]
+        for figure in figures:
             if isinstance(figure, dict) and "verdict" in figure:
                 figure["verdict"] = None
     out["health"] = health(seen, month)

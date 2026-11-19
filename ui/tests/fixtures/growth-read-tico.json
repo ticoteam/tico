@@ -12,6 +12,7 @@
      "new_share": 0.64,
      "over_budget": null,
      "owner": null,
+     "signups": 56,
      "slug": "content",
      "status": "no_spend",
      "with_effort": 4.29
@@ -25,6 +26,7 @@
      "new_share": 0.18,
      "over_budget": null,
      "owner": null,
+     "signups": 17,
      "slug": "outbound",
      "status": "no_spend",
      "with_effort": 180.0
@@ -38,12 +40,14 @@
      "new_share": 0.09,
      "over_budget": null,
      "owner": null,
+     "signups": 11,
      "slug": "community",
      "status": "no_spend"
     },
     {
      "new_customers": 2,
      "new_share": 0.09,
+     "signups": 8,
      "slug": "unknown"
     }
    ],

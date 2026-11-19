@@ -134,6 +134,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
     outbound = next(c for c in out["channels"] if c["slug"] == "outbound")
     assert outbound == {
         "slug": "outbound",
+        "signups": 10,
         "new_customers": 4,
         "name": "Outbound",
         "new_share": 0.33,
@@ -145,7 +146,7 @@ def test_a_company_with_no_segments_and_no_paid_spend_reads_no_spend_with_effort
         "status": "no_spend",
         "with_effort": 210.0,
     }
-    assert out["channels"][-1] == {"slug": "unknown", "new_customers": 2, "new_share": 0.17}
+    assert out["channels"][-1] == {"slug": "unknown", "signups": 0, "new_customers": 2, "new_share": 0.17}
     assert out["health"] == {
         "basis": "customers",
         "unknown_share": 0.17,
@@ -299,6 +300,7 @@ def test_each_channel_carries_its_owner_and_budget_and_mine_is_the_callers_chann
     assert mine["headline"]["new_customers"]["value"] == 8 and mine["headline"]["cost"] == {"value": 650.0}
     assert mine["channels"][1] == {
         "slug": "events",
+        "signups": 0,
         "new_customers": 0,
         "name": "Events",
         "new_share": 0.0,
@@ -435,7 +437,7 @@ def test_an_unfinished_month_reads_partial_with_no_verdicts(api):
     assert now["channels"][0]["verdict"] is None
 
 
-def test_signup_rows_alone_give_health_its_gaps_and_segment_none_reads_the_no_segment_group(api):
+def test_signup_rows_alone_give_health_and_channels_their_gaps_and_segment_none_reads_the_no_segment_group(api):
     for slug in ("creators", "viewers"):
         post(api, "growth/segments", {"slug": slug, "name": slug.title()})
     header = "anchor,period,segment,channel,as_of,entered"
@@ -450,8 +452,12 @@ def test_signup_rows_alone_give_health_its_gaps_and_segment_none_reads_the_no_se
             "signup,2026-10,,,2026-11-12,98",
         ),
     )
-    health = read(api, "period=2026-10")["health"]
+    october = read(api, "period=2026-10")
+    health = october["health"]
     assert health["basis"] == "signups" and health["unknown_share"] == 1.0 and health["no_segment"] == 98
+    assert october["channels"] == [{"slug": "unknown", "signups": 200, "new_customers": 0, "new_share": None}]
+    # nothing pushed for November: not supplied, never a measured 0
+    assert read(api, "period=2026-11")["headline"]["signups"] == {"value": None, "status": "not_supplied"}
     none = read(api, "scope=segment:none&period=2026-10")
     assert none["scope"] == "segment:none" and none["headline"]["signups"]["value"] == 98
     push(api, "rows", "hotmic-db", lines(header, "customer,2026-10,viewers,,2026-11-12,10"))
