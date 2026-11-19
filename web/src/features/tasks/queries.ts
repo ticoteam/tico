@@ -35,7 +35,12 @@ export interface Stage {
   name: string;
   /** A side stage: a task goes there by hand and comes back to the stage it left. */
   side?: boolean;
+  /** The teammate who holds it (`bot:<id>` or `human:<id>`); none when it is held by a role. */
+  owner?: string | null;
 }
+
+/** A stage's holder when it is a teammate, not a role such as "assignee". */
+const holder = (owner: string | null | undefined) => (owner && /^(bot|human):./.test(owner) ? owner : null);
 
 export interface Pipeline {
   id: string;
@@ -66,7 +71,7 @@ function adaptPipeline(p: PipelineRecord): Pipeline {
   return {
     id: p.id,
     name: p.name,
-    stages: p.stages.map((s) => ({ id: s.id, name: s.name, side: s.side })),
+    stages: p.stages.map((s) => ({ id: s.id, name: s.name, side: s.side, owner: holder(s.owner) })),
     owner: p.owner_id ?? p.manager_id ?? null,
     done: p.done ? { id: p.done.id, name: p.done.name } : null,
     closed: p.closed ? { id: p.closed.id, name: p.closed.name } : null,
@@ -463,7 +468,11 @@ export async function savePipeline(pipeline: string, stages: readonly StageDraft
     return was ? { ...was, name: d.name, side: d.side } : { name: d.name, side: d.side, requirements: [] };
   });
   const shown = (list: Pipeline[] | undefined) =>
-    list?.map((p) => (p.id === pipeline ? { ...p, stages: stages.map((d, i) => ({ id: d.id ?? `tmp:${i}`, name: d.name, side: d.side })) } : p));
+    list?.map((p) =>
+      p.id === pipeline
+        ? { ...p, stages: stages.map((d, i) => ({ id: d.id ?? `tmp:${i}`, name: d.name, side: d.side, owner: p.stages.find((st) => st.id === d.id)?.owner ?? null })) }
+        : p,
+    );
   const out = await write<PipelineSettingsResult>({
     key: pipelinesQuery.queryKey,
     optimistic: shown,

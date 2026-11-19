@@ -224,6 +224,17 @@ export const editPipeline = defineAction({
   target: () => ({ kind: 'panel', id: 'pipeline' }),
 });
 
+/** One of a pipeline's agents, asked about it: their chat opens beside the board (on a phone, the chat card comes up). */
+export const chatWith = defineAction({
+  id: 'tasks.chatWith',
+  title: "Open the chat of one of a pipeline's agents",
+  kind: 'view',
+  input: s.object({ pipeline, who: actor }),
+  run: ({ router }, { pipeline, who }) => router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, chat: who }) }),
+  did: () => 'Opened the chat',
+  target: ({ who }) => ({ kind: 'chat', id: who }),
+});
+
 const stageDraft = s.object({
   id: s.optional(s.string({ min: 1, max: 100, what: 'a saved stage id; leave out for a new stage' })),
   name: s.string({ min: 1, max: 80 }),

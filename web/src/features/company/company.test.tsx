@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useLocation } from '@tanstack/react-router';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -84,6 +84,41 @@ describe('Company', () => {
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
+
+describe('Floor card, on a phone @s271', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+    cleanup();
+  });
+  const tasks = { tasks: [{ id: 't1', number: 4, title: 'Check the gift notes', turn: null, late: null, stage_since: null }], cursor: '' };
+
+  it('opens a stage as a page over the Floor, its back arrow closing it', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    serve((url) => (url.startsWith('/api/v2/tasks?') ? { status: 200, body: tasks } : nothing()));
+    queryClient.setQueryData(floorQuery.queryKey, floor);
+    show(<CompanyRoute />, '/company?panel=stage:p1:s2');
+    const panel = await screen.findByRole('complementary', { name: 'Review' });
+    expect(panel.className).toContain('co-stage');
+    expect(href(await within(panel).findByText('Check the gift notes'))).toBe('/tasks/p1/4');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Back to Company' }));
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review' })).toBeNull());
+  });
+
+  it('keeps the x and no back arrow on a computer', async () => {
+    serve((url) => (url.startsWith('/api/v2/tasks?') ? { status: 200, body: tasks } : nothing()));
+    queryClient.setQueryData(floorQuery.queryKey, floor);
+    show(<CompanyPage search={{ panel: 'stage:p1:s2' }} />, '/company?panel=stage:p1:s2');
+    const panel = await screen.findByRole('complementary', { name: 'Review' });
+    expect(within(panel).queryByRole('button', { name: 'Back to Company' })).toBeNull();
+    expect(within(panel).getByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+});
+
+/** The page reading its panel from the address, as its route does. */
+function CompanyRoute() {
+  const panel = useLocation({ select: (l) => (l.search as { panel?: string }).panel });
+  return <CompanyPage search={{ panel }} />;
+}
 
 const kpi: Kpi = {
   id: 'k1',

@@ -115,3 +115,6 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .rq-list{display:grid;max-height:calc(var(--row) * 8);overflow:auto;scrollbar-width:thin}
 .rq-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .rq-form{display:grid;gap:var(--s-3)}
+
+/* The ask: on a phone the head's face stays (marked for the phone) and opens a pipeline agent's chat card */
+.tk-ask{display:contents}

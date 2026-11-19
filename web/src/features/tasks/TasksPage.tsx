@@ -18,6 +18,7 @@ import { ValueButton } from '@/kit/ValueButton';
 import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip, type PageState } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
+import { AskButton } from './Ask';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, RowMore, ROW_H } from './capped';
 import { useCardDrag } from './drag';
@@ -26,7 +27,7 @@ import { DUE_NAMES, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
 import { PipelinePanel } from './PipelinePanel';
-import { Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe } from './parts';
+import { Face, FlowButton, isPending, markOf, Movable, taskHref, waitsOnMe } from './parts';
 import {
   flowQuery,
   isFiltered,
@@ -106,7 +107,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head, panel }: PageProps &
   const page = {
     ...head,
     title: 'Tasks',
-    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} owner={p?.owner ?? null} onNew={() => setNewIn({ stage: null })} />,
+    actions: <HeadActions pipeline={pipeline} view={view} search={search} flow={flow} p={p} onNew={() => setNewIn({ stage: null })} />,
     more: p && <MoreMenu p={p} onSelect={() => setPicked({ pipeline, ids: new Set() })} />,
     state,
     empty: p
@@ -176,7 +177,7 @@ function ArchivedPage({ pipeline, p, pipes, search, head, panel }: PageProps) {
       {...head}
       title="Archived"
       crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
-      actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} owner={p?.owner ?? null} />}
+      actions={<HeadActions pipeline={pipeline} view="archived" search={search} flow={flow} p={p} />}
       state={state}
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
       onRetry={() => void (pipes.isError ? pipes.refetch() : shelves.retry())}
@@ -225,20 +226,21 @@ function MoreMenu({ p, onSelect }: { p: Pipeline; onSelect: () => void }) {
   );
 }
 
-/** Search, Filter, the view switch, New task, Flow, the owner (list.js head). Archived keeps search and filter. */
+/** Search, Filter, the view switch, New task, Flow, the owner (list.js head); on a phone the owner's face is the ask
+    (Ask.tsx). Archived keeps search and filter. */
 function HeadActions({
   pipeline,
   view,
   search,
   flow,
-  owner,
+  p,
   onNew,
 }: {
   pipeline: string;
   view: View;
   search: TasksSearch;
   flow: number;
-  owner: string | null;
+  p: Pipeline | undefined;
   onNew?: () => void;
 }) {
   const setView = useAction('tasks.setView');
@@ -282,7 +284,7 @@ function HeadActions({
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
       {view !== 'archived' && <FlowButton on={false} count={flow} />}
-      {owner && <OwnerButton actor={owner} />}
+      {p && <AskButton p={p} />}
     </>
   );
 }
