@@ -215,7 +215,7 @@ export const snoozeTask = (id: string, until: string | null) =>
 /** Approve or ask changes on one requirement. The row leaves Flow at once and comes back if the server refuses.
     `shown` is the hash of what the person was shown (decisionShownQuery): an OK bound to it is given with it; null
     answers a stage's own OK, which has no grant, with the page version it was asked on (ui/app/decide.ts). */
-export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null): Promise<TaskResult & { answer_id?: string }> {
+export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null): Promise<TaskResult> {
   const me = queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
   const answered = (t: TaskData): Fields => ({
     to_leave: (t.to_leave ?? []).map((r) =>
@@ -231,7 +231,7 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     return { ...f, items, count: items.length };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
-  return write<TaskResult & { answer_id?: string }>({
+  return write<TaskResult>({
     key: [...shownIn(id), ...flows],
     optimistic: (cur) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? gone(cur) : patch(id, answered)(cur)),
     send: (idem) => (value === 'ok' && shown ? post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown }, idem) : sendAnswer(id, rid, value, note, idem)),
