@@ -210,6 +210,24 @@ def refusal(c, runner_id, bot):
     return blocked if blocked.get('runner_id') == runner_id else {}
 
 
+def refusals(c, runner_id, bots):
+    """`refusal` for each of `bots`, read together: {bot: its refusal} for those blocked on this computer. A heartbeat
+    asked once per hosted bot, under the write lock (50 reads a beat on a computer with 50 bots)."""
+    out = {}
+    for part in H.chunks(bots):
+        for key, value in c.execute(
+            "SELECT key,value FROM registry_metadata WHERE key IN (%s)" % ','.join('?' * len(part)),
+            ['subscription-unavailable:' + bot for bot in part],
+        ):
+            try:
+                blocked = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(blocked, dict) and blocked.get('runner_id') == runner_id:
+                out[key.removeprefix('subscription-unavailable:')] = blocked
+    return out
+
+
 def record(c, runner_id, profiles, readiness=None):
     # Omitted by an older computer: retain its last report until it can report again.
     from . import model_subscriptions
@@ -249,8 +267,10 @@ def record(c, runner_id, profiles, readiness=None):
                 value.pop('account', None)
             runtimes[runtime] = value
         valid[profile.name] = encode(runtimes)
-    for bot in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (runner_id,)):
-        blocked = refusal(c, runner_id, bot['bot'])
+    hosted = [row['bot'] for row in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (runner_id,))]
+    blocks = refusals(c, runner_id, hosted)
+    for bot in hosted:
+        blocked = blocks.get(bot, {})
         status = (
             (
                 readiness_document(readiness)
@@ -267,7 +287,7 @@ def record(c, runner_id, profiles, readiness=None):
             signed_in is True
             or (signed_in is None and blocked['profile'] in valid and status.get('authenticated') == 'ready')
         ):
-            c.execute("DELETE FROM registry_metadata WHERE key=?", (f"subscription-unavailable:{bot['bot']}",))
+            c.execute("DELETE FROM registry_metadata WHERE key=?", (f"subscription-unavailable:{bot}",))
     stored = {
         r['profile']: r['runtimes']
         for r in c.execute('SELECT profile,runtimes FROM computer_profiles WHERE runner_id=?', (runner_id,))

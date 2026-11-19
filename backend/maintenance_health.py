@@ -642,39 +642,38 @@ def _bot_checks(c, settings=None):
                     BUG_FIX["queue_idle"],
                 )
             )
-    from .worktrees import current_error, finished_and_retired, supported, statuses
+    from .worktrees import current_error, finished_and_retired, statuses
 
-    if supported(c):
-        for r in statuses(
-            c,
-            c.execute(
-                "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
-                "WHERE l.kind='worktree' AND l.state<>'removed'"
-            ),
-        ):
-            if finished_and_retired(r):
-                continue
-            error = current_error(r["state"], json.loads(r["detail"] or "{}"))
-            if error:
-                bot = H.actor_id(r["owner_id"])
-                label = (H.bot(c, bot) or {}).get("slug", bot)
-                digest = hashlib.sha256(error.encode()).hexdigest()[:8]
-                out.append(
-                    _finding(
-                        f"worktree_error:{bot}:{digest}",
-                        "worktree_error",
-                        SETUP,
-                        f"A task worktree of {label} failed",
-                        f"{label}: {error[:400]}",
-                        (
-                            f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
-                            "Unpushed work stayed on the retired computer."
-                            if r['state'] == 'retired'
-                            else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
-                            "the computer can make it again (docs/worktrees.md)."
-                        ),
-                    )
+    for r in statuses(
+        c,
+        c.execute(
+            "SELECT t.owner_id,t.status AS task_status,l.* FROM task_links l JOIN tasks t ON t.id=l.task_id "
+            "WHERE l.kind='worktree' AND l.state<>'removed'"
+        ),
+    ):
+        if finished_and_retired(r):
+            continue
+        error = current_error(r["state"], json.loads(r["detail"] or "{}"))
+        if error:
+            bot = H.actor_id(r["owner_id"])
+            label = (H.bot(c, bot) or {}).get("slug", bot)
+            digest = hashlib.sha256(error.encode()).hexdigest()[:8]
+            out.append(
+                _finding(
+                    f"worktree_error:{bot}:{digest}",
+                    "worktree_error",
+                    SETUP,
+                    f"A task worktree of {label} failed",
+                    f"{label}: {error[:400]}",
+                    (
+                        f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                        "Unpushed work stayed on the retired computer."
+                        if r['state'] == 'retired'
+                        else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
+                        "the computer can make it again (docs/worktrees.md)."
+                    ),
                 )
+            )
     out.extend(_stop_checks(c))
     out.extend(_session_checks(c))
     out.extend(_profile_checks(c))
