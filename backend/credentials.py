@@ -1222,7 +1222,9 @@ def install_credentials(app, store, delegate=None, propose=None):
     @app.get('/api/v2/runner-credential-grants')
     def runner_grants(request: Request):
         who = request.state.identity
-        with store.read() as c:
+        # One snapshot, so the company-wide reads (the default-read tools and their keys, each key's tool, the bots'
+        # grants) are read once for all of the computer's bots, not once per bot (backend/read_cache.py).
+        with store.read_transaction() as c:
             migration_runner(c, who)
             bots = {r[0]: [] for r in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (who.runner_id,))}
             stored = c.execute(
@@ -1230,10 +1232,11 @@ def install_credentials(app, store, delegate=None, propose=None):
             ).fetchall()
             from . import tool_settings
 
-            for bot, names in bots.items():
-                held = granted(c, 'bot:' + bot)
+            prime_granted(c, ['bot:' + bot for bot in bots])
+            helds = [granted(c, 'bot:' + bot) for bot in bots]
+            for names, held, settings in zip(bots.values(), helds, tool_settings.names_each(c, helds), strict=True):
                 names.extend(r['env'] for r in stored if r['id'] in held)
-                names.extend(n for n in tool_settings.names(c, held) if n not in names)
+                names.extend(n for n in settings if n not in names)
             return {'bots': bots}
 
     @app.post('/api/v2/runner-credential-migration')

@@ -447,3 +447,39 @@ def test_a_preset_companys_build_reads_each_tasks_stage_pipeline_pages_and_filed
     together, after = shapes(api, ANA, monkeypatch)
     assert all(n <= 1 for n in together.values()), str((alone, together))
     assert json.dumps(after, sort_keys=True, default=str) == json.dumps(before, sort_keys=True, default=str)
+
+
+def test_tasks_primed_again_in_a_snapshot_read_nothing_more_until_a_write(api):
+    """Needs you primes its whole list, then its briefs and the reader's views prime parts of it again
+    (waiting_on.prime): those read no statement, and give the same tasks. The ❓ chats, read already, are not read again
+    (question_marks.chat_rows), and an @ list is read once a snapshot (open_mentions.rows). A write in the same
+    transaction drops what was read, so the next prime reads again."""
+    from backend import open_mentions, waiting_on
+
+    store = company(api, pages=3, questions=4, idle=2)
+    with store.read_transaction() as c:
+        seen: list[str] = []
+        c.set_trace_callback(seen.append)  # first: setting it empties the snapshot's read cache
+        ids = [str(r[0]) for r in c.execute("SELECT id FROM tasks WHERE status='open' ORDER BY id")]
+        first = waiting_on.prime(c, ids)
+        marks = [m["conversation_id"] for m in (H.message(c, q["message_id"]) for q in Q.open_rows(c))]
+        mine = open_mentions.rows(c, ANA)
+        read = len(seen)
+        again = waiting_on.prime(c, ids[: len(ids) // 2])
+        chats = Q.chat_rows(c, marks)
+        mentions = open_mentions.rows(c, ANA)
+        c.set_trace_callback(None)
+        assert seen[read:] == [], seen[read:]
+        assert again == {i: first[i] for i in ids[: len(ids) // 2]}
+        assert chats and all(row["id"] == cid for cid, row in chats.items())
+        assert mentions == mine and mentions is not mine
+    with store.transaction() as c:
+        seen = []
+        c.set_trace_callback(seen.append)
+        waiting_on.prime(c, ids)
+        X.new_task(c, ANA, "One more", "eng", assignee=f"bot:{BOTS[0]}")
+        read = len(seen)
+        waiting_on.prime(c, ids)
+        c.set_trace_callback(None)
+        # The per-task primes run again too, not only the task rows: the write dropped the set of tasks primed.
+        assert any("FROM task_relations" in s for s in seen[read:]), seen[read:]

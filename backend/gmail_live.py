@@ -6,7 +6,9 @@ permitted (backend/email_sending.py `drain`); it never retries. Only the token c
 the connector's pure normalizer supplies the same message fields without loading Google client libraries.
 
 Drafts are found again by the Message-ID Tico gave them (`draft_find`, Gmail's `rfc822msgid:` search over drafts), so a
-retried draft or automation action finds the draft it made instead of making a second one.
+retried draft or automation action finds the draft it made instead of making a second one. A draft is named by its own
+id (r-...) or by its message's id, whoever made it (`draft_resolve`), and is changed in place, keeping its id
+(`draft_update`). `trash` and `spam` move messages out of the inbox and back; nothing here deletes a message for good.
 """
 
 import base64
@@ -44,9 +46,12 @@ PROTECTED_LABELS = frozenset(("TRASH", "SPAM", "SENT", "DRAFT", "DRAFTS"))
 ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024  # one attachment read through Tico; a bigger one is opened in Gmail
 
 
-def gmail_call(url, *, token, data=None, max_bytes=HTTP_MAX_BYTES):
-    """(status, JSON object), or status 0 when Gmail cannot answer. Tests replace this function."""
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "Authorization": "Bearer " + token})
+def gmail_call(url, *, token, data=None, max_bytes=HTTP_MAX_BYTES, method=None):
+    """(status, JSON object), or status 0 when Gmail cannot answer. A call with `data` is a POST unless `method` says
+    PUT. Tests replace this function."""
+    request = urllib.request.Request(
+        url, method=method, headers={"Accept": "application/json", "Authorization": "Bearer " + token}
+    )
     if data is not None:
         request.data = json.dumps(data).encode()
         request.add_header("Content-Type", "application/json")
@@ -84,7 +89,7 @@ def gmail_delete_call(url, *, token):
         return 0
 
 
-def _call(mailbox, path, token, *, data=None, max_bytes=None, **query):
+def _call(mailbox, path, token, *, data=None, max_bytes=None, method=None, **query):
     url = BASE + urllib.parse.quote(mailbox, safe="") + "/" + path
     if query:
         url += "?" + urllib.parse.urlencode(query, doseq=True)
@@ -93,6 +98,7 @@ def _call(mailbox, path, token, *, data=None, max_bytes=None, **query):
         token=token,
         **({"data": data} if data is not None else {}),
         **({"max_bytes": max_bytes} if max_bytes else {}),
+        **({"method": method} if method else {}),
     )
     if status in (200, 201, 204) and isinstance(body, dict) and "error" not in body:
         return body
@@ -364,7 +370,7 @@ def resolve_label(c, mailbox, name, *, create=False):
 
 
 def organize(c, mailbox, ids, add=(), remove=()):
-    """Change only safe system labels or verified user-label IDs. There is no delete or trash operation."""
+    """Change only safe system labels or verified user-label IDs. Trash and spam are `trash` and `spam`."""
     changes = set(add) | set(remove)
     if changes & PROTECTED_LABELS:
         raise Problem("gmail_label", "Tico may not change this Gmail system label", 422)
@@ -387,12 +393,139 @@ def organize(c, mailbox, ids, add=(), remove=()):
         )
 
 
-def send_call(url, *, token, body, content_type):
-    """(status, JSON object) for one messages.send or large drafts.create, or status 0 when Gmail did not answer.
-    Tests replace this."""
+def spam(c, mailbox, ids, restore=False):
+    """Report these messages as spam (out of the inbox), or with `restore` bring them back to the inbox. Gmail keeps
+    spam 30 days; nothing here deletes."""
+    for start in range(0, len(ids), 1000):
+        _call(
+            mailbox,
+            "messages/batchModify",
+            _token(c, mailbox, write=True),
+            data={
+                "ids": ids[start : start + 1000],
+                "addLabelIds": ["INBOX"] if restore else ["SPAM"],
+                "removeLabelIds": ["SPAM"] if restore else ["INBOX"],
+            },
+        )
+
+
+def trash(c, mailbox, ids, restore=False):
+    """Move these messages to Gmail's Trash, or with `restore` back out of it. Gmail has no batch call for either and
+    keeps a trashed message 30 days; nothing here deletes one for good."""
+    if not ids:
+        return
+    token, verb = _token(c, mailbox, write=True), "/untrash" if restore else "/trash"
+
+    def one(mid):
+        _call(mailbox, "messages/" + urllib.parse.quote(mid, safe="") + verb, token, data={})
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        builtins.list(pool.map(one, ids))
+
+
+def thread_message_ids(c, mailbox, thread_ids):
+    """Every message id of these threads, in order, drafts left out (Gmail files no label on a draft, and an unsent
+    reply is the person's): what an action on whole threads changes, however many there are."""
+    token, ids = _token(c, mailbox), []
+    for tid in thread_ids:
+        rows = _get(
+            mailbox,
+            "threads/" + urllib.parse.quote(tid, safe=""),
+            token,
+            format="minimal",
+            fields="messages(id,labelIds)",
+        ).get("messages")
+        if not isinstance(rows, builtins.list) or any(not isinstance(r, dict) or not r.get("id") for r in rows):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete thread; try again", 502, retryable=True)
+        ids.extend(str(r["id"]) for r in rows if "DRAFT" not in (r.get("labelIds") or []) and str(r["id"]) not in ids)
+    return ids
+
+
+LABEL_COUNTS = ("messagesTotal", "messagesUnread", "threadsTotal", "threadsUnread")
+
+
+def labels_counted(c, mailbox):
+    """Every label with Gmail's own counts: [{id, name, type, messages_total, messages_unread, threads_total,
+    threads_unread}], system labels first."""
+    rows, token = labels(c, mailbox), _token(c, mailbox)
+
+    def one(row):
+        found = _get(mailbox, "labels/" + urllib.parse.quote(row["id"], safe=""), token, fields=",".join(LABEL_COUNTS))
+        counts = {
+            "messages_total": found.get("messagesTotal"),
+            "messages_unread": found.get("messagesUnread"),
+            "threads_total": found.get("threadsTotal"),
+            "threads_unread": found.get("threadsUnread"),
+        }
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "type": row["type"],
+            **{k: v if isinstance(v, int) and v >= 0 else 0 for k, v in counts.items()},
+        }
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        out = builtins.list(pool.map(one, rows))
+    return sorted(out, key=lambda row: (row["type"] != "system", row["name"].lower()))
+
+
+def user_label(c, mailbox, name_or_id):
+    """The user label named or numbered so, as {id, name, type}; a system label is refused, a missing one not_found."""
+    for row in labels(c, mailbox):
+        if name_or_id in (row["name"], row["id"]):
+            if row["type"] != "user":
+                raise Problem("gmail_label", "Tico changes only your own labels, never Gmail's system labels", 422)
+            return row
+    raise Problem("not_found", "Gmail could not find this label", 404)
+
+
+def label_create(c, mailbox, name):
+    """The user label of this name, made when missing: {id, name, type, created}. Asked again, it is found."""
+    for row in labels(c, mailbox):
+        if row["name"] == name or (row["type"] == "system" and name.upper() == row["id"]):
+            if row["type"] != "user":
+                raise Problem("gmail_label", "This is a Gmail system label; choose another name", 422)
+            return {"id": row["id"], "name": row["name"], "type": "user", "created": False}
+    row = _call(mailbox, "labels", _token(c, mailbox, write=True), data={"name": name})
+    if not row.get("id") or row.get("type") != "user":
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
+    return {"id": str(row["id"]), "name": str(row["name"]), "type": "user", "created": True}
+
+
+def label_rename(c, mailbox, label_id, name):
+    row = _call(
+        mailbox,
+        "labels/" + urllib.parse.quote(label_id, safe=""),
+        _token(c, mailbox, write=True),
+        data={"name": name},
+        method="PATCH",
+    )
+    if not row.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
+    return {"id": str(row["id"]), "name": str(row.get("name") or name), "type": "user"}
+
+
+def label_delete(c, mailbox, label_id):
+    """Delete a user label: Gmail takes it off its messages and keeps the messages. True when deleted, False when it
+    was already gone."""
+    url = BASE + urllib.parse.quote(mailbox, safe="") + "/labels/" + urllib.parse.quote(label_id, safe="")
+    status = gmail_delete_call(url, token=_token(c, mailbox, write=True))
+    if status in (200, 204):
+        return True
+    if status == 404:
+        return False
+    if status in (401, 403):
+        raise Problem("gmail_refused", "Gmail refused this change; check the connection and Gmail access", 403)
+    raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
+
+
+def send_call(url, *, token, body, content_type, method=None):
+    """(status, JSON object) for one messages.send or large drafts.create (POST) or drafts.update (PUT), or status 0
+    when Gmail did not answer. Tests replace this."""
     request = urllib.request.Request(
         url,
         data=body,
+        method=method,
         headers={"Accept": "application/json", "Content-Type": content_type, "Authorization": "Bearer " + token},
     )
     try:
@@ -507,28 +640,120 @@ def draft_find(c, mailbox, message_id):
 
 
 def draft_get(c, mailbox, draft_id):
-    """The draft with this id as {id, message, thread}, or None when Gmail no longer has it."""
+    """The draft with this id as {id, message, thread}, or None when Gmail has no draft by that id (a message id
+    Gmail refuses as a draft id included)."""
     try:
         found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="minimal")
     except Problem as missing:
-        if missing.code == "not_found":
+        if missing.code in ("not_found", "gmail_query"):
             return None
         raise
     return _draft(found)
 
 
-def draft_create(c, mailbox, raw, thread_id=""):
-    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}. A draft
-    over INLINE_RAW_MAX (an email with files) goes up as a multipart upload, as a large send does."""
-    token = _token(c, mailbox, write=True)
-    if len(raw) <= INLINE_RAW_MAX:
-        message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
-        return _draft(_call(mailbox, "drafts", token, data={"message": message}))
-    body, content_type = _upload_body(raw, {"message": {"threadId": thread_id}} if thread_id else {})
-    path = urllib.parse.quote(mailbox, safe="") + "/drafts?uploadType=multipart"
-    status, found = send_call(UPLOAD + path, token=token, body=body, content_type=content_type)
+DRAFT_PAGE = 500  # drafts one list call returns (Gmail's most)
+DRAFT_PAGES = 1000  # pages of ids a lookup by message or thread reads before it refuses (half a million drafts)
+
+
+def _draft_page(c, mailbox, q="", page_token="", limit=None):
+    """One page of drafts as [{id, message, thread}], and Gmail's continuation token or None."""
+    limit = limit or DRAFT_PAGE
+    query = {"maxResults": limit, "fields": "drafts(id,message(id,threadId)),nextPageToken"}
+    if q:
+        query["q"] = q
+    if page_token:
+        query["pageToken"] = page_token
+    page = _get(mailbox, "drafts", _token(c, mailbox), **query)
+    rows, nxt = page.get("drafts") or [], page.get("nextPageToken") or None
+    if not isinstance(rows, builtins.list) or len(rows) > limit or (nxt is not None and not isinstance(nxt, str)):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+    return [_draft(row) for row in rows], nxt
+
+
+def draft_scan(c, mailbox, wanted, q="", enough=None):
+    """The drafts `wanted({id, message, thread})` keeps, newest first, paging through every draft (ids only) until
+    `enough(found)` says to stop or Gmail has no more. A mailbox past DRAFT_PAGES pages is refused, never cut short."""
+    found, cursor, seen = [], "", set()
+    for _ in range(DRAFT_PAGES):
+        rows, cursor = _draft_page(c, mailbox, q, cursor)
+        found.extend(row for row in rows if wanted(row))
+        if not cursor or (enough and enough(found)):
+            return found
+        if cursor in seen:
+            break
+        seen.add(cursor)
+    raise Problem("gmail_size", "This mailbox has too many drafts to look through; find the draft in Gmail", 502)
+
+
+def draft_resolve(c, mailbox, ident):
+    """The draft named by its own id or by its message's id, as {id, message, thread}; None when neither names one.
+    Any draft in the mailbox counts, whoever made it."""
+    return draft_get(c, mailbox, ident) or next(
+        iter(draft_scan(c, mailbox, lambda row: row["message"] == ident, enough=bool)), None
+    )
+
+
+def draft_ids(c, mailbox, message_ids):
+    """{message id: draft id} for those of these messages that are drafts."""
+    wanted = set(message_ids)
+    if not wanted:
+        return {}
+    rows = draft_scan(c, mailbox, lambda row: row["message"] in wanted, enough=lambda found: len(found) >= len(wanted))
+    return {row["message"]: row["id"] for row in rows}
+
+
+DRAFT_FIELDS = "id,message(" + LIST_FIELDS + ")"
+
+
+def drafts(c, mailbox, q="", thread="", page_token="", limit=50):
+    """One bounded page of drafts, newest first: each its draft id with its message's headers, snippet and attachment
+    names. `thread` keeps the drafts in that thread: every draft is looked through for them, and the cursor is how
+    many of them came before."""
+    cap = min(LIMIT_MAX, max(1, limit))
+    if thread:
+        matched = draft_scan(c, mailbox, lambda row: row["thread"] == thread, q)
+        start = int(page_token) if page_token.isdigit() else 0
+        rows, nxt = matched[start : start + cap], str(start + cap) if start + cap < len(matched) else None
+    else:
+        rows, nxt = _draft_page(c, mailbox, q, page_token, cap)
+    token = _token(c, mailbox)
+
+    def one(row):
+        found = _get(
+            mailbox, "drafts/" + urllib.parse.quote(row["id"], safe=""), token, format="full", fields=DRAFT_FIELDS
+        )
+        return {"draft": row["id"], **_listed(found.get("message"))}
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        listed = builtins.list(pool.map(one, rows))
+    return _bounded({"drafts": listed, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
+
+
+def draft_message(c, mailbox, draft_id):
+    """A draft's message read whole, with `draft` its id; None when Gmail has no draft by that id."""
+    try:
+        found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="full")
+    except Problem as missing:
+        if missing.code in ("not_found", "gmail_query"):
+            return None
+        raise
+    return {"draft": str(found.get("id") or draft_id), **_bounded(_message(found.get("message")), OPEN_MAX_BYTES)}
+
+
+def _draft_upload(url, token, raw, meta, method=None):
+    """A draft over INLINE_RAW_MAX (an email with files) goes up as a multipart upload, as a large send does."""
+    body, content_type = _upload_body(raw, meta)
+    status, found = send_call(
+        url + "?uploadType=multipart",
+        token=token,
+        body=body,
+        content_type=content_type,
+        **({"method": method} if method else {}),
+    )
     if status in (200, 201) and found.get("id"):
         return _draft(found)
+    if status == 404:
+        raise Problem("not_found", "Gmail no longer has this draft", 404)
     if status in (401, 403):
         raise Problem(
             "gmail_refused", "Gmail refused this change; check the Whole Workspace connection and Gmail access", 403
@@ -538,12 +763,37 @@ def draft_create(c, mailbox, raw, thread_id=""):
     raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
 
 
+def draft_update(c, mailbox, draft_id, raw, thread_id=""):
+    """Replace a draft's message with this MIME (base64url), keeping the draft's id: {id, message, thread}. Gmail
+    gives the new message its own id."""
+    token = _token(c, mailbox, write=True)
+    path = "drafts/" + urllib.parse.quote(draft_id, safe="")
+    thread = {"threadId": thread_id} if thread_id else {}
+    if len(raw) <= INLINE_RAW_MAX:
+        return _draft(
+            _call(mailbox, path, token, data={"id": draft_id, "message": {"raw": raw, **thread}}, method="PUT")
+        )
+    url = UPLOAD + urllib.parse.quote(mailbox, safe="") + "/" + path
+    return _draft_upload(url, token, raw, {"id": draft_id, "message": thread}, method="PUT")
+
+
+def draft_create(c, mailbox, raw, thread_id=""):
+    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}. A draft
+    over INLINE_RAW_MAX (an email with files) goes up as a multipart upload, as a large send does."""
+    token = _token(c, mailbox, write=True)
+    if len(raw) <= INLINE_RAW_MAX:
+        message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+        return _draft(_call(mailbox, "drafts", token, data={"message": message}))
+    meta = {"message": {"threadId": thread_id}} if thread_id else {}
+    return _draft_upload(UPLOAD + urllib.parse.quote(mailbox, safe="") + "/drafts", token, raw, meta)
+
+
 # A draft's format=raw answer: the whole email base64url-encoded, up to the send gate's limit, with room for the JSON.
 DRAFT_RAW_MAX_BYTES = MAX_RAW * 4 // 3 + 1024 * 1024
 
 
 def draft_raw(c, mailbox, draft_id):
-    """A draft's MIME (base64url) and thread, as Gmail holds it now: what a send of the draft freezes."""
+    """A draft's MIME (base64url), thread and message id, as Gmail holds it now: what a send of the draft freezes."""
     found = _call(
         mailbox,
         "drafts/" + urllib.parse.quote(draft_id, safe=""),
@@ -554,16 +804,20 @@ def draft_raw(c, mailbox, draft_id):
     message = found.get("message") if isinstance(found, dict) else None
     if not isinstance(message, dict) or not isinstance(message.get("raw"), str) or not message["raw"]:
         raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
-    return {"raw": message["raw"].rstrip("="), "thread": str(message.get("threadId") or "")}
+    return {
+        "raw": message["raw"].rstrip("="),
+        "thread": str(message.get("threadId") or ""),
+        "message": str(message.get("id") or ""),
+    }
 
 
 def draft_delete(c, mailbox, draft_id):
-    """Discard one draft. True when Gmail deleted it, False when it was already gone."""
+    """Discard one draft. True when Gmail deleted it, False when it was already gone (or the id is no draft id)."""
     url = BASE + urllib.parse.quote(mailbox, safe="") + "/drafts/" + urllib.parse.quote(draft_id, safe="")
     status = gmail_delete_call(url, token=_token(c, mailbox, write=True))
     if status in (200, 204):
         return True
-    if status == 404:
+    if status in (400, 404):
         return False
     if status in (401, 403):
         raise Problem("gmail_refused", "Gmail refused this change; check the connection and Gmail access", 403)

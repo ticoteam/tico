@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 
+from backend import bot_settings as BS
 from backend import bot_stops, execution, holds, login_holds, task_wakes, views
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 from backend.tests.helpers.run_failures import failing
 
@@ -246,6 +248,45 @@ def test_a_bot_on_a_login_another_bot_met_the_limit_on_shows_the_limit(api, monk
         assert (H.status(c, "ops") or {}).get("state") == "limited"
         assert holds.why(c, "ops", kinds=holds.STOPS) is None
         assert not execution.cooling_off(c, settings, "ops")
+
+
+def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone(api, monkeypatch):
+    # A page (Needs you, the Floor) asks holds.why of every bot in one snapshot while a login is held. From the third
+    # bot, what cooling_off reads is read once for all of them (execution.cooling_off_loads), and each bot's answer is
+    # the one it gets asked alone. A write in the same transaction drops what was read: the next answer reads again.
+    machine, rig = _start(api, monkeypatch)
+    store = api.app.state.store
+    extra = [f"helper{n}" for n in range(6)]
+    with store.transaction() as c:
+        for slug in extra:
+            X.bot(c, slug, computer=False)
+    for slug in extra[:4]:  # two stay on no computer
+        assign(api, machine, slug)
+    with store.transaction() as c:
+        _usage_limit(api, c, rig)
+        # A hold on a login none of them signs in with: it stays when theirs is cleared, so every bot is judged again.
+        hold = {"runner_id": rig["runner_id"], "profile": "", "runtime": "other", "since": NOW, "until": LATER}
+        login_holds._save(c, {**hold, "reset": LATER})
+    bots = ["ops", *extra]
+    alone = {}
+    for slug in bots:
+        with store.read_transaction() as c:
+            alone[slug] = holds.why(c, slug, kinds=holds.STOPS)
+    assert alone == {**{slug: holds.USAGE_LIMIT for slug in bots[:5]}, **{slug: None for slug in extra[4:]}}
+    with store.read_transaction() as c:
+        seen: list[str] = []
+        c.set_trace_callback(seen.append)
+        together = {slug: holds.why(c, slug, kinds=holds.STOPS) for slug in bots}
+        c.set_trace_callback(None)
+    assert together == alone
+    # The first two bots read their own computer and configuration; the rest come from one read of every bot's.
+    one_bot = [s for s in seen if s.startswith((execution.PLACE_SQL[:-1], BS.ONE_SQL[:-1]))]  # the trace has values
+    assert len(one_bot) == 4, one_bot
+    with store.transaction() as c:
+        assert [holds.why(c, slug, kinds=holds.STOPS) for slug in bots[:3]] == [holds.USAGE_LIMIT] * 3
+        login_holds.clear(c, rig["runner_id"], "", "fake")
+        assert c.execute(holds.ANY_LOGIN_HOLD_SQL).fetchone()  # the loads are read again, not skipped
+        assert [holds.why(c, slug, kinds=holds.STOPS) for slug in bots] == [None] * len(bots)
 
 
 def _second_run(c, job_id):

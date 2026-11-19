@@ -192,10 +192,15 @@ def _answerable_open(conn: sqlite3.Connection, sql: str, args: tuple[object, ...
 
 
 def chat_rows(conn: sqlite3.Connection, ids: Iterable[object]) -> dict[str, Row]:
-    """These chats' rows by id, in one read: for `readable` over many marks."""
+    """These chats' rows by id, in one read: for `readable` over many marks. Inside a snapshot a chat read already
+    (hubdb.conversation, prime_conversations) is not read again (hubdb.conversation_rows); outside one, one read."""
+    from . import read_cache
+
     wanted = sorted({str(i) for i in ids if i})
     if not wanted:
         return {}
+    if read_cache.cache(conn) is not None:
+        return {str(cid): dict(row) for cid, row in H.conversation_rows(conn, wanted).items()}
     return {
         str(r["id"]): dict(r)
         for r in conn.execute(

@@ -41,14 +41,23 @@ Reading (lists: headers and snippets; bodies only in thread and message, audited
   tico email attachments <address> <message-id>        attachment references from all MIME parts
   tico email attachment  <address> <message-id> <ref> --out <path>   one attachment to a new private file
 State (visible in Gmail too; each prints an undo line)
-  tico email archive|unarchive|mark-read|mark-unread <address> <message-id>...  (or --query)
+  tico email archive|unarchive|mark-read|mark-unread <address> <message-id>...  (or --thread, or --query)
+  tico email star|unstar|important|not-important <address> <message-id>...
+  tico email trash|untrash|spam|not-spam <address> <message-id>...   Gmail keeps both 30 days; never deleted
   tico email label|unlabel <address> <label> <message-id>...   hub/<name> labels; STARRED stars
+  tico email labels <address>                          every label with its message and thread counts
+  tico email label-create|label-delete <address> <label>   tico email label-rename <address> <label> <new-name>
+  tico email original <address> <message-id> [--out <file.eml>]   every header as received
 Writing (all go through the guardrails below)
   tico email draft   <address> --to <addr> [--cc <addr>] --subject "..." --body-file <path>
   tico email draft   <address> --reply-to <thread-id> --body-file <path>
+  tico email drafts  <address> [--q '<gmail query>'] [--thread <thread-id>]   draft ids, whoever made them
+  tico email draft-show   <address> <draft-id>         one draft (a draft id or its message id)
+  tico email draft-update <address> <draft-id> [--to ...] [--subject ...] [--body-file <path>] [--attach ...]
   tico email discard <address> <draft-id>
   tico email send    <address> --draft <draft-id>      queue it with Tico, which decides
-  tico email reply   <address> --thread <thread-id> --body-file <path>   draft, then queue it
+  tico email reply   <address> --thread <thread-id> [--all] --body-file <path>   draft, then queue it
+  tico email forward <address> <message-id> --to <addr> [--body ...]   with its files; draft, then queue it
   tico email unsubscribe <address> <message-id>        one RFC 8058 one-click request
 Calendar
   tico calendar free --who human:ana --minutes 20      free times within working hours

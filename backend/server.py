@@ -10,6 +10,12 @@ import signal
 import socket
 import subprocess
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from uvicorn import Server as _UvicornServer  # imported lazily at run time (start-up speed)
+else:
+    _UvicornServer = object
 
 
 def _logging_config(log_level):
@@ -38,6 +44,31 @@ def _logging_config(log_level):
             "tico.call_voice": call_logger,
         },
     }
+
+
+def _freeze_startup_heap():
+    """Once the app has started: what it holds from then on (every module, the catalogs, the open store) moves out of
+    the cycle collector's generations (gc.freeze), so a full collection walks only what requests made since. On a
+    TIDY-sized heap (~410k tracked objects) a full collection inside a request took ~60 ms, about one request in four;
+    frozen it takes 2-6 ms. Frozen objects are still freed by reference count, and what exists at start lives as long
+    as the process. The cost: a reference cycle that holds a frozen object is never collected, with everything it
+    reaches, even what is made later (say, a relay response in flight at the freeze, kept alive by a cycle through it).
+    That can only happen to what was alive at this one moment at start, so it is bounded and does not grow."""
+    import gc
+
+    gc.collect()
+    gc.freeze()
+
+
+class _FreezeAfterStartup(_UvicornServer):
+    """Mixed into the uvicorn server: once startup succeeds (the app's lifespan has run and the sockets listen), the
+    startup heap is frozen. A failed lifespan raises out of startup (uvicorn exits), and a stop asked for while starting
+    skips it; either way nothing is frozen."""
+
+    async def startup(self, sockets=None):
+        await super().startup(sockets=sockets)
+        if not self.should_exit:
+            _freeze_startup_heap()
 
 
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
@@ -121,7 +152,7 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         else:
             settings = replace(settings, screen_relay_url=url, screen_relay_key=key)
 
-        class Server(uvicorn.Server):
+        class Server(_FreezeAfterStartup, uvicorn.Server):
             def handle_exit(self, sig, frame):  # uvicorn takes SIGINT and SIGTERM while it runs: a stop starts here
                 # The public port closes with the server, so a new connect is refused (Caddy holds it), not a relay 502.
                 stopping.set()

@@ -56,7 +56,7 @@ def capabilities(c, auth, conv):
         return None, False, []
     bot = bots[0]
     config = read_cache.one(c, BS.ONE_SQL, (bot,))
-    runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
+    runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config["config"] or "{}") if config else {})
     row = c.execute(
         "SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "WHERE a.bot=? AND r.revoked_at IS NULL",

@@ -94,6 +94,8 @@ ANSWERS = {
         "ids": ["m1", "m2"],
         "undo": {"action": "unlabel", "label": "Receipts", "ids": ["m1", "m2"]},
     },
+    "POST mail/drafts": {"mailbox": "ops@acme.test", "draft": "r-123", "message": "dm-1", "thread": "t-1"},
+    "POST email/sends": {"send": {"id": "snd_1", "state": "waiting_approval", "decision": {"outcome": "ask"}}},
     "GET growth/channels": {"channels": [_CHANNEL]},
     "GET growth/sources": {
         "sources": [

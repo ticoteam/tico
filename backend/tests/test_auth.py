@@ -120,3 +120,15 @@ def test_a_domain_join_through_the_tico_account_keeps_the_verified_email_rule():
     assert oidc._email(claims, ["acme.example"]) == "ben@acme.example"
     with pytest.raises(SignInError):
         oidc._email({**claims, "email_verified": False}, ["acme.example"])
+
+
+def test_cookies_are_read_leniently_so_a_neighbor_cannot_hide_the_sign_in():
+    """Another app on the same host (localhost cookies ignore the port) can leave a cookie Python's strict parser
+    rejects; the rest, the sign-in among them, still read."""
+    from backend.auth import cookies
+
+    header = 'other_app={"a":1}; bad="a\\b" x; tico_local_session_abc=secret; quoted="v"; tico_local_session_abc=later'
+    jar = cookies({"cookie": header})
+    assert jar["tico_local_session_abc"] == "secret"  # the first of a name wins
+    assert jar["quoted"] == "v"
+    assert cookies({}) == {}

@@ -5,12 +5,15 @@ with no bypass; a person's Assistant is that person. Runners are refused. Every 
 read is audited as `mail.read`. A draft (`POST /api/v2/mail/drafts`) is written to Gmail under a Message-ID Tico
 chose, so the same draft asked for again is found, not made twice (backend/mail_compose.py); a bot's own draft meets
 the lint first, and the second reviewer reads it. Sending a draft is the send gate's (`POST /api/v2/email/sends` with
-its `draft_id`). `tico email ...` (clients/commands/mail.py) is a thin call to each route.
+its `draft_id`). Every draft in the mailbox, whoever made it, is listed, read, changed in place (meeting the same lint
+and review) and discarded by its draft id (r-...) or by its message's id; a draft's message in a thread or a search
+carries its `draft_id`. `tico email ...` (clients/commands/mail.py) is a thin call to each route.
 
 `GET /api/v2/mail/access` answers what the caller, a person or a bot's turn, may do on each mailbox it holds.
 """
 
 import base64
+import hashlib
 import json
 import re
 from types import SimpleNamespace
@@ -26,29 +29,45 @@ from .api_contract import api_v2, error, ref
 
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 ATTACHMENTS_MAX = 20
+DRAFT_ID = re.compile(r"r-?\d+")  # Gmail's draft ids; a message id is hex
 DURATION = {"d": 86400, "h": 3600, "m": 60}
+# action: (labels added, labels removed, its undo). Trash and spam are Gmail's own moves (`gmail_live.trash`, `spam`).
 ORGANIZE_ACTIONS = {
     "archive": ((), ("INBOX",), "unarchive"),
     "unarchive": (("INBOX",), (), "archive"),
     "mark_read": ((), ("UNREAD",), "mark_unread"),
     "mark_unread": (("UNREAD",), (), "mark_read"),
+    "star": (("STARRED",), (), "unstar"),
+    "unstar": ((), ("STARRED",), "star"),
+    "important": (("IMPORTANT",), (), "not_important"),
+    "not_important": ((), ("IMPORTANT",), "important"),
     "label": ((), (), "unlabel"),
     "unlabel": ((), (), "label"),
+    "trash": ((), (), "untrash"),
+    "untrash": ((), (), "trash"),
+    "spam": ((), (), "not_spam"),
+    "not_spam": ((), (), "spam"),
 }
 
 
-def organize_selection(body):
-    action, ids, query = body.get("action"), body.get("ids"), body.get("query")
-    if not isinstance(action, str) or action not in ORGANIZE_ACTIONS:
-        raise Problem("action", "Choose archive, unarchive, mark_read, mark_unread, label or unlabel", 422)
-    if (ids is not None) == (query is not None):
-        raise Problem("selection", "Choose either message ids or a Gmail query", 422)
-    if ids is not None and (
-        not isinstance(ids, list)
-        or not 1 <= len(ids) <= 500
-        or any(not isinstance(mid, str) or not mid.strip() or not mid.isascii() or len(mid) > 128 for mid in ids)
+def _ids(value, name, what):
+    if value is not None and (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= 500
+        or any(not isinstance(i, str) or not i.strip() or not i.isascii() or len(i) > 128 for i in value)
     ):
-        raise Problem("ids", "Choose 1 to 500 message ids (up to 128 characters each)", 422)
+        raise Problem(name, f"Choose 1 to 500 {what} ids (up to 128 characters each)", 422)
+
+
+def organize_selection(body):
+    """(action, message ids, query, thread ids, limit, label): exactly one of ids, threads and query is given."""
+    action, ids, query, threads = body.get("action"), body.get("ids"), body.get("query"), body.get("threads")
+    if not isinstance(action, str) or action not in ORGANIZE_ACTIONS:
+        raise Problem("action", "Choose one of " + ", ".join(ORGANIZE_ACTIONS), 422)
+    if sum(x is not None for x in (ids, query, threads)) != 1:
+        raise Problem("selection", "Choose either message ids, thread ids (threads) or a Gmail query", 422)
+    _ids(ids, "ids", "message")
+    _ids(threads, "threads", "thread")
     if query is not None and (not isinstance(query, str) or not query.strip() or len(query) > 4096):
         raise Problem("query", "A Gmail query is required (up to 4096 characters)", 422)
     limit = body.get("limit", 100)
@@ -61,7 +80,8 @@ def organize_selection(body):
         label = label.strip()
     elif label is not None:
         raise Problem("label", "label is only used with label or unlabel", 422)
-    return action, list(dict.fromkeys(ids)) if ids is not None else None, query, limit, label
+    unique = list(dict.fromkeys(ids)) if ids is not None else None
+    return action, unique, query, list(dict.fromkeys(threads)) if threads is not None else None, limit, label
 
 
 def visible_addresses(c, who):
@@ -226,8 +246,11 @@ class DraftBody(Contract):
     to: list[str] = Field(default_factory=list, max_length=50)
     cc: list[str] = Field(default_factory=list, max_length=50)
     subject: str = Field(default="", max_length=900)
-    body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
+    # The email text; a forward may have none (the forwarded message follows it).
+    body: str = Field(default="", max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)  # a thread id: the reply answers its newest message from others
+    reply_all: bool = False  # with reply_to: to the sender and everyone else on the message, the mailbox left out
+    forward: str = Field(default="", max_length=200)  # a message id: forwarded with its files, after the text
     # Tico files to attach, in order: FILE (its current version) or FILE@N, each one the caller may download.
     attachments: list[str] = Field(default_factory=list, max_length=ATTACHMENTS_MAX)
     operation_id: str = Field(default="", max_length=200)
@@ -240,10 +263,133 @@ class LintBody(Contract):
     subject: str = Field(default="", max_length=900)
     body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)
+    reply_all: bool = False
+
+
+class DraftUpdateBody(Contract):
+    """What changes in a draft; a field left out keeps what the draft has now (its files included)."""
+
+    mailbox: str = Field(min_length=3, max_length=320)
+    to: list[str] | None = Field(default=None, max_length=50)
+    cc: list[str] | None = Field(default=None, max_length=50)
+    subject: str | None = Field(default=None, max_length=900)
+    body: str | None = Field(default=None, min_length=1, max_length=mail_compose.BODY_MAX)
+    # Tico files that replace the draft's files, in order (FILE or FILE@N); [] takes them all off.
+    attachments: list[str] | None = Field(default=None, max_length=ATTACHMENTS_MAX)
+    # The draft's message id the caller last saw: a draft changed since (by Gmail, a person or another edit) is
+    # refused, not overwritten.
+    message: str = Field(default="", max_length=200)
+    operation_id: str = Field(default="", max_length=200)
+
+
+def stale(addr, did, expected, current):
+    """409 when the draft no longer holds the message the caller acted on."""
+    if expected and current and expected != current:
+        raise Problem(
+            "draft_changed",
+            f"Draft {did} in {addr} changed since you read it (its message is now {current}, not {expected}). Read it "
+            f"again with `tico email draft-show {addr} {did}` and redo the change on what it says now",
+            409,
+            extra={"draft": did, "message": current},
+        )
 
 
 class MailboxBody(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
+
+
+class LabelBody(Contract):
+    mailbox: str = Field(min_length=3, max_length=320)
+    name: str = Field(min_length=1, max_length=225)
+
+
+def no_draft(addr, ident):
+    return Problem(
+        "not_found",
+        f"{addr} has no draft {ident}: it was sent or discarded, or the id is neither a draft id (r-...) nor a draft's "
+        f"message id. `tico email drafts {addr}` lists its drafts",
+        404,
+    )
+
+
+def draft_public(addr, item, domains, body=False):
+    """A draft's message as the read API shows a message, with its draft id and when it was last saved."""
+    out = live_message_public(addr, item, domains, body=body)
+    if not body:
+        out["attachments"] = [a["name"] for a in item["attachments"]]
+    return {"draft_id": item["draft"], **out, "updated": out["date"]}
+
+
+def with_draft_ids(c, addr, messages):
+    """Each draft's message among these carries its `draft_id`: the id a discard, update or send names."""
+    ids = [m["msg_id"] for m in messages if "DRAFT" in m["labels"]]
+    found = gmail_live.draft_ids(c, addr, ids) if ids else {}
+    for m in messages:
+        if m["msg_id"] in found:
+            m["draft_id"] = found[m["msg_id"]]
+    return messages
+
+
+def read_draft(c, addr, ident):
+    """The draft named by its draft id or its message's id, its message read whole; not_found when neither."""
+    found = gmail_live.draft_message(c, addr, ident)
+    if found is None:
+        row = next(iter(gmail_live.draft_scan(c, addr, lambda r: r["message"] == ident, enough=bool)), None)
+        found = gmail_live.draft_message(c, addr, row["id"]) if row else None
+    if found is None:
+        raise no_draft(addr, ident)
+    return found
+
+
+def edited_draft(raw, to=None, cc=None, subject=None, text=None, files=None):
+    """A draft's MIME (base64url) with only the fields given changed, in place: every other header (Bcc, In-Reply-To,
+    References...) and part (an HTML version, a forwarded message, inline images) stays byte for byte as it was.
+    `files` replaces the draft's attachments. New words for a draft whose text has an HTML version are refused: Tico
+    cannot change the HTML to match, and dropping it would lose the draft's formatting. The Message-ID is removed for
+    the caller to set. Returns the email.message.EmailMessage."""
+    from email import policy
+    from email.parser import BytesParser
+
+    msg = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+
+    def put(name, value):
+        del msg[name]
+        if value:
+            msg[name] = value
+
+    if to is not None:
+        put("To", ", ".join(to))
+    if cc is not None:
+        put("Cc", ", ".join(cc))
+    if subject is not None:
+        put("Subject", subject[: mail_compose.SUBJECT_MAX])
+    del msg["Message-ID"]
+    if text is not None:
+        plain = msg.get_body(preferencelist=("plain",))
+        if plain is None or msg.get_body(preferencelist=("html",)) is not None:
+            raise Problem(
+                "body",
+                "This draft's text has an HTML version Tico cannot change to match. Change its words in Gmail, or "
+                "draft it again with `tico email draft` and discard this one",
+                422,
+            )
+        plain.set_content(text)
+    if files is not None:
+        attached = {id(part) for part in msg.iter_attachments()}
+        if attached:
+            msg.set_payload([part for part in msg.iter_parts() if id(part) not in attached])
+        for name, content_type, data in files:
+            maintype, _, subtype = (content_type or "").partition("/")
+            if not maintype or not subtype:
+                maintype, subtype = "application", "octet-stream"
+            msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+    return msg
+
+
+def header_addresses(msg, name):
+    from email.utils import getaddresses
+
+    return mail_compose.addresses([a for _, a in getaddresses(msg.get_all(name) or [])])
 
 
 def _no_live_changes(store, what):
@@ -263,16 +409,44 @@ def _refused(c, who, addr, need):
     raise Problem("forbidden", f"You may not {words} {addr} (Tools > {addr} > Who can use it)", 403)
 
 
-def compose(c, who, addr, body, mid, files=()):
-    """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint. `files` are the
-    attachments' (name, content type, bytes), in order."""
-    original = None
-    if body.reply_to:
-        original = mail_compose.answered_in(addr, gmail_live.thread(c, addr, body.reply_to))
+def answered(c, addr, body):
+    """The message a reply answers (the thread's newest from someone else), or None for a new email."""
+    return mail_compose.answered_in(addr, gmail_live.thread(c, addr, body.reply_to)) if body.reply_to else None
+
+
+def recipients(addr, body, original):
+    """(to, cc) the email goes to: as named; for a reply with no `to`, the answered message's sender; for a reply to
+    all, everyone on the answered message but the mailbox."""
+    if original and body.reply_all:
+        return mail_compose.reply_all(addr, original, body.to, body.cc)
     if original:
-        raw, thread, to, subject = mail_compose.reply(
-            addr, original, body.body, mid, to=body.to, cc=body.cc, attachments=files
+        return mail_compose.addresses(body.to) or mail_compose.addresses(
+            [original.get("from")]
+        ), mail_compose.addresses(body.cc)
+    return mail_compose.addresses(body.to), mail_compose.addresses(body.cc)
+
+
+def compose(c, who, addr, body, mid, files=(), original=None):
+    """(raw, thread id, recipients, subject, the message it answers or None) for a draft or a lint. `files` are the
+    attachments' (name, content type, bytes), in order; a forward carries the forwarded message's own files first.
+    `original` is the answered message when already read."""
+    forward_id = getattr(body, "forward", "")
+    if forward_id and body.reply_to:
+        raise Problem("forward", "A forward is a new email: give forward or reply_to, not both", 422)
+    if body.reply_all and not body.reply_to:
+        raise Problem("reply_all", "reply_all answers a thread: give reply_to too", 422)
+    if forward_id:
+        source, carried = forwarded(c, addr, forward_id)
+        raw, thread, to, subject = mail_compose.forward(
+            addr, source, body.body, body.to, mid, cc=body.cc, attachments=[*carried, *files]
         )
+        return raw, thread, to, subject, None
+    if not body.body.strip():
+        raise Problem("body", "Give the email text", 422)
+    original = original or answered(c, addr, body)
+    if original:
+        to, cc = recipients(addr, body, original)
+        raw, thread, to, subject = mail_compose.reply(addr, original, body.body, mid, to=to, cc=cc, attachments=files)
         return raw, thread, to, subject, original
     to = mail_compose.addresses(body.to)
     if not to:
@@ -287,6 +461,40 @@ def compose(c, who, addr, body, mid, files=()):
         attachments=files,
     )
     return raw, "", to, body.subject, None
+
+
+def message_attachments(c, addr, mid):
+    from .mail_lib import gmail as gm
+
+    return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
+
+
+def forwarded(c, addr, mid):
+    """The message being forwarded, whole: (its headers with its full text, never the read API's shortened one, and its
+    files as (name, type, bytes), in order, each at most gmail_live.ATTACHMENT_MAX_BYTES). A file Gmail cannot give
+    refuses the forward, never drops out of it; a text over the email's limit is refused when the email is built."""
+    from .mail_lib import Failure
+    from .mail_lib import gmail as gm
+
+    raw = gmail_live.payload(c, addr, mid)
+    source = gm.normalize(raw)
+    source["body"] = gm.body_text(raw.get("payload") or {})[0]
+    cap, files = gmail_live.ATTACHMENT_MAX_BYTES, []
+    for item in gm.attachment_refs(raw.get("payload") or {}):
+        if item["size"] > cap:
+            raise Problem("too_large", f"{item['name']} is over {cap // (1024 * 1024)} MB; forward it from Gmail", 413)
+        if item["inline"]:
+            encoded, size = item["_data"], item["size"]
+        elif item["attachment_id"]:
+            fetched = gmail_live.attachment(c, addr, mid, item["attachment_id"])
+            encoded, size = fetched["data"], max(item["size"], fetched["size"])
+        else:
+            raise Problem("attachment", f"Gmail gives no data for {item['name']}; forward this message from Gmail", 502)
+        try:
+            files.append((item["name"], item["type"], gm.attachment_bytes(encoded, size, limit=cap)))
+        except Failure as bad:
+            raise Problem("attachment", bad.msg, 502) from bad
+    return source, files
 
 
 def attachment_file(c, app, auth, who, ref):
@@ -358,12 +566,43 @@ def _verdict(review):
 
 
 def install_mail(app, store, auth):
+    def writing_bot(who):
+        """The bot whose writing a draft is, or "" for a person's own: a bot's turn, or a person's Assistant (or BotOps)
+        acting for them, which arrives as its person but is checked as the bot that wrote it (org_rule_check)."""
+        from . import org_rule_check
+
+        found = org_rule_check.checked_as(who, store.settings.assistant_bot)
+        sender = found[1] if found else ""
+        return sender if sender.startswith("bot:") else ""
+
+    def bot_checks(c, bot, addr, snap, thread, reply_id):
+        """A bot's own draft meets the lint (an error refuses it) before Gmail sees it; the second reviewer's context,
+        or None for a person's draft."""
+        from . import email_sending as ES
+
+        if not bot:
+            return None
+        errors = ES.lint_findings(c, bot, addr, snap, reply_id)["errors"]
+        if errors:
+            raise Problem(
+                "lint",
+                "The lint refused this draft: "
+                + ", ".join(e["id"] for e in errors)
+                + ". "
+                + str(errors[0].get("fix") or ""),
+                422,
+                extra={"lint": [e["id"] for e in errors]},
+            )
+        ask = SimpleNamespace(reply_to_id=reply_id, thread_id=thread, approval_id="")
+        return ES.review_context(c, auth, bot, ask, addr, snap)
+
     @app.post(
         "/api/v2/mail/messages/organize",
         **api_v2(
             "Email",
             "organizeMailMessages",
-            "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+            "Organize up to 500 messages (by id, thread or query) live in Whole Workspace Gmail: archive, read, star, "
+            "important, labels, spam and trash, each with its undo; requires organize access; never deletes for good",
             "MailOrganizeResult",
             request_body={"required": True, "content": {"application/json": {"schema": ref("MailOrganizeBody")}}},
             responses={"403": error("Organize access or the company organize switch is off")},
@@ -391,10 +630,13 @@ def install_mail(app, store, auth):
         key, selection_operation = request.headers.get("idempotency-key"), request.url.path + ":selection"
         with store.read() as c:
             access(c)
-            action, ids, query, limit, label = organize_selection(body)
+            action, ids, query, threads, limit, label = organize_selection(body)
             completed = store.saved(c, who, request.url.path, key)
             if ids is None and not completed and not store.saved(c, who, selection_operation, key):
-                ids = gmail_live.message_ids(c, addr, query, limit)
+                if threads is not None:
+                    ids = gmail_live.thread_message_ids(c, addr, threads)
+                else:
+                    ids = gmail_live.message_ids(c, addr, query, limit)
         if completed:
 
             def expired(c):
@@ -409,7 +651,12 @@ def install_mail(app, store, auth):
             if label is not None and ids:
                 label_id = gmail_live.resolve_label(c, addr, label, create=action == "label")
                 add, remove = ((label_id,), ()) if action == "label" else ((), (label_id,))
-            gmail_live.organize(c, addr, ids, add=add, remove=remove)
+            if action in ("trash", "untrash"):
+                gmail_live.trash(c, addr, ids, restore=action == "untrash")
+            elif action in ("spam", "not_spam"):
+                gmail_live.spam(c, addr, ids, restore=action == "not_spam")
+            else:
+                gmail_live.organize(c, addr, ids, add=add, remove=remove)
         detail = {"mailbox": addr, "action": action, "label": label, "count": len(ids), "ids": ids}
         label_fields = {"label": label} if label is not None else {}
         result = {
@@ -503,7 +750,8 @@ def install_mail(app, store, auth):
             query = gmail_query(q, label, since_epoch, until_epoch, has_attachment)
             page = gmail_live.list(c, addr, query, page_token=cursor, limit=min(cap, gmail_live.LIMIT_MAX))
             domains = mailbox_access.company_domains(c)
-            return {**page, "messages": [live_message_public(addr, item, domains) for item in page["messages"]]}
+            listed = [live_message_public(addr, item, domains) for item in page["messages"]]
+            return {**page, "messages": with_draft_ids(c, addr, listed)}
 
     @app.get("/api/v2/mail/threads/{thread_id}")
     def thread(request: Request, thread_id: str, mailbox: str = ""):
@@ -518,13 +766,14 @@ def install_mail(app, store, auth):
             addr, _ = require_mailbox(c, who, mailbox)
             domains = mailbox_access.company_domains(c)
             items = [live_message_public(addr, item, domains, body=True) for item in gmail_live.thread(c, addr, tid)]
-            out = {"mailbox": addr, "thread_id": tid, "messages": items}
+            out = {"mailbox": addr, "thread_id": tid, "messages": with_draft_ids(c, addr, items)}
         with store.transaction() as c:
             H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread", "messages": len(items)})
         return out
 
     @app.get("/api/v2/mail/messages/{msg_id}")
     def message(request: Request, msg_id: str, mailbox: str = ""):
+        """One message with its body. A draft id (r-...) reads that draft's message, with its `draft_id`."""
         who = request.state.identity
         reader(who)
         mid = str(msg_id or "").strip()
@@ -532,11 +781,52 @@ def install_mail(app, store, auth):
             raise Problem("message", "msg_id is required", 422)
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            out = live_message_public(
-                addr, gmail_live.message(c, addr, mid), mailbox_access.company_domains(c), body=True
-            )
+            domains = mailbox_access.company_domains(c)
+            if DRAFT_ID.fullmatch(mid):
+                out = draft_public(addr, read_draft(c, addr, mid), domains, body=True)
+            else:
+                out = with_draft_ids(
+                    c, addr, [live_message_public(addr, gmail_live.message(c, addr, mid), domains, True)]
+                )[0]
         with store.transaction() as c:
             H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message", "thread_id": out["thread_id"]})
+        return out
+
+    @app.get("/api/v2/mail/drafts")
+    def drafts(
+        request: Request, mailbox: str = "", q: str = "", thread: str = "", cursor: str = "", limit: int = LIMIT_DEFAULT
+    ):
+        """The mailbox's drafts, newest first, whoever made them: each its draft id, message id, thread, recipients,
+        subject, when it was last saved and its files' names. `q` is a Gmail query over drafts; `thread` keeps one
+        thread's drafts."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            page = gmail_live.drafts(
+                c,
+                addr,
+                q.strip(),
+                thread.strip(),
+                cursor,
+                min(max(1, int(limit or LIMIT_DEFAULT)), gmail_live.LIMIT_MAX),
+            )
+            domains = mailbox_access.company_domains(c)
+            return {**page, "mailbox": addr, "drafts": [draft_public(addr, d, domains) for d in page["drafts"]]}
+
+    @app.get("/api/v2/mail/drafts/{draft_id}")
+    def draft_read(request: Request, draft_id: str, mailbox: str = ""):
+        """One draft, named by its draft id or its message's id: headers, body and files; audited as a read."""
+        who = request.state.identity
+        reader(who)
+        did = str(draft_id or "").strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            out = draft_public(addr, read_draft(c, addr, did), mailbox_access.company_domains(c), body=True)
+        with store.transaction() as c:
+            H.event(
+                c, who.actor, "mail.read", out["msg_id"], {"mailbox": addr, "kind": "draft", "draft": out["draft_id"]}
+            )
         return out
 
     @app.post("/api/v2/mail/drafts")
@@ -552,40 +842,47 @@ def install_mail(app, store, auth):
         who = request.state.identity
         reader(who)
         addr = body.mailbox.strip().lower()
-        bot = who.actor if who.role == "bot" else ""
+        bot = writing_bot(who)
         with store.read() as c:
             require_mailbox(c, who, addr)
             _refused(c, who, addr, "draft")
             _no_live_changes(store, "write")
+            original = answered(c, addr, body)
         # The draft's own words make its Message-ID: asked again (a retry, a rerun step) it is found, not made twice.
         # Each file counts as it is now, its version and the hash of its bytes: other files, or a file changed since,
-        # are another draft. A draft without files keeps the key it always had.
+        # are another draft. A reply also counts the message it answers and whom it goes to: the same words after a
+        # newer message in the thread are another draft, never the old one with its old recipients. A new email
+        # without files keeps the key it always had.
         found, files = attachment_files(store, app, auth, who, body.attachments)
         attached = [json.dumps([[f["ref"], f["digest"]] for f in found])] if found else []
+        answers = ["answers:" + original["id"], *recipients(addr, body, original)] if original else []
+        # A reply to all and a forward are other drafts than the same words as a plain reply or a new email.
+        kind = (["reply_all"] if body.reply_all else []) + (["forward:" + body.forward] if body.forward else [])
         key = mail_compose.key(
-            who.actor, addr, body.operation_id, body.reply_to, body.to, body.cc, body.subject, body.body, *attached
+            who.actor,
+            addr,
+            body.operation_id,
+            body.reply_to,
+            body.to,
+            body.cc,
+            body.subject,
+            body.body,
+            *attached,
+            *answers,
+            *kind,
         )
         mid = mail_compose.message_id("draft", key, addr)
         with store.read() as c:
-            raw, thread, to, subject, original = compose(c, who, addr, body, mid, files)
+            raw, thread, to, subject, original = compose(c, who, addr, body, mid, files, original)
             snap = snapshot(raw, addr)
-            review = None
-            if bot:
-                errors = ES.lint_findings(c, bot, addr, snap, original["id"] if original else "")["errors"]
-                if errors:
-                    first = errors[0]
-                    raise Problem(
-                        "lint",
-                        "The lint refused this draft: "
-                        + ", ".join(e["id"] for e in errors)
-                        + ". "
-                        + str(first.get("fix") or ""),
-                        422,
-                        extra={"lint": [e["id"] for e in errors]},
-                    )
-                ask = SimpleNamespace(reply_to_id=original["id"] if original else "", thread_id=thread, approval_id="")
-                review = ES.review_context(c, auth, bot, ask, addr, snap)
+            review = bot_checks(c, bot, addr, snap, thread, original["id"] if original else "")
         made = mail_compose.ensure_draft(store, addr, raw, thread, mid)
+        if not made["created"]:
+            # Found, not made: answer with what the draft says now (a person may have changed it in Gmail since).
+            with store.read() as c:
+                snap = snapshot(gmail_live.draft_raw(c, addr, made["id"])["raw"], addr)
+            subject = snap["subject"]
+        to, cc = snap["recipient_headers"]["to"], snap["recipient_headers"]["cc"]
         checked = ES.classify(app, store, snap, review) if bot else {}
         verdict = checked.get("review")
         # The verdict a bot's draft got, with its reason, is kept beside the draft: what the bot was told can be read back.
@@ -603,10 +900,17 @@ def install_mail(app, store, auth):
             "draft": made["id"],
             "message": made["message"],
             "thread": made["thread"] or thread,
+            # Whom the draft goes to, read from its MIME: what a send of it freezes.
             "to": to,
-            "cc": mail_compose.addresses(body.cc),
+            "cc": cc,
             "subject": subject,
             "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in found],
+            # A forward carries the forwarded message's files first, then the ones named here.
+            **(
+                {"forwarded": [a["name"] for a in snap["attachments"][: len(snap["attachments"]) - len(found)]]}
+                if body.forward
+                else {}
+            ),
             "created": made["created"],
             # The second reviewer on a bot's own draft: send, stop (rewrite it), or None when it could not answer.
             # `review_reason` says why in words whenever it is not send (backend/email_sending.py `reviewed`).
@@ -614,19 +918,136 @@ def install_mail(app, store, auth):
             "review_reason": checked.get("review_reason", ""),
         }
 
-    @app.delete("/api/v2/mail/drafts/{draft_id}")
-    def discard(request: Request, draft_id: str, mailbox: str = ""):
+    @app.patch("/api/v2/mail/drafts/{draft_id}")
+    def update_draft(request: Request, draft_id: str, body: DraftUpdateBody):
+        """Change a draft in place, keeping its draft id (Gmail gives its message a new id): any of to, cc, subject,
+        body and files. Everything else in it (Bcc, its thread headers, an HTML version, a forwarded message) stays as
+        it was; new words for a draft with an HTML version are refused rather than dropping it. Named by its message id,
+        or with `message`, a draft changed since is refused (409). A retry under the same Idempotency-Key answers the
+        first change, never writing it again. A bot's draft (an Assistant's included) meets the lint and the second
+        reviewer again, as a new one does."""
+        from . import email_sending as ES
+        from .email_content import snapshot
+
         who = request.state.identity
         reader(who)
-        did = str(draft_id or "").strip()
+        addr = body.mailbox.strip().lower()
+        bot = writing_bot(who)
+        ident = str(draft_id or "").strip()
+        key = request.headers.get("idempotency-key")
+
+        def access(c):
+            require_mailbox(c, who, addr)
+            _refused(c, who, addr, "draft")
+            _no_live_changes(store, "change")
+
+        with store.read() as c:
+            access(c)
+            if store.saved(c, who, request.url.path, key):
+
+                def expired(c):
+                    raise Problem("receipt_expired", "This draft change's receipt expired; read the draft again", 409)
+
+                return store.mutate(who, request.url.path, key, body.model_dump(), expired, check=access)
+            found = gmail_live.draft_resolve(c, addr, ident)
+            if not found:
+                raise no_draft(addr, ident)
+            current = gmail_live.draft_raw(c, addr, found["id"])
+        # Named by a message id, that message is the version the caller saw.
+        expected = body.message or (ident if ident == found["message"] else "")
+        stale(addr, found["id"], expected, current["message"])
+        listed, files = attachment_files(store, app, auth, who, body.attachments or [])
+        msg = edited_draft(
+            current["raw"],
+            to=mail_compose.addresses(body.to) if body.to is not None else None,
+            cc=mail_compose.addresses(body.cc) if body.cc is not None else None,
+            subject=body.subject,
+            text=body.body,
+            files=files if body.attachments is not None else None,
+        )
+        if not header_addresses(msg, "To") + header_addresses(msg, "Cc") + header_addresses(msg, "Bcc"):
+            raise Problem("to", "A draft needs a recipient: --to", 422)
+        mid = mail_compose.message_id(
+            "draft", mail_compose.key(who.actor, addr, found["id"], hashlib.sha256(msg.as_bytes()).hexdigest()), addr
+        )
+        msg["Message-ID"] = mid
+        mime = msg.as_bytes()
+        if len(mime) > mail_compose.RAW_MAX:
+            raise Problem("attachments", "This draft would be over the email's size limit; attach fewer files", 413)
+        raw = base64.urlsafe_b64encode(mime).decode().rstrip("=")
+        thread = current["thread"] if msg["In-Reply-To"] or msg["References"] else ""
+        snap = snapshot(raw, addr)
+        with store.read() as c:
+            access(c)  # again at the write: the files were read since
+            reply_id = ES.resolve_reply(c, addr, snap, "", thread)[0] if thread else ""
+            review = bot_checks(c, bot, addr, snap, thread, reply_id)
+            again = gmail_live.draft_get(c, addr, found["id"])
+            if again is None:
+                raise no_draft(addr, ident)
+            stale(addr, found["id"], current["message"], again["message"])
+            made = gmail_live.draft_update(c, addr, found["id"], raw, thread)
+        checked = ES.classify(app, store, snap, review) if bot else {}
+        said = {"review": _verdict(checked.get("review")), "review_reason": checked.get("review_reason", "")}
+        result = {
+            "mailbox": addr,
+            "draft": made["id"],
+            "message": made["message"],
+            "previous_message": current["message"],
+            "thread": made["thread"] or thread,
+            "to": snap["recipient_headers"]["to"],
+            "cc": snap["recipient_headers"]["cc"],
+            "subject": snap["subject"],
+            "attachments": [
+                {"name": a["name"], "content_type": a["type"], "size": a["size"]} for a in snap["attachments"]
+            ],
+            "updated": True,
+            **said,
+        }
+
+        def record(c):
+            # The draft's words changed: a later `draft` of its old words is another draft, and of these words is this.
+            c.execute("DELETE FROM mail_drafts WHERE draft_id=? OR message_id=?", (made["id"], mid))
+            c.execute(
+                "INSERT INTO mail_drafts(message_id,mailbox,claimed_at,draft_id,message,thread) VALUES(?,?,?,?,?,?)",
+                (mid, addr, H.now(), made["id"], made["message"], made["thread"]),
+            )
+            H.event(
+                c,
+                who.actor,
+                "mail.draft_updated",
+                addr,
+                {"mailbox": addr, "draft": made["id"], "thread": made["thread"], **(said if bot else {})},
+            )
+            return result
+
+        return store.mutate(who, request.url.path, key, body.model_dump(), record, check=access)
+
+    @app.delete("/api/v2/mail/drafts/{draft_id}")
+    def discard(request: Request, draft_id: str, mailbox: str = "", message: str = ""):
+        """Discard one draft, named by its draft id or its message's id, whoever made it. Gmail deletes a draft for
+        good. A name that is no draft is not_found, never a silent false. With `message` (the draft's message id the
+        caller last saw), a draft changed since is refused (409), not discarded."""
+        who = request.state.identity
+        reader(who)
+        ident = str(draft_id or "").strip()
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
             _refused(c, who, addr, "draft")
             _no_live_changes(store, "change")
-            deleted = gmail_live.draft_delete(c, addr, did)
+            found = gmail_live.draft_resolve(c, addr, ident)
+            if not found:
+                raise no_draft(addr, ident)
+            stale(addr, found["id"], message.strip(), found["message"])
+            deleted = gmail_live.draft_delete(c, addr, found["id"])
         with store.transaction() as c:
-            H.event(c, who.actor, "mail.draft_discarded", addr, {"mailbox": addr, "draft": did, "deleted": deleted})
-        return {"mailbox": addr, "draft": did, "deleted": deleted}
+            H.event(
+                c,
+                who.actor,
+                "mail.draft_discarded",
+                addr,
+                {"mailbox": addr, "draft": found["id"], "message": found["message"], "deleted": deleted},
+            )
+        return {"mailbox": addr, "draft": found["id"], "message": found["message"], "deleted": deleted}
 
     @app.post("/api/v2/mail/lint")
     def lint(request: Request, body: LintBody):
@@ -645,10 +1066,7 @@ def install_mail(app, store, auth):
             found = ES.lint_findings(c, who.actor, addr, snapshot(raw, addr), original["id"] if original else "")
         return {"mailbox": addr, "ok": not found["errors"], "errors": found["errors"], "warnings": found["warnings"]}
 
-    def _attachments(c, addr, mid):
-        from .mail_lib import gmail as gm
-
-        return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
+    _attachments = message_attachments
 
     @app.get("/api/v2/mail/messages/{msg_id}/attachments")
     def attachments(request: Request, msg_id: str, mailbox: str = ""):
@@ -728,3 +1146,98 @@ def install_mail(app, store, auth):
             addr, _ = require_mailbox(c, who, body.mailbox)
             _refused(c, who, addr, "organize")
         return {"mailbox": addr, "message_id": mid, **mail_unsubscribe.unsubscribe(store, addr, mid, who.actor)}
+
+    @app.get("/api/v2/mail/messages/{msg_id}/original")
+    def original(request: Request, msg_id: str, mailbox: str = "", raw: bool = False):
+        """The message as it was received: every header in order (Received, Authentication-Results, DKIM...) and its
+        size; with `raw`, its whole MIME (base64), at most gmail_live.ATTACHMENT_MAX_BYTES. Audited as a read."""
+        from email.parser import BytesHeaderParser
+
+        who = request.state.identity
+        reader(who)
+        mid = str(msg_id or "").strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            data = gmail_live.raw_message(c, addr, mid)
+        if raw and len(data) > gmail_live.ATTACHMENT_MAX_BYTES:
+            raise Problem("too_large", "This message is over 6 MB; open its original in Gmail", 413)
+        parsed = BytesHeaderParser().parsebytes(data)
+        out = {
+            "mailbox": addr,
+            "message_id": mid,
+            "size": len(data),
+            "headers": [{"name": k, "value": str(v)} for k, v in parsed.items()],
+            **({"raw": base64.b64encode(data).decode()} if raw else {}),
+        }
+        with store.transaction() as c:
+            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "original", "raw": raw})
+        return out
+
+    def label_change(c, who, addr):
+        """A label change needs organize access, a live connection and an install that changes live email."""
+        _refused(c, who, addr, "organize")
+        if not google_tokens.covered(c, addr):
+            raise Problem("mailbox", "Live organizing needs Whole Workspace or Connect Google", 422)
+        _no_live_changes(store, "change")
+
+    @app.get("/api/v2/mail/labels")
+    def mail_labels(request: Request, mailbox: str = ""):
+        """Every Gmail label of the mailbox, system first, with Gmail's message and thread counts (total, unread)."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            return {"mailbox": addr, "labels": gmail_live.labels_counted(c, addr)}
+
+    @app.post("/api/v2/mail/labels")
+    def label_create(request: Request, body: LabelBody):
+        """A user label, made when missing (asked again, it is found: `created` false)."""
+        who = request.state.identity
+        reader(who)
+        name = body.name.strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, body.mailbox)
+            label_change(c, who, addr)
+            made = gmail_live.label_create(c, addr, name)
+        if made["created"]:
+            with store.transaction() as c:
+                H.event(c, who.actor, "mail.label_created", addr, {"mailbox": addr, "label": made["id"], "name": name})
+        return {"mailbox": addr, **made}
+
+    @app.patch("/api/v2/mail/labels/{label:path}")
+    def label_rename(request: Request, label: str, body: LabelBody):
+        """Rename a user label (by its name or id); its messages keep it. Gmail's system labels are refused."""
+        who = request.state.identity
+        reader(who)
+        name = body.name.strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, body.mailbox)
+            label_change(c, who, addr)
+            row = gmail_live.user_label(c, addr, label)
+            renamed = gmail_live.label_rename(c, addr, row["id"], name)
+        with store.transaction() as c:
+            H.event(
+                c,
+                who.actor,
+                "mail.label_renamed",
+                addr,
+                {"mailbox": addr, "label": row["id"], "from": row["name"], "to": name},
+            )
+        return {"mailbox": addr, **renamed, "previous_name": row["name"]}
+
+    @app.delete("/api/v2/mail/labels/{label:path}")
+    def label_delete(request: Request, label: str, mailbox: str = ""):
+        """Delete a user label (by its name or id): Gmail takes it off its messages and keeps every message. Gmail's
+        system labels are refused."""
+        who = request.state.identity
+        reader(who)
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, mailbox)
+            label_change(c, who, addr)
+            row = gmail_live.user_label(c, addr, label)
+            deleted = gmail_live.label_delete(c, addr, row["id"])
+        with store.transaction() as c:
+            H.event(
+                c, who.actor, "mail.label_deleted", addr, {"mailbox": addr, "label": row["id"], "name": row["name"]}
+            )
+        return {"mailbox": addr, "id": row["id"], "name": row["name"], "deleted": deleted}

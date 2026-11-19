@@ -54,6 +54,7 @@ import logging
 import os
 import re
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -2248,6 +2249,22 @@ def _sleep(stopping, seconds):
     return not stopping.is_set()
 
 
+def _when_free(stopping, what, fn, *args, **kwargs):
+    """Run a start-up database step; a busy hub (SQLite `database is locked` past the store's busy timeout) is waited
+    out with backoff and logged, never allowed to end the process and crash-loop the container."""
+    delay = 1.0
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as exc:
+            text = str(exc).lower()
+            if ("locked" not in text and "busy" not in text) or stopping.is_set():
+                raise
+            LOG.warning("%s: %s; trying again in %.0fs", what, SE.describe(exc), delay)
+            stopping.wait(delay)
+            delay = min(delay * 2, 30.0)
+
+
 def main(argv=None, make_slack=None):
     """`make_slack(bot, app)` is the test seam for the Slack client. With TICO_SLACK_WAIT=1 (the Docker
     service) a missing token or a refused start is reported on the Health page and retried, and
@@ -2270,8 +2287,10 @@ def main(argv=None, make_slack=None):
         credentials, stored = slack_credentials(settings), None
         if not (credentials["bot_token"] and credentials["app_token"]):
             store = store or Store(settings)
-            store.initialize()
-            stored = slack_app.load(store)  # sealed in the vault by Tools > Slack (backend/slack_app.py)
+            _when_free(stopping, "Slack start-up", store.initialize)
+            stored = _when_free(
+                stopping, "Slack token load", slack_app.load, store
+            )  # sealed in the vault by Tools > Slack (backend/slack_app.py)
             if stored:
                 credentials = stored
         if not credentials["bot_token"] or not credentials["app_token"]:
@@ -2287,16 +2306,16 @@ def main(argv=None, make_slack=None):
         if credentials["app_id"]:
             settings.slack_app_id = credentials["app_id"]
         store = store or Store(settings)
-        store.initialize()
+        _when_free(stopping, "Slack start-up", store.initialize)
         gateway = Gateway(store, make_slack(credentials["bot_token"], credentials["app_token"]))
         gateway.pin_workspace = stored is not None
         try:
-            verified = gateway.verify_app()
+            verified = _when_free(stopping, "Slack verify", gateway.verify_app)
         except (SlackError, SlackUnreachable, RuntimeError) as exc:
             LOG.error("Refusing to start: %s", exc)
             if not wait:
                 return 1
-            slack_app.report(store, "disconnected", str(exc))
+            _when_free(stopping, "Slack health", slack_app.report, store, "disconnected", str(exc))
             if _sleep(stopping, 60):
                 continue
             return 0
@@ -2307,8 +2326,8 @@ def main(argv=None, make_slack=None):
             print(json.dumps(verified))
             return 0
         if stored is not None and not (stored["team_id"] and stored["app_id"]):
-            slack_app.pin(store, verified["team_id"], verified["app_id"])
-        gateway.recover()
+            _when_free(stopping, "Slack pin", slack_app.pin, store, verified["team_id"], verified["app_id"])
+        _when_free(stopping, "Slack recover", gateway.recover)
         try:
             gateway.slack.connect(lambda payload: gateway.receive(payload))
         except Exception as exc:
@@ -2316,8 +2335,13 @@ def main(argv=None, make_slack=None):
             LOG.error("Socket Mode did not connect: %s", type(exc).__name__)
             if not wait:
                 return 1
-            slack_app.report(
-                store, "disconnected", f"Socket Mode did not connect ({type(exc).__name__}); check the app-level token"
+            _when_free(
+                stopping,
+                "Slack health",
+                slack_app.report,
+                store,
+                "disconnected",
+                f"Socket Mode did not connect ({type(exc).__name__}); check the app-level token",
             )
             gateway.slack.close()
             if _sleep(stopping, 60):
@@ -2328,7 +2352,10 @@ def main(argv=None, make_slack=None):
             "link_shared (previews for %s)",
             ", ".join(sorted(SU.hosts(settings))) or "no host",
         )
-        state = {"connected": None, "stamp": slack_app.stamp(store) if stored else None}
+        state = {
+            "connected": None,
+            "stamp": _when_free(stopping, "Slack token stamp", slack_app.stamp, store) if stored else None,
+        }
 
         def heartbeat(gateway=gateway, state=state, store=store, verified=verified):  # this connection's own
             up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
