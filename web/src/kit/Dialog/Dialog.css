@@ -1,0 +1,10 @@
+/* The scrim is the backdrop (it fades); the viewport takes .scrim's place and centring without its colour.
+   Motion G9: the scrim fades in 200ms; the dialog comes from --pop and --move in 240ms (opacity --ease, transform
+   --spring) and leaves in 200ms --ease-in to opacity 0 at .98. With Motion off the tokens leave only the fades. */
+.kit-scrim{transition:opacity var(--dur) var(--ease)}
+.kit-scrim[data-starting-style],.kit-scrim[data-ending-style]{opacity:0}
+.kit-viewport{z-index:var(--z-dialog);background:none}
+.kit-modal{transition:opacity var(--dur-enter) var(--ease),transform var(--dur-enter) var(--ease-arrive)}
+.kit-modal[data-starting-style]{opacity:0;transform:translateY(var(--move)) scale(var(--pop))}
+.kit-modal[data-ending-style]{opacity:0;transform:scale(calc((1 + var(--pop)) / 2));transition:opacity var(--dur-leave) var(--ease-in),transform var(--dur-leave) var(--ease-in)}
+.kit-modal:focus-visible{outline:0}

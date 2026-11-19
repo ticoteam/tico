@@ -1,0 +1,8 @@
+/* The quiet dropdown for a row or a page head, from pages/8-settings/settings.css .dd (components.js: two dropdowns
+   are enough, the field and this). */
+.dd{max-width:calc(100% + 12px);min-width:0;height:var(--ctl-sm);display:inline-flex;align-items:center;gap:var(--s-1);justify-self:start;margin:0 calc(var(--s-1h) * -1);padding:0 var(--s-1h);border:0;border-radius:var(--r-chip);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.dd>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dd>.ico{width:13px;height:13px;flex:none;color:var(--faint);stroke-width:2}
+.dd:hover,.dd[data-popup-open]{background:var(--well-2);color:var(--ink)}
+.dd:hover>.ico,.dd[data-popup-open]>.ico{color:var(--ink-2)}
+.dd.is-same{color:var(--muted)}

@@ -1,0 +1,3 @@
+.kit-tip-layer{z-index:var(--z-tip)}
+.kit-tip{transition:opacity var(--dur-fast) var(--ease)}
+.kit-tip[data-starting-style],.kit-tip[data-ending-style]{opacity:0}

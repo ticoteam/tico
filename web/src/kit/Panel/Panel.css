@@ -1,0 +1,6 @@
+/* From pages/3-company/company.css, the goal panel (components.js: side panel). */
+.pnl:focus-visible{outline:0}
+.pnl .side-head b{font-weight:var(--w-strong)}
+.pnl .rail-sec h3{display:flex;align-items:center;justify-content:space-between}
+.pnl .rail-sec h3 .ib{margin:calc(var(--s-2) * -1) calc(var(--s-1h) * -1) calc(var(--s-2) * -1) 0}
+.pnl-foot{flex:none;display:flex;gap:var(--s-2);padding:var(--s-3) var(--s-4);border-top:1px solid var(--line)}

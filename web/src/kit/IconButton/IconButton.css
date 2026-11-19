@@ -1,0 +1,2 @@
+/* Busy: the icon breathes in place (motion.md R10); no spinner. */
+.ib[aria-busy="true"]{pointer-events:none;animation:rest var(--breathe) ease-in-out infinite;animation-play-state:var(--loop,running)}
