@@ -36,12 +36,14 @@ from backend.tests.helpers.calls import (
     thread,
     thread_texts,
 )
+from backend.tests.helpers.events import listening, topic
 from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.company import company_store
 from backend.tests.helpers.model_subscriptions import add, codex_file, company, give, machine, on
 from backend.tests.helpers.models_preset import connected, on_tico
+from scripts import check_wire_contract
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
@@ -777,6 +779,37 @@ def test_voice_inputs_wake_only_the_runner_holding_the_attempt(meet, tmp_path, a
         assert cursor == newest(store)  # past the skipped hint
     finally:
         second_store.close()
+
+
+def test_the_runner_stream_names_the_attempt_and_call_a_voice_hint_wakes(meet, monkeypatch):
+    """The hint as the computer's stream sends it: the runner wire keeps `attempt_id` (backend/runs.py RUNNER_WIRE),
+    the field the resident session matches it on (runner-rs/src/events.rs VoiceInputs). Renamed `run_id` like a public
+    answer, it matched nothing and every turn waited for the session's 3 s backstop read (0.6.81)."""
+    credential_setup(meet)
+    company(meet)
+    default = get(meet, "providers")["default"]
+    on(meet, "ops", default["runtime"], default["model"])
+    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
+    give(meet, worker, "claude", add(meet)["id"])
+    call = start_call(meet, _dm(meet), bots=["ops"])
+    attempt = _claim(meet, worker, "ops")
+    monkeypatch.setattr(events, "KEEPALIVE_SECONDS", 0.5)  # the server notices the closed stream and stops
+    # The doorbell alone wakes the stream: its shared look for other processes' writes never comes in this test.
+    monkeypatch.setattr(events.runner_bell(meet.app.state.store), "_every", 3600)
+    with listening(meet.app) as open_stream:
+        stream = open_stream(worker["token"], path="/api/v2/runners/me/events")
+        stream.until(topic("ready"))
+        _speak(meet, call["id"], 0)
+        hint = stream.until(topic("runner", kind="voice_inputs"), timeout=10)["data"]
+    assert hint == {
+        "seq": hint["seq"],
+        "kind": "voice_inputs",
+        "bots": [],
+        "attempt_id": attempt["id"],
+        "call_id": call["id"],
+    }
+    contract = check_wire_contract.load()["wire"]
+    assert check_wire_contract.errors(hint, {"$ref": "#/$defs/RunnerFrame"}, contract) == []
 
 
 def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, caplog):

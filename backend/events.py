@@ -3344,9 +3344,10 @@ class _Data(dict):
     encoded = None
 
 
-def _frame(seq, topic, data):
-    # A task's or message's own attempt_id keys read run_id here too, as in every answer (backend/runs.py).
-    text = runs.public_json(getattr(data, "encoded", None) or encode(data))
+def _frame(seq, topic, data, path=None):
+    # A task's or message's own attempt_id keys read run_id here too, as in every answer (backend/runs.py). A
+    # computer's stream passes its path: the runner wire keeps attempt_id (runs.RUNNER_WIRE), which a voice hint names.
+    text = runs.public_json(getattr(data, "encoded", None) or encode(data), path)
     return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {text}\n\n"
 
 
@@ -3734,6 +3735,7 @@ def install(app, store, auth, task_views, task_view):
 # ---------------------------------------------------------------- a computer's stream
 
 RUNNER_GATHER_SECONDS = 0.25  # one write often tells a computer two things (an assignment and its work)
+RUNNER_EVENTS = "/api/v2/runners/me/events"
 
 
 def runner_read(c, runner_id, actor, after, limit=BATCH):
@@ -3788,7 +3790,7 @@ def runner_read(c, runner_id, actor, after, limit=BATCH):
 def install_runner(app, store, execution):
     doorbell = runner_bell(store)
 
-    @app.get("/api/v2/runners/me/events")
+    @app.get(RUNNER_EVENTS)
     async def runner_events(request: Request, after: int | None = None):
         """Server-sent events for a computer: what changed for it, as hints to re-read one of its
         endpoints (`event: runner`, data with a sequence, kind and any relevant IDs). `ready` names this
@@ -3835,6 +3837,7 @@ def install_runner(app, store, execution):
                     None,
                     "ready",
                     {"seq": now_seq, "after": cursor, "release": runner_versions.desired().get("version", "")},
+                    RUNNER_EVENTS,
                 )
                 deadline = time.monotonic() + RUNNER_LIFETIME_SECONDS
                 # Contact is due every keepalive whatever is sent, so last_seen never lapses.
@@ -3855,10 +3858,10 @@ def install_runner(app, store, execution):
                         due = more
                         if reset:
                             cursor = next_cursor
-                            yield _frame(cursor, "reset", {"seq": cursor})
+                            yield _frame(cursor, "reset", {"seq": cursor}, RUNNER_EVENTS)
                         else:
                             for seq, data in sent:
-                                yield _frame(seq, "runner", data)
+                                yield _frame(seq, "runner", data, RUNNER_EVENTS)
                             cursor = max(cursor, next_cursor)
                         if more:
                             continue

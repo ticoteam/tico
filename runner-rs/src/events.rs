@@ -35,10 +35,8 @@ pub const TURN_RECOVERY_S: f64 = 15.0;
 pub const TURN_RECOVERY_JITTER: f64 = 0.2;
 /// How often a resident voice session reads its inputs when nothing pushes them: what it always did.
 const VOICE_POLL: Duration = Duration::from_millis(400);
-/// The backstop read while the server pushes `voice_inputs` hints, for a hint that went missing. Held at the old poll
-/// for now: on 0.6.81 hints were written but turns still waited for this read (1.4-2.6 s to claim, against 0.1-0.4 s
-/// on the poll), so a missed hint must cost no more than the poll did until the miss is found.
-const VOICE_BACKUP: Duration = VOICE_POLL;
+/// The backstop read while the server pushes `voice_inputs` hints, for a hint that went missing.
+const VOICE_BACKUP: Duration = Duration::from_secs(3);
 /// A stream quiet this long may be dead without having failed yet: voice keeps its own poll until it is heard again.
 /// The server sends a keepalive every 15 s by default (20 s is a common setting).
 const VOICE_QUIET: Duration = Duration::from_secs(25);
@@ -717,6 +715,24 @@ mod tests {
             .expect("the notice did not wake the voice loop");
         assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("17"));
         assert!(!e.take("claim"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_voice_hint_wakes_the_session_before_its_backstop_from_every_server_that_sends_one() {
+        let e = pushing();
+        let mut inputs = e.voice_inputs();
+        inputs.wait("attempt", "call").await;
+        // The frame as the server's stream sends it (backend/events.py runner_read), and as the first servers to send
+        // hints did, with the attempt renamed run_id (wire.rs RunnerFrame): neither waits for the backstop read.
+        for key in ["attempt_id", "run_id"] {
+            let mut frame = serde_json::json!({
+                "seq": 17, "kind": "voice_inputs", "bots": [], "call_id": "call"
+            });
+            frame[key] = serde_json::json!("attempt");
+            e.dispatch("runner", Some("17".into()), &frame, false);
+            assert_eq!(next_read(&mut inputs).await, Duration::ZERO, "{key}");
+            assert_eq!(next_read(&mut inputs).await, VOICE_BACKUP, "{key}");
+        }
     }
 
     /// How long the next read of the voice inputs waits, given nothing else wakes it.
