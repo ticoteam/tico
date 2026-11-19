@@ -595,6 +595,11 @@ def readers(auth):
             (row["id"],),
         ).fetchone()
         value["parts"] = {"total": counts[0] or 0, "done": counts[1] or 0}
+        from . import risk
+
+        matter = risk.matter_of(c, who, row["id"])  # its facts as a matter, when it carries a risk's
+        if matter:
+            value["matter"] = matter
         if who is not None:
             from .files import readable_earlier, readable_page_refs
 

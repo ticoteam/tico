@@ -2951,8 +2951,13 @@ def tag_by_key(conn, key):
     return _tag_view(row) if row else None
 
 
+# A tag's kind is set when it is made and never changes: '' for a plain tag, 'risk' for a risk (backend/risk.py).
+TAG_KINDS = ("", "risk")
+
+
 def _tag_view(row):
     value = dict(row)
+    value["kind"] = value.get("kind") or ""
     value["metadata"] = _json(value.pop("metadata"), {}) or {}
     value["is_template"] = bool(value["is_template"])
     value["bot_writers"] = _json(value.get("bot_writers"), []) or []
@@ -2982,8 +2987,11 @@ def tag_create(
     template_id=None,
     owner=None,
     mover=None,
+    kind="",
 ):
     _writer(conn, actor)
+    if kind not in TAG_KINDS:
+        refuse(conn, actor, "kind", f"a tag's kind is one of {', '.join(repr(k) for k in TAG_KINDS)}")
     keys = _labels([key])
     if not keys:
         refuse(conn, actor, "kind", "give the tag a key")
@@ -3004,8 +3012,8 @@ def tag_create(
         refuse(conn, actor, "kind", "give the tag a label")
     ts, ident = now(), new_id()
     conn.execute(
-        "INSERT INTO tags(id,key,label,metadata,markdown,is_template,template_id,owner,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tags(id,key,label,metadata,markdown,is_template,template_id,owner,kind,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (
             ident,
             key,
@@ -3015,11 +3023,18 @@ def tag_create(
             int(is_template),
             template["id"] if template else None,
             owner,
+            kind,
             ts,
             ts,
         ),
     )
-    event(conn, actor, "tag.create", ident, {"key": key, "template_id": template["id"] if template else None})
+    event(
+        conn,
+        actor,
+        "tag.create",
+        ident,
+        {"key": key, "template_id": template["id"] if template else None, "kind": kind},
+    )
     return tag(conn, ident)
 
 

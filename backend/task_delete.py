@@ -49,6 +49,7 @@ TASK_ROWS = (
     "maintenance_listings",
     "maintenance_handoffs",
     "holds",
+    "matters",  # a risk's facts on the task (backend/risk.py)
 )
 # Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
 # (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the
@@ -59,6 +60,9 @@ TASK_KEYS = {
     "history_events": ("subject_id", "subject_type='task'"),
     "holds": ("holdable_id", "holdable_type='task'"),  # what holds a bot on the task (backend/holds.py)
 }
+# Columns naming a Directory record that may be gone by the time the task comes back (erased or purged since): a restore
+# clears each one whose record is gone and keeps the rest of the row.
+DIRECTORY_REFS = {"matters": ("party_entity_id", "place_id", "product_id")}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
@@ -446,6 +450,16 @@ def _insert(c, table, row, skip=()):
     c.execute(f"INSERT INTO {table} ({','.join(data)}) VALUES ({_marks(list(data))})", list(data.values()))
 
 
+def _without_gone_records(c, table, row):
+    """`row` with each DIRECTORY_REFS column whose Directory record no longer exists cleared."""
+    gone = [
+        col
+        for col in DIRECTORY_REFS.get(table, ())
+        if row.get(col) and not c.execute("SELECT 1 FROM entities WHERE id=?", (row[col],)).fetchone()
+    ]
+    return {**row, **dict.fromkeys(gone)} if gone else row
+
+
 def _try_insert(c, table, row, skipped):
     """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted label) is left
     out rather than failing the restore, and so is a row of a table a migration has dropped; the report counts both."""
@@ -549,7 +563,7 @@ def restore_tasks(c, ids, actor=None):
         for table, found in snap["rows"].items():
             if table not in CORE and table != "task_relations":
                 for row in found:
-                    _try_insert(c, table, row, skipped)
+                    _try_insert(c, table, _without_gone_records(c, table, row), skipped)
     for e, snap in snapshots:
         tid = e["task_id"]
         for row in snap["rows"].get("task_relations", []):

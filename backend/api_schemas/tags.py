@@ -14,6 +14,7 @@ SCHEMAS.update(
                 "metadata": "o",
                 "markdown": "s",
                 "is_template": "b",
+                "kind": {"enum": ["", "risk"]},
                 "template_id": "n",
                 "owner": "n",
                 "bot_writers": items("s"),
