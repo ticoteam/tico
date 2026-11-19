@@ -427,3 +427,7 @@ export function DefaultsDialog({ defaults, onOpenChange }: { defaults: Partial<A
     </Ask>
   );
 }
+
+// The bill, invoice, card and journal dialogs (BillForms.tsx) are decisions too: tried first, then sent.
+export { Decide };
+export type { Decision };

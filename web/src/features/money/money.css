@@ -110,6 +110,10 @@
 .money .dlg-form .prow{padding:0}
 .money .dlg-ask{font-weight:var(--w-strong)}
 .money .dlg-error{color:var(--ink);font-size:var(--t-sm)}
+/* The bill, invoice and journal dialogs (BillForms.tsx): a name beside its Add, and a line beside its amounts. */
+.money .dlg-pair{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s-2);align-items:end}
+.money .dlg-line{display:grid;grid-template-columns:minmax(0,2fr) repeat(auto-fit,minmax(0,1fr));gap:var(--s-2);align-items:end}
+.money .t-was{color:var(--ink-2)}
 .money .once{display:grid;gap:var(--s-1)}
 .money .once p span{color:var(--muted);font-size:var(--t-sm)}
 .money .once-row{display:flex;align-items:center;gap:var(--s-2)}
@@ -145,9 +149,28 @@
 .money .fr-group{height:var(--s-10);display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) var(--s-1h);font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);border-bottom:1px solid var(--line)}
 .money .fr-group .count{font-size:var(--t-sm)}
 
-/* Growth: the Growth Manager's face kept in a phone's head (GrowthPanels.tsx ManagerFace), a long customer list */
+/* Growth: the Growth Manager's face kept in a phone's head (GrowthPanels.tsx ManagerFace) */
 .money .gm-ask{display:contents}
-.money .cust-list{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+/* Growth's top (Growth.tsx): the ask line, loud trust lines (greys: weight and a mark carry them), five or six tiles */
+.money .gr-top{display:grid;gap:var(--s-3);padding-top:var(--s-2)}
+.money .gr-ask{display:flex;align-items:center;gap:var(--s-2);padding:0 var(--page-x)}
+.money .gr-ask .f{flex:1;min-width:0}
+.money .gr-loud{display:grid;gap:var(--s-1);padding:0 var(--page-x)}
+.money .gr-loud p{display:flex;align-items:center;gap:var(--s-2);margin:0;font-weight:var(--w-strong);color:var(--ink)}
+.money .gr-verdict{margin-left:var(--s-1);font-size:var(--t-sm);color:var(--muted)}
+.money .gr-why{color:var(--faint);font-weight:var(--w-text)}
+.money .gr-partial{margin-left:var(--s-2);font-size:var(--t-xs);color:var(--muted)}
+.money .month-pick{display:inline-flex;align-items:center}
+.money .gr-chan{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0}
+.money .gr-over{display:block;font-size:var(--t-xs);color:var(--ink);font-weight:var(--w-strong)}
+.money .gr-n,.money .gr-est{margin-left:var(--s-1h);font-size:var(--t-xs);color:var(--faint);font-weight:var(--w-text)}
+.money .gr-health{display:grid;gap:var(--s-1);padding:var(--s-3) var(--page-x);font-size:var(--t-sm);color:var(--muted)}
+.money .gr-health p{margin:0}
+.money .gr-health summary{display:inline-flex;align-items:center;gap:var(--s-1h);cursor:pointer;list-style:none}
+.money .gr-health details>span{display:block;padding-left:var(--s-6)}
+@container page (min-width:481px){
+  .money .gr-tiles .widgets{grid-template-columns:repeat(var(--gr-n,4),minmax(0,1fr))}
+}
 
 :where(html[data-layout="cards"]){
   .money .chart-sec{padding:0 var(--s-2) var(--s-3)}

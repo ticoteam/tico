@@ -3,23 +3,31 @@ import { defineAction, s } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
 import { chatAddress } from '@/lib';
-import { budgetDay } from './model';
+import { budgetDay, lastFullMonth, monthName } from './model';
 import {
   addBudget,
   addStripeHook,
+  balanceQuery,
   BOOKS,
   booksSignIn,
+  cachedCard,
   connectSource,
   decide,
   disconnectBooks,
   findGrowthManager,
+  askGrowthManager,
+  segmentsQuery,
   KEY_SOURCES,
   removeBudget,
+  cachedBudget,
+  tmpBudgetId,
   setBillsAddress,
   setBudgetAmount,
   type Decided,
 } from './queries';
 import { FINANCE_TAB_IDS } from './search';
+import { asOfDay, balanceCsv, balanced, billPayload, compareDay, download, entryPayload, invoicePayload, paidPayload, toCents } from './ledger';
+import { TX_STATUSES, validateFinanceSearch } from './search';
 
 /* Every view and change on Finance and Growth. Tabs, ranges and the open panel live in the address, so Back undoes a
    view; a budget change is shown first and taken back if the server refuses it. Growth is read here: its changes go
@@ -403,45 +411,84 @@ export const newBudget = defineAction({
   target: () => ({ kind: 'budget', id: 'new' }),
 });
 
+/** The day a month's budgets are read at: today in this month, else the month's first day (finance-budgets.ts:76). */
+const budgetAt = (month?: string) => (!month || month === budgetDay().slice(0, 7) ? budgetDay() : `${month}-01`);
+/** The month Budgets shows now, from the address. */
+const shownMonth = (router: AnyRouter) => validateFinanceSearch(router.state.location.search as Record<string, unknown>).month;
+
 export const addRow = defineAction({
   id: 'budget.addRow',
-  title: 'Add a monthly budget for a P&L line',
+  title: 'Add a budget: for a P&L line, or under one for a teammate or a vendor',
   kind: 'change',
   // A budget is money: the person's own press. Opening one (above) stays Tico's.
   tico: false,
-  input: s.object({ name: s.string({ min: 1, max: 120 }), line: id, amount: dollars }),
-  run: async ({ router }, { name, line, amount }) => {
-    const done = addBudget(budgetDay(), { name, line, cents: Math.round(amount * 100) });
-    await go(router, FIN, { tab: 'budgets', panel: undefined });
+  input: s.object({
+    name: s.string({ min: 1, max: 120 }),
+    line: id,
+    amount: dollars,
+    under: s.optional(id),
+    teammate: s.optional(s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' })),
+    vendor: s.optional(s.string({ min: 1, max: 120 })),
+    warn: s.optional(s.number({ int: true, min: 1, max: 100 })),
+    period: s.optional(s.oneOf(['month', 'quarter', 'year'] as const)),
+    from: s.optional(ym),
+  }),
+  run: async ({ router }, { name, line, amount, under, teammate, vendor, warn, period, from }) => {
+    const done = addBudget(budgetAt(shownMonth(router)), { name, line, cents: Math.round(amount * 100), parent: under, teammate, vendor, warn, period, from });
+    // From New budget, back to the list; from a line's panel, it stays open.
+    if (router.state.location.search.panel === 'budget:new') await go(router, FIN, { tab: 'budgets', panel: undefined });
     return done;
   },
   did: ({ name }) => `Added “${name}”`,
-  target: ({ line }) => ({ kind: 'budget', id: `tmp:${line}` }),
+  target: (i) => ({ kind: 'budget', id: tmpBudgetId(i) }),
 });
+
+/** Whether a new amount is at most what the budget holds now, as last read. */
+const lowers = (at: string, budget: string, amount: number) => {
+  const now = cachedBudget(queryClient, at, budget)?.state.amount;
+  return now != null && Math.round(amount * 100) <= now;
+};
 
 export const updateRow = defineAction({
   id: 'budget.updateRow',
-  title: 'Change a budget from this month on',
+  title: 'Change a budget from a month on (this one when left out)',
   kind: 'change',
-  tico: false,
-  input: s.object({ budget: id, amount: dollars }),
-  run: (_ctx, { budget, amount }) => setBudgetAmount(budgetDay(), budget, Math.round(amount * 100)),
+  input: s.object({ budget: id, amount: dollars, month: s.optional(ym) }),
+  // Raising a budget is money: the person's own press. Lowering one stays Tico's.
+  can: (ctx, { budget, amount, month }) => ctx.via !== 'tico' || lowers(budgetAt(month), budget, amount),
+  run: (_ctx, { budget, amount, month }) => setBudgetAmount(budgetAt(month), budget, Math.round(amount * 100)),
   did: () => 'Changed the budget',
   target: ({ budget }) => ({ kind: 'budget', id: budget }),
 });
 
+/** Stopping a budget spends nothing and keeps its history, so Tico may do it too. */
 export const removeRow = defineAction({
   id: 'budget.removeRow',
-  title: 'Stop a budget from this month on',
+  title: 'Stop a budget from a month on (this one when left out)',
   kind: 'change',
-  tico: false,
-  input: s.object({ budget: id }),
-  run: async ({ router }, { budget }) => {
-    const done = removeBudget(budgetDay(), budget);
+  input: s.object({ budget: id, month: s.optional(ym) }),
+  run: async ({ router }, { budget, month }) => {
+    const done = removeBudget(budgetAt(month), budget);
     await closeHere(router);
     return done;
   },
   did: () => 'Removed the budget',
+});
+
+export const setBudgetMonth = defineAction({
+  id: 'budget.setMonth',
+  title: 'Show budgets for a month',
+  kind: 'view',
+  input: s.object({ month: ym }),
+  run: ({ router }, { month }) =>
+    go(router, FIN, {
+      // My budget keeps its tab; anywhere else it is Budgets.
+      tab: validateFinanceSearch(router.state.location.search as Record<string, unknown>).tab === 'mine' ? 'mine' : 'budgets',
+      month: month === budgetDay().slice(0, 7) ? undefined : month,
+      panel: undefined,
+    }),
+  did: () => 'Showed the month',
+  target: () => ({ kind: 'range', id: 'budgets' }),
 });
 
 // ---------------------------------------------------------------- Growth views
@@ -486,28 +533,6 @@ export const openSources = defineAction({
   target: () => ({ kind: 'page', id: `${GROWTH}?tab=sources` }),
 });
 
-const slug = s.string({ min: 1, max: 80, pattern: /^[\w-]+$/, what: 'a channel slug' });
-
-export const openMonth = defineAction({
-  id: 'growth.openMonth',
-  title: "Open a channel's month: each number and where it came from",
-  kind: 'view',
-  input: s.object({ channel: slug, month: ym }),
-  run: ({ router }, { channel, month }) => go(router, GROWTH, { tab: undefined, panel: `month:${channel}:${month}` }),
-  did: () => 'Opened the month',
-  target: ({ channel, month }) => ({ kind: 'month', id: `${channel}:${month}` }),
-});
-
-export const openCustomers = defineAction({
-  id: 'growth.openCustomers',
-  title: 'Open the customers behind a retention figure',
-  kind: 'view',
-  input: s.object({ month: ym, day: s.oneOf(['30', '90', '180'] as const) }),
-  run: ({ router }, { month, day }) => go(router, GROWTH, { tab: undefined, panel: `customers:${month}:${day}` }),
-  did: () => 'Opened the customers',
-  target: ({ month, day }) => ({ kind: 'kept', id: `${month}:${day}` }),
-});
-
 export const openSource = defineAction({
   id: 'growth.openSource',
   title: 'Open a Growth source: what it is the truth for and its last sync',
@@ -518,20 +543,35 @@ export const openSource = defineAction({
   target: ({ source }) => ({ kind: 'source', id: source }),
 });
 
-/** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. */
+/** What the page shows, in words, ahead of a question: "Rental, October 2026". */
+function growthScopeWords(router: AnyRouter, qc: typeof queryClient) {
+  const loc = router.state.location;
+  if (loc.pathname !== GROWTH) return '';
+  const search = loc.search as { segment?: string; month?: string };
+  const seg = search.segment && qc.getQueryData(segmentsQuery.queryKey)?.segments.find((x) => x.slug === search.segment);
+  return `${seg ? seg.name : 'All'}, ${monthName(search.month ?? lastFullMonth())}`;
+}
+
+/** Growth changes (channels, customers, sources) are asked of the Growth Manager: its chat opens beside the page. With
+    words, they are sent first, led by the scope and month on screen. Ordinary messaging, so Tico may ask too. */
 export const askManager = defineAction({
   id: 'growth.askManager',
-  title: "Open the Growth Manager's chat",
-  kind: 'view',
-  input: s.object({}),
-  run: async ({ router, queryClient: qc }): Promise<string> => {
+  title: 'Ask the Growth Manager',
+  kind: 'change',
+  input: s.object({ text: s.optional(s.string({ min: 1, max: 4000 })) }),
+  run: async ({ router, queryClient: qc }, { text }): Promise<string> => {
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
+    const words = text?.trim();
+    if (words) {
+      const lead = growthScopeWords(router, qc);
+      await askGrowthManager(who, lead ? `${lead}: ${words}` : words, { path: router.state.location.href, title: 'Growth' });
+    }
     const chat = chatAddress(who, 'agent');
     await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) });
     return chat;
   },
-  did: () => 'Opened the chat',
+  did: ({ text }) => (text?.trim() ? 'Asked the Growth Manager' : 'Opened the chat'),
   target: (_i, chat) => (chat ? { kind: 'chat', id: chat } : null),
 });
 
@@ -542,4 +582,334 @@ export const closeGrowthPanel = defineAction({
   input: s.object({}),
   run: ({ router }) => closeHere(router),
   did: () => 'Closed the panel',
+});
+
+// ---------------------------------------------------------------- bills, invoices, cards, entries, the balance sheet (s405-s411, s449, s475)
+
+/* A bill or an invoice is entered as a draft and decided from its panel, each decision tried first by its dialog (s449).
+   What moves or commits money (approve, schedule, mark paid, send, write off, void, unfreezing a card, raising its
+   limit) is the person's own press; a draft, a vendor, a journal entry, a freeze and a lower limit are Tico's too. */
+
+const RECORD_TAB = { bill: 'payables', invoice: 'receivables', card: 'cards', tx: 'transactions' } as const;
+const tags = s.optional(s.record(s.string({ min: 1, max: 200 })));
+const words = (max: number) => s.optional(s.string({ max }));
+
+export const openRecord = defineAction({
+  id: 'finance.openRecord',
+  title: 'Open a bill, an invoice, a card or a transaction beside its list',
+  kind: 'view',
+  input: s.object({ kind: s.oneOf(['bill', 'invoice', 'card', 'tx'] as const), record: id }),
+  run: ({ router }, { kind, record }) => go(router, FIN, { tab: RECORD_TAB[kind], panel: `${kind}:${record}` }),
+  did: () => 'Opened it',
+  target: ({ kind, record }) => ({ kind, id: record }),
+});
+
+export const setAsOf = defineAction({
+  id: 'finance.setAsOf',
+  title: 'Show the balance sheet as of today, the last month end or the last year end',
+  kind: 'view',
+  input: s.object({ asof: s.oneOf(['today', 'month', 'year'] as const) }),
+  run: ({ router }, { asof }) => go(router, FIN, { tab: 'balance', asof: asof === 'today' ? undefined : asof }),
+  did: () => 'Moved the day',
+  target: () => ({ kind: 'tab', id: 'balance' }),
+});
+
+/** Each filter given is set; one given as null is cleared; one left out stays. */
+export const filterTransactions = defineAction({
+  id: 'finance.filterTransactions',
+  title: 'Filter transactions by source (bank or entries), status or line',
+  kind: 'view',
+  input: s.object({
+    src: s.optional(s.nullable(s.oneOf(['feed', 'entry'] as const))),
+    status: s.optional(s.nullable(s.oneOf(TX_STATUSES))),
+    line: s.optional(s.nullable(id)),
+  }),
+  run: ({ router }, f) => go(router, FIN, { tab: 'transactions', panel: undefined, ...Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v ?? undefined])) }),
+  did: () => 'Filtered transactions',
+  target: () => ({ kind: 'tab', id: 'transactions' }),
+});
+
+/** The balance sheet shown, beside the day before it, as a file (finance-books.ts Export CSV). */
+export const exportBalance = defineAction({
+  id: 'finance.exportBalance',
+  title: 'Download the balance sheet as a CSV',
+  kind: 'view',
+  input: s.object({}),
+  run: async ({ router, queryClient: qc }) => {
+    const at = validateFinanceSearch(router.state.location.search as Record<string, unknown>);
+    const asof = at.asof ?? 'today';
+    const [now, was] = await Promise.all([
+      qc.fetchQuery(balanceQuery(asOfDay(asof), at.as)),
+      qc.fetchQuery(balanceQuery(compareDay(asof), at.as)).catch(() => undefined),
+    ]);
+    const name = `balance-sheet-${now.as_of}.csv`;
+    download(name, balanceCsv(now, was));
+    return name;
+  },
+  did: () => 'Exported',
+});
+
+/** A new vendor or customer; its id comes back for the bill or invoice it was named on. */
+export const addContact = defineAction({
+  id: 'finance.addContact',
+  title: 'Add a vendor or a customer',
+  kind: 'change',
+  input: s.object({ name: s.string({ min: 1, max: 120 }), kind: s.oneOf(['vendor', 'customer'] as const) }),
+  run: async (_ctx, { name, kind }) => {
+    const out = (await decide('contact_create', { name: name.trim(), kind })) as Decided & { result?: { contact_id?: unknown } };
+    const made = out.result?.contact_id;
+    if (out.status !== 'committed' || typeof made !== 'string') throw new Error(`The new ${kind} waits for approval`);
+    return made;
+  },
+  did: (i) => `Added ${i.name.trim()}`,
+});
+
+/** A bill entered by hand, as a draft: it holds budget, and Approve enters it. */
+export const addBill = defineAction({
+  id: 'finance.addBill',
+  title: 'Enter a bill from a vendor, as a draft',
+  kind: 'change',
+  input: s.object({ vendor: id, date: day, due: s.optional(day), number: words(60), memo: words(200), line: id, amount: money, tags }),
+  run: (_ctx, b) => decide('bill_create', billPayload(b)),
+  did: (_i, out) => waits(out, 'Bill added'),
+  target: () => ({ kind: 'tab', id: 'payables' }),
+});
+
+export const approveBill = defineAction({
+  id: 'finance.approveBill',
+  title: 'Approve a draft bill, entering it to be paid',
+  kind: 'change',
+  // Approving commits the company to paying it: the person's own press.
+  tico: false,
+  input: s.object({ bill: id }),
+  run: (_ctx, { bill }) => decide('bill_approve', { bill_id: bill }),
+  did: (_i, out) => waits(out, 'Approved'),
+});
+
+export const scheduleBill = defineAction({
+  id: 'finance.scheduleBill',
+  title: 'Pay a bill from a bank account on a day',
+  kind: 'change',
+  // Money leaves the bank on that day: the person's own press.
+  tico: false,
+  input: s.object({ bill: id, on: day, from: id }),
+  run: (_ctx, { bill, on, from }) => decide('bill_schedule', { bill_id: bill, pay_on: on, money_account_id: from }),
+  did: (_i, out) => waits(out, 'Scheduled'),
+});
+
+/** Money paid on a bill, or received on an invoice, from (to) a bank account or elsewhere. */
+export const markPaid = defineAction({
+  id: 'finance.markPaid',
+  title: 'Record money paid on a bill or received on an invoice',
+  kind: 'change',
+  // It settles money in the books: the person's own press.
+  tico: false,
+  input: s.object({ kind: s.oneOf(['bill', 'invoice'] as const), doc: id, amount: money, date: s.optional(day), account: s.optional(id) }),
+  run: (_ctx, p) => decide(p.kind === 'bill' ? 'bill_mark_paid' : 'invoice_record_payment', paidPayload(p)),
+  did: (_i, out) => waits(out, 'Marked paid'),
+});
+
+export const voidBill = defineAction({
+  id: 'finance.voidBill',
+  title: 'Void a bill',
+  kind: 'change',
+  // A void cannot be undone: the person's own press.
+  tico: false,
+  input: s.object({ bill: id, reason: words(200) }),
+  run: (_ctx, { bill, reason }) => decide('bill_void', { bill_id: bill, ...(reason?.trim() ? { reason: reason.trim() } : {}) }),
+  did: (_i, out) => waits(out, 'Voided'),
+});
+
+/** An invoice entered by hand, as a draft: Send sends it. */
+export const newInvoice = defineAction({
+  id: 'finance.newInvoice',
+  title: 'Write an invoice to a customer, as a draft',
+  kind: 'change',
+  input: s.object({
+    customer: id,
+    date: day,
+    due: s.optional(day),
+    number: words(60),
+    memo: words(200),
+    lines: s.array(s.object({ line: id, amount: money, taxable: s.optional(s.boolean()), tags }), { max: 50 }),
+  }),
+  can: (_ctx, { lines }) => lines.length > 0,
+  run: (_ctx, v) => decide('invoice_create', invoicePayload(v)),
+  did: (_i, out) => waits(out, 'Invoice added'),
+  target: () => ({ kind: 'tab', id: 'receivables' }),
+});
+
+export const sendInvoice = defineAction({
+  id: 'finance.sendInvoice',
+  title: 'Send a draft invoice to its customer',
+  kind: 'change',
+  // It goes to the customer and books what they owe: the person's own press.
+  tico: false,
+  input: s.object({ invoice: id }),
+  run: (_ctx, { invoice }) => decide('invoice_send', { invoice_id: invoice }),
+  did: (_i, out) => waits(out, 'Sent'),
+});
+
+export const writeOff = defineAction({
+  id: 'finance.writeOff',
+  title: 'Write off what a customer will not pay on an invoice',
+  kind: 'change',
+  // It takes income off the books for good: the person's own press.
+  tico: false,
+  input: s.object({ invoice: id, amount: money, memo: words(200) }),
+  run: (_ctx, { invoice, amount, memo }) => decide('invoice_write_off', { invoice_id: invoice, amount: toCents(amount), ...(memo?.trim() ? { memo: memo.trim() } : {}) }),
+  did: (_i, out) => waits(out, 'Written off'),
+});
+
+/** A journal entry: debits more than 0, credits less, equal in all (finance-docs.ts finJournalAdd). */
+export const addEntry = defineAction({
+  id: 'finance.addEntry',
+  title: 'Post a journal entry of two balanced lines or more',
+  kind: 'change',
+  input: s.object({
+    date: day,
+    memo: words(200),
+    lines: s.array(s.object({ line: id, amount: s.number({ min: -1_000_000_000, max: 1_000_000_000 }), tags }), { max: 50 }),
+  }),
+  can: (_ctx, { lines }) => balanced(lines),
+  run: (_ctx, e) => decide('journal', entryPayload(e)),
+  did: (_i, out) => waits(out, 'Posted'),
+  target: () => ({ kind: 'tab', id: 'transactions' }),
+});
+
+/** Freezing stops spend at once and is undone by hand: Tico may. */
+export const freezeCard = defineAction({
+  id: 'finance.freezeCard',
+  title: 'Freeze a card',
+  kind: 'change',
+  input: s.object({ card: id }),
+  run: (_ctx, { card }) => decide('card_freeze', { card_id: card }),
+  did: (_i, out) => waits(out, 'Frozen'),
+  target: ({ card }) => ({ kind: 'card', id: card }),
+});
+
+export const unfreezeCard = defineAction({
+  id: 'finance.unfreezeCard',
+  title: 'Unfreeze a card a person froze',
+  kind: 'change',
+  // The card can spend again: the person's own press.
+  tico: false,
+  input: s.object({ card: id }),
+  run: (_ctx, { card }) => decide('card_unfreeze', { card_id: card }),
+  did: (_i, out) => waits(out, 'Unfrozen'),
+});
+
+export const setCardLimit = defineAction({
+  id: 'finance.setCardLimit',
+  title: "Change a card's monthly limit",
+  kind: 'change',
+  input: s.object({ card: id, amount: money }),
+  // A higher limit lets more be spent: the person's own press. Tico may lower one the cards list shows.
+  can: ({ via, queryClient: qc }, { card, amount }) => {
+    if (via !== 'tico') return true;
+    const now = cachedCard(qc, card)?.limit;
+    return now != null && toCents(amount) < now;
+  },
+  run: (_ctx, { card, amount }) => decide('card_update_limit', { card_id: card, amount: toCents(amount) }),
+  did: (_i, out) => waits(out, 'Saved'),
+  target: ({ card }) => ({ kind: 'card', id: card }),
+});
+
+// ---------------------------------------------------------------- sources and access, opened beside (finance-admin.ts)
+
+const mate = s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' });
+
+export const openFinanceSource = defineAction({
+  id: 'finance.openSource',
+  title: 'Open a Finance source: its accounts, its line in the books, its last sync',
+  kind: 'view',
+  input: s.object({ source: id }),
+  run: ({ router }, { source }) => go(router, FIN, { tab: 'sources', panel: `source:${source}` }),
+  did: () => 'Opened the source',
+  target: ({ source }) => ({ kind: 'source', id: source }),
+});
+
+export const openMate = defineAction({
+  id: 'finance.openMate',
+  title: "Open a teammate's Finance access: what they see and why",
+  kind: 'view',
+  input: s.object({ teammate: mate }),
+  run: ({ router }, { teammate }) => go(router, FIN, { tab: 'access', panel: `mate:${teammate}` }),
+  did: () => 'Opened the teammate',
+  target: ({ teammate }) => ({ kind: 'mate', id: teammate }),
+});
+
+/** Reads a connection's feed again now; it spends nothing and changes no books. */
+export const syncSource = defineAction({
+  id: 'finance.syncSource',
+  title: 'Sync a Finance source now',
+  kind: 'change',
+  input: s.object({ connection: id }),
+  run: (_ctx, { connection }) => decide('connection_sync', { connection_id: connection }),
+  did: (_i, out) => waits(out, 'Syncing'),
+  target: ({ connection }) => ({ kind: 'source', id: connection }),
+});
+
+/** Which line of the books a bank, card or payments account posts to; another choice puts it back. */
+export const mapSource = defineAction({
+  id: 'finance.mapSource',
+  title: 'Choose the balance sheet line a bank, card or payments account books to',
+  kind: 'change',
+  input: s.object({ account: id, line: id }),
+  run: (_ctx, { account, line }) => decide('connection_map', { money_account_id: account, account_id: line }),
+  did: (_i, out) => waits(out, 'Saved'),
+  target: ({ account }) => ({ kind: 'source', id: account }),
+});
+
+const WHAT = ['everything', 'pnl', 'expenses', 'pnl_lines', 'balance_sheet', 'bs_lines', 'payables', 'receivables', 'sources'] as const;
+
+export const giveAccess = defineAction({
+  id: 'finance.giveAccess',
+  title: 'Let a teammate see more of Finance',
+  kind: 'change',
+  // Who sees financial data is a right given: the person's own press.
+  tico: false,
+  input: s.object({
+    teammate: mate,
+    what: s.oneOf(WHAT),
+    whose: s.optional(s.oneOf(['own', 'team', 'company'] as const)),
+    team: s.optional(id),
+    line: s.optional(id),
+    until: s.optional(day),
+  }),
+  can: (_ctx, { what, whose, team, line }) => (whose !== 'team' || !!team) && (!(what === 'pnl_lines' || what === 'bs_lines') || !!line),
+  run: (_ctx, { teammate, what, whose, team, line, until }) =>
+    decide('view_grant', {
+      subject_kind: 'teammate',
+      subject: teammate,
+      what,
+      ...(whose ? { whose } : {}),
+      ...(whose === 'team' && team ? { whose_team: team } : {}),
+      ...(line ? { account_ids: [line] } : {}),
+      ...(until ? { expires_at: `${until}T23:59:59Z` } : {}),
+    }),
+  did: (_i, out) => waits(out, 'Access given'),
+  target: ({ teammate }) => ({ kind: 'mate', id: teammate }),
+});
+
+/** Taking a view back narrows what someone sees; it can be given again. */
+export const takeAccess = defineAction({
+  id: 'finance.takeAccess',
+  title: 'Take back a view of Finance given to a teammate',
+  kind: 'change',
+  input: s.object({ grant: id }),
+  run: (_ctx, { grant }) => decide('view_revoke', { grant_id: grant }),
+  did: (_i, out) => waits(out, 'Access taken back'),
+});
+
+export const setApprover = defineAction({
+  id: 'finance.setApprover',
+  title: 'Name who approves finance-admin actions; none is the owner',
+  kind: 'change',
+  // Naming the approver gives a right: the owner's own press.
+  tico: false,
+  input: s.object({ approver: s.optional(mate) }),
+  run: (_ctx, { approver }) => decide('finance_approver_set', { approver: approver ?? '' }),
+  did: (_i, out) => waits(out, 'Saved'),
+  target: () => ({ kind: 'tab', id: 'access' }),
 });

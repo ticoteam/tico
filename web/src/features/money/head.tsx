@@ -1,5 +1,6 @@
 import { useActor } from '@/data';
 import type { PageBaseProps, PageTab } from '@/pagekinds';
+import { useCaps } from './caps';
 import { ActLink, useViewAs } from './parts';
 import { FINANCE_TABS, type FinanceTab } from './search';
 import './money.css';
@@ -20,15 +21,18 @@ export const financeHead = { title: 'Finance', path: FIN, className: 'money', ta
   tabs: readonly PageTab[];
 };
 
-/** The head, and while the owner reads Finance as a teammate, whose view it is (with Stop) and tabs that keep it. */
+/** The head, and while the owner reads Finance as a teammate, whose view it is (with Stop) and tabs that keep it. The
+    tabs are the pages the viewer (or the teammate read as) may open (finTabShown). */
 export function useFinanceHead() {
   const as = useViewAs();
   const who = useActor(as ?? null);
-  if (!as) return financeHead;
+  const { shown } = useCaps();
+  const tabs = FINANCE_PAGE_TABS.filter((_, i) => shown(FINANCE_TABS[i]![0]));
+  if (!as) return { ...financeHead, tabs };
   const name = who?.name ?? as.slice(as.indexOf(':') + 1);
   return {
     ...financeHead,
-    tabs: FINANCE_PAGE_TABS.map((t) => ({ ...t, search: { ...t.search, as } })),
+    tabs: tabs.map((t) => ({ ...t, search: { ...t.search, as } })),
     sub: (
       <span className="view-as" role="status">
         {`Viewing as ${name}`}

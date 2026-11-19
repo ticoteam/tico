@@ -261,9 +261,9 @@ export function centsOf(text: string): number | null {
 // ---------------------------------------------------------------- Growth
 
 /** The funnel from the read's headline: sign-ups, then the shares that activated and paid, then new customers. */
-export function funnelSteps(h: GrowthRead['headline']) {
+export function funnelSteps(h: Partial<GrowthRead['headline']>) {
   const signups = h.signups?.value ?? null;
-  const of = (rate: GrowthRead['headline']['activated_rate']) =>
+  const of = (rate: GrowthRead['headline']['activated_rate'] | undefined) =>
     rate?.value == null || signups == null ? null : Math.round(rate.value * (rate.n ?? signups));
   const steps: [string, number | null][] = [
     ['Sign-ups', signups],
@@ -274,11 +274,42 @@ export function funnelSteps(h: GrowthRead['headline']) {
   return steps.filter((s): s is [string, number] => s[1] != null).map(([name, n]) => ({ name, count: n }));
 }
 
-/** Twelve months back from the last full one, newest first, plus the month picked. */
+/** The month the page opens on: the last full one. */
+export const lastFullMonth = (now = new Date()) => addMonths(ymOf(now), -1);
+
+/** The current (partial) month, then twelve full months back, newest first, plus the month picked. */
 export function growthMonths(picked: string | undefined, now = new Date()) {
-  const last = addMonths(ymOf(now), -1);
-  const list = Array.from({ length: 12 }, (_, k) => addMonths(last, -k));
+  const list = Array.from({ length: 13 }, (_, k) => addMonths(ymOf(now), -k));
   return [...new Set([...(picked ? [picked] : []), ...list])].sort().reverse();
+}
+
+/** Revenue or retention: a segment says; on All the read gives a retention headline (`value`) only when every segment
+    is a retention one. */
+export const valueKind = (r: Pick<GrowthRead, 'segment' | 'headline'>): 'revenue' | 'retention' =>
+  r.segment?.value_kind ?? (r.headline.value ? 'retention' : 'revenue');
+
+/** When a cohort's kept share at a window can first be read: once its whole month is old enough ("Nov 30"). */
+export function firstRead(cohort: string, days: number) {
+  const [y, m] = parts(cohort);
+  const d = new Date(y, m, 0);
+  d.setDate(d.getDate() + days);
+  return `${MON[d.getMonth()]} ${d.getDate()}`;
+}
+
+const FIGURE_WORD = { signups: 'Sign-ups', new_customers: 'New customers', cost: 'Cost' } as const;
+
+/** The trust lines worth saying out loud: a big unknown share, a check that disagrees, stale sources. */
+export function loudHealth(h: GrowthRead['health'] | undefined): string[] {
+  if (!h) return [];
+  const out: string[] = [];
+  if (h.unknown_share != null && h.unknown_share >= 0.2)
+    out.push(`${pct(h.unknown_share)} of ${h.basis === 'signups' ? 'sign-ups' : 'new customers'} have no known channel`);
+  for (const c of h.checks ?? []) {
+    if (c.agrees !== false) continue;
+    out.push(`${FIGURE_WORD[c.figure]} is off from ${c.kpi}: ${count(c.growth)} here, ${count(c.outside)} there`);
+  }
+  if (h.stale_sources.length) out.push(`Stale: ${h.stale_sources.join(', ')}`);
+  return out;
 }
 
 /** "too few", "not supplied": why a figure is missing, in a muted word. */

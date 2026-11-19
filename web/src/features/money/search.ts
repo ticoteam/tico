@@ -4,6 +4,8 @@ import { isYm, type Period } from './model';
 
 export const FINANCE_TABS = [
   ['overview', 'Overview'],
+  // A teammate's own budgets: the one page of Finance for whoever sees only those (finance-budgets.ts:122).
+  ['mine', 'My budget'],
   ['pnl', 'P&L'],
   ['transactions', 'Transactions'],
   ['budgets', 'Budgets'],
@@ -33,7 +35,21 @@ export interface FinanceSearch {
   books?: 'connected' | 'error' | 'other';
   /** Why the books did not connect: a known code, anything else `unknown`. */
   reason?: BooksReason;
+  /** The balance sheet as of the last month end or year end; today when left out. */
+  asof?: 'month' | 'year';
+  /** Transactions from the bank feeds or the books' own entries only. */
+  src?: 'feed' | 'entry';
+  /** Transactions in one status. */
+  status?: TxStatus;
+  /** Transactions on one P&L or balance sheet line (its account id). */
+  line?: string;
+  /** Budgets and My budget for this month, YYYY-MM; this month when left out. */
+  month?: string;
 }
+
+/** A transaction's status, as GET /api/v2/finance/transactions filters it. */
+export const TX_STATUSES = ['new', 'matched', 'posted', 'pending', 'ignored', 'failed'] as const;
+export type TxStatus = (typeof TX_STATUSES)[number];
 
 /** The codes a books return can carry (backend/finance/books_link.py and HQ's consent answers). */
 export const BOOKS_REASONS = [
@@ -57,13 +73,17 @@ export interface GrowthSearch {
   segment?: string;
   /** YYYY-MM; the last full month when left out. */
   month?: string;
-  /** `channel:<slug>`, `month:<channel slug>:<YYYY-MM>`, `customers:<YYYY-MM>:<30|90|180>`, or on Sources `source:<id>`. */
+  /** `channel:<slug>`, or on Sources `source:<id>`. */
   panel?: string;
 }
 
 const text = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 const PANEL = /^(line|budget|channel):\S+$/;
-const GROWTH_PANEL = /^(channel|source):\S+$|^month:[\w-]+:\d{4}-(0[1-9]|1[0-2])$|^customers:\d{4}-(0[1-9]|1[0-2]):(30|90|180)$/;
+/** A bill, an invoice, a card or a transaction open beside its list. */
+const BOOK_PANEL = /^(bill|invoice|card|tx):\S+$/;
+/** A source on Sources, a teammate on Access (`mate:human:<id>`). */
+const ADMIN_PANEL = /^(source|mate):\S+$/;
+const GROWTH_PANEL = /^(channel|source):\S+$/;
 
 /** `?tab=pnl&period=quarter&basis=cash&from=2026-07&panel=line:<account>&as=human:<id>`; anything else is dropped. */
 export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSearch {
@@ -72,6 +92,15 @@ export function validateFinanceSearch(raw: Record<string, unknown>): FinanceSear
   if (tab && tab !== 'overview') out.tab = tab;
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
+  if (panel && BOOK_PANEL.test(panel)) out.panel = panel;
+  if (panel && ADMIN_PANEL.test(panel)) out.panel = panel;
+  if (isYm(raw.month)) out.month = raw.month;
+  if (raw.asof === 'month' || raw.asof === 'year') out.asof = raw.asof;
+  if (raw.src === 'feed' || raw.src === 'entry') out.src = raw.src;
+  const status = TX_STATUSES.find((v) => v === raw.status);
+  if (status) out.status = status;
+  const line = text(raw.line, 80);
+  if (line && /^[\w-]+$/.test(line)) out.line = line;
   if (raw.period === 'quarter' || raw.period === 'year') out.period = raw.period;
   if (raw.basis === 'cash') out.basis = 'cash';
   if (isYm(raw.from)) out.from = raw.from;
@@ -95,12 +124,6 @@ export function validateGrowthSearch(raw: Record<string, unknown>): GrowthSearch
   if (panel && GROWTH_PANEL.test(panel) && panel.startsWith('source:') === (out.tab === 'sources')) out.panel = panel;
   return out;
 }
-
-/** `month:search:2026-10` is ['search', '2026-10']; `customers:2026-10:90` is ['2026-10', '90']. */
-export const pairOf = (rest: string): [string, string] => {
-  const i = rest.lastIndexOf(':');
-  return [rest.slice(0, i), rest.slice(i + 1)];
-};
 
 /** The panel's kind and id: `line:acc_1` is ['line', 'acc_1']. */
 export const panelOf = (panel: string | undefined): [string, string] | null => {

@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { GrowthPage } from './Growth';
-import type { GrowthCohortMonth, GrowthComputed, GrowthRead } from './queries';
+import type { GrowthRead } from './queries';
 import { validateGrowthSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -26,8 +26,10 @@ function serve(over: Record<string, Reply> = {}) {
     ...over,
   };
   vi.stubGlobal('fetch', async (url: string) => {
-    const path = new URL(String(url), 'http://x').pathname.replace('/api/v2', '');
-    const r = base[path] ?? missing;
+    const u = new URL(String(url), 'http://x');
+    const path = u.pathname.replace('/api/v2', '');
+    const scope = u.searchParams.get('scope');
+    const r = (scope && base[`${path}?scope=${scope}`]) || base[path] || missing;
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -45,32 +47,39 @@ function show(at: string) {
 }
 const searchOf = (href: string | null) => Object.fromEntries(new URL(href ?? '', 'http://x').searchParams);
 
+const fig = (value: number | null, more: Partial<GrowthRead['headline']['cac']> = {}) => ({ value, ...more });
 const READ: GrowthRead = {
   scope: 'all',
   period: '2026-10',
-  headline: { new_customers: { value: 40 }, cost: { value: 2000 }, cac: { value: 50 } },
-  channels: [{ slug: 'search', name: 'Search ads', new_customers: 40, cost: 2000, cac: 50 }],
+  as_of: '2026-11-02',
+  headline: {
+    signups: fig(120),
+    activated_rate: fig(0.5),
+    paid_rate: fig(0.3),
+    new_customers: fig(40),
+    cost: fig(2000),
+    cac: fig(50),
+    kept: fig(0.75, { cohort: '2026-06', n: 40 }),
+    ltv: fig(300),
+    ltv_cac: fig(6),
+    payback_months: fig(2),
+  },
+  channels: [{ slug: 'search', name: 'Search ads', signups: 120, new_customers: 40, new_share: 1, cost: 2000, cac: 50, cost_share: 1, budget: 2500 }],
+  health: { basis: 'customers', unknown_share: 0, stale_sources: [], reconciled: 'not_reconciled' },
   metrics: [],
   retention: [{ cohort: '2026-06', entered: 40, kept_d30: { value: 0.75, n: 40, status: 'ok' }, kept_d90: { value: 0.5, n: 40, status: 'ok' } }],
+  more: [],
 };
-const MONTH: GrowthCohortMonth = {
-  id: 'c1',
-  channel: 'search',
-  month: '2026-09',
-  spend: 1800,
-  bot_cost: null,
-  new_customers: 36,
-  kept_d30: 80,
-  kept_d90: null,
-  kept_d180: null,
-  revenue_month: null,
-  margin_pct: null,
-  quality: 'actual',
-  status: { kept_d90: 'not_yet' },
-  origins: {
-    spend: { origin: 'synced', source: 'ledger', at: null, conflict: { value: 1700, source: 'books' } },
-    new_customers: { origin: 'computed', computed_from: 36, sources: [] },
-    kept_d30: { origin: 'typed', by: 'human:p1', quality: 'estimate' },
+const point = (period: string, n: number | null) => ({ period, signups: null, new_customers: n, cost: n && n * 25, cac: n && 25, kept: null });
+const CHANNEL: GrowthRead = {
+  ...READ,
+  scope: 'channel:search',
+  series: [point('2026-08', 9), point('2026-09', 12), point('2026-10', null)],
+  campaigns: {
+    search: [
+      { campaign: 'Spring beds', new_customers: 30, cost: 1500, cac: 50 },
+      { campaign: 'none', new_customers: 10, cost: 500, cac: 50 },
+    ],
   },
 };
 
@@ -91,123 +100,34 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('Growth panels @s480 @s481 @s482 @s484 @s486', () => {
-  it('a channel lists its months, each opening at its own address', async () => {
-    serve({ '/growth/cohorts': ok({ cohorts: [{ ...MONTH, month: '2026-08', new_customers: 30 }, MONTH] }) });
-    show('/company/growth?panel=channel:search');
+describe('Growth panels @s480 @s484 @s486', () => {
+  it('a channel opens beside: its budget and spend, its months newest first, its campaigns by name', async () => {
+    serve({ '/growth/read?scope=channel:search': ok(CHANNEL) });
+    const router = show('/company/growth?month=2026-10');
+    const link = await screen.findByRole('link', { name: 'Search ads' });
+    expect(searchOf(link.getAttribute('href'))).toEqual({ month: '2026-10', panel: 'channel:search' });
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10', panel: 'channel:search' }));
     const panel = await screen.findByRole('complementary', { name: 'Search ads' });
-    const sep = await within(panel).findByRole('link', { name: 'September 2026' });
-    expect(searchOf(sep.getAttribute('href'))).toEqual({ panel: 'month:search:2026-09' });
-    // Newest first.
-    const months = within(panel)
-      .getAllByRole('link')
-      .map((a) => a.textContent);
-    expect(months).toEqual(['September 2026', 'August 2026']);
+    expect(await within(panel).findByText('$2,500')).toBeTruthy();
+    const rows = [...panel.querySelectorAll('.prow .row-title')].map((r) => r.textContent);
+    expect(rows).toEqual(['September 2026', 'August 2026', 'Spring beds', 'No campaign']);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ month: '2026-10' }));
   });
 
   it('a channel with no months says so', async () => {
-    serve({ '/growth/cohorts': ok({ cohorts: [] }) });
-    show('/company/growth?panel=channel:search');
-    expect(await screen.findByText('No months yet')).toBeTruthy();
-  });
-
-  it('a channel fed only by pushed rows lists the months its own read holds, newest first', async () => {
-    const point = (period: string, n: number | null) => ({ period, signups: null, new_customers: n, cost: n && n * 25, cac: null, kept: null });
-    serve({
-      '/growth/cohorts': ok({ cohorts: [] }),
-      '/growth/read': ok({ ...READ, series: [point('2026-08', 9), point('2026-09', 12), point('2026-10', null)] }),
-    });
+    serve({ '/growth/read?scope=channel:search': ok({ ...CHANNEL, series: [], campaigns: {} }) });
     show('/company/growth?panel=channel:search');
     const panel = await screen.findByRole('complementary', { name: 'Search ads' });
-    expect(await within(panel).findByText('September 2026')).toBeTruthy();
-    const months = [...panel.querySelectorAll('.prow .row-title')].map((r) => r.textContent);
-    expect(months).toEqual(['September 2026', 'August 2026']);
-    expect(within(panel).queryByText('No months yet')).toBeNull();
+    expect(await within(panel).findByText('No months yet')).toBeTruthy();
   });
 
-  it('months that fail offer Try again', async () => {
-    serve({ '/growth/cohorts': broken });
+  it('a channel that fails offers Try again', async () => {
+    serve({ '/growth/read?scope=channel:search': broken });
     show('/company/growth?panel=channel:search');
-    expect(await screen.findByRole('heading', { name: 'Months did not load' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'This channel did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
-  });
-
-  it('a month shows each number and where it came from, and closes back to its channel', async () => {
-    directory(agent('bot:gm1', 'growth-manager', 'Growth Manager'));
-    queryClient.setQueryData(['directory'], (d: { actors: Actor[]; byId: Record<string, Actor> }) => ({
-      ...d,
-      byId: { ...d.byId, 'human:p1': { id: 'human:p1', kind: 'person', name: 'Sam Rivera' } },
-    }));
-    serve({ '/growth/cohorts': ok({ cohorts: [MONTH] }) });
-    const router = show('/company/growth?panel=month:search:2026-09');
-    const panel = await screen.findByRole('complementary', { name: 'Search ads' });
-    expect(await within(panel).findByText('new customers, September 2026')).toBeTruthy();
-    expect(within(panel).getByText('ledger; books says $1,700')).toBeTruthy();
-    expect(within(panel).getByText('From 36 customers')).toBeTruthy();
-    expect(within(panel).getByText('Typed by Sam Rivera, estimate')).toBeTruthy();
-    expect(within(panel).getByText('not yet')).toBeTruthy();
-    expect(within(panel).queryByText('Agent cost')).toBeNull();
-    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ panel: 'channel:search' }));
-  });
-
-  it('a month with nothing in it says so', async () => {
-    serve({ '/growth/cohorts': ok({ cohorts: [] }) });
-    show('/company/growth?panel=month:search:2026-09');
-    expect(await screen.findByText('Nothing for this month')).toBeTruthy();
-  });
-
-  it('a month that fails offers Try again', async () => {
-    serve({ '/growth/cohorts': broken });
-    show('/company/growth?panel=month:search:2026-09');
-    expect(await screen.findByRole('heading', { name: 'This month did not load' })).toBeTruthy();
-  });
-
-  it('a retention figure opens the customers behind it: still and churned', async () => {
-    const computed: GrowthComputed = {
-      keys_visible: true,
-      cohorts: [
-        {
-          period: '2026-06',
-          kept_d90: {
-            value: 50,
-            status: 'ok',
-            count: 2,
-            denominator: 4,
-            customers: {
-              still: ['cus_a', 'cus_b'],
-              churned: [
-                { key: 'cus_c', churned: '2026-08-02' },
-                { key: 'cus_d', churned: null },
-              ],
-            },
-          },
-        },
-      ],
-    };
-    serve({ '/growth/computed': ok(computed) });
-    const router = show('/company/growth');
-    const cell = await screen.findByRole('link', { name: '50%' });
-    expect(searchOf(cell.getAttribute('href'))).toEqual({ panel: 'customers:2026-06:90' });
-    fireEvent.click(cell);
-    await waitFor(() => expect(router.state.location.search).toEqual({ panel: 'customers:2026-06:90' }));
-    const panel = await screen.findByRole('complementary', { name: 'June 2026, day 90' });
-    expect(await within(panel).findByText('2 of 4 kept')).toBeTruthy();
-    expect(within(panel).getByText('Still customers')).toBeTruthy();
-    expect(within(panel).getByText('cus_b')).toBeTruthy();
-    expect(within(panel).getByText('cus_c')).toBeTruthy();
-  });
-
-  it('customers with no list say so, and a failed read offers Try again', async () => {
-    serve({ '/growth/computed': ok({ keys_visible: false, cohorts: [] }) });
-    show('/company/growth?panel=customers:2026-06:90');
-    expect(await screen.findByText('No customer list')).toBeTruthy();
-  });
-
-  it('customers that fail to load offer Try again', async () => {
-    serve({ '/growth/computed': broken });
-    show('/company/growth?panel=customers:2026-06:90');
-    expect(await screen.findByRole('heading', { name: 'Customers did not load' })).toBeTruthy();
   });
 
   it('a source opens beside Sources: what it is the truth for, how agents reach it, its last sync', async () => {
@@ -309,13 +229,12 @@ describe('Growth Manager entry @s479 @s483 @s485', () => {
 });
 
 describe('Growth panel addresses', () => {
-  it('a source opens on Sources only; months and customers on the board; anything else is dropped', () => {
+  it('a source opens on Sources only, a channel on the board; anything else is dropped', () => {
     expect(validateGrowthSearch({ tab: 'sources', panel: 'source:src1' })).toEqual({ tab: 'sources', panel: 'source:src1' });
     expect(validateGrowthSearch({ panel: 'source:src1' })).toEqual({});
     expect(validateGrowthSearch({ tab: 'sources', panel: 'channel:search' })).toEqual({ tab: 'sources' });
-    expect(validateGrowthSearch({ panel: 'month:search:2026-09' })).toEqual({ panel: 'month:search:2026-09' });
-    expect(validateGrowthSearch({ panel: 'month:search:2026-13' })).toEqual({});
-    expect(validateGrowthSearch({ panel: 'customers:2026-06:90' })).toEqual({ panel: 'customers:2026-06:90' });
-    expect(validateGrowthSearch({ panel: 'customers:2026-06:45' })).toEqual({});
+    expect(validateGrowthSearch({ panel: 'channel:search' })).toEqual({ panel: 'channel:search' });
+    expect(validateGrowthSearch({ panel: 'month:search:2026-09' })).toEqual({});
+    expect(validateGrowthSearch({ panel: 'customers:2026-06:90' })).toEqual({});
   });
 });

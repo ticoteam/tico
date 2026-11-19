@@ -1,36 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
-import { directoryQuery, useActor, type Directory } from '@/data';
+import { directoryQuery, useActor } from '@/data';
 import { chatAddress, fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { VirtualList } from '@/kit/VirtualList';
 import { OwnerButton } from '@/kit/OwnerButton';
 import { Section, SidePanel } from '@/pagekinds';
-import { GROWTH } from './head';
-import { count, monthName, pct, statusWord } from './model';
-import { ActLink, Pfig, Prow, Ptrace, usePress, Who } from './parts';
-import {
-  channelMonthsQuery,
-  channelSeriesQuery,
-  growthCustomersQuery,
-  growthManager,
-  growthSourcesQuery,
-  pageOwnersQuery,
-  type GrowthCohortMonth,
-  type GrowthOrigin,
-  type GrowthSource,
-} from './queries';
+import { count, monthName, statusWord } from './model';
+import { Pfig, Prow, Ptrace, usePress, Who } from './parts';
+import { growthChannelQuery, growthManager, growthSourcesQuery, pageOwnersQuery, type GrowthChannel, type GrowthSource } from './queries';
 
-/* What Growth opens beside the board (old ui/app growth-channels.ts, growth-retention.ts, growth-sources.ts dialogs),
-   read only. Changes to channels, customers and sources are asked of the Growth Manager in its chat. */
+/* What Growth opens beside the board (old ui/app growth-channels.ts, growth-sources.ts dialogs), read only. Changes to
+   channels, customers and sources are asked of the Growth Manager in its chat. */
 
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
-/** /cohorts and /computed hold kept and margin as percents, 0 to 100. */
-const of100 = (v: number | null | undefined) => (v == null ? '' : pct(v / 100));
-
 /** The Growth Manager's face in the head: it opens its chat beside the page. Nothing when the company has none. */
 export function ManagerFace() {
   const owners = useQuery(pageOwnersQuery);
@@ -67,155 +52,63 @@ function Failed({ what, retry }: { what: string; retry: () => unknown }) {
   );
 }
 
-/** A channel's months, newest first, each opening its numbers and where they came from (growth-channels.ts gcMonths). A
-    channel fed only by pushed rows has none in /cohorts: its own read's months stand in, as plain rows (the month panel
-    reads /cohorts). */
-export function ChannelMonths({ channel }: { channel: string }) {
-  const q = useQuery(channelMonthsQuery(channel));
-  const rows = [...(q.data?.cohorts ?? [])].sort((a, b) => b.month.localeCompare(a.month));
-  const none = !!q.data && rows.length === 0;
-  const read = useQuery({ ...channelSeriesQuery(channel), enabled: none });
-  const pushed = none ? (read.data?.series ?? []).filter((m) => m.new_customers != null || m.cost != null).reverse() : [];
-  return (
-    <Section name="Months" count={q.data && !read.isLoading ? rows.length || pushed.length : undefined}>
-      {q.isPending || read.isLoading ? (
-        <SkeletonRows rows={3} />
-      ) : q.isError || read.isError ? (
-        <Failed what="Months" retry={q.isError ? q.refetch : read.refetch} />
-      ) : rows.length > 0 ? (
-        rows.map((c) => (
-          <Prow
-            key={c.month}
-            name={
-              <ActLink
-                to={GROWTH}
-                search={{ tab: undefined, panel: `month:${channel}:${c.month}` }}
-                action="growth.openMonth"
-                input={{ channel, month: c.month }}
-                className="t-link"
-                data-target={`month:${channel}:${c.month}`}
-              >
-                {monthName(c.month)}
-              </ActLink>
-            }
-            sub={c.quality === 'estimate' ? 'estimate' : ''}
-            fig={count(c.new_customers)}
-          />
-        ))
-      ) : pushed.length > 0 ? (
-        pushed.map((m) => <Prow key={m.period} name={monthName(m.period)} fig={count(m.new_customers)} />)
-      ) : (
-        <p className="row-sub">No months yet</p>
-      )}
-    </Section>
-  );
-}
+const CAMPAIGN: Record<string, string> = { none: 'No campaign', other: 'Other' };
 
-type Field = 'spend' | 'bot_cost' | 'new_customers' | 'kept_d30' | 'kept_d90' | 'kept_d180' | 'revenue_month' | 'margin_pct';
-const FIELDS: readonly [Field, string, (v: number | null) => string][] = [
-  ['spend', 'Spend', (v) => usd(v)],
-  ['bot_cost', 'Agent cost', (v) => usd(v)],
-  ['new_customers', 'New customers', count],
-  ['kept_d30', 'Kept at day 30', of100],
-  ['kept_d90', 'Kept at day 90', of100],
-  ['kept_d180', 'Kept at day 180', of100],
-  ['revenue_month', 'Revenue per customer, monthly', (v) => usd(v, true)],
-  ['margin_pct', 'Margin', of100],
-];
-
-/** Where one number came from, in words (growth-channels.ts gcOriginHint). */
-function originWords(o: GrowthOrigin | undefined, dir: Directory | undefined, write: (v: number | null) => string): string {
-  if (!o) return '';
-  const at = o.at ? `, ${fmtAge(o.at)}` : '';
-  const said =
-    o.origin === 'synced'
-      ? `${o.source ?? 'A source'}${at}`
-      : o.origin === 'computed'
-        ? `From ${count(o.computed_from ?? 0)} customers${o.sources?.length ? `, ${o.sources.map((s) => s.source).join(', ')}` : ''}`
-        : `Typed${o.by ? ` by ${dir?.byId[o.by]?.name ?? 'a teammate'}` : ''}${o.at ? `, ${fmtDate(o.at)}` : ''}`;
-  const est = o.quality === 'estimate' ? ', estimate' : '';
-  const differs = o.conflict ? `; ${o.conflict.source ?? 'a source'} says ${write(o.conflict.value)}` : '';
-  return `${said}${est}${differs}`;
-}
-
-/** One channel's month: each number and where it came from (growth-channels.ts gcCohortDialog, read only). */
-export function MonthPanel({ channel, name, month }: { channel: string; name: string; month: string }) {
+/** One channel, opened (`?panel=channel:<slug>`): its budget and spend, its months and its campaigns by name, from its
+    own read. `row` is the channel as the board shows it, when the board has it. */
+export function ChannelPanel({ slug, month, row }: { slug: string; month: string; row?: GrowthChannel }) {
   const press = usePress();
-  const q = useQuery(channelMonthsQuery(channel));
-  const dir = useQuery(directoryQuery).data;
-  const c: GrowthCohortMonth | undefined = q.data?.cohorts.find((r) => r.month === month);
-  const known = c ? FIELDS.filter(([f]) => c[f] != null || c.status?.[f]) : [];
+  const q = useQuery(growthChannelQuery(slug, month));
+  const c = row ?? q.data?.channels.find((x) => x.slug === slug);
+  const h = q.data?.headline;
+  const cac = c?.cac ?? h?.cac.value ?? null;
+  const months = [...(q.data?.series ?? [])].filter((p) => p.new_customers != null || p.cost != null).reverse();
+  const camps = q.data?.campaigns?.[slug] ?? [];
   return (
-    <SidePanel title={name} target={`month:${channel}:${month}`} onClose={() => void press('growth.openChannel', { channel })}>
+    <SidePanel title={c?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
       <div className="money">
         {q.isPending ? (
           <SkeletonRows rows={4} />
         ) : q.isError ? (
-          <Failed what="This month" retry={q.refetch} />
-        ) : !c || known.length === 0 ? (
-          <Empty title="Nothing for this month" />
+          <Failed what="This channel" retry={q.refetch} />
         ) : (
           <>
-            <Pfig big={count(c.new_customers) || '0'} sub={`new customers, ${monthName(month)}${c.quality === 'estimate' ? ', estimate' : ''}`} />
-            <Section name="Where this comes from">
-              {known.map(([f, label, write]) => (
-                <Ptrace key={f} name={label} sub={originWords(c.origins?.[f], dir, write) || statusWord(c.status?.[f])} fig={write(c[f])} />
-              ))}
+            <Pfig big={cac != null ? usd(cac, true) : statusWord(c?.status ?? h?.cac.status)} sub={`for a new customer, ${monthName(month)}`} />
+            <Section name="Budget">
+              <Ptrace name="Budget" sub="" fig={usd(c?.budget)} />
+              <Ptrace name="Spend" sub={c?.status === 'no_spend' ? statusWord('no_spend') : ''} fig={usd(c?.cost ?? h?.cost.value)} />
+              {c?.over_budget ? <Ptrace name="Over" sub="" fig={usd(c.over_budget)} /> : null}
             </Section>
+            <Section name="Months" count={months.length}>
+              {months.length ? (
+                months.map((m) => (
+                  <Prow
+                    key={m.period}
+                    name={monthName(m.period.slice(0, 7))}
+                    sub={m.cac != null ? `${usd(m.cac, true)} each` : ''}
+                    fig={count(m.new_customers)}
+                  />
+                ))
+              ) : (
+                <p className="row-sub">No months yet</p>
+              )}
+            </Section>
+            {camps.length > 0 && (
+              <Section name="Campaigns" count={camps.length}>
+                {camps.map((a) => (
+                  <Prow
+                    key={a.campaign}
+                    name={CAMPAIGN[a.campaign] ?? a.campaign}
+                    sub={`${count(a.new_customers)} new${a.cac != null ? `, ${usd(a.cac, true)} each` : ''}`}
+                    fig={usd(a.cost)}
+                  />
+                ))}
+              </Section>
+            )}
           </>
         )}
       </div>
     </SidePanel>
-  );
-}
-
-/** Who a retention figure counts: still customers and churned ones (growth-retention.ts grxOpen). Keys, never names. */
-export function CustomersPanel({ segment, month, day }: { segment?: string; month: string; day: '30' | '90' | '180' }) {
-  const press = usePress();
-  const q = useQuery(growthCustomersQuery(segment, month));
-  const cohort = q.data?.cohorts.find((r) => r.period.startsWith(month));
-  const f = cohort?.[`kept_d${day}`];
-  const list = f?.customers;
-  return (
-    <SidePanel title={`${monthName(month)}, day ${day}`} target={`kept:${month}:${day}`} onClose={() => void press('growth.closePanel', {})}>
-      <div className="money">
-        {q.isPending ? (
-          <SkeletonRows rows={4} />
-        ) : q.isError ? (
-          <Failed what="Customers" retry={q.refetch} />
-        ) : !f ? (
-          <Empty title="No customer list" />
-        ) : (
-          <>
-            <Pfig
-              big={f.value != null ? of100(f.value) : statusWord(f.status)}
-              sub={f.denominator ? `${count(f.count ?? null) || 0} of ${count(f.denominator)} kept` : 'kept'}
-            />
-            {list ? (
-              <>
-                <Keys name="Still customers" rows={list.still.map((k) => ({ key: k, when: '' }))} />
-                <Keys name="Churned" rows={list.churned.map((c) => ({ key: c.key, when: c.churned ? fmtDate(c.churned) : '' }))} />
-              </>
-            ) : null}
-          </>
-        )}
-      </div>
-    </SidePanel>
-  );
-}
-
-/** A list of customer keys; a long one scrolls in place. */
-function Keys({ name, rows }: { name: string; rows: { key: string; when: string }[] }) {
-  if (!rows.length) return null;
-  const row = (r: { key: string; when: string }) => <Prow name={r.key} fig={r.when} />;
-  return (
-    <Section name={name} count={rows.length}>
-      {rows.length > 50 ? (
-        <VirtualList items={rows} getKey={(r) => r.key} estimateSize={36} renderItem={row} className="cust-list" label={name} />
-      ) : (
-        rows.map((r) => <div key={r.key}>{row(r)}</div>)
-      )}
-    </Section>
   );
 }
 

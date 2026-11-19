@@ -195,14 +195,22 @@ describe('Budgets @s404 @s463', () => {
     expect(sent[2]).not.toBe(sent[1]);
   });
 
-  it('without the budgets right a budget is read only', async () => {
+  it('read as a teammate, a budget is read only', async () => {
     serve((url) => {
       if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
-      if (url.endsWith('/finance/access')) return ok({ teammates: [{ teammate: 'human:me', kind: 'human', default: 'team_expenses', rights: [] }] });
+      if (url.includes('/finance/budgets')) return ok({ budgets: [budget] });
+      if (url.endsWith('/finance/access'))
+        return ok({
+          can_view_as: true,
+          teammates: [
+            { teammate: 'human:me', kind: 'human', default: 'everything', rights: [] },
+            { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: ['finance.budgets'] },
+          ],
+        });
       return ok({});
     });
     seed();
-    show('finance', '/company/finance?tab=budgets&panel=budget:b1');
+    show('finance', '/company/finance?tab=budgets&panel=budget:b1&as=human:lee');
     expect(await screen.findByRole('complementary', { name: 'Tools' })).toBeTruthy();
     await waitFor(() => expect(queryClient.getQueryData(['finance', 'access'])).toBeTruthy());
     expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).disabled).toBe(true);
@@ -236,18 +244,31 @@ describe('Budgets @s404 @s463', () => {
 });
 
 describe('Growth @s400 @s444', () => {
+  const f = (value: number | null) => ({ value });
   const read: GrowthRead = {
-    scope: 'all',
+    scope: 'segment:alpha',
     period: '2026-10',
-    headline: { signups: { value: 400 }, new_customers: { value: 40 }, cost: { value: 2000 }, cac: { value: 50 } },
-    channels: [{ slug: 'search', name: 'Search ads', new_customers: 40, cost: 2000, cac: 50 }],
+    as_of: '2026-11-02',
+    segment: { slug: 'alpha', name: 'Alpha', rule: null, value_kind: 'revenue' },
+    headline: {
+      signups: f(400),
+      activated_rate: f(0.4),
+      paid_rate: f(0.1),
+      new_customers: f(40),
+      cost: f(2000),
+      cac: f(50),
+      kept: f(null),
+      ltv_cac: f(null),
+    },
+    channels: [{ slug: 'search', name: 'Search ads', signups: 400, new_customers: 40, new_share: 1, cost: 2000, cac: 50, cost_share: 1 }],
+    health: { basis: 'customers', unknown_share: 0, stale_sources: [], reconciled: 'not_reconciled' },
     metrics: [],
+    more: [],
   };
 
   it('a segment is its own tab and a channel opens at its address, keeping the segment', async () => {
     serve((url) => {
       if (url.endsWith('/growth/segments')) return ok({ segments: [{ slug: 'alpha', name: 'Alpha', channels: ['search'] }] });
-      if (url.endsWith('/growth/sources')) return ok({ sources: [{ id: 's1', name: 'Ledger', health: 'fresh', fills: ['spend'] }] });
       return ok(read);
     });
     show('growth', '/company/growth?segment=alpha');
@@ -256,11 +277,16 @@ describe('Growth @s400 @s444', () => {
     expect(searchOf(screen.getByRole('link', { name: 'All' }).getAttribute('href'))).toEqual({});
     const channel = await screen.findByRole('link', { name: 'Search ads' });
     expect(searchOf(channel.getAttribute('href'))).toEqual({ segment: 'alpha', panel: 'channel:search' });
-    expect(screen.getByRole('list', { name: 'Funnel, Alpha' })).toBeTruthy();
+    expect(within(screen.getByRole('group', { name: 'Headline' })).getByText('CAC')).toBeTruthy();
   });
 
-  it('with no source says there are no numbers yet', async () => {
-    serve((url) => (url.endsWith('/growth/sources') ? ok({ sources: [] }) : url.endsWith('/growth/segments') ? ok({ segments: [] }) : ok(read)));
+  it('with nothing read yet says there are no numbers yet', async () => {
+    const none: GrowthRead = {
+      ...read,
+      headline: { ...read.headline, signups: f(0), new_customers: f(0), cost: { value: null, status: 'no_spend' }, cac: { value: null, status: 'no_spend' } },
+      channels: [],
+    };
+    serve((url) => (url.endsWith('/growth/segments') ? ok({ segments: [] }) : ok(none)));
     show('growth', '/company/growth');
     expect(await screen.findByText('No numbers yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Set up' })).toBeTruthy();
@@ -678,8 +704,6 @@ describe('Finance tabs and sources', () => {
       ['finance.disconnect', { connection: 'c1' }],
       ['finance.setDefaults', { member: 'own_expenses' }],
       ['budget.addRow', { name: 'Ads', line: 'acc_ads', amount: 10 }],
-      ['budget.updateRow', { budget: 'b1', amount: 10 }],
-      ['budget.removeRow', { budget: 'b1' }],
     ];
     for (const [id, input] of closed) expect(await run(id, input, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });

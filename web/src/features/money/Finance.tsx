@@ -3,14 +3,17 @@ import { fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines, Sparkline } from '@/kit/Chart';
 import { Table } from '@/kit/Table';
-import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
+import { Dashboard, FiguresStrip, List, Section } from '@/pagekinds';
+import { AccessPage } from './Access';
 import { BooksPage } from './Books';
 import { useBooksReturn } from './booksReturn';
 import { BudgetsPage } from './Budgets';
+import { useCaps } from './caps';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
 import { FIN, plural, TAB_NAME, useFinanceHead } from './head';
 import { ActLink, readState, usePress, useViewAs } from './parts';
 import { PnlPage } from './Pnl';
+import { SourcesPage } from './Sources';
 import {
   billsQuery,
   briefQuery,
@@ -20,16 +23,36 @@ import {
   pnlQuery,
   sourcesQuery,
 } from './queries';
-import type { FinanceSearch, FinanceTab } from './search';
+import { FINANCE_TAB_IDS, type FinanceSearch, type FinanceTab } from './search';
 
-/** Finance: twelve pages under one title, the tab in `?tab=`. The overview is a dashboard; the rest are lists. */
+/** Finance: its pages under one title, the tab in `?tab=`, each only for a viewer who may open it (finTabShown). The
+    overview is a dashboard; the rest are lists. A page outside the viewer's rights says so; the plain address opens
+    the first page they have, as the old app's redirect did (finance.ts finShow). */
 export function FinancePage({ search }: { search: FinanceSearch }) {
   const [failure, dismiss] = useBooksReturn(search);
-  const tab = search.tab ?? 'overview';
+  const { shown, pending } = useCaps();
+  // The plain address waits for the access list, so a teammate who has only My budget lands there, not on the overview.
+  if (!search.tab && pending) return <Waiting />;
+  const tab: FinanceTab = search.tab ?? (shown('overview') ? 'overview' : (FINANCE_TAB_IDS.find(shown) ?? 'overview'));
+  if (!shown(tab)) return <Closed />;
   if (tab === 'overview') return <Overview />;
   if (tab === 'pnl') return <PnlPage search={search} />;
   if (tab === 'budgets') return <BudgetsPage search={search} />;
+  if (tab === 'mine') return <BudgetsPage search={search} mine />;
+  if (tab === 'sources') return <SourcesPage failure={failure} onDismiss={dismiss} search={search} />;
+  if (tab === 'access') return <AccessPage search={search} />;
   return <BooksPage tab={tab} failure={failure} onDismiss={dismiss} />;
+}
+
+/** A page this viewer may not open: no access, without Try again. */
+function Closed() {
+  const head = useFinanceHead();
+  return <List {...head} state="no-access" sections={null} />;
+}
+
+function Waiting() {
+  const head = useFinanceHead();
+  return <List {...head} state="loading" sections={null} />;
 }
 
 /** Where each kind of waiting item is dealt with. */

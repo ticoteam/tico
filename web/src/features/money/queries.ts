@@ -8,6 +8,7 @@ import type {
   FinanceBillsAddress,
   FinanceChart,
   FinanceContacts,
+  FinanceDocument,
   FinanceLineAttribution,
   FinanceStatementReview,
   FinanceBrief,
@@ -335,17 +336,64 @@ export const removeBudget = (at: string, id: string) =>
     send: () => act('budget_update', { budget_id: id, active: false, effective_from: `${at.slice(0, 7)}-01` }),
   });
 
-/** A monthly budget for one P&L line, shown at once under a pending id. */
-export const addBudget = (at: string, row: { name: string; line: string; cents: number }) =>
-  write({
+/** A new budget: on a P&L line, under another budget, for a teammate or a vendor, by month, quarter or year. */
+export interface NewBudgetRow {
+  name: string;
+  line: string;
+  cents: number;
+  period?: 'month' | 'quarter' | 'year';
+  parent?: string;
+  teammate?: string;
+  vendor?: string;
+  /** Warn at this share used, in percent; the server's default is 80 (core/budgets.py). */
+  warn?: number;
+  /** Its first month, YYYY-MM; the month `at` is in when left out. */
+  from?: string;
+}
+/** A new budget's pending id, until the list is read again. */
+export const tmpBudgetId = (row: { line: string; teammate?: string; vendor?: string }) => `tmp:${[row.line, row.teammate ?? row.vendor].filter(Boolean).join(':')}`;
+
+/** A budget from its first month on, shown at once under a pending id when that month has begun. Only what was chosen
+    is sent, so the server's defaults hold for the rest (finance-budgets.ts finBudgetAdd). */
+export const addBudget = (at: string, row: NewBudgetRow) => {
+  const from = row.from ?? at.slice(0, 7);
+  const pending: Budget = {
+    id: tmpBudgetId(row),
+    name: row.name,
+    account_id: row.line,
+    parent_id: row.parent ?? null,
+    teammate: row.teammate ?? null,
+    vendor: row.vendor ?? null,
+    period: row.period ?? 'month',
+    active: true,
+    state: { amount: row.cents, actual: 0 },
+  };
+  return write({
     key: budgetsKey(at),
-    optimistic: mapBudgets((l) => [
-      ...l,
-      { id: `tmp:${row.line}`, name: row.name, account_id: row.line, parent_id: null, period: 'month', active: true, state: { amount: row.cents, actual: 0 } },
-    ]),
+    optimistic: mapBudgets((l) => (from > at.slice(0, 7) ? l : [...l, pending])),
     send: () =>
-      act('budget_create', { name: row.name, period: 'month', account_id: row.line, amount: row.cents, effective_from: `${at.slice(0, 7)}-01` }),
+      act('budget_create', {
+        name: row.name,
+        period: row.period ?? 'month',
+        account_id: row.line,
+        amount: row.cents,
+        effective_from: `${from}-01`,
+        ...(row.parent ? { parent_id: row.parent } : {}),
+        ...(row.teammate ? { teammate: row.teammate } : {}),
+        ...(row.vendor ? { vendor: row.vendor } : {}),
+        ...(row.warn != null && row.warn !== 80 ? { warn_pct: row.warn } : {}),
+      }),
   });
+};
+
+/** A budget as the list for `at` last read it, in any view. */
+export function cachedBudget(qc: QueryClient, at: string, id: string): Budget | undefined {
+  for (const [, d] of qc.getQueriesData<Budgets>({ queryKey: budgetsKey(at) })) {
+    const b = d?.budgets.find((x) => x.id === id);
+    if (b) return b;
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------- decisions, sources and access (the old app's dialogs)
 
@@ -573,22 +621,98 @@ export const journalChartQuery = queryOptions({
 
 // ---------------------------------------------------------------- Growth (dollars; rates are 0 to 1)
 
+/* GET /api/v2/growth/read, typed from backend/growth_core.py `read` and its helpers (the schema leaves it untyped). A
+   figure the read cannot give carries a status and a null value, never 0. */
+
+/** Why a figure has no value, or (`estimate`) how far to trust it. */
+export type GrowthStatus = 'ok' | 'too_few' | 'not_yet' | 'nobody' | 'not_supplied' | 'no_spend' | 'no_customers' | 'not_split' | 'estimate';
+/** Against the trailing three months' average (flat within 10%); `too_few` under the minimum cohort. Null in a partial month. */
+export type GrowthVerdict = 'up' | 'down' | 'flat' | 'too_few';
+
+/** One headline figure. Which keys come depends on the figure: counts carry `vs_3mo`, rates `n`, `cohort` and `window`. */
 export interface GrowthFig {
-  value?: number | null;
-  status?: string;
-  verdict?: string | null;
+  value: number | null;
+  status?: GrowthStatus;
+  verdict?: GrowthVerdict | null;
+  /** The people the figure rests on. */
   n?: number;
+  /** The cohort month (YYYY-MM) a rate comes from. */
+  cohort?: string;
+  /** Kept: d30, d90 or d180; LTV: d90, d180 or d365. */
+  window?: string;
+  /** Counts: the trailing three months' average. */
+  vs_3mo?: number | null;
+  /** Cost and CAC with agent cost and hours added. */
+  with_effort?: number | null;
+  /** Cost only: spend on keeping customers, never in CAC. */
+  retention?: number | null;
 }
+
+export interface GrowthHeadline {
+  signups: GrowthFig;
+  activated_rate: GrowthFig;
+  paid_rate: GrowthFig;
+  new_customers: GrowthFig;
+  cost: GrowthFig;
+  cac: GrowthFig;
+  /** A segment's scope only: its own cost plus company-wide cost by its share of new customers. */
+  cac_loaded?: GrowthFig;
+  kept: GrowthFig;
+  /** `value_kind: revenue` only. */
+  ltv?: GrowthFig;
+  ltv_cac?: GrowthFig;
+  payback_months?: GrowthFig;
+  /** `value_kind: retention` only, in place of LTV, LTV to CAC and payback. */
+  value?: { kept_d30: GrowthFig; cost_per_retained: GrowthFig };
+}
+
+/** One channel in the month, ranked by the read (new customers, then sign-ups), Unknown last. Unknown (`slug:
+    'unknown'`) carries only its counts and share. */
 export interface GrowthChannel {
   slug: string;
-  name?: string;
-  signups?: number;
+  signups: number;
+  /** Null when the scope's customers are not supplied for the month. */
   new_customers: number | null;
+  new_share: number | null;
+  name?: string;
+  /** `bot:<id>` or `human:<id>`. */
   owner?: string | null;
+  /** The channel's monthly budget, dollars. */
+  budget?: number | null;
+  over_budget?: number | null;
   cost?: number | null;
   cac?: number | null;
-  status?: string;
+  cost_share?: number | null;
+  status?: 'no_spend' | 'no_customers' | 'not_split';
+  verdict?: GrowthVerdict | null;
+  with_effort?: number | null;
 }
+
+/** An outside total (a KPI with a check role) against Growth's own company-wide figure; `agrees` null when the KPI has
+    no reading for the month. */
+export interface GrowthCheck {
+  figure: 'signups' | 'new_customers' | 'cost';
+  growth: number | null;
+  outside: number | null;
+  /** The KPI's name: the outside source in words ("Finance"). */
+  kpi: string;
+  agrees: boolean | null;
+}
+
+export interface GrowthHealth {
+  /** What the shares count: customers when the company has any, else sign-ups. */
+  basis: 'customers' | 'signups';
+  /** The share with no known channel, 0 to 1. */
+  unknown_share: number | null;
+  /** With segments only. */
+  no_segment?: number;
+  mismatch?: number;
+  stale_sources: string[];
+  reconciled: 'reconciled' | 'off' | 'not_reconciled';
+  /** Only when a check KPI is set up. */
+  checks?: GrowthCheck[];
+}
+
 export interface GrowthPoint {
   period: string;
   signups: number | null;
@@ -597,41 +721,54 @@ export interface GrowthPoint {
   cac: number | null;
   kept: number | null;
 }
-export type GrowthWin = { value: number | null; n: number; status: string };
+/** A cohort's kept share at one window and how many were old enough to be judged; `not_yet` when none were. */
+export type GrowthWin = { value: number | null; n: number; status: 'ok' | 'too_few' | 'not_yet' };
 export interface GrowthCohort {
   cohort: string;
-  entered: number;
+  entered: number | null;
   kept_d30?: GrowthWin;
   kept_d90?: GrowthWin;
   kept_d180?: GrowthWin;
 }
+/** A campaign's month: `none` is the channel's rows with no campaign, `other` the rest past ten. */
+export interface GrowthCampaign {
+  campaign: string;
+  new_customers: number;
+  cost: number | null;
+  cac: number | null;
+}
+/** A KPI that belongs to Growth, with its latest reading up to the month's end and the one before it. */
 export interface GrowthMetric {
   id: string;
   name: string;
   unit: string;
+  owner: string | null;
+  channel: string | null;
   value: number | null;
-  estimate?: boolean;
+  period_end: string | null;
+  estimate: boolean;
+  vs_prior: number | null;
 }
-/** GET /api/v2/growth/read (backend/growth_core.py `read`); the schema leaves it untyped. */
+
 export interface GrowthRead {
+  /** `all`, `mine`, `segment:<slug>` or `segment:none`, `channel:<slug>` or `channel:unknown`. */
   scope: string;
   period: string;
-  partial?: boolean;
-  headline: {
-    signups?: GrowthFig;
-    activated_rate?: GrowthFig;
-    paid_rate?: GrowthFig;
-    new_customers?: GrowthFig;
-    cost?: GrowthFig;
-    cac?: GrowthFig;
-    ltv?: GrowthFig;
-    ltv_cac?: GrowthFig;
-    payback_months?: GrowthFig;
-  };
+  as_of: string;
+  /** A segment's scope only. */
+  segment?: { slug: string; name: string; rule: string | null; value_kind: 'revenue' | 'retention' };
+  headline: GrowthHeadline;
   channels: GrowthChannel[];
-  series?: GrowthPoint[];
-  retention?: GrowthCohort[];
+  /** The current, unfinished month: every verdict is null. */
+  partial?: boolean;
+  health: GrowthHealth;
   metrics: GrowthMetric[];
+  /** `detail=campaigns`: by channel slug (`unknown`, or `company-wide` for cost with no channel). */
+  campaigns?: Record<string, GrowthCampaign[]>;
+  retention?: GrowthCohort[];
+  series?: GrowthPoint[];
+  /** The details not asked for. */
+  more: string[];
 }
 
 export const growthScope = (segment?: string) => (segment ? `segment:${segment}` : 'all');
@@ -643,6 +780,19 @@ export const growthReadQuery = (segment: string | undefined, month: string | und
       api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: growthScope(segment), detail: detail ? 'series,retention' : undefined, period: month })}`, { signal }),
     ...quiet,
   });
+
+/** One channel's own read for its side panel: its budget and spend, its months and its campaigns. */
+export const growthChannelQuery = (channel: string, month: string | undefined) =>
+  queryOptions({
+    queryKey: ['growth', 'read', `channel:${channel}`, month ?? 'last', 'campaigns,series'],
+    queryFn: ({ signal }) =>
+      api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'campaigns,series', period: month })}`, { signal }),
+    ...quiet,
+  });
+
+/** A message to the Growth Manager in its chat (POST /api/v2/chat/{bot}, backend/thread_api.py), sent from the page. */
+export const askGrowthManager = (bot: string, text: string, page: { path: string; title: string }) =>
+  api.post<unknown>(`/api/v2/chat/${enc(bot.replace(/^bot:/, ''))}`, { text, refs: { page } });
 
 export interface Segment {
   slug: string;
@@ -684,78 +834,6 @@ export const growthSourcesQuery = queryOptions({
   ...quiet,
 });
 
-/** A number's origin (backend/growth_sync.py origins_view, growth.py beside): synced by a source, typed by someone, or
-    computed from customers; `conflict` is a source's value held beside a typed actual. */
-export interface GrowthOrigin {
-  origin: 'synced' | 'typed' | 'computed';
-  quality?: string | null;
-  source?: string | null;
-  at?: string | null;
-  by?: string | null;
-  computed_from?: number;
-  sources?: { source: string }[];
-  conflict?: { value: number | null; source: string | null } | null;
-  differs?: { typed: number | null; chosen: string | null } | null;
-}
-/** One channel's month as GET /api/v2/growth/cohorts lists it. Money in dollars; kept and margin are percents, 0 to 100. */
-export interface GrowthCohortMonth {
-  id: string | null;
-  channel: string | null;
-  month: string;
-  spend: number | null;
-  bot_cost: number | null;
-  new_customers: number | null;
-  kept_d30: number | null;
-  kept_d90: number | null;
-  kept_d180: number | null;
-  revenue_month: number | null;
-  margin_pct: number | null;
-  quality: 'actual' | 'estimate' | null;
-  origins?: Record<string, GrowthOrigin>;
-  /** Why a computed figure has no value (not_yet, too_few), by field. */
-  status?: Record<string, string>;
-}
-
-/** A channel's months, newest first; its month panel reads the same list. */
-export const channelMonthsQuery = (channel: string) =>
-  queryOptions({
-    queryKey: ['growth', 'cohorts', channel],
-    queryFn: ({ signal }) => api.get<{ cohorts: GrowthCohortMonth[] }>(`/api/v2/growth/cohorts?${qs({ channel })}`, { signal }),
-    ...quiet,
-  });
-
-/** A channel's own read with its last twelve months (GET /api/v2/growth/read at the channel's scope, `series`): the months
-    its pushed rows hold, which /cohorts does not list (it lists typed and computed months only). */
-export const channelSeriesQuery = (channel: string) =>
-  queryOptions({
-    queryKey: ['growth', 'read', `channel:${channel}`, 'last', 'series'],
-    queryFn: ({ signal }) => api.get<GrowthRead>(`/api/v2/growth/read?${qs({ scope: `channel:${channel}`, detail: 'series' })}`, { signal }),
-    ...quiet,
-  });
-
-export interface GrowthKeptFigure {
-  value: number | null;
-  status: string;
-  count?: number | null;
-  denominator?: number;
-  rule?: string;
-  /** Only for the owner, admins and the key readers. */
-  customers?: { still: string[]; churned: { key: string; churned: string | null }[] };
-}
-/** GET /api/v2/growth/computed (backend/growth_computed.py), the fields the customers panel reads. */
-export interface GrowthComputed {
-  keys_visible: boolean;
-  cohorts: ({ period: string } & Partial<Record<'kept_d30' | 'kept_d90' | 'kept_d180', GrowthKeptFigure>>)[];
-}
-
-/** The customers behind one month's retention, all customers or one segment's. */
-export const growthCustomersQuery = (segment: string | undefined, month: string) =>
-  queryOptions({
-    queryKey: ['growth', 'customers', growthScope(segment), month],
-    queryFn: ({ signal }) => api.get<GrowthComputed>(`/api/v2/growth/computed?${qs({ by: 'all', month, segment, customers: 'true' })}`, { signal }),
-    ...quiet,
-  });
-
 export interface PageOwnerRow {
   bot?: string | null;
   /** 'default', 'none' or the chosen agent ('bot:<id>'). */
@@ -792,4 +870,80 @@ export function growthManager(owners: Record<string, PageOwnerRow> | undefined, 
 export async function findGrowthManager(qc: QueryClient): Promise<string | null> {
   const [owners, dir] = await Promise.all([qc.ensureQueryData(pageOwnersQuery), qc.ensureQueryData(directoryQuery).catch(() => undefined)]);
   return growthManager(owners, dir);
+}
+
+// ---------------------------------------------------------------- one bill, invoice, card or transaction (the books tabs' panels and forms)
+
+export type DocKind = 'bill' | 'invoice';
+export type Doc = FinanceDocument;
+export type ChartLine = FinanceChart['accounts'][number];
+const DOCS = { bill: 'bills', invoice: 'invoices' } as const;
+
+/** Drafts: a new bill waits to be approved, a new invoice to be sent; the unpaid list leaves them out. */
+export const draftsQuery = (kind: DocKind, as?: string) =>
+  queryOptions({
+    queryKey: ['finance', DOCS[kind], 'draft', ...asKey(as)],
+    queryFn: async ({ signal }) => {
+      const d = await api.get<{ bills?: DocRow[]; invoices?: DocRow[] }>(viewAs(`/api/v2/finance/${DOCS[kind]}?status=draft&limit=200`, as), { signal });
+      return (kind === 'bill' ? d.bills : d.invoices) ?? [];
+    },
+    ...quiet,
+  });
+
+/** One bill or invoice with its lines, payments and approvals (GET /api/v2/finance/bills/{id}, /invoices/{id}). */
+export const docQuery = (kind: DocKind, id: string, as?: string) =>
+  queryOptions({
+    queryKey: ['finance', DOCS[kind], 'one', id, ...asKey(as)],
+    queryFn: ({ signal }) => api.get<Doc>(viewAs(`/api/v2/finance/${DOCS[kind]}/${enc(id)}`, as), { signal }),
+    ...quiet,
+  });
+
+/** What the Transactions filter holds: the source, a status, a line. */
+export interface TxFilter {
+  src?: 'feed' | 'entry';
+  status?: string;
+  line?: string;
+}
+export const filtered = (f: TxFilter) => !!(f.src || f.status || f.line);
+
+/** The first 200 transactions the filter keeps, read by the server (the route's source, status and account_id). */
+export const txFilteredQuery = (f: TxFilter, as?: string) =>
+  queryOptions({
+    queryKey: ['finance', 'transactions', 'filtered', { src: f.src, status: f.status, line: f.line }, ...asKey(as)],
+    queryFn: ({ signal }) =>
+      api.get<FinanceTransactions>(viewAs(`${TRANSACTIONS_URL}&${qs({ source: f.src, status: f.status, account_id: f.line })}`, as), { signal }),
+    ...quiet,
+  });
+
+/** Customers, as vendorsQuery reads vendors. */
+export const customersQuery = queryOptions({
+  queryKey: ['finance', 'contacts', 'customer'],
+  queryFn: ({ signal }) => api.get<FinanceContacts>('/api/v2/finance/contacts?kind=customer&limit=200', { signal }),
+  ...quiet,
+});
+
+/** The lines the person may put a bill or an invoice on (GET /api/v2/finance/chart?for=bill|invoice). */
+export const docChartQuery = (kind: DocKind) =>
+  queryOptions({
+    queryKey: ['finance', 'chart', kind],
+    queryFn: ({ signal }) => api.get<FinanceChart>(`/api/v2/finance/chart?for=${kind}`, { signal }),
+    ...quiet,
+  });
+
+/** A card as the cards list last read it, in any view. */
+export function cachedCard(qc: QueryClient, id: string): Card | undefined {
+  for (const [, d] of qc.getQueriesData<FinanceCards>({ queryKey: ['finance', 'cards'] })) {
+    const c = d?.cards?.find((x) => x.id === id);
+    if (c) return c;
+  }
+  return undefined;
+}
+
+/** A transaction as any transactions list last read it. */
+export function cachedTx(qc: QueryClient, id: string): Tx | undefined {
+  for (const [, d] of qc.getQueriesData<FinanceTransactions>({ queryKey: ['finance', 'transactions'] })) {
+    const t = d?.rows?.find((x) => x.id === id);
+    if (t) return t;
+  }
+  return undefined;
 }

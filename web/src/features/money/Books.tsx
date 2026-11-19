@@ -7,18 +7,27 @@ import { Button } from '@/kit/Button';
 import { Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { EmptyRow, Table } from '@/kit/Table';
-import { List, PageMore, Section, SidePanel } from '@/pagekinds';
-import { plural, useFinanceHead } from './head';
+import { Segmented } from '@/kit/Segmented';
+import { FilterRow, List, PageMore, Section, SidePanel } from '@/pagekinds';
+import { AddBillDialog, EntryDialog, NewInvoiceDialog } from './BillForms';
+import { CardPanel, DocPanel, TxPanel, useBookSearch } from './BookPanels';
+import { acctKey, asOfDay, compareDay, type AsOf } from './ledger';
+import { FIN, plural, useFinanceHead } from './head';
 import { cash, count } from './model';
 import { CardDialog, ConfirmDialog, ConnectBooksDialog, ConnectKeyDialog, DefaultsDialog, ShownOnce, TransferDialog, useMay, WebhookDialog } from './dialogs';
 import { BillsAddressDialog, copied, ImportDialog, RuleDialog, ShareDialog, StatementDialog, ViewAsDialog, type RuleRow } from './forms';
-import { Meter, readState, usePhone, usePress, useViewAs, Who } from './parts';
+import { ActLink, Meter, readState, usePhone, usePress, useViewAs, Who } from './parts';
 import {
   accessQuery,
+  cachedTx,
+  draftsQuery,
+  filtered,
+  txFilteredQuery,
+  type DocKind,
   BOOKS,
   balanceQuery,
   billsQuery,
@@ -39,7 +48,7 @@ import {
   type SourceRow,
   type Tx,
 } from './queries';
-import type { FinanceTab } from './search';
+import { panelOf, TX_STATUSES, type FinanceTab } from './search';
 
 /* The rest of Finance, each a list read from its endpoint and drawn as the mock draws it, with the old app's dialogs
    for a transfer, a card, connecting a source, the books, Stripe's webhook and the access defaults. */
@@ -52,6 +61,7 @@ function Page({
   actions,
   more,
   panel,
+  filter,
   children,
 }: {
   q: Read;
@@ -59,12 +69,29 @@ function Page({
   actions?: ReactNode;
   more?: ReactNode;
   panel?: ReactNode;
+  filter?: ReactNode;
   children: ReactNode;
 }) {
   const head = useFinanceHead();
   return (
-    <List {...head} state={readState(q, !!empty)} empty={empty} onRetry={() => void q.refetch()} actions={actions} more={more || undefined} panel={panel || undefined} sections={children} />
+    <List
+      {...head}
+      state={readState(q, !!empty)}
+      empty={empty}
+      onRetry={() => void q.refetch()}
+      actions={actions}
+      more={more || undefined}
+      panel={panel || undefined}
+      filter={filter || undefined}
+      sections={children}
+    />
   );
+}
+
+/** The record open beside a books tab: `bill:<id>` on Payables, and so on. */
+function usePanel(kind: 'bill' | 'invoice' | 'card' | 'tx'): string | null {
+  const open = panelOf(useBookSearch().panel);
+  return open && open[0] === kind ? open[1] : null;
 }
 
 /** `failure`: a books sign-in that came back unconnected (useBooksReturn), shown beside Sources until put away. */
@@ -109,22 +136,70 @@ function sourceOf(t: Tx): string {
 }
 const describe = (t: Tx) => t.vendor_name || (typeof t.vendor === 'object' ? t.vendor?.name : t.vendor) || t.description || t.counterparty || '';
 
+const SRC = { feed: 'Bank', entry: 'Entries' } as const;
+const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+type TxFilterIn = { src?: 'feed' | 'entry' | null; status?: string | null; line?: string | null };
+
+/** Source ›, Status ›, Line › (finance-books.ts finTxFilter): each choice lands in the address; the one on takes it off. */
+function TxFilterMenu({ on, lines, onPick }: { on: TxFilterIn; lines: [string, string][]; onPick: (f: TxFilterIn) => void }) {
+  return (
+    <Menu trigger={<IconButton icon="filter" label="Filter" on={!!(on.src || on.status || on.line)} data-phone />}>
+      <MenuSub label="Source">
+        {(['feed', 'entry'] as const).map((k) => (
+          <MenuItem key={k} label={SRC[k]} on={on.src === k} onSelect={() => onPick({ src: on.src === k ? null : k })} />
+        ))}
+      </MenuSub>
+      <MenuSub label="Status">
+        {TX_STATUSES.map((k) => (
+          <MenuItem key={k} label={cap(k)} on={on.status === k} onSelect={() => onPick({ status: on.status === k ? null : k })} />
+        ))}
+      </MenuSub>
+      {lines.length > 0 && (
+        <MenuSub label="Line">
+          {lines.map(([k, name]) => (
+            <MenuItem key={k} label={name} on={on.line === k} onSelect={() => onPick({ line: on.line === k ? null : k })} />
+          ))}
+        </MenuSub>
+      )}
+    </Menu>
+  );
+}
+
 /** Every entry, newest first. Past 100 rows only the rows in view are drawn; on a phone, rows under each day. */
 function Transactions() {
   const may = useMay();
   const as = useViewAs();
   const qc = useQueryClient();
   const phone = usePhone();
-  const q = useQuery(transactionsQuery(as));
+  const press = usePress();
+  const at = useBookSearch();
+  const f = { src: at.src, status: at.status, line: at.line };
+  const narrow = filtered(f);
+  // A filter is read by the server: its first 200 rows, with no more pages.
+  const plain = useQuery({ ...transactionsQuery(as), enabled: !narrow });
+  const kept = useQuery({ ...txFilteredQuery(f, as), enabled: narrow });
+  const q = narrow ? kept : plain;
+  const open = usePanel('tx');
   const [line, setLine] = useState<string | null>(null);
   const [find, setFind] = useState('');
   const [moving, setMoving] = useState(false);
+  const [entering, setEntering] = useState(false);
   const words = find.trim().toLowerCase();
   const all = q.data?.rows ?? [];
   const rows = words ? all.filter((t) => `${describe(t)} ${t.account ?? ''} ${sourceOf(t)}`.toLowerCase().includes(words)) : all;
   // The server holds more than was read: the next page comes as the last row is drawn (a search reads only what is here).
-  const more = q.data?.next && !words ? () => void loadMoreTransactions(as) : undefined;
+  const more = q.data?.next && !words && !narrow ? () => void loadMoreTransactions(as) : undefined;
   const share = may('finance.attribute') ? setLine : undefined;
+  // The lines to filter by: those the rows read so far are on.
+  const named = new Map<string, string>();
+  for (const t of [...(plain.data?.rows ?? []), ...(kept.data?.rows ?? [])]) if (t.account_id && t.account) named.set(t.account_id, t.account);
+  const lines = [...named].sort((a, b) => a[1].localeCompare(b[1]));
+  const pick = (change: TxFilterIn) => void press('finance.filterTransactions', change);
+  const chips: { label: string; onClear: () => void }[] = [];
+  if (f.src) chips.push({ label: SRC[f.src], onClear: () => pick({ src: null }) });
+  if (f.status) chips.push({ label: cap(f.status), onClear: () => pick({ status: null }) });
+  if (f.line) chips.push({ label: named.get(f.line) ?? 'One line', onClear: () => pick({ line: null }) });
+  const shown = open ? (all.find((t) => t.id === open) ?? cachedTx(qc, open)) : undefined;
   // A transfer needs two bank accounts to move between (finance-books.ts finXferAdd).
   const transfer = async () => {
     try {
@@ -139,11 +214,35 @@ function Transactions() {
     <Page
       q={q}
       actions={
-        may('finance.pay') && (
-          <>
-            <IconButton icon="plus" label="New transfer" onClick={() => void transfer()} />
-            {moving && <TransferDialog onOpenChange={setMoving} />}
-          </>
+        <>
+          <TxFilterMenu on={f} lines={lines} onPick={pick} />
+          {may('finance.pay') && (
+            <>
+              <IconButton icon="plus" label="New transfer" onClick={() => void transfer()} />
+              {moving && <TransferDialog onOpenChange={setMoving} />}
+            </>
+          )}
+          {may('finance.book') && (
+            <>
+              <Button variant="primary" onClick={() => setEntering(true)}>
+                Add entry
+              </Button>
+              {entering && <EntryDialog onOpenChange={setEntering} />}
+            </>
+          )}
+        </>
+      }
+      filter={chips.length > 0 && <FilterRow filters={chips} onClearAll={chips.length > 1 ? () => pick({ src: null, status: null, line: null }) : undefined} />}
+      panel={
+        open && (
+          <TxPanel
+            id={open}
+            t={shown}
+            name={shown ? describe(shown) : ''}
+            source={shown ? sourceOf(shown) : ''}
+            lines={shown ? linesOf(shown) : []}
+            onShare={share}
+          />
         )
       }
     >
@@ -199,7 +298,7 @@ function TxPhone({ rows, onMore }: { rows: readonly Tx[]; onMore?: () => void })
           <div className={t.pending ? 'row fr is-quiet' : 'row fr'} role="listitem">
             <span className="fr-main">
               <span className="row-title">
-                {describe(t)}
+                <TxLink t={t} />
                 {!t.account && <Pill flag>No line</Pill>}
               </span>
               <span className="fr-sub">
@@ -227,13 +326,20 @@ export function linesOf(t: Tx): { id: string; account: string }[] {
   return (t.lines ?? []).flatMap((l) => (str(l.line_id) ? [{ id: str(l.line_id), account: str(l.account) }] : []));
 }
 
+/** A row's words, opening it beside the list. */
+const TxLink = ({ t }: { t: Tx }) => (
+  <ActLink to={FIN} search={{ tab: 'transactions', panel: `tx:${t.id}` }} action="finance.openRecord" input={{ kind: 'tx', record: t.id }} className="t-link">
+    {describe(t) || 'Entry'}
+  </ActLink>
+);
+
 function TxRow({ t, first, onShare }: { t: Tx; first: boolean; onShare?: (line: string) => void }) {
   const lines = onShare ? linesOf(t) : [];
   return (
     <tr className={t.pending ? 'is-quiet' : undefined}>
       <td className="t-words">{first ? fmtDate(t.date) : ''}</td>
       <td className="t-name">
-        {describe(t)}
+        <TxLink t={t} />
         {!t.account && <Pill flag>No line</Pill>}
       </td>
       <td className="t-words">{t.account ?? ''}</td>
@@ -309,6 +415,7 @@ const sum = (list: readonly DocRow[]) => list.reduce((a, d) => a + d.remaining, 
 
 /** Documents in named groups, each with its total, and the total of all. */
 function DocTable({ label, name, number, groups }: { label: string; name: string; number?: boolean; groups: [string, DocRow[]][] }) {
+  const kind: DocKind = number ? 'invoice' : 'bill';
   const shown = groups.filter(([, list]) => list.length > 0);
   const all = shown.flatMap(([, list]) => list);
   const span = number ? 4 : 3;
@@ -341,7 +448,15 @@ function DocTable({ label, name, number, groups }: { label: string; name: string
             ...list.map((d) => (
               <tr key={d.id}>
                 <td className="t-name">
-                  {(number ? d.customer?.name : d.vendor?.name) || d.number}
+                  <ActLink
+                    to={FIN}
+                    search={{ tab: number ? 'receivables' : 'payables', panel: `${kind}:${d.id}` }}
+                    action="finance.openRecord"
+                    input={{ kind, record: d.id }}
+                    className="t-link"
+                  >
+                    {(number ? d.customer?.name : d.vendor?.name) || d.number || 'Untitled'}
+                  </ActLink>
                   {late(d) && <Pill>{late(d)}</Pill>}
                 </td>
                 <td className="t-words">{number ? d.number : String((d.account as { name?: unknown } | null)?.name ?? '')}</td>
@@ -364,8 +479,13 @@ function DocTable({ label, name, number, groups }: { label: string; name: string
 
 function Payables() {
   const may = useMay();
-  const q = useQuery(billsQuery(useViewAs()));
+  const as = useViewAs();
+  const q = useQuery(billsQuery(as));
+  // Drafts are not in the unpaid list; they wait here for Approve.
+  const drafts = useQuery(draftsQuery('bill', as)).data ?? [];
+  const open = usePanel('bill');
   const [setting, setSetting] = useState(false);
+  const [adding, setAdding] = useState(false);
   const email = q.data?.bills_email ?? '';
   const bills = q.data?.bills ?? [];
   const over = bills.filter((b) => late(b));
@@ -374,7 +494,18 @@ function Payables() {
   return (
     <Page
       q={q}
-      empty={q.data && bills.length === 0 ? { title: 'Nothing to pay' } : undefined}
+      empty={q.data && bills.length === 0 && drafts.length === 0 ? { title: 'Nothing to pay' } : undefined}
+      actions={
+        may('finance.ap') && (
+          <>
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              Add bill
+            </Button>
+            {adding && <AddBillDialog onOpenChange={setAdding} />}
+          </>
+        )
+      }
+      panel={open && <DocPanel kind="bill" id={open} />}
       more={
         // The owner or an admin sets the bills address; anyone else copies it (finance-docs.ts finDocEmailDraw).
         // The dialog sits with its menu: with no bills the page shows only its empty state.
@@ -399,6 +530,7 @@ function Payables() {
           ['Overdue', over],
           ['This week', week],
           ['Later', later],
+          ['Draft', drafts],
         ]}
       />
     </Page>
@@ -414,12 +546,32 @@ const AGES = [
 ] as const;
 
 function Receivables() {
-  const q = useQuery(invoicesQuery(useViewAs()));
+  const may = useMay();
+  const as = useViewAs();
+  const q = useQuery(invoicesQuery(as));
+  // Drafts are not in the unpaid list; they wait here for Send.
+  const drafts = useQuery(draftsQuery('invoice', as)).data ?? [];
+  const open = usePanel('invoice');
+  const [making, setMaking] = useState(false);
   const list = q.data?.invoices ?? [];
   const aging = q.data?.open.aging;
   const max = aging ? Math.max(1, ...AGES.map(([k]) => aging[k])) : 1;
   return (
-    <Page q={q} empty={q.data && list.length === 0 ? { title: 'Nobody owes you' } : undefined}>
+    <Page
+      q={q}
+      empty={q.data && list.length === 0 && drafts.length === 0 ? { title: 'Nobody owes you' } : undefined}
+      actions={
+        may('finance.ar') && (
+          <>
+            <Button variant="primary" onClick={() => setMaking(true)}>
+              New invoice
+            </Button>
+            {making && <NewInvoiceDialog onOpenChange={setMaking} />}
+          </>
+        )
+      }
+      panel={open && <DocPanel kind="invoice" id={open} />}
+    >
       {aging && (
         <Section name="By age">
           <div className="hbars">
@@ -436,7 +588,7 @@ function Receivables() {
           </div>
         </Section>
       )}
-      <Section name="Invoices" count={list.length}>
+      <Section name="Invoices" count={list.length + drafts.length}>
         <DocTable
           label="Invoices"
           name="Customer"
@@ -444,6 +596,7 @@ function Receivables() {
           groups={[
             ['Late', list.filter((d) => late(d))],
             ['Current', list.filter((d) => !late(d))],
+            ['Draft', drafts],
           ]}
         />
       </Section>
@@ -453,41 +606,54 @@ function Receivables() {
 
 // ---------------------------------------------------------------- Balance sheet
 
-type Account = { name: string; balance: number; code: string };
+type Account = { name: string; balance: number; code: string; account_id: string | null };
 const total = (list: readonly Account[]) => list.reduce((a, r) => a + r.balance, 0);
 
-function Side({ label, head, parts }: { label: string; head: string; parts: { name: string; rows: readonly Account[]; total: string }[] }) {
+/** The day before, read beside the day shown: each account's balance then, by its id (or code and name). */
+type Was = { head: string; at: Map<string, number> } | null;
+
+function Side({ label, head, was, parts }: { label: string; head: string; was: Was; parts: { name: string; rows: readonly Account[]; total: string }[] }) {
+  const then = (rows: readonly Account[]) => rows.reduce((a, r) => a + (was?.at.get(acctKey(r)) ?? 0), 0);
+  const cols = was ? 3 : 2;
   return (
     <Table label={label}>
       <colgroup>
         <col />
+        {was && <col className="t-col" />}
         <col className="t-col" />
       </colgroup>
       <thead>
         <tr>
           <Th>Account</Th>
+          {was && <Th num>{was.head}</Th>}
           <Th num>{head}</Th>
         </tr>
       </thead>
       <tbody>
         {parts.map((p) => [
           <tr key={`g:${p.name}`} className="is-group">
-            <td colSpan={2}>{p.name}</td>
+            <td colSpan={cols}>{p.name}</td>
           </tr>,
-          ...p.rows.map((r) => (
-            <tr key={`${p.name}:${r.code}:${r.name}`}>
-              <td className="t-name">{r.name}</td>
-              <td className={r.balance === 0 ? 'num zero' : 'num'}>{cash(r.balance)}</td>
-            </tr>
-          )),
+          ...p.rows.map((r) => {
+            const before = was?.at.get(acctKey(r));
+            return (
+              <tr key={`${p.name}:${r.code}:${r.name}`}>
+                <td className="t-name">{r.name}</td>
+                {was && <td className={before ? 'num t-was' : 'num zero t-was'}>{cash(before ?? 0)}</td>}
+                <td className={r.balance === 0 ? 'num zero' : 'num'}>{cash(r.balance)}</td>
+              </tr>
+            );
+          }),
           <tr key={`t:${p.name}`} className="is-total">
             <td className="t-name">{p.total}</td>
+            {was && <td className="num t-was">{cash(then(p.rows))}</td>}
             <td className="num">{cash(total(p.rows))}</td>
           </tr>,
         ])}
         {parts.length > 1 && (
           <tr className="is-net">
             <td className="t-name">{parts.map((p) => p.name).join(' and ')}</td>
+            {was && <td className="num t-was">{cash(parts.reduce((a, p) => a + then(p.rows), 0))}</td>}
             <td className="num">{cash(parts.reduce((a, p) => a + total(p.rows), 0))}</td>
           </tr>
         )}
@@ -496,18 +662,40 @@ function Side({ label, head, parts }: { label: string; head: string; parts: { na
   );
 }
 
+const AS_OF: { value: AsOf; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'month', label: 'Month end' },
+  { value: 'year', label: 'Year end' },
+];
+
 function Balance() {
   const may = useMay();
-  const q = useQuery(balanceQuery(undefined, useViewAs()));
+  const as = useViewAs();
+  const press = usePress();
+  const asof: AsOf = useBookSearch().asof ?? 'today';
+  const q = useQuery(balanceQuery(asOfDay(asof), as));
+  // The compare column: the month end (or year end) before the day shown, as the mock draws "Oct 31" beside today.
+  const c = useQuery(balanceQuery(compareDay(asof), as)).data;
   const [importing, setImporting] = useState(false);
   const d = q.data;
   const head = d ? fmtDate(d.as_of) : '';
+  const was: Was = c && d && c.as_of !== d.as_of ? { head: fmtDate(c.as_of), at: new Map([...c.assets, ...c.liabilities, ...c.equity].map((a): [string, number] => [acctKey(a), a.balance])) } : null;
   return (
     <Page
       q={q}
+      actions={
+        <span data-phone>
+          <Segmented label="As of" options={AS_OF} value={asof} onValueChange={(v) => void press('finance.setAsOf', { asof: v })} />
+        </span>
+      }
       more={
         <>
-          <PageMore>{[may('finance.book') && <MenuItem key="import" label="Import history" onSelect={() => setImporting(true)} />]}</PageMore>
+          <PageMore>
+            {[
+              <MenuItem key="export" label="Export" onSelect={() => void press('finance.exportBalance', {})} />,
+              may('finance.book') && <MenuItem key="import" label="Import history" onSelect={() => setImporting(true)} />,
+            ]}
+          </PageMore>
           {importing && <ImportDialog onOpenChange={setImporting} />}
         </>
       }
@@ -515,12 +703,13 @@ function Balance() {
       {d && (
         <div className="two-col">
           <div>
-            <Side label="Assets" head={head} parts={[{ name: 'Assets', rows: d.assets, total: 'Total assets' }]} />
+            <Side label="Assets" head={head} was={was} parts={[{ name: 'Assets', rows: d.assets, total: 'Total assets' }]} />
           </div>
           <div>
             <Side
               label="Liabilities and equity"
               head={head}
+              was={was}
               parts={[
                 { name: 'Liabilities', rows: d.liabilities, total: 'Total liabilities' },
                 { name: 'Equity', rows: d.equity, total: 'Total equity' },
@@ -540,6 +729,7 @@ const STATUS: Record<string, string> = { frozen: 'Frozen', paused: 'Frozen', clo
 function Cards() {
   const may = useMay();
   const [making, setMaking] = useState(false);
+  const open = usePanel('card');
   const q = useQuery(cardsQuery(useViewAs()));
   const cards = q.data?.cards ?? [];
   const spent = cards.reduce((a, c) => a + (c.spent ?? 0), 0);
@@ -556,6 +746,7 @@ function Cards() {
         )
       }
       empty={q.data && cards.length === 0 ? { title: 'No cards yet' } : undefined}
+      panel={open && <CardPanel id={open} />}
     >
       <div className="t-scroll">
         <Table label="Cards" stick>
@@ -583,7 +774,9 @@ function Cards() {
               return (
                 <tr key={c.id} className={off ? 'is-quiet' : undefined}>
                   <td className="t-name">
-                    {c.nickname}
+                    <ActLink to={FIN} search={{ tab: 'cards', panel: `card:${c.id}` }} action="finance.openRecord" input={{ kind: 'card', record: c.id }} className="t-link">
+                      {c.nickname || 'Card'}
+                    </ActLink>
                     {off && <Pill>{off}</Pill>}
                   </td>
                   <td className="t-words">{/^(human|bot):/.test(c.holder) ? <Who id={c.holder} /> : c.holder}</td>

@@ -1,16 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { fmtDate, fmtMoney } from '@/lib';
+import { Button } from '@/kit/Button';
 import { BarChart } from '@/kit/Chart';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Segmented } from '@/kit/Segmented';
 import { GroupRow, Table } from '@/kit/Table';
 import { List, Section, SidePanel } from '@/pagekinds';
+import { lineBudget, LineBudgetDialog } from './Budgets';
+import { useCaps } from './caps';
 import { FIN, useFinanceHead } from './head';
-import { cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
+import { budgetDay, cash, colLabel, monShort, nowCol, paceOf, pnlRange, rangeLabel, statement, stepRange, valueAt, type Period, type StatementRow } from './model';
 import { ActLink, Meter, Pfig, Prow, readState, usePhone, usePress, useViewAs } from './parts';
-import { lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
+import { budgetsQuery, lineQuery, pnlQuery, type LineDetail, type Pnl } from './queries';
 import { panelOf, type FinanceSearch } from './search';
 
 const PERIODS = [
@@ -199,7 +202,16 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
   const as = useViewAs();
   const now = useQuery(lineQuery(account, col, as));
   const was = useQuery(lineQuery(account, prev, as));
+  // A budget is added here rarely: the line's own when it has none, else a vendor's under it (finance-pnl.ts:780).
+  // finance.budgets, as useMay reads it (owner, the right, or finance.admin); reading as a teammate is read only.
+  const { caps } = useCaps();
+  const may = !as && !!caps?.budgets;
+  const budgets = useQuery({ ...budgetsQuery(budgetDay(), as), enabled: may });
+  const [adding, setAdding] = useState(false);
   if (!row || !col) return null;
+  const list = budgets.data?.budgets;
+  const own = list ? lineBudget(list, account) : undefined;
+  const add = may && !!list && row.type === 'expense' && !row.private && (!own || own.period === 'month');
   const v = valueAt(row, cols, i);
   const budget = row.budget?.[i] ?? null;
   const span = pnl.period === 'month' ? 'this month' : `this ${pnl.period}`;
@@ -209,7 +221,21 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
   const prevName = prev ? (pnl.period === 'month' ? monShort(prev.start.slice(0, 7)) : prev.label) : '';
   const groups = groupsOf(now.data, by);
   return (
-    <SidePanel title={row.name} target={`line:${account}`} onClose={() => void press('finance.closePanel', {})}>
+    <SidePanel
+      title={row.name}
+      target={`line:${account}`}
+      onClose={() => void press('finance.closePanel', {})}
+      foot={
+        add && (
+          <>
+            <Button variant="quiet" onClick={() => setAdding(true)}>
+              {own ? 'Vendor budget' : 'Line budget'}
+            </Button>
+            {adding && <LineBudgetDialog line={row} parent={own} onOpenChange={setAdding} />}
+          </>
+        )
+      }
+    >
       <div className="money">
         <Pfig big={cash(v)} sub={budget ? `of ${cash(budget)} ${span}` : colLabel(col, pnl.period)}>
           {budget ? <Meter pct={((v ?? 0) / budget) * 100} pace={pnl.period === 'month' && col.state === 'current' ? paceOf().pace : undefined} /> : null}

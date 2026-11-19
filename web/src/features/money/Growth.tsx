@@ -1,35 +1,46 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
+import { useState, type FormEvent } from 'react';
+import { directoryQuery, useActor } from '@/data';
 import { fmtAge, fmtMoney } from '@/lib';
+import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { Funnel, Lines, Sparkline } from '@/kit/Chart';
+import { Lines, Sparkline } from '@/kit/Chart';
+import { Field } from '@/kit/Field';
+import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { EmptyRow, Table } from '@/kit/Table';
-import { Dashboard, FiguresStrip, List, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
+import { Dashboard, FiguresStrip, List, PageMore, Section, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
-import { ChannelMonths, CustomersPanel, ManagerFace, MonthPanel, SourcePanel } from './GrowthPanels';
-import { axis, count, funnelSteps, growthMonths, isYm, monShort, monthName, pct, ratio, statusWord } from './model';
-import { ActLink, Pfig, Ptrace, usePress } from './parts';
+import { ChannelPanel, ManagerFace, SourcePanel } from './GrowthPanels';
+import { axis, count, firstRead, growthMonths, isYm, lastFullMonth, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind, ymOf } from './model';
+import { ActLink, readState, usePhone, usePress } from './parts';
 import {
+  growthManager,
   growthReadQuery,
   growthSourcesQuery,
+  pageOwnersQuery,
   segmentsQuery,
   type GrowthChannel,
+  type GrowthCohort,
   type GrowthFig,
+  type GrowthHealth,
   type GrowthMetric,
+  type GrowthPoint,
   type GrowthRead,
   type GrowthSource,
-  type Segment,
+  type GrowthVerdict,
 } from './queries';
-import { pairOf, panelOf, type GrowthSearch } from './search';
+import { panelOf, type GrowthSearch } from './search';
 
-/* Growth: read-only, as in the old app. A scope tab for all customers and each segment, a month, and a channel opened
-   beside to show where its number comes from; from there its months, and from Retention the customers behind a figure.
-   Changes go through the Growth Manager's chat (its face in the head). Money here is dollars. */
+/* Growth: one read (GET /api/v2/growth/read) for a scope (All or a segment) and a month, read only, as in the old app.
+   Top to bottom: the ask line to the Growth Manager, trust lines when they matter, the headline tiles that fit the
+   company, where to bet (channels), trends, retention, KPIs, and the read's health at the foot. A channel opens beside.
+   Every change is asked of the Growth Manager in its chat. Money here is dollars. */
 
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
-/** A figure, or the muted reason it has none. */
-const orWhy = (f: GrowthFig | undefined, write: (v: number) => string) => (f?.value != null ? write(f.value) : statusWord(f?.status));
 const head = { title: 'Growth', path: GROWTH, className: 'money' } as const;
 
 export function GrowthPage({ search }: { search: GrowthSearch }) {
@@ -37,61 +48,156 @@ export function GrowthPage({ search }: { search: GrowthSearch }) {
   return <GrowthBoard search={search} />;
 }
 
+const ARROW: Record<'up' | 'down' | 'flat', string> = { up: '↑', down: '↓', flat: '→' };
+const ARROW_WORD = { up: 'Up on the last three months', down: 'Down on the last three months', flat: 'Flat on the last three months' };
+
+/** A figure's verdict against its trailing three months; none in a partial month or on too few. */
+function Verdict({ v }: { v?: GrowthVerdict | null }) {
+  if (!v || v === 'too_few') return null;
+  return (
+    <span className="gr-verdict" role="img" aria-label={ARROW_WORD[v]} title={ARROW_WORD[v]}>
+      {ARROW[v]}
+    </span>
+  );
+}
+
+/** A figure the read cannot give: its status word, never 0. */
+const shown = (f: GrowthFig | undefined): f is GrowthFig & { value: number } => f?.value != null && f.status !== 'no_spend';
+const leftOut = (f: GrowthFig | undefined) => !f || f.status === 'nobody' || f.status === 'not_supplied';
+
+/** What a tile says under its value: the cohort and how many it rests on, or the trailing average. */
+function figSub(f: GrowthFig, write: (v: number) => string) {
+  if (!shown(f)) return '';
+  if (f.cohort && f.n != null) return `${monShort(f.cohort)} cohort of ${count(f.n)}`;
+  if (f.vs_3mo != null) return `avg ${write(f.vs_3mo)}`;
+  return '';
+}
+
+interface Tile {
+  key: string;
+  label: string;
+  fig: GrowthFig;
+  write: (v: number) => string;
+  sub?: string;
+  spark?: (p: GrowthPoint) => number | null;
+}
+
+/** The headline tiles that fit the company: revenue (CAC, LTV to CAC) or retention (activated, kept; never CAC or LTV). */
+function tilesOf(d: GrowthRead): Tile[] {
+  const h = d.headline;
+  const money = (v: number) => usd(v);
+  const all: (Tile | null)[] =
+    valueKind(d) === 'retention'
+      ? [
+          { key: 'signups', label: 'Sign-ups', fig: h.signups, write: count, spark: (p) => p.signups },
+          { key: 'activated', label: 'Activated', fig: h.activated_rate, write: (v) => pct(v) },
+          { key: 'kept', label: 'Kept', fig: h.kept, write: (v) => pct(v), spark: (p) => p.kept },
+          (h.cost.value ?? 0) > 0 ? { key: 'cost', label: 'Cost', fig: h.cost, write: money, spark: (p) => p.cost } : null,
+        ]
+      : [
+          { key: 'signups', label: 'Sign-ups', fig: h.signups, write: count, spark: (p) => p.signups },
+          { key: 'new', label: 'New customers', fig: h.new_customers, write: count, spark: (p) => p.new_customers },
+          { key: 'cost', label: 'Cost', fig: h.cost, write: money, spark: (p) => p.cost },
+          { key: 'cac', label: 'CAC', fig: h.cac, write: (v) => usd(v, true), spark: (p) => p.cac },
+          h.ltv_cac
+            ? {
+                key: 'ltv',
+                label: 'LTV to CAC',
+                fig: h.ltv_cac,
+                write: ratio,
+                sub: shown(h.payback_months) ? `payback ${ratio(h.payback_months.value)} months` : undefined,
+              }
+            : null,
+          { key: 'kept', label: 'Kept', fig: h.kept, write: (v) => pct(v), spark: (p) => p.kept },
+        ];
+  return all.filter((t): t is Tile => !!t && !leftOut(t.fig));
+}
+
+const metricValue = (m: GrowthMetric) => {
+  if (m.value == null) return '';
+  const u = m.unit.toLowerCase();
+  if (u === 'usd' || u === 'dollars' || u === '$') return usd(m.value, !Number.isInteger(m.value));
+  if (u === 'percent' || u === '%' || u === 'rate') return m.value <= 1 ? pct(m.value) : `${Math.round(m.value)}%`;
+  if (u === 'months' || u === 'ratio') return ratio(m.value);
+  return count(m.value);
+};
+
 function GrowthBoard({ search }: { search: GrowthSearch }) {
   const press = usePress();
+  const phone = usePhone();
   const segments = useQuery(segmentsQuery);
-  const sources = useQuery(growthSourcesQuery);
   const read = useQuery(growthReadQuery(search.segment, search.month));
+  const owners = useQuery(pageOwnersQuery);
+  const dir = useQuery(directoryQuery);
+  const manager = growthManager(owners.data, dir.data);
   const segs = segments.data?.segments ?? [];
-  const one = segs.find((s) => s.slug === search.segment);
-  const funnels = useQueries({ queries: (one ? [] : segs).map((s) => growthReadQuery(s.slug, search.month, false)) });
-  const live = (sources.data?.sources ?? []).some((s) => !s.retired_at);
-  const state = read.isPending || sources.isPending ? 'loading' : read.isError ? 'fault' : !live ? 'empty' : 'ready';
   const d = read.data;
-  const h = d?.headline ?? {};
   const series = d?.series ?? [];
   const months = growthMonths(search.month);
-  const month = search.month ?? months[0]!;
+  const month = search.month ?? lastFullMonth();
+  const thisMonth = ymOf(new Date());
   const open = panelOf(search.panel);
-  const channel = open?.[0] === 'channel' ? d?.channels.find((c) => c.slug === open[1]) : undefined;
-  const nameOf = (slug: string) => (slug === 'unknown' ? 'Unknown' : (d?.channels.find((c) => c.slug === slug)?.name ?? slug));
-  const pair = open && open[0] !== 'channel' ? pairOf(open[1]) : null;
-  const panel =
-    open?.[0] === 'month' && pair ? (
-      <MonthPanel channel={pair[0]} name={nameOf(pair[0])} month={pair[1]} />
-    ) : open?.[0] === 'customers' && pair ? (
-      <CustomersPanel segment={search.segment} month={pair[0]} day={pair[1] as '30' | '90' | '180'} />
-    ) : (
-      channel && d && <ChannelPanel channel={channel} read={d} month={month} sources={sources.data?.sources ?? []} />
-    );
-  const spark = (pick: (p: (typeof series)[number]) => number | null) => {
+  const opened = open?.[0] === 'channel' ? open[1] : undefined;
+
+  const tiles = d ? tilesOf(d) : [];
+  // Before revenue (every funnel tile 0 or left out), the company's own KPIs lead and the funnel folds below them.
+  const funnelBlank = tiles.every((t) => !t.fig.value);
+  const metrics = d?.metrics ?? [];
+  const kpisLead = funnelBlank && metrics.length > 0;
+  const anyone = (d?.channels ?? []).some((c) => c.signups > 0 || (c.new_customers ?? 0) > 0);
+  const blank = !!d && funnelBlank && !metrics.length && !anyone;
+  const loud = loudHealth(d?.health);
+
+  const spark = (pick?: (p: GrowthPoint) => number | null) => {
+    if (!pick) return undefined;
     const pts = series.map(pick).filter((v): v is number => v != null);
     return pts.length > 1 ? <Sparkline points={pts} /> : undefined;
   };
+  const figures: Figure[] = tiles.map((t) => ({
+    label: t.label,
+    value: shown(t.fig) ? (
+      <>
+        {t.write(t.fig.value)}
+        <Verdict v={t.fig.verdict} />
+      </>
+    ) : (
+      <span className="gr-why">{statusWord(t.fig.status)}</span>
+    ),
+    sub: t.sub ?? figSub(t.fig, t.write),
+    spark: spark(t.spark),
+    target: `figure:${t.key}`,
+  }));
+  const kpiFigures: Figure[] = metrics.slice(0, 6).map((m) => ({
+    label: m.name,
+    value: metricValue(m) || <span className="gr-why">{statusWord('not_yet')}</span>,
+    sub: m.estimate ? 'estimate' : m.vs_prior != null ? `was ${metricValue({ ...m, value: m.vs_prior })}` : '',
+    target: `kpi:${m.id}`,
+  }));
+  const strip = (list: Figure[], label: string) =>
+    list.length > 0 && (
+      <div className="gr-tiles" style={{ ['--gr-n' as string]: Math.min(list.length, 6) }}>
+        <FiguresStrip figures={list} label={label} />
+      </div>
+    );
 
-  // A scope tab starts the board clean: no month, no channel open.
-  const tabs: PageTab[] = [
-    { label: 'All', to: GROWTH, target: 'tab:all' },
-    ...segs.map((s) => ({ label: s.name, to: GROWTH, target: `tab:${s.slug}`, search: { segment: s.slug } })),
-  ];
-  const figures: Figure[] = [
-    { label: 'New customers', value: orWhy(h.new_customers, count), spark: spark((p) => p.new_customers), target: 'figure:new' },
-    { label: 'Spend', value: orWhy(h.cost, (v) => usd(v)), spark: spark((p) => p.cost), target: 'figure:spend' },
-    { label: 'Cost per customer', value: orWhy(h.cac, (v) => usd(v, true)), spark: spark((p) => p.cac), target: 'figure:cac' },
-    one
-      ? { label: 'LTV to cost', value: orWhy(h.ltv_cac, ratio), target: 'figure:ltv' }
-      : { label: 'Payback, months', value: orWhy(h.payback_months, ratio), target: 'figure:payback' },
-  ];
+  // A scope tab starts the board clean: no month, no channel open. No segments, no tabs.
+  const tabs: PageTab[] | undefined = segs.length
+    ? [
+        { label: 'All', to: GROWTH, target: 'tab:all' },
+        ...segs.map((s) => ({ label: s.name, to: GROWTH, target: `tab:${s.slug}`, search: { segment: s.slug } })),
+      ]
+    : undefined;
+  const row = opened ? d?.channels.find((c) => c.slug === opened) : undefined;
 
   return (
     <Dashboard
       {...head}
-      state={state}
+      state={readState(read, blank)}
       onRetry={() => void read.refetch()}
       empty={{
         title: 'No numbers yet',
         action: (
-          <Button variant="primary" onClick={() => void press('growth.openSources', {})}>
+          <Button variant="primary" onClick={() => void press(manager ? 'growth.askManager' : 'growth.openSources', {})}>
             Set up
           </Button>
         ),
@@ -103,136 +209,224 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
             <Select
               label="Month"
               labelHidden
-              options={months.map((m) => ({ value: m, label: monthName(m) }))}
+              options={months.map((m) => ({ value: m, label: m === thisMonth ? `${monthName(m)}, partial` : monthName(m) }))}
               value={month}
               onValueChange={(m) => void press('growth.setMonth', { month: m })}
             />
+            {d?.partial && <span className="gr-partial">partial</span>}
           </div>
         </>
       }
-      tabs={tabs}
-      figures={<FiguresStrip figures={figures} />}
-      widgets={
-        <div className="stack">
-          {one ? (
-            <Section name="Funnel">
-              <Funnel steps={funnelSteps(h)} label={`Funnel, ${one.name}`} />
-            </Section>
-          ) : (
-            <div className="two-col">
-              {segs.map((s, i) => {
-                const f = funnels[i]?.data;
-                return (
-                  <Section key={s.slug} name={`Funnel, ${s.name}`}>
-                    {f ? <Funnel steps={funnelSteps(f.headline)} label={`Funnel, ${s.name}`} /> : null}
-                  </Section>
-                );
-              })}
-            </div>
-          )}
-          {d && (
-            <>
-              <Channels read={d} segs={one ? [] : segs} selected={channel?.slug} />
-              <div className="two-col">
-                <Trend title="New customers, by month" points={series.map((p) => [p.period, p.new_customers] as const)} fmt={(v) => count(v)} />
-                <Trend title="Cost per customer, by month" points={series.map((p) => [p.period, p.cac] as const)} fmt={(v) => usd(v, true)} />
-              </div>
-              <Retention read={d} open={open?.[0] === 'customers' ? open[1] : undefined} />
-              <Kpis metrics={d.metrics} />
-            </>
-          )}
-        </div>
+      more={
+        <PageMore target="growth:more">
+          <MenuItem label="Sources" onSelect={() => void press('growth.openSources', {})} />
+        </PageMore>
       }
-      panel={panel}
+      tabs={tabs}
+      figures={
+        d && (
+          <div className="gr-top">
+            {manager && <Ask />}
+            {loud.length > 0 && (
+              <div className="gr-loud" role="status">
+                {loud.map((line) => (
+                  <p key={line}>
+                    <Icon name="alert" />
+                    {line}
+                  </p>
+                ))}
+              </div>
+            )}
+            {kpisLead ? strip(kpiFigures, 'KPIs') : strip(figures, 'Headline')}
+          </div>
+        )
+      }
+      widgets={
+        d && (
+          <div className="stack">
+            {kpisLead && figures.length > 0 && (
+              <Section name="Funnel" defaultOpen={false}>
+                {strip(figures, 'Funnel')}
+              </Section>
+            )}
+            <Channels read={d} selected={opened} phone={phone} cac={valueKind(d) !== 'retention'} />
+            <Trends read={d} />
+            <Retention rows={d.retention ?? []} />
+            {!kpisLead ? <Kpis metrics={metrics} /> : metrics.length > 6 && <Kpis metrics={metrics.slice(6)} />}
+            <HealthFoot health={d.health} quietOnly={loud.length > 0} />
+          </div>
+        )
+      }
+      panel={opened && <ChannelPanel slug={opened} month={month} row={row} />}
     />
   );
 }
 
-function Channels({ read, segs, selected }: { read: GrowthRead; segs: readonly Segment[]; selected?: string }) {
-  const h = read.headline;
-  const ltv = h.ltv?.value ?? null;
-  // On All the channels stand under the segment that names them; one a segment does not name stands last.
-  const named = new Set(segs.flatMap((s) => s.channels ?? []));
-  const groups: [string | null, GrowthChannel[]][] = segs.length
-    ? [
-        ...segs.map((s) => [s.name, read.channels.filter((c) => (s.channels ?? []).includes(c.slug))] as [string, GrowthChannel[]]),
-        ['Other', read.channels.filter((c) => !named.has(c.slug))],
-      ]
-    : [[null, read.channels]];
-  const row = (c: GrowthChannel) => (
-    <tr key={c.slug} className={c.slug === selected ? 'is-selected' : undefined} data-target={`channel:${c.slug}`}>
-      <td className="t-name">
-        <ActLink to={GROWTH} search={{ tab: undefined, panel: `channel:${c.slug}` }} action="growth.openChannel" input={{ channel: c.slug }} className="t-link">
-          {c.name ?? c.slug}
-        </ActLink>
-      </td>
-      <td className={c.cost ? 'num' : 'num zero'}>{usd(c.cost ?? 0)}</td>
-      <td className="num">{count(c.new_customers)}</td>
-      <td className="num t-fig">{c.cac != null ? usd(c.cac, true) : <span className="zero">{statusWord(c.status)}</span>}</td>
-      <td className="num">{ltv != null && c.cac ? ratio(ltv / c.cac) : ''}</td>
-    </tr>
-  );
+/** One line to the Growth Manager: the words go to its chat, led by the scope and month on screen, and the chat opens. */
+function Ask() {
+  const press = usePress();
+  const [text, setText] = useState('');
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    if (await press('growth.askManager', { text: text.trim() })) setText('');
+  };
   return (
-    <Section name="Channels" count={read.channels.length}>
-      <div className="t-scroll">
-        <Table label="Channels">
-          <colgroup>
-            <col />
-            <col className="t-col" />
-            <col className="t-n" />
-            <col className="t-col" />
-            <col className="t-col" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th scope="col">Channel</th>
+    <form className="gr-ask" onSubmit={(e) => void send(e)} data-target="growth:ask">
+      <Field label="Ask the Growth Manager" labelHidden placeholder="Ask the Growth Manager…" value={text} onValueChange={setText} lead="spark" />
+      <IconButton icon="send" label="Send" type="submit" />
+    </form>
+  );
+}
+
+/** A channel owner's face, beside its name. */
+function OwnerFace({ id }: { id: string }) {
+  const a = useActor(id);
+  return <Avatar kind={a?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={a?.name ?? 'Owner'} hue={a?.hue} size={16} decorative />;
+}
+
+/** Where to bet: each channel's new customers, cost and CAC, budget and shares, in the read's ranking. Unknown last, and
+    always shown when it has anyone. On a phone: channel, new, CAC. A retention company has no CAC column. */
+function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?: string; phone: boolean; cac: boolean }) {
+  const rows = read.channels.filter((c) => c.slug !== 'unknown' || c.signups > 0 || (c.new_customers ?? 0) > 0);
+  const span = (phone ? 2 : 6) + (cac ? 1 : 0);
+  const word = (c: GrowthChannel) => <span className="zero">{statusWord(c.status)}</span>;
+  return (
+    <Section name="Channels" count={rows.filter((c) => c.slug !== 'unknown').length} target="growth:channels">
+      <Table label="Channels">
+        <colgroup>
+          <col />
+          <col className="t-n" />
+          {!phone && <col className="t-col" />}
+          {cac && <col className="t-col" />}
+          {!phone && (
+            <>
+              <col className="t-col" />
+              <col className="t-n" />
+              <col className="t-n" />
+            </>
+          )}
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">Channel</th>
+            <th scope="col" className="num">
+              New
+            </th>
+            {!phone && (
               <th scope="col" className="num">
-                Spend
+                Cost
               </th>
-              <th scope="col" className="num">
-                New
-              </th>
-              <th scope="col" className="num">
-                Cost per customer
-              </th>
-              <th scope="col" className="num">
-                LTV to cost
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {read.channels.length === 0 && <EmptyRow span={5}>No channels yet</EmptyRow>}
-            {groups
-              .filter(([, list]) => list.length > 0)
-              .map(([name, list]) => [
-                name && (
-                  <tr key={`g:${name}`} className="is-group">
-                    <td colSpan={5}>{name}</td>
-                  </tr>
-                ),
-                ...list.map(row),
-              ])}
-            {read.channels.length > 0 && (
-              <tr className="is-total">
-                <td className="t-name">Total</td>
-                <td className="num">{usd(h.cost?.value ?? null)}</td>
-                <td className="num">{count(h.new_customers?.value ?? null)}</td>
-                <td className="num">{usd(h.cac?.value ?? null, true)}</td>
-                <td className="num">{ratio(h.ltv_cac?.value ?? null)}</td>
-              </tr>
             )}
-          </tbody>
-        </Table>
-      </div>
+            {cac && (
+              <th scope="col" className="num">
+                CAC
+              </th>
+            )}
+            {!phone && (
+              <>
+                <th scope="col" className="num">
+                  Budget
+                </th>
+                <th scope="col" className="num">
+                  Cost share
+                </th>
+                <th scope="col" className="num">
+                  New share
+                </th>
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <EmptyRow span={span}>No channels yet</EmptyRow>}
+          {rows.map((c) => {
+            const unknown = c.slug === 'unknown';
+            return (
+              <tr key={c.slug} className={c.slug === selected ? 'is-selected' : undefined} data-target={`channel:${c.slug}`}>
+                <td className="t-name">
+                  {unknown ? (
+                    'Unknown'
+                  ) : (
+                    <span className="gr-chan">
+                      {c.owner && <OwnerFace id={c.owner} />}
+                      <ActLink
+                        to={GROWTH}
+                        search={{ tab: undefined, panel: `channel:${c.slug}` }}
+                        action="growth.openChannel"
+                        input={{ channel: c.slug }}
+                        className="t-link"
+                      >
+                        {c.name ?? c.slug}
+                      </ActLink>
+                    </span>
+                  )}
+                </td>
+                <td className="num">{count(c.new_customers)}</td>
+                {!phone && <td className="num">{c.status === 'no_spend' || unknown ? '' : usd(c.cost)}</td>}
+                {cac && (
+                  <td className="num t-fig">
+                    {c.cac != null ? (
+                      <>
+                        {usd(c.cac, true)}
+                        <Verdict v={c.verdict} />
+                      </>
+                    ) : c.status ? (
+                      word(c)
+                    ) : (
+                      ''
+                    )}
+                  </td>
+                )}
+                {!phone && (
+                  <>
+                    <td className="num">
+                      {usd(c.budget)}
+                      {c.over_budget ? <span className="gr-over">{usd(c.over_budget)} over</span> : null}
+                    </td>
+                    <td className="num">{pct(c.cost_share)}</td>
+                    <td className={unknown ? 'num t-fig' : 'num'}>{pct(c.new_share)}</td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </Table>
     </Section>
+  );
+}
+
+/** The read's months as lines, two to a row: sign-ups, new customers, CAC (not for a retention company) and kept. */
+function Trends({ read }: { read: GrowthRead }) {
+  const s = read.series ?? [];
+  const retention = valueKind(read) === 'retention';
+  const all: [string, string, (p: GrowthPoint) => number | null, (v: number) => string][] = [
+    ['signups', 'Sign-ups, by month', (p) => p.signups, (v) => count(v)],
+    ['new', 'New customers, by month', (p) => p.new_customers, (v) => count(v)],
+    ['cac', 'CAC, by month', (p) => p.cac, (v) => usd(v, true)],
+    ['kept', 'Kept, by month', (p) => p.kept, (v) => pct(v)],
+  ];
+  const charts = all.filter(([k, , pick]) => !(retention && (k === 'new' || k === 'cac')) && s.filter((p) => pick(p) != null).length > 1);
+  const pairs = Array.from({ length: Math.ceil(charts.length / 2) }, (_, i) => charts.slice(i * 2, i * 2 + 2));
+  return (
+    <>
+      {pairs.map((pair) => (
+        <div key={pair[0]![0]} className="two-col">
+          {pair.map(([k, title, pick, fmt]) => (
+            <Trend key={k} title={title} points={s.map((p) => [p.period, pick(p)] as const)} fmt={fmt} />
+          ))}
+        </div>
+      ))}
+    </>
   );
 }
 
 /** One figure by month as a line, named at its end. */
 function Trend({ title, points, fmt }: { title: string; points: readonly (readonly [string, number | null])[]; fmt: (v: number) => string }) {
-  const known = points.filter((p): p is readonly [string, number] => p[1] != null);
-  if (known.length < 2) return null;
-  const pts = known.map((p) => p[1]);
+  const have = points.filter((p): p is readonly [string, number] => p[1] != null);
+  if (have.length < 2) return null;
+  const pts = have.map((p) => p[1]);
   const n = pts.length;
   const label = (period: string) => (/^\d{4}-\d{2}/.test(period) ? monShort(period.slice(0, 7)) : period);
   return (
@@ -247,8 +441,8 @@ function Trend({ title, points, fmt }: { title: string; points: readonly (readon
           {...axis(pts)}
           fmt={fmt}
           xl={[
-            [0, label(known[0]![0])],
-            [n - 1, label(known[n - 1]![0])],
+            [0, label(have[0]![0])],
+            [n - 1, label(have[n - 1]![0])],
           ]}
           label={title}
         />
@@ -257,89 +451,89 @@ function Trend({ title, points, fmt }: { title: string; points: readonly (readon
   );
 }
 
-/** Each cohort kept by day 30, 90, 180; a month's figure opens the customers behind it. */
-function Retention({ read, open }: { read: GrowthRead; open?: string }) {
-  const rows = read.retention ?? [];
+const WINDOWS = [
+  ['kept_d30', 30],
+  ['kept_d90', 90],
+  ['kept_d180', 180],
+] as const;
+
+/** One retention cell: the share kept and how many were old enough to judge, or when it can first be read. */
+function KeptCell({ cohort, w, days }: { cohort: GrowthCohort; w: GrowthCohort['kept_d30']; days: number }) {
+  if (!w) return <td className="num" />;
+  if (w.status === 'not_yet')
+    return (
+      <td className="num">
+        <span className="zero">first read {firstRead(cohort.cohort, days)}</span>
+      </td>
+    );
+  if (w.status === 'too_few')
+    return (
+      <td className="num">
+        <span className="zero">
+          {count(w.n)} of {count(cohort.entered)} old enough
+        </span>
+      </td>
+    );
+  return (
+    <td className="num">
+      {pct(w.value)}
+      <span className="gr-n">{count(w.n)}</span>
+    </td>
+  );
+}
+
+/** Each cohort kept by day 30, 90 and 180. */
+function Retention({ rows }: { rows: readonly GrowthCohort[] }) {
   if (!rows.length) return null;
   return (
-    <Section name="Retention">
-      <Table label="Retention">
-        <colgroup>
-          <col />
-          <col className="t-col" />
-          <col className="t-n" />
-          <col className="t-n" />
-          <col className="t-n" />
-        </colgroup>
-        <thead>
-          <tr>
-            <th scope="col">First order</th>
-            <th scope="col" className="num">
-              Customers
-            </th>
-            <th scope="col" className="num">
-              Day 30
-            </th>
-            <th scope="col" className="num">
-              Day 90
-            </th>
-            <th scope="col" className="num">
-              Day 180
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const ym = isYm(r.cohort);
-            return (
-              <tr key={r.cohort} className={open?.startsWith(`${r.cohort}:`) ? 'is-selected' : undefined}>
-                <td className="t-name">{ym ? monthName(r.cohort) : r.cohort}</td>
+    <Section name="Retention" target="growth:retention">
+      <div className="gr-ret">
+        <Table label="Retention">
+          <colgroup>
+            <col />
+            <col className="t-n" />
+            <col className="t-col" />
+            <col className="t-col" />
+            <col className="t-col" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">First order</th>
+              <th scope="col" className="num">
+                Customers
+              </th>
+              <th scope="col" className="num">
+                Day 30
+              </th>
+              <th scope="col" className="num">
+                Day 90
+              </th>
+              <th scope="col" className="num">
+                Day 180
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.cohort}>
+                <td className="t-name">{isYm(r.cohort) ? monthName(r.cohort) : r.cohort}</td>
                 <td className="num">{count(r.entered)}</td>
-                {(['30', '90', '180'] as const).map((day) => {
-                  const w = r[`kept_d${day}`];
-                  const v = w?.value != null ? pct(w.value) : '';
-                  return (
-                    <td key={day} className="num">
-                      {ym && v ? (
-                        <ActLink
-                          to={GROWTH}
-                          search={{ tab: undefined, panel: `customers:${r.cohort}:${day}` }}
-                          action="growth.openCustomers"
-                          input={{ month: r.cohort, day }}
-                          className="t-link"
-                          title={`Customers, day ${day}`}
-                          data-target={`kept:${r.cohort}:${day}`}
-                        >
-                          {v}
-                        </ActLink>
-                      ) : (
-                        v
-                      )}
-                    </td>
-                  );
-                })}
+                {WINDOWS.map(([k, days]) => (
+                  <KeptCell key={k} cohort={r} w={r[k]} days={days} />
+                ))}
               </tr>
-            );
-          })}
-        </tbody>
-      </Table>
+            ))}
+          </tbody>
+        </Table>
+      </div>
     </Section>
   );
 }
 
-const metricValue = (m: GrowthMetric) => {
-  if (m.value == null) return '';
-  const u = m.unit.toLowerCase();
-  if (u === 'usd' || u === 'dollars' || u === '$') return usd(m.value, !Number.isInteger(m.value));
-  if (u === 'percent' || u === '%' || u === 'rate') return m.value <= 1 ? pct(m.value) : `${Math.round(m.value)}%`;
-  if (u === 'months' || u === 'ratio') return ratio(m.value);
-  return count(m.value);
-};
-
 function Kpis({ metrics }: { metrics: readonly GrowthMetric[] }) {
   if (!metrics.length) return null;
   return (
-    <Section name="KPIs" count={metrics.length}>
+    <Section name="KPIs" count={metrics.length} target="growth:kpis">
       <Table label="KPIs">
         <colgroup>
           <col />
@@ -356,7 +550,10 @@ function Kpis({ metrics }: { metrics: readonly GrowthMetric[] }) {
         <tbody>
           {metrics.map((m) => (
             <tr key={m.id} className={m.estimate ? 'is-quiet' : undefined}>
-              <td className="t-name">{m.name}</td>
+              <td className="t-name">
+                {m.name}
+                {m.estimate && <span className="gr-est">estimate</span>}
+              </td>
               <td className="num t-fig">{metricValue(m)}</td>
             </tr>
           ))}
@@ -366,29 +563,34 @@ function Kpis({ metrics }: { metrics: readonly GrowthMetric[] }) {
   );
 }
 
-const fills = (list: readonly GrowthSource[], what: string) =>
-  list
-    .filter((s) => !s.retired_at && (s.fills ?? []).includes(what))
-    .map((s) => s.name ?? s.system ?? s.id)
-    .join(', ');
+const FIGURE_NAME = { signups: 'Sign-ups', new_customers: 'New customers', cost: 'Cost' } as const;
 
-/** One channel, opened: its cost per customer and where each part of it comes from. */
-function ChannelPanel({ channel: c, read, month, sources }: { channel: GrowthChannel; read: GrowthRead; month: string; sources: readonly GrowthSource[] }) {
-  const press = usePress();
-  const ltv = read.headline.ltv?.value ?? null;
+/** The read's health, quiet: checks that match (both figures on open), checks not filled, and when nothing is loud, the
+    unknown share. */
+function HealthFoot({ health: h, quietOnly }: { health: GrowthHealth; quietOnly: boolean }) {
+  const checks = h.checks ?? [];
+  const unknown =
+    !quietOnly && h.unknown_share ? `${pct(h.unknown_share)} of ${h.basis === 'signups' ? 'sign-ups' : 'new customers'} have no known channel` : '';
+  if (!checks.some((c) => c.agrees !== false) && !unknown) return null;
   return (
-    <SidePanel title={c.name ?? c.slug} target={`channel:${c.slug}`} onClose={() => void press('growth.closePanel', {})}>
-      <div className="money">
-        <Pfig big={c.cac != null ? usd(c.cac, true) : statusWord(c.status)} sub={`for a new customer, ${monthName(month)}`} />
-        <Section name="Where this comes from">
-          <Ptrace name="Spend" sub={fills(sources, 'spend') || statusWord(c.status)} fig={usd(c.cost ?? null)} />
-          <Ptrace name="New customers" sub={fills(sources, 'customers') || fills(sources, 'new_customers')} fig={count(c.new_customers)} />
-          {ltv != null && <Ptrace name="LTV" sub={fills(sources, 'revenue') || fills(sources, 'net_revenue')} fig={usd(ltv)} />}
-          {ltv != null && c.cac ? <Ptrace name="LTV to cost" sub={`${usd(ltv)} over ${usd(c.cac, true)}`} fig={ratio(ltv / c.cac)} /> : null}
-        </Section>
-        <ChannelMonths channel={c.slug} />
-      </div>
-    </SidePanel>
+    <div className="gr-health" data-target="growth:health">
+      {checks.map((c) =>
+        c.agrees === true ? (
+          <details key={`${c.figure}:${c.kpi}`} className="gr-match">
+            <summary>
+              <Icon name="check" />
+              Matches {c.kpi}
+            </summary>
+            <span>
+              {FIGURE_NAME[c.figure]}: {count(c.growth)} here, {count(c.outside)} there
+            </span>
+          </details>
+        ) : c.agrees === null ? (
+          <p key={`${c.figure}:${c.kpi}`}>{c.kpi} not filled</p>
+        ) : null,
+      )}
+      {unknown && <p>{unknown}</p>}
+    </div>
   );
 }
 
