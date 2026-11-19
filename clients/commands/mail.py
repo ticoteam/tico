@@ -269,42 +269,26 @@ _ORGANIZE_SAYS = {
 
 
 def _register_email_organize(action):
-    properties = {'mailbox': _s('Whole Workspace mailbox address')}
+    properties = {'mailbox': _s('Mailbox address')}
     required = ('mailbox',)
     if action in ('label', 'unlabel'):  # before the ids: `tico email label <address> <label> <id>...`
         properties['label'] = _s('Gmail label name; label creates a missing user label, unlabel never does')
         required += ('label',)
+    # Kept short: fourteen of these are in the Assistant's tool listing, which has a size budget. The server checks
+    # every bound (1-500 ids or threads, ids up to 128 characters).
+    ids = {'type': 'array', 'items': {'type': 'string'}}
     properties |= {
-        'ids': {
-            'type': 'array',
-            'items': {'type': 'string', 'maxLength': 128},
-            'minItems': 1,
-            'maxItems': 500,
-            'description': 'Message ids, from `email inbox` or `email search`',
-        },
-        'threads': {
-            'type': 'array',
-            'items': {'type': 'string', 'maxLength': 128},
-            'minItems': 1,
-            'maxItems': 500,
-            'description': 'Thread ids instead of message ids: every message in each thread',
-        },
-        'query': _s("Gmail query instead of ids; resolved live before changing messages"),
-        'limit': {
-            'type': 'integer',
-            'minimum': 1,
-            'maximum': 500,
-            'default': 100,
-            'description': 'With query: at most this many messages, 1-500 (default 100)',
-        },
+        'ids': {**ids, 'description': 'Message ids (up to 500)'},
+        'threads': {**ids, 'description': 'Or thread ids: all their messages'},
+        'query': _s('Or a Gmail query'),
+        'limit': {'type': 'integer', 'description': 'With query: 1-500, default 100'},
     }
 
     @tool(
         'tico_email_' + action,
-        'Organize live Gmail: '
+        'Gmail: '
         + _ORGANIZE_SAYS.get(action, action.replace('_', ' '))
-        + '. Supply ids, threads or a query, up to 500 messages. Needs your organize access and the company switch. '
-        'Never deletes for good. Returns count, ids and the undo action.',
+        + '. Needs organize access. Returns count, ids, undo.',
         properties,
         required=required,
         writes=True,
@@ -434,7 +418,7 @@ _MESSAGE = _s('The draft\'s message id you last read (msg_id); a draft changed s
         'cc': {**_ADDRESSES, 'description': 'New copied recipients'},
         'subject': _s('New subject'),
         'body': _s('The new email text, whole'),
-        'attachments': {**_ATTACHMENTS, 'description': _ATTACHMENTS['description'] + '; replaces the draft\'s files'},
+        'attachments': {**_ATTACHMENTS, 'description': 'Tico files (FILE or FILE@N) that replace the draft\'s files'},
         'message': _MESSAGE,
     },
     required=('mailbox', 'draft'),
@@ -639,7 +623,7 @@ def save_original(api, args, out=None):
     import os
 
     target = _safe_target(out or '') if out else None
-    found = email_original(api, {**args, 'raw': bool(target)})
+    found = email_original(api, {**args, 'raw': bool(target or args.get('raw'))})
     if not target:
         return found
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)

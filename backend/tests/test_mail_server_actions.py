@@ -959,3 +959,13 @@ def test_the_original_message_has_every_header_and_saves_as_an_eml(api, box, mon
     with api.app.state.store.read() as c:
         kinds = [json.loads(r[0])["kind"] for r in c.execute("SELECT detail FROM events WHERE action='mail.read'")]
     assert kinds == ["original", "original"]
+
+
+def test_whole_threads_are_organized_past_500_messages_and_their_drafts_are_left_alone(api, organized):
+    for n in range(500):
+        organized.add(BOX, f"b{n}", thread="t-big", subject="Bulk", body="Bulk.")
+    organized.put_draft(BOX, "r-900", "dm-old", "t1", OLD_TOOL_DRAFT)
+    done = organize(api, action="trash", threads=["t-big", "t1"])
+    assert done["count"] == 502 and "dm-old" not in done["ids"]  # every message, the unsent reply left out
+    assert all("TRASH" in labels_of(organized, mid) for mid in done["ids"])
+    assert "TRASH" not in labels_of(organized, "dm-old")

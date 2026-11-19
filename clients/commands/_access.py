@@ -377,6 +377,14 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_email_attachments",
         "tico_email_attachment",
         "tico_email_lint",  # tico_email_draft runs the same lint; same cliff
+        # Rarer Gmail actions the person does in Gmail or asks for by `tico email`; the Assistant's listing keeps the
+        # everyday ones (archive, read, star, label, trash). Same cliff.
+        "tico_email_important",
+        "tico_email_not_important",
+        "tico_email_spam",
+        "tico_email_not_spam",
+        "tico_email_labels",
+        "tico_email_original",
     }
 )
 
