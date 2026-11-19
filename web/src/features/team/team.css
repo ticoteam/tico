@@ -163,6 +163,25 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .m-pick{width:208px;height:var(--ctl-sm);font-size:var(--t-sm)}
 .m-pick .ico{width:14px;height:14px}
 
+/* ---------- a computer's screen: the picture of it, at its own shape, on the ground ---------- */
+.scr{position:relative;flex:none;margin:var(--s-2) 0 0;aspect-ratio:16/10;max-height:100%;border-radius:var(--r-block);background:var(--ground);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden;display:flex;flex-direction:column;font-size:var(--t-micro);color:var(--muted)}
+.scr:fullscreen{margin:0;border-radius:0;box-shadow:none}
+.scr-view{position:absolute;inset:0}
+.scr-msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-3);padding:var(--s-4);text-align:center;font-size:var(--t-base);color:var(--muted)}
+.scr-rec{position:absolute;right:var(--s-2h);bottom:var(--s-2h);display:inline-flex;align-items:center;gap:var(--s-1h);height:22px;padding:0 var(--s-2);border-radius:var(--r-chip);background:var(--raised);box-shadow:var(--lift-2);color:var(--ink-2);pointer-events:none}
+
+/* ---------- an account's browser, live (Open browser): a large dialog, the whole window on a phone ---------- */
+.kit-modal.bv{width:min(1100px,calc(100vw - var(--s-8)));max-width:none;max-height:calc(100dvh - var(--s-8));overflow:auto}
+.bv-url{display:flex;align-items:center;gap:var(--s-1h);min-width:0;height:var(--ctl-sm);padding:0 var(--s-2h);border-radius:var(--r-ctl);background:var(--well);font-size:var(--t-sm);color:var(--muted)}
+.bv-url .ico{flex:none;width:14px;height:14px}
+.bv-url .mono{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.bv-stage{position:relative;display:flex;align-items:flex-start;justify-content:center;min-height:200px;overflow:hidden;border-radius:var(--r-block);background:var(--ground);box-shadow:inset 0 0 0 1px var(--line);user-select:none;-webkit-user-select:none}
+.bv-stage img{display:block;max-width:100%;max-height:calc(100dvh - 260px);height:auto;object-fit:contain}
+.bv-stage.is-control{touch-action:none;cursor:pointer}
+.bv-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:var(--s-4);text-align:center;color:var(--muted);pointer-events:none}
+.bv-type{display:flex;align-items:center;gap:var(--s-1h)}
+.bv-type .f{flex:1;min-width:0}
+
 @media (min-width:761px){
   /* beside a chat (about 630 px) */
   @container rec (max-width:780px){
@@ -261,4 +280,8 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .plan .row-pills{grid-area:pills}
   .plan-use{grid-area:use;justify-self:end}
   .plan .ib{grid-area:sw;justify-self:end}
+  .kit-modal.bv{width:100vw;height:100dvh;max-width:100vw;max-height:100dvh;border-radius:0;padding:var(--s-3) var(--s-3) calc(var(--s-3) + env(safe-area-inset-bottom));align-content:start}
+  .bv-stage img{max-height:none}
+  .bv-type .btn,.bv .modal-row .btn{min-height:var(--s-12)}
+  .bv .modal-row .btn{flex:1}
 }

@@ -16,13 +16,18 @@ import {
   moveAgent,
   moveToTeam,
   newCredential,
+  openBrowser,
+  openScreenSession,
   removePerson,
   renamePerson,
   restartComputer,
+  sendBrowserInput,
   sendLoginCode,
+  setBrowserControl,
   setAgentModel,
   setAgentStatus,
   setProfile,
+  setScreenMode,
   setPersonRole,
   setPersonTitle,
   setTeammateAccess,
@@ -460,4 +465,122 @@ export const signOut = defineAction({
   run: (_ctx, { computer, runtime }) => said("Couldn't sign out", () => startLogout(computer, runtime)),
   did: () => 'Signing out. The agents that use it stop until someone signs in again.',
   target: () => ({ kind: 'team', id: 'computer' }),
+});
+
+/* ---------------------------------------------------------------- a computer's screen */
+
+/* A session's ticket comes back as the action's output, which only the person's own press receives: the Screen tab
+   holds it in component state and connects. The server refuses the Assistant too ("Open the screen yourself"). */
+
+/** Keeps the refusal's code (screen_off, forbidden…): a 403 would otherwise read only as not_allowed. */
+const session = (computer: string, control: boolean) =>
+  openScreenSession(computer, control).catch((e: unknown) => {
+    throw e instanceof ApiError && e.status === 403 ? Object.assign(new Error(e.message), { code: e.code }) : e;
+  });
+
+export const watchScreen = defineAction({
+  id: 'computers.watchScreen',
+  title: "Watch a computer's screen",
+  kind: 'view',
+  tico: false,
+  input: s.object({ computer }),
+  run: (_ctx, { computer }) => session(computer, false),
+  did: () => 'Watching the screen',
+  target: ({ computer }) => ({ kind: 'screen', id: computer }),
+});
+
+export const controlScreen = defineAction({
+  id: 'computers.controlScreen',
+  title: "Take control of a computer's screen",
+  kind: 'change',
+  tico: false,
+  input: s.object({ computer }),
+  run: (_ctx, { computer }) => session(computer, true),
+  did: () => 'You have control',
+  target: ({ computer }) => ({ kind: 'screen', id: computer }),
+});
+
+/** Who may open the screen from the app. Its operator or an admin, in person. */
+export const setScreen = defineAction({
+  id: 'computers.setScreen',
+  title: "Turn a computer's screen off, view only or on",
+  kind: 'change',
+  tico: false,
+  input: s.object({ computer, mode: s.oneOf(['off', 'view', 'control'] as const) }),
+  run: (_ctx, { computer, mode }) => said("Couldn't change it", () => setScreenMode(computer, mode)),
+  did: ({ mode }) => (mode === 'off' ? 'Turned the screen off' : mode === 'view' ? 'The screen is view only' : 'Turned the screen on'),
+  target: ({ computer }) => ({ kind: 'screen', id: computer }),
+});
+
+/** Needs the press itself (a browser grants full screen only to one). */
+export const fullScreen = defineAction({
+  id: 'computers.fullScreen',
+  title: "Show a computer's screen full screen",
+  kind: 'view',
+  tico: false,
+  input: s.object({ computer }),
+  run: (_ctx, { computer }) => document.querySelector(`[data-target="screen:${CSS.escape(computer)}"]`)?.requestFullscreen(),
+  did: () => 'Full screen',
+  target: ({ computer }) => ({ kind: 'screen', id: computer }),
+});
+
+/* ---------------------------------------------------------------- an account's browser (Open browser) */
+
+const tool = s.string({ min: 1, max: 100, what: "a website tool's id" });
+const account = s.string({ min: 1, max: 100, what: "one of its accounts' ids" });
+const onBrowser = (account: string) => ({ kind: 'browser', id: account });
+
+/** Opens, or wakes, the account's browser so a person can sign in or finish a step by hand. */
+export const browserOpen = defineAction({
+  id: 'browser.open',
+  title: "Open a website account's browser",
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool, account }),
+  run: (_ctx, { tool, account }) => said("The browser didn't open", () => openBrowser(tool, account)),
+  did: () => 'Opened the browser',
+  target: ({ account }) => onBrowser(account),
+});
+
+export const browserTake = defineAction({
+  id: 'browser.takeControl',
+  title: "Take control of a website account's browser",
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool, account }),
+  run: (_ctx, { tool, account }) => said("Couldn't take control", () => setBrowserControl(tool, account, true)),
+  did: () => 'You have control',
+  target: ({ account }) => onBrowser(account),
+});
+
+export const browserGiveBack = defineAction({
+  id: 'browser.giveBack',
+  title: "Give back control of a website account's browser",
+  kind: 'change',
+  tico: false,
+  input: s.object({ tool, account }),
+  run: (_ctx, { tool, account }) => said("Couldn't give it back", () => setBrowserControl(tool, account, false)),
+  did: () => 'Gave back control',
+  target: ({ account }) => onBrowser(account),
+});
+
+/** A click in page pixels, typed text, a key or a scroll. Only while the person holds control. */
+export const browserInput = defineAction({
+  id: 'browser.input',
+  title: "Click, type or scroll in a website account's browser",
+  kind: 'change',
+  tico: false,
+  input: s.object({
+    tool,
+    account,
+    kind: s.oneOf(['click', 'type', 'key', 'scroll'] as const),
+    x: s.optional(s.number({ int: true, min: 0 })),
+    y: s.optional(s.number({ int: true, min: 0 })),
+    text: s.optional(s.string({ min: 1, max: 2000 })),
+    key: s.optional(s.oneOf(['Enter', 'Tab', 'Backspace'] as const)),
+    dy: s.optional(s.number({ int: true })),
+  }),
+  run: (_ctx, { tool, account, ...input }) => said("It didn't reach the browser", () => sendBrowserInput(tool, account, input)),
+  did: () => 'Sent',
+  target: ({ account }) => onBrowser(account),
 });

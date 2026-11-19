@@ -75,7 +75,8 @@ export default defineConfig({
           });
         },
       },
-      '/api': toServer,
+      // ws: a computer's screen is a websocket under /api
+      '/api': { ...toServer, ws: true },
       '/auth': toServer,
       '/_tico': toServer,
       '/visuals': toServer,

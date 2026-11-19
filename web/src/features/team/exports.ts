@@ -5,5 +5,6 @@ export { AgentPage } from './AgentPage';
 export { PersonPage } from './PersonPage';
 export { TeamPage } from './TeamPage';
 export { ComputerPage, type ComputerPageProps } from './ComputerPage';
+export { BrowserDialog, type BrowserDialogProps } from './BrowserView';
 export { agentsQuery, groupsQuery, computersQuery } from './queries';
 export { teamSlug, whoHref } from './model';

@@ -5,7 +5,6 @@ import { useActors, type Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
-import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -14,7 +13,8 @@ import { fmtDate } from '@/lib';
 import { FiguresStrip, Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { computerStatus, modelLine, whoHref } from './model';
 import { ModelPicker } from './ModelPicker';
-import { ConfirmDialog, Foot, MateRow } from './parts';
+import { ConfirmDialog, Foot } from './parts';
+import { Screen, ScreenTools, type ScreenMode } from './Screen';
 import { SignIns } from './SignIns';
 import { agentsQuery, computersQuery, modelsQuery, performanceQuery, type AgentRow, type Computer, type PerfPoint } from './queries';
 
@@ -37,6 +37,7 @@ export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
   const c = computers.data?.find((x) => x.id === agent?.machine?.runner_id) ?? computers.data?.find((x) => x.bots?.includes(botId));
   const restart = useAction('computers.restart');
   const [asking, setAsking] = useState(false);
+  const [mode, setMode] = useState<ScreenMode>('view');
   const title = c?.label ?? agent?.machine?.label ?? (agent?.cloud_machine?.shared ? 'Shared computer' : 'Computer');
   const state: PageState = computers.isError ? 'fault' : computers.isPending ? 'loading' : c ? 'ready' : 'empty';
   return (
@@ -64,13 +65,14 @@ export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
         { label: 'Info', to: base, search: { tab: 'computer' } },
         { label: 'Screen', to: base, search: { tab: 'screen' } },
       ]}
+      tabsAfter={tab === 'screen' && c && <ScreenTools c={c} mode={mode} onMode={setMode} />}
       state={state}
       onRetry={() => void computers.refetch()}
       empty={{ title: agent?.cloud_machine?.shared ? 'It runs on the shared computer' : 'Not on a computer yet' }}
       sections={
         c && (
           <>
-            {tab === 'screen' ? <Screen c={c} /> : <Info c={c} onRestart={() => setAsking(true)} />}
+            {tab === 'screen' ? <Screen c={c} mode={mode} /> : <Info c={c} onRestart={() => setAsking(true)} />}
             <ConfirmDialog
               open={asking}
               onOpenChange={setAsking}
@@ -152,25 +154,6 @@ function Info({ c, onRestart }: { c: Computer; onRestart: () => void }) {
         )}
       </Section>
       {picking && <ModelPicker agent={picking} open onOpenChange={(o) => !o && setPicking(null)} />}
-    </>
-  );
-}
-
-/** Who is on it now. The picture itself needs a live viewer this app does not have yet. */
-function Screen({ c }: { c: Computer }) {
-  const actors = useActors();
-  if (!c.online) return <Empty icon="offline" title="It did not answer" />;
-  const busy = actors.filter((a) => a.kind === 'agent' && a.working && c.bots?.includes(a.id.slice(a.id.indexOf(':') + 1)));
-  return (
-    <>
-      {busy.length > 0 && (
-        <Section name="On it now" count={busy.length}>
-          {busy.map((a) => (
-            <MateRow key={a.id} actor={a} />
-          ))}
-        </Section>
-      )}
-      <Empty icon="computer" title="No picture of the screen yet" />
     </>
   );
 }

@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
-import type { Task, TeammateAccessView } from '@/api/schema';
+import type { BrowserControl, BrowserControlState, BrowserInput, BrowserInputDone, BrowserOpen, BrowserOpened, Problem, Task, TeammateAccessView } from '@/api/schema';
 import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
 
 // Teammates, teams and computers have no live topic of their own (status lines come through the directory): read
@@ -341,6 +341,8 @@ export interface Computer {
   bots?: string[];
   restarting?: unknown;
   screen_available?: boolean;
+  /** Who may open its screen from the app: 'off', 'view' or 'control' (backend/screen.py listing). */
+  screen?: string;
   performance?: string;
   may_manage?: boolean;
   cloud_machine?: { size?: string; placement?: string; shared?: boolean } | null;
@@ -815,4 +817,88 @@ export async function setProfile(slug: string, profile: string, dropRules?: bool
   });
   copiesAgain();
   return out;
+}
+
+/* ---------------------------------------------------------------- a computer's screen */
+
+/** One screen session (POST /api/v2/computers/{rid}/screen/sessions, backend/screen.py; in /api/v2 but not yet in the
+    published contract). `ws_path` carries a single-use ticket good for a minute: only the component that connects
+    holds it, never the query cache, the address or a log. */
+export interface ScreenSession {
+  session_id: string;
+  control: boolean;
+  ws_path: string;
+  width: number;
+  height: number;
+}
+
+/** The computer's operator or an admin, in person: the server refuses the Assistant and API tokens. */
+export const openScreenSession = (rid: string, control: boolean) =>
+  api.post<ScreenSession>(`/api/v2/computers/${at(rid)}/screen/sessions`, { control });
+
+/** Who may open the screen: off, view or control. Off closes open sessions; view closes the ones in control. */
+export function setScreenMode(rid: string, mode: 'off' | 'view' | 'control') {
+  return write({
+    key: computersQuery.queryKey,
+    optimistic: (rows: Computer[] | undefined) => rows?.map((c) => (c.id === rid ? { ...c, screen: mode } : c)),
+    send: (idempotencyKey) => api.post<{ screen: string }>(`/api/v2/computers/${at(rid)}/screen`, { mode }, { idempotencyKey }),
+  });
+}
+
+/** The browser end of a session: the hub relays it to the computer's VNC server, view only or in control. */
+export function screenSocket(path: string): WebSocket {
+  if (!/^\/api\/v2\/runners\/[^/?]+\/screen\/ws\?/.test(path)) throw new ApiError(0, 'bad_session', 'Could not open the screen');
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${path}`, ['binary']);
+  ws.binaryType = 'arraybuffer';
+  return ws;
+}
+
+/* ---------------------------------------------------------------- an account's browser (Open browser) */
+
+const browser = (tool: string, account: string) => `/api/v2/website-tools/${at(tool)}/accounts/${at(account)}/browser` as const;
+
+/** Open, or wake, the website account's browser for a person's live view. */
+export const openBrowser = (tool: string, account: string) => api.post<BrowserOpened>(browser(tool, account), {} satisfies BrowserOpen);
+
+/** Take control (agents wait until it is given back, or 5 idle minutes), or give it back. */
+export const setBrowserControl = (tool: string, account: string, take: boolean) =>
+  api.post<BrowserControlState>(`${browser(tool, account)}/control`, { take } satisfies BrowserControl);
+
+/** A click (page pixels), typed text, a key or a scroll, from the person in control. */
+export const sendBrowserInput = (tool: string, account: string, input: BrowserInput) =>
+  api.post<BrowserInputDone>(`${browser(tool, account)}/input`, input);
+
+export interface BrowserFrame {
+  image: Blob;
+  /** The page's address, scrubbed by the server. */
+  url: string;
+  width: number;
+  height: number;
+}
+
+/** The newest picture of the page (JPEG), or null before the first. Never cached: the caller shows it and lets it go. */
+export async function browserFrame(tool: string, account: string, signal?: AbortSignal): Promise<BrowserFrame | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${browser(tool, account)}/frame`, { credentials: 'same-origin', cache: 'no-store', signal: signal ?? null });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new ApiError(0, 'network', 'The server did not answer', true);
+  }
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    let problem: Problem['error'] | undefined;
+    try {
+      problem = ((await res.json()) as Partial<Problem>).error;
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(res.status, problem?.code ?? `http_${res.status}`, problem?.detail ?? res.statusText, res.status >= 500);
+  }
+  return {
+    image: await res.blob(),
+    url: res.headers.get('X-Page-Url') ?? '',
+    width: Number(res.headers.get('X-Page-Width')) || 0,
+    height: Number(res.headers.get('X-Page-Height')) || 0,
+  };
 }
