@@ -392,7 +392,7 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-spec",
             "Spec",
-            "A feature starts as a chat. Write the Spec from it (skill write-a-spec): tico task attach <id> spec.html "
+            "A feature starts as a chat. Write the Spec from it (skill write-the-spec): tico task attach <id> spec.html "
             "--doc Spec. The decision model checks it.",
             2880,
             [_approval("Spec", SPEC_RUBRIC)],
@@ -409,7 +409,7 @@ PRESETS[PRODUCT] = {
         _stage(
             "product-ok-spec",
             "OK spec",
-            "Write the next version of the Spec with what the comments changed (skill write-a-spec): writing it here "
+            "Write the next version of the Spec with what the comments changed (skill write-the-spec): writing it here "
             "submits it. Any person approves it.",
             2880,
             [_people_only(_approval("Spec", SPEC_RUBRIC))],
@@ -546,10 +546,17 @@ EARLIER: dict[str, tuple[str, ...]] = {
     ),
     # Nov 16: stage approvals name a document; Product has no pitch (a feature starts as a chat).
     "product/goal": ("From a pitch to something checked in production",),
-    "product-spec/purpose": ("Write the spec page with the person who OK'd the pitch (skill write-a-spec).",),
+    # Nov 18: the Spec skill is write-the-spec; write-a-spec never existed.
+    "product-spec/purpose": (
+        "Write the spec page with the person who OK'd the pitch (skill write-a-spec).",
+        "A feature starts as a chat. Write the Spec from it (skill write-a-spec): tico task attach <id> spec.html "
+        "--doc Spec. The decision model checks it.",
+    ),
     "product-spec/page/line": ("Spec page",),
     "product-ok-spec/purpose": (
         "Attach the spec page with what the comments changed (skill write-a-spec). Any person OKs it.",
+        "Write the next version of the Spec with what the comments changed (skill write-a-spec): writing it here "
+        "submits it. Any person approves it.",
     ),
     "product-ok-spec/page/line": ("Spec page",),
     "product-qa/purpose": (

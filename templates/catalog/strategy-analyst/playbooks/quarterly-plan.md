@@ -35,7 +35,7 @@ Follow `playbooks/grade-a-quarter.md`. Write the result into the report and `kno
 
 ## 4. Draft next quarter
 
-Use `skills/draft-an-objective-from-a-bet/SKILL.md` for each objective and `skills/write-a-measurable-key-result/SKILL.md`
+Use `skills/draft-an-objective-from-a-bet/SKILL.md` for each objective and `.claude/skills/run-the-operating-cadence/SKILL.md` (step 13)
 for each key result.
 
 1. Pick the one focus: the single outcome that would make the quarter a success, from the strategy's active

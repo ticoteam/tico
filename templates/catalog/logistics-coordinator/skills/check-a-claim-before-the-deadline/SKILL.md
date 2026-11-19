@@ -1,6 +1,8 @@
 ---
 name: check-a-claim-before-the-deadline
 description: Prepare a lost or damaged shipment claim with its value, proof of shipment and evidence, take the filing deadline from the carrier's own terms with the date read, and put any claim within 7 days of that deadline at the top of the report.
+metadata:
+  function: operations
 ---
 # Check a claim before the deadline
 

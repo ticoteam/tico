@@ -65,3 +65,4 @@ shared_files:
   - playbooks/build-a-bet.md
   - playbooks/run-and-measure.md
   - playbooks/fix-a-slip.md
+  - .claude/skills/get-found-and-cited

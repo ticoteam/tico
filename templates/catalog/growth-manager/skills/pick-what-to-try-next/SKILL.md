@@ -1,6 +1,8 @@
 ---
 name: pick-what-to-try-next
 description: Choose which kinds of growth idea to look for next, by the team's stage, budget and time, before filing ideas. Use in the propose-ideas run, when the owner asks "what should we try?", or when the channels in use have stopped growing.
+metadata:
+  function: growth
 ---
 # Pick what to try next
 

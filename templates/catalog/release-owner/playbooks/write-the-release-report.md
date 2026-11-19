@@ -38,7 +38,7 @@ Note what each pull request body says a release needs: data changes, settings, f
 
 Then look across the batch for the same files or screens changed twice, one change undoing another, an order one
 needs (a back end before the screen that calls it), and a data change that locks a large table or cannot be undone
-(`skills/find-hidden-breaking-changes/SKILL.md`, `skills/judge-whether-a-release-can-roll-back/SKILL.md`). Write
+(`.claude/skills/find-hidden-breaking-changes/SKILL.md`, `.claude/skills/ship-a-release/SKILL.md` step 3). Write
 "None found" only after checking.
 
 ## 3. Write the page
@@ -47,7 +47,7 @@ Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/release.html
 
 1. **Changelog.** Written for customers, good enough to publish as the company's changelog as it is. One entry per
    change people will notice: its kind (New, Improved, Fixed), a short plain headline, one or two sentences on what
-   they can now do or what no longer goes wrong (`skills/write-release-notes-for-users/SKILL.md`), and the after
+   they can now do or what no longer goes wrong (`.claude/skills/ship-a-release/SKILL.md`, `references/release-notes.md`), and the after
    picture from its QA page. The change people will like most comes first. No task or pull request numbers, no
    internal names, no jargon. Changes nobody will notice go in one closing line: "Plus 3 fixes behind the scenes."
 2. **Why we're confident.** Short: each task's QA page and its approval, what was checked live, anything unusual.

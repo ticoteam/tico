@@ -1,6 +1,8 @@
 ---
 name: check-a-repeat-before-you-escalate
 description: Decide whether a new ticket repeats a known issue, a known question or an open task, so each problem gets one count and one owner instead of a new escalation each time.
+metadata:
+  function: customers
 ---
 # Check a repeat before you escalate
 

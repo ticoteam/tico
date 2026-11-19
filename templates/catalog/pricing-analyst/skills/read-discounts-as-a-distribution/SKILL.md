@@ -1,6 +1,8 @@
 ---
 name: read-discounts-as-a-distribution
 description: Report discounts as a distribution (share discounted, median among discounted deals, spread, share over the written cap) with a noise check against the last period. Name outlier deals, never salespeople.
+metadata:
+  function: growth
 ---
 # Read discounts as a distribution
 

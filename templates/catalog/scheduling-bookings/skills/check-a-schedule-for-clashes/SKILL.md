@@ -1,6 +1,8 @@
 ---
 name: check-a-schedule-for-clashes
 description: Check a week of bookings for double bookings, breached opening hours, missing buffers and time-zone errors, and say which open slots the rules actually allow, before any day is called clear.
+metadata:
+  function: operations
 ---
 # Check a schedule for clashes
 

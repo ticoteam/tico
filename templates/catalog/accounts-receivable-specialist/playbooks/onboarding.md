@@ -23,7 +23,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 1. Where do I get the list of open invoices? Can you attach the current one?
 2. What are your usual payment terms, and what may a reminder say about them?
-3. How firm should each step be: before due, 1 to 7 days late, 15, 30, 45 and beyond?
+3. How firm should each step be: the heads-up before due, 1, 7 and 30 days late, and the 60 day final notice?
 4. Which customers or invoices must I never chase, and above what amount does a human write instead?
 5. Who sends reminders and from which address, who gets the weekly pack and when? Can you paste two reminders you were happy with?
 

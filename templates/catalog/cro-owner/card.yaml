@@ -70,3 +70,6 @@ shared_files:
   - playbooks/build-a-bet.md
   - playbooks/run-and-measure.md
   - playbooks/fix-a-slip.md
+  - .claude/skills/set-and-test-prices
+  - .claude/skills/run-lifecycle-and-paid
+  - .claude/skills/write-marketing-copy

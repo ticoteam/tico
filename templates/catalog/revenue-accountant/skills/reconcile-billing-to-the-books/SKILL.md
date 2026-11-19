@@ -1,6 +1,8 @@
 ---
 name: "reconcile-billing-to-the-books"
 description: "Match the month's billing export (invoices, credit notes, refunds, payments) to the ledger's revenue and receivable postings at invoice level, and sort each difference by cause: missing, posted twice, wrong period or wrong amount."
+metadata:
+  function: finance
 ---
 # Reconcile billing to the books
 

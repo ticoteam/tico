@@ -1,6 +1,8 @@
 ---
 name: build-a-letter-from-records
 description: Prepare an employment letter or verification in which every fact comes from a named record, the letter carries only what the type allows, and a human signs and sends it.
+metadata:
+  function: people
 ---
 # Build a letter from records
 

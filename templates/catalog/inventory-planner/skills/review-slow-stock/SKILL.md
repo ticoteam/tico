@@ -1,6 +1,8 @@
 ---
 name: review-slow-stock
 description: Find overstocked and slow-moving items from the stock and sales exports, show each one's months of cover and the cash tied up, and set out options for the owner to choose from, without changing an order, a price or an item record.
+metadata:
+  function: operations
 ---
 # Review slow stock
 

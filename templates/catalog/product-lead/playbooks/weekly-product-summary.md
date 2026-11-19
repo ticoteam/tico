@@ -6,7 +6,7 @@ changed in any tool.
 
 Inputs: `knowledge/roadmap.md`, `knowledge/decision-log.md`, `knowledge/team.md`, `tico goal list --all`, the product bots' newest reports and last week's summary.
 
-Done when: the summary is in the shape of `knowledge/examples/product-summary.md`, every roadmap item has a status with its evidence and date, at most three decisions are framed as in `skills/frame-a-decision-for-the-owner/SKILL.md`, and the task is closed with the headline.
+Done when: the summary is in the shape of `knowledge/examples/product-summary.md`, every roadmap item has a status with its evidence and date, at most three decisions are framed as in `.claude/skills/frame-a-decision-for-the-owner/SKILL.md`, and the task is closed with the headline.
 
 ---
 
@@ -22,7 +22,7 @@ If last week proposed a decision, check whether it was made; carry it forward or
 
 For every item in `knowledge/roadmap.md`: read its source (the doc, the milestone, the linked issues,
 read only) and the owner's latest update. Mark it on track, at risk (a dependency open, a spec missing,
-more than a week behind) or slipped (target passed). One line each, with the evidence and its date. Follow `skills/read-the-roadmap-status/SKILL.md`.
+more than a week behind) or slipped (target passed). One line each, with the evidence and its date. Follow `.claude/skills/read-the-roadmap-status/SKILL.md`.
 
 ## 3. Read what the team produced
 
@@ -39,7 +39,7 @@ their scores and the one thing that would raise confidence most.
 ## 5. Decide what needs the owner
 
 At most three decisions, each: the question, the options, the evidence, your recommendation and what
-happens if nobody decides this week, framed as in `skills/frame-a-decision-for-the-owner/SKILL.md`. Add routing proposals (one line each) and, if the pattern in
+happens if nobody decides this week, framed as in `.claude/skills/frame-a-decision-for-the-owner/SKILL.md`. Add routing proposals (one line each) and, if the pattern in
 `playbooks/propose-a-hire.md` holds, one hiring proposal.
 
 ## 6. Write and hand over

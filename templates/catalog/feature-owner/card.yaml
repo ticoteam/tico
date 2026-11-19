@@ -74,3 +74,16 @@ recommend_when: [sells_software, uses_tickets, uses_meetings, uses_github]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/quick-perf-check
+  - .claude/skills/answer-each-review-comment
+  - .claude/skills/get-the-checks-green-at-the-head
+  - .claude/skills/debug-and-handle-incidents
+  - .claude/skills/plan-before-coding
+  - .claude/skills/qa-a-change
+  - .claude/skills/review-code
+  - .claude/skills/ship-a-release
+  - .claude/skills/test-first
+  - .claude/skills/turn-corrections-into-gates
+  - .claude/skills/brainstorm-a-feature
+  - .claude/skills/decide-what-not-to-build
+  - .claude/skills/learn-from-customers
+  - .claude/skills/write-the-spec

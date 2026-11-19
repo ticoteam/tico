@@ -1,6 +1,8 @@
 ---
 name: plan-a-test-before-it-starts
 description: Decide whether a page or form test is worth running, size it from the events the page can produce, and write the stop rules before launch so the result cannot be argued into a win.
+metadata:
+  function: marketing
 ---
 # Plan a test before it starts
 

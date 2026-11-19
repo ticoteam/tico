@@ -1,6 +1,8 @@
 ---
 name: build-three-real-slots
 description: Find three interview times that every panel member can keep, inside the interviewers' rules and the candidate's time zone, and say which calendar each one was checked against.
+metadata:
+  function: people
 ---
 # Build three real slots
 

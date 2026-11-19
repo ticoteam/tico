@@ -1,6 +1,8 @@
 ---
 name: hand-off-feedback-evidence
 description: Send a theme, a bug or a request to the team that acts on it, with the count, the window, the quotes, the exclusions and what is unknown, so the receiver can decide without re-reading the sources.
+metadata:
+  function: product
 ---
 # Hand off feedback evidence
 

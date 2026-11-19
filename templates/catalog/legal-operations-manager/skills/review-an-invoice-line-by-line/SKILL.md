@@ -1,6 +1,8 @@
 ---
 name: review-an-invoice-line-by-line
 description: Read every time entry and expense on an outside counsel invoice against the engagement letter and the billing rules, check units, blocks, scope, admin work, duplicates and arithmetic, and list each line to question with the rule it breaks and the amount in question.
+metadata:
+  function: legal
 ---
 # Review an invoice line by line
 

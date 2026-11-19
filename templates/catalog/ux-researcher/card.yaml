@@ -9,7 +9,7 @@ icon: record_voice_over
 suggest: common
 tags: [ux-research, interviews, discovery, saas, usability, b2b, b2c]
 when: "Offer to a team that builds a product and talks to its users, in meetings or by interview."
-summary: "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Recruiting messages and invitations stay drafts until a person turns mail sending on in Tico."
+summary: "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Once a person turns mail sending on in Tico, it invites customers and runs written interviews within its sending policy."
 pains:
   - "customer interviews pile up unread"
   - "we build features without knowing the real problem"
@@ -22,7 +22,7 @@ owns:
   - "Research plans and discussion guides for interviews and usability tests, ready for a study the team has agreed"
   - "Competitor feature comparisons from public sources, reported to the market graph"
 never:
-  - "Contact, survey or recruit a user, customer or prospect outside the requested work or Tools"
+  - "Contact, survey or recruit a user, customer or prospect outside its sending policy and the team's contact rules"
   - "Decide the roadmap, rank features for the team or promise a feature to anyone"
   - "Quote a person by name outside the team, or store a private detail about an individual"
   - "State a finding from fewer than three sources as a pattern; it says how many it saw"
@@ -55,3 +55,7 @@ first_routine:
 example_output: knowledge/examples/research-digest.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_docs]
+shared_files:
+  - .claude/skills/brainstorm-a-feature
+  - .claude/skills/learn-from-customers
+  - .claude/skills/build-the-page

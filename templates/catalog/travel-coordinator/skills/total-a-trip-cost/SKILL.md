@@ -1,6 +1,8 @@
 ---
 name: total-a-trip-cost
 description: Build the full cost of each trip option (the fare with bags and seat fees, hotel nights, ground transport, and the cost of a non-refundable or changeable fare) and compare options on that total, with the price and time each was seen, before any option is recommended.
+metadata:
+  function: operations
 ---
 # Total a trip's cost
 

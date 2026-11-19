@@ -1,6 +1,8 @@
 ---
 name: set-a-pay-range-for-a-job-post
 description: Give the pay range for a job post from the band for its role and level, check the rules that apply to where the job can be done, and write the range with its unit, currency and what sits outside it.
+metadata:
+  function: people
 ---
 # Set a pay range for a job post
 

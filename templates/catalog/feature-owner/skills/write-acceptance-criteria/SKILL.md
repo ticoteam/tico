@@ -1,6 +1,8 @@
 ---
 name: write-acceptance-criteria
 description: Write acceptance criteria that an engineer and QA can check, one user-visible behaviour each, with the edge cases the feature touches and a tag for when each can be checked.
+metadata:
+  function: product
 ---
 # Write acceptance criteria
 

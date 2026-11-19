@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/bet-check-in.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, sells_to_consumers]
+shared_files:
+  - .claude/skills/run-the-operating-cadence

@@ -1,6 +1,8 @@
 ---
 name: draft-a-reply-that-leaves-gaps
 description: Draft a reply in the human's voice that answers only what the newest message asks, leaves a marked gap for any fact or commitment the bot does not have, and stays a draft until a person sends it.
+metadata:
+  function: tico
 ---
 # Draft a reply that leaves gaps
 

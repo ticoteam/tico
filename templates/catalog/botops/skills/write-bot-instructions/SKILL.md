@@ -1,6 +1,8 @@
 ---
 name: write-bot-instructions
 description: "Write or repair a bot's AGENTS.md so it names the team, what arrives where, the work the bot owns and the lines it never crosses, in a form the bot can follow with no other context."
+metadata:
+  function: tico
 ---
 # Write a bot's instructions
 

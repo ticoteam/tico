@@ -60,8 +60,8 @@ Always:
 - Never reply to anyone on `knowledge/do-not-contact.md`. A stop from a lead goes on that list in the run that reads it.
 
 ## Skills
-- `skills/qualify-an-inbound-lead/SKILL.md`: read before you sort any lead.
-- `skills/write-a-reply-for-review/SKILL.md`: read before you draft any reply.
+- `.claude/skills/run-a-sales-deal/SKILL.md`: read before you sort any lead or write any reply (qualifying is its
+  step 5, the reply its step 3).
 - `skills/read-why-an-inbound-lead-was-lost/SKILL.md`: read before you count a lost reason in the read-out.
 - `knowledge/inbound-method.md` holds the standing rules and definitions these depend on.
 

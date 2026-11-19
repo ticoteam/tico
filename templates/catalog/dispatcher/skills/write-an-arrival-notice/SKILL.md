@@ -1,6 +1,8 @@
 ---
 name: write-an-arrival-notice
 description: Write a customer's arrival notice from one plan line (day, window, technician's first name, what to prepare) and a reschedule notice when the window moves, each under 80 words, ready for a person to send.
+metadata:
+  function: operations
 ---
 # Write an arrival notice
 

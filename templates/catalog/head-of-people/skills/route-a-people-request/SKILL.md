@@ -1,6 +1,8 @@
 ---
 name: route-a-people-request
 description: Route one people request to the owner who holds that work, or to the named human when no bot holds it, with one line of reason and no decision made for anyone.
+metadata:
+  function: people
 ---
 # Route a people request
 

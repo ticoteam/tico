@@ -1,6 +1,8 @@
 ---
 name: "confirm-a-competitor-move"
 description: "Confirm a competitor move before a note calls it real: load the company's own page again, name the change in one line, rule out tests and regional pricing, and require a pattern of independent sources for complaints."
+metadata:
+  function: marketing
 ---
 # Confirm a competitor move
 

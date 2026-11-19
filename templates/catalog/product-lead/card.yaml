@@ -59,3 +59,13 @@ first_routine:
 example_output: knowledge/examples/product-summary.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_github, uses_docs]
+shared_files:
+  - .claude/skills/ask-with-recommended-answers
+  - .claude/skills/read-the-roadmap-status
+  - .claude/skills/frame-a-decision-for-the-owner
+  - .claude/skills/set-and-test-prices
+  - .claude/skills/brainstorm-a-feature
+  - .claude/skills/decide-what-not-to-build
+  - .claude/skills/learn-from-customers
+  - .claude/skills/write-the-spec
+  - .claude/skills/build-the-page

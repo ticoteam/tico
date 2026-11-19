@@ -1,6 +1,8 @@
 ---
 name: read-an-area-retention-cohort
 description: Read an area's activation and retention from a cohort export without calling an immature cohort a result, naming its window, its size and its definition, and showing counts when a rate is too small to trust.
+metadata:
+  function: product
 ---
 # Read an area's retention cohort
 

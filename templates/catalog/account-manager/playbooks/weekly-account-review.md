@@ -49,7 +49,7 @@ Compare usage with the contract: seats, locations, modules, usage tiers. Read re
     tico meeting search "<account>"
     tico meeting read <id>
 
-Score each candidate with `skills/score-an-expansion-signal/SKILL.md`. Each opportunity is one line: the account, the evidence
+Rate each candidate with the expansion step of `.claude/skills/get-customers-to-their-outcome/SKILL.md`. Each opportunity is one line: the account, the evidence
 with its number and date, and the option to propose. No evidence, no opportunity.
 
 ## 5. Prepare the packs due

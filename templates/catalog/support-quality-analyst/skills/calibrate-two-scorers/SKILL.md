@@ -1,6 +1,8 @@
 ---
 name: calibrate-two-scorers
 description: Calibrate scoring by having two scorers, or one scorer on two passes, mark the same few replies without seeing each other's marks, then compare criterion by criterion and write each disagreement and the rule that settles it.
+metadata:
+  function: customers
 ---
 # Calibrate two scorers
 

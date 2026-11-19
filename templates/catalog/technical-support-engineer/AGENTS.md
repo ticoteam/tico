@@ -56,7 +56,7 @@ Always:
 
 ## Skills
 - `skills/reproduce-from-a-known-state/SKILL.md`: read before you say a problem could not be reproduced, or that it is one.
-- `skills/write-an-engineering-bug-report/SKILL.md`: read before you write or file a bug report.
+- `.claude/skills/write-an-engineering-bug-report/SKILL.md`: read before you write or file a bug report.
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run

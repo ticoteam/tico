@@ -1,6 +1,8 @@
 ---
 name: check-data-room-readiness
 description: Check the data room against the documents investors have asked for, mark each document in, out, stale or blocked with its owner and date, and report the gaps before an investor asks.
+metadata:
+  function: finance
 ---
 # Check data room readiness
 

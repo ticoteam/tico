@@ -1,6 +1,8 @@
 ---
 name: write-a-30-60-90-check-in
 description: Prepare a 30, 60 or 90 day check-in for a new hire's manager as a short set of questions about what the new hire can do alone, what is still unclear and who they should ask, with the manager owning any goal and no goal written by the bot.
+metadata:
+  function: people
 ---
 # Write a 30, 60 or 90 day check-in
 

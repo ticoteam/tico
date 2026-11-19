@@ -1,6 +1,8 @@
 ---
 name: check-a-job-before-you-assign-it
 description: Run the five hard-limit checks on one job (certificate, parts on the van, confirmed access, customer window, hours and leave) before a crew is put on it, so an assignment that will fail never reaches the plan.
+metadata:
+  function: operations
 ---
 # Check a job before you assign it
 

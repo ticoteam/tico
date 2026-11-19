@@ -1,6 +1,8 @@
 ---
 name: ask-how-they-heard
 description: Get a self-reported first source ("How did you hear about us?") for new customers, by asking whoever closes them, so word of mouth, podcasts, communities and AI answers show up where tracking cannot see them. Use when Growth's Unknown or direct share is large, when a channel's tracked numbers and the team's gut disagree, or in the growth interview.
+metadata:
+  function: growth
 ---
 # Ask how they heard
 

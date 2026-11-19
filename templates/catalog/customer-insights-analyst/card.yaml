@@ -61,3 +61,6 @@ example_output: knowledge/examples/weekly-feedback-report.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, sells_to_consumers, uses_email, has_support_inbox]
 when: "A team whose customers talk in many places and whose product team hears little of it."
+shared_files:
+  - .claude/skills/learn-from-customers
+  - .claude/skills/build-the-page

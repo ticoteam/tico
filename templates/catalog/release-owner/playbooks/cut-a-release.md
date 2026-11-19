@@ -34,7 +34,7 @@ no-go with its reason. A no-go stops here: say what blocks it and who clears eac
 ## 4. Notes and version
 
 Follow `playbooks/release-notes-draft.md` over the range from the last release that reached users to the candidate commit.
-Use `knowledge/versioning.md` for the numbering and suggest the version with its reason, from `skills/find-hidden-breaking-changes/SKILL.md`
+Use `knowledge/versioning.md` for the numbering and suggest the version with its reason, from `.claude/skills/find-hidden-breaking-changes/SKILL.md`
 for any change that might be breaking. The notes must cover every task you could read; a task with no merged pull request in the
 range is listed under "Could not classify" with the question.
 

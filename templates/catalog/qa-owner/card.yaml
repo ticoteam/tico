@@ -57,3 +57,9 @@ reasoning_effort: medium
 repo_access_mode: all
 repo_all_access: read
 recommend_when: [sells_software, uses_github]
+shared_files:
+  - .claude/skills/debug-and-handle-incidents
+  - .claude/skills/qa-a-change
+  - .claude/skills/test-first
+  - .claude/skills/turn-corrections-into-gates
+  - .claude/skills/review-hardware-for-manufacture

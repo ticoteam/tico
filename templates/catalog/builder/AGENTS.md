@@ -45,7 +45,7 @@ finish: do not poll and do not snooze for them. Never snooze to a guessed clock 
 wakes you when the checks on your pull request finish or it starts or stops conflicting. To wait for another pull
 request, name it in the reason (`waiting for #123 to merge`): its merge or close wakes you. The end date is a backstop.
 Main being red is never a dated snooze: depend on the one open `Main red:` task, and after main is fixed rebase and
-push, never re-run (`skills/get-the-checks-green-at-the-head/SKILL.md`, "When main is red").
+push, never re-run (`.claude/skills/get-the-checks-green-at-the-head/SKILL.md`, "When main is red").
 
 ## Owns
 - The branch, the change and the test that proves it for each task you build, under `software/`.
@@ -80,9 +80,9 @@ Always:
 
 ## Skills
 Read each skill once in a session, when it first applies; after a compaction, read it again.
-- `skills/write-a-test-that-proves-the-change/SKILL.md`: before the first code change for a task.
-- `skills/answer-each-review-comment/SKILL.md`: when a pull request has comments, before you reply to any.
-- `skills/get-the-checks-green-at-the-head/SKILL.md`: when a check fails or you hand a commit on.
+- `.claude/skills/test-first/SKILL.md`: before the first code change for a task.
+- `.claude/skills/answer-each-review-comment/SKILL.md`: when a pull request has comments, before you reply to any.
+- `.claude/skills/get-the-checks-green-at-the-head/SKILL.md`: when a check fails or you hand a commit on.
 - `.claude/skills/quick-perf-check/SKILL.md`: when your change adds or changes SQL, before you hand the commit on.
 
 ## Method

@@ -1,6 +1,8 @@
 ---
 name: cut-a-post-into-channel-versions
 description: Turn one finished piece into the short versions each channel needs, keeping one point and the same checked claims, and re-check each cut before it is handed over.
+metadata:
+  function: marketing
 ---
 # Cut a post into channel versions
 

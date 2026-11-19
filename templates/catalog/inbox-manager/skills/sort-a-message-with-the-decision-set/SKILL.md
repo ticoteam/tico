@@ -1,6 +1,8 @@
 ---
 name: sort-a-message-with-the-decision-set
 description: Sort each untriaged message by its decision word from questions/mail-triage.json (needs-owner, reply, route, archive or read), let the always-reaches list and stranger checks override the word, and give each message one reason that points at it.
+metadata:
+  function: tico
 ---
 # Sort a message with the decision set
 

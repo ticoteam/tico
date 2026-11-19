@@ -1,6 +1,8 @@
 ---
 name: manage-tools-and-keys
 description: "Add a tool (API, website login, MCP server), get its key stored without seeing it, propose who gets Read or Read and write, and fix a key that is rejected, duplicated or never reaches a run. Read before any tool or key work."
+metadata:
+  function: tico
 ---
 # Manage tools and keys
 

@@ -1,6 +1,8 @@
 ---
 name: enter-a-bill-from-a-file
 description: "Enter a bill from an emailed file or an upload, or approve an existing draft by its id, only after a duplicate check and a tie-out of vendor, number, dates, terms and total; otherwise leave the draft and ask one person."
+metadata:
+  function: finance
 ---
 # Enter a bill from a file
 

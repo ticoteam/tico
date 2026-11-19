@@ -1,6 +1,8 @@
 ---
 name: run-a-name-clash-check
 description: Run a first-pass clash search for a proposed product, feature, campaign or company name across the trademark registers, app stores, company registries and the web, and list what was found without calling the name clear.
+metadata:
+  function: marketing
 ---
 # Run a name clash check
 

@@ -8,7 +8,7 @@ pack: basics
 icon: person_add
 suggest: default
 tags: [hiring, smb, recruiting, job-posts, screening, remote]
-summary: "Fills the team's open roles: writes the job post, screens each application against the hiring manager's criteria, keeps every candidate answered, and runs the weekly pipeline. The hiring manager decides, and posts and messages go out only when a person has turned mail sending on in Tico."
+summary: "Fills the team's open roles: writes the job post, screens each application against the hiring manager's criteria, keeps every candidate answered, and runs the weekly pipeline. Hiring is bot first: it starts on a role only once a person has OK'd a search for work a bot cannot do. The hiring manager decides, and posts and messages go out only when a person has turned mail sending on in Tico."
 when: "A team hiring a few roles a quarter with no recruiter, or one recruiter who wants the screening and follow-through covered."
 pains:
   - "writing job posts takes forever"
@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/hiring-pipeline.md
 reasoning_effort: medium
 recommend_when: [uses_email, uses_docs, small_team]
+shared_files:
+  - .claude/skills/fill-a-role

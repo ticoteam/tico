@@ -1,6 +1,8 @@
 ---
 name: check-a-return-against-the-order
 description: Check a return request against the written policy and the order record, in a fixed order of questions, and decide allowed, not allowed or a human's call, with each fact cited.
+metadata:
+  function: customers
 ---
 # Check a return against the order
 

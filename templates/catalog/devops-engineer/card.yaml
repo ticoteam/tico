@@ -50,3 +50,7 @@ first_routine:
 example_output: knowledge/examples/ci-health.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_github]
+shared_files:
+  - .claude/skills/debug-and-handle-incidents
+  - .claude/skills/ship-a-release
+  - .claude/skills/turn-corrections-into-gates

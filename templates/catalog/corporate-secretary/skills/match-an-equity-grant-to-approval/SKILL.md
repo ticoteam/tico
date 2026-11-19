@@ -1,6 +1,8 @@
 ---
 name: match-an-equity-grant-to-approval
 description: Match each grant, issuance, exercise or transfer from the Equity Manager's change log, or the cap table export, to the minute or consent that approved it, checking holder, number, class, price and date, and list any gap without editing the cap table.
+metadata:
+  function: legal
 ---
 # Match an equity grant to approval
 

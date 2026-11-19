@@ -1,6 +1,8 @@
 ---
 name: read-a-test-without-peeking
 description: Read an A/B test once, at its planned sample and end, with a sample ratio check, a confidence interval and a written call of won, lost or inconclusive. Never state a winner from fewer people than planned.
+metadata:
+  function: marketing
 ---
 # Read a test without peeking
 

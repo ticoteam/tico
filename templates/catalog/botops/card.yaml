@@ -20,3 +20,5 @@ never:
   - Do for a human anything they may not do themselves
 reasoning_effort: high
 recommend_when: [always]
+shared_files:
+  - .claude/skills/fill-a-role

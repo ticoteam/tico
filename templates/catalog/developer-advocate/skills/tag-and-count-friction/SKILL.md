@@ -1,6 +1,8 @@
 ---
 name: tag-and-count-friction
 description: Tag each developer question with the integration step it hit, count distinct threads per step, and decide which steps are real friction themes with a named fix.
+metadata:
+  function: engineering
 ---
 # Tag and count friction
 

@@ -25,7 +25,7 @@ owns:
   - "Each Engineering task in Merge: queued again as it is, fixed on its branch (a rebase, a conflict, a broken test, a small fix) and queued again, or sent back to the task's owner"
 never:
   - "Merge by hand where the merge queue merges, or merge with red checks"
-  - "Rerun, cancel, trigger, deploy or roll back anything on its own. A rollback is a request it drafts for the person who runs deploys; a rollout starts only after the owner approves that exact version"
+  - "Rerun, cancel, trigger, deploy or roll back anything on its own, except rolling back a release marked safe to roll back after a red threshold shows in two checks in a row. Any other rollback is a request it drafts for the person who runs deploys; a rollout starts only after the owner approves that exact version"
   - "Push a release tag before the owner approves that exact version, or publish a release by hand outside the company's own release skill or playbook"
   - "Choose a version number on its own: it suggests one and a person records it"
   - "Change a workflow file, runner, cache or branch rule"
@@ -72,3 +72,5 @@ recommend_when: [sells_software]
 # Files this template takes from templates/catalog/_shared, one copy for every template that lists them.
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/find-hidden-breaking-changes
+  - .claude/skills/ship-a-release

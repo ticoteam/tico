@@ -1,6 +1,8 @@
 ---
 name: write-a-three-touch-outreach
 description: Write a three-message outreach sequence for one person, each message built on a specific piece of their work, with the range where allowed, a single easy question, and a fixed stop rule.
+metadata:
+  function: people
 ---
 # Write a three-touch outreach
 

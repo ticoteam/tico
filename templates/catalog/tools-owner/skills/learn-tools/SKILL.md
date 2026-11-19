@@ -1,6 +1,8 @@
 ---
 name: learn-tools
 description: "Learn how this company's tools and vendor logins work: save what a person explains or corrects to knowledge/company/<vendor>.md (and general vendor facts to knowledge/vendors/learned/), and ask one short question when a vendor has no guide or a guide proved wrong. Never records a secret."
+metadata:
+  function: tico
 ---
 # Learn tools
 

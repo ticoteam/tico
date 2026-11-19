@@ -54,3 +54,7 @@ first_routine:
 example_output: knowledge/examples/invoice-run.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, uses_crm, uses_docs]
+shared_files:
+  - .claude/skills/answer-a-customer
+  - .claude/skills/collect-receivables
+  - .claude/skills/defend-a-consumer-claim

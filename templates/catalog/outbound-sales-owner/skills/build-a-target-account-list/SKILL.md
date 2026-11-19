@@ -1,6 +1,8 @@
 ---
 name: build-a-target-account-list
 description: Build a target account list from the ideal customer profile, ranking accounts by fit and dated signal, choosing a contact by role, and checking each contact against the do-not-contact, customer and open-deal lists before it can enter a sequence.
+metadata:
+  function: sales
 ---
 # Build a target account list
 

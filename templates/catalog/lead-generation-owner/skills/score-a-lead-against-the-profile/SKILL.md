@@ -1,6 +1,8 @@
 ---
 name: score-a-lead-against-the-profile
 description: Decide whether one lead counts as qualified, against the written qualified-lead rule, and record the first step that fails when it does not. Used for weekly counts, for every hand-off and for company targets.
+metadata:
+  function: sales
 ---
 # Score a lead against the profile
 

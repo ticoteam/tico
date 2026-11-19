@@ -1,6 +1,8 @@
 ---
 name: check-partner-terms-before-resale
 description: Read the terms of each layer before a partner resells, routes or automates access to a product, including any intermediary, and record what each layer permits.
+metadata:
+  function: sales
 ---
 # Check partner terms before resale
 

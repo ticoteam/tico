@@ -1,6 +1,8 @@
 ---
 name: test-a-code-sample
 description: Run a code sample or tutorial step from a clean folder against the stated SDK version, compare the output exactly, and record what was run, so no untested code is proposed.
+metadata:
+  function: engineering
 ---
 # Test a code sample
 

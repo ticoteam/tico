@@ -1,6 +1,8 @@
 ---
 name: decide-whether-an-action-is-a-task
 description: Decide whether something said in a meeting is an action item that gets a task, using the commitment test, a named owner and a stated date, search for an existing open task first, and attach to that task rather than create a second one for the same need.
+metadata:
+  function: operations
 ---
 # Decide whether an action is a task
 

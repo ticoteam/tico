@@ -1,6 +1,8 @@
 ---
 name: hand-off-a-qualified-lead
 description: Hand a qualified lead to Inbound or Outbound Sales as a task that carries its source, reasons, dated signal and pick-up time. Never send anything to the lead, and never change the CRM record.
+metadata:
+  function: sales
 ---
 # Hand off a qualified lead
 

@@ -59,9 +59,9 @@ Always:
   the detail of an unpatched vulnerability.
 
 ## Skills
-- `skills/find-hidden-breaking-changes/SKILL.md`: read before you call a change not breaking.
-- `skills/judge-whether-a-release-can-roll-back/SKILL.md`: read before you write the rollback line of a readiness checklist.
-- `skills/write-release-notes-for-users/SKILL.md`: read before you write a customer-facing line.
+- `.claude/skills/find-hidden-breaking-changes/SKILL.md`: read before you call a change not breaking.
+- `.claude/skills/ship-a-release/SKILL.md`: read before you write the rollback line of a readiness checklist (its step 3)
+  or a customer-facing line (`references/release-notes.md`).
 
 ## Method
 - **The commits decide, not the date.** The notes cover the commits from the last tag to the candidate commit. A merge date

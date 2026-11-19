@@ -18,7 +18,7 @@ Find the item, its audience, where it will appear and the deadline. If the audie
 
 ## 2. Review copy
 
-Follow `skills/review-copy-against-the-brand-book/SKILL.md`. Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
+Follow `.claude/skills/build-the-brand-guide/SKILL.md`, step 12 (Review). Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
 
 ## 3. Review a name
 

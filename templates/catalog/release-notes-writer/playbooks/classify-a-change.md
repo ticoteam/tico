@@ -25,7 +25,7 @@ which one:
 
 ## 3. Is it breaking?
 
-Read `skills/find-hidden-breaking-changes/SKILL.md` before you call a change not breaking.
+Read `.claude/skills/find-hidden-breaking-changes/SKILL.md` before you call a change not breaking.
 
 Breaking means existing users must change something: a removed or renamed option, a changed default, a
 changed API response, a required migration. Mark it and write what to do instead. If you suspect it but the
@@ -33,7 +33,7 @@ pull request does not say, put it in "Could not classify" with the question.
 
 ## 4. Write the line
 
-Read `skills/write-release-notes-for-users/SKILL.md` for the wording.
+Read `.claude/skills/ship-a-release/SKILL.md` (`references/release-notes.md`) for the wording.
 
 One line, present tense, from the user's side: "You can now export a report as a CSV." Not "Add CSV export
 endpoint". No internal names, no ticket numbers as the message, no customer names. End with the pull request

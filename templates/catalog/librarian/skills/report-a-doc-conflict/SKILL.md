@@ -1,6 +1,8 @@
 ---
 name: report-a-doc-conflict
 description: "When two sources give different values for the same fact, use the replacement if one says it replaces the other; otherwise report both with their dates and owners without picking one, record the conflict once in the gap list, and open one task for a person if it matters."
+metadata:
+  function: tico
 ---
 # Report a doc conflict
 

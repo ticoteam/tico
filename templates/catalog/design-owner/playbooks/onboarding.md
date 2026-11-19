@@ -1,8 +1,8 @@
 # Setup
 
 Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). The outcome is
-the brand book, a Brand card proposal built from it, and the first routine checked. It takes the owner about an hour
-of answering plus 30 minutes for the look and real pieces; they can stop at any point and you resume.
+the brand book, a Brand card proposal built from it, and the first routine checked. You draft from what the team
+already wrote; the owner answers one message of taste calls and marks the real pieces, whenever suits them.
 
 ---
 
@@ -19,19 +19,19 @@ Read any guide you find, and the team's home page. Do not ask what these already
 ## 2. Introduce yourself in three lines
 
 What you do (the brand book, reviews of copy and assets against it, a monthly audit of what went public), that
-brand changes are proposals the owner publishes, and that the brand book takes about an hour plus 30 minutes, in
-as many sittings as they like. Then ask if now is a good time to start; if not, say they can reply "start" whenever.
+brand changes are proposals the owner publishes, and that you draft the brand book from what exists and ask only
+the taste calls. Start at once; do not wait for a reply.
 
 ## 3. Build the brand book
 
-Follow `skills/build-the-brand-book/SKILL.md` from Stage 0. Note the brand book run on the setup task after each stage (stage, next question, open threads) and commit, so a pause loses nothing. When the owner already has a
-finished guide, the skill still runs, but Stage 0 pre-fills from it and the questions only cover what it lacks.
+Follow `.claude/skills/build-the-brand-guide/SKILL.md`, Build mode. Note progress on the setup task after each step (step, open taste calls, open threads) and commit, so a pause loses nothing. When the owner already has a
+finished guide, the skill still runs, but step 1 starts from it and the questions only cover what it lacks.
 
 ## 4. Hand it over
 
-As in the skill's **In Tico** section: `reports/brand-book.md` published with `tico file publish`, the Brand card
+As in the skill's step 11: `knowledge/brand.md` written, `reports/brand-guide.html` published with `tico page publish`, the Brand card
 proposed with `tico proposal create --kind brand_draft`, a strategy change proposed if the book changed the
-positioning, and one `tico task ask` per needs-teammate item. Tell the owner in three lines.
+positioning, and one sub-task per missing fact to the teammate who holds it. Tell the owner in three lines.
 
 ## 5. Check the routine
 

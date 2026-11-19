@@ -21,7 +21,7 @@ has what it needs: your done.
 
 ## 2. Decide each one
 
-Follow `skills/answer-each-review-comment/SKILL.md`. For each finding, act on it or reply on the pull request with one
+Follow `.claude/skills/answer-each-review-comment/SKILL.md`. For each finding, act on it or reply on the pull request with one
 line of reason. A blocking finding (a bug, a broken rule, or cost or data to undo) is never left without an answer.
 
 ## 3. Fix
@@ -33,7 +33,7 @@ Fix on the same branch. Write the test that would have caught the problem first,
 
 The pull request is ready, so every push runs CI. Make all the fixes first, run the checks on your computer at the new
 head as in `playbooks/build-a-dev-task.md` step 5, then push once. Record the head commit. A check that did not run is
-"not checked". A check that fails because main is red: `skills/get-the-checks-green-at-the-head/SKILL.md`, "When main
+"not checked". A check that fails because main is red: `.claude/skills/get-the-checks-green-at-the-head/SKILL.md`, "When main
 is red" (one `Main red:` task, your task depends on it rather than snoozed, rebase and push once main is fixed,
 never a re-run).
 

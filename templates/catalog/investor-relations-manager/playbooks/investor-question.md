@@ -15,7 +15,7 @@ thread with `tico email search <address> "<investor>"`.
 ## 2. Find the facts
 
 Answer only from the record: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list`, `tico meeting search`, and the finance inputs. Check every
-figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A fact you cannot source is a marked gap, never a guess. Check `knowledge/exclusions.md` before
+figure with `.claude/skills/write-investor-and-board-updates/SKILL.md`. A fact you cannot source is a marked gap, never a guess. Check `knowledge/exclusions.md` before
 naming anyone.
 
 ## 3. Draft
@@ -25,5 +25,5 @@ owner's voice, plain, with no spin. If the question is about a legal, tax or val
 
 ## 4. Hand over
 
-Attach the draft to the task with the facts and their sources under it, and say what you could not confirm. Send the text to its recipient with your Tools only
-when the task asks for the send and mail sending is on in Tico. Otherwise keep the draft. Then `tico task done <id> -m "..." --version N`.
+Attach the draft to the task with the facts and their sources under it, and say what you could not confirm. Send the text to its recipient only
+when mail sending is on in Tico and the owner gave an OK on this draft (Sending in `AGENTS.md`). Otherwise keep the draft. Then `tico task done <id> -m "..." --version N`.

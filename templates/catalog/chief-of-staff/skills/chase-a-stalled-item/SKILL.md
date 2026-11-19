@@ -1,6 +1,8 @@
 ---
 name: chase-a-stalled-item
 description: Find who owns the next step of a stalled goal or task, draft one short nudge, and log it, without asking the same person about the same item twice in a week.
+metadata:
+  function: operations
 ---
 # Chase a stalled item
 

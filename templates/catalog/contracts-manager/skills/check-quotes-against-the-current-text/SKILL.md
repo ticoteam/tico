@@ -1,6 +1,8 @@
 ---
 name: check-quotes-against-the-current-text
 description: Check every clause number, date and quoted phrase from a contract against the version under review (signed, or a proposed text awaiting signature) before it goes into a summary, letter, note or task, including ones copied from an earlier letter or template.
+metadata:
+  function: legal
 ---
 # Check quotes against the current text
 

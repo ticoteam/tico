@@ -1,6 +1,8 @@
 ---
 name: decide-a-beta-exit
 description: Recommend extend, graduate or end for a beta at or past its exit date, using the exit criteria written when it started and counted evidence, with the owner named as the decider.
+metadata:
+  function: product
 ---
 # Decide a beta exit
 

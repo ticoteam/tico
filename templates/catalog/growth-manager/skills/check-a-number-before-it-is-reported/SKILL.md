@@ -1,6 +1,8 @@
 ---
 name: check-a-number-before-it-is-reported
 description: Before a number or status goes into the weekly marketing page or a blocker, trace it to the dated source it was read from, check its definition and date, and mark it "no report" when it cannot be traced.
+metadata:
+  function: growth
 ---
 # Check a number before it is reported
 

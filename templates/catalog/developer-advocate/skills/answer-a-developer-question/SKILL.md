@@ -1,6 +1,8 @@
 ---
 name: "answer-a-developer-question"
 description: "Turn one public developer question into a checked reply: the fix, one line of why and one doc link, tested against the version the asker uses."
+metadata:
+  function: engineering
 ---
 # Answer a developer question
 

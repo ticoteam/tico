@@ -69,9 +69,9 @@ Proposing a new role goes to your team's Manager as a note on its task; you neve
 work, how often it came up and what it cost or risked, and send the note to `success-manager` once.
 
 ## Skills
-- `skills/score-account-health/SKILL.md`: read before you give any account a green, yellow, red or waiting status.
+- `.claude/skills/get-customers-to-their-outcome/SKILL.md`: read before you give any account a green, yellow, red or
+  waiting status, and before you draft any message to a customer.
 - `skills/read-usage-without-misreading/SKILL.md`: read before you cite a login, usage or ticket count as evidence.
-- `skills/write-a-customer-next-touch/SKILL.md`: read before you draft any message to a customer.
 
 ## Starting a run
 1. Read the task's chat with `tico task show <id>`.

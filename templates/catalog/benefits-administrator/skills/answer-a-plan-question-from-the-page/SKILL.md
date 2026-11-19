@@ -1,6 +1,8 @@
 ---
 name: answer-a-plan-question-from-the-page
 description: Answer a general question about what a benefit plan says by quoting its page, with the plan year and date, and hand a question about a named person's case to the human who owns it.
+metadata:
+  function: people
 ---
 # Answer a plan question from the page
 

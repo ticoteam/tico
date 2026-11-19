@@ -1,6 +1,8 @@
 ---
 name: cut-release-path-time
 description: Make a release pipeline faster without weakening it. Lay out one real release as a timeline (validated, published, canary, stable), find the largest segment, and cut waits before cutting work - waiting for the next event, slow planning scans, steps that no longer earn their time, hand-offs that could overlap, promotion that could run in the same step, and fail-fast where it is safe. Then re-check the reads and failure reports that the old waits used to hide, and measure the first real releases against the baseline. Use it when asked to speed up releases, shorten merge to production time, or find out why a release takes so long. Not for measuring medians for a report - use time-the-merge-to-release-path for that.
+metadata:
+  function: engineering
 ---
 
 # Cut release path time

@@ -1,6 +1,8 @@
 ---
 name: classify-a-stalled-customer
 description: Put a customer with no recent progress into one named stall state (waiting on customer, booked step, overdue on customer, stuck on us, or no owner) with its date, instead of a general stuck label.
+metadata:
+  function: customers
 ---
 # Classify a stalled customer
 

@@ -1,6 +1,8 @@
 ---
 name: report-a-call-on-a-bet
 description: Make one of three calls on a strategy bet (on track, watch or looks wrong) from dated evidence, and write it so a reader can check it. Use it at the end of every check-in, and when a task asks for a bet's status.
+metadata:
+  function: operations
 ---
 # Report a call on a bet
 

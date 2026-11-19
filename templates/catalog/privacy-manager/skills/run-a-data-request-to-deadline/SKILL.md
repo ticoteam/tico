@@ -1,6 +1,8 @@
 ---
 name: run-a-data-request-to-deadline
 description: Log a data subject request with its received date, work out its deadline from the requester's place using the rule in knowledge/privacy-practice.md, split it into one task per system, and track it to a sent reply, with any extension decided by a human.
+metadata:
+  function: legal
 ---
 # Run a data request to its deadline
 

@@ -1,6 +1,8 @@
 ---
 name: decide-whether-to-go
 description: Decide go, go small or skip for a trade show, conference, sponsorship, booth or webinar before it is booked, from one goal number, the full cost of attending and the cost per meeting the team's own past events returned.
+metadata:
+  function: marketing
 ---
 # Decide whether to go
 

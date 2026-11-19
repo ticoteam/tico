@@ -1,6 +1,8 @@
 ---
 name: score-a-brand-audit-sample
 description: Pick a sample of what went public last month, score each item pass, minor or miss against the brand book's four checks, and choose the three fixes that matter most.
+metadata:
+  function: marketing
 ---
 # Score a brand audit sample
 

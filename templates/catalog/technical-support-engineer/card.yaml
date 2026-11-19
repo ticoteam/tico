@@ -53,3 +53,7 @@ first_routine:
 example_output: knowledge/examples/tier2-report.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_tickets, uses_github, has_support_inbox]
+shared_files:
+  - .claude/skills/write-an-engineering-bug-report
+  - .claude/skills/answer-a-customer
+  - .claude/skills/debug-and-handle-incidents

@@ -102,8 +102,8 @@ stop, and their end wakes you.
 ## Skills
 - `skills/enter-a-bill-from-a-file/SKILL.md`: read before you create or approve a bill from an emailed file or upload.
 - `skills/categorize-a-feed-row/SKILL.md`: read before you categorize a bank or card row or propose a posting rule.
-- `skills/write-the-close-variance-note/SKILL.md`: read before you write the budget vs actual note for a close or report.
-- `skills/build-the-13-week-cash-forecast/SKILL.md`: read before you build or roll the cash forecast.
+- `.claude/skills/forecast-cash-and-budget/SKILL.md`: read before you build or roll the cash forecast, and before you write
+  the budget vs actual note for a close or report.
 - `skills/reconcile-a-cash-figure/SKILL.md`: read before a cash or runway figure goes to the owner as an alarm.
 
 Keep runs short. A quiet month means few runs.

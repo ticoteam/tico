@@ -1,6 +1,8 @@
 ---
 name: "review-the-books-for-unusual-entries"
 description: "Test a period's journal entries for the patterns that most often hide errors or misuse: duplicates, round amounts, after-close postings, entries from outside finance, and balances left in suspense. Use before saying a period is ready to call closed."
+metadata:
+  function: finance
 ---
 
 # Review the books for unusual entries

@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/marketing-data-check.md
 reasoning_effort: medium
 recommend_when: [uses_crm, has_pipeline, sells_to_businesses]
+shared_files:
+  - .claude/skills/run-lifecycle-and-paid

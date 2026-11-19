@@ -1,6 +1,8 @@
 ---
 name: answer-from-the-record
 description: "Answers a human's question about a task, bot, goal, meeting or person from the record, with links and the source named. Use it before saying what a bot is doing or what something is waiting for."
+metadata:
+  function: tico
 ---
 
 # Answer from the record

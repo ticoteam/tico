@@ -8,7 +8,7 @@ pack: basics
 icon: event_upcoming
 suggest: common
 tags: [hiring, interviews, scheduling, candidate-experience, remote]
-summary: "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit, and chases scorecards until the debrief can happen. Candidate messages go out when a person has turned mail sending on in Tico."
+summary: "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit, and chases scorecards until the debrief can happen. It starts only once a person has OK'd a search for a role a bot cannot do. Candidate messages go out when a person has turned mail sending on in Tico."
 when: "A team running more than a handful of interviews a week, where scheduling and feedback chasing eat the recruiter's or the manager's time."
 pains:
   - "interview scheduling is a game of email tag"
@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/interview-logistics.md
 reasoning_effort: medium
 recommend_when: [uses_email, uses_meetings]
+shared_files:
+  - .claude/skills/fill-a-role

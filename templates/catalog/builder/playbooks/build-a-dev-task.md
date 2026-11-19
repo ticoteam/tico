@@ -58,7 +58,7 @@ so push less often. Keep it a draft until step 6.
 
 ## 3. Test first
 
-Follow `skills/write-a-test-that-proves-the-change/SKILL.md`. Write the test, run it, and see it fail for the reason the
+Follow `.claude/skills/test-first/SKILL.md`. Write the test, run it, and see it fail for the reason the
 task gives. Only then change the code.
 
 ## 4. Change
@@ -92,7 +92,7 @@ Every push to a ready pull request runs CI, so batch the fixes that follow.
 ## 7. Let the stage finish
 
 There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to Review once
-they pass at the head; a failing check wakes you with its names (`skills/get-the-checks-green-at-the-head/SKILL.md`).
+they pass at the head; a failing check wakes you with its names (`.claude/skills/get-the-checks-green-at-the-head/SKILL.md`).
 When the same check fails on main too, follow that skill's "When main is red": comment `Blocks #<your task>` on the
 one open `Main red:` task (file it only when none is open), make your task depend on it rather than snooze, and once
 main is fixed rebase on it and push; never re-run the failed jobs.

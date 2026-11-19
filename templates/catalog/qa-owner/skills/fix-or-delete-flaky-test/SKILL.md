@@ -1,6 +1,8 @@
 ---
 name: fix-or-delete-flaky-test
 description: Decide, the same day, whether a flaky or low-value test is fixed at its root cause or deleted with a recorded reason, and record the decision in the flaky test register with its owner. A flaky test is never quarantined, skipped, retried or given a longer wait.
+metadata:
+  function: engineering
 ---
 # Fix or delete a flaky test
 

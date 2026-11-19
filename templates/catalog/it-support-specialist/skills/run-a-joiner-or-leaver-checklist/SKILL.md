@@ -1,6 +1,8 @@
 ---
 name: run-a-joiner-or-leaver-checklist
 description: Run the IT checklist for one person starting or leaving, one line per account and device, each marked done with the date and time it was read, waiting on a named person, or not started, with a leaver's accounts disabled by the last day.
+metadata:
+  function: operations
 ---
 # Run a joiner or leaver checklist
 

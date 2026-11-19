@@ -5,6 +5,7 @@ what `TICO_CATALOG_DIR` is for, so these tests say nothing about which bots the 
 """
 
 import functools
+import re
 import subprocess
 import tempfile
 import unittest
@@ -529,6 +530,37 @@ class Layers(unittest.TestCase):
         )
         self.assertEqual((path / ".claude/skills/check/SKILL.md").read_text(), "Check it twice.\n")
 
+    def test_a_retired_playbook_goes_and_kept_instructions_name_the_skill_that_replaced_it(self):
+        (self.template / "playbooks/write-a-spec-page.md").write_text("Write the spec page.\n")
+        path = self.make()
+        (path / "AGENTS.md").write_text((path / "AGENTS.md").read_text() + "Follow `playbooks/write-a-spec-page.md`.\n")
+        git(path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "The bot's own instructions")
+        # The release: the playbook is retired and the shared write-the-spec skill replaces it.
+        (self.template / "playbooks/write-a-spec-page.md").unlink()
+        (self.template / "AGENTS.md").write_text(AGENT + "Follow `.claude/skills/write-the-spec/SKILL.md`.\n")
+        (self.shared / ".claude/skills/write-the-spec").mkdir()
+        (self.shared / ".claude/skills/write-the-spec/SKILL.md").write_text(
+            "---\nname: write-the-spec\n---\nWrite it.\n"
+        )
+        card = self.template / "card.yaml"
+        card.write_text(
+            card.read_text().replace("[.claude/skills/page,", "[.claude/skills/page, .claude/skills/write-the-spec,")
+        )
+        done = catalog.refresh("sales", path, NAMES, directory=self.catalog)
+        self.assertEqual(
+            done,
+            {
+                **NOTHING,
+                "added": [".claude/skills/write-the-spec/SKILL.md"],
+                "removed": ["playbooks/write-a-spec-page.md"],
+                "kept": ["AGENTS.md"],
+            },
+        )
+        self.assertFalse((path / "playbooks/write-a-spec-page.md").exists())
+        self.assertIn("Follow `.claude/skills/write-the-spec/SKILL.md`.", (path / "AGENTS.md").read_text())
+        self.assertEqual(git(path, "status", "--porcelain"), "")
+        self.assertEqual(catalog.refresh("sales", path, NAMES, directory=self.catalog), NOTHING)
+
 
 class ShippedLayers(unittest.TestCase):
     """The shipped catalog keeps one copy of each shared file."""
@@ -554,6 +586,37 @@ class ShippedLayers(unittest.TestCase):
         }
         self.assertEqual(shared, set(takers))
         self.assertTrue(all(len(names) > 1 for names in takers.values()), takers)
+
+    def test_every_retired_path_is_gone_from_the_catalog_and_its_replacement_is_shipped(self):
+        offered = {rel for name in read_catalog(self.directory) for rel in catalog.files(name, self.directory)}
+        for old, new in catalog.RETIRED.items():
+            self.assertFalse(catalog._offers(offered, old), f"{old} is retired but a template still ships it")
+            self.assertTrue(catalog._offers(offered, new), f"{old} is retired for {new}, which no template ships")
+
+    def test_every_role_with_a_shared_skill_has_the_skills_it_names(self):
+        # A line that says "where your repository has it" (or "if your role has") names an optional skill.
+        named = re.compile(r"(?<![\w/-])\.claude/skills/([a-z0-9]+(?:-[a-z0-9]+)*)(?![\w<-])")
+        optional = re.compile(r"where (?:your|the) repository has|if your role has", re.I)
+        given = {name: catalog.files(name, self.directory) for name in read_catalog(self.directory)}
+        missing = []
+        for folder in sorted((self.directory / catalog.SHARED / ".claude/skills").iterdir()):
+            needs = {
+                found
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix in (".md", ".py", ".yaml")
+                for line in path.read_text().splitlines()
+                if not optional.search(line)
+                for found in named.findall(line)
+                if found != folder.name
+            }
+            for role, files in given.items():
+                if f".claude/skills/{folder.name}/SKILL.md" in files:
+                    missing += [
+                        f"{role}: {folder.name} needs {need}"
+                        for need in sorted(needs)
+                        if f".claude/skills/{need}/SKILL.md" not in files
+                    ]
+        self.assertEqual(missing, [])
 
     def test_no_template_ships_a_permission_allow_list(self):
         # Claude Code runs every turn with bypassPermissions (runner-rs/src/hosts/claude.rs): only `deny` does anything.

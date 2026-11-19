@@ -35,12 +35,12 @@ call, use `tico meeting search "<account>"`. Name every signal you could not rea
 
 ## 4. Give each account a status
 
-Apply `skills/score-account-health/SKILL.md`: green, yellow, red, or waiting on customer with its date. Give the two facts that
+Apply the health score in `.claude/skills/get-customers-to-their-outcome/SKILL.md`: green, yellow, red, or waiting on customer with its date. Give the two facts that
 drive the status. Update `knowledge/accounts/<account>.md`. A change since last week reads "moved from yellow to red".
 
 ## 5. Draft the next touch for each yellow or red account
 
-One action for one human: who, what and by when. Write the message with `skills/write-a-customer-next-touch/SKILL.md`. Gaps
+One action for one human: who, what and by when. Write the message with `.claude/skills/get-customers-to-their-outcome/SKILL.md` (the next touch). Gaps
 about price or dates stay marked, as `[price: Account Manager]` or `[date: account owner]`. Never send.
 
 ## 6. Write and hand over

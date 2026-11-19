@@ -1,6 +1,8 @@
 ---
 name: write-a-changelog-line
 description: Write changelog entries for a release, one line per user-visible change, under the six Keep a Changelog types, newest version first, with the pull request reference and an ISO 8601 date.
+metadata:
+  function: engineering
 ---
 # Write a changelog line
 

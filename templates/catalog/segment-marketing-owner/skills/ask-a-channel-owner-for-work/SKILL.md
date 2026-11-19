@@ -1,6 +1,8 @@
 ---
 name: ask-a-channel-owner-for-work
 description: Ask a channel Owner for a quote, scoping, data or a check for one segment, as one task with one outcome, one date and a stated spend limit, without starting a test or spending money, then track the ask until it is answered.
+metadata:
+  function: marketing
 ---
 # Ask a channel Owner for work
 

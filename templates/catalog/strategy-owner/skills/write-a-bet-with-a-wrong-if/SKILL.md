@@ -1,6 +1,8 @@
 ---
 name: write-a-bet-with-a-wrong-if
 description: "Drafts one strategy bet with what it rules out and a wrong-if the record can check. Use it when drafting or rewriting a bet for a strategy proposal, or when a tripped bet needs a new wrong-if."
+metadata:
+  function: operations
 ---
 
 # Write a bet with a wrong-if

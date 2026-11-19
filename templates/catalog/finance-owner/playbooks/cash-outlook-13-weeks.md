@@ -3,7 +3,7 @@
 Schedule: rolled every Monday inside the weekly cash summary (`playbooks/weekly-cash-summary.md`). Built the first time the
 owner asks, or when `knowledge/cash-forecast.md` does not exist. Budget 30 minutes.
 
-Method: `skills/build-the-13-week-cash-forecast/SKILL.md`, the direct method, cash in and out by week and line. Read it before
+Method: `.claude/skills/forecast-cash-and-budget/SKILL.md`, the direct method, cash in and out by week and line. Read it before
 you build or roll the forecast, and `skills/reconcile-a-cash-figure/SKILL.md` before a cash or runway figure goes to the owner
 as an alarm.
 

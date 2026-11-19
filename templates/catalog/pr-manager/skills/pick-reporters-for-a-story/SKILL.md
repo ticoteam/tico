@@ -1,6 +1,8 @@
 ---
 name: pick-reporters-for-a-story
 description: Choose five to ten reporters for one story from the media list, rank them on recent relevant work and the story's angle, and record why each one was picked and when the list was last checked.
+metadata:
+  function: marketing
 ---
 # Pick reporters for a story
 

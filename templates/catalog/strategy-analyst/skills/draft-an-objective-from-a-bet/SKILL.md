@@ -1,6 +1,8 @@
 ---
 name: draft-an-objective-from-a-bet
 description: Turn one active bet from the Strategy page into a plain-words objective that names the bet it serves and respects what the bet rules out, or mark the objective as serving no active bet.
+metadata:
+  function: operations
 ---
 # Draft an objective from a bet
 

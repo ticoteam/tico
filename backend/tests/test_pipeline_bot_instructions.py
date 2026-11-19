@@ -27,11 +27,12 @@ OLD_WORDS = re.compile(r"\b(verdicts?|merge rules|QA pass|board|ticket)\b", re.I
 
 
 def texts(template):
-    folder = CATALOG / template
-    for path in sorted(folder.rglob("*")):
-        if path.is_file() and path.suffix in (".md", ".yaml") and "software" not in path.relative_to(folder).parts:
-            if "examples" not in path.parts:
-                yield path, path.read_text()
+    """Every instruction file a bot from `template` is given: the base, its shared files (skills in `.claude/skills`
+    shared with other roles) and its own folder."""
+    for rel, path in sorted(catalog.files(template).items()):
+        parts = Path(rel).parts
+        if path.suffix in (".md", ".yaml") and "software" not in parts and "examples" not in parts:
+            yield path, path.read_text()
 
 
 def agent(template):
@@ -214,9 +215,12 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
     assert "Pitch" not in text  # a feature starts as a chat; its first approval is the Spec (Nov 16)
     assert "A person approves the Spec and the Release report: you never pass those yourself." in text
     assert '--task <id> --as "Release report"' in text
-    for playbook in ("write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
+    for playbook in ("build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
+    # The Spec is written with the shared write-the-spec skill (Nov 18), which the Feature Owner is given.
+    assert "`.claude/skills/write-the-spec/SKILL.md`" in text
+    assert ".claude/skills/write-the-spec/SKILL.md" in catalog.files("feature-owner")
     # Nov 14, Tico Team trial: owners made from the Product Owner's settings could not edit or open a pull request.
     rules = settings("feature-owner")
     for write in ("gh pr create", "gh pr edit", "gh pr ready", "gh pr comment"):
@@ -231,7 +235,11 @@ def test_the_feature_owner_takes_a_feature_from_a_chat_to_production_in_one_sess
 # The one page skill every bot that writes a spec, a check or a review uses (docs/software-factory.md, "Visual specs").
 PAGE_SKILL = "build-the-page"
 PAGE_WRITERS = {
-    "feature-owner": ("playbooks/write-a-spec-page.md", "playbooks/qa.md", "playbooks/validate-in-production.md"),
+    "feature-owner": (
+        ".claude/skills/write-the-spec/SKILL.md",
+        "playbooks/qa.md",
+        "playbooks/validate-in-production.md",
+    ),
     "reviewer": ("playbooks/review-a-pull-request.md",),
     "builder": ("playbooks/qa.md",),
     "release-owner": ("playbooks/write-the-release-report.md",),
@@ -268,8 +276,9 @@ def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
     assert {f"templates/{k}.html" for k in PAGE_KINDS} <= set(canonical)
     for template, playbooks in PAGE_WRITERS.items():
         assert page_skill(template) == canonical, template
+        given = catalog.files(template)
         for playbook in playbooks:
-            text = " ".join((CATALOG / template / playbook).read_text().split())
+            text = " ".join(given[playbook].read_text().split())
             assert f".claude/skills/{PAGE_SKILL}/SKILL.md" in text, playbook
             assert "tico page publish" in text and "tico file publish" not in text, playbook
             assert "render" in text, playbook
@@ -397,6 +406,14 @@ def test_each_page_opens_the_way_its_reader_needs(tmp_path):
     internal = pages["release"].replace("<p class=\"plus\">", "<p class=\"plus\">Fixed in PR #4325. ", 1)
     found = tool.problems_in(internal, "release")
     assert any("'PR' in the changelog" in p for p in found) and any("'#4325' in the changelog" in p for p in found)
+    # Nov 18: a spec may be long when clarity needs it, so its length warns and passes; a release report's still fails.
+    padding = "<p>" + " ".join(["row"] * 2000) + "</p></section>"
+    long_spec = pages["screen-spec"].replace("</section>", padding, 1)
+    assert tool.problems_in(long_spec, "screen-spec") == []
+    assert any("words" in w for w in tool.warnings_in(long_spec, "screen-spec"))
+    long_release = pages["release"].replace("</section>", padding, 1)
+    assert any("words; a release page" in p for p in tool.problems_in(long_release, "release"))
+    assert tool.warnings_in(long_release, "release") == []
 
 
 def test_the_release_label_flow_stays_off_stages_that_wait_for_a_published_release():

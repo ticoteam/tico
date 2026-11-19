@@ -1,6 +1,8 @@
 ---
 name: list-the-obligations-in-a-document
 description: "Read a document the Rules Owner was given, in full, and list only the obligations that bind us: the company, its teammates or its bots. Skip what binds only the other party, and give each one its section."
+metadata:
+  function: tico
 ---
 # List the obligations in a document
 

@@ -1,6 +1,8 @@
 ---
 name: reconcile-a-carrier-invoice
 description: Check each line of a carrier invoice against the contracted rates and surcharges in knowledge/carriers.md, list every overcharge with the charged and contracted amounts and the rate's source, and prepare a dispute for a person to decide, without paying, approving or disputing anything.
+metadata:
+  function: operations
 ---
 # Reconcile a carrier invoice
 

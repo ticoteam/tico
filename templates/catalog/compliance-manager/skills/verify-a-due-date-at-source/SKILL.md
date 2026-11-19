@@ -1,6 +1,8 @@
 ---
 name: verify-a-due-date-at-source
 description: Confirm a due date or filing rule on the authority's own page before it goes on the calendar or into a pack, write the arithmetic, record the date read, and show both values when the register and the source disagree.
+metadata:
+  function: legal
 ---
 # Verify a due date at source
 

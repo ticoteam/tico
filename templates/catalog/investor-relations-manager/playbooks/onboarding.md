@@ -42,7 +42,7 @@ Follow `playbooks/monthly-investor-update.md` on the real record for the month j
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`) and tell the human in one line:
-"I will have a draft ready on the 3rd of every month at 09:00 for you to review and send." They can change it or turn it off any time; there is nothing to approve.
+"I will have a draft ready on the 3rd of every month at 09:00; it goes out after your OK." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and the routine
 to match (`tico automation update <id>`, with `--disable` to turn it off).

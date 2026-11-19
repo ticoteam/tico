@@ -1,6 +1,8 @@
 ---
 name: chase-a-stale-action-item
 description: Handle a late action item or an ask that has gone quiet, with one re-check on its task, at most one chase per owner a week, an escalation to the person who ran the meeting after a second late week, and no second task filed for the same ask.
+metadata:
+  function: operations
 ---
 # Chase a stale action item
 

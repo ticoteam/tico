@@ -1,6 +1,8 @@
 ---
 name: check-attribution-before-a-claim
 description: Before a summary or recommendation says a channel, campaign or post drove a result, check which system counted the result, what the platform is allowed to claim, how the link was tagged, and whether the volume can support a claim of cause.
+metadata:
+  function: growth
 ---
 # Check attribution before a claim
 

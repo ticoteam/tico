@@ -1,6 +1,8 @@
 ---
 name: draft-an-investor-follow-up
 description: Write a follow-up draft to an investor or prospective investor that uses only facts from the record, carries no terms, leaves marked blanks, and ends with the one message a person must approve or send.
+metadata:
+  function: finance
 ---
 # Draft an investor follow-up
 

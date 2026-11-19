@@ -61,3 +61,8 @@ first_routine:
 example_output: knowledge/examples/ops-weekly.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
+shared_files:
+  - .claude/skills/manage-insurance
+  - .claude/skills/manage-leases-and-real-estate
+  - .claude/skills/run-the-operating-cadence
+  - .claude/skills/fill-a-role

@@ -1,6 +1,8 @@
 ---
 name: keep-numbers-fresh
 description: Keep Growth's numbers current without forms. Use in the weekly numbers run and when a person source goes stale - re-ask the person who gave a number once a month closes, and after two months from the same person offer once to read it from a system instead.
+metadata:
+  function: growth
 ---
 # Keep numbers fresh
 

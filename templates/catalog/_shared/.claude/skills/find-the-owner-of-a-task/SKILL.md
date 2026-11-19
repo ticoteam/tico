@@ -1,6 +1,8 @@
 ---
 name: find-the-owner-of-a-task
 description: Work out who can do a stopped task's work in its current stage, from the stage's owner and the team, and say so when that seat is not hired instead of handing the task to a stand-in.
+metadata:
+  function: tico
 ---
 # Find the owner of a task
 

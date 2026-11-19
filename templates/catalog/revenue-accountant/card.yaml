@@ -54,3 +54,7 @@ first_routine:
 example_output: knowledge/examples/revenue-close.md
 reasoning_effort: high
 recommend_when: [sells_software, sells_to_businesses, uses_docs]
+shared_files:
+  - .claude/skills/build-the-pnl
+  - .claude/skills/close-the-month
+  - .claude/skills/collect-receivables

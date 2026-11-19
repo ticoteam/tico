@@ -1,6 +1,8 @@
 ---
 name: find-duplicate-expense-candidates
 description: Find expense lines that may record the same spend twice across reports, cards and people, rate each match on its evidence, and write both lines with the rule. Use before flagging any duplicate.
+metadata:
+  function: finance
 ---
 # Find duplicate expense candidates
 

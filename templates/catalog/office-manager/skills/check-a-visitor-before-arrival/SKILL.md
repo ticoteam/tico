@@ -1,6 +1,8 @@
 ---
 name: check-a-visitor-before-arrival
 description: Check a visitor or an office event the day before it, against the host checklist (reception told, room booked, guest Wi-Fi ready, catering if any), name the host for each missing item, and keep only the visit details the visit needs, deleted 30 days after the visit.
+metadata:
+  function: operations
 ---
 # Check a visitor before arrival
 

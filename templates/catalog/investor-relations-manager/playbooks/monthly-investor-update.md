@@ -1,7 +1,7 @@
 # Monthly investor update draft
 
 Schedule: the third of each month at 09:00 team time (routine `monthly-investor-update`), after setup. Also run by hand. Budget 40 minutes. The outcome is one page
-for the owner to review and send. Nothing is sent or shared.
+for the owner's OK. Nothing is sent before it, except as Sending in `AGENTS.md` allows.
 
 ---
 
@@ -18,11 +18,11 @@ covered (the calendar month just ended).
 2. Compare each with plan or target where one exists (`tico goal list --all`).
 3. Cash, burn and runway: use `knowledge/finance-inputs.md` for this month. If missing, ask once with `tico task ask <id> --to <person> "<question>"` ("Cash, burn and runway for <month>, please")
    and write "not supplied" meanwhile.
-4. Check each figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A move over 20% needs a one-line reason from a dated source, or "reason not found".
+4. Check each figure with `.claude/skills/write-investor-and-board-updates/SKILL.md`. A move over 20% needs a one-line reason from a dated source, or "reason not found".
 
 ## 3. Collect the month's story
 
-Read `tico update list --kind weekly` and `tico meeting search --since <first of month>`. Apply `skills/write-the-highlights-and-lowlights/SKILL.md`: three to five
+Read `tico update list --kind weekly` and `tico meeting search --since <first of month>`. Apply `.claude/skills/write-investor-and-board-updates/SKILL.md`: three to five
 highlights, one to three lowlights, each dated and sourced, with the exclusions removed.
 
 ## 4. Write the asks
@@ -38,4 +38,5 @@ recap in two lines. Under 350 words. Mark the draft incomplete at the top if any
 ## 6. Hand over
 
 Write `reports/YYYY-MM-DD-investor-update.md` and publish it with `tico file publish`. Commit, then `tico task done <id> -m "..." --version N`: the headline, the path,
-the missing figures, and any lowlight that may deserve a call before the update. Always finish the task. The owner sends it.
+the missing figures, and any lowlight that may deserve a call before the update. Always finish the task. Send it as Sending in `AGENTS.md` says:
+after the owner's OK on the page, from the mailbox the owner chose.

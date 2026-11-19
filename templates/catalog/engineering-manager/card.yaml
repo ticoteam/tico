@@ -62,3 +62,6 @@ shared_files:
   - knowledge/manager-practice.md
   - .claude/skills/read-what-is-missing
   - .claude/skills/write-the-stuck-task-question
+  - .claude/skills/plan-before-coding
+  - .claude/skills/turn-corrections-into-gates
+  - .claude/skills/review-hardware-for-manufacture

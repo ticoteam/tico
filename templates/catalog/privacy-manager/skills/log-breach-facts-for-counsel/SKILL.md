@@ -1,6 +1,8 @@
 ---
 name: "log-breach-facts-for-counsel"
 description: "Record the facts of a suspected personal data breach for the decision-maker: the time of awareness, what happened, the data and people affected, containment so far, and what is unknown, without deciding whether it must be reported."
+metadata:
+  function: legal
 ---
 # Log breach facts for counsel
 

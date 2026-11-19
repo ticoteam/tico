@@ -1,6 +1,8 @@
 ---
 name: check-an-sla-against-a-promise
 description: Check each help desk timer against the promise it is meant to keep, comparing the target, the clock, the hours, the pauses and the tickets it covers, so a timer that is looser or misplaced is found before a customer finds it.
+metadata:
+  function: customers
 ---
 # Check an SLA against a promise
 

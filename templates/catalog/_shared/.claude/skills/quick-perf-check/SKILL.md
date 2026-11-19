@@ -1,6 +1,8 @@
 ---
 name: quick-perf-check
-description: For a change that adds or changes SQL (a query, a schema, a migration or an index): get each query's plan, time it before and after on a realistic copy of the data, scan for N+1 queries, and post those results on the task before the change merges. Skip any change that touches no SQL.
+description: "For a change that adds or changes SQL (a query, a schema, a migration or an index): get each query's plan, time it before and after on a realistic copy of the data, scan for N+1 queries, and post those results on the task before the change merges. Skip any change that touches no SQL."
+metadata:
+  function: engineering
 ---
 # Quick perf check
 

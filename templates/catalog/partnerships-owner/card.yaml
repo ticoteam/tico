@@ -61,3 +61,5 @@ first_routine:
 example_output: knowledge/examples/partner-review.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, has_pipeline, uses_crm]
+shared_files:
+  - .claude/skills/build-a-partnership

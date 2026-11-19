@@ -1,6 +1,8 @@
 ---
 name: reset-a-password-or-mfa
 description: Help a person reset a password or replace a lost MFA method through the tool's own reset page, confirm who is asking by a route they cannot control, and state the team's password rule without ever seeing the password.
+metadata:
+  function: operations
 ---
 # Reset a password or MFA method
 

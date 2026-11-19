@@ -28,7 +28,7 @@ Nothing on GitHub changes, and no test is skipped or deleted by this run.
    carried out by a person unless the task asks for it and a granted Tool allows it.
 5. **Find skipped tests.** List each one with why it is skipped, its age and its owner.
 6. **Find paths with no test.** For each must-test path, read the test code and say whether a test asserts its behaviour
-   (`skills/prove-a-test-catches-the-bug/SKILL.md`). A path with no such test is named, not counted as covered.
+   (`.claude/skills/test-first/SKILL.md`). A path with no such test is named, not counted as covered.
 7. **Check slow suites against the threshold.** A suite is slow when its median passes the threshold in
    `knowledge/thresholds.md`. Name the test or step that grew, if the log shows it.
 8. **Hand over product bugs.** A product bug a test exposed goes to the feature owner of its area as a Product task, with the failing

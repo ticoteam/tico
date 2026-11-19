@@ -589,8 +589,12 @@ def refresh(template, target, names, display_name=None, directory=None, instruct
     for rel in gone:
         (target / rel).unlink()
         result["removed"].append(rel)
+    # A file the bot kept (its own AGENTS.md, an edited playbook) names the new path of each moved skill and of each
+    # retired file or skill that is gone from it now.
     pointed = _repoint(
-        target, moves, lambda rel: rel not in write and _digest(_text(target / rel) or "") != files.get(rel)
+        target,
+        {**moves, **_retired(target, offer, given)},
+        lambda rel: rel not in write and _digest(_text(target / rel) or "") != files.get(rel),
     )
     _stamp(target, template, files, kept, at or "")
     touched = len(write) + len(gone) + len(moved)
@@ -619,6 +623,25 @@ def _skill_moves(target, offer, given):
         if _under_any(offer, new) and not _under_any(offer, old):
             moves[old] = new
     return moves
+
+
+def _retired(target, offer, given):
+    """{old path: replacement} for each `RETIRED` file or skill folder the bot was given, the template no longer offers
+    and the bot no longer has (an edited copy it kept is still the one its files name), whose replacement the template
+    offers."""
+    found = {}
+    for old, new in RETIRED.items():
+        if not _offers(given, old) or _offers(offer, old) or not _offers(offer, new):
+            continue
+        here = target / old
+        if here.is_symlink() or here.is_file() or here.is_dir() and any(p.is_file() for p in here.rglob("*")):
+            continue
+        found[old] = new
+    return found
+
+
+def _offers(paths, rel):
+    return rel in paths or _under_any(paths, rel)
 
 
 def _under_any(paths, folder):
@@ -662,17 +685,83 @@ def _move_skills(target, moves):
     return moved
 
 
+# A file or skill folder a template no longer ships -> what replaced it. A bot that kept a file naming the old path (its
+# own AGENTS.md, an edited playbook) is pointed at the new one when it is refreshed and the old one is gone.
+RETIRED = {
+    "playbooks/write-a-spec-page.md": ".claude/skills/write-the-spec/SKILL.md",
+    "playbooks/write-an-interview-snapshot.md": ".claude/skills/learn-from-customers/SKILL.md",
+    "skills/answer-each-review-comment": ".claude/skills/answer-each-review-comment",
+    "skills/ask-with-recommended-answers": ".claude/skills/ask-with-recommended-answers",
+    "skills/build-a-filing-calendar-line": ".claude/skills/stay-on-top-of-taxes",
+    "skills/build-a-weekly-brief-from-the-record": ".claude/skills/run-the-operating-cadence",
+    "skills/build-the-13-week-cash-forecast": ".claude/skills/forecast-cash-and-budget",
+    "skills/build-the-brand-book": ".claude/skills/build-the-brand-guide",
+    "skills/calculate-a-notice-deadline": ".claude/skills/count-a-notice-deadline",
+    "skills/check-a-bank-detail-change": ".claude/skills/pay-bills-and-buy",
+    "skills/check-a-figure-before-it-goes-out": ".claude/skills/write-investor-and-board-updates",
+    "skills/check-a-job-post-before-it-goes-out": ".claude/skills/fill-a-role",
+    "skills/check-a-legal-deadline": ".claude/skills/check-a-legal-deadline",
+    "skills/check-a-pay-change-against-its-source": ".claude/skills/run-payroll",
+    "skills/check-a-sales-tax-threshold": ".claude/skills/stay-on-top-of-taxes",
+    "skills/check-an-nda-clause-by-clause": ".claude/skills/review-a-contract",
+    "skills/check-before-you-chase": ".claude/skills/collect-receivables",
+    "skills/check-that-a-test-proves-the-change": ".claude/skills/review-code",
+    "skills/compare-the-register-after-a-run": ".claude/skills/run-payroll",
+    "skills/count-a-notice-deadline": ".claude/skills/count-a-notice-deadline",
+    "skills/design-an-ab-test": ".claude/skills/run-lifecycle-and-paid",
+    "skills/draft-a-monday-agenda": ".claude/skills/run-the-operating-cadence",
+    "skills/explain-a-variance": ".claude/skills/build-the-pnl",
+    "skills/find-a-duplicate-bill": ".claude/skills/pay-bills-and-buy",
+    "skills/find-hidden-breaking-changes": ".claude/skills/find-hidden-breaking-changes",
+    "skills/flag-a-clause-against-the-playbook": ".claude/skills/review-a-contract",
+    "skills/frame-a-decision-for-the-owner": ".claude/skills/frame-a-decision-for-the-owner",
+    "skills/gather-contractor-tax-forms": ".claude/skills/stay-on-top-of-taxes",
+    "skills/get-the-checks-green-at-the-head": ".claude/skills/get-the-checks-green-at-the-head",
+    "skills/grade-a-key-result-from-readings": ".claude/skills/run-the-operating-cadence",
+    "skills/judge-whether-a-release-can-roll-back": ".claude/skills/ship-a-release",
+    "skills/match-a-bill-to-its-order": ".claude/skills/pay-bills-and-buy",
+    "skills/prove-a-test-catches-the-bug": ".claude/skills/test-first",
+    "skills/qualify-an-inbound-lead": ".claude/skills/run-a-sales-deal",
+    "skills/read-an-aging-report": ".claude/skills/collect-receivables",
+    "skills/read-the-roadmap-status": ".claude/skills/read-the-roadmap-status",
+    "skills/reconcile-an-account": ".claude/skills/close-the-month",
+    "skills/reconcile-headcount-and-gross": ".claude/skills/run-payroll",
+    "skills/review-copy-against-the-brand-book": ".claude/skills/build-the-brand-guide",
+    "skills/roll-forward-a-deferred-schedule": ".claude/skills/close-the-month",
+    "skills/score-account-health": ".claude/skills/get-customers-to-their-outcome",
+    "skills/score-an-expansion-signal": ".claude/skills/get-customers-to-their-outcome",
+    "skills/screen-against-stated-criteria": ".claude/skills/fill-a-role",
+    "skills/shape-a-spec-to-an-appetite": ".claude/skills/decide-what-not-to-build",
+    "skills/write-a-counsel-brief": ".claude/skills/write-a-counsel-brief",
+    "skills/write-a-customer-next-touch": ".claude/skills/get-customers-to-their-outcome",
+    "skills/write-a-discussion-guide": ".claude/skills/learn-from-customers",
+    "skills/write-a-holding-statement": ".claude/skills/handle-press-and-a-crisis",
+    "skills/write-a-measurable-key-result": ".claude/skills/run-the-operating-cadence",
+    "skills/write-a-payment-reminder": ".claude/skills/collect-receivables",
+    "skills/write-a-renewal-decide-by-date": ".claude/skills/count-a-notice-deadline",
+    "skills/write-a-reply-for-review": ".claude/skills/run-a-sales-deal",
+    "skills/write-a-reply-with-a-marked-gap": ".claude/skills/answer-a-customer",
+    "skills/write-a-reporter-pitch": ".claude/skills/handle-press-and-a-crisis",
+    "skills/write-a-structured-interview-kit": ".claude/skills/fill-a-role",
+    "skills/write-a-test-that-proves-the-change": ".claude/skills/test-first",
+    "skills/write-an-engineering-bug-report": ".claude/skills/write-an-engineering-bug-report",
+    "skills/write-release-notes-for-users": ".claude/skills/ship-a-release",
+    "skills/write-the-close-variance-note": ".claude/skills/forecast-cash-and-budget",
+    "skills/write-the-highlights-and-lowlights": ".claude/skills/write-investor-and-board-updates",
+}
+
 # Where a bot's instructions name its skills: rewritten when a skill moves, so nothing points at the old path.
 POINTERS = (INSTRUCTIONS, "playbooks", "knowledge", "skills", ".claude/skills")
 
 
 def _repoint(target, moves, rewrite):
-    """Rewrite `skills/<name>` to `.claude/skills/<name>` for each moved skill in the bot's instruction files that
-    `rewrite(rel)` allows (its own and its kept ones: a file the template just wrote names the new path already).
-    Returns the paths rewritten."""
+    """Rewrite each old path in `moves` (`skills/<name>` to `.claude/skills/<name>`, a retired file to its replacement)
+    in the bot's instruction files that `rewrite(rel)` allows (its own and its kept ones: a file the template just wrote
+    names the new path already). Returns the paths rewritten."""
     if not moves:
         return []
-    pattern = re.compile(r"(?<![\w./-])(" + "|".join(re.escape(old) for old in moves) + r")(?![\w.-])")
+    names = sorted(moves, key=len, reverse=True)
+    pattern = re.compile(r"(?<![\w./-])(" + "|".join(re.escape(old) for old in names) + r")(?![\w.-])")
     pointed = []
     for name in POINTERS:
         base = Path(target) / name

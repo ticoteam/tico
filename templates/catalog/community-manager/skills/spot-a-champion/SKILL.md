@@ -1,6 +1,8 @@
 ---
 name: spot-a-champion
 description: Find members who answer others well, check their answers against the docs, and record them as champions with a public name, dated evidence and the last date thanked, without keeping anything private.
+metadata:
+  function: marketing
 ---
 # Spot a champion
 

@@ -52,7 +52,7 @@ Always:
 
 ## Skills
 - `skills/set-severity-and-owner/SKILL.md`: read before you give a case a severity or an owner.
-- `skills/write-an-engineering-bug-report/SKILL.md`: read before you hand a defect to engineering.
+- `.claude/skills/write-an-engineering-bug-report/SKILL.md`: read before you hand a defect to engineering.
 - `skills/write-a-customer-update/SKILL.md`: read before you draft any update to a customer.
 
 ## Starting a run

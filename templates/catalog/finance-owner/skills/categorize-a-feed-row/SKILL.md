@@ -1,6 +1,8 @@
 ---
 name: categorize-a-feed-row
 description: "Categorize a bank or card row by a posting rule, a repeated pattern or what the counterparty plainly is, after checking it is not a transfer or a refund; ask for a missing chart line through an approval; ask one person per unclear counterparty."
+metadata:
+  function: finance
 ---
 # Categorize a feed row
 

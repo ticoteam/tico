@@ -1,6 +1,8 @@
 ---
 name: check-a-team-rating-spread
 description: Build the rating spread by team and level from the grid a human attached, merge any group under five, flag teams with everyone at one point, ratings with no evidence and descriptions that do not match their ratings, and report by team reference with no names.
+metadata:
+  function: people
 ---
 # Check a team's rating spread
 

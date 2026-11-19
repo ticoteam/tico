@@ -1,6 +1,8 @@
 ---
 name: numbers-from-chat
 description: Turn what someone said (a chat reply, a pasted sheet, a screenshot, a call transcript) into Growth's channels, monthly numbers, settings and KPI readings, then read back what was saved. Use after every answer in a growth interview and after a growth call.
+metadata:
+  function: growth
 ---
 # Numbers from chat
 

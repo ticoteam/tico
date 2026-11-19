@@ -1,6 +1,8 @@
 ---
 name: check-an-invoice-before-issue
 description: Run the pre-issue checks on each invoice in a run (amount against source, rate against contract, legal entity and contact, PO and tax, terms and sequence, duplicates), and mark it ready only when every check passes.
+metadata:
+  function: finance
 ---
 # Check an invoice before issue
 

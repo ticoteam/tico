@@ -1,6 +1,8 @@
 ---
 name: check-a-contact-list-at-list-time
 description: Run the suppression rules on each record when it is put on an outreach list, not only when it was labelled, and name the rule that removed each record it drops.
+metadata:
+  function: sales
 ---
 # Check a contact list at list time
 

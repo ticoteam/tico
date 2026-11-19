@@ -1,6 +1,8 @@
 ---
 name: write-the-morning-brief
 description: Write the morning mail brief with a headline count, what needs the human today, the drafts ready, the routed items, what would be filed, and what could not be read, using message ids and one-line reasons and no bodies.
+metadata:
+  function: tico
 ---
 # Write the morning brief
 

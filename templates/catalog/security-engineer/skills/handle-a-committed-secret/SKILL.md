@@ -1,6 +1,8 @@
 ---
 name: "handle-a-committed-secret"
 description: "Respond to a credential found in a repository, a pull request or a commit history, in the order that limits damage: confirm it is live, have it rotated, check its use in the audit window, then clean the repository and prevent a repeat, without ever copying its value."
+metadata:
+  function: security
 ---
 # Handle a committed secret
 

@@ -1,6 +1,8 @@
 ---
 name: tidy-the-docs-sweep
 description: "Sweep the team's docs for upkeep problems (duplicates, drafts left behind, docs with no owner, dead links, misplaced docs and text that looks like a credential), report each one, and change nothing in a person's doc."
+metadata:
+  function: tico
 ---
 # Tidy the docs sweep
 

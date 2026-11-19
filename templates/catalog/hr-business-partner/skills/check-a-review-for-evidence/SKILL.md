@@ -1,6 +1,8 @@
 ---
 name: check-a-review-for-evidence
 description: Check each rating in a manager or self review against the dated examples it cites, flag ratings with no evidence and wording about personality rather than work, hand employee relations content on untouched, and report by reference without a view on the rating.
+metadata:
+  function: people
 ---
 # Check a review for evidence
 

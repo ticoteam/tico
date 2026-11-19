@@ -1,6 +1,8 @@
 ---
 name: test-a-segment-message
 description: Check a customer segment's message, offer and claims before any copy goes to a channel Owner or outside the team, so every claim is approved in the brand's claims with its source, the copy passes the brand check, and each idea states its change and measure without a prediction.
+metadata:
+  function: marketing
 ---
 # Test a segment's message
 

@@ -1,6 +1,8 @@
 ---
 name: learn-why-customers-buy
 description: Find out why customers buy, stay and leave by asking the people who talk to them, in their words. Use when an idea, a page or a positioning line has no customer behind it, when the growth interview reaches "why they leave", or when the owner asks who the best customers are.
+metadata:
+  function: growth
 ---
 # Learn why customers buy
 

@@ -1,6 +1,8 @@
 ---
 name: match-a-request-to-the-ledger
 description: Decide whether a feature request is the same need as a ledger row, a close but different need, or a new one, and record the account, source and date without merging away a real difference.
+metadata:
+  function: product
 ---
 # Match a request to the ledger
 

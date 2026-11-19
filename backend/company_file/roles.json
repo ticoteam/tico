@@ -45,7 +45,7 @@
    "department": "finance",
    "lead": false,
    "core": false,
-   "summary": "Gets every bill paid once, on time and to the right account. Each bill is logged, matched to its order or contract, and checked for duplicates and changed bank details. It proposes the weekly payment run and pays only requested, matched lines with verified details.",
+   "summary": "Gets every bill paid once, on time and to the right account. Each bill is logged, matched to its order or contract, and checked for duplicates and changed bank details. It runs the weekly payment run, paying approved, matched bills to verified payees inside budget.",
    "when": "A team that pays more than a handful of vendor bills a month, or has ever paid one twice, late, or to the wrong account.",
    "tags": [
     "bills",
@@ -83,7 +83,7 @@
    "department": "finance",
    "lead": false,
    "core": false,
-   "summary": "Gets overdue invoices paid. Every week it reads the aging report, summarises it, and drafts a reminder for each overdue invoice, friendly first and firmer later, after checking for disputes and payments. A reminder goes out only when the task asks for it and mail sending is on.",
+   "summary": "Gets overdue invoices paid. Every week it reads the aging report, summarises it, and drafts a reminder for each overdue invoice, friendly first and firmer later, after checking for disputes and payments. Reminders go out where its sending policy allows; the final notice waits for a person's OK.",
    "when": "A team that invoices customers on terms and finds itself chasing payments late or not at all.",
    "tags": [
     "b2b",
@@ -2096,7 +2096,7 @@
    "department": "finance",
    "lead": false,
    "core": false,
-   "summary": "Gets payroll right before it runs: a change summary for each pay run with joiners, leavers, pay changes, hours, bonuses and commissions, each checked against HR records and the last run. Nothing is entered without a task request and a granted Tool.",
+   "summary": "Gets payroll right before it runs: a change summary for each pay run with joiners, leavers, pay changes, hours, bonuses and commissions, each checked against HR records and the last run. It enters sourced changes and submits a regular run that passes every check.",
    "when": "A team whose payroll is run by a founder, an office manager or an outside provider from changes collected by hand.",
    "tags": [
     "payroll",
@@ -2167,7 +2167,7 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Keeps the team's media list and coverage log, finds the story in each announcement, and prepares press releases and short targeted pitches for review. It never speaks to a journalist on the team's behalf.",
+   "summary": "Keeps the team's media list and coverage log, finds the story in each announcement, and prepares press releases and short targeted pitches. Once mail sending is on, it sends the tailored pitches and one follow-up for a story a person approved; releases and promises wait for a person.",
    "when": "A team with news worth telling (launches, funding, customer milestones, research) and nobody who works with the press.",
    "tags": [
     "pr",
@@ -2570,7 +2570,7 @@
    "department": "hr",
    "lead": false,
    "core": false,
-   "summary": "Fills the team's open roles: writes the job post, screens each application against the hiring manager's criteria, keeps every candidate answered, and runs the weekly pipeline. The hiring manager decides, and posts and messages go out only when a person has turned mail sending on in Tico.",
+   "summary": "Fills the team's open roles: writes the job post, screens each application against the hiring manager's criteria, keeps every candidate answered, and runs the weekly pipeline. Hiring is bot first: it starts on a role only once a person has OK'd a search for work a bot cannot do. The hiring manager decides, and posts and messages go out only when a person has turned mail sending on in Tico.",
    "when": "A team hiring a few roles a quarter with no recruiter, or one recruiter who wants the screening and follow-through covered.",
    "tags": [
     "hiring",
@@ -2605,7 +2605,7 @@
    "department": "hr",
    "lead": false,
    "core": false,
-   "summary": "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit, and chases scorecards until the debrief can happen. Candidate messages go out when a person has turned mail sending on in Tico.",
+   "summary": "Schedules every interview loop, keeps candidates informed at each step, sends each panel its interview kit, and chases scorecards until the debrief can happen. It starts only once a person has OK'd a search for a role a bot cannot do. Candidate messages go out when a person has turned mail sending on in Tico.",
    "when": "A team running more than a handful of interviews a week, where scheduling and feedback chasing eat the recruiter's or the manager's time.",
    "tags": [
     "hiring",
@@ -3412,7 +3412,7 @@
    "department": "hr",
    "lead": false,
    "core": false,
-   "summary": "Finds interested people for each open role from public professional work and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate.",
+   "summary": "Finds interested people for each open role from public professional work and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate, and starts only once a person has OK'd a search for a role a bot cannot do.",
    "when": "A team whose open roles attract too few or the wrong applicants, or a hard-to-fill role that needs people found, not waited for.",
    "tags": [
     "hiring",
@@ -3681,7 +3681,7 @@
    "department": "finance",
    "lead": false,
    "core": false,
-   "summary": "Keeps the team ahead of its tax deadlines: a monthly calendar of filings and payments with their inputs, and a sales tax and VAT threshold watch by place. It gathers what the accountant needs; summaries for a human, not tax advice.",
+   "summary": "Keeps the team ahead of its tax deadlines: a monthly calendar of filings and payments with their inputs, and a sales tax and VAT threshold watch by place. It files the routine returns inside the team's authority table and gathers what the CPA needs; never tax advice.",
    "when": "A team that sells across states or countries, pays contractors, or has missed a filing because nobody owned the calendar.",
    "tags": [
     "tax",
@@ -3822,7 +3822,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Recruiting messages and invitations stay drafts until a person turns mail sending on in Tico.",
+   "summary": "Runs discovery for product decisions: interview snapshots, an opportunity map with source counts, research plans and briefs, and a weekly research digest. Once a person turns mail sending on in Tico, it invites customers and runs written interviews within its sending policy.",
    "when": "Offer to a team that builds a product and talks to its users, in meetings or by interview.",
    "tags": [
     "ux-research",

@@ -2,7 +2,8 @@
 """Build, check and render one page from a template in this skill (SKILL.md says when to use which).
 
     python3 page.py build  DRAFT.html --out PAGE.html        real screenshots in, red numbered arrows drawn on them
-    python3 page.py check  PAGE.html --kind KIND              the page's rules; exit 1 names each one it breaks
+    python3 page.py check  PAGE.html --kind KIND              the page's rules; exit 1 names each one it breaks (a
+                                                              long spec is a warning that does not fail)
     python3 page.py render FILE_ID --kind KIND [--out DIR]    the published page, checked again and drawn at 390 and 1280 px
 
 KIND is bug-spec, screen-spec, change-spec, validation, review, qa or release. Standard library only.
@@ -39,6 +40,8 @@ TILES = 4  # a QA page's verdict strip: criteria, checks, review findings, risk
 FOLD_LINES = 10  # output longer than this sits in a <details>, never on the face of the page
 MAX_BYTES = 8 * 1024 * 1024
 LEAD_WORDS = 70
+# A spec may run long when clarity needs it, so its length is a warning (Nov 18); every other page's is a rule.
+SPECS = ("bug-spec", "screen-spec", "change-spec")
 PAGE_WORDS = {
     "bug-spec": 1200,
     "screen-spec": 1200,
@@ -262,9 +265,19 @@ def problems_in(text, kind):
         out.append(f"'{m.group(0)}': the page brings the proof; it never asks the reader to check")
     for m in FILLER.finditer(plain):
         out.append(f"'{m.group(0)}': say what it does instead")
-    if len(words(text)) > PAGE_WORDS[kind]:
+    if kind not in SPECS and len(words(text)) > PAGE_WORDS[kind]:
         out.append(f"{len(words(text))} words; a {kind} page keeps under {PAGE_WORDS[kind]}: cut the details")
     return out
+
+
+def warnings_in(text, kind):
+    """What the page may keep but should look at again: a spec over its length, which clarity can need."""
+    count = len(words(text))
+    if kind in SPECS and count > PAGE_WORDS[kind]:
+        return [
+            f"{count} words; a {kind} page is usually under {PAGE_WORDS[kind]}: cut every word clarity does not need"
+        ]
+    return []
 
 
 def qa_problems(text):
@@ -335,7 +348,10 @@ def section(text, name):
 
 
 def check(path, kind):
-    found = problems_in(Path(path).read_text(), kind)
+    text = Path(path).read_text()
+    found = problems_in(text, kind)
+    for line in warnings_in(text, kind):
+        print("check: warning:", line)
     for line in found:
         print("check:", line)
     if found:
@@ -361,6 +377,8 @@ def render(file_id, kind, out):
     page = out / "published.html"
     page.write_text(text)
     found = problems_in(text, kind)
+    for line in warnings_in(text, kind):
+        print("published page: warning:", line)
     for line in found:
         print("published page:", line)
     browser = chrome()

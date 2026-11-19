@@ -1,6 +1,8 @@
 ---
 name: "build-a-forecast-call-pack"
 description: "Build the forecast part of the weekly summary or a forecast call: commit, best case and the gap to target, each number with its source and date, and the few deals the call should inspect."
+metadata:
+  function: growth
 ---
 # Build a forecast call pack
 

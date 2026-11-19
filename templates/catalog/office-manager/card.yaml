@@ -57,3 +57,7 @@ first_routine:
 example_output: knowledge/examples/office-page.md
 reasoning_effort: low
 recommend_when: [small_team]
+shared_files:
+  - .claude/skills/manage-insurance
+  - .claude/skills/manage-leases-and-real-estate
+  - .claude/skills/pay-bills-and-buy

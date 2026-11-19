@@ -1,6 +1,8 @@
 ---
 name: write-a-customer-update
 description: Write an escalation update a customer can act on, with what happened, what is being done, what is next and when they will hear again, and no invented fix date, credit or promise.
+metadata:
+  function: customers
 ---
 # Write a customer update
 

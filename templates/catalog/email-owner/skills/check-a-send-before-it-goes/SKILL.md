@@ -1,6 +1,8 @@
 ---
 name: "check-a-send-before-it-goes"
 description: "Run the send checklist on a finished email before it is handed over: audience and consent, the do-not-email list, sender and authentication, unsubscribe and postal address, links, the plain-text version and the complaint guardrail."
+metadata:
+  function: marketing
 ---
 # Check a send before it goes
 

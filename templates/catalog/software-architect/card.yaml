@@ -56,3 +56,7 @@ first_routine:
 example_output: knowledge/examples/architecture-review.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_github, uses_docs]
+shared_files:
+  - .claude/skills/plan-before-coding
+  - .claude/skills/review-code
+  - .claude/skills/turn-corrections-into-gates

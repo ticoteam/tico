@@ -1,6 +1,8 @@
 ---
 name: decide-whether-a-course-earns-its-place
 description: Decide whether a course belongs in a role plan, by the skill it builds, what work alone will not teach, whether it gives practice and feedback, its cost and a finish-by date, returning include, include with conditions, or leave to work. It recommends and never buys.
+metadata:
+  function: people
 ---
 # Decide whether a course earns its place
 

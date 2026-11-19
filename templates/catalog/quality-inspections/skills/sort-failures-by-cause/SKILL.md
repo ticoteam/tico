@@ -1,6 +1,8 @@
 ---
 name: sort-failures-by-cause
 description: Decide whether an inspection failure or re-do is a system cause (the standard, the checklist, the equipment) or a crew cause (a missed item, a wrong method), with the evidence for the call, before anyone is named in a finding.
+metadata:
+  function: operations
 ---
 # Sort failures by cause
 
