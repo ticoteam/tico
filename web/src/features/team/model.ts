@@ -191,3 +191,85 @@ export function computerStatus(
   }
   return out;
 }
+
+/* ---------------------------------------------------------------- what it learned: decisions and dreams */
+
+export interface Decision {
+  key: string;
+  title: string;
+  /** Its day, YYYY-MM-DD, or '' when it has none. */
+  on: string;
+  /** The whole entry, for the row's hover. */
+  text: string;
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/**
+ * The entries of `memory/decisions.md`, newest first (ui bot-learnings learnNewestFirst): each top-level `- ` item,
+ * dated by its `added:`, a date at its start, or its `## ` heading's date. Agents append at the bottom; an undated
+ * entry stays with the dated one above it, and undated ones before every dated one stay first.
+ */
+export function decisionsOf(text: string): Decision[] {
+  const year = (text.match(/\b20\d\d(?=-\d\d-\d\d\b)/g) ?? []).sort().pop() ?? '';
+  const when = (t: string): string => {
+    const iso = /\b(20\d\d-\d\d-\d\d)\b/.exec(t);
+    if (iso) return iso[1] ?? '';
+    const md = year ? /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? (\d{1,2})\b/i.exec(t) : null;
+    return md ? `${year}-${String(MONTHS.indexOf((md[1] ?? '').toLowerCase()) + 1).padStart(2, '0')}-${(md[2] ?? '').padStart(2, '0')}` : '';
+  };
+  const items: { lines: string[]; head: string }[] = [];
+  let head = '';
+  let fence = false;
+  let cur: { lines: string[]; head: string } | null = null;
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    if (!fence && /^## /.test(line)) {
+      head = when(line);
+      cur = null;
+    } else if (!fence && /^[-*] /.test(line)) {
+      cur = { lines: [line], head };
+      items.push(cur);
+    } else if (cur && (fence || /^\s+\S/.test(line))) cur.lines.push(line);
+    else if (line.trim()) cur = null;
+  }
+  const rows = items.map((it, i): Decision => {
+    const first = (it.lines[0] ?? '').replace(/^[-*]\s+/, '');
+    const all = it.lines.join('\n');
+    const on = /added:\s*(20\d\d-\d\d-\d\d)/.exec(all)?.[1] ?? (when(first.slice(0, 16)) || it.head);
+    const title = first
+      .replace(/^\W{0,3}(20\d\d-\d\d-\d\d|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.? \d{1,2})\W{0,3}\s*[:—–-]?\s*/i, '')
+      .replace(/\*\*|__|`/g, '')
+      .trim();
+    return { key: `d${i}`, title: title || first, on, text: all.replace(/^[-*]\s+/, '').trim() };
+  });
+  const groups: { on: string; rows: Decision[] }[] = [];
+  for (const r of rows) {
+    const last = groups[groups.length - 1];
+    if (r.on || !last) groups.push({ on: r.on, rows: [r] });
+    else last.rows.push(r);
+  }
+  const lead = groups[0] && !groups[0].on ? (groups.shift()?.rows ?? []) : [];
+  groups.sort((a, b) => b.on.localeCompare(a.on));
+  return [...lead, ...groups.flatMap((g) => g.rows)];
+}
+
+/** A dream's question as cards to answer: numbered questions ("1. …", "2) …") one each, anything else one card. */
+export function dreamCards(text: string): { n: string; text: string }[] {
+  const lines = text.split('\n');
+  const parts: { n: string; lines: string[] }[] = [];
+  const lead: string[] = [];
+  for (const line of lines) {
+    const m = /^\s*(?:\*\*)?(\d{1,2})[.)](?:\*\*)?\s+(.*)$/.exec(line);
+    if (m) parts.push({ n: m[1] ?? '', lines: [m[2] ?? ''] });
+    else if (parts.length) parts[parts.length - 1]?.lines.push(line);
+    else lead.push(line);
+  }
+  if (parts.length < 2) return [{ n: '', text: text.trim() }];
+  const intro = lead.join('\n').trim();
+  return parts.map((p, i) => ({ n: p.n, text: `${i === 0 && intro ? `${intro}\n\n` : ''}${p.lines.join('\n').trim()}` }));
+}
+
+/** The answers as one reply, numbered to match the questions. */
+export const dreamReply = (cards: { n: string }[], answers: string[]) =>
+  cards.length === 1 ? (answers[0] ?? '').trim() : cards.map((c, i) => `${c.n}. ${(answers[i] ?? '').trim() || 'No answer'}`).join('\n');

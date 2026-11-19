@@ -739,6 +739,15 @@ export function Computers({ open }: { open?: string }) {
           </>
         )}
       </Section>
+      {/* Owner, Nov 19: agents made and run outside Tico are not in the first build; one dimmed line. */}
+      <Section name="External agents" target="setting:external">
+        <div className="row is-off" aria-disabled="true" title="Agents made and run outside Tico">
+          <span className="row-title">
+            Agents made and run outside Tico
+            <Pill>Coming soon</Pill>
+          </span>
+        </div>
+      </Section>
       <Hosted />
       <Sleep />
     </>

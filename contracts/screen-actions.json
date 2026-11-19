@@ -41,8 +41,61 @@
       }
     },
     {
+      "id": "agents.answerDream",
+      "title": "Answer a dreaming agent's questions",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "the dream's task id"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "slug",
+          "task",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.archive",
       "title": "Archive an agent",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.dream",
+      "title": "Start a dream: an agent cleans up its own memory",
       "kind": "change",
       "input": {
         "type": "object",
@@ -356,6 +409,60 @@
         "required": [
           "slug",
           "people"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.stopDream",
+      "title": "Stop an agent's dream",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "the dream's task id"
+          }
+        },
+        "required": [
+          "slug",
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.wakeUp",
+      "title": "Put away a finished dream",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "the dream's task id"
+          }
+        },
+        "required": [
+          "slug",
+          "task"
         ],
         "additionalProperties": false
       }
@@ -6788,6 +6895,33 @@
         "required": [
           "tasks",
           "owner"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.chatWith",
+      "title": "Open the chat of one of a pipeline's agents",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          },
+          "who": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "an actor id: human:<id> or bot:<slug>"
+          }
+        },
+        "required": [
+          "pipeline",
+          "who"
         ],
         "additionalProperties": false
       }

@@ -19,6 +19,7 @@ import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type His
 import { ModelPicker } from './ModelPicker';
 import { CopiesSection, CopyFacts, CopyPick } from './Copies';
 import { CredentialDialog, WorksForDialog } from './dialogs';
+import { DecisionsSection, DreamSection } from './Learnings';
 import { ConfirmDialog, EditDialog, Foot, Fold, OwnRow, PickDialog, SecLink, waitsOn } from './parts';
 import {
   agentQuery,
@@ -26,6 +27,7 @@ import {
   changesQuery,
   computersQuery,
   doneTasksQuery,
+  dreamQuery,
   groupsQuery,
   instructionsQuery,
   latestUpdateQuery,
@@ -112,6 +114,7 @@ function AgentHead({
   const pause = useAction('agents.pause');
   const resume = useAction('agents.resume');
   const archive = useAction('agents.archive');
+  const dream = useAction('agents.dream');
   const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
   const head: Head = {
@@ -145,6 +148,7 @@ function AgentHead({
           ) : (
             <MenuItem label="Pause" icon="pause" onSelect={() => void pause.run({ slug })} />
           )}
+          <MenuItem label="Dream" icon="asleep" onSelect={() => void dream.run({ slug })} />
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
@@ -173,6 +177,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const runs = useQuery(runsQuery(slug));
   const update = useQuery(latestUpdateQuery(slug));
   const detail = useQuery(agentQuery(slug));
+  const dream = useQuery(dreamQuery(slug));
 
   const tasks = open.data?.tasks ?? [];
   const nowId = detail.data?.status?.task_id;
@@ -190,7 +195,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     .filter(Boolean);
   const doneN = done.data?.tasks.length ?? 0;
 
-  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : !tasks.length && !lines.length && !doneN && !actor.working ? 'empty' : 'ready';
+  const state: PageState = open.isError ? 'fault' : open.isPending ? 'loading' : !tasks.length && !lines.length && !doneN && !actor.working && !dream.data ? 'empty' : 'ready';
   return (
     <RecordPage
       {...head}
@@ -250,6 +255,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
               </ul>
             </Section>
           )}
+          <DreamSection slug={slug} actorId={actor.id} />
           <Section name="Tasks" actions={<SecLink href="/tasks">All tasks</SecLink>}>
             {rest.map((t) => (
               <OwnRow key={t.id} task={t} me={me?.id} />
@@ -380,6 +386,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               </div>
             ))}
           </Section>
+          <DecisionsSection slug={slug} />
           <Section name="History">
             {history.slice(0, HISTORY_ROWS).map((h) => (
               <HistRow key={h.key} h={h} />

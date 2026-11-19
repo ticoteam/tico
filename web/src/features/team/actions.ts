@@ -32,6 +32,10 @@ import {
   setPersonTitle,
   setTeammateAccess,
   setWorksFor,
+  answerDream,
+  startDream,
+  stopDream,
+  wakeUp,
   startLogin,
   startLogout,
 } from './queries';
@@ -255,6 +259,51 @@ export const credential = defineAction({
   input: s.object({ slug }),
   run: (_ctx, { slug }) => said("Couldn't make a credential", () => newCredential(slug)),
   did: () => 'Made a new credential',
+  target: ({ slug }) => onPage(slug),
+});
+
+/* ---------------------------------------------------------------- dream */
+
+const dreamTask = s.string({ min: 1, max: 100, what: "the dream's task id" });
+const onDream = (slug: string) => ({ kind: 'dream', id: slug });
+
+export const dream = defineAction({
+  id: 'agents.dream',
+  title: 'Start a dream: an agent cleans up its own memory',
+  kind: 'change',
+  input: s.object({ slug }),
+  run: (_ctx, { slug }) => said("Couldn't start the dream", () => startDream(slug)),
+  did: () => 'Started a dream',
+  target: ({ slug }) => onDream(slug),
+});
+
+export const dreamAnswer = defineAction({
+  id: 'agents.answerDream',
+  title: "Answer a dreaming agent's questions",
+  kind: 'change',
+  input: s.object({ slug, task: dreamTask, text: s.string({ min: 1, max: 8000 }) }),
+  run: (_ctx, { slug, task, text }) => said("Couldn't send the answers", () => answerDream(slug, task, text)),
+  did: () => 'Sent the answers',
+  target: ({ slug }) => onDream(slug),
+});
+
+export const dreamStop = defineAction({
+  id: 'agents.stopDream',
+  title: "Stop an agent's dream",
+  kind: 'change',
+  input: s.object({ slug, task: dreamTask }),
+  run: (_ctx, { slug, task }) => said("Couldn't stop the dream", () => stopDream(slug, task)),
+  did: () => 'Stopped the dream',
+  target: ({ slug }) => onDream(slug),
+});
+
+export const dreamWake = defineAction({
+  id: 'agents.wakeUp',
+  title: 'Put away a finished dream',
+  kind: 'view',
+  input: s.object({ slug, task: dreamTask }),
+  run: (_ctx, { slug, task }) => wakeUp(slug, task),
+  did: () => 'Woke up',
   target: ({ slug }) => onPage(slug),
 });
 

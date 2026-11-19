@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
-import type { BrowserControl, BrowserControlState, BrowserInput, BrowserInputDone, BrowserOpen, BrowserOpened, Problem, Task, TeammateAccessView } from '@/api/schema';
+import type { BotDreamView, BrowserControl, BrowserControlState, BrowserInput, BrowserInputDone, BrowserOpen, BrowserOpened, Problem, Task, TeammateAccessView } from '@/api/schema';
 import { keys, queryClient, quietRoot, QUIET_STALE_MS, write } from '@/data';
 
 // Teammates, teams and computers have no live topic of their own (status lines come through the directory): read
@@ -184,6 +184,79 @@ export const learnedQuery = (slug: string) =>
       (await api.get<{ updates?: Learned[] }>(`/api/v2/bots/${at(slug)}/memory?include_documents=false`, { signal })).updates ?? [],
     staleTime: QUIET_STALE_MS,
   });
+
+/** Its memory files (GET .../memory): `memory/decisions.md` is what the Decisions section lists. */
+export interface Memory {
+  documents?: Record<string, string> | null;
+  document_status?: Record<string, { oversized?: boolean; updated_at?: string | null } | undefined> | null;
+}
+
+export const memoryQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'memory', slug] as const,
+    queryFn: ({ signal }) => api.get<Memory>(`/api/v2/bots/${at(slug)}/memory?${q({ limit: 1 })}`, { signal }),
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** A dream (backend/dream.py): a cleanup task the agent runs over its own memory, with at most one round of questions. */
+export type Dream = NonNullable<BotDreamView['dream']>;
+export const dreamOpen = (d: Dream | null | undefined): boolean => !!d && d.state !== 'done' && d.state !== 'stopped';
+
+// The server keeps showing a finished dream for a day; Wake up puts it away for the rest of this visit.
+const woken = new Set<string>();
+
+/** Its open dream, or one that finished in the last day and was not woken from. */
+export const dreamQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'dream', slug] as const,
+    queryFn: async ({ signal }): Promise<Dream | null> => {
+      const d = (await api.get<Partial<BotDreamView>>(`/api/v2/bots/${at(slug)}/dream`, { signal })).dream ?? null;
+      return d && woken.has(d.task) ? null : d;
+    },
+    staleTime: QUIET_STALE_MS,
+  });
+
+/** Read the dream again: its task moved on the stream. */
+export const dreamAgain = (slug: string) => void queryClient.invalidateQueries({ queryKey: dreamQuery(slug).queryKey });
+
+/** Start one: "Falling asleep" at once; its open dream comes back instead of a second. */
+export function startDream(slug: string) {
+  const now = new Date().toISOString();
+  return write<Partial<BotDreamView>>({
+    key: dreamQuery(slug).queryKey,
+    optimistic: (cur: Dream | null | undefined): Dream =>
+      cur && dreamOpen(cur)
+        ? cur
+        : { auto: false, closed_at: null, doing: null, questions: null, reason: null, started_at: now, state: 'starting', status: 'open', summary: null, task: '' },
+    send: (idempotencyKey) => api.post<Partial<BotDreamView>>(`/api/v2/bots/${at(slug)}/dream`, {}, { idempotencyKey }),
+  });
+}
+
+/** The answers, as one reply on the dream's task: it clears the question and wakes the agent, which dreams on. */
+export function answerDream(slug: string, task: string, text: string) {
+  return write({
+    key: dreamQuery(slug).queryKey,
+    optimistic: (cur: Dream | null | undefined) => (cur ? { ...cur, state: 'dreaming', questions: null } : cur),
+    send: (idempotencyKey) => api.post(`/api/v2/tasks/${at(task)}/comments`, { text }, { idempotencyKey }),
+  });
+}
+
+/** Stop: the dream's task is closed. */
+export function stopDream(slug: string, task: string) {
+  return write({
+    key: dreamQuery(slug).queryKey,
+    optimistic: (cur: Dream | null | undefined) => (cur ? { ...cur, state: 'stopped' } : cur),
+    send: (idempotencyKey) => api.post(`/api/v2/tasks/${at(task)}/move`, { to: 'closed' }, { idempotencyKey }),
+  });
+}
+
+/** Wake up: the finished dream is put away and its memory read again. */
+export function wakeUp(slug: string, task: string) {
+  woken.add(task);
+  queryClient.setQueryData(dreamQuery(slug).queryKey, null);
+  void queryClient.invalidateQueries({ queryKey: memoryQuery(slug).queryKey });
+  void queryClient.invalidateQueries({ queryKey: learnedQuery(slug).queryKey });
+}
 
 /** Changes to its settings (GET /api/v2/settings/history?bot=). */
 export interface Change {
