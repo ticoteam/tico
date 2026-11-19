@@ -237,7 +237,7 @@ company subscription. Its first model request warms the bot's identity, the call
 Each bot in the call holds a normal lease and uses one `turns_at_once` slot for the whole call (five slots on Shared).
 Each question goes to the resident session, with updated notes when they change. At 24,000 context tokens the runner
 starts a fresh process with the primer and a short excerpt of the recent call transcript.
-Each bot uses its own model at low effort with Claude Code’s Concise output style. Follow-up tasks use the bot’s usual settings.
+Each bot uses its own model at medium effort with Claude Code’s Concise output style. Follow-up tasks use the bot’s usual settings.
 
 The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
 The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
