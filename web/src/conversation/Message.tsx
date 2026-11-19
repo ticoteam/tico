@@ -8,7 +8,8 @@ import { ConfirmCard } from '@/kit/ConfirmCard';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
-import { ContextMenu, MenuItem } from '@/kit/Menu';
+import { IconButton } from '@/kit/IconButton';
+import { ContextMenu, MenuItem, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
@@ -17,8 +18,9 @@ import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Rate, Rated, type RateControls } from './Feedback';
+import { EMOJI, Quote, ReactPicker, Reacts, reactControls, type ReactControls } from './Reactions';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type Feedback, type SlackPlace } from './queries';
-import type { Attachment, ChatMessage, LiveRun, Variant } from './types';
+import type { Attachment, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
 export interface Who {
   name: string;
@@ -261,6 +263,14 @@ export interface MessageProps {
   feedback?: Feedback | null;
   /** What to draw in place of its text (a call's card), or nothing for a plain message. */
   card?: (m: ChatMessage) => ReactNode;
+  /** The chat it is in, when the person may react to it: the emoji picker, and its chips can be pressed. */
+  reactIn?: string;
+  /** Reply to it: the quote goes above the box. Left out where the person cannot write. */
+  onReply?: (m: ChatMessage) => void;
+  /** What it answers, drawn above it. */
+  quote?: ReplyQuote | null;
+  /** Go to the message a quote names. */
+  onQuote?: (id: string) => void;
 }
 
 /** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
@@ -282,16 +292,24 @@ const copy = (text: string) =>
 
 /**
  * On a phone there is no hover: a long press on a message opens its actions as a sheet, the same ones a computer
- * shows under it (Good, Not good), and Copy, since the press takes the place of selecting the text.
+ * shows on it (Reply, React, Good, Not good), and Copy, since the press takes the place of selecting the text.
  */
-function Held({ text, rate, children }: { text: string; rate: RateControls | null; children: ReactElement }) {
+function Held({ text, rate, react, reply, children }: { text: string; rate: RateControls | null; react: ReactControls | null; reply: (() => void) | null; children: ReactElement }) {
   const cards = useCards();
-  if (!cards || (!text && !rate)) return children;
+  if (!cards || (!text && !rate && !react && !reply)) return children;
   return (
     <ContextMenu
       items={
         <>
           {text && <MenuItem icon="copy" label="Copy" onSelect={() => copy(text)} />}
+          {reply && <MenuItem icon="reply" label="Reply" onSelect={reply} />}
+          {react && (
+            <MenuSub label="React" icon="smile">
+              {EMOJI.map((e) => (
+                <MenuItem key={e} label={e} on={react.mine(e)} onSelect={() => react.pick(e)} />
+              ))}
+            </MenuSub>
+          )}
           {rate && (
             <>
               <MenuItem label="Good" on={rate.rating === 'up'} onSelect={() => void rate.good()} />
@@ -306,7 +324,18 @@ function Held({ text, rate, children }: { text: string; rate: RateControls | nul
   );
 }
 
-function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { rate: RateControls | null }) {
+/** Reply and React on the message under the pointer (a phone has the long press instead). */
+function Acts({ react, reply }: { react: ReactControls | null; reply: (() => void) | null }) {
+  if (!react && !reply) return null;
+  return (
+    <div className="msg-acts">
+      {reply && <IconButton icon="reply" label="Reply" size="sm" quiet onClick={reply} />}
+      {react && <ReactPicker react={react} />}
+    </div>
+  );
+}
+
+function Line({ m, variant, me, cont, onRetry, card, rate, reactIn, onReply, quote, onQuote }: MessageProps & { rate: RateControls | null }) {
   const [reading, setReading] = useState(false);
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const shown = m.deleted ? null : card?.(m);
@@ -315,6 +344,11 @@ function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { ra
   const files = m.refs?.attachments;
   const pics = usePictures(m);
   const place = reading ? slackPlaceOf(m) : null;
+  const real = !m.pending && !m.deleted && !m.id.startsWith('tmp:');
+  const react = real && reactIn ? reactControls(reactIn, m, me) : null;
+  const reply = real && onReply ? () => onReply(m) : null;
+  const quoted = quote && !m.deleted ? <Quote q={quote} me={me} onOpen={onQuote} /> : null;
+  const reacts = m.deleted ? null : <Reacts list={m.reactions} me={me} react={react} />;
   // What opens over the page stays outside the long-pressed row: a press inside it is not a press on the message.
   const over = (
     <>
@@ -327,9 +361,11 @@ function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { ra
     const failed = m.pending === 'failed' || m.pending === 'held';
     return (
       <>
-        <Held text={words} rate={null}>
+        <Held text={words} rate={null} react={react} reply={reply}>
           <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
+            <Acts react={react} reply={reply} />
             <div className="mine-col" onClick={pics.onClick}>
+              {quoted}
               {shown ??
                 (text && (
                   <div className="bubble">
@@ -337,6 +373,7 @@ function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { ra
                   </div>
                 ))}
               <Files files={files} pending={!!m.pending} onPicture={pics.openAt} />
+              {reacts}
               {failed && (
                 <div className="msg-fail">
                   <Icon name="alert" />
@@ -359,8 +396,9 @@ function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { ra
   const aid = typeof m.refs?.action === 'string' ? m.refs.action : null;
   return (
     <>
-      <Held text={words} rate={rate}>
+      <Held text={words} rate={rate} react={react} reply={reply}>
         <div className={['msg', cont && 'is-cont'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
+          <Acts react={react} reply={reply} />
           {cont ? <span className="av-gap av-22" /> : <Face who={who} size={22} />}
           <div className="msg-main" onClick={pics.onClick}>
             {!cont && (
@@ -369,11 +407,13 @@ function Line({ m, variant, me, cont, onRetry, card, rate }: MessageProps & { ra
                 <time dateTime={m.created_at}>{clock(m.created_at)}</time>
               </div>
             )}
+            {quoted}
             {shown ?? (text && <Markdown text={text} compact />)}
             <Steps run={m.run} />
             <Files files={files} pending={false} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
             {m.refs?.slack && <FromSlack m={m} onRead={() => setReading(true)} />}
+            {reacts}
             {rate && <Rate rate={rate} />}
           </div>
         </div>

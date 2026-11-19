@@ -15,7 +15,7 @@ import type {
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
-import type { ChatMessage, LiveRun, PageRef, TimelinePage, Variant } from './types';
+import type { ChatMessage, LiveRun, PageRef, Reaction, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -111,6 +111,10 @@ export interface Send {
   me: string;
   /** Retry: the failed row to send again in its place. */
   retry?: string;
+  /** A reply: the message it answers (`in_reply_to`), and its quote shown on the pending row. Threads only: Tico's own
+      chat takes no reply. */
+  replyTo?: string;
+  quote?: ReplyQuote | null;
 }
 
 type Sent = ChatMessage | { message?: ChatMessage } | { hold?: unknown };
@@ -126,10 +130,13 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
     for (const file of files) f.append('files', file);
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
-  if (!files.length) return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.page ? { page: s.page } : {} }, opts);
+  const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
+  if (!files.length)
+    return api.post<Sent>(`/api/v2/threads/${enc(s.id)}/messages`, { text: s.text, refs: s.page ? { page: s.page } : {}, ...reply }, opts);
   // The upload form has no refs: a message with files does not carry the page.
   const f = new FormData();
   f.set('text', s.text);
+  if (s.replyTo) f.set('in_reply_to', s.replyTo);
   for (const file of files) f.append('files', file);
   return api.post<Sent>(`/api/v2/uploads/threads/${enc(s.id)}/messages`, f, opts);
 }
@@ -170,6 +177,7 @@ export async function sendMessage(s: Send): Promise<ChatMessage | null> {
     },
     pending: 'sending',
     ...(s.files?.length && { files: s.files }),
+    ...(s.replyTo && { in_reply_to: s.replyTo, reply_to: s.quote ?? { id: s.replyTo } }),
   };
   try {
     const answer = await write<Sent>({
@@ -277,7 +285,8 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
 export const liveText = (r: LiveRun) =>
   [...r.parts, r.typing ?? ''].map((p) => p.trim()).filter(Boolean).join('\n\n');
 
-const meId = () => queryClient.getQueryData<{ id?: string }>(keys.me())?.id;
+/** The signed-in person's actor id, from the cache. */
+export const meId = () => queryClient.getQueryData<{ id?: string }>(keys.me())?.id;
 
 let installed = false;
 
@@ -319,10 +328,77 @@ export function installConversationLive(): void {
       }
     }
   });
+  onTopic<ReactionEvent>('threads', patchReactions);
   onTopic('reset', () => {
     for (const [key, runs] of queryClient.getQueriesData<LiveRun[]>({ queryKey: ['thread'] }))
       if (key[2] === 'live' && runs?.length) queryClient.setQueryData(key, []);
   });
+}
+
+/* ---------------------------------------------------------------- reactions */
+
+/** Change one message wherever a timeline holds it. Returns the same data when it is not there. */
+function withMessage(d: Timeline | undefined, id: string, fn: (m: ChatMessage) => ChatMessage): Timeline | undefined {
+  if (!d) return d;
+  const p = d.pages.findIndex((page) => page.messages.some((m) => m.id === id));
+  if (p < 0) return d;
+  const page = d.pages[p] as TimelinePage;
+  return { ...d, pages: d.pages.with(p, { ...page, messages: page.messages.map((m) => (m.id === id ? fn(m) : m)) }) };
+}
+
+const mineIn = (r: Reaction | undefined, me: string) => !!r?.actors?.includes(me);
+
+/** A message's reactions with my `emoji` added (`on`) or taken off; the same list when nothing changes. */
+export function toggled(list: Reaction[] | undefined, emoji: string, me: string, on: boolean): Reaction[] {
+  const was = list ?? [];
+  const r = was.find((x) => x.emoji === emoji);
+  if (mineIn(r, me) === on) return was;
+  if (!r) return [...was, { emoji, count: 1, actors: [me] }];
+  return was
+    .map((x) =>
+      x.emoji !== emoji
+        ? x
+        : { ...x, count: Math.max(0, x.count + (on ? 1 : -1)), actors: on ? [...(x.actors ?? []), me] : (x.actors ?? []).filter((a) => a !== me) },
+    )
+    .filter((x) => x.count > 0);
+}
+
+/** Whether `me` reacted with `emoji` on a message the chat holds. */
+export function reacted(chat: string, message: string, emoji: string, me: string): boolean {
+  const m = rowsOf(queryClient.getQueryData<Timeline>(timelineKey(chat))).find((x) => x.id === message);
+  return mineIn(m?.reactions?.find((r) => r.emoji === emoji), me);
+}
+
+/** Add or take off my reaction: shown at once, replaced by the message's reactions as the server answers them. */
+export function reactMessage(chat: string, message: string, emoji: string, on: boolean, me: string) {
+  const path = `/api/v2/messages/${enc(message)}/reactions/${enc(emoji)}` as const;
+  return write<Reaction[]>({
+    key: timelineKey(chat),
+    optimistic: (d: Timeline | undefined) => withMessage(d, message, (m) => ({ ...m, reactions: toggled(m.reactions, emoji, me, on) })),
+    send: (idempotencyKey) => (on ? api.put<Reaction[]>(path, {}, { idempotencyKey }) : api.delete<Reaction[]>(path, { idempotencyKey })),
+    settle: (d: Timeline | undefined, answer) => (Array.isArray(answer) ? withMessage(d, message, (m) => ({ ...m, reactions: answer })) : d),
+    revert: (d: Timeline | undefined) => withMessage(d, message, (m) => ({ ...m, reactions: toggled(m.reactions, emoji, me, !on) })),
+  });
+}
+
+/** The `threads` topic's `reactions` kind (backend/events.py _threads): one message's reactions as they stand now. */
+export interface ReactionEvent {
+  kind?: string;
+  thread_id?: string;
+  message_id?: string;
+  reactions?: Reaction[];
+}
+
+/** Put each message's new reactions in every timeline that holds it (a root's flat timeline holds its sub-threads'). */
+export function patchReactions(batch: ReactionEvent[]): void {
+  const moved = batch.filter((e) => e.kind === 'reactions' && e.message_id && Array.isArray(e.reactions));
+  if (!moved.length) return;
+  for (const [key, data] of queryClient.getQueriesData<Timeline>({ queryKey: ['thread'] })) {
+    if (key[2] !== 'timeline' || !data?.pages) continue;
+    let next: Timeline | undefined = data;
+    for (const e of moved) next = withMessage(next, e.message_id as string, (m) => ({ ...m, reactions: e.reactions }));
+    if (next !== data) queryClient.setQueryData(key, next);
+  }
 }
 
 /* ---------------------------------------------------------------- outline */

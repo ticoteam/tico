@@ -13,6 +13,7 @@ import { dayKey, dayLabel } from './dates';
 import { canRate } from './Feedback';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
+import { quoteFrom, quoteOf, Replying } from './Reactions';
 import { feedbackQuery, installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
@@ -129,6 +130,23 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     scroller.current?.scrollToEnd();
   });
 
+  const byId = new Map(rows.map((m) => [m.id, m]));
+
+  /* ---- a reply being written: the message it answers sits above the box until it is sent or dropped. Tico's own
+     chat takes no reply (POST /api/v2/assistant/messages has no in_reply_to). */
+  const [replying, setReplying] = useState<{ id: string; m: ChatMessage } | null>(null);
+  const replyTo = replying?.id === id ? replying.m : null;
+  const footRef = useRef<HTMLElement>(null);
+  const canReply = canPost && variant !== 'tico';
+  const startReply = (m: ChatMessage) => {
+    setReplying({ id, m });
+    footRef.current?.querySelector('textarea')?.focus();
+  };
+  // A quote goes to the message it names when that is loaded.
+  const toQuoted = (message: string) => {
+    if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not loaded', kind: 'failed' });
+  };
+
   /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
   useEffect(
@@ -166,10 +184,22 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     return dot.set(doing);
   }, [doing]);
 
-  const send = (text: string, files: File[], retry?: string) => {
+  const send = (text: string, files: File[], retry?: ChatMessage) => {
     if (!myId) return;
     jump.current = true;
-    void sendMessage({ id, variant, text, files, page: at && { path: at.path, title: at.title }, me: myId, ...(retry && { retry }) });
+    const answers = retry ? retry.in_reply_to : replyTo?.id;
+    const quote = retry ? retry.reply_to : replyTo && quoteFrom(replyTo);
+    if (!retry) setReplying(null);
+    void sendMessage({
+      id,
+      variant,
+      text,
+      files,
+      page: at && { path: at.path, title: at.title },
+      me: myId,
+      ...(retry && { retry: retry.id }),
+      ...(answers && { replyTo: answers, quote }),
+    });
   };
 
   const list = (
@@ -202,10 +232,14 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
             variant={variant}
             me={myId}
             cont={it.cont}
-            onRetry={(m) => send(m.body ?? '', m.files ?? [], m.id)}
+            onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
             rateIn={rate ? id : undefined}
             feedback={rate ? (ratings.find((f) => f.subject_id === it.m.id) ?? null) : null}
             card={card}
+            reactIn={variant === 'tico' ? undefined : id}
+            onReply={canReply ? startReply : undefined}
+            quote={quoteOf(it.m, byId)}
+            onQuote={toQuoted}
           />
         );
       }}
@@ -223,9 +257,10 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     ) : null;
 
   const footer = (
-    <footer className="chat-foot" data-dock>
+    <footer className="chat-foot" data-dock ref={footRef}>
       {foot}
       {look}
+      {canReply && replyTo && myId && <Replying q={quoteFrom(replyTo)} me={myId} onDrop={() => setReplying(null)} />}
       {myId && canPost && <Composer id={id} me={myId} to={name} onSend={(text, files) => send(text, files)} />}
     </footer>
   );

@@ -80,3 +80,30 @@ textarea.composer-text::placeholder{color:var(--muted)}
 .co-list{max-height:60dvh;overflow:auto;margin:0 calc(var(--s-2) * -1)}
 .co-row{width:100%;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);border:0;background:none;color:var(--ink-2);font-family:inherit;font-size:inherit;text-align:left;cursor:pointer}
 .co-row:hover{background:var(--hover);color:var(--ink)}
+
+/* A reply's quote above it (pages/2-threads/threads.css .quote, spacing on the scale), drawn as a button that goes to
+   the message answered; and the same line above the box while a reply is written, with its close. */
+.quote{display:flex;align-items:center;gap:var(--s-1h);max-width:100%;height:22px;margin:0 0 var(--s-0);padding:0;border:0;background:none;color:var(--muted);font-family:inherit;font-size:var(--t-sm);text-align:left;position:relative}
+.quote .ico{width:12px;height:12px;flex:none}
+.quote b{flex:none;font-weight:var(--w-strong);color:var(--ink-2)}
+.quote span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+button.quote{cursor:pointer}
+button.quote:hover span{color:var(--ink)}
+.quote.is-replying{width:100%;height:auto}
+.quote.is-replying .ib{margin-left:auto}
+:where(html[data-layout="cards"]){
+  button.quote::before{content:"";position:absolute;inset:-11px 0}
+}
+
+/* Reaction chips (parts.css .reacts/.react) as buttons: mine is marked by weight and a ring, never a color. */
+button.react{border:0;color:var(--ink);font-family:inherit;cursor:pointer}
+button.react:hover{background:var(--well-2)}
+button.react[aria-pressed="true"]{box-shadow:inset 0 0 0 1px var(--line-strong)}
+button.react[aria-pressed="true"] b{font-weight:var(--w-strong);color:var(--ink-2)}
+
+/* Reply and React on the message under the pointer, at its top corner; a phone has the long press instead. */
+.chat-body .msg{position:relative}
+.msg-acts{position:absolute;top:var(--s-2);right:0;display:flex;gap:var(--s-0);border-radius:var(--r-ctl);background:var(--surface-chat);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.msg.is-mine .msg-acts{right:auto;left:0}
+.msg:hover .msg-acts,.msg-acts:focus-within,.msg-acts:has([aria-expanded="true"]){opacity:1}
+@media (hover:none){.msg-acts{display:none}}
