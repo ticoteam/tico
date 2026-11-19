@@ -485,15 +485,23 @@ def test_check_kpis_reconcile_growth_with_outside_totals(api):
     push(api, "costs", "ads", lines("period,channel,kind,amount", "2026-10,,money,2000"))
     assert read(api, "period=2026-10")["health"]["reconciled"] == "not_reconciled"
 
-    def check(name, role, value):
+    def check(name, role, value=None):
         kpi = post(api, "kpis", {"name": name})["kpi"]["id"]
         post(api, f"kpis/{kpi}", {"growth_role": role})
-        post(api, f"kpis/{kpi}/readings", {"value": value, "period_end": "2026-10-31"})
+        if value is not None:
+            post(api, f"kpis/{kpi}/readings", {"value": value, "period_end": "2026-10-31"})
+
+    check("Bank deposits", "check_cost")  # set up, no October reading: listed, not counted
+    health = read(api, "period=2026-10")["health"]
+    assert health["reconciled"] == "not_reconciled" and health["checks"] == [
+        {"figure": "cost", "growth": 2000.0, "outside": None, "kpi": "Bank deposits", "agrees": None}
+    ]
 
     check("Stripe new paying", "check_new_customers", 41)  # within 1
     check("Finance ad spend", "check_cost", 2050)  # within 5%
     health = read(api, "period=2026-10")["health"]
-    assert health["reconciled"] == "reconciled" and [c["figure"] for c in health["checks"]] == ["new_customers", "cost"]
+    assert health["reconciled"] == "reconciled"
+    assert [c["figure"] for c in health["checks"]] == ["cost", "new_customers", "cost"]
     check("PostHog sign-ups", "check_signups", 130)
     health = read(api, "period=2026-10")["health"]
     assert health["reconciled"] == "off"
