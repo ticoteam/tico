@@ -65,8 +65,16 @@ def main():
             thread.start()
             while not server.started:
                 time.sleep(0.01)
+
+            def written():
+                with store.read() as c:
+                    row = c.execute(
+                        "SELECT last_seen_at FROM runner_states WHERE runner_id=?", (computer["runner_id"],)
+                    )
+                    return (row.fetchone() or [None])[0]
+
             for busy in (False, True):
-                starts, readies = [], []
+                starts, readies, stamps = [], [], []
                 for _ in range(RUNS):
                     with store.transaction() as c:  # its contact is due, as when it last wrote five minutes ago
                         c.execute(
@@ -74,12 +82,18 @@ def main():
                         )
                     holder = None
                     if busy:
-                        holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+                        holder = sqlite3.connect(
+                            str(store.settings.db_path), isolation_level=None, check_same_thread=False
+                        )
                         holder.execute("BEGIN IMMEDIATE")
                         threading.Timer(HOLD, holder.rollback).start()
+                    began = time.perf_counter()
                     start, ready = opened(port, computer["token"])
                     starts.append(start)
                     readies.append(ready)
+                    while not written() and time.perf_counter() - began < 30:
+                        time.sleep(0.02)
+                    stamps.append((time.perf_counter() - began) * 1000 if written() else float("inf"))
                     time.sleep(HOLD + 0.2)
                     if holder is not None:
                         holder.close()
@@ -87,11 +101,8 @@ def main():
                 print(
                     f"{label:22s} response start median {statistics.median(starts):8.1f} ms max {max(starts):8.1f} ms"
                     f" | ready median {statistics.median(readies):8.1f} ms max {max(readies):8.1f} ms"
+                    f" | contact written after median {statistics.median(stamps):8.1f} ms"
                 )
-            with store.read() as c:
-                row = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (computer["runner_id"],))
-                seen = (row.fetchone() or [None])[0]
-            print("contact written:", bool(seen))
             server.should_exit = True
             thread.join(timeout=20)
             sock.close()
