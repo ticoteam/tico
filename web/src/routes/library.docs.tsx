@@ -1,6 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { DocsPage, docsSearch, loadDocs } from '@/features/library/exports';
 
 export const Route = createFileRoute('/library/docs')({
-  component: () => <Placeholder title="Docs" />,
+  validateSearch: docsSearch,
+  loader: ({ context: { queryClient } }) => loadDocs(queryClient),
+  component: Docs,
 });
+
+function Docs() {
+  return <DocsPage search={Route.useSearch()} />;
+}

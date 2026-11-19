@@ -1,6 +1,9 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
+// Library has no page of its own: it opens on Docs.
 export const Route = createFileRoute('/library/')({
-  component: () => <Placeholder title="Library" />,
+  beforeLoad: () => {
+    throw redirect({ to: '/library/docs', replace: true });
+  },
+  component: () => null,
 });

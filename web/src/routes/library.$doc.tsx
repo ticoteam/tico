@@ -1,6 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { DocPage, docSearch, loadDoc } from '@/features/library/exports';
 
+// One doc by id; `sources` is External sources and `ext:<id>` a doc read from one of them.
 export const Route = createFileRoute('/library/$doc')({
-  component: () => <Placeholder title="Library" />,
+  validateSearch: docSearch,
+  loader: ({ params: { doc }, context: { queryClient } }) => loadDoc(queryClient, doc),
+  component: Doc,
 });
+
+function Doc() {
+  const { doc } = Route.useParams();
+  return <DocPage key={doc} doc={doc} search={Route.useSearch()} />;
+}

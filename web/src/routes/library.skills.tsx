@@ -1,6 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Placeholder } from '@/kit/placeholder/Placeholder';
+import { loadSkills, SkillsPage, skillsSearch } from '@/features/library/exports';
 
 export const Route = createFileRoute('/library/skills')({
-  component: () => <Placeholder title="Skills" />,
+  validateSearch: skillsSearch,
+  loaderDeps: ({ search }) => ({ skill: search.skill, proposal: search.proposal }),
+  loader: ({ deps, context: { queryClient } }) => loadSkills(queryClient, deps),
+  component: Skills,
 });
+
+function Skills() {
+  return <SkillsPage search={Route.useSearch()} />;
+}
