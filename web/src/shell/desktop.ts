@@ -1,0 +1,225 @@
+import { useSyncExternalStore } from 'react';
+
+/* The desktop app's bridge, `window.tico` (desktop/src/bridge.d.ts, mirrored here so web/ imports nothing from desktop/).
+   It exists only inside the desktop app; in a browser every accessor here gives null and every report does nothing.
+   The page checks for the bridge and never sniffs the user agent (platforms.md 4.10). */
+
+export type DesktopPlatform = 'mac' | 'windows' | 'linux';
+export type UpdateState = { state: 'none' | 'downloading' | 'ready' | 'error'; version?: string };
+/** 'return': the person closed the small window and chose to go back to the call in the main window. */
+export type CallWindowState = 'open' | 'closed' | 'return';
+export type CompanyRef = { id: string; origin: string; name: string; email: string; active: boolean; self: boolean; signedOut: boolean; needs: number };
+
+export interface TicoDesktop {
+  version: string;
+  platform: DesktopPlatform;
+  companies: {
+    list(): Promise<CompanyRef[]>;
+    switchTo(id: string, url?: string): Promise<void>;
+    add(server?: string): Promise<void>;
+    remove(id: string): Promise<void>;
+    reportSelf(info: { name: string; email: string; signedOut: boolean }): void;
+    onChange(cb: (all: CompanyRef[]) => void): () => void;
+  };
+  setBadge(needs: number): void;
+  callWindow: {
+    open(callId: string): Promise<void>;
+    close(): Promise<void>;
+    setOnTop(on: boolean): Promise<void>;
+    onState(cb: (s: CallWindowState) => void): () => void;
+  };
+  app: {
+    updateState(): Promise<UpdateState>;
+    restartToUpdate(): Promise<void>;
+    checkForUpdates(): Promise<void>;
+    showLog(): Promise<void>;
+    logTail(): Promise<{ version: string; lines: string[] }>;
+    openAtLogin(on?: boolean): Promise<boolean>;
+  };
+  setFilesOrigin?(origin: string): void;
+}
+
+/** The bridge, or null in a browser. */
+export const desktop = (): TicoDesktop | null =>
+  (typeof window !== 'undefined' && (window as { tico?: TicoDesktop }).tico) || null;
+
+/** The desktop preload marks `<html data-desktop>` before the first paint; this covers a page the preload marked late. */
+export function markDesktop(): void {
+  const t = desktop();
+  const root = document.documentElement;
+  if (t && !root.dataset.desktop) root.dataset.desktop = t.platform;
+}
+
+/* ---------------------------------------------------------------- Settings' desktop rows */
+
+/** What Settings shows for the desktop app: its version, updates, the log and open at login. */
+export interface DesktopApp {
+  version: string;
+  platform: DesktopPlatform;
+  updateState(): Promise<UpdateState>;
+  /** Refused while a call is live. */
+  restartToUpdate(): Promise<void>;
+  checkForUpdates(): Promise<void>;
+  showLog(): Promise<void>;
+  logTail(): Promise<{ version: string; lines: string[] }>;
+  /** Reads, or with `on` sets, open at login; resolves to the current value. */
+  openAtLogin(on?: boolean): Promise<boolean>;
+}
+
+/** The desktop app's own controls for Settings, or null in a browser (no rows then). */
+export function desktopApp(): DesktopApp | null {
+  const t = desktop();
+  if (!t) return null;
+  const a = t.app;
+  return {
+    version: t.version,
+    platform: t.platform,
+    updateState: () => a.updateState(),
+    restartToUpdate: () => a.restartToUpdate(),
+    checkForUpdates: () => a.checkForUpdates(),
+    showLog: () => a.showLog(),
+    logTail: () => a.logTail(),
+    openAtLogin: (on) => (on === undefined ? a.openAtLogin() : a.openAtLogin(on)),
+  };
+}
+
+/* ---------------------------------------------------------------- who is signed in, the badge, the files origin */
+
+export interface DesktopSelf {
+  /** null while the person is not known yet: nothing is reported */
+  signedIn: boolean | null;
+  /** the company's name (config) */
+  name: string;
+  email: string;
+  /** this company's Needs you count; undefined until it is read (the badge waits) */
+  needs?: number;
+  /** the company's files origin for user-made pages (config.visual_origin) */
+  filesOrigin?: string;
+}
+
+let told = { self: '', badge: -1, files: '' };
+/** For tests: forget what was reported. */
+export const resetDesktopReports = () => {
+  told = { self: '', badge: -1, files: '' };
+};
+
+/** Tells the desktop app who is signed in here, this company's count for the Dock badge, and its files origin.
+    Each is sent only when it changed. Signed out keeps the company's stored name and email and clears the count. */
+export function reportToDesktop(s: DesktopSelf): void {
+  const t = desktop();
+  if (!t || s.signedIn === null) return;
+  const needs = !s.signedIn ? 0 : s.needs === undefined ? null : Math.max(0, Math.floor(s.needs) || 0);
+  if (needs !== null && needs !== told.badge) {
+    told.badge = needs;
+    t.setBadge(needs);
+  }
+  if (s.signedIn && s.filesOrigin && s.filesOrigin !== told.files && t.setFilesOrigin) {
+    told.files = s.filesOrigin;
+    t.setFilesOrigin(s.filesOrigin);
+  }
+  const key = s.signedIn ? `in|${s.name}|${s.email}` : 'out';
+  if (key === told.self || (s.signedIn && (!s.name || !s.email))) return;
+  told.self = key;
+  if (s.signedIn) return t.companies.reportSelf({ name: s.name, email: s.email, signedOut: false });
+  // signed out: the row keeps the name and email it had, so the person sees which account to sign back in to
+  void t.companies.list().then(
+    (all) => {
+      const me = all.find((c) => c.self);
+      t.companies.reportSelf({ name: me?.name || s.name, email: me?.email ?? '', signedOut: true });
+    },
+    () => t.companies.reportSelf({ name: s.name, email: '', signedOut: true }),
+  );
+}
+
+/* ---------------------------------------------------------------- the small call window (platforms.md 4.6) */
+
+/** This page is the small call window: `/call/<id>?window=1`. It draws the call page alone. */
+export const isCallWindow = (pathname: string, search: string): boolean =>
+  /^(\/next)?\/call\/[^/]+\/?$/.test(pathname) && new URLSearchParams(search).get('window') === '1';
+
+export interface CallWindowNow {
+  /** the call shown in the small window, while it is out */
+  id: string | null;
+  open: boolean;
+}
+let callWin: CallWindowNow = { id: null, open: false };
+const callWinListeners = new Set<() => void>();
+let returnTo: ((id: string) => void) | null = null;
+let offState: (() => void) | null = null;
+
+function setCallWin(next: CallWindowNow) {
+  callWin = next;
+  for (const l of callWinListeners) l();
+}
+
+/** Listens to the small window once: 'open', 'closed' (left the call there) and 'return' (go back to it here,
+    which `onReturn` does). Returns the stop. */
+export function watchCallWindow(onReturn: (id: string) => void): () => void {
+  returnTo = onReturn;
+  const t = desktop();
+  if (!t || offState) return () => undefined;
+  offState = t.callWindow.onState((st) => {
+    const id = callWin.id;
+    if (st === 'open') return setCallWin({ id, open: true });
+    setCallWin({ id: null, open: false });
+    if (st === 'return' && id) returnTo?.(id);
+  });
+  return () => {
+    offState?.();
+    offState = null;
+    returnTo = null;
+  };
+}
+
+/** Opens a call in the small window (only one at a time; the main process replaces an older one). */
+export async function openCallWindow(id: string): Promise<void> {
+  const t = desktop();
+  if (!t) throw new Error('only the desktop app opens a call in its own window');
+  callWin = { id, open: callWin.open };
+  await t.callWindow.open(id);
+}
+
+/** The small window's own controls: keep it above other windows, or close it. */
+export const callWindowControls = () => {
+  const t = desktop();
+  return t ? { setOnTop: (on: boolean) => t.callWindow.setOnTop(on), close: () => t.callWindow.close() } : null;
+};
+
+/** Whether a call is out in the small window, and which (for the main window's call bar: "In the small window"). */
+export function useCallWindow(): CallWindowNow {
+  return useSyncExternalStore(
+    (cb) => {
+      callWinListeners.add(cb);
+      return () => callWinListeners.delete(cb);
+    },
+    () => callWin,
+  );
+}
+
+/* ---------------------------------------------------------------- the window buttons' corner */
+
+export interface DesktopInset {
+  left: number;
+  top: number;
+}
+const NO_INSET = '0,0';
+const readInset = (): string => {
+  if (typeof document === 'undefined') return NO_INSET;
+  const root = document.documentElement;
+  if (!root.dataset.desktop) return NO_INSET;
+  const css = getComputedStyle(root);
+  const px = (name: string) => Math.max(0, Number.parseFloat(css.getPropertyValue(name)) || 0);
+  return `${px('--desktop-inset-left')},${px('--desktop-inset-top')}`;
+};
+const watchInset = (cb: () => void) => {
+  const watch = new MutationObserver(cb);
+  watch.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-desktop', 'data-desktop-fullscreen'] });
+  return () => watch.disconnect();
+};
+
+/** The room to keep clear of the macOS window buttons at the window's top left (0, 0 in a browser and in full screen). */
+export function useDesktopInset(): DesktopInset {
+  const v = useSyncExternalStore(watchInset, readInset, () => NO_INSET);
+  const [left = 0, top = 0] = v.split(',').map(Number);
+  return { left, top };
+}

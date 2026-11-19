@@ -1,13 +1,15 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
+import { useDesktopInset } from './desktop';
 import { IconButton } from '@/kit/IconButton';
 import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
 import './Frame.css';
+import './desktop.css';
 
 /* The ground and the sheets: Tico | the menu (or a task's list) | a second chat | the page, plus a panel, an agent's
    widgets or a call's side. Sizes come from layout() (layout.md); under 760 the phone's cards take over. */
@@ -36,6 +38,9 @@ export interface FrameProps {
   onCloseChat?: () => void;
   onClosePanel?: () => void;
 }
+
+/* the least head a sheet keeps beside the desktop window's buttons; narrower, its content starts below them */
+const BESIDE_LIGHTS = 160;
 
 const NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'the menu', list: 'the list', chat: 'the chat', page: 'the page', panel: 'the panel', widgets: 'widgets', stage: 'the call', side: 'the side' };
 
@@ -94,6 +99,7 @@ interface Placed {
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
   const { width, mode } = useWindowMode();
+  const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
   const [peek, setPeek] = useState<SheetId | null>(null);
@@ -329,6 +335,10 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
         const folded = s.state === 'fold' && !shown && s.width > 0;
         const w = shown ? (s.wanted ?? s.width) : s.width;
         const x = shown && out && s.id !== 'chat' ? stX + stretch.width - w : (s.x ?? stX);
+        // the desktop window's buttons sit over the top left corner: a sheet under them moves its head right past
+        // them, or, too narrow for that (a folded rail), starts below them (desktop.css)
+        const under = Math.max(0, lights.left - x);
+        const clear = under > 0 && lights.top > 0 ? (w - under < BESIDE_LIGHTS ? 'top' : 'left') : undefined;
         const sp = s.id === stretch.id ? null : specOf(arr, s.id);
         const controls: SheetControls = {
           id: s.id,
@@ -348,7 +358,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               else places.current.delete(s.id);
             }}
             className={`shell-place${out || shown ? ' is-over' : ''}`}
-            style={{ left: x, width: w }}
+            style={clear ? ({ left: x, width: w, '--lights-left': `${under}px` } as CSSProperties) : { left: x, width: w }}
+            data-lights={clear}
             hidden={out && s.state !== 'over' && !shown}
             data-sheet={s.id}
             data-target={`sheet:${s.id}`}

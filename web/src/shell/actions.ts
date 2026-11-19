@@ -2,6 +2,7 @@ import { defineAction, run, s } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
 import { teamSlug } from '@/features/team/exports';
 import { companiesBridge } from './companies';
+import { desktop, openCallWindow } from './desktop';
 
 /* What the menu's own controls do, as actions so Tico can do them too: add a teammate from the Team section's plus,
    and, in the desktop app, switch to or add a company. The account menu's rows are other parts' actions
@@ -60,4 +61,21 @@ export const addCompany = defineAction({
     await b.add();
   },
   did: () => 'Opened Add company',
+});
+
+/** Desktop only: the call moves to its own small window. The room lives in one window at a time, so this one leaves
+    it first and the small window joins (about a second, platforms.md 4.6); this window goes back to the start. */
+export const openCallInWindow = defineAction({
+  id: 'shell.openCallWindow',
+  title: 'Open the call in its own window',
+  kind: 'view',
+  tico: false,
+  input: s.object({ id: s.string({ min: 1, max: 200, what: 'a call id' }) }),
+  can: () => !!desktop(),
+  run: async ({ router, via }, { id }) => {
+    await run('calls.leave', {}, { via });
+    await openCallWindow(id);
+    if (/^\/call\//.test(here(router.state.location.pathname))) await router.navigate({ to: '/' });
+  },
+  did: () => 'Opened the call in its own window',
 });

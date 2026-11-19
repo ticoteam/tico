@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { queryClient } from '@/data/query-client';
 import { setLinkComponent, type LinkProps } from '@/kit/Link';
 import { router } from '@/router';
+import { markDesktop } from '@/shell';
 import '@/styles/index.css';
 
 /* The kit's links move through the router (no page load). An address is app-relative ("/tasks/engineering?view=list");
@@ -21,6 +22,8 @@ function AppLink({ href, ...rest }: LinkProps) {
   );
 }
 setLinkComponent(AppLink);
+// the desktop preload marks the page before the first paint; a page it marked late is marked here
+markDesktop();
 
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root');

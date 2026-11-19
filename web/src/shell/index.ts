@@ -9,3 +9,19 @@ export { layout, modeFor, press, C, SPEC, ARR } from './layout';
 export type { Arrangement, ArrangementSpec, Saved, SheetId, SheetLayout, SheetState, Layout } from './layout';
 export { resetSheetSizes } from './memory';
 export { useCompanies, type Company } from './companies';
+export {
+  desktop,
+  desktopApp,
+  isCallWindow,
+  markDesktop,
+  openCallWindow,
+  reportToDesktop,
+  useCallWindow,
+  useDesktopInset,
+  watchCallWindow,
+  callWindowControls,
+  type DesktopApp,
+  type DesktopSelf,
+  type UpdateState,
+  type CallWindowNow,
+} from './desktop';

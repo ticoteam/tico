@@ -1,0 +1,26 @@
+/* The desktop app. Its preload marks <html data-desktop="mac|windows|linux"> and sets --desktop-inset-left and
+   --desktop-inset-top (0 in full screen) before the first paint. On the Mac the window's buttons sit over the top left
+   corner of the page: nothing to press goes under them, and the heads move the window. Only tokens; no new values. */
+
+/* moving the window: the ground and every sheet's head; everything pressable in them stays pressable */
+:root[data-desktop="mac"] :is(.shell-frame,.shell-col>.cb,.shell-place[data-lights="top"]),
+:root[data-desktop="mac"] :is(.tico-head,.nav-head,.page-head,.side-head,.stage-head,.cw-head,.call-head){-webkit-app-region:drag}
+:root[data-desktop="mac"] :is(.shell-place,.shell-handle),
+:root[data-desktop="mac"] :is(button,a,input,textarea,select,label,summary,[role="button"],[role="tab"],[role="menuitem"],[role="combobox"],[tabindex],[contenteditable]),
+:root[data-desktop="mac"] :is(.menu,[role="menu"],[role="dialog"],[role="listbox"]){-webkit-app-region:no-drag}
+
+/* a sheet under the buttons (Frame sets data-lights and how far in they reach): its head moves right past them, or a
+   folded rail starts below them. A call's bar on top already holds the frame below them. */
+:root[data-desktop="mac"] .shell-col:not(:has(>.cb)) .shell-place[data-lights="left"]>.pane>header:first-child,
+:root[data-desktop="mac"] .shell-col:not(:has(>.cb)) .shell-place[data-lights="left"]>.pane>:first-child>header:first-child{border-left:var(--lights-left) solid transparent}
+:root[data-desktop="mac"] .shell-col:not(:has(>.cb)) .shell-place[data-lights="top"]>.pane{padding-top:calc(var(--desktop-inset-top) - var(--gap-pane))}
+:root[data-desktop="mac"] .shell-col>.cb{margin-left:calc(var(--desktop-inset-left))}
+
+/* the phone's cards in a narrow window, and the small call window: the head at the top moves right past them */
+:root[data-desktop="mac"] .ph>.pg>.pane>header:first-child,
+:root[data-desktop="mac"] .ph>.pg>.pane>:first-child>header:first-child,
+:root[data-desktop="mac"] .shell-callwin>.pane>header:first-child{border-left:var(--desktop-inset-left) solid transparent}
+
+/* the small call window (/call/<id>?window=1): the call page alone, the whole window */
+.shell-callwin{height:100dvh;display:flex;background:var(--ground)}
+.shell-callwin>.pane{flex:1;min-width:0;border-radius:0;box-shadow:none}

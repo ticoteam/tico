@@ -14,3 +14,4 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .acct-me b{font-weight:var(--w-strong)}
 .acct-me em{font-style:normal;font-size:var(--t-sm);color:var(--muted)}
 .acct-line{height:var(--ctl);display:flex;align-items:center;justify-content:space-between;padding:0 var(--s-1) 0 var(--s-2)}
+.help-slot>.slot-n{left:18px;top:-6px;pointer-events:none}

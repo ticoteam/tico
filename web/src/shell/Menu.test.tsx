@@ -63,4 +63,19 @@ describe('Menu', () => {
     fireEvent.click(within(nav).getByRole('button', { name: 'Add a teammate' }));
     expect(add).toHaveBeenCalledOnce();
   });
+
+  it('marks the "?" with Tico support\'s unread count, open and folded, and presses onHelp', async () => {
+    const help = vi.fn();
+    let nav = await show({ counts: { support: 2 }, onHelp: help });
+    const q = within(nav).getByRole('button', { name: 'Tico support, 2 unread' });
+    expect(q.parentElement?.querySelector('.slot-n')?.textContent).toBe('2');
+    fireEvent.click(q);
+    expect(help).toHaveBeenCalledOnce();
+    document.body.innerHTML = '';
+    nav = await show({ counts: { support: 3 }, folded: true });
+    expect(within(nav).getByRole('button', { name: 'Tico support, 3 unread' }).parentElement?.querySelector('.slot-n')?.textContent).toBe('3');
+    document.body.innerHTML = '';
+    nav = await show();
+    expect(within(nav).getByRole('button', { name: 'Tico support' }).parentElement?.querySelector('.slot-n')).toBeNull();
+  });
 });

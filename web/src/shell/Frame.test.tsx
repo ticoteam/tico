@@ -63,4 +63,27 @@ describe('Frame', () => {
     rerender(<Frame {...slots} arrangement="agent" widgets={<Sheet kind="column" label="Widgets" />} />);
     expect(handle('the menu').getAttribute('aria-valuenow')).toBe('248');
   });
+
+  it("in the Mac app, marks the sheets under the window's buttons: a head moves right, a folded rail starts below", async () => {
+    const root = document.documentElement;
+    root.dataset.desktop = 'mac';
+    root.style.setProperty('--desktop-inset-left', '92px');
+    root.style.setProperty('--desktop-inset-top', '52px');
+    try {
+      resize(1440);
+      render(<Frame {...slots} arrangement="page" />);
+      const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
+      expect(place('tico').dataset.lights).toBe('left');
+      expect(place('tico').style.getPropertyValue('--lights-left')).toBe('84px');
+      expect(place('menu').dataset.lights).toBeUndefined();
+      resize(860); // Tico folds to its rail; the menu beside it starts at 72
+      expect(place('tico').dataset.lights).toBe('top');
+      expect(place('menu').dataset.lights).toBe('top'); // the folded menu is a rail too
+      await act(async () => root.setAttribute('style', '--desktop-inset-left: 0px; --desktop-inset-top: 0px')); // full screen
+      expect(place('tico').dataset.lights).toBeUndefined();
+    } finally {
+      delete root.dataset.desktop;
+      root.removeAttribute('style');
+    }
+  });
 });

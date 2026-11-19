@@ -5,7 +5,9 @@ import { ActionsRoot, run } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, recordVisit, useHeldCount, type Actor, type Directory } from '@/data';
 import { CallBar, CallSide, RingCard, TOGGLE_MUTE, useCall } from '@/features/calls/exports';
+import { FileViewerHost } from '@/features/library/exports';
 import { FirstRun, StartScreen, useStartGate } from '@/features/start/exports';
+import { SUPPORT_CHAT, SupportChat, supportUnreadQuery } from '@/features/support/exports';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/exports';
 import { TeammateChat, teamSlug, whoHref } from '@/features/team/exports';
 import { ChatSheet, catchUpQuery, updateListQuery } from '@/features/threads/exports';
@@ -27,9 +29,13 @@ import {
   Sheet,
   SheetHead,
   arrangementFor,
+  desktop,
   foldSheet,
+  isCallWindow,
   isTeammate,
+  reportToDesktop,
   useCompanies,
+  watchCallWindow,
   type Company,
   type MenuMate,
   type MenuTeam,
@@ -75,8 +81,40 @@ function Root() {
   useMotionRoot();
   useTheme();
   const gate = useStartGate();
+  useDesktopReports(gate.screen === 'signin' || gate.screen === 'signed-out');
+  const callWindow = useLocation({ select: (l) => isCallWindow(l.pathname, l.searchStr) });
   if (gate.screen) return <StartScreen screen={gate.screen} error={gate.error} retry={gate.retry} busy={gate.busy} />;
-  return <App />;
+  return callWindow ? <CallWindow /> : <App />;
+}
+
+/* The desktop app's small call window (/call/<id>?window=1): the call page alone, with no Tico, menu or call bar. */
+function CallWindow() {
+  return (
+    <>
+      <div className="shell-callwin">
+        <Outlet />
+      </div>
+      <ActionsRoot dot={dotEl} fold={foldSheet} />
+      <Toasts />
+    </>
+  );
+}
+
+/* In the desktop app: who is signed in here, this company's Needs you count for the Dock badge, its files origin.
+   Nothing is read or sent in a browser. */
+function useDesktopReports(signedOut: boolean) {
+  const on = !!desktop();
+  const me = useQuery({ ...meQuery, enabled: on });
+  const config = useQuery({ ...configQuery, enabled: on });
+  const flow = useQuery({ ...flowQuery, enabled: on && me.isSuccess });
+  const signedIn = me.isSuccess && config.isFetched ? true : signedOut ? false : null;
+  const name = config.data?.company_name || config.data?.app_name || '';
+  const email = me.data?.email ?? '';
+  const needs = flow.data?.count;
+  const files = config.data?.visual_origin;
+  useEffect(() => {
+    if (on) reportToDesktop({ signedIn, name, email, needs, filesOrigin: files });
+  }, [on, signedIn, name, email, needs, files]);
 }
 
 function App() {
@@ -112,13 +150,29 @@ function App() {
     return () => clearTimeout(t);
   }, [signedIn, at.path]);
 
+  // the desktop's small call window: 'return' brings the call back here (the room moves, so this window joins it)
+  useEffect(
+    () =>
+      watchCallWindow((id) => {
+        void router.navigate({ to: `/call/${encodeURIComponent(id)}` }).then(() => run('calls.join', { id }, { via: 'click' }));
+      }),
+    [router],
+  );
+
   const closePanel = () =>
     void router.navigate({ to: '.', search: ({ panel: _, ...rest }: Record<string, unknown>) => rest } as never);
 
   /* What each place holds in this arrangement (layout.md 6): an open task's chat beside it; a teammate's chat
      stretching, with their page as the column beside it; otherwise the page, and a second chat when one is open. */
   let page: ReactNode = <Outlet />;
-  let chat: ReactNode = at.chat ? <SecondChat chat={at.chat} /> : undefined;
+  let chat: ReactNode =
+    at.chat === SUPPORT_CHAT ? (
+      <Sheet kind="chat" label="Tico support">
+        <SupportChat />
+      </Sheet>
+    ) : at.chat ? (
+      <SecondChat chat={at.chat} />
+    ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
   if (arrangement === 'task') {
@@ -160,6 +214,8 @@ function App() {
       {signedIn ? <FirstRun /> : null}
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
+      {/* the file `files.view` opens, over any page */}
+      <FileViewerHost />
       <RingCard />
     </>
   );
@@ -205,6 +261,7 @@ function AppMenu({ note }: { note: ReactNode }) {
   const { data: flow } = useQuery(flowQuery);
   const { data: catchUp } = useQuery(catchUpQuery);
   const { data: updates } = useInfiniteQuery(updateListQuery('all'));
+  const { data: support } = useQuery(supportUnreadQuery);
   const companies = useCompanies();
   const self = me ? dir?.byId[me.id] : undefined;
   const name = config?.company_name || config?.app_name || '';
@@ -217,10 +274,11 @@ function AppMenu({ note }: { note: ReactNode }) {
       me={meMate}
       teams={teamsOf(dir, me?.id)}
       pipelines={pipelines?.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` }))}
-      counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread) }}
+      counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread), support: some(support) }}
       note={note}
       onSearch={() => openSearch()}
       onAddTeammate={press('shell.addTeammate')}
+      onHelp={press('support.open')}
       companyMenu={<CompanyRows name={name} all={companies} />}
       accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
     />

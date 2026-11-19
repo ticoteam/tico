@@ -20,6 +20,8 @@ export interface MenuCounts {
   updates?: number;
   /* the next meeting's time, beside Calendar ("2:30 PM") */
   next?: string;
+  /* Tico support's replies not read yet, on the "?" */
+  support?: number;
 }
 export interface MenuMate {
   id: string;
@@ -172,7 +174,7 @@ export function Menu(p: MenuProps) {
         </div>
         <footer className="nav-foot">
           <IconButton icon="search" label="Search" quiet onClick={p.onSearch} />
-          <IconButton icon="help" label="Tico support" quiet onClick={p.onHelp} />
+          <Help n={c.support} quiet onClick={p.onHelp} />
           {can('settings') ? (
             <Link className="ib ib-quiet" to={to('/settings')} aria-label="Settings" title="Settings">
               <Icon name="gear" />
@@ -338,7 +340,7 @@ export function Menu(p: MenuProps) {
         </Link>
       )}
       <span className="grow" />
-      <IconButton icon="help" label="Tico support" onClick={p.onHelp} />
+      <Help n={p.counts?.support} onClick={p.onHelp} />
       {can('settings') ? (
         <Link className="ib" to={to('/settings')} aria-label="Settings" title="Settings">
           <Icon name="gear" />
@@ -381,5 +383,20 @@ export function Menu(p: MenuProps) {
       {p.note}
       <footer className="nav-foot">{foot}</footer>
     </nav>
+  );
+}
+
+/* The foot's "?": Tico support, with a count of its unread replies (the menu's grey count). */
+function Help({ n, quiet, onClick }: { n?: number; quiet?: boolean; onClick?: () => void }) {
+  const label = n ? `Tico support, ${n} unread` : 'Tico support';
+  return (
+    <span className="slot-ico help-slot">
+      <IconButton icon="help" label={label} quiet={quiet} onClick={onClick} />
+      {n ? (
+        <i className="slot-n" aria-hidden="true">
+          {n}
+        </i>
+      ) : null}
+    </span>
   );
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
+import { desktop, type TicoDesktop } from './desktop';
 
-/* The companies this person is in. Only the desktop app knows them: its bridge, `window.tico` (the part of
-   desktop/src/bridge.d.ts the menu reads), lists them and switches the window to another one. In a browser there is
-   no bridge, and a company is its own address: the menu shows this one only (platforms.md 4.10). */
+/* The companies this person is in. Only the desktop app knows them: its bridge, `window.tico` (desktop.ts), lists
+   them and switches the window to another one. In a browser there is no bridge, and a company is its own address:
+   the menu shows this one only (platforms.md 4.10). */
 
 export interface Company {
   id: string;
@@ -13,18 +14,8 @@ export interface Company {
   self: boolean;
   needs: number;
 }
-interface Bridge {
-  companies: {
-    list(): Promise<Company[]>;
-    switchTo(id: string, url?: string): Promise<void>;
-    add(server?: string): Promise<void>;
-    onChange(cb: (all: Company[]) => void): () => void;
-  };
-}
-
 /** The desktop bridge's companies, or null in a browser. */
-export const companiesBridge = (): Bridge['companies'] | null =>
-  (typeof window !== 'undefined' && (window as { tico?: Bridge }).tico?.companies) || null;
+export const companiesBridge = (): TicoDesktop['companies'] | null => desktop()?.companies ?? null;
 
 /** Every company, from the desktop; null in a browser (or until the list arrives). */
 export function useCompanies(): Company[] | null {
