@@ -2,6 +2,7 @@
 
 from . import access as Access
 from . import models as M
+from .api_contract import api_v2, error
 from .store import Problem
 from fastapi import Request
 from fastapi.responses import Response
@@ -65,7 +66,20 @@ def register(app, admin_only, auth, mutate, settings, store):
         cloud_access.from_billing(store, answer)
         return answer
 
-    @app.get("/api/v2/cloud-access")
+    @app.get(
+        "/api/v2/cloud-access",
+        **api_v2(
+            "Team",
+            "getCloudAccess",
+            "A Tico Cloud company's access: open, frozen or locked, why, and where to pay; any signed-in person",
+            "CloudAccessView",
+            description="What every page polls (the old app every minute while not open): null off Tico Cloud. It "
+            "answers while the company is locked too, when every other route but sign-in, billing and Download all "
+            "files answers 402 `locked` with the same object as `error.cloud`. Out of credit shows as frozen while "
+            "Tico HQ has refused one of the company's machines for credit, whatever its company-wide word.",
+            responses={"403": error("identity: people only; a bot or a computer is refused")},
+        ),
+    )
     def cloud_access_view(request: Request):
         """A Tico Cloud company's access for every page: open, frozen or locked, why, and where to pay. Null off
         cloud. Open to every signed-in person, also while locked."""

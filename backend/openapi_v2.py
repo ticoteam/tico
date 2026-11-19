@@ -133,6 +133,12 @@ PROBLEM = {
                 "detail": {"type": "string"},
                 "retryable": {"type": "boolean"},
                 "sign_in": {"type": "string", "description": "On a 401 with built-in sign-in: the login path"},
+                # Any route a person calls answers 402 `locked` while a Tico Cloud company is locked
+                # (backend/cloud_access.py gate), so the refusal's access lives on the shared error, optional.
+                "cloud": {
+                    "allOf": [ref("CloudAccess")],
+                    "description": "On a 402 `locked`: the company's Tico Cloud access, with where to pay",
+                },
             },
         }
     },

@@ -17,6 +17,40 @@ SCHEMAS.update(
                 "may_turn_off": "b",
             }
         ),
+        # A computer's Screen setting (backend/screen.py): the mode now stored, and whether the computer offers a screen.
+        "ComputerScreen": obj(
+            {
+                "screen": {
+                    "type": "string",
+                    "enum": ["off", "view", "control"],
+                    "description": "Who may open the screen from the app: nobody (off), to watch (view), or to watch "
+                    "and drive it (control); only the computer's operator and admins open it at all",
+                },
+                "screen_available": {
+                    "type": "boolean",
+                    "description": "Whether the computer's last heartbeat offered a screen; a mode other than off needs it",
+                },
+            }
+        ),
+        # One screen opening (backend/screen.py open_screen). The ticket is the relay's; nothing on the hub keeps it.
+        "ScreenSession": obj(
+            {
+                "session_id": "s",
+                "control": {
+                    "type": "boolean",
+                    "description": "Whether this opening drives the computer or only watches",
+                },
+                "ws_path": {
+                    "type": "string",
+                    "description": "The same-origin path of the screen's WebSocket, `/api/v2/runners/{id}/screen/ws?"
+                    "ticket=...`. Its ticket is single-use and good for a minute: connect at once, never log or keep "
+                    "the path, and open a new session to reconnect",
+                },
+                "width": {"type": "integer", "description": "The computer's display, in pixels"},
+                "height": "i",
+            },
+            required=["session_id", "control", "ws_path", "width", "height"],
+        ),
         "BrowserExitUsage": obj(
             {
                 "rows": items(obj({"day": "s", "bot": "s", "host": "s", "bytes": "i", "tunnels": "i"})),

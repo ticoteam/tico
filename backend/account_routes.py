@@ -153,7 +153,26 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
     setup_handoff.register(app, auth, store, mutate)
     mcp_oauth.register(app, auth, store)
 
-    @app.get(LOGOUT_PATH)
+    @app.get(
+        LOGOUT_PATH,
+        **api_v2(
+            "Session",
+            "signOut",
+            "Sign out of the browser session: a redirect to where sign-in starts again",
+            security=[],
+            description="A browser navigation, not a fetch: it needs no sign-in (an expired session can still sign "
+            "out). It ends the session at whichever sign-in fronts this server (built-in sign-in, or an identity "
+            "proxy such as Cloudflare Access), clears its cookies and redirects.",
+            responses={
+                "200": None,
+                "302": {
+                    "description": "Signed out: go to `Location` (this server's signed-out page, the proxy's own "
+                    "sign-out, or /)",
+                    "headers": {"Location": {"schema": {"type": "string"}}},
+                },
+            },
+        ),
+    )
     def logout(request: Request):
         """End the browser session at whichever identity proxy fronts this server."""
         target, expire = auth.proxy.logout(request.headers) if auth.proxy else ("/", [])

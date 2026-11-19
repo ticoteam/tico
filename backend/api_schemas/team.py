@@ -1,6 +1,7 @@
 # pyright: strict
 """The answers of the Team routes (backend/openapi_v2.py gathers them)."""
 
+from ..api_contract import ref
 from ._base import SCHEMAS, obj
 
 SCHEMAS.update(
@@ -56,6 +57,35 @@ SCHEMAS.update(
                 "owner_email",
                 "version",
             ],
+        ),
+        # A Tico Cloud company's access as every page reads it (backend/cloud_access.py view and shown). It is also the
+        # `cloud` of a 402 `locked` refusal (the shared Problem).
+        "CloudAccess": obj(
+            {
+                "access": {
+                    "type": "string",
+                    "enum": ["open", "frozen", "locked"],
+                    "description": "open: working; frozen: out of credit, no new turn on a Tico model; locked: pay to "
+                    "continue, people's calls answer 402 `locked` but for sign-in, this read, billing and the download",
+                },
+                "reason": {"type": ["string", "null"], "enum": [None, "out_of_credit", "trial_over", "unpaid"]},
+                "plan": "s",
+                "trial_days_left": {"type": ["integer", "null"]},
+                "billing_url": {
+                    "type": ["string", "null"],
+                    "description": "Where to pay or add credit: an https page at Tico HQ, or null",
+                },
+                "days_left": {
+                    "type": ["integer", "null"],
+                    "description": "While open with under two days of spend left: about how many; else null",
+                },
+            }
+        ),
+        "CloudAccessView": obj(
+            {
+                "cloud": {"oneOf": [ref("CloudAccess"), {"type": "null"}]}
+                | {"description": "Null for a company that is not on Tico Cloud, or before Tico HQ has said"}
+            }
         ),
         "PreferenceValue": obj({"key": "s", "value": {"description": "Any JSON value, or null when unset"}}),
         # The audit trail (backend/audit_log.py).
