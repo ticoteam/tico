@@ -9,7 +9,7 @@ import type * as conversations from '@/conversation';
 import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { decisionName, effectOf } from './model';
+import { decisionName, effectOf, sendTitle } from './model';
 import type { TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
 
@@ -280,6 +280,42 @@ describe('the decision', () => {
     expect(await within(chat).findByText(/^Changes asked/)).toBeTruthy();
     expect(within(chat).queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(within(chat).getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
+  });
+});
+
+describe('an email waiting to send', () => {
+  const titled = 'Send: Re: Notice of claim → Dana Ruiz <dana@example.test> +1';
+
+  it('reads its subject and recipient from the title the server gives it @approvals', () => {
+    expect(sendTitle(titled)).toEqual({ subject: 'Notice of claim', to: 'Dana Ruiz <dana@example.test>' });
+    expect(sendTitle('Send: Fwd: RE: Lease → a@example.test')).toEqual({ subject: 'Lease', to: 'a@example.test' });
+    expect(sendTitle('Reply to the claim')).toBeNull();
+  });
+
+  it('is titled by its subject alone, and the title is not a field to rename @approvals', async () => {
+    shown = task({ title: titled });
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const title = await screen.findByRole('heading', { level: 1, name: 'Notice of claim' });
+    fireEvent.click(title);
+    expect(screen.queryByRole('textbox', { name: 'Title' })).toBeNull();
+    expect(document.activeElement?.tagName).not.toBe('INPUT');
+  });
+
+  it('when its preview does not load, says so in place of what Approve does, with Try again @approvals', async () => {
+    shown = task({ title: titled });
+    let busy = true;
+    reply = (url) => (busy && url.endsWith('/api/v2/email/sends/s1') ? { status: 503, body: { error: { code: 'busy', detail: 'Tico is busy; retry shortly', retryable: true } } } : null);
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(within(box).queryByText('Sends now')).toBeNull();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+    busy = false;
+    fireEvent.click(within(box).getByRole('button', { name: 'Try again' }));
+    await ready(box);
+    expect(within(box).getByText('Sends now')).toBeTruthy();
+    expect(within(box).queryByText('Part of it did not load')).toBeNull();
   });
 });
 

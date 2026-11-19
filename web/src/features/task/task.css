@@ -132,6 +132,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* ---------- the answer card, over the message box in the task's chat ---------- */
 .an-err{margin:var(--s-2) var(--s-1h) 0 0;font-size:var(--t-sm);line-height:var(--lh);color:var(--ink-2);text-wrap:pretty}
+.an-err .btn{margin-left:var(--s-2)}
 
 /* ---------- a phone: the page is the back card; Details fills it and the answer holds the bottom ---------- */
 :where(html[data-layout="cards"]){

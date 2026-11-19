@@ -8,7 +8,7 @@ import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
-import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, tabAddress } from './model';
+import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
 import { Face } from './parts';
 import { decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
 
@@ -52,11 +52,12 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
   );
 }
 
-/** The thing's name and what Approve does: an email is named by who it goes to, read from its own preview. */
+/** The thing's name and what Approve does: an email is named by who it goes to, read from its own preview, else from
+    the task's title while the preview is not read. */
 function useNamed(t: TaskData, r: TaskRequirement) {
   const send = emailOf(r);
   const mail = useQuery({ ...emailSendQuery(t.id, send ?? ''), enabled: !!send });
-  const to = mail.data?.send.recipients[0];
+  const to = mail.data?.send.recipients[0] ?? sendTitle(t.title)?.to;
   return { name: decisionName(t, r, to ? personOf(to) : undefined), effect: effectOf(t, r) };
 }
 
@@ -96,6 +97,8 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   if (key !== null && seen === null) setSeen(key);
   const changed = key !== null && seen !== null && key !== seen;
   const ready = !!shown.data?.complete && !shown.isPlaceholderData;
+  // A refusal, or what Approve binds to did not load: said in place of what Approve does, never over it.
+  const fault = !!error || shown.isError;
 
   useEffect(() => {
     if (!asking) return;
@@ -155,7 +158,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
       <div className="dcx-top">
         <FlowMark />
         <b className="an-name">{name}</b>
-        {(changed || effect) && <span className="dcx-eff">{changed ? 'Changed' : effect}</span>}
+        {!fault && (changed || effect) && <span className="dcx-eff">{changed ? 'Changed' : effect}</span>}
         <span className="grow" />
         <Face id={askerOf(t, r)} />
       </div>
@@ -190,9 +193,14 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
           )}
         </div>
       )}
-      {(error || shown.isError) && (
+      {fault && (
         <p className="an-err" role="alert">
           {error || 'Part of it did not load'}
+          {!error && (
+            <Button variant="quiet" onClick={() => void shown.refetch()}>
+              Try again
+            </Button>
+          )}
         </p>
       )}
     </section>

@@ -102,8 +102,18 @@ export function defaultTab(tabs: TaskTab[]): string {
   return (tabs.find((x) => x.mark === 'ask') ?? tabs.find((x) => !x.chat))?.slug ?? DETAILS;
 }
 
+/** An email's OK task, as the server titles it ("Send: <subject> → <first recipient> +n", backend/email_sending.py
+    send_title): the subject without "Send:" and its "Re:"/"Fwd:", and who it goes to. Null for any other title. */
+export function sendTitle(title: string): { subject: string; to?: string } | null {
+  if (!/^send:/i.test(title)) return null;
+  const rest = title.replace(/^send:\s*/i, '');
+  const at = rest.lastIndexOf(' → ');
+  const subject = (at < 0 ? rest : rest.slice(0, at)).replace(/^((re|fwd?|fw):\s*)+/i, '');
+  return { subject: subject || rest, ...(at >= 0 && { to: rest.slice(at + 3).replace(/\s\+\d+$/, '') }) };
+}
+
 /** The decision's name for what it decides: the same name as its tab, with its version past the first ("Spec v2"),
-    else the requirement's own line. An email is named by `to` ("Email to Dana Ruiz") once it is read. */
+    else the requirement's own line. An email is named by `to` ("Email to Dana Ruiz"). */
 export function decisionName(t: TaskData, r: TaskRequirement, to?: string): string {
   if (emailOf(r)) return to ? `Email to ${to}` : 'Email';
   const file = r.approval?.file_id ?? r.page?.file_id;
