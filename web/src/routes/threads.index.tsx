@@ -1,15 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { ThreadsPage } from '@/features/threads/exports';
-import { loadThreads, threadsSearch } from '@/features/threads/routing';
+import { loadThreads } from '@/features/threads/routing';
 
+/* No thread open: the list is the menu's Threads tab. */
 export const Route = createFileRoute('/threads/')({
-  validateSearch: threadsSearch,
-  loaderDeps: ({ search }) => ({ q: search.q }),
-  loader: ({ deps: { q }, context: { queryClient } }) => loadThreads(queryClient, { q, catchUp: true }),
-  component: ThreadsIndex,
+  loader: ({ context: { queryClient } }) => loadThreads(queryClient),
+  component: () => <ThreadsPage pane="none" />,
 });
-
-function ThreadsIndex() {
-  const { q } = Route.useSearch();
-  return <ThreadsPage pane="catch-up" q={q} />;
-}

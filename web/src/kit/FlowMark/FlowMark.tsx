@@ -8,13 +8,15 @@ export type FlowMarkProps = {
   play?: boolean;
   /** The play mark rides while Flow is on. */
   live?: boolean;
+  /** What the dot says to a screen reader: "Waits on you", or "Asks you" on a conversation that asks you. */
+  label?: string;
 };
 
 const FLOW_PLAY = 'M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z';
 
 /** Flow's mark: something waits on you (parts-kit.js flow()), or with `play` the Flow button's own. Its jade lives in
     styles/dot.css. The only Flow mark: features use this one. */
-export function FlowMark({ size = 12, className, play, live }: FlowMarkProps) {
+export function FlowMark({ size = 12, className, play, live, label = 'Waits on you' }: FlowMarkProps) {
   if (play)
     return (
       <span className={`flow-mark${live ? ' live' : ''}${className ? ` ${className}` : ''}`} aria-hidden="true">
@@ -29,7 +31,7 @@ export function FlowMark({ size = 12, className, play, live }: FlowMarkProps) {
       </span>
     );
   return (
-    <span className={className ? `dot flow ${className}` : 'dot flow'} style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label="Waits on you">
+    <span className={className ? `dot flow ${className}` : 'dot flow'} style={{ '--d': `${size}px` } as CSSProperties} role="img" aria-label={label}>
       <i />
       <b />
     </span>

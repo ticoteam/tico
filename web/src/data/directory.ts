@@ -137,11 +137,12 @@ quietRoot(keys.directory()[0]);
 /** Every person and agent the caller may see, with each agent's status line. */
 export const directoryQuery = queryOptions({
   queryKey: keys.directory(),
-  queryFn: async ({ signal }) => {
+  // Route loaders (a teammate's page) share this request with the shell, even while its observers unmount: no signal.
+  queryFn: async () => {
     const [org, status] = await Promise.all([
-      api.get<GetOrgResponse>('/api/v2/org', { signal }),
+      api.get<GetOrgResponse>('/api/v2/org'),
       // Status lines are extra: the directory still opens without them.
-      api.get<{ bots?: StatusLine[] }>('/api/v2/status', { signal }).catch(() => ({ bots: [] })),
+      api.get<{ bots?: StatusLine[] }>('/api/v2/status').catch(() => ({ bots: [] })),
     ]);
     return buildDirectory(org, status.bots ?? []);
   },

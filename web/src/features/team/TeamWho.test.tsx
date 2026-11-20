@@ -216,7 +216,7 @@ describe('Loading a teammate', () => {
     await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();
   });
 
-  it('opens a team when the shell detaches from the in-flight directory read', async () => {
+  it('opens a team when the shell detaches from the in-flight directory read: the one read carries on', async () => {
     queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
     const org = { status: 200, body: { org_groups: [], people: [], bots: [] } };
     let finish: (reply: Reply) => void = () => {};
@@ -235,6 +235,6 @@ describe('Loading a teammate', () => {
     unsubscribe();
     finish(org);
     await expect(page).resolves.toBeUndefined();
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
   });
 });
