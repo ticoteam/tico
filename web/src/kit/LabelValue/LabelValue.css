@@ -28,3 +28,11 @@ button.fact{width:100%;border:0;background:none;font-family:inherit;font-size:in
 :is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field)){display:flex;justify-content:space-between;gap:var(--s-3)}
 :is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field))>span:first-child{flex:0 1 auto;min-width:0;padding-right:0}
 :is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field))>.fact-v{flex:0 1 auto;justify-content:flex-end;text-align:right}
+/* On a phone a picker line answers a 44px tap without growing (the conversation's quote does the same): its hit area
+   reaches 7px above and below, except toward a neighbouring picker, whose own line keeps that edge. */
+:where(html[data-layout="cards"]){
+  button.fact{position:relative}
+  button.fact::before{content:"";position:absolute;inset:-7px 0}
+  .fact-more:has(+.fact-more>button.fact)>button.fact::before,button.fact:has(+button.fact)::before{bottom:0}
+  .fact-more+.fact-more>button.fact::before,button.fact+button.fact::before{top:0}
+}

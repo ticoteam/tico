@@ -1,4 +1,4 @@
-import { Children, Fragment, isValidElement, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { Children, Fragment, isValidElement, useRef, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import { ContextMenu as BaseContextMenu } from '@base-ui/react/context-menu';
 import { Menu as BaseMenu } from '@base-ui/react/menu';
 import { Icon } from '@/kit/Icon';
@@ -48,12 +48,33 @@ export type ContextMenuProps = {
   items: ReactNode;
 };
 
+/* After a long press, lifting the finger is still the press that opened the menu: Chrome sends a mouseup and a click
+   where the finger was, now outside the sheet, and Base UI takes them for a press outside. Until a moment after the lift
+   only an item (or Escape) closes the menu, so the sheet stays up for the tap on Reply. */
+const LIFT_MS = 400;
+const KEEPS = new Set(['item-press', 'escape-key']);
+
 /** The same menu, opened by a right click or a long press on a row. */
 export function ContextMenu({ children, items }: ContextMenuProps) {
   const at = usePlacement();
+  const pressing = useRef(false);
+  const press = () => {
+    pressing.current = true;
+    const done = new AbortController();
+    const lift = () => {
+      done.abort();
+      setTimeout(() => (pressing.current = false), LIFT_MS);
+    };
+    document.addEventListener('touchend', lift, { signal: done.signal });
+    document.addEventListener('touchcancel', lift, { signal: done.signal });
+  };
   return (
-    <BaseContextMenu.Root>
-      <BaseContextMenu.Trigger render={children} data-long-press="" />
+    <BaseContextMenu.Root
+      onOpenChange={(open, details) => {
+        if (!open && pressing.current && !KEEPS.has(details.reason)) details.cancel();
+      }}
+    >
+      <BaseContextMenu.Trigger render={children} data-long-press="" onTouchStart={press} />
       <BaseContextMenu.Portal>
         {at.sheet && <BaseContextMenu.Backdrop className={sheetScrim} />}
         <BaseContextMenu.Positioner className={at.layer} style={at.style}>
@@ -124,7 +145,9 @@ export function MenuSub({ label, icon, children }: MenuSubProps) {
   const at = usePlacement();
   return (
     <BaseMenu.SubmenuRoot>
-      <BaseMenu.SubmenuTrigger render={<a />}>
+      {/* On a phone both levels are sheets in the same place: a second level opened by the mouse passing over its row
+          would cover the first's other rows, so there it opens on a press. */}
+      <BaseMenu.SubmenuTrigger render={<a />} openOnHover={!at.sheet}>
         {icon && <Icon name={icon} />}
         <span>{label}</span>
         <Icon name="chevron" className="is-next" />

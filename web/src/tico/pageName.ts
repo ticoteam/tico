@@ -34,3 +34,11 @@ export function usePageName(): string {
   }, [router]);
   return useSyncExternalStore(listen, () => name, () => '');
 }
+
+/**
+ * Where the person asked Tico from, as a message's `refs.page`. The server hands Tico's turn only a path that starts
+ * "#/" (backend/assistant.py post_message_sync, from the old app's hash addresses), so the app's own address (its
+ * search too, which names an open item) goes after a "#", cut to what the server takes.
+ */
+export const askedFrom = (address: string, title: string) => ({ path: `#${address}`.slice(0, 300), title: title.slice(0, 200) });
+

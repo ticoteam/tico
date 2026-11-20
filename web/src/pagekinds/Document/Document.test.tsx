@@ -40,6 +40,23 @@ describe('Document', () => {
     expect(topped.innerHTML).toBe(html);
   });
 
+  describe('on a phone', () => {
+    afterEach(() => {
+      delete document.documentElement.dataset.layout;
+    });
+
+    it('puts facts under the body, in its scroll, and keeps an outline beside it for the jump menu', async () => {
+      document.documentElement.dataset.layout = 'cards';
+      const main = await showPage(<Document title="File" path="/f" body={<p>Preview</p>} side={<p>Size 2 KB</p>} sideFacts framed />);
+      const facts = within(main).getByRole('complementary', { name: 'Facts' });
+      expect(facts.parentElement?.classList.contains('pk-body')).toBe(true);
+      expect(facts.previousElementSibling?.textContent).toBe('Preview');
+      main.ownerDocument.body.innerHTML = '';
+      const doc = await showPage(<Document title="Spec" path="/s" body={<p>Text</p>} side={<a href="#goals">Goals</a>} />);
+      expect(within(doc).getByRole('complementary', { name: 'Outline' }).parentElement?.classList.contains('pk-body')).toBe(false);
+    });
+  });
+
   describe('opened from a thread', () => {
     afterEach(() => {
       delete document.documentElement.dataset.layout;

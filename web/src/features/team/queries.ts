@@ -518,6 +518,28 @@ export type OwnTask = Pick<Task, 'id' | 'number' | 'title' | 'status' | 'pipelin
 export interface OwnTasks {
   tasks: OwnTask[];
   cursor?: string;
+  next_after?: string | null;
+}
+
+/** How many pages a list reads before it leaves the rest. */
+const PAGES = 50;
+
+/**
+ * Every page of a task list (GET /api/v2/tasks: a page names the next with `next_after`, passed back as `after`), in one
+ * cache entry, so the counts and folds see all of it and the stream patches it as it does one page. The first page's
+ * `cursor` stays: the stream's changes after it apply again, which is harmless.
+ */
+async function allPages(params: Record<string, string | number>, signal: AbortSignal): Promise<OwnTasks> {
+  const first = await api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal });
+  let tasks = first.tasks;
+  let after = first.next_after;
+  for (let read = 1; after && read < PAGES; read++) {
+    const page = await api.get<OwnTasks>(`/api/v2/tasks?${q({ ...params, after })}`, { signal });
+    const seen = new Set(tasks.map((t) => t.id));
+    tasks = [...tasks, ...page.tasks.filter((t) => !seen.has(t.id))];
+    after = page.next_after;
+  }
+  return { ...first, tasks, next_after: null };
 }
 
 /** A teammate's open tasks, under the tasks root so the stream patches them (`owner` is an actor id). */
@@ -525,7 +547,7 @@ export const openTasksQuery = (actor: string) => {
   const params = { owner: actor, status: 'open', brief: 'true', limit: 200 };
   return queryOptions({
     queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
+    queryFn: ({ signal }) => allPages(params, signal),
   });
 };
 
@@ -534,17 +556,24 @@ export const doneTasksQuery = (actor: string, since: string) => {
   const params = { owner: actor, status: 'done', brief: 'true', updated_since: since, limit: 500 };
   return queryOptions({
     queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
+    queryFn: ({ signal }) => allPages(params, signal),
   });
 };
 
-/** An open-task page: a team page counts its rows by owner. */
-export const allTasksQuery = () => {
-  const params = { status: 'open', brief: 'true', limit: 500 };
-  return queryOptions({
-    queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
-  });
+/** A team's open tasks, every page, its owners a hundred at a time (the API's value limit): the page counts them by owner. */
+export const teamOpenTasksQueries = (owners: ReadonlySet<string>) => {
+  const ids = [...owners].sort();
+  const batches = [];
+  for (let start = 0; start < ids.length; start += 100) {
+    const params = { status: 'open', brief: 'true', limit: 500, owners: ids.slice(start, start + 100).join(',') };
+    batches.push(
+      queryOptions({
+        queryKey: keys.tasks.list(params),
+        queryFn: ({ signal }) => allPages(params, signal),
+      }),
+    );
+  }
+  return batches;
 };
 
 /** The server counts across all pages. Bound the owner filter so large teams fit within the API's value limit. */

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IconButton } from '@/kit/IconButton';
-import { ContextMenu, Menu, MenuItem, MenuRule } from './Menu';
+import { ContextMenu, Menu, MenuItem, MenuRule, MenuSub } from './Menu';
 
 function TaskMenu({ onRename = () => {}, onDelete = () => {} }) {
   return (
@@ -81,6 +81,37 @@ describe('ContextMenu', () => {
   });
 });
 
+describe('ContextMenu on a phone', () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.layout;
+  });
+
+  it('stays open when the long press lifts outside the sheet, so Reply can be tapped', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    const onReply = vi.fn();
+    render(
+      <ContextMenu items={<MenuItem label="Reply" onSelect={onReply} />}>
+        <div>Launch plan</div>
+      </ContextMenu>,
+    );
+    const row = screen.getByText('Launch plan');
+    const wait = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
+    // Chrome's long press: the touch opens the menu, then Chrome's own contextmenu comes while the finger stays down
+    fireEvent.touchStart(row, { touches: [{ clientX: 40, clientY: 40 }] });
+    await wait(520);
+    const reply = await screen.findByRole('menuitem', { name: 'Reply' });
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 40 });
+    await wait(520);
+    // the lift: a mouseup where the finger was, outside the sheet
+    fireEvent.touchEnd(row);
+    fireEvent.mouseUp(document.body, { clientX: 40, clientY: 40 });
+    await wait(50);
+    expect(screen.getByRole('menuitem', { name: 'Reply' })).toBe(reply);
+    fireEvent.click(reply);
+    expect(onReply).toHaveBeenCalledOnce();
+  });
+});
+
 describe('Menu on a phone', () => {
   afterEach(() => {
     delete document.documentElement.dataset.layout;
@@ -112,5 +143,30 @@ describe('Menu on a phone', () => {
     expect(menu.className).not.toContain('is-sheet');
     expect(menu.className).toContain('kit-pop');
     expect(document.querySelector('.scrim')).toBeNull();
+  });
+
+  it('opens a second level on a press, not when the mouse passes over its row', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    const onLate = vi.fn();
+    render(
+      <Menu trigger={<IconButton icon="filter" label="Filter" />}>
+        <MenuSub label="Due">
+          <MenuItem label="Overdue" onSelect={() => {}} />
+        </MenuSub>
+        <MenuItem label="Late" onSelect={onLate} />
+      </Menu>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    const due = await screen.findByRole('menuitem', { name: 'Due' });
+    fireEvent.pointerEnter(due, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(due);
+    fireEvent.mouseMove(due);
+    await act(() => new Promise((r) => setTimeout(r, 150)));
+    expect(screen.queryByRole('menuitem', { name: 'Overdue' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Late' }));
+    expect(onLate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Due' }));
+    expect(await screen.findByRole('menuitem', { name: 'Overdue' })).toBeTruthy();
   });
 });

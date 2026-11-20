@@ -593,6 +593,29 @@ describe('Flow @s5 @s112', () => {
     expect(screen.getByRole('region', { name: 'Engineering, Doing' })).toBeTruthy();
   });
 
+  it('reads every page of what waits on you, starting over when the list moved between pages', async () => {
+    const need = (id: string, number: number, title: string) => ({ id: `n-${id}`, kind: 'task', line: title, since: ago(5), task: { ...item, id, number, title } });
+    const asked: string[] = [];
+    let moved = true;
+    serve((url) => {
+      asked.push(url);
+      if (!url.includes('/needs-you')) return { status: 200, body: {} };
+      if (!url.includes('cursor=')) return { status: 200, body: { actor: ME, items: [need('a1', 7, 'Approve the copy')], next: 'v1.1' } };
+      if (moved) {
+        moved = false;
+        return { status: 200, body: { actor: ME, items: [need('a3', 9, 'Sign the lease')], next: 'v2.1', restart: true } };
+      }
+      return { status: 200, body: { actor: ME, items: [need('a2', 8, 'Check the totals')], next: null } };
+    });
+    queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
+    show(<FlowPage />, '/flow');
+    expect(await screen.findByTitle('Check the totals')).toBeTruthy();
+    expect(screen.getByTitle('Sign the lease')).toBeTruthy();
+    expect(screen.queryByTitle('Approve the copy')).toBeNull();
+    expect(queryClient.getQueryData<{ count: number }>(['flow'])?.count).toBe(2);
+    expect(asked.filter((u) => u.includes('/needs-you')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'v1.1', 'v2.1']);
+  });
+
   it('says so when nothing waits on you', async () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);

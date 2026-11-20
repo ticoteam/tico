@@ -35,14 +35,13 @@ import type {
   TaskBrief,
   Usage,
 } from '@/api/schema';
-import { keys, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { keys, needsYouItems, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
   FileSearch,
   GetGoalsNeedsYouResponse,
   Matter,
   MatterResult,
   MatterWrite,
-  NeedsYou,
   RepositoryList,
   RiskObligation,
   TaskFileList,
@@ -740,17 +739,37 @@ export const risksQuery = queryOptions({
   queryFn: ({ signal }) => api.get<RiskList>('/api/v2/risks', { signal }),
 });
 
+/** The most a matters page holds (backend/risk.py LIMIT_MAX), and how many pages a list reads before it leaves the rest. */
+const MATTERS = 200;
+const MATTER_PAGES = 50;
+
+/** A matter list's rows from `offset` on (GET /api/v2/matters, page after page by `next_offset`). */
+async function mattersFrom(filter: string, offset: number | null, signal: AbortSignal): Promise<MatterRow[]> {
+  const rows: MatterRow[] = [];
+  for (let read = 0; offset != null && read < MATTER_PAGES; read++) {
+    const page = await api.get<MatterList>(`/api/v2/matters?${filter}&limit=${MATTERS}&offset=${offset}`, { signal });
+    rows.push(...page.matters);
+    offset = page.next_offset;
+  }
+  return rows;
+}
+
+/** A risk with every one of its matters: the detail's first page, then the rest from the matters list, in its order. */
 export const riskQuery = (id: string) =>
   queryOptions({
     queryKey: ['risks', 'detail', id],
-    queryFn: ({ signal }) => api.get<RiskDetail>(`/api/v2/risks/${enc(id)}`, { signal }),
+    queryFn: async ({ signal }): Promise<RiskDetail> => {
+      const d = await api.get<RiskDetail>(`/api/v2/risks/${enc(id)}?limit=${MATTERS}`, { signal });
+      if (d.next_offset == null) return d;
+      return { ...d, matters: [...d.matters, ...(await mattersFrom(`risk=${enc(d.risk.id)}`, d.next_offset, signal))], next_offset: null };
+    },
   });
 
-/** Open matters (under live risks), or every dispute (the Disputes tab). */
+/** Open matters (under live risks), or every dispute (the Disputes tab): every page, so the Open total counts them all. */
 export const mattersQuery = (which: 'open' | 'disputes') =>
   queryOptions({
     queryKey: ['risks', 'matters', which],
-    queryFn: ({ signal }) => api.get<MatterList>(`/api/v2/matters?${which === 'open' ? 'open=true' : 'kind=dispute'}&limit=200`, { signal }),
+    queryFn: async ({ signal }): Promise<MatterList> => ({ matters: await mattersFrom(which === 'open' ? 'open=true' : 'kind=dispute', 0, signal), next_offset: null }),
   });
 
 export type { MatterRow };
@@ -809,8 +828,7 @@ export const waitingTasksQuery = queryOptions({
   queryKey: ['needs', 'tasks'],
   queryFn: async ({ signal }) => {
     try {
-      const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200', { signal });
-      return 'items' in r ? r.items.map((i) => i.task_id ?? i.task?.id).filter((x): x is string => !!x) : [];
+      return (await needsYouItems(signal)).map((i) => i.task_id ?? i.task?.id).filter((x): x is string => !!x);
     } catch {
       return [];
     }

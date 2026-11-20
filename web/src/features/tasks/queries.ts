@@ -3,7 +3,6 @@ import { api } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
-  NeedsYou,
   PipelineSettings,
   PipelineSettingsList,
   PipelineSettingsResult,
@@ -21,7 +20,7 @@ import type {
   TagDetail,
   TagList,
 } from '@/api/schema';
-import { keys, queryClient, quietRoot, write } from '@/data';
+import { keys, needsYouItems, queryClient, quietRoot, write } from '@/data';
 import { toast } from '@/kit/Toast';
 import { newId } from '@/lib';
 
@@ -669,10 +668,9 @@ export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
   // The Flow loader still needs this result if the shell unsubscribes.
   queryFn: async (): Promise<Flow> => {
-    const r = await api.get<NeedsYou>('/api/v2/needs-you?limit=200');
     const seen = new Set<string>();
     const items: FlowItem[] = [];
-    for (const it of 'items' in r ? r.items : []) {
+    for (const it of await needsYouItems()) {
       const t = it.task;
       if (!t || seen.has(t.id)) continue;
       seen.add(t.id);

@@ -19,11 +19,11 @@ import { managerOf, memberIds, membersUnder, startOfMonth, subTeams, teamSlug, w
 import { LONG_LIST, taskHref } from './parts';
 import {
   agentsQuery,
-  allTasksQuery,
   groupsQuery,
   monthSpendQuery,
   peopleRosterQuery,
   teamDoneCountQueries,
+  teamOpenTasksQueries,
   teammateAccessQuery,
   type AgentRow,
   type Group,
@@ -51,7 +51,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const { data: peopleRoster } = useQuery(peopleRosterQuery);
   const [since] = useState(() => startOfMonth(new Date()).toISOString());
   const [month] = useState(() => MONTH.format(new Date()));
-  const openTasks = useQuery(allTasksQuery());
   const addOpen = useAction('team.addTeammate');
   const navigate = useNavigate();
   const reach = useQuery(teammateAccessQuery('team', group.id)).data;
@@ -62,11 +61,13 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const manager = lead ? actorOf(lead) : undefined;
   const under = membersUnder(all, group.id);
   const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
+  const openReads = useQueries({ queries: teamOpenTasksQueries(everyone) });
+  const openRead = openReads.every((r) => r.data);
   const doneCounts = useQueries({ queries: teamDoneCountQueries(everyone, since) });
   const done = doneCounts.reduce<number | undefined>((sum, { data }) => sum === undefined || !data?.counts ? undefined : sum + data.counts.total, 0);
   const ownerOf = (t: OwnTask) => (t.owner_id ? actorOf(t.owner_id) : undefined);
   // What the team is on: every open task a teammate here (or in a team inside) holds, the latest first.
-  const running = (openTasks.data?.tasks ?? [])
+  const running = openReads.flatMap((r) => r.data?.tasks ?? [])
     .filter((t) => everyone.has(ownerOf(t)?.id ?? ''))
     .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
   const paused = new Set((roster.data ?? []).filter((r: AgentRow) => r.status === 'paused').map((r) => r.slug));
@@ -129,7 +130,7 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
           <FiguresStrip
             label={`${group.name} at a glance`}
             figures={[
-              { label: 'Open tasks', value: openTasks.data ? running.length : '' },
+              { label: 'Open tasks', value: openRead ? running.length : '' },
               { label: `Done, ${month}`, value: done ?? '' },
               { label: `Spend, ${month}`, value: spend === undefined ? '' : fmtMoney(spend) },
             ]}

@@ -315,6 +315,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
           link={linkOf(file)}
         />
       }
+      sideFacts
       side={
         file && (
           <div className="fv-side">

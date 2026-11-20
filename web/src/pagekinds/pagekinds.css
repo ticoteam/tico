@@ -294,8 +294,12 @@ html[data-layout="cards"] .pk-split.is-list .conv{display:none}
 html[data-layout="cards"] .pk-rec.has-side{grid-template-columns:minmax(0,1fr);grid-template-areas:"facts" "side" "figs" "secs"}
 html[data-layout="cards"] .pk-rec-side{padding:0 var(--page-x) var(--s-4)}
 html[data-layout="cards"] .pk-body .pk-rec-facts{padding-right:var(--page-x)}
-/* document: one column; the outline becomes the head's jump menu */
+/* document: one column; the outline becomes the head's jump menu, facts follow the body in its scroll (a framed
+   body's preview keeps the room above them) */
 html[data-layout="cards"] .pk-doc-side{display:none}
+html[data-layout="cards"] .pk-body>.pk-doc-side{display:block;width:auto;min-height:auto;overflow:visible;padding:0 0 var(--s-4);border-left:0}
+html[data-layout="cards"] .pk .pk-doc-body.is-framed:has(>.pk-doc-side){flex-direction:column}
+html[data-layout="cards"] .pk-doc-body.is-framed>.pk-doc-side{flex:none;max-height:45%;overflow:auto}
 html[data-layout="cards"] .pk-foot{padding:var(--s-2) var(--s-3) var(--s-3) var(--page-x)}
 /* dashboard: widgets stack; the chart keeps the 16 on its right too (phone.css .chart) */
 html[data-layout="cards"] .pk-widgets{grid-template-columns:minmax(0,1fr)}
