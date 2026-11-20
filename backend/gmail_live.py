@@ -327,16 +327,21 @@ def all_ids(c, mailbox, query, cap=SCAN_MAX):
     return ids[:cap]
 
 
-def label_total(c, mailbox, label_id):
-    """How many messages carry this label now (Gmail's own count; nothing is listed)."""
+def label_total(c, mailbox, label_id, token=None):
+    """How many messages carry this label now (Gmail's own count; nothing is listed). `token`: one the caller already
+    holds for the mailbox, so the call needs no database (`c` may be None)."""
     found = _get(
-        mailbox, "labels/" + urllib.parse.quote(label_id, safe=""), _token(c, mailbox), fields="messagesTotal"
+        mailbox,
+        "labels/" + urllib.parse.quote(label_id, safe=""),
+        token or _token(c, mailbox),
+        fields="messagesTotal",
     ).get("messagesTotal", 0)
     return found if isinstance(found, int) and found >= 0 else 0
 
 
-def labels(c, mailbox):
-    rows = _get(mailbox, "labels", _token(c, mailbox)).get("labels")
+def labels(c, mailbox, token=None):
+    """The mailbox's labels. `token` as for label_total."""
+    rows = _get(mailbox, "labels", token or _token(c, mailbox)).get("labels")
     if not isinstance(rows, builtins.list) or any(
         not isinstance(row, dict)
         or not isinstance(row.get("id"), str)

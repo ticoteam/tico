@@ -8,10 +8,11 @@ a mailbox's review count is Gmail's own count of its review labels, kept REVIEW_
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Request
 
-from . import routines
+from . import mailbox_access
 from .api_contract import api_v2, error
 from .mail import live_message_public, visible_addresses
 from . import slack_channels as SC
@@ -38,24 +39,52 @@ _REVIEW_LOCK = threading.Lock()
 def needs_review(c, address):
     """How many messages in the mailbox carry a review label now (Gmail's count per label, added up). A mailbox Gmail
     cannot answer for counts 0; its check error says why."""
+    return review_counts(c, [address])[address]
+
+
+def _review_count(address, token):
+    """(count, when it was asked): the window it is kept for starts when its own Gmail calls do."""
     from . import gmail_live
 
-    now = time.monotonic()
-    with _REVIEW_LOCK:
-        hit = _REVIEW.get(address)
-    if hit and hit[1] > now:
-        return hit[0]
+    asked = time.monotonic()
     try:
-        count = sum(
-            gmail_live.label_total(c, address, row["id"])
-            for row in gmail_live.labels(c, address)
+        return sum(
+            gmail_live.label_total(None, address, row["id"], token=token)
+            for row in gmail_live.labels(None, address, token=token)
             if row["type"] == "user" and (row["name"].startswith(REVIEW_LABELS[0]) or row["name"] == REVIEW_LABELS[1])
-        )
+        ), asked
     except Problem:
-        count = 0
-    with _REVIEW_LOCK:
-        _REVIEW[address] = (count, now + REVIEW_SECONDS)
-    return count
+        return 0, asked
+
+
+def review_counts(c, addresses):
+    """{address: needs_review} for these mailboxes, each kept REVIEW_SECONDS. The tokens are read here, in turn (they
+    read the database); the mailboxes not counted lately are then asked of Gmail at once, not one after another: a
+    page of 17 mailboxes waited on some 50 calls in a row."""
+    from . import gmail_live
+
+    out, todo = {}, {}
+    for address in dict.fromkeys(addresses):
+        now = time.monotonic()
+        with _REVIEW_LOCK:
+            hit = _REVIEW.get(address)
+        if hit and hit[1] > now:
+            out[address] = hit[0]
+            continue
+        try:
+            todo[address] = gmail_live._token(c, address)
+        except Problem:
+            out[address] = 0
+            with _REVIEW_LOCK:
+                _REVIEW[address] = (0, now + REVIEW_SECONDS)
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(gmail_live.WORKERS, len(todo))) as pool:
+            counted = dict(zip(todo, pool.map(lambda a: _review_count(a, todo[a]), todo), strict=True))
+        with _REVIEW_LOCK:
+            for address, (count, asked) in counted.items():
+                _REVIEW[address] = (count, asked + REVIEW_SECONDS)
+        out.update((address, count) for address, (count, _) in counted.items())
+    return out
 
 
 def rule_hits(c, mailbox, ids):
@@ -75,9 +104,11 @@ def rule_hits(c, mailbox, ids):
     return out
 
 
-def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes):
+def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, addresses):
+    """The bot's sources. `addresses`: the mailboxes it works on (routines.inbox_of). An email source's `needs_review`
+    is None until `_catalog` counts every bot's mailboxes at once."""
     sources = []
-    for address in routines.inbox_of(c, bot)["mailboxes"]:
+    for address in addresses:
         if address not in allowed:
             continue
         row = mailboxes.get(address) or {}
@@ -89,7 +120,7 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
                 "synced_at": row.get("synced_at"),
                 "error": row.get("error"),
                 "message_count": 0,
-                "needs_review": needs_review(c, address),
+                "needs_review": None,
             }
         )
     if who.role == "owner":
@@ -109,6 +140,17 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
 
 
 def _catalog(c, who, auth, settings):
+    draft = _draft(c, who, auth, settings)
+    return _finish(draft, review_counts(c, _review_addresses(draft)))
+
+
+def _review_addresses(draft):
+    return [s["name"] for entry, _ in draft["bots"] for s in entry["sources"] if s["kind"] == "email"]
+
+
+def _draft(c, who, auth, settings):
+    """The catalog from the database: every shown bot with its sources, their review counts not asked of Gmail yet
+    (`_finish` fills them), so the snapshot need not stay open while Gmail answers."""
     allowed = set(visible_addresses(c, who))
     people = roster(c)
     channels = SC.channel_map(c, settings) if who.role == "owner" else {}
@@ -125,56 +167,66 @@ def _catalog(c, who, auth, settings):
         "WHERE a.deleted_at IS NULL AND a.owner_id LIKE 'bot:%'"
     ):
         schedules.setdefault(row["owner_id"][4:], []).append(dict(row))
-    bots = []
+    # Every bot's configuration, status and mailboxes in one read each, not several a bot.
+    configs = {}
+    for row in c.execute(
+        f"SELECT bc.bot AS bot,{BS.CONFIG} AS config,bc.description,bc.owner_id,bc.revision FROM bot_config bc {BS.JOIN}"
+    ):
+        configs.setdefault(row["bot"], row)
+    statuses = {row["bot"]: dict(row) for row in c.execute("SELECT * FROM bot_status")}
+    inboxes = mailbox_access.bot_mailboxes(c)
+    shown = []
     covered_mail, covered_slack = set(), set()
     readable = auth.bot_accesses(c, who)
     for row in H.bots(c):
         bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute(
-            f"SELECT {BS.CONFIG} AS config,bc.description,bc.owner_id,bc.revision FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
-            (bot,),
-        ).fetchone()
+        config_row = configs.get(bot)
         config = _json(config_row["config"], {}) if config_row else {}
-        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes)
+        sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, inboxes.get(bot, []))
         if not sources:
             continue
         covered_mail.update(s["name"] for s in sources if s["kind"] == "email")
         covered_slack.update(s["id"][6:] for s in sources if s["kind"] == "slack")
+        shown.append((row, config_row, config, sources))
+    # The shown bots' last turns, one read for them all.
+    turns = {}
+    for part in H.chunks([row["id"] for row, *_ in shown]):
+        turns.update(
+            c.execute(
+                "SELECT bot_id, max(coalesce(settled_at,created_at)) FROM attempts WHERE bot_id IN (%s) "
+                "AND (job_id IS NULL OR trigger IS NOT NULL) GROUP BY bot_id" % ",".join("?" * len(part)),
+                part,
+            ).fetchall()
+        )
+    bots = []
+    for row, config_row, config, sources in shown:
+        bot = row["id"]
         jobs = schedules.get(bot, [])
         fired = [r["last_fired_at"] for r in jobs if r["last_fired_at"]]
         due = [r["next_due_at"] for r in jobs if r["enabled"] and r["next_due_at"]]
-        turn = c.execute(
-            "SELECT max(coalesce(settled_at,created_at)) FROM attempts WHERE bot_id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
-            (bot,),
-        ).fetchone()[0]
+        turn = turns.get(bot)
         last = max(fired + ([turn] if turn else []), default=None)
-        status = H.status(c, bot) or {}
-        bots.append(
-            {
-                "bot": bot,
-                "name": row["display_name"] or row["slug"],
-                "description": (config_row["description"] if config_row else "") or config.get("role") or "",
-                "state": row["state"],
-                "focus": status.get("focus") or "",
-                "last_result": status.get("last_result") or "",
-                "sources": sources,
-                "automation_count": len(jobs),
-                "last_run": last,
-                "next_run": min(due, default=None),
-                # Mailbox review labels belong to its primary inbox bot. Other bots
-                # may read the same mailbox without owning that review queue.
-                "needs_review": (
-                    sum(s["needs_review"] for s in sources if s["kind"] == "email")
-                    if P.inbox_person(bot, people)
-                    else 0
-                ),
-                "can_manage": auth.operator(c, who, bot) or auth.manages(c, who, "bot", bot),
-                "revision": config_row["revision"] if config_row else None,
-            }
-        )
-    bots.sort(key=lambda b: (b["state"] != "active", -b["needs_review"], b["name"].lower()))
+        status = statuses.get(bot) or {}
+        entry = {
+            "bot": bot,
+            "name": row["display_name"] or row["slug"],
+            "description": (config_row["description"] if config_row else "") or config.get("role") or "",
+            "state": row["state"],
+            "focus": status.get("focus") or "",
+            "last_result": status.get("last_result") or "",
+            "sources": sources,
+            "automation_count": len(jobs),
+            "last_run": last,
+            "next_run": min(due, default=None),
+            "needs_review": None,  # _finish
+            "can_manage": auth.operator(c, who, bot) or auth.manages(c, who, "bot", bot),
+            "revision": config_row["revision"] if config_row else None,
+        }
+        # Mailbox review labels belong to its primary inbox bot. Other bots
+        # may read the same mailbox without owning that review queue.
+        bots.append((entry, bool(P.inbox_person(bot, people))))
     unassigned = []
     if who.role == "owner":
         for address in sorted(allowed - covered_mail):
@@ -184,6 +236,19 @@ def _catalog(c, who, auth, settings):
             if cid not in covered_slack:
                 unassigned.append({"id": "slack:" + cid, "kind": "slack", "name": "#" + (entry["name"] or cid)})
     return {"bots": bots, "unassigned": unassigned}
+
+
+def _finish(draft, counts):
+    """The catalog with each mailbox's review count (`review_counts`), each inbox bot's total, in page order."""
+    bots = []
+    for entry, inbox in draft["bots"]:
+        for s in entry["sources"]:
+            if s["kind"] == "email":
+                s["needs_review"] = counts[s["name"]]
+        entry["needs_review"] = sum(s["needs_review"] for s in entry["sources"] if s["kind"] == "email") if inbox else 0
+        bots.append(entry)
+    bots.sort(key=lambda b: (b["state"] != "active", -b["needs_review"], b["name"].lower()))
+    return {"bots": bots, "unassigned": draft["unassigned"]}
 
 
 def _workspace_url(c):
@@ -218,8 +283,13 @@ def install_messaging(app, store, auth):
     def messaging_bots(request: Request):
         who = request.state.identity
         human_only(who)
+        # One snapshot, so the per-bot checks share its rows (read_cache keeps them only inside a transaction); closed
+        # before Gmail is asked for the review counts.
+        with store.read_transaction() as c:
+            draft = _draft(c, who, auth, store.settings)
         with store.read() as c:
-            return _catalog(c, who, auth, store.settings)
+            counts = review_counts(c, _review_addresses(draft))
+        return _finish(draft, counts)
 
     @app.get("/api/v2/messaging/bots/{bot}")
     def messaging_bot(request: Request, bot: str, source: str = ""):
