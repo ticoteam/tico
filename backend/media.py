@@ -28,6 +28,7 @@ from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
 from .api_contract import api_v2, error
+from .api_answers.tasks import TaskFileList, TaskFileResult
 
 
 class Note(M.Contract):
@@ -772,7 +773,7 @@ def install_media(
         return await asyncio.to_thread(write, request, body, uploads, work)
 
     @app.get(
-        "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
+        "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", TaskFileList)
     )
     def task_files(request: Request, tid: str, all_pages: bool = Query(default=False, alias="all")):
         with store.read_transaction() as c:
@@ -785,7 +786,7 @@ def install_media(
             "Tasks",
             "attachTaskFile",
             "Attach a file; the same name adds a version",
-            "TaskFileResult",
+            TaskFileResult,
             openapi_extra=task_file_contract(),
         ),
     )

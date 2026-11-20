@@ -4,8 +4,9 @@ declared:
 
     @app.get("/api/v2/things", **api_v2("Things", "listThings", "The things a person can see", "ThingList"))
 
-gives the operation its tag (a key of openapi_v2.TAGS), operationId and summary, and names its 200 answer in
-openapi_v2.SCHEMAS (None keeps what FastAPI says). A route without it is internal: absent from the document and free
+gives the operation its tag (a key of openapi_v2.TAGS), operationId and summary, and names its 200 answer: a TypedDict
+from backend/api_answers/ (FastAPI writes its schema), or, for a tag not moved there yet, a name in openapi_v2.SCHEMAS
+(None keeps what FastAPI says). A route without it is internal: absent from the document and free
 to change in any release. What FastAPI cannot see in a handler (a body read by hand, an answer that is not JSON, the
 errors it gives) is said here too, next to the route.
 """
@@ -42,7 +43,7 @@ def api_v2(
     tag: str,
     operation_id: str,
     summary: str,
-    answer: str | dict[str, Any] | None = None,
+    answer: type | str | dict[str, Any] | None = None,
     *,
     description: str | None = None,
     parameters: dict[str, str] | None = None,
@@ -55,7 +56,9 @@ def api_v2(
     """The route decorator's keyword arguments for one stable operation. The operationId goes in openapi_extra, not
     FastAPI's operation_id, which would also rename the route's generated schemas.
 
-    answer: the 200 answer, a schema name in SCHEMAS or the whole response object (bytes, CSV, a stream).
+    answer: the 200 answer: a TypedDict from backend/api_answers/, given to FastAPI as the 200 response's model, which
+        only the document reads (the handler's dict is still what orjson encodes); a schema name in SCHEMAS; or the
+        whole response object (bytes, CSV, a stream).
     description: the operation's description; the handler's docstring is never published.
     parameters: descriptions of FastAPI's parameters by name (a description given to Query() would reach the schema too).
     request_body: the body, for a handler that reads it by hand.
@@ -63,10 +66,11 @@ def api_v2(
     security: [] for a route open without sign-in (it has no 401 or 422 either), or the schemes it takes instead.
     idempotency: for a /api/v2 write that does not need the Idempotency-Key header, what the header does instead.
     """
+    model = answer if isinstance(answer, type) else None
     contract: dict[str, Any] = {
         key: value
         for key, value in (
-            ("answer", answer),
+            ("answer", None if model else answer),
             ("description", description),
             ("parameters", parameters),
             ("request_body", request_body),
@@ -76,8 +80,11 @@ def api_v2(
         )
         if value is not None
     }
-    return {
+    declared: dict[str, Any] = {
         "tags": [tag],
         "summary": summary,
         "openapi_extra": {**(openapi_extra or {}), "operationId": operation_id, MARK: contract},
     }
+    if model is not None:
+        declared["responses"] = {200: {"model": model, "description": "OK"}}
+    return declared

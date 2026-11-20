@@ -548,6 +548,7 @@ def test_a_route_change_selects_the_contract_tests(repo_map):
         "backend/openapi_v2.py",
         "backend/api_contract.py",
         "backend/api_schemas/bots.py",
+        "backend/api_answers/tasks.py",
         "backend/calendar_api.py",  # declares its routes with **api_v2(...) but is not a *_routes.py
     ):
         picked = checks.selection([changed], graph=repo_map)

@@ -10,6 +10,7 @@ from . import reach
 from . import task_caps
 from . import task_merge as TM
 from .api_contract import api_v2
+from .api_answers.tasks import TaskMergeChecks, TaskMergeResult, TaskResult
 
 
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
@@ -115,7 +116,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             "Tasks",
             "relateTask",
             "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a release that holds task's merged PRs)",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_relation(request: Request, tid: str, body: M.TaskRelation):
@@ -159,7 +160,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             "Tasks",
             "taskMergeChecks",
             "Before dropping this task on ?into=: both tasks, why each choice (subtask, merge) cannot be done or null, and what a merge would move. People only",
-            "TaskMergeChecks",
+            TaskMergeChecks,
         ),
     )
     def task_merge_checks(request: Request, tid: str, into: str):
@@ -180,7 +181,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             "Tasks",
             "mergeTask",
             "Merge this task into another as its duplicate ({into, owner?}), in one write: the other gains its details and open subtasks, and this one is Closed and linked as a duplicate. People only",
-            "TaskMergeResult",
+            TaskMergeResult,
         ),
     )
     def task_merge(request: Request, tid: str, body: M.TaskMerge):
@@ -222,7 +223,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             "Tasks",
             "setTaskParent",
             "Put this task under another as its subtask ({parent}); both keep their owners and stages. People only",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_parent(request: Request, tid: str, body: M.TaskParent):

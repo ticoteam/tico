@@ -22,6 +22,7 @@ from . import task_privacy as privacy
 from . import reach
 from . import views
 from .api_contract import api_v2
+from .api_answers.tasks import TaskList
 
 
 # The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
@@ -87,7 +88,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             "Tasks",
             "listTasks",
             "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=). counts=stage also answers `counts`: how many tasks the same filters select in each stage, across every page",
-            "TaskList",
+            TaskList,
             parameters={
                 "counts": "stage: also answer `counts`, the number of tasks these filters select in each stage across "
                 "every page (the rows a reader may not read are never counted). Not with changed_after",

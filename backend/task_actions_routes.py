@@ -33,6 +33,7 @@ from . import (
     task_followers_routes,
 )
 from .api_contract import ASK_REFUSED
+from .api_answers.tasks import TaskDetail, TaskResult, TaskRunModelResult
 
 from . import models as M
 from .api_contract import api_v2
@@ -46,7 +47,7 @@ def register(app, auth, mutate, settings_admin):
             "Tasks",
             "setTaskModel",
             "Set the model this task's runs use, with its effort and harness (backend/task_run_models.py): an absent `model` keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's computer can run it now",
-            "TaskRunModelResult",
+            TaskRunModelResult,
         ),
     )
     def task_run_model(request: Request, tid: str, body: M.TaskRunModel):
@@ -200,7 +201,7 @@ def register_core(
             "Tasks",
             "getTask",
             "A task with its history, comments and messages: where it is (pipeline, stage), whose turn it is, what it takes to leave its stage (to_leave, each requirement with what the reader may do), the next stage and the tasks it filed",
-            "TaskDetail",
+            TaskDetail,
         ),
     )
     def task(request: Request, tid: str):
@@ -951,7 +952,7 @@ def register_core(
             return store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
 
     @app.post(
-        "/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", "TaskResult", responses={"422": ASK_REFUSED})
+        "/api/v2/tasks", **api_v2("Tasks", "createTask", "Create a task", TaskResult, responses={"422": ASK_REFUSED})
     )
     def create_task(request: Request, body: M.TaskCreate):
         who = request.state.identity
@@ -1080,7 +1081,7 @@ def register_core(
             "Tasks",
             "updateTask",
             "Edit a task's fields (title, due, labels, privacy, goal, note); a task has no description. A bot sends the version it was shown (409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
-            "TaskResult",
+            TaskResult,
             responses={"422": ASK_REFUSED},
         ),
     )

@@ -8,6 +8,7 @@ from . import org_rule_check
 from . import task_privacy as privacy
 from . import task_followers
 from .api_contract import api_v2
+from .api_answers.tasks import CommentResult
 
 
 def register(
@@ -108,7 +109,7 @@ def register(
             "Tasks",
             "editTaskComment",
             "Change the text of a comment you wrote; it wakes nobody and is marked edited_at",
-            "CommentResult",
+            CommentResult,
         ),
     )
     def task_comment_edit(request: Request, tid: str, mid: str, body: M.TaskComment):
@@ -164,7 +165,7 @@ def register(
             "Tasks",
             "deleteTaskComment",
             "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain",
-            "CommentResult",
+            CommentResult,
         ),
     )
     def task_comment_delete(request: Request, tid: str, mid: str, body: M.Empty):

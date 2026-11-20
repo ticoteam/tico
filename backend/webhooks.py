@@ -30,6 +30,17 @@ from . import webhook_delivery as D
 from .models import Contract
 from .store import Problem
 from .api_contract import api_v2
+from .api_answers.webhooks import (
+    WebhookChanged,
+    WebhookCreated,
+    WebhookEnabled,
+    WebhookList,
+    WebhookQueued,
+    WebhookRecovered,
+    WebhookReplayed,
+    WebhookSends,
+    WebhookShown,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1411,7 +1422,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "listWebhooks",
             "Your outgoing endpoints (an admin sees all) with 7-day delivered, failed and pending counts; paged",
-            "WebhookList",
+            WebhookList,
         ),
     )
     def webhook_list(request: Request, limit: int = LISTED, offset: int = 0):
@@ -1427,7 +1438,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "createWebhook",
             "A person makes an endpoint; the secret is in the answer once. A bot files an approval and the answer says so",
-            "WebhookCreated",
+            WebhookCreated,
         ),
     )
     def webhook_create(request: Request, body: WebhookCreate):
@@ -1444,7 +1455,7 @@ def install(app, settings, store, auth, mutate):
 
     @app.get(
         "/api/v2/webhooks/{hook_id}",
-        **api_v2("Webhooks", "getWebhook", "One endpoint and its last ten attempts", "WebhookShown"),
+        **api_v2("Webhooks", "getWebhook", "One endpoint and its last ten attempts", WebhookShown),
     )
     def webhook_show(request: Request, hook_id: str):
         """One endpoint and its last ten attempts."""
@@ -1472,7 +1483,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "updateWebhook",
             "Change the name, address, events, filter, custom headers, hourly rate or (owner only) the plain-http switch",
-            "WebhookChanged",
+            WebhookChanged,
         ),
     )
     def webhook_update(request: Request, hook_id: str, body: WebhookUpdate):
@@ -1489,7 +1500,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "rotateWebhookSecret",
             "A new secret, shown once; the old one signs beside it for 24 hours",
-            "WebhookCreated",
+            WebhookCreated,
         ),
     )
     def webhook_rotate(request: Request, hook_id: str, body: M.Empty):
@@ -1500,15 +1511,13 @@ def install(app, settings, store, auth, mutate):
 
     @app.post(
         "/api/v2/webhooks/{hook_id}/pause",
-        **api_v2("Webhooks", "pauseWebhook", "Stop sending; queued sends wait", "WebhookChanged"),
+        **api_v2("Webhooks", "pauseWebhook", "Stop sending; queued sends wait", WebhookChanged),
     )
     def webhook_pause(request: Request, hook_id: str, body: Pause):
         """Stop sending; what is queued waits."""
         return mutate(request, body, lambda c: {"webhook": pause(c, request.state.identity, hook_id, body.reason)})
 
-    @app.post(
-        "/api/v2/webhooks/{hook_id}/resume", **api_v2("Webhooks", "resumeWebhook", "Send again", "WebhookChanged")
-    )
+    @app.post("/api/v2/webhooks/{hook_id}/resume", **api_v2("Webhooks", "resumeWebhook", "Send again", WebhookChanged))
     def webhook_resume(request: Request, hook_id: str, body: M.Empty):
         return mutate(request, body, lambda c: {"webhook": resume(c, request.state.identity, hook_id)})
 
@@ -1518,7 +1527,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "enableWebhook",
             "Turn an endpoint back on; after an automatic turn-off the answer offers `recover` with the date to send again from",
-            "WebhookEnabled",
+            WebhookEnabled,
         ),
     )
     def webhook_enable(request: Request, hook_id: str, body: M.Empty):
@@ -1532,7 +1541,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "recoverWebhookSends",
             "Send again every send that gave up since a date (same ids and bodies)",
-            "WebhookRecovered",
+            WebhookRecovered,
         ),
     )
     def webhook_recover(request: Request, hook_id: str, body: WebhookSince):
@@ -1545,7 +1554,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "replayWebhookEvents",
             "Send the events since a date that the endpoint should have had and has no send for",
-            "WebhookReplayed",
+            WebhookReplayed,
         ),
     )
     def webhook_replay(request: Request, hook_id: str, body: WebhookReplay):
@@ -1569,7 +1578,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "sendWebhook",
             "A custom.<name> event to one endpoint: people, and bots with sending on",
-            "WebhookQueued",
+            WebhookQueued,
         ),
     )
     def webhook_send(request: Request, hook_id: str, body: WebhookSend):
@@ -1578,7 +1587,7 @@ def install(app, settings, store, auth, mutate):
 
     @app.post(
         "/api/v2/webhooks/{hook_id}/example",
-        **api_v2("Webhooks", "sendWebhookExample", "Send an event type's example to one endpoint", "WebhookQueued"),
+        **api_v2("Webhooks", "sendWebhookExample", "Send an event type's example to one endpoint", WebhookQueued),
     )
     def webhook_example(request: Request, hook_id: str, body: WebhookExample):
         """Send an event type's example to one endpoint."""
@@ -1590,7 +1599,7 @@ def install(app, settings, store, auth, mutate):
             "Webhooks",
             "listWebhookSends",
             "The send log, newest first: type, subject, state, attempts, last status, next attempt",
-            "WebhookSends",
+            WebhookSends,
         ),
     )
     def webhook_sends(request: Request, hook_id: str, state: str = "", limit: int = LOG_LISTED, offset: int = 0):

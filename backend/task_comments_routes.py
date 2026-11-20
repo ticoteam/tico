@@ -15,6 +15,7 @@ from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
 from .api_contract import ASK_REFUSED, api_v2
+from .api_answers.tasks import CommentResult, TaskComments
 
 
 # What a bot is told when it comments on its own task during its turn (decision (c): a bot talks one way).
@@ -233,7 +234,7 @@ def register(
     # Before POST: the API document lists a path's methods in the order they are registered.
     @app.get(
         "/api/v2/tasks/{tid}/comments",
-        **api_v2("Tasks", "listTaskComments", "Comments and questions with their answers", "TaskComments"),
+        **api_v2("Tasks", "listTaskComments", "Comments and questions with their answers", TaskComments),
     )
     def task_comments(request: Request, tid: str):
         with store.read() as c:
@@ -247,7 +248,7 @@ def register(
 
     @app.post(
         "/api/v2/tasks/{tid}/comments",
-        **api_v2("Tasks", "commentOnTask", "Comment on a task", "CommentResult", responses={"422": ASK_REFUSED}),
+        **api_v2("Tasks", "commentOnTask", "Comment on a task", CommentResult, responses={"422": ASK_REFUSED}),
     )
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
@@ -289,7 +290,7 @@ def register(
             "A bot's ❓: comment on the task's chat and mark it as needing one person's reply (`to`, `text`). It is "
             "listed in their Needs you until they reply there or the task ends; no task is filed and nothing else is "
             "sent. One open ❓ per bot per chat: a new one replaces the old, and `warning` says so. Bots only",
-            "CommentResult",
+            CommentResult,
         ),
     )
     def task_question(request: Request, tid: str, body: M.Question):

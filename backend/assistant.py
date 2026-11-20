@@ -32,6 +32,7 @@ from .media import upload_contract
 from . import rooms
 from .store import H, Problem, digest
 from .api_contract import api_v2
+from .api_answers.tasks import TaskMakePage
 
 RUNNING_TTL_S = 120  # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24  # a proposal nobody confirmed for a day is not run
@@ -2191,7 +2192,7 @@ def install(app, store, auth, mutate, onboarding):
             "Tasks",
             "getTaskMakePage",
             "The caller's latest Make page request: making, made, failed or update_required",
-            "TaskMakePage",
+            TaskMakePage,
         ),
     )
     def make_page_status(request: Request, tid: str):

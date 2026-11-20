@@ -32,6 +32,7 @@ from .store import H as _H
 from .store import Problem
 from . import store as _store_module
 from .api_contract import api_v2
+from .api_answers.tasks import OkPreview, TaskManyResult, TaskMoveResult, TaskResult
 
 # Untyped modules, reached through Any in this strict module.
 H: Any = _H
@@ -311,7 +312,7 @@ def register(
             "Tasks",
             "doneTask",
             "The work of this stage is finished, with a note. It never pushes past anything: while something else is missing it is refused (409 task_not_met) with what is missing and the commands allowed next. In the last stage the task is Done",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_done(request: Request, tid: str, body: M.TaskDone):
@@ -355,7 +356,7 @@ def register(
             "Tasks",
             "moveTask",
             "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. With to_pipeline (another pipeline's id or name) it moves there, to the stage to names (its first when left out), keeping its number, label and history; a Done or Closed task lands in that pipeline's Done or Closed. A refusal is 409 with error, detail, missing, next and version (task_turn_running while a bot's turn on it runs)",
-            "TaskResult",
+            TaskResult,
             description="Within a pipeline, moves between a side stage and another work stage or Done need no why and count no requirements as skipped. Next from a side stage goes to the next main stage, or to Done when there is none.",
         ),
     )
@@ -468,7 +469,7 @@ def register(
             "stage when left out), or to alone (next, done, closed, reopen or a stage, each in its own pipeline); why (a "
             "bot's is required). Each moves as one move does; one that cannot is skipped with its code "
             "(task_turn_running, task_stage_full, task_not_met, not_found, ...) and the rest still move. At most 500 tasks",
-            "TaskMoveResult",
+            TaskMoveResult,
         ),
     )
     def tasks_move(request: Request, body: M.TaskMoveMany):
@@ -552,7 +553,7 @@ def register(
             "Give many tasks to one owner for their stage: ids, or from {pipeline, stage} for every open task there; "
             "owner and why. Each is given as one reassign is; one that can't be is skipped with its code and the rest "
             "still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
-            "TaskManyResult",
+            TaskManyResult,
         ),
     )
     def tasks_owner(request: Request, body: M.TaskOwnerMany):
@@ -572,7 +573,7 @@ def register(
             "Snooze many tasks in their stages: ids, or from {pipeline, stage} for every open task there; until (a date "
             "to come; none is On ice) and why. Each is snoozed as one snooze is; one that can't be is skipped with its "
             "code and the rest still change. A person's, or a bot's for a person (on_behalf_of). At most 500 tasks",
-            "TaskManyResult",
+            TaskManyResult,
         ),
     )
     def tasks_snooze(request: Request, body: M.TaskSnoozeMany):
@@ -664,7 +665,7 @@ def register(
 
     @app.post(
         "/api/v2/tasks/{tid}/owner",
-        **api_v2("Tasks", "reassignTask", "Give the task to another owner for this stage, with a why", "TaskResult"),
+        **api_v2("Tasks", "reassignTask", "Give the task to another owner for this stage, with a why", TaskResult),
     )
     def task_owner(request: Request, tid: str, body: M.TaskOwner):
         """Give the task to another owner for this stage."""
@@ -693,7 +694,7 @@ def register(
             "Tasks",
             "snoozeTask",
             "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice): no wakes, no Late, and off Needs you until then",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_snooze(request: Request, tid: str, body: M.TaskSnooze):
@@ -735,7 +736,7 @@ def register(
     says("task_unsnooze", M.TaskWhy, lambda body: [("Why", body.why)], unsnooze_call)
 
     @app.post(
-        "/api/v2/tasks/{tid}/unsnooze", **api_v2("Tasks", "unsnoozeTask", "Bring a snoozed task back now", "TaskResult")
+        "/api/v2/tasks/{tid}/unsnooze", **api_v2("Tasks", "unsnoozeTask", "Bring a snoozed task back now", TaskResult)
     )
     def task_unsnooze(request: Request, tid: str, body: M.TaskWhy):
         """Bring a snoozed task back now."""
@@ -752,7 +753,7 @@ def register(
             "Tasks",
             "tryTaskAgain",
             "A person hands a task that reached them back to its owner, with the count at zero",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_try_again(request: Request, tid: str, body: M.TaskWhy):
@@ -818,7 +819,7 @@ def register(
             "Tasks",
             "askOnTask",
             "Ask a person on the task for an OK of what it shows, in one sentence. The task stays in its stage until they answer; carries requirement_id. A question is a message marked ❓ (POST /api/v2/tasks/{tid}/questions)",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
@@ -846,7 +847,7 @@ def register(
 
     @app.delete(
         "/api/v2/tasks/{tid}/asks/{requirement_id}",
-        **api_v2("Tasks", "withdrawAsk", "Take back an ask that was added to the task", "TaskResult"),
+        **api_v2("Tasks", "withdrawAsk", "Take back an ask that was added to the task", TaskResult),
     )
     def task_withdraw_ask(request: Request, tid: str, requirement_id: str, body: M.TaskWhy | None = None):
         """Take back an ask that was added to the task."""
@@ -900,7 +901,7 @@ def register(
             "Tasks",
             "answerAsk",
             "Answer an OK: ok, or no (send it back, with a note); carries answer_id",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_answer(request: Request, tid: str, requirement_id: str, body: M.TaskAskAnswer):
@@ -913,7 +914,7 @@ def register(
             "Tasks",
             "attachTaskPage",
             "Attach a page to a page requirement: the Decision model checks it, then a named person OKs that version; carries page",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_page_attach(request: Request, tid: str, body: M.TaskPageAttach):
@@ -984,7 +985,7 @@ def register(
             "Tasks",
             "giveAsk",
             "Give an ask to another person: it leaves your Needs you and goes to theirs",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_give(request: Request, tid: str, requirement_id: str, body: M.TaskAskGive):
@@ -1020,7 +1021,7 @@ def register(
             "Tasks",
             "previewOk",
             "What an OK is for, exactly as asked, with the shown_hash its OK sends back",
-            "OkPreview",
+            OkPreview,
         ),
     )
     def ok_preview(request: Request, requirement_id: str):
@@ -1041,7 +1042,7 @@ def register(
             "Tasks",
             "giveOk",
             "OK exactly what you were shown, by your own click: only the person asked, never a bot or anyone acting for them",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_give_ok(request: Request, tid: str, requirement_id: str, body: M.TaskOkGive):
@@ -1101,7 +1102,7 @@ def register(
             "Tasks",
             "askOk",
             "Ask a person to OK exactly this content before doing subject (kind:id); carries requirement_id",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_ask_ok(request: Request, tid: str, body: M.TaskOkAsk):
@@ -1127,7 +1128,7 @@ def register(
             "Tasks",
             "useOk",
             "Use an OK once, for the same subject and exactly the same content, just before the act",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def ok_use(request: Request, requirement_id: str, body: M.OkUse):
@@ -1148,7 +1149,7 @@ def register(
 
         return mutate(request, body, write, durable=True)
 
-    @app.post("/api/v2/answers/{answer_id}/undo", **api_v2("Tasks", "undoAnswer", "Take an answer back", "TaskResult"))
+    @app.post("/api/v2/answers/{answer_id}/undo", **api_v2("Tasks", "undoAnswer", "Take an answer back", TaskResult))
     def answer_undo(request: Request, answer_id: str, body: M.Empty):
         """Take an answer back: whoever gave it, or any person."""
 
@@ -1180,7 +1181,7 @@ def register(
             "Tasks",
             "queueTask",
             "Queue again: put the PRs GitHub took out of the merge queue (or refused) back in it at their newest commit. The stage owner, the pipeline's manager or any person. 409 task_stage off a stage that queues PRs, task_requirement when nothing was taken out or its checks are running or failing",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_queue(request: Request, tid: str, body: M.TaskQueue):
@@ -1202,7 +1203,7 @@ def register(
             "Tasks",
             "releaseTask",
             "Cut the release the task waits for, the way its In a release names (`release_with`: run the release workflow, or create the tag `tag`), through Tico's GitHub App on the next Heartbeat. The stage owner, the pipeline's manager or any person; a bot only once a person signed off before release. 409 task_stage off a stage that waits for a release, task_needs_person with no person's sign-off, task_requirement with no way set, no tag named, nothing merged, already released, or an earlier ask still waiting",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def task_release(request: Request, tid: str, body: M.TaskRelease):
