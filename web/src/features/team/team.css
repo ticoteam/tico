@@ -70,11 +70,12 @@
 .fact-link:hover>.ico{color:var(--ink)}
 
 /* ---------- model picker ---------- */
-.mp-list{display:grid;grid-template-columns:minmax(0,1fr);margin:calc(-1 * var(--s-0)) 0}
-.mp-list .radio{min-height:var(--ctl-sm);gap:var(--s-2h)}
-.mp-list .radio span{flex:1;min-width:0}
-.mp-list .radio em{font-style:normal;font-size:var(--t-xs);color:var(--muted)}
-.mp-list .radio.is-on span{font-weight:var(--w-strong)}
+.mp-list{display:grid;grid-template-columns:minmax(0,1fr);justify-self:stretch;margin:calc(-1 * var(--s-0)) 0}
+.mp-list .radio{display:flex;min-height:var(--ctl-sm);gap:var(--s-2h)}
+/* the name takes the row and the Default mark sits at its end; the box (a span too) keeps its 16px */
+.mp-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mp-list .radio em{flex:none;font-style:normal;font-size:var(--t-xs);color:var(--muted)}
+.mp-list .radio.is-on .mp-name{font-weight:var(--w-strong)}
 
 /* ---------- Add teammate ---------- */
 .modal.add{--pad-t:var(--s-4);width:520px;gap:var(--s-4)}

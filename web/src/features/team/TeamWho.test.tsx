@@ -1138,6 +1138,20 @@ describe('Move agent, and Change model settings @s715', () => {
     await waitFor(() => expect(posted('/bots/ana/transitions')?.body).toMatchObject({ kind: 'model', model: 'm-two', expected_generation: 2, expected_revision: 3 }));
   });
 
+  it('opens on what it runs, with Apply off until a pick differs', async () => {
+    serve();
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    fireEvent.click(await screen.findByRole('button', { name: /^Model/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Model' }));
+    expect(dialog.getByRole('radio', { name: 'Model One' }).getAttribute('aria-checked')).toBe('true');
+    expect(dialog.getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(dialog.getByRole('radio', { name: 'Model Two' }));
+    expect(dialog.getByRole('radio', { name: 'Model Two' }).getAttribute('aria-checked')).toBe('true');
+    expect(dialog.getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(false);
+    fireEvent.click(dialog.getByRole('radio', { name: 'Model One' }));
+    expect(dialog.getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('uses the new configuration revision when applying a model and compact size together', async () => {
     serve((url, method) => (method !== 'POST' ? undefined : url.endsWith('/compact-at') ? ok({ revision: 4 }) : url.endsWith('/transitions') ? ok({ id: 'tr1' }) : undefined));
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
