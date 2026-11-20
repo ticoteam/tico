@@ -4470,6 +4470,8 @@ def edit_message(c, principal, message_id, body):
     if text == message.get("body"):
         return message
     thread = thread_row(c, message["conversation_id"])
+    if thread is None:
+        raise Problem("not_found", "Thread not found", 404)
     if v is not None and not can_post(c, v, thread):
         raise Problem("forbidden", "You can read this thread but not post in it", 403)
     secret_drop.refuse(c, thread, actor, text)  # an edit is checked as a new message is
