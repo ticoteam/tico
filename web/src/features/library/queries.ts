@@ -557,12 +557,13 @@ export const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 /** A new skill as its SKILL.md, waiting for an admin's OK after screening (backend/skills.py propose: no
     `base_version`, so nothing it replaces). It waits at the top of the list once the answer is in. */
-export function proposeSkill(input: { name: string; text: string; note?: string; task?: string }) {
+export function proposeSkill(input: { name: string; text: string; note?: string; task?: string; files?: SkillFile[]; base?: number }) {
   const body: SkillPropose = {
     name: input.name,
-    files: [{ path: 'SKILL.md', content: input.text }],
+    files: input.files ?? [{ path: 'SKILL.md', content: input.text }],
     ...(input.note && { note: input.note }),
     ...(input.task && { task_id: input.task }),
+    ...(input.base && { base_version: input.base }),
   };
   return write<{ proposal: Proposal }>({
     key: proposalsQuery.queryKey,
@@ -572,6 +573,13 @@ export function proposeSkill(input: { name: string; text: string; note?: string;
     // the server withdraws the proposer's earlier pending one for the name
     settle: (cur: Proposal[] | undefined, answer) => cur && [answer.proposal, ...cur.filter((p) => p.name !== answer.proposal.name)],
   }).then((r) => r.proposal);
+}
+
+/** The skill's folder with its SKILL.md as `text`: every other file kept, since a proposal is the whole folder. */
+export function withMain(files: readonly SkillFile[], text: string): SkillFile[] {
+  const at = files.findIndex((f) => /(^|\/)SKILL\.md$/i.test(f.path));
+  if (at < 0) return [{ path: 'SKILL.md', content: text }, ...files];
+  return files.map((f, i) => (i === at ? { ...f, content: text } : f));
 }
 
 export function declineProposal(id: string, reason: string) {

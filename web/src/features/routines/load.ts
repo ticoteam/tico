@@ -26,9 +26,11 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
   }
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
-  if (!out.tab) {
+  if (out.tab !== 'runs') {
     const q = text(raw.q);
     if (q) out.q = q;
+  }
+  if (!out.tab) {
     const state = ROUTINE_STATES.find((x) => x === raw.state);
     if (state) out.state = state;
   }

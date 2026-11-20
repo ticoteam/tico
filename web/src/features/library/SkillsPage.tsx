@@ -273,6 +273,27 @@ function NewSkill({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Edit (the mock's pencil on a skill): its SKILL.md as it stands and a note on what changed, sent as a proposal for an
+    admin's OK, as a new skill is; lands on that proposal. */
+function EditSkill({ name, text: was, onClose }: { name: string; text: string; onClose: () => void }) {
+  const [text, setText] = useState(was);
+  const [note, setNote] = useState('');
+  const [busy, go] = useGo(onClose);
+  const ready = !!text.trim() && text !== was;
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Edit ${name}`}
+      className="sk-edit"
+      actions={<Foot onClose={onClose} label="Propose" busy={busy} ready={ready} onGo={() => void go('skills.edit', { name, text, note: note.trim() || undefined }, 'Not proposed')} />}
+    >
+      <Field label="Text" area value={text} onValueChange={setText} autoFocus />
+      <Field label="Note" value={note} onValueChange={setNote} placeholder="What changed" />
+    </Dialog>
+  );
+}
+
 /** Up to three faces, then how many more (tools.css `.avs`). */
 function Stack({ on, total }: { on: SkillActor[]; total: number }) {
   return (
@@ -365,6 +386,8 @@ function SkillPage({ name }: { name: string }) {
   const files = text.data?.files ?? shipped?.files ?? [];
   const extra = files.filter((f) => !/(^|\/)SKILL\.md$/i.test(f.path));
   const [installing, setInstalling] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const main = files.find((f) => /(^|\/)SKILL\.md$/i.test(f.path));
 
   return (
     <Document
@@ -374,7 +397,9 @@ function SkillPage({ name }: { name: string }) {
       className="lib"
       actions={
         <>
+          {main && <IconButton icon="edit" label="Edit" onClick={() => setEditing(true)} data-target={`skill-edit:${name}`} data-phone />}
           <OwnerButton page="skills" />
+          {editing && main && <EditSkill name={name} text={main.content} onClose={() => setEditing(false)} />}
           {installing && <InstallDialog name={name} versions={d.data?.versions ?? []} onClose={() => setInstalling(false)} />}
           {removing && (
             <RemoveDialog who={removing.who} id="skills.removeInstall" input={{ skill: name, install: removing.id }} onClose={() => setRemoving(null)} />

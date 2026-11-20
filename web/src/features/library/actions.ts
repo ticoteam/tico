@@ -52,6 +52,9 @@ import {
   saveFact,
   setAccess,
   proposeSkill,
+  skillQuery,
+  skillTextQuery,
+  withMain,
   SKILL_NAME,
   skillsQuery,
   startSignIn,
@@ -416,6 +419,31 @@ export const skillsPropose = defineAction({
     return p.id;
   },
   did: (i) => `Proposed ${i.name}`,
+  target: (_i, out) => (out ? { kind: 'page', id: `/library/skills?proposal=${out}` } : null),
+});
+
+/** A change to a skill: its SKILL.md as edited, the rest of its folder as it is, from its latest version (or the
+   files Tico ships it with). Open to Tico like a new skill: it waits for an admin's OK after screening, and an
+   unchanged text is refused there. Lands on the proposal. */
+export const skillsEdit = defineAction({
+  id: 'skills.edit',
+  title: "Propose a change to a skill's text",
+  kind: 'change',
+  input: z.strictObject({
+    name: z.string().check(z.minLength(1), z.maxLength(80), z.regex(SKILL_NAME)),
+    text: z.string().check(z.minLength(1), z.maxLength(90_000)),
+    note: z.optional(text(200)),
+    task: z.optional(id),
+  }),
+  run: async ({ router, queryClient }, i) => {
+    const d = await queryClient.ensureQueryData(skillQuery(i.name));
+    const base = d.skill.latest?.number;
+    const files = base ? (await queryClient.ensureQueryData(skillTextQuery(i.name, base))).files : (d.shipped?.files ?? []);
+    const p = await proposeSkill({ name: i.name, text: i.text, files: withMain(files, i.text), base, note: i.note?.trim() || undefined, task: i.task });
+    await go(router, '/library/skills', { proposal: p.id }, true);
+    return p.id;
+  },
+  did: (i) => `Proposed a change to ${i.name}`,
   target: (_i, out) => (out ? { kind: 'page', id: `/library/skills?proposal=${out}` } : null),
 });
 

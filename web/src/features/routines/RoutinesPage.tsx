@@ -56,7 +56,7 @@ export function RoutinesPage({ search }: { search: RoutinesSearch }) {
     const { status, range } = search;
     return <RunsTab head={head} status={status} range={range} panel={search.panel} href={(panel) => routinesHref({ tab: 'runs', status, range, panel })} />;
   }
-  return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
+  return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} q={search.q} /> : <RoutinesTab panel={search.panel} q={search.q} state={search.state} />;
 }
 
 const close = () => void press('routines.closePanel', {});
@@ -236,12 +236,14 @@ function BuiltInSection({ selected, q, showEmpty }: { selected: Builtin | null; 
 
 // ---------------------------------------------------------------- webhooks
 
-function WebhooksTab({ panel }: { panel?: string }) {
-  const list = useSuspenseQuery(hooksQuery).data;
+function WebhooksTab({ panel, q }: { panel?: string; q?: string }) {
+  const all = useSuspenseQuery(hooksQuery).data;
   const [adding, setAdding] = useState(false);
+  const [inbox, setInbox] = useState(false);
   // a new webhook's full address, secret included, shown once: this state only, never the cache or the address
   const [made, setMade] = useState<{ hook: string; url: string; signing?: string } | null>(null);
   const open = panel?.startsWith('hook:') ? panel.slice(5) : null;
+  const list = all.filter((h) => has(`${h.name} ${startsWords(h)}`, q));
   const add = (
     <Button variant="primary" onClick={() => setAdding(true)}>
       Add webhook
@@ -250,20 +252,32 @@ function WebhooksTab({ panel }: { panel?: string }) {
   return (
     <List
       {...head}
-      state={list.length ? 'ready' : 'empty'}
+      state={all.length ? 'ready' : 'empty'}
       empty={{ title: 'No webhooks yet', action: add }}
+      search={all.length > 0 && <Find label="Search webhooks" value={q} onFind={(words) => void press('routines.list', { tab: 'webhooks', q: words })} />}
       actions={
         <>
-          {list.length > 0 && add}
+          {all.length > 0 && add}
           {adding && <HookDialog onMade={setMade} onClose={() => setAdding(false)} />}
+          {inbox && <NewInbox onClose={() => setInbox(false)} />}
         </>
       }
+      more={
+        <PageMore>
+          <MenuItem label="Outgoing webhooks" icon="send" onSelect={() => void press('tools.filter', { kind: 'webhook' })} />
+          <MenuItem label="New inbox" icon="mail" onSelect={() => setInbox(true)} />
+        </PageMore>
+      }
       sections={
-        <Section name="Incoming" count={list.length} target="section:incoming">
-          {list.map((h) => (
-            <HookRow key={h.id} h={h} selected={h.id === open} />
-          ))}
-        </Section>
+        list.length ? (
+          <Section name="Incoming" count={list.length} target="section:incoming">
+            {list.map((h) => (
+              <HookRow key={h.id} h={h} q={q} selected={h.id === open} />
+            ))}
+          </Section>
+        ) : (
+          <Empty title="No matches" />
+        )
       }
       panel={
         open && (
@@ -284,7 +298,7 @@ function WebhooksTab({ panel }: { panel?: string }) {
   );
 }
 
-function HookRow({ h, selected }: { h: Hook; selected: boolean }) {
+function HookRow({ h, q, selected }: { h: Hook; q?: string; selected: boolean }) {
   const copy = () =>
     void navigator.clipboard.writeText(h.url).then(
       () => toast({ text: 'Address copied', kind: 'done' }),
@@ -292,7 +306,7 @@ function HookRow({ h, selected }: { h: Hook; selected: boolean }) {
     );
   return (
     <Row className="hook" title={h.name} selected={selected} target={`hook:${h.id}`}>
-      <Link className="row-title" href={routinesHref({ tab: 'webhooks', panel: `hook:${h.id}` })} aria-current={selected ? 'true' : undefined}>
+      <Link className="row-title" href={routinesHref({ tab: 'webhooks', q, panel: `hook:${h.id}` })} aria-current={selected ? 'true' : undefined}>
         {h.name}
       </Link>
       <span className="row-sub">{startsWords(h)}</span>
