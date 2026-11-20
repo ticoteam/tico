@@ -123,7 +123,7 @@ def scenario():
             title="Settings tabs",
             author="frank",
             body="## Risk\nmedium: UI only\n",
-            files=("ui/settings/tabs.tsx", "scripts/tests/test_settings.py"),
+            files=("web/src/features/settings/Tabs.tsx", "scripts/tests/test_settings.py"),
         )
     )
     routes.update(pr_routes(16, title="Work in progress", merged=False))
@@ -190,7 +190,7 @@ def test_a_commit_citing_a_ticket_number_that_is_no_pull_request_is_skipped():
         (".github/workflows/train.yml", "ci"),
         ("README.md", "other"),
         ("backend/tests/test_tasks.py", "tests"),
-        ("ui/src/app.test.tsx", "ui"),
+        ("web/src/app.test.tsx", "web"),
         ("conftest.py", "tests"),
     ],
 )
@@ -201,10 +201,10 @@ def test_each_file_belongs_to_one_area(path, area):
 @pytest.mark.parametrize(
     "fields, group",
     [
-        (dict(risk="high", areas=("ui",)), "high"),
+        (dict(risk="high", areas=("web",)), "high"),
         (dict(risk="high", areas=("docs",)), "high"),
         (dict(risk="medium", areas=("docs",)), "internal"),
-        (dict(areas=("ui", "backend")), "user"),
+        (dict(areas=("web", "backend")), "user"),
         (dict(areas=("app",)), "user"),
         (dict(areas=("runner", "docs")), "backend"),
         (dict(areas=("docs",)), "internal"),

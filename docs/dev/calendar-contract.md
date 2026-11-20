@@ -219,13 +219,12 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 
 ## UI (track ui; TypeScript, strict)
 
-- `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|3day|week|month|list&date=YYYY-MM-DD&q=…`),
-  `ui/app/calendar-row.ts` (sidebar row), `ui/styles/calendar.css`; registered in `ui/app/router.ts` and
-  `ui/index.html`. Spec §12.
+- The page is `web/src/features/calls/CalendarPage.tsx` at `/calendar`; its query is `calendarSearch` in
+  `web/src/features/calls/model.ts`. Spec §12.
 - Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Meetings, Company
   (Strategy, Finance, Growth, Automations, Rules), Library (Docs, Files, Skills, Contacts, Tools), Pipelines pins, Team.
   Meetings is a top-level place of its own (calls and meetings), not a Library page.
-  Directory is Contacts, a Library row (`#/library/contacts`; the old `#/library/directory` still opens it). The Rules folder becomes one
+  Directory is Contacts, a Library row (`/library/contacts`; the old `#/library/directory` still opens it). The Rules folder becomes one
   Rules row under Company (its Internal/External/Due/Suggested pages stay reachable from the Rules page).
 - Join (row, bubble, page, card): opens `meeting_url` in a new tab.
 - Who bots may book: one control on Rules > reach (track reach).
@@ -237,8 +236,8 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 - Commit on your branch with the repo's git identity (no Co-Authored-By, no "Claude" author), message from your own
   file `/Volumes/PNYRP60PSSD/orca/workspaces/ticoteam-tico/_commitmsg-calendar-<track>.txt`.
 - Checks: `ruff check <changed .py>`, `ruff format --check <changed .py>`, the pytest files you wrote or touched
-  (run one file at a time, `-p no:xdist` if needed), UI: `bash scripts/check_ui_types.sh` and your one browser script
-  (`node scripts/ui-tests.cts <script>` or as ui/tests docs say). No full suites; the machine is shared.
+  (run one file at a time, `-p no:xdist` if needed), UI: in `web/`, `npm run typecheck`, `npm run lint` and the vitest
+  files you touched. No full suites; the machine is shared.
 - Tests guard real behaviour (permissions, recurrence maths, routing, data safety); no tests of wording.
 - No test calls Google or opens Chrome from pytest. Google is faked by replacing `gcal_call`.
 - Comments explain why, briefly, in the codebase's style. UI copy minimal: titles only, marks not words, no "Filter".

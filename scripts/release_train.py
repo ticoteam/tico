@@ -12,8 +12,7 @@ person is needed (docs/releasing.md#approval).
     python3 scripts/release_train.py status             what canary and stable run, the approvals, the next step
     python3 scripts/release_train.py notes BASE HEAD    the release notes for HEAD since BASE (read-only)
     python3 scripts/release_train.py shots-into-approval VERSION FILE
-                                                        put the pictures (release-shots' markdown FILE, or the failure
-                                                        of its run) in the approval issue's section (idempotent)
+                                                        nothing: releases have no pictures; train.yml still calls it
 
 The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
@@ -104,12 +103,6 @@ APPROVE_FOOTER = (
     "Stable (TIDY) takes an approved release at the next train run (the backstop runs every 20 minutes), unless it is"
     " held or a health check fails."
 )
-SHOTS_HEADING = "## What it looks like"
-SHOTS_START, SHOTS_END = "<!-- release-shots:start -->", "<!-- release-shots:end -->"
-SHOTS_PENDING = (
-    "The before and after pictures are on their way; the release shots job adds them here when they are made."
-)
-SHOTS_SECTION = re.compile(re.escape(SHOTS_START) + r".*?" + re.escape(SHOTS_END), re.DOTALL)
 RELEASE_WAIT = 90 * 60
 VALIDATION_WAIT = 150 * 60
 DISPATCH_WAIT = 120
@@ -1304,8 +1297,7 @@ def earlier_approval(gh, version, prs):
     for issue in gh.approval_issues("all"):
         match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
         if match and parse_version(match[1]) < parse_version(version):
-            body = SHOTS_SECTION.sub("", issue.get("body") or "", count=1)
-            if prs <= release_notes.high_risk_prs(body) and person_approval(gh, issue)[0]:
+            if prs <= release_notes.high_risk_prs(issue.get("body") or "") and person_approval(gh, issue)[0]:
                 return issue["number"]
     return None
 
@@ -1332,8 +1324,7 @@ def approval_state(gh, issue, env):
     if approver:
         return "approved by @" + approver, held, ""
     match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
-    body = SHOTS_SECTION.sub("", issue.get("body") or "", count=1)
-    approval, why = automatic_approval(gh, match[1] if match else None, body, env)
+    approval, why = automatic_approval(gh, match[1] if match else None, issue.get("body") or "", env)
     return approval, held, why
 
 
@@ -1346,11 +1337,6 @@ def pending_approval(gh, env):
     return None
 
 
-def shots_block(section):
-    """The pictures section between the markers with_shots replaces. `section` is markdown that starts with its heading."""
-    return "\n".join([SHOTS_START, section.strip(), SHOTS_END])
-
-
 def quiet_mentions(text):
     # GitHub resolves Markdown-escaped mentions too. The word joiner keeps handles readable without a notification.
     return re.sub(r"(?<![\w/@])@(?=[a-zA-Z0-9])", "@\u2060", text)
@@ -1358,18 +1344,7 @@ def quiet_mentions(text):
 
 def approval_body(version, sha, notes, validated):
     head = "Candidate %s at %s (validated: %s)" % (version, sha[:12], validated or "not recorded")
-    pending = shots_block("%s\n\n%s" % (SHOTS_HEADING, SHOTS_PENDING))
-    return "\n".join([head, "", pending, "", quiet_mentions(notes.rstrip()), "", APPROVE_FOOTER]) + "\n"
-
-
-def with_shots(body, section):
-    """The approval body with its pictures section: the section between the markers is replaced, or, in a body without
-    them, goes under the candidate line. The same section twice gives the same body."""
-    block = shots_block(section)
-    if SHOTS_SECTION.search(body):
-        return SHOTS_SECTION.sub(lambda _found: block, body, count=1)
-    head, _, rest = body.partition("\n")
-    return head + "\n\n" + block + "\n" + rest
+    return "\n".join([head, "", quiet_mentions(notes.rstrip()), "", APPROVE_FOOTER]) + "\n"
 
 
 def open_approval(gh, env, version, sha, notes, validated=""):
@@ -1380,10 +1355,9 @@ def open_approval(gh, env, version, sha, notes, validated=""):
     body = approval_body(version, sha, notes, validated)
     found = find_approval(gh, version, state="all")
     if found:
-        old_body = found.get("body") or ""
         if person_approval(gh, found)[0]:
-            body = old_body  # The notes are the record of what the person approved.
-        return gh.edit(found["number"], kept_shots(body, old_body), "open"), None
+            body = found.get("body") or ""  # The notes are the record of what the person approved.
+        return gh.edit(found["number"], body, "open"), None
     if automatic_approval(gh, version, notes, env)[1]:
         for old, issue in reversed(open_approvals(gh)):
             if parse_version(old) >= parse_version(version):
@@ -1391,19 +1365,8 @@ def open_approval(gh, env, version, sha, notes, validated=""):
             approval, held, _ = approval_state(gh, issue, env)
             if not approval and not held:
                 previous = issue.copy()
-                body = kept_shots(body, issue.get("body"))
                 return gh.edit(issue["number"], body, "open", title=approval_title(version)), previous
     return gh.create_issue(approval_title(version), body, [APPROVAL_LABEL]), None
-
-
-def kept_shots(body, old):
-    """`body` with the pictures section that `old` (an approval record's body) has, in place of its pending line; `body`
-    as it is when `old` has no section."""
-    kept = SHOTS_SECTION.search(old or "")
-    if not kept:
-        return body
-    section = kept.group(0)
-    return SHOTS_SECTION.sub(lambda _found: section, body, count=1)
 
 
 def retire_approvals(gh, version, text, *, inclusive):
@@ -1466,44 +1429,13 @@ def release_notes_for(gh, env, head, previous):
     return release_notes.build(gh, release_base(env, previous), head)
 
 
-# ---- the release shots: the pictures on a candidate's approval issue ----
-
-
-def shots_section(markdown, url):
-    """The section for the approval issue: the markdown release-shots wrote, or, when the shots left none, that the
-    pictures could not be made, with the run that tried."""
-    text = (markdown or "").strip()
-    if not text:
-        failed = (
-            "The before and after pictures could not be made: the release shots job did not finish. Its run: " + url
-        )
-        return SHOTS_HEADING + "\n\n" + failed
-    return text if text.startswith(SHOTS_HEADING) else SHOTS_HEADING + "\n\n" + text
+# ---- the release shots: retired ----
 
 
 def cmd_shots_into_approval(gh, version, path):
-    """Puts a candidate's pictures in its approval issue: release-shots' markdown at path, or the failure with this run when
-    there is none. The section replaces the one it put before, so running it again changes nothing."""
-    try:
-        markdown = Path(path).read_text()
-    except OSError:
-        markdown = ""
-    found = find_approval(gh, version, state="all")
-    if not found:
-        target = parse_version(version)
-        for issue in gh.approval_issues("all"):
-            match = APPROVAL_TITLE.fullmatch(issue.get("title") or "")
-            if target and match and parse_version(match[1]) > target:
-                note("The approval record for %s was superseded; its pictures were skipped" % version)
-                return 0
-        raise Fail("no approval record for %s to put its pictures in" % version)
-    body = found.get("body") or ""
-    updated = with_shots(body, shots_section(markdown, run_url()))
-    if updated == body:
-        note("The pictures on #%s are already current" % found["number"])
-        return 0
-    gh.edit(found["number"], updated)
-    note("Put the pictures on #%s (%s)" % (found["number"], "made" if markdown.strip() else "not made: see the run"))
+    """Nothing: releases have no before and after pictures. train.yml's approval-shots job still calls this (with
+    release-shots.yml, which runs scripts/release_shots.py); this command goes when those jobs do."""
+    note("Release %s has no pictures to put on its approval issue" % version)
     return 0
 
 

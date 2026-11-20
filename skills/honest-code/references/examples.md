@@ -1,6 +1,7 @@
 # Examples from Tico
 
-Paths and lines are `origin/main` at `7e7842e5a2` (2026-11-18). Lines move; search for the quoted text. Lesson ids
+Paths and lines are `origin/main` at `7e7842e5a2` (2026-11-18). Lines move; search for the quoted text. The `ui/` paths
+are the old web app's, removed since (#4660): read them at that commit. Lesson ids
 (`L02`) point at `../LESSONS.md`.
 
 ## Cause of a flaky test, the fix that held, the helper to use

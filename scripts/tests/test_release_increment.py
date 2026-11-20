@@ -20,14 +20,11 @@ NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
 A, B, C = ("a" * 40, "b" * 40, "c" * 40)
 TABLES = {
     "seconds": {"backend/tests/test_a.py": 30.0, "backend/tests/test_slow.py": 900.0},
-    "browser": {"threads": 10.0, "task-code": 5.0},
     "slow_only": {"backend/tests/test_slow.py"},
 }
 PYTEST_FAILURES = (
     "FAILED backend/tests/test_company_file.py::test_one - AssertionError\n"
     "FAILED backend/tests/test_company_file.py::test_two\n"
-    "FAIL  threads.cjs (4.1s)\n"
-    "FAIL  ui/tests/task-code.cjs (2s)\n"
 )
 
 
@@ -58,10 +55,9 @@ def red(failed, sha=A, conclusion="failure"):
     return {"sha": sha, "url": "https://github.example/red", "conclusion": conclusion, "failed": failed}
 
 
-def selected(python=(), browser=(), **flags):
+def selected(python=(), **flags):
     return {
         "python": list(python),
-        "browser": list(browser),
         "rust": [],
         "conformance": False,
         "contracts": False,
@@ -72,15 +68,12 @@ def selected(python=(), browser=(), **flags):
     }
 
 
-def plan_of(
-    sel, changed=("backend/tests/test_a.py",), carried=(), smoke=("sign-in-redirect",), gone=("gone",), **options
-):
+def plan_of(sel, changed=("backend/tests/test_a.py",), carried=(), gone=("gone",), **options):
     return ri.plan_for(
         sel,
         list(changed),
         set(carried),
         lambda path: not any(word in path for word in gone),
-        list(smoke),
         TABLES,
         **options,
     )
@@ -201,17 +194,9 @@ def test_a_candidate_whose_previous_release_moved_from_the_anchors_runs_the_prod
 
 
 def test_failures_are_named_from_the_logs_and_by_their_job():
-    assert ri.failure_tokens(PYTEST_FAILURES) == {
-        "backend/tests/test_company_file.py",
-        "ui/tests/threads.cjs",
-        "ui/tests/task-code.cjs",
-    }
+    assert ri.failure_tokens(PYTEST_FAILURES) == {"backend/tests/test_company_file.py"}
     named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
-    assert named == {
-        "backend/tests/test_company_file.py",
-        "ui/tests/threads.cjs",
-        "ui/tests/task-code.cjs",
-    }
+    assert named == {"backend/tests/test_company_file.py"}
     assert ri.failed_tokens([("product", ""), ("desktop", "")]) == {"product", "desktop"}
 
 
@@ -319,7 +304,7 @@ def test_a_red_at_mains_head_waits_for_a_push():
 def test_a_red_waits_until_a_commit_since_it_selects_what_failed():
     go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_y.py"})
     assert go is False and "the train waits" in why and "test_x.py" in why
-    go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_x.py", "ui/tests/threads.cjs"})
+    go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_x.py", "backend/tests/test_y.py"})
     assert go is True and "a commit since" in why and "test_x.py" in why
 
 
@@ -332,22 +317,19 @@ def test_a_red_naming_no_failure_or_with_an_unreadable_diff_runs_on_the_next_com
 # ---- the incremental plan ----
 
 
-def test_a_plan_runs_its_selection_the_carried_failures_and_the_smoke_browser_scripts():
-    sel = selected(
-        python=["backend/tests/test_a.py", "backend/tests/test_gone.py", "backend/tests/test_slow.py"],
-        browser=["threads"],
-    )
+def test_a_plan_runs_its_selection_and_the_carried_failures():
+    sel = selected(python=["backend/tests/test_a.py", "backend/tests/test_gone.py", "backend/tests/test_slow.py"])
     plan = plan_of(
         sel,
+        # A browser script an older red run named is no Python file: nothing runs it now.
         carried={"ui/tests/task-code.cjs", "backend/tests/test_b.py", "backend/tests/test_gone2.py", ri.PRODUCT},
         gone=("gone",),
     )
     assert plan["python"] == ["backend/tests/test_a.py", "backend/tests/test_b.py"]
     assert plan["contracts"] == ["backend/tests/test_slow.py"]
-    assert plan["browser"] == ["sign-in-redirect", "task-code", "threads"]
     assert plan["product"] is True and plan["desktop"] is False
-    assert plan["dropped"] == ["backend/tests/test_gone2.py"]
-    assert [job["name"] for job in plan["jobs"]] == ["python-1", "browser-1", "contracts", "product"]
+    assert plan["dropped"] == ["backend/tests/test_gone2.py", "ui/tests/task-code.cjs"]
+    assert [job["name"] for job in plan["jobs"]] == ["python-1", "contracts", "product"]
 
 
 def test_a_carried_file_with_slow_tests_runs_them_in_the_contracts_lane_too():
@@ -356,7 +338,6 @@ def test_a_carried_file_with_slow_tests_runs_them_in_the_contracts_lane_too():
         ["backend/tests/test_a.py"],
         {"backend/tests/test_mixed.py", "backend/tests/test_plain.py"},
         lambda path: True,
-        [],
         TABLES,
         has_slow=lambda path: path == "backend/tests/test_mixed.py",
     )
@@ -375,33 +356,31 @@ def test_a_test_file_is_slow_only_when_it_marks_a_test_slow(tmp_path):
     assert ri.has_slow_tests(tmp_path / "missing.py") is False
 
 
-def test_an_empty_selection_runs_the_smoke_browser_scripts_only():
+def test_an_empty_selection_runs_nothing():
     plan = plan_of(selected(), changed=["docs/readme.md"], gone=())
-    assert plan["python"] == [] and plan["contracts"] == [] and plan["browser"] == ["sign-in-redirect"]
-    assert [job["name"] for job in plan["jobs"]] == ["browser-1"]
+    assert plan["python"] == [] and plan["contracts"] == [] and plan["jobs"] == []
     assert plan["product"] is False and plan["desktop"] is False
 
 
 def test_an_app_change_runs_the_desktop_part_and_a_caddy_change_the_product_part():
-    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], smoke=(), gone=())
+    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], gone=())
     assert plan["desktop"] is True and plan["product"] is True
     assert [job["name"] for job in plan["jobs"]] == ["product", "desktop"]
 
 
 def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
     # Both parts run native_binaries (hosted_release_check.py), so their VMs must wait for and place the binaries.
-    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], smoke=(), gone=())
+    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], gone=())
     include = ri.matrix_of(json.dumps(plan))["include"]
     assert [entry["name"] for entry in include] == ["product", "desktop"]
     assert all("binaries" not in entry for entry in include)
 
 
 def test_selection_tokens_name_what_the_selection_runs():
-    sel = selected(python=["backend/tests/test_a.py"], browser=["threads"], contracts=True)
+    sel = selected(python=["backend/tests/test_a.py"], contracts=True)
     tokens = ri.selection_tokens(sel, ["app/x.rs"])
-    assert {"backend/tests/test_a.py", "ui/tests/threads.cjs", ri.DESKTOP} <= tokens
+    assert {"backend/tests/test_a.py", ri.DESKTOP} <= tokens
     assert set(pr_checks.CONTRACT_TESTS) <= tokens
-    assert "ui/tests/sign-in-redirect.cjs" not in tokens
 
 
 def test_a_fix_to_the_isolation_suite_selects_the_product_part():
@@ -414,12 +393,12 @@ def test_a_fix_to_the_isolation_suite_selects_the_product_part():
         "b" * 40,
         ri.selection_tokens(selected(), changed),
     )[0]
-    assert plan_of(selected(), changed=changed, smoke=(), gone=())["product"] is True
+    assert plan_of(selected(), changed=changed, gone=())["product"] is True
     assert ri.PRODUCT not in ri.selection_tokens(selected(), ["runner_support/turns.py"])
 
 
 def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner(tmp_path, monkeypatch):
-    plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=())
+    plan = plan_of(selected(python=["backend/tests/test_a.py"]), gone=())
     (tmp_path / "backend/tests").mkdir(parents=True)
     (tmp_path / "backend/tests/test_a.py").touch()
     (tmp_path / "ci-results").mkdir()
@@ -441,7 +420,6 @@ def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms(
     full = ri.matrix_of("")["include"]
     assert len(full) == ri.FULL_PYTHON_SHARDS + 2
     assert full[0] == {"name": "product", "part": "product", "shard": "", "workers": "2", "runner": ri.RUNNER}
-    assert not [entry for entry in full if entry["part"] == "browser"]  # the old web app's browser scripts are gone
     assert full[1] == {
         "name": "python-1",
         "part": "python",
@@ -450,10 +428,10 @@ def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms(
         "runner": ri.RUNNER,
     }
     assert full[-1]["name"] == "desktop"
-    plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=("sign-in-redirect",), gone=())
+    plan = plan_of(selected(python=["backend/tests/test_a.py"]), gone=())
     include = ri.matrix_of(json.dumps(plan))["include"]
-    assert [entry["name"] for entry in include] == ["python-1", "browser-1"]
-    assert "files" not in include[0] and include[1]["binaries"] == "no"
+    assert [entry["name"] for entry in include] == ["python-1"]
+    assert "files" not in include[0]
 
 
 @pytest.mark.parametrize(
@@ -462,6 +440,7 @@ def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms(
         json.dumps({"jobs": []}),
         json.dumps({"jobs": [{"name": "../x", "part": "python"}]}),
         json.dumps({"jobs": [{"name": "python-1", "part": "shell"}]}),
+        json.dumps({"jobs": [{"name": "browser-1", "part": "browser"}]}),
     ],
 )
 def test_a_plan_naming_an_unknown_vm_is_refused(text):
@@ -512,14 +491,14 @@ def test_a_string_or_a_parametrised_slow_case_is_not_a_slow_only_file(tmp_path):
 
 def test_a_large_contracts_lane_splits_into_timed_vms_and_a_small_one_keeps_its_name():
     files = [f"backend/tests/test_s{i}.py" for i in range(20)]
-    tables = {"seconds": {name: 100.0 for name in files}, "browser": {}, "slow": set(files)}
-    jobs = ri.build_jobs([], [], files, False, [], False, False, tables)
+    tables = {"seconds": {name: 100.0 for name in files}, "slow": set(files)}
+    jobs = ri.build_jobs([], files, False, [], False, False, tables)
     names = [job["name"] for job in jobs]
     assert names == ["contracts-1", "contracts-2", "contracts-3"]  # 2000 one-worker seconds: three VMs of about 330 s
     ri.matrix_of(json.dumps({"jobs": jobs}))  # the gate accepts numbered contracts VMs
     assert sorted(sum((job["files"] for job in jobs), [])) == sorted(files)
     assert all(job["part"] == "python" for job in jobs)
-    small = ri.build_jobs([], [], files[:2], False, [], False, False, tables)
+    small = ri.build_jobs([], files[:2], False, [], False, False, tables)
     assert [job["name"] for job in small] == ["contracts"]
 
 
@@ -528,9 +507,9 @@ def test_only_the_python_vms_holding_native_test_files_wait_for_the_release_bina
     # with a file that runs the runner or relay binaries wait, and those files are packed on their own VMs.
     files = [f"backend/tests/test_p{i}.py" for i in range(6)]
     native = {"runner_support/tests/test_engine.py"}
-    tables = {"seconds": {name: 400.0 for name in [*files, *native]}, "browser": {}, "slow_only": set()}
+    tables = {"seconds": {name: 400.0 for name in [*files, *native]}, "slow_only": set()}
     jobs = ri.build_jobs(
-        sorted([*files, *native]), [], [], False, [], False, False, tables, native=lambda names: native & set(names)
+        sorted([*files, *native]), [], False, [], False, False, tables, native=lambda names: native & set(names)
     )
     waiting = [job for job in jobs if "binaries" not in job]
     assert [job["files"] for job in waiting] == [sorted(native)]
@@ -544,16 +523,16 @@ def test_only_the_python_vms_holding_native_test_files_wait_for_the_release_bina
 def test_a_contracts_vm_waits_for_the_binaries_only_when_it_holds_a_native_test_file():
     native = {"backend/tests/test_s0.py"}
     files = [f"backend/tests/test_s{i}.py" for i in range(20)]
-    tables = {"seconds": {name: 100.0 for name in files}, "browser": {}, "slow_only": set()}
-    jobs = ri.build_jobs([], [], files, False, [], False, False, tables, native=lambda names: native & set(names))
+    tables = {"seconds": {name: 100.0 for name in files}, "slow_only": set()}
+    jobs = ri.build_jobs([], files, False, [], False, False, tables, native=lambda names: native & set(names))
     assert [("binaries" not in job) for job in jobs] == [bool(native & set(job["files"])) for job in jobs]
     assert any(job.get("binaries") == "no" for job in jobs)
 
 
 def test_a_plan_that_cannot_tell_native_files_keeps_every_python_vm_waiting_for_the_binaries():
-    plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=())
+    plan = plan_of(selected(python=["backend/tests/test_a.py"]), gone=())
     assert [job for job in plan["jobs"] if job["part"] == "python" and "binaries" in job] == []
-    told = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=(), gone=(), native=lambda names: set())
+    told = plan_of(selected(python=["backend/tests/test_a.py"]), gone=(), native=lambda names: set())
     assert [job["binaries"] for job in told["jobs"] if job["name"].startswith("python-")] == ["no"]
 
 

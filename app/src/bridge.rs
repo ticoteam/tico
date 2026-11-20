@@ -15,9 +15,9 @@ use crate::{
     AppState, LOG_LINES,
 };
 
-/// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which
-/// `nativeHandler(name)` in ui/app/native.ts looks for; `/TicoHub/` in the user agent marks the
-/// page native. (WKWebView's own `window.webkit.messageHandlers` cannot be replaced, so the
+/// The page's side of the bridge: `window.ticoNative(name).postMessage(body)`, which the old web app's
+/// `nativeHandler(name)` looked for (ui/app/native.ts, gone with ui/; the web app, web/, calls the Electron app's
+/// bridge in desktop/ instead and none of these); `/TicoHub/` in the user agent marks the page native. (WKWebView's own `window.webkit.messageHandlers` cannot be replaced, so the
 /// shell has its own name.)
 const BRIDGE_SCRIPT: &str = r#"
 (() => {
@@ -89,7 +89,7 @@ const CAPTURE_SCRIPT: &str = r#"
 /// The page's `alert` (returns at once) and its OK/Cancel question, through `page_dialog`, which shows them only for
 /// the page on screen. Org pages have no dialog plugin permission; this runs after the plugin's own script, so it is
 /// the one that stays. The question is `ticoConfirm`, a promise of true for OK and false for anything else (Cancel, a
-/// refused or failed dialog), which the page's `askConfirm` (ui/app/confirm.ts) awaits. `confirm` itself must answer
+/// refused or failed dialog), which the old web app's `askConfirm` awaited. `confirm` itself must answer
 /// at once and the dialog cannot, so it answers false without asking: a caller that does not await can never go
 /// ahead on a question still open (a promise is truthy, so `if (!confirm(...)) return;` went ahead before Cancel).
 const DIALOG_SCRIPT: &str = r#"
@@ -324,8 +324,8 @@ pub(crate) fn bridge(
                 open_meeting_window(&app, &home, id);
             }
         }
-        // A Tico Meet call's meeting window (ui/app/call-window.ts), for the caller's own org as above; `join`: it
-        // joins the call as it opens.
+        // A Tico Meet call's meeting window, for the caller's own org as above; `join`: it joins the call as it
+        // opens.
         "callWindow" => {
             let id = body
                 .as_ref()
@@ -354,7 +354,7 @@ pub(crate) fn bridge(
         "showLog" => show_log(&app),
         // The open org's name and email, as its page reports them: kept for the rail and the org menu.
         "orgInfo" => org_info(&app, webview.label(), body.as_ref())?,
-        // How long the page took to open (ui/app/boot-timing.js), once per load: one line in the app's log, with how
+        // How long the page took to open (the old web app reported it once per load): one line in the app's log, with how
         // long it has been since this shell built the page's webview (its first report only; a reload has none).
         "bootTiming" => {
             let since = app
@@ -498,7 +498,7 @@ fn org_info(app: &App, label: &str, body: Option<&Value>) -> Result<(), String> 
 /// The most a `bootTiming` report may be, as JSON: its marks and at most BOOT_READS reads come to well under this.
 const BOOT_TIMING_MAX: usize = 4096;
 const BOOT_READS: usize = 16;
-/// The marks a report may carry, in the order an open passes them (ui/app/boot-timing.js BOOT_MARKS).
+/// The marks a report may carry, in the order an open passes them (the old web app's BOOT_MARKS).
 const BOOT_MARKS: [&str; 8] = [
     "head",
     "bundle-start",
@@ -537,7 +537,7 @@ fn call_start_line(marks: Option<&Value>) -> Result<String, String> {
     Ok(Value::Object(marks.clone()).to_string())
 }
 
-/// A read's path as the page writes it (ui/app/boot-timing.js bootPath): `/api/`, then `v2/` if there, the resource's
+/// A read's path as the page writes it (the old web app's bootPath): `/api/`, then `v2/` if there, the resource's
 /// name, and `:id` for every part after it, so the log can never name a bot, task or person. `/api/v2/messaging/bots/ops`
 /// is refused; the page sends `/api/v2/messaging/:id/:id`.
 fn boot_path_ok(path: &str) -> bool {
@@ -558,7 +558,7 @@ fn boot_path_ok(path: &str) -> bool {
 }
 
 /// The page's `bootTiming` report as one log line. Only its known fields reach the log: whole milliseconds of at most
-/// ten minutes, the page as `#/word`, and API paths in boot_path_ok's shape. Anything else refuses the whole report, so
+/// ten minutes, the page as `#/word` (the old web app's address), and API paths in boot_path_ok's shape. Anything else refuses the whole report, so
 /// a page can neither add lines to the log nor fill it.
 pub(crate) fn boot_line(body: Option<&Value>, since_built: Option<u128>) -> Result<String, String> {
     let refuse = || "The open's timing is not in the expected form.".to_string();

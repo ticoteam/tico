@@ -127,27 +127,43 @@ def small_replay(tmp_path):
     return runner
 
 
-def test_replay_maps_script_conversions_and_catches_any_failing_check(tmp_path):
+def test_replay_follows_moved_files_and_catches_any_failing_check(tmp_path):
     runner = small_replay(tmp_path)
-    path = tmp_path / "ui/tests/check.cts"
+    path = tmp_path / "backend/tests/test_check.py"
     path.parent.mkdir(parents=True)
     path.touch()
-    runner.plan = lambda changed, event: {"python": [], "browser": ["check"], "contracts": False}
+    runner.graph.by_base["test_check.py"].add("backend/tests/test_check.py")
+    runner.plan = lambda changed, event: {"python": ["backend/tests/test_check.py"], "contracts": False}
     case = dict(
-        fix_pr=1, cause="dynamic_ref", changed_files=["ui/tests/check.cjs"], failing_tests=["ui/tests/check.cjs"]
+        fix_pr=1,
+        cause="dynamic_ref",
+        changed_files=["backend/old/test_check.py"],
+        failing_tests=["backend/old/test_check.py"],
     )
     result = runner.case(case, 1)
     assert result["caught"] and not result["stale"]
-    assert result["moved"] == {"ui/tests/check.cjs": "ui/tests/check.cts"}
-    case["failing_tests"].append("ui/tests/gone.cjs")
+    assert result["moved"] == {"backend/old/test_check.py": "backend/tests/test_check.py"}
+    case["failing_tests"].append("backend/tests/test_gone.py")
     result = runner.case(case, 1)
     assert result["stale"] and result["caught"]
     assert result["results"][0]["caught"]
-    case["failing_tests"] = ["ui/tests/gone.cjs"]
+    case["failing_tests"] = ["backend/tests/test_gone.py"]
     assert not runner.case(case, 1)["caught"]
     case["changed_files"] = []
     result = runner.case(case, 1)
     assert result["stale"] and not result["caught"]
+
+
+def test_replay_counts_a_browser_script_outside_the_pr_checks(tmp_path):
+    runner = small_replay(tmp_path)
+    path = tmp_path / "ui/tests/check.cts"
+    path.parent.mkdir(parents=True)
+    path.touch()
+    runner.plan = lambda changed, event: {"python": [], "contracts": False}
+    case = dict(fix_pr=1, cause="other", changed_files=["ui/app/source.ts"], failing_tests=["ui/tests/check.cts"])
+    result = runner.case(case, 1)
+    assert not result["caught"] and not result["stale"]
+    assert result["results"][0]["stages"]["pull_request"]["reason"] == "outside the PR/queue test jobs"
 
 
 def test_replay_counts_static_jobs_but_not_unrunnable_eval_sources(tmp_path):
@@ -158,7 +174,7 @@ def test_replay_counts_static_jobs_but_not_unrunnable_eval_sources(tmp_path):
     seed = tmp_path / "evals/seeds.py"
     seed.parent.mkdir()
     seed.touch()
-    runner.plan = lambda changed, event: {"python": [], "browser": [], "contracts": False}
+    runner.plan = lambda changed, event: {"python": [], "contracts": False}
     case = dict(
         fix_pr=1,
         cause="other",
@@ -175,7 +191,6 @@ def test_replay_counts_static_jobs_but_not_unrunnable_eval_sources(tmp_path):
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_replay_applies_each_stages_time_cap(monkeypatch, tmp_path, event):
     runner = small_replay(tmp_path)
-    runner.core = []
     runner.counts = Counter({"test_fast.py": 1, "test_over_budget.py": 1})
     runner.timings = {"test_fast.py": 1, "test_over_budget.py": 15}
     picked = {
@@ -199,20 +214,19 @@ def test_replay_applies_each_stages_time_cap(monkeypatch, tmp_path, event):
 @pytest.mark.parametrize("stage", ["pull_request", "merge_group", None])
 def test_replay_catches_one_of_multiple_resolved_failures_at_either_stage(tmp_path, stage):
     runner = small_replay(tmp_path)
-    for name in ("first.cts", "second.cts"):
-        path = tmp_path / "ui/tests" / name
+    for name in ("test_first.py", "test_second.py"):
+        path = tmp_path / "backend/tests" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
     runner.plan = lambda changed, event: {
-        "python": [],
-        "browser": ["second"] if event == stage else [],
+        "python": ["backend/tests/test_second.py"] if event == stage else [],
         "contracts": False,
     }
     case = dict(
         fix_pr=1,
         cause="dynamic_ref",
-        changed_files=["ui/app/source.ts"],
-        failing_tests=["ui/tests/first.cts", "ui/tests/second.cts"],
+        changed_files=["backend/source.py"],
+        failing_tests=["backend/tests/test_first.py", "backend/tests/test_second.py"],
     )
     row = runner.case(case, 1)
     assert row["caught"] == (stage is not None)
@@ -223,7 +237,8 @@ def test_replay_catches_one_of_multiple_resolved_failures_at_either_stage(tmp_pa
 
 def test_replay_combines_named_breakers_before_resolving_paths(monkeypatch, tmp_path):
     runner = small_replay(tmp_path)
-    path = tmp_path / "ui/tests/second.cts"
+    second = "backend/tests/test_second.py"
+    path = tmp_path / second
     path.parent.mkdir(parents=True)
     path.touch()
     calls, plans = [], []
@@ -231,28 +246,23 @@ def test_replay_combines_named_breakers_before_resolving_paths(monkeypatch, tmp_
     def diff(command, **kwargs):
         calls.append(command)
         assert kwargs["cwd"] == tmp_path
-        return "backend/first.py\n" if command[-1] == "abcdef123" else "ui/tests/second.cjs\n"
+        return "backend/first.py\n" if command[-1] == "abcdef123" else second + "\n"
 
     monkeypatch.setattr(replay.subprocess, "check_output", diff)
     runner.plan = lambda changed, event: (
-        plans.append((changed, event))
-        or {
-            "python": [],
-            "browser": ["second"] if "ui/tests/second.cts" in changed else [],
-            "contracts": False,
-        }
+        plans.append((changed, event)) or {"python": [second] if second in changed else [], "contracts": False}
     )
     case = dict(
         fix_pr=1,
         cause="batched",
         changed_files=["backend/first.py"],
         breaking_prs=["pr 1 (merge abcdef123; topic)", "commit 123abcdef (topic)"],
-        failing_tests=["ui/tests/second.cts"],
+        failing_tests=[second],
     )
     row = runner.case(case, 1)
     assert row["caught"]
     assert [c[-2:] for c in calls] == [["abcdef123^1", "abcdef123"], ["123abcdef^1", "123abcdef"]]
-    assert plans == [(["backend/first.py", "ui/tests/second.cts"], event) for event in replay.checks.NARROW]
+    assert plans == [(["backend/first.py", second], event) for event in replay.checks.NARROW]
     assert row["batch"] == "combined diff of all named breaking commits"
 
 
@@ -278,7 +288,6 @@ def test_report_counts_pr_queue_only_and_missed(tmp_path, capsys):
     runner.target = lambda description: ("file", "backend/tests/test_check.py")
     runner.plan = lambda changed, event: {
         "python": ["backend/tests/test_check.py"] if changed == [event] or changed == ["both"] else [],
-        "browser": [],
         "contracts": False,
     }
     rows = runner.run(

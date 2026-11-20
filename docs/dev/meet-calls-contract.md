@@ -169,7 +169,8 @@ connected Google account's address when they have one, else none.
 
 ## Phone push (push track)
 
-Web Push for the Tico web app and the installed app (`ui/manifest.webmanifest`, `ui/sw.ts`): VAPID keys made once per
+Web Push for the Tico web app and the installed app (the manifest from `backend/account_routes.py`, the service worker
+`web/public/sw.js`): VAPID keys made once per
 install and kept sealed, a `push_subscriptions` table per person and browser, routes to read the public key, subscribe
 and unsubscribe, the service worker's `push` and `notificationclick` handlers (focus or open `url`), and a switch in the
 person's own notification settings. It registers a `call_ring.HOOKS` entry that sends the ring payload to the rung
@@ -180,6 +181,6 @@ people's subscriptions. iPhone push works once Tico is added to the home screen.
 | Track | Branch | Owns |
 | --- | --- | --- |
 | Server | `chris/meet-calls-server` | backend/calls.py, backend/google_meet.py (new), backend/call_ring.py (new), backend/google_workspace.py (Meet scope only), backend/live_meetings.py (`_connector` only), thread row `live_call` (backend/thread_rail.py, backend/threads.py row builder), backend/openapi_v2.py call entries, the migration, docs/meet.md, scripts/meet-live-check.py (new), backend tests |
-| Calls UI | `chris/meet-calls-ui` | ui/app/thread-call.ts, the call card in ui/app/thread-view.ts, the rail mark in ui/app/thread-rail.ts (row render only), ring popup/sheet (new ui/app/call-ring.ts), styles, ui tests |
-| New message | `chris/meet-calls-newmsg` | rail + button and New message pane (ui/app/thread-rail.ts header, ui/app/threads-page.ts, new ui/app/new-message.ts), `GET /api/v2/threads/match` (backend/thread_api.py), ui + api tests |
-| Push | `chris/meet-calls-push` | backend/web_push.py (new), its migration, ui/sw.ts, the switch in ui/app/person-page.ts, docs/push.md (new), tests |
+| Calls UI | `chris/meet-calls-ui` | the call card, the rail mark (row render only) and the ring popup/sheet in the old web app (`ui/`, since removed; the web app's are in `web/src/features/calls/`), styles, ui tests |
+| New message | `chris/meet-calls-newmsg` | rail + button and New message pane in the old web app (`ui/`, since removed; the web app's are in `web/src/features/threads/`), `GET /api/v2/threads/match` (backend/thread_api.py), ui + api tests |
+| Push | `chris/meet-calls-push` | backend/web_push.py (new), its migration, the service worker (now web/public/sw.js), the switch in the person's notification settings, docs/push.md (new), tests |

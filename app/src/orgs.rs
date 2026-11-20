@@ -39,7 +39,7 @@ pub struct Org {
     /// the session copied into its store carries straight through. Cleared once that page opens.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sign_in: bool,
-    /// Where its page last was in the web app (the hub's address and a route, `windows::place_of`), so its next page,
+    /// Where its page last was in the web app (the hub's origin and a page's path, `windows::place_of`), so its next page,
     /// after this run too, opens there. None opens it on its usual first page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_url: Option<String>,
@@ -489,13 +489,13 @@ mod tests {
         let mut orgs = Orgs::new(doc, Some(path.clone()));
         orgs.set_last_url(
             "o_bbbbbbbb",
-            Some("https://tidy.example.com/#/threads/t_1".into()),
+            Some("https://tidy.example.com/threads/t_1".into()),
         );
         let saved = std::fs::read_to_string(&path).unwrap();
         let read = parse(&saved).unwrap();
         assert_eq!(
             read.orgs[1].last_url.as_deref(),
-            Some("https://tidy.example.com/#/threads/t_1")
+            Some("https://tidy.example.com/threads/t_1")
         );
         assert_eq!(read.orgs[0].last_url, None);
         assert_eq!(
@@ -511,7 +511,10 @@ mod tests {
         assert!(!std::fs::read_to_string(&path)
             .unwrap()
             .contains("tidy.example.com"));
-        orgs.set_last_url("o_bbbbbbbb", Some("https://tidy.example.com/#/x".into()));
+        orgs.set_last_url(
+            "o_bbbbbbbb",
+            Some("https://tidy.example.com/threads".into()),
+        );
         assert!(
             orgs.get("o_bbbbbbbb").is_none(),
             "a removed org gets no place back"

@@ -98,13 +98,13 @@ fix adds; its race test is the example to follow.
 
 | Fix | Machine | Owner (writer) | Guard before the fix | What the fix adds | Race test |
 |---|---|---|---|---|---|
-| SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
+| SM-01 | statement upload preview and agent pairing (UI) | the old web app (`ui/`, since removed) | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
 | SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | `test_merge_queue_undo_intent.py::test_back_and_forward_while_the_queue_call_is_out_leaves_the_pr_queued` |
 | SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect; the exchange keeps its grant only while its operation is current | `test_google_connect.py::test_an_exchange_answered_after_its_connect_was_replaced_keeps_nothing_and_revokes_nothing` |
 | SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | `test_automation_reclaimed_worker.py::test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run`, `test_webhook_reclaimed_worker.py` |
 | SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | `test_live_meeting_claims.py::test_a_lost_claim_answer_is_shown_to_its_bot_again_and_the_same_claim_is_returned` |
 | SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | `test_finance_gateway_cap_target.py::test_a_reply_for_a_key_replaced_meanwhile_does_not_satisfy_the_new_key` |
-| SM-08 | desktop confirm before delete or revoke | desktop bridge, `ui/app` | none: the Promise reads as yes | an awaited `true` before every write | pending (SM-08) |
+| SM-08 | desktop confirm before delete or revoke | desktop bridge, the old web app (`ui/`, since removed) | none: the Promise reads as yes | an awaited `true` before every write | pending (SM-08) |
 | SM-09 | GitHub PR facts | `item_sources/github.py` | `updated_at` | an equal-time conflict is reread before it is final; only merged is final | `test_github_equal_version.py::test_same_time_close_and_reopen_end_at_githubs_state_in_either_order` |
 
 ## Detail

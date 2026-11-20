@@ -6,8 +6,8 @@ the newest green run on main before it whose candidate is an ancestor of C:
 
 - The suspect range is G..C: each first-parent and merge commit in it, mapped to its pull requests (GitHub's
   commits/<sha>/pulls, else the number in the commit message). A merge queue group lists each pull request it merged.
-- The failing tests come from the failed jobs' logs: pytest FAILED lines and the UI scripts line. A failed job that
-  names no test is not attributed to anything.
+- The failing tests come from the failed jobs' logs: pytest FAILED lines. A failed job that names no test is not
+  attributed to anything.
 - A test is likely flaky when G has it and nothing it uses changed from G to C, by scripts/pr_checks.py's measured
   dependency map. Anything else is a likely break, and so is a test that G does not have.
 - At most three suspects (pull requests that changed a file a likely break uses) each get one review (COMMENT, never a
@@ -59,14 +59,10 @@ MAX_REVIEWS = 3  # reviews per break: the culprit's pull requests, or every susp
 BISECT_OVER = 3  # more suspects than this, with every likely break a pytest node id: bisect instead of reviewing all
 REPEATS = 2  # runs of the failing tests at each commit the bisect probes
 RUN_LIMIT = 55  # seconds one pytest run may take
-BUILD_LIMIT = 10  # seconds the UI build may take
-STEP_LIMIT = REPEATS * RUN_LIMIT + BUILD_LIMIT  # seconds one probe may take: 120, two minutes
+STEP_LIMIT = REPEATS * RUN_LIMIT + 10  # seconds one probe may take, its checkout too: 120, two minutes
 BISECT_LIMIT = 15 * 60  # seconds a whole bisect may take
-ALL_UI = "ui/tests/*"  # any browser script: a UI file UI_MAP does not name
 PYTEST_FAILED = re.compile(r"\bFAILED (\S+::\S+)")
 PYTEST_NODE = re.compile(r"\S+\.py::\S+$")
-# scripts/ui-tests.cts ends a red run with "N of M UI scripts failed: a.cjs, b.cjs (all M took Ss)".
-UI_FAILED = re.compile(r"\d+ of \d+ UI scripts failed: (.+?)(?: \((?:all \d+ took )?\d+s\))?\s*$")
 MESSAGE_PR = re.compile(r"Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")
 STATE = re.compile(r"<!-- main-red-state (\{[^\n]*\}) -->")
 
@@ -177,17 +173,12 @@ def newer_finished(run, runs):
 
 
 def test_file(test):
-    """The repository file a failing test is defined in: a UI script's file, or a pytest node id's path."""
-    return "ui/tests/" + test if test.endswith((".cjs", ".cts")) else test.split("::", 1)[0]
-
-
-def ui_test_files(stem):
-    """Both files a browser script stem may be: ui/tests/<stem>.cjs or .cts (only one exists)."""
-    return {"ui/tests/%s.cjs" % stem, "ui/tests/%s.cts" % stem}
+    """The repository file a failing test is defined in: a pytest node id's path."""
+    return test.split("::", 1)[0]
 
 
 def test_def(test):
-    """The function a pytest node id names, without its parameters (None for a UI script)."""
+    """The function a pytest node id names, without its parameters (None for a bare file)."""
     return test.rsplit("::", 1)[-1].split("[", 1)[0] if "::" in test else None
 
 
@@ -198,16 +189,8 @@ def defined_at(git, sha, test):
 
 
 def failing_tests(log):
-    """The failing tests a job's log names, in order: pytest FAILED lines and the UI scripts line."""
-    found = []
-    for line in log.splitlines():
-        match = PYTEST_FAILED.search(line)
-        if match:
-            found.append(match.group(1))
-        match = UI_FAILED.search(line)
-        if match:
-            found += [name.strip() for name in match.group(1).split(",") if name.strip()]
-    return list(dict.fromkeys(found))
+    """The failing tests a job's log names, in order: its pytest FAILED lines."""
+    return list(dict.fromkeys(match.group(1) for line in log.splitlines() if (match := PYTEST_FAILED.search(line))))
 
 
 def message_numbers(subject):
@@ -224,18 +207,8 @@ def reach(graph, changed, cache):
 
 
 def _reach(graph, changed):
-    # A UI file (or the browser runner) that UI_MAP does not name may break any browser script, and no Python test
-    # beyond what the map measures. selection() counts it uncertain (its rule 4), so it is judged here, not there.
-    unmapped = {
-        name
-        for name in changed
-        if (name.startswith("ui/") or name == checks.UI_RUNNER)
-        and checks.ui_map_key(name) not in checks.UI_MAP
-        and (graph.root / name).is_file()
-    }
-    rest = [name for name in changed if name not in unmapped]
     try:
-        if rest and checks.selection(rest, "pull_request", root=graph.root, graph=graph, core=())["uncertain"]:
+        if checks.selection(changed, "pull_request", root=graph.root, graph=graph)["uncertain"]:
             return None
     except (OSError, ValueError, KeyError):  # selection could not read what it needs: say nothing about the change
         return None
@@ -247,19 +220,11 @@ def _reach(graph, changed):
     # A conftest the change reaches (an autouse fixture reads or runs it) may change any test below it.
     if via or any(Path(name).name == "conftest.py" for name in found):
         return None
-    # A UI file runs the browser scripts that UI_MAP names for it. One it does not map runs every script.
-    for name in changed:
-        if checks.ui_map_key(name) in checks.UI_MAP:
-            found |= {path for script in checks.UI_MAP[checks.ui_map_key(name)] for path in ui_test_files(script)}
-    if unmapped:
-        found.add(ALL_UI)
     return found
 
 
 def hit(test, used):
-    if used is None or test_file(test) in used:
-        return True
-    return test.endswith((".cjs", ".cts")) and ALL_UI in used
+    return used is None or test_file(test) in used
 
 
 def verdict(test, baseline, red, git, graph, cache):
@@ -378,17 +343,8 @@ def probe_commit(workdir, git, sha, tests):
         return "good", [], "defines none of the tests"
     try:
         subprocess.run(["git", "checkout", "--detach", "--force", sha], cwd=workdir, capture_output=True, check=True)
-        # A commit from before the old web app (ui/) was removed serves it only once it is built.
-        if (Path(workdir) / "scripts" / "build-ui.cjs").is_file():
-            subprocess.run(
-                ["npm", "run", "--silent", "build:ui"],
-                cwd=workdir,
-                capture_output=True,
-                check=True,
-                timeout=BUILD_LIMIT,
-            )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        return "inconclusive", [], "checkout or UI build failed (%s)" % type(exc).__name__
+    except (subprocess.CalledProcessError, OSError) as exc:
+        return "inconclusive", [], "checkout failed (%s)" % type(exc).__name__
     runs = [run_tests(workdir, present) for _ in range(REPEATS)]
     result, names = classify(*runs)
     return result, names, "runs %s" % ", ".join(describe(run) for run in runs)
@@ -631,7 +587,7 @@ def red(api, run, runs, git, root, dry_run, bisecting=False):
     elif not breaks or not all(PYTEST_NODE.match(test) for test in breaks):
         report["bisect"] = {
             "verdict": "not run",
-            "reason": "the bisect runs pytest node ids only, and a browser script or an unnamed job is among the breaks",
+            "reason": "the bisect runs pytest node ids only, and a break is not one",
         }
     elif not bisecting:
         report["bisect"] = {"verdict": "pending"}

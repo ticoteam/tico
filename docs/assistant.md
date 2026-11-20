@@ -25,8 +25,8 @@ Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot n
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
-left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cts`
-holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
+left running; and with reduced motion it holds still and says what it is doing in a word. Its budgets in Chrome (a
+browser check held the old web app's dot to them and went with `ui/`; `web/src/tico/dot/` has none yet): 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
 CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
 Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box

@@ -149,7 +149,7 @@ def owned(owners):
 
 def chain(tmp_path, changed, count):
     """A green commit on main, then count commits that each change `changed`: shas[i] is the i-th change. The tree is
-    BASE_FILES: backend/tests/test_a.py imports backend/util.py, and ui/tests/google-tab.cjs is a browser script."""
+    BASE_FILES: backend/tests/test_a.py imports backend/util.py."""
     git(tmp_path, "init", "-q", "-b", "main")
     green = commit(tmp_path, "green", BASE_FILES)
     shas = [commit(tmp_path, "change %d" % index, {changed: "value %d\n" % index}) for index in range(count)]
@@ -174,9 +174,7 @@ BASE_FILES = {
     "backend/tests/__init__.py": "",
     "backend/tests/test_a.py": "from backend.util import helper\n\n\ndef test_a():\n    assert helper()\n",
     "backend/tests/test_b.py": "def test_b():\n    assert True\n",
-    "ui/app/mapped.js": "export const mapped = 1;\n",
-    "ui/app/other.js": "export const other = 2;\n",
-    "ui/tests/google-tab.cjs": "// a browser script\n",
+    "backend/page.txt": "a page\n",
 }
 
 
@@ -225,32 +223,23 @@ def test_pull_request_numbers_come_from_merge_and_squash_subjects():
     assert mr.message_numbers("Question tasks: spec D8, step 6a") == set()
 
 
-def test_failing_tests_come_from_pytest_lines_and_the_ui_scripts_line():
+def test_failing_tests_come_from_pytest_lines():
     log = "\n".join(
         [
             "2026-11-06T16:30:00Z FAILED backend/tests/test_page_audience_review3.py::test_leak[stored] - AssertionError",
             "2026-11-06T16:30:01Z FAILED e2e/tests/test_contract.py::test_v2_responses_match_the_goldens",
-            "2026-11-06T16:31:00Z 2 of 60 UI scripts failed: google-tab.cjs, support.cjs (253s)",
+            "2026-11-06T16:30:02Z FAILED e2e/tests/test_contract.py::test_v2_responses_match_the_goldens",
             "2026-11-06T16:31:01Z unrelated line mentioning FAILED without a node id",
         ]
     )
     assert mr.failing_tests(log) == [
         "backend/tests/test_page_audience_review3.py::test_leak[stored]",
         "e2e/tests/test_contract.py::test_v2_responses_match_the_goldens",
-        "google-tab.cjs",
-        "support.cjs",
-    ]
-    # The line scripts/ui-tests.cts prints today names the total run time as "(all M took Ss)".
-    assert mr.failing_tests("2 of 60 UI scripts failed: chat.cjs, docs.cjs (all 60 took 253s)\n") == [
-        "chat.cjs",
-        "docs.cjs",
     ]
     assert mr.test_file("backend/tests/test_page_audience_review3.py::test_leak[stored]") == (
         "backend/tests/test_page_audience_review3.py"
     )
     assert mr.test_def("backend/tests/test_page_audience_review3.py::test_leak[stored]") == "test_leak"
-    assert mr.test_file("google-tab.cjs") == "ui/tests/google-tab.cjs"
-    assert mr.test_file("chat.cts") == "ui/tests/chat.cts"
 
 
 def test_a_test_that_passed_green_with_nothing_it_uses_changed_is_likely_flaky(two_runs):
@@ -286,55 +275,40 @@ def test_a_failure_on_the_green_commit_itself_is_flaky(two_runs):
     assert mr.verdict("backend/tests/test_a.py::test_a", green, green, mr.Git(root), graph, {})[0] == "flaky"
 
 
-def test_a_ui_change_reaches_the_scripts_it_maps_and_every_script_when_it_maps_none(two_runs, monkeypatch):
-    root, _, _ = two_runs
-    graph = checks.DependencyMap(root)
-    monkeypatch.setitem(checks.UI_MAP, "ui/app/mapped.js", ["google-tab"])
-
-    mapped = mr.reach(graph, ["ui/app/mapped.js"], {})
-    assert mr.hit("google-tab.cjs", mapped)
-    assert not mr.hit("chat.cjs", mapped)
-    assert not mr.hit("backend/tests/test_b.py::test_b", mapped)
-
-    unmapped = mr.reach(graph, ["ui/app/other.js"], {})
-    assert mr.hit("chat.cjs", unmapped) and mr.hit("google-tab.cjs", unmapped)
-    assert not mr.hit("backend/tests/test_b.py::test_b", unmapped)
-
-
 def test_a_gone_file_or_a_pin_may_reach_any_test(two_runs):
     root, _, _ = two_runs
     graph = checks.DependencyMap(root)
 
     assert mr.reach(graph, ["backend/removed.py"], {}) is None
     assert mr.reach(graph, ["backend/requirements.txt"], {}) is None
-    assert mr.hit("backend/tests/test_b.py::test_b", mr.reach(graph, ["backend/removed.py", "ui/app/other.js"], {}))
+    assert mr.hit("backend/tests/test_b.py::test_b", mr.reach(graph, ["backend/removed.py", "backend/page.txt"], {}))
 
 
-def test_a_ui_file_a_conftest_fixture_reads_may_reach_any_test(tmp_path):
+def test_a_file_a_conftest_fixture_reads_may_reach_any_test(tmp_path):
     git(tmp_path, "init", "-q", "-b", "main")
     files = dict(BASE_FILES)
     files["backend/tests/conftest.py"] = (
         "from pathlib import Path\n\nimport pytest\n\n\n@pytest.fixture\ndef page():\n"
-        '    return Path("ui/app/other.js").read_text()\n'
+        '    return Path("backend/page.txt").read_text()\n'
     )
     files["backend/tests/test_page.py"] = "def test_page(page):\n    assert page\n"
     commit(tmp_path, "green", files)
     graph = checks.DependencyMap(tmp_path)
 
-    assert mr.reach(graph, ["ui/app/other.js"], {}) is None
+    assert mr.reach(graph, ["backend/page.txt"], {}) is None
 
 
-def test_a_ui_file_an_autouse_fixture_reads_may_reach_any_test(tmp_path):
+def test_a_file_an_autouse_fixture_reads_may_reach_any_test(tmp_path):
     git(tmp_path, "init", "-q", "-b", "main")
     files = dict(BASE_FILES)
     files["backend/tests/conftest.py"] = (
         "from pathlib import Path\n\nimport pytest\n\n\n@pytest.fixture(autouse=True)\ndef page():\n"
-        '    return Path("ui/app/other.js").read_text()\n'
+        '    return Path("backend/page.txt").read_text()\n'
     )
     commit(tmp_path, "green", files)
     graph = checks.DependencyMap(tmp_path)
 
-    assert mr.reach(graph, ["ui/app/other.js"], {}) is None
+    assert mr.reach(graph, ["backend/page.txt"], {}) is None
 
 
 def test_a_red_run_tells_each_suspect_once_and_leaves_the_others_alone(two_runs, monkeypatch):
@@ -528,22 +502,6 @@ def test_a_newer_validation_run_supersedes_the_bisect_and_leaves_the_issue_alone
     assert api.posts == [] and api.issue_bodies == []
 
 
-def test_a_browser_script_break_is_not_bisected_and_gets_no_reviews(tmp_path, monkeypatch):
-    root, green, shas = chain(tmp_path, "ui/app/other.js", 6)
-    monkeypatch.setattr(mr, "collect", owned({sha: [900 + index] for index, sha in enumerate(shas)}))
-
-    def never(*args):
-        raise AssertionError("a browser script is not probed by the bisect")
-
-    monkeypatch.setattr(mr, "probe_commit", never)
-    api = api_for(green, shas[-1], "1 of 60 UI scripts failed: google-tab.cjs (3s)\n")
-
-    result = mr.alarm(api, red_of(shas[-1]), root)
-
-    assert "needs_bisect" not in result and api.posts == []
-    assert "Not bisected:" in api.issue_bodies[-1]
-
-
 def test_merge_queue_and_stale_runs_are_skipped(tmp_path):
     api = FakeApi()
     queue = run_of(
@@ -608,7 +566,7 @@ def test_a_pytest_run_names_each_failed_node_id():
         "backend/tests/test_x.py::test_a[None]",
         "backend/tests/test_x.py::test_b",
     }
-    assert mr.PYTEST_NODE.match(TEST_A) and not mr.PYTEST_NODE.match("google-tab.cjs")
+    assert mr.PYTEST_NODE.match(TEST_A) and not mr.PYTEST_NODE.match("backend/tests/test_x.py")
 
 
 def test_the_bisect_finds_the_first_bad_commit_of_seventy_in_log_steps():

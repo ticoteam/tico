@@ -85,10 +85,9 @@ which covers every goal the setup page suggests; a file with more is refused bef
 routines, model choices and tool connections are saved for later setup and listed in the preview; the team uses its
 currently configured AI providers.
 
-The implementation is `backend/onboarding.py` (the record, creating the team), `ui/app/welcome.ts` (the modal and its
-steps), `ui/setup-strategy.ts` (What are you building, over `backend/strategy_setup.py`), `backend/company_import.py`
-(the default chart and company files), `backend/recruit.py` and `backend/recruit_rank.py` (the team builder's templates
-and suggestions), `ui/org-builder.ts` (the team builder), `ui/first-run.ts` (who reports to whom), Tico HQ's
+The implementation is `backend/onboarding.py` (the record, creating the team), `web/src/features/start/` (the modal and
+its steps), `backend/strategy_setup.py` (What are you building), `backend/company_import.py` (the default chart and
+company files), `backend/recruit.py` and `backend/recruit_rank.py` (the team builder's templates and suggestions), Tico HQ's
 `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a
 repository), `runner_support/catalog_job.py` (the bots the computer sets up itself, run by the runner as
 `python -m runner_support catalog`) and `templates/catalog/` (the templates). The quick start in the
@@ -386,7 +385,7 @@ The last question's **Start research** calls `POST /api/v2/librarian/setup/marke
 `playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
-Market page is drawn. The code is `ui/market-page.ts`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
+Market page is drawn. The page is `web/src/features/company/MarketPage.tsx`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
 market map" from it and the market page opens on the researching notice; the Librarian reads that website from `tico strategy show`
 when the task has none, and the four questions stay for a team that gave no website.
 
@@ -403,8 +402,7 @@ the caller's own choices. Runners and bots get `403`.
 | `POST /api/v2/setup/getting-started/state` | Any human, for themselves |
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
-The code is `backend/getting_started.py` and `ui/getting-started.ts`. Tests: `backend/tests/test_getting_started.py`
-and `ui/tests/getting-started.cts`.
+The code is `backend/getting_started.py`. Tests: `backend/tests/test_getting_started.py`.
 
 ## What finishing creates
 
@@ -518,7 +516,7 @@ and creates a planned bot that waits for its setup thread. External services lin
 ### Recruiting a seat
 
 Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a job makes it.
-`backend/recruiting.py` does the work; the pages are `ui/app/recruit.ts`.
+`backend/recruiting.py` does the work.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
   and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with

@@ -15,9 +15,9 @@ ROOT = remote.ROOT
 @pytest.mark.parametrize(
     'local, sent',
     [
-        # ui-tests.cts and release_checks.py re-run themselves through heavy.sh by their absolute path (__filename,
-        # __file__); the VM's checkout is somewhere else, so a path inside this checkout goes as a relative one.
-        (['/usr/local/bin/node', f'{ROOT}/scripts/ui-tests.cts', 'chat'], ['node', 'scripts/ui-tests.cts', 'chat']),
+        # release_checks.py re-runs itself through heavy.sh by its absolute path (__file__); the VM's checkout is
+        # somewhere else, so a path inside this checkout goes as a relative one.
+        (['/usr/local/bin/node', f'{ROOT}/web/scripts/parity.ts', 'chat'], ['node', 'web/scripts/parity.ts', 'chat']),
         (
             ['/opt/venv/bin/python3', f'{ROOT}/scripts/release_checks.py', '--release', '--part', 'python'],
             ['python', 'scripts/release_checks.py', '--release', '--part', 'python'],
@@ -47,19 +47,17 @@ def test_paths_inside_the_checkout_go_relative_to_it(local, sent):
 def test_a_path_through_a_symlinked_checkout_goes_relative_too(tmp_path):
     link = tmp_path / 'checkout'
     link.symlink_to(ROOT)
-    assert remote.portable(['node', f'{link}/scripts/ui-tests.cts']) == ['node', 'scripts/ui-tests.cts']
+    assert remote.portable(['node', f'{link}/web/scripts/parity.ts']) == ['node', 'web/scripts/parity.ts']
 
 
 @pytest.mark.parametrize(
     'command, setup',
     [
-        # The default release check runs pytest and then node scripts/ui-tests.cts: it needs the browsers.
-        (['python', 'scripts/release_checks.py'], 'browser'),
-        (['python', 'scripts/release_checks.py', '--release'], 'all'),
+        (['python', 'scripts/release_checks.py'], 'python'),
+        (['python', 'scripts/release_checks.py', '--release'], 'rust'),
         (['python', 'scripts/release_checks.py', '--shard', '2', '7'], 'python'),
         (['python', 'scripts/release_checks.py', '--record-timings', 'a', 'b'], 'python'),
-        (['node', 'scripts/ui-tests.cts', 'chat'], 'browser'),
-        (['node', 'ui/tests/chat.cts'], 'browser'),
+        (['npx', 'playwright', 'test'], 'browser'),
         (['cargo', 'test'], 'rust'),
         (['python', '-m', 'pytest', '-q'], 'python'),
     ],

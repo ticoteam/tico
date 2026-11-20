@@ -687,7 +687,8 @@ fn only_rail(webview: &tauri::Webview) -> Result<(), String> {
 }
 
 // ----------------------------------------------------------------------------- deep links
-// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser.
+// tico://meetings/<id> and any other hub path land on the page in the app rather than a browser: as an old hash
+// address (`#/meetings/<id>`), which the web app opens at its page (web/src/oldAddress).
 fn open_deep_link(app: &App, url: &url::Url) {
     let path = format!("{}{}", url.host_str().unwrap_or(""), url.path())
         .trim_matches('/')
@@ -951,7 +952,7 @@ async fn check_for_update(app: &App) {
     CHECKING.store(false, Ordering::SeqCst);
 }
 
-/// Tells the page how a check went (`window.ticoAppUpdate` in ui/app/notices.ts), so a failed update is
+/// Tells the page how a check went (`window.ticoAppUpdate`, which the old web app read), so a failed update is
 /// shown with its reason instead of only reaching the log.
 fn report_update(app: &App, state: &str, detail: &str) {
     match state {
