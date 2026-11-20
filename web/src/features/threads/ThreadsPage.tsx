@@ -41,8 +41,9 @@ export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
 function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
-  // A thread with an agent shows what it asked you to approve, as cards among its messages.
-  const approvals = useApprovalCards({ agent: agentOf(data, useMe()) });
+  // A thread with an agent shows what it asked you to approve, as cards among its messages; a card's page opens
+  // beside this thread.
+  const approvals = useApprovalCards({ agent: agentOf(data, useMe()) }, `thread:${id}`);
   const team = data && teamOf(data);
   if (team) return <TeamThread who={team} />;
   const outside = outsideOf(data);

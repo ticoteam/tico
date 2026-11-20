@@ -299,6 +299,15 @@ describe('an open task', () => {
     await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull());
   });
 
+  it('opened from a thread, keeps that thread beside it in place of the task’s own chat (plan/layers.html)', async () => {
+    at(1600);
+    people(MAYA, QA);
+    show('/flow/7?chat=agent%3Aqa&via=thread');
+    const sheet = await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
+    expect(await within(sheet).findByText('a teammate chat')).toBeTruthy();
+    expect(screen.queryByText('task chat')).toBeNull();
+  });
+
   it('the pipeline editor is a page, not a task: no task chat and no Flow list', async () => {
     show('/tasks/eng/edit');
     expect(await screen.findByRole('heading', { name: 'Edit pipeline' })).toBeTruthy();

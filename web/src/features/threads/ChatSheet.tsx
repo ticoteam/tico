@@ -23,8 +23,8 @@ export function ChatSheet({ chat }: ChatSheetProps) {
   const title = useTitle(t);
   // The face in the head: the agent or person the address names, or the other one in a DM.
   const actor = chatActor(chat) ?? (t && isDm(t) ? othersOf(t, me)[0] : undefined);
-  // With an agent: what it asked you to approve, as cards among its messages.
-  const approvals = useApprovalCards({ agent: actor });
+  // With an agent: what it asked you to approve, as cards among its messages; a card's page opens beside this chat.
+  const approvals = useApprovalCards({ agent: actor }, chat);
   if (isError)
     return (
       <Empty icon="alert" title="This chat did not load">

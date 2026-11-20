@@ -59,10 +59,12 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
-/** What the shell keeps in every page's address: the second chat and an open side panel (the page reads `panel`). */
+/** What the shell keeps in every page's address: the second chat, an open side panel (the page reads `panel`), and
+    `via=thread` when the page was opened from that chat (its head draws ✕, lib besideThread). */
 export interface RootSearch {
   chat?: string;
   panel?: string;
+  via?: 'thread';
 }
 const word = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
@@ -75,6 +77,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     const panel = word(s.panel);
     if (chat) out.chat = chat;
     if (panel) out.panel = panel;
+    if (s.via === 'thread') out.via = 'thread';
     return out;
   },
   notFoundComponent: () => <Placeholder title="Not found" />,
@@ -221,7 +224,8 @@ function App() {
     const task = top === 'tasks' ? b : a;
     // Task and Flow are one view: what waits on you stands in the menu's place, the open task chosen
     list = task ? <TaskList open={decodeURIComponent(task)} /> : undefined;
-    chat = task ? (
+    // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
+    if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
         <Suspense fallback={null}>
           <TaskChat task={decodeURIComponent(task)} flow={top === 'flow'} />

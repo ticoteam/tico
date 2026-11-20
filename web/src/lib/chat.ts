@@ -21,3 +21,13 @@ export function chatActor(chat: string): string | undefined {
   if (kind === 'person' || kind === 'human') return `human:${id}`;
   return undefined;
 }
+
+/** An artifact's address opened from a thread (plan/layers.html): the thread stays beside it as the chat (`chat`), and
+    `via=thread` gives its head a ✕ that goes back to where you were. Without a thread, the address as it is. */
+export function besideThread(to: string, chat: string | undefined): string {
+  if (!chat) return to;
+  const u = new URL(to, 'http://x');
+  u.searchParams.set('chat', chat);
+  u.searchParams.set('via', 'thread');
+  return u.pathname + u.search + u.hash;
+}

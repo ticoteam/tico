@@ -244,6 +244,7 @@ html[data-layout="cards"] .pk .read-body{padding-right:var(--s-4);padding-left:v
 :where(html[data-layout="cards"]) .filter-row{padding:0 var(--s-2) var(--s-2) var(--page-x)}
 html[data-layout="cards"] .pk-crumb{display:none}
 html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
+html[data-layout="cards"] .pk .pk-close{display:none}
 html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}
 /* the head's search, on its own line under the head (Page draws it here only on a phone); edges as the body's rows */
 html[data-layout="cards"] .pk-find{flex:none;padding:var(--s-1h) var(--s-2) 0}

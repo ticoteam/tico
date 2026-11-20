@@ -67,6 +67,22 @@ describe('PhoneCards', () => {
     expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
   });
 
+  it('a page opened from the chat (an approval card) tucks it and comes forward (plan/layers.html)', () => {
+    render(
+      <PhoneCards
+        page={<h1>Finance</h1>}
+        tico={<p>Tico's chat</p>}
+        menu={<p>Menu</p>}
+        chat={<a href="/next/tasks/p1/12?chat=agent%3Agm&via=thread" onClick={(e) => e.preventDefault()}>Approve</a>}
+        labels={{ chat: 'Finance Owner' }}
+      />,
+    );
+    expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Approve' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+  });
+
   it('an address that names a chat opens on its card, with the conversation in the card-high sheet', () => {
     render(
       <PhoneCards
