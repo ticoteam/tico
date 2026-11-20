@@ -18,7 +18,7 @@ const PARTY = /^(group|bot|human):\S+$/;
 
 export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSearch {
   const out: RoutinesSearch = {};
-  if (raw.tab === 'webhooks' || raw.tab === 'runs') out.tab = raw.tab;
+  if (raw.tab === 'webhooks' || raw.tab === 'runs' || raw.tab === 'all') out.tab = raw.tab;
   if (out.tab === 'runs') {
     const status = RUN_STATUSES.find((x) => x === raw.status);
     if (status) out.status = status;
@@ -27,7 +27,8 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
   if (range) out.range = range;
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
-  if (!out.tab) {
+  {
+    // the sidebar's search and state hold beside every view
     const q = text(raw.q);
     if (q) out.q = q;
     const state = ROUTINE_STATES.find((x) => x === raw.state);

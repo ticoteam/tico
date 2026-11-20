@@ -9,7 +9,7 @@ import { PageFault } from '@/shell/PageFault';
 import { validateAutomationSearch, validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
 import { deliveriesQuery, heartbeatQuery, hooksQuery, maintenanceQuery, maintenanceRunsQuery, routinesQuery, systemJobsQuery, templatesQuery, versionsQuery } from './queries';
 import { AutomationPage } from './AutomationPage';
-import { RoutinesPage } from './AutomationsPage';
+import { AutomationsShell, RoutinesPage } from './AutomationsPage';
 import type { Hook, Maintenance, Routine, StageRule, SystemJob } from './types';
 import { cronWords, orgParts, runLink, stageParts } from './words';
 
@@ -22,6 +22,8 @@ const ME = { id: 'human:me', kind: 'person', name: 'Ada Example', slug: 'ada' };
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
   queryClient.clear();
+  // the sidebar lists the automations beside every view: none unless a test gives some
+  queryClient.setQueryData(routinesQuery.queryKey, []);
   queryClient.setQueryData(['me'], { id: 'human:me', email: 'ada@company.example', role: 'person', slug: 'ada' });
   queryClient.setQueryData(['directory'], { actors: [ME], byId: { 'human:me': ME } });
 });
@@ -51,15 +53,22 @@ const pick = async (name: string | RegExp, option: string | RegExp, scope: HTMLE
   fireEvent.click(o);
 };
 const menu = async (scope: HTMLElement, item: string) => {
-  fireEvent.click(within(scope).getByRole('button', { name: 'More' }));
+  // the page's own "⋯" is the content's: the sidebar has one too
+  const at = scope === document.body ? (screen.queryByRole('region', { name: 'Automation' }) ?? scope) : scope;
+  fireEvent.click(within(at).getByRole('button', { name: 'More' }));
   fireEvent.click(await screen.findByRole('menuitem', { name: item }));
 };
 const href = (el: HTMLElement) => decodeURIComponent((el.tagName === 'A' ? el : el.closest('a'))?.getAttribute('href') ?? '');
 
 /** The page at its own address, reading its search from the router so an action's move lands, with the action layer bound. */
 function show(at: string) {
-  const Live = () => <RoutinesPage search={useSearch({ strict: false })} />;
+  const All = () => <RoutinesPage search={useSearch({ strict: false })} />;
   const One = () => <AutomationPage id={useParams({ strict: false }).id ?? ''} search={useSearch({ strict: false })} />;
+  const Layout = () => (
+    <AutomationsShell search={useSearch({ strict: false })} id={useParams({ strict: false }).id}>
+      <Outlet />
+    </AutomationsShell>
+  );
   const root = createRootRoute({
     component: () => (
       <>
@@ -76,10 +85,11 @@ function show(at: string) {
       const p = search.panel ?? '';
       if (p.startsWith('routine:') && p !== 'routine:new') throw redirect({ to: '/company/automations/$id', params: { id: p.slice(8) } });
     },
-    component: Live,
+    component: Layout,
   });
-  const one = createRoute({ getParentRoute: () => root, path: '/company/automations/$id', validateSearch: validateAutomationSearch, component: One });
-  const router = createRouter({ routeTree: root.addChildren([page, one]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
+  const all = createRoute({ getParentRoute: () => page, path: '/', component: All });
+  const one = createRoute({ getParentRoute: () => page, path: '$id', validateSearch: validateAutomationSearch, component: One });
+  const router = createRouter({ routeTree: root.addChildren([page.addChildren([all, one])]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -87,6 +97,11 @@ function show(at: string) {
   );
   return router;
 }
+
+/** The content beside the sidebar: the open automation, or All, Runs, Webhooks. */
+const content = () => screen.getByRole('region', { name: 'Automation' });
+/** The sidebar: every automation under what starts it. */
+const sidebar = () => screen.getByRole('region', { name: 'Automations' });
 
 const routine = (over: Partial<Routine> = {}) =>
   ({
@@ -136,7 +151,7 @@ describe('words and the address', () => {
     expect(validateRulesSearch({ tab: 'stages', who: 'group:3', panel: 'x' })).toEqual({ tab: 'stages', who: 'group:3' });
     expect(validateRoutinesSearch({ q: 'numbers', state: 'failed' })).toEqual({ q: 'numbers', state: 'failed' });
     expect(validateRoutinesSearch({ state: 'nope' })).toEqual({});
-    expect(validateRoutinesSearch({ tab: 'runs', q: 'x' })).toEqual({ tab: 'runs' });
+    expect(validateRoutinesSearch({ tab: 'runs', q: 'x' })).toEqual({ tab: 'runs', q: 'x' });
     expect(validateRoutinesSearch({ tab: 'runs', status: 'failed', range: '7d' })).toEqual({ tab: 'runs', status: 'failed', range: '7d' });
     expect(validateRoutinesSearch({ tab: 'runs', status: 'lost', range: '1y' })).toEqual({ tab: 'runs' });
     expect(validateRoutinesSearch({ tab: 'webhooks', status: 'failed' })).toEqual({ tab: 'webhooks' });
@@ -158,13 +173,15 @@ describe('Automations', () => {
     automations: rows.map((r) => ({ ...r, buckets: [{ ok: r.runs - r.failed, failed: 0 }, { ok: 0, failed: r.failed }] })),
   });
 
-  it('lists each automation in a table grouped by what starts it, its name opening its own page @s509', async () => {
+  it('lists each automation in the sidebar and in All’s table, grouped by what starts it, each opening beside the sidebar @s509', async () => {
     record();
     queryClient.setQueryData(routinesQuery.queryKey, [routine()]);
     show('/company/automations');
-    const link = await screen.findByRole('link', { name: 'Morning numbers' });
-    expect(href(link)).toBe('/company/automations/r1');
-    const table = screen.getByRole('table', { name: 'Automations' });
+    const table = await screen.findByRole('table', { name: 'Automations' });
+    expect(href(within(table).getByRole('link', { name: 'Morning numbers' }))).toBe('/company/automations/r1');
+    // the sidebar lists it under what starts it too, opening it beside the sidebar
+    expect(href(within(sidebar()).getByRole('link', { name: /Morning numbers/ }))).toBe('/company/automations/r1');
+    expect(within(sidebar()).getByRole('region', { name: 'Schedule' })).toBeTruthy();
     expect(within(table).getByRole('button', { name: /Schedule/ })).toBeTruthy();
     expect(within(table).getByText('Every day at 7:00 AM')).toBeTruthy();
   });
@@ -194,6 +211,7 @@ describe('Automations', () => {
 
   it('shows the fault with Try again', async () => {
     record((url) => (url.includes('/automations') ? failed() : nothing()));
+    queryClient.removeQueries({ queryKey: routinesQuery.queryKey });
     show('/company/automations');
     expect(await screen.findByText('This page did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
@@ -204,12 +222,12 @@ describe('Automations', () => {
     queryClient.setQueryData(routinesQuery.queryKey, [routine({ name: 'Old cleanup' })]);
     queryClient.setQueryData(systemJobsQuery.queryKey, []);
     show('/company/automations?q=System%20jobs');
-    const link = await screen.findByRole('link', { name: 'System jobs' });
-    expect(href(link)).toBe('/company/automations?q=System+jobs&panel=builtin:system');
-    expect(screen.queryByRole('link', { name: 'Old cleanup' })).toBeNull();
+    const table = await screen.findByRole('table', { name: 'Automations' });
+    expect(href(within(table).getByRole('link', { name: 'System jobs' }))).toBe('/company/automations?q=System+jobs&panel=builtin:system');
+    expect(screen.queryByRole('link', { name: /Old cleanup/ })).toBeNull();
   });
 
-  it('filters by what starts it, its status and its owner, each with a count; status lives in the address @s509', async () => {
+  it('filters by status from the sidebar’s filter, with a count per choice; status lives in the address @s509', async () => {
     record();
     queryClient.setQueryData(routinesQuery.queryKey, [
       routine(),
@@ -217,18 +235,20 @@ describe('Automations', () => {
       routine({ id: 'r3', name: 'Old cleanup', enabled: false, trigger: { type: 'event', name: 'task.created' } }),
     ]);
     const router = show('/company/automations');
-    await screen.findByRole('link', { name: 'Morning numbers' });
-    const trigger = screen.getByRole('group', { name: 'Trigger' });
-    expect(within(trigger).getByRole('button', { name: /Schedule\s*2/ })).toBeTruthy();
-    fireEvent.click(within(trigger).getByRole('button', { name: /Event/ }));
-    await waitFor(() => expect(screen.queryByRole('link', { name: 'Morning numbers' })).toBeNull());
-    expect(screen.getByRole('link', { name: 'Old cleanup' })).toBeTruthy();
-    fireEvent.click(within(trigger).getByRole('button', { name: /Event/ }));
-
-    fireEvent.click(within(screen.getByRole('group', { name: 'Status' })).getByRole('button', { name: /Last run failed/ }));
+    await screen.findByRole('table', { name: 'Automations' });
+    expect(within(sidebar()).getByRole('region', { name: 'Event' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Filter automations' }));
+    const sub = await screen.findByRole('menuitem', { name: 'Status' });
+    fireEvent.pointerEnter(sub, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(sub);
+    fireEvent.mouseMove(sub);
+    fireEvent.click(sub);
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Last run failed\s*1/ }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ state: 'failed' }));
-    expect(await screen.findByRole('link', { name: 'Weekly invoices' })).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'Morning numbers' })).toBeNull();
+    expect(await within(sidebar()).findByRole('link', { name: /Weekly invoices/ })).toBeTruthy();
+    expect(within(sidebar()).queryByRole('link', { name: /Morning numbers/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Last run failed' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
 
     const r = await run('automations.list', { q: 'nothing like it' }, { via: 'tico' });
     expect(r.ok).toBe(true);
@@ -239,8 +259,8 @@ describe('Automations', () => {
     record();
     queryClient.setQueryData(routinesQuery.queryKey, [routine(), routine({ id: 'r2', name: 'Alpha check', owner_id: 'human:me' })]);
     show('/company/automations');
-    await screen.findByRole('link', { name: 'Morning numbers' });
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    await screen.findByRole('table', { name: 'Automations' });
+    fireEvent.click(within(sidebar()).getByRole('button', { name: 'More' }));
     const sub = await screen.findByRole('menuitem', { name: 'Group by' });
     fireEvent.pointerEnter(sub, { pointerType: 'mouse' });
     fireEvent.mouseEnter(sub);
@@ -290,7 +310,7 @@ describe('One automation', () => {
   it('Test run needs edit rights @s510', async () => {
     record();
     await openRoutine({ can_edit: false });
-    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(within(content()).getByRole('button', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'Versions' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Test run' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add step' })).toBeNull();
@@ -592,6 +612,7 @@ describe('Runs', () => {
     show('/company/automations?tab=runs');
     const table = await screen.findByRole('table', { name: 'Runs' });
     const row = within(table).getByText('Morning numbers').closest('tr')!;
+    expect(within(sidebar()).getByRole('link', { name: 'Runs' }).getAttribute('aria-current')).toBe('true');
     expect(within(row).getByText('Failed')).toBeTruthy();
     expect(within(row).getByText('Timed out')).toBeTruthy();
     expect(href(within(row).getByRole('link'))).toBe('/company/automations/r1?view=runs');
@@ -604,12 +625,12 @@ describe('Runs', () => {
     const sent = record((url) => (url.includes('/automations/runs?') ? ok(url.includes('status=failed') ? { ...runs, runs: [] } : runs) : nothing()));
     const router = show('/company/automations?tab=runs');
     await screen.findByRole('table', { name: 'Runs' });
-    fireEvent.click(within(screen.getByRole('group', { name: 'Run' })).getByRole('button', { name: /Failed/ }));
+    expect((await run('automations.showRuns', { status: 'failed' }, { via: 'click' })).ok).toBe(true);
     expect(await screen.findByText('No failed runs in the last hour')).toBeTruthy();
     expect(router.state.location.search).toMatchObject({ tab: 'runs', status: 'failed' });
     expect(sent.reads.some((u) => u.includes('/automations/runs?') && u.includes('status=failed') && u.includes('range=1h'))).toBe(true);
-    fireEvent.click(within(screen.getByRole('group', { name: 'Run' })).getByRole('button', { name: /Failed/ }));
-    expect(await screen.findByText('Morning numbers')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Failed' }));
+    expect(await within(content()).findByText('Morning numbers')).toBeTruthy();
     expect(router.state.location.search).toEqual({ tab: 'runs' });
   });
 
@@ -623,7 +644,13 @@ describe('Runs', () => {
     const sent = record((url) => (url.includes('/automations/runs?') ? ok(runs) : nothing()));
     show('/company/automations?tab=runs');
     await screen.findByRole('table', { name: 'Runs' });
-    fireEvent.click(within(screen.getByRole('group', { name: 'Trigger' })).getByRole('button', { name: /Schedule/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter runs' }));
+    const sub = await screen.findByRole('menuitem', { name: 'Trigger' });
+    fireEvent.pointerEnter(sub, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(sub);
+    fireEvent.mouseMove(sub);
+    fireEvent.click(sub);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Schedule' }));
     await waitFor(() => expect(sent.reads.some((u) => u.includes('/automations/runs?') && u.includes('trigger=schedule'))).toBe(true));
   });
 });
@@ -648,7 +675,7 @@ describe('Webhooks', () => {
     expect(href(within(row).getByRole('link', { name: 'Shop orders' }))).toBe('/company/automations?tab=webhooks&panel=hook:h1');
     expect(screen.getByRole('button', { name: 'Add webhook' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Outgoing' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    expect(within(content()).queryByRole('button', { name: 'More' })).toBeNull();
     expect(sent.reads.some((u) => u.includes('/api/v2/webhooks'))).toBe(false);
   });
 

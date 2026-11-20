@@ -1,46 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Icon, type IconName } from '@/kit/Icon';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { MenuItem, MenuSub } from '@/kit/Menu';
 import { GROUPS, RANGE_WORDS, RANGES, SORTS, type GroupBy, type Range, type SortBy } from './flow';
 
-/* The parts the Automations list and its Runs share (automations-overview.ts): the filters down the left with a count
-   per choice, a run's bars over the time range, and the width a chart is drawn at. */
-
-export interface Choice {
-  value: string;
-  label: string;
-  /** How many rows it would show; none is left out unless picked. */
-  count?: number;
-  icon?: IconName;
-  lead?: ReactNode;
-}
-
-/** One group of filters: a heading, then a choice per line with its count. One pick at a time unless `many`. */
-export function Facet({ label, choices, picked, onPick }: { label: string; choices: readonly Choice[]; picked: readonly string[]; onPick: (value: string) => void }) {
-  const shown = choices.filter((c) => c.count === undefined || c.count > 0 || picked.includes(c.value));
-  if (!shown.length) return null;
-  return (
-    <div className="au-facet" role="group" aria-label={label}>
-      <h3 className="au-facet-h">{label}</h3>
-      {shown.map((c) => (
-        <button key={c.value} type="button" className="au-fb" aria-pressed={picked.includes(c.value)} onClick={() => onPick(c.value)}>
-          <span className="au-fb-lead">{c.lead ?? (c.icon ? <Icon name={c.icon} /> : null)}</span>
-          <span className="au-fb-t">{c.label}</span>
-          {c.count !== undefined && <span className="au-fb-n">{c.count}</span>}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** The filters' column: on a phone it shows only while the filter button is on. */
-export function Rail({ open, children }: { open: boolean; children: ReactNode }) {
-  return (
-    <aside className={open ? 'au-rail is-open' : 'au-rail'} aria-label="Filters">
-      {children}
-    </aside>
-  );
-}
+/* The parts the Automations list and its Runs share (automations-overview.ts): a row's bars over the time range, the
+   width a chart is drawn at, and the sidebar's Group by, Sort by and (on a phone) time range. */
 
 export interface Bucket {
   ok: number;

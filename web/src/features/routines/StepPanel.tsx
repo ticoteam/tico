@@ -140,7 +140,7 @@ function StepForm({ routine, start, insert, onClose }: { routine: Routine; start
   const put = (patch: Partial<FlowStep>) => setS((x) => ({ ...x, ...patch }));
   const arg = (k: string) => String(s.args?.[k] ?? '');
   const setArg = (k: string, v: string) => put({ args: { ...(s.args ?? {}), [k]: v } });
-  const withCur = (opts: { value: string; label: string }[], v: string | undefined) => (v && !opts.some((o) => o.value === v) ? [{ value: v, label: name(v) || v.replace(/^\w+:/, '') }, ...opts] : opts);
+  const withCur = (opts: { value: string; label: string }[], v: string | undefined) => (v && !opts.some((o) => o.value === v) ? [{ value: v, label: name(v) || 'Agent' }, ...opts] : opts);
   const agentOpts = agents.map((a) => ({ value: a.id, label: a.name }));
   const whoOpts = [...people.map((p) => ({ value: p.id.replace(/^human:/, 'person:'), label: p.name })), ...agentOpts];
 

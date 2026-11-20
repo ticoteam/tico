@@ -2,35 +2,36 @@
    the runs chart, and one automation's flow of cards, its paths in columns and the inbox board. Greys only: what the
    old page coloured (a failed run, a destination) is a mark or a weight here. Everything sits under .au. */
 
-/* ---------- the list: filters | table ---------- */
-.au .au-split{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;min-height:100%}
-.au .au-split:has(>.au-rail.is-open){grid-template-columns:calc(var(--s-18) * 3 - var(--s-4)) minmax(0,1fr)}
-.au .au-split:not(:has(>.au-rail.is-open)) .au-main{padding-left:var(--page-x)}
-.au .au-rail{position:sticky;top:0;display:none;align-content:start;gap:var(--s-4);padding:var(--s-2) var(--s-3) var(--s-6) var(--page-x);border-right:1px solid var(--line);align-self:stretch}
-.au .au-main{min-width:0;padding:0 var(--page-x) var(--s-6) 0}
-.au .au-rail.is-open{display:grid}
-.au .au-facet{display:grid;align-content:start;gap:0}
-.au .au-facet-h{margin:0 0 var(--s-1);padding-left:var(--s-2);font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--muted)}
-.au .au-fb{display:grid;grid-template-columns:var(--ico) minmax(0,1fr) auto;align-items:center;column-gap:var(--s-2);height:var(--ctl-sm);padding:0 var(--s-2);border:0;border-radius:var(--r-row);background:none;color:var(--ink-2);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
-.au .au-fb:hover{background:var(--hover)}
-.au .au-fb[aria-pressed="true"]{background:var(--selected);color:var(--ink);font-weight:var(--w-strong)}
-.au .au-fb:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
-.au .au-fb-lead{display:grid;place-items:center;color:var(--muted)}
-.au .au-fb-lead .ico{width:var(--ico-sm);height:var(--ico-sm)}
-.au .au-fb-t{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.au .au-fb-n{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+/* ---------- the sidebar: the page's views, then every automation under what starts it ---------- */
+.au .au-side{display:grid;align-content:start}
+/* while an editor is open in the panel the sidebar steps aside; closing it brings the sidebar back */
+.au.has-panel>.tl{display:none}
+.au .au-navs{display:grid;gap:0;padding:var(--s-1) 0 var(--s-2);margin-bottom:var(--s-1);border-bottom:1px solid var(--line)}
+.au .au-nav,.au .au-srow{grid-template-columns:var(--ico) minmax(0,1fr) auto calc(var(--s-8) + var(--s-1));column-gap:var(--s-2);padding:0 var(--s-1h) 0 var(--s-3)}
+.au :is(.au-nav,.au-srow)>.ico{width:var(--ico);height:var(--ico);color:var(--muted)}
+.au .au-nav .row-title{color:var(--ink);font-weight:var(--w-strong)}
+.au .au-nav .row-age,.au .au-srow .row-age{text-align:right;font-variant-numeric:tabular-nums}
+.au .au-srow .row-title{color:var(--ink)}
+.au .au-srow.is-off .row-title{color:var(--muted)}
+.au .au-srow-mark{display:grid;place-items:center;color:var(--muted)}
+.au .au-srow-mark .ico{width:var(--ico-sm);height:var(--ico-sm)}
+.au .au-side .pk-sec{margin-top:var(--s-1)}
 
+/* ---------- the content beside it ---------- */
+.au .au-body{padding-top:var(--s-2)}
+.au .au-subbar{display:flex;align-items:center;gap:var(--s-3);min-height:var(--s-12);padding:0 var(--s-3) 0 var(--s-6);border-bottom:1px solid var(--line);flex:none;color:var(--muted);font-size:var(--t-sm)}
+.au .au-subbar>.au-sub-line{flex:1}
+.au .au-body{container-type:inline-size}
 /* the table: the name takes the room, the facts keep theirs */
-.au .au-main{container-type:inline-size}
-.au .au-main .table td,.au .au-main .table th{width:1%}
+.au .au-body .table td,.au .au-body .table th{width:1%}
 /* the name and the words take what is left, cut short; the facts keep their own width */
-.au .au-main .table :is(td,th):is(.au-c-name,:first-child){width:60%;max-width:0}
-.au .au-main .table :is(.au-c-trig,.au-c-by,.au-c-out){width:40%;max-width:0;overflow:hidden;text-overflow:ellipsis}
+.au .au-body .table :is(td,th):is(.au-c-name,:first-child){width:60%;max-width:0}
+.au .au-body .table :is(.au-c-trig,.au-c-by,.au-c-out){width:40%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 /* a narrow list folds its least read columns first: the trend, then when it runs next and what it cost */
 @container (max-width:720px){
-  .au .au-main .table :is(.au-c-trend,.au-c-next,.au-c-cost,.au-c-by){display:none}
+  .au .au-body .table :is(.au-c-trend,.au-c-next,.au-c-cost,.au-c-by,.au-c-steps,.au-c-time){display:none}
 }
-.au .au-main .table th:first-child,.au .au-main .table td:first-child{padding-left:var(--s-3)}
+.au .au-body .table th:first-child,.au .au-body .table td:first-child{padding-left:var(--s-2)}
 .au .au-name{display:flex;align-items:center;gap:var(--s-2);min-width:0}
 .au .au-name>.ico{flex:none;width:var(--ico);height:var(--ico);color:var(--muted)}
 .au .au-name>a,.au .au-name-t{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-weight:var(--w-strong);text-decoration:none}
@@ -50,11 +51,11 @@
 .au .au-bars .is-on{fill:var(--faint)}
 .au .au-bars .is-none{fill:var(--line)}
 .au .au-bars .is-failed{fill:var(--ink)}
-.au .au-note{margin:var(--s-3) 0;padding-left:var(--s-3);color:var(--muted);font-size:var(--t-sm)}
+.au .au-note{margin:var(--s-3) 0;color:var(--muted);font-size:var(--t-sm)}
 .au .au-more{display:flex;justify-content:center;padding:var(--s-2) 0 var(--s-3)}
 
 /* the runs chart over the table */
-.au .au-chart{padding:var(--s-3) var(--s-3) var(--s-2)}
+.au .au-chart{padding:var(--s-2) 0 var(--s-2)}
 .au .au-chart-h{display:flex;align-items:center;gap:var(--s-4);margin-bottom:var(--s-1);font-size:var(--t-sm);color:var(--muted)}
 .au .au-chart-t{flex:1;font-weight:var(--w-strong)}
 .au .au-key{display:inline-flex;align-items:center;gap:var(--s-1h);font-variant-numeric:tabular-nums}
@@ -64,7 +65,7 @@
 .au .au-chart .chart rect.c1{fill:var(--faint)}
 .au .au-chart .chart rect.c2{fill:var(--ink)}
 
-/* a phone: two lines a row, the filters under the head while the button is on */
+/* a phone's All: two lines a row, the name and its marks over its facts */
 .au .au-prows{display:grid}
 .au .au-prow{position:relative;display:grid;gap:var(--s-0);padding:var(--s-2h) var(--s-3);border-bottom:1px solid var(--line)}
 .au .au-prow-1{display:flex;align-items:center;gap:var(--s-2);min-width:0}
@@ -76,12 +77,8 @@
 .au .au-prow-2{padding-left:calc(var(--ico) + var(--s-2));color:var(--muted);font-size:var(--t-sm)}
 
 :where(html[data-layout="cards"]){
-  .au .au-split,.au .au-split:has(>.au-rail.is-open){grid-template-columns:minmax(0,1fr)}
-  .au .au-rail{position:static;border-right:0;border-bottom:1px solid var(--line);padding:var(--s-2) var(--page-x) var(--s-3)}
-  .au .au-rail.is-open{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--s-3)}
-  .au .au-split:not(:has(>.au-rail.is-open)) .au-main{padding-left:0}
-  .au .au-fb{height:var(--tap)}
-  .au .au-main{padding:0}
+  .au .au-nav,.au .au-srow{height:var(--tap)}
+  .au .au-subbar{padding:0 var(--s-4);flex-wrap:wrap}
 }
 
 /* ---------- one automation ---------- */
@@ -92,10 +89,10 @@
 .au .au-subbtn:disabled{cursor:default}
 .au .au-subbtn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
 .au .au-head-sw{display:inline-flex;align-items:center}
-.au .au-lines{display:grid;gap:var(--s-1h);padding:var(--s-1) var(--page-x) var(--s-2)}
+.au .au-lines{display:grid;gap:var(--s-1h);padding:var(--s-1) 0 var(--s-2)}
 .au .au-lock{display:flex;align-items:center;gap:var(--s-1h);margin:0;color:var(--muted);font-size:var(--t-sm)}
 .au .au-lock .ico{width:var(--ico-sm);height:var(--ico-sm)}
-.au .au-flow{padding:var(--s-3) var(--page-x) var(--s-8)}
+.au .au-flow{padding:var(--s-2) 0 var(--s-8)}
 .au .au-quiet{margin:0;color:var(--muted);font-size:var(--t-sm)}
 
 /* the track: a card per step, a line and a "+" between */
@@ -178,13 +175,13 @@
 .au .au-dest.is-open{border-color:var(--ink)}
 .au .au-dest-n{font-weight:var(--w-strong);color:var(--ink);text-decoration:none}
 .au a.au-dest-n::after{content:"";position:absolute;inset:0;border-radius:inherit}
-.au .au-dest-a{display:flex;align-items:center;gap:var(--s-1h);color:var(--muted);font-size:var(--t-sm)}
+.au .au-dest-a{display:flex;align-items:center;gap:var(--s-1h);min-width:0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
 .au .au-dest-a .ico{width:var(--ico-sm);height:var(--ico-sm)}
 .au .au-dest.is-add{align-content:center;grid-auto-flow:column;justify-content:center;gap:var(--s-1h);border-style:dashed;border-top-width:1px;color:var(--ink-2);font-size:var(--t-sm);font-weight:var(--w-strong)}
 .au .au-dest.is-add .ico{width:var(--ico-sm);height:var(--ico-sm)}
 
 /* ---------- its runs ---------- */
-.au .au-runs{display:grid;padding:var(--s-2) var(--page-x) var(--s-6)}
+.au .au-runs{display:grid;padding:var(--s-1) 0 var(--s-6)}
 .au .au-run{border-bottom:1px solid var(--line)}
 .au .au-run-row{display:grid;grid-template-columns:var(--ico-sm) calc(var(--s-18) * 2 + var(--s-4)) auto minmax(0,1fr) var(--s-10) var(--s-12);align-items:center;column-gap:var(--s-3);width:100%;height:var(--row);padding:0 var(--s-2);border:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;border-radius:var(--r-row)}
 .au .au-run-row:hover{background:var(--hover)}

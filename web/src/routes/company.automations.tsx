@@ -1,9 +1,10 @@
-import { createFileRoute, redirect } from '@tanstack/react-router';
-import { AutomationsPage } from '@/features/routines/exports';
+import { createFileRoute, Outlet, redirect, useParams } from '@tanstack/react-router';
+import { AutomationsShell } from '@/features/routines/exports';
 import { loadRoutines, validateRoutinesSearch } from '@/features/routines/routing';
 
-/** Automations: `?tab=runs` and `?tab=webhooks`; Tico's own jobs, a webhook and a new routine open in `?panel=`. An
-    automation is its own page (`/company/automations/<id>`): an older `?panel=routine:<id>` link goes there. */
+/** Automations: the sidebar of automations, and beside it the one open (`/company/automations/<id>`) or All, `?tab=runs`,
+    `?tab=webhooks`. Tico's own jobs, a webhook and a new routine open in `?panel=`; an older `?panel=routine:<id>` link
+    opens the automation. The sidebar stays while the content beside it changes. */
 export const Route = createFileRoute('/company/automations')({
   validateSearch: validateRoutinesSearch,
   beforeLoad: ({ search }) => {
@@ -12,9 +13,14 @@ export const Route = createFileRoute('/company/automations')({
   },
   loaderDeps: ({ search: { tab, status, range } }) => ({ tab, status, range }),
   loader: ({ context, deps }) => loadRoutines(context.queryClient, deps),
-  component: Page,
+  component: Layout,
 });
 
-function Page() {
-  return <AutomationsPage search={Route.useSearch()} />;
+function Layout() {
+  const id = useParams({ strict: false, select: (p) => (p as { id?: string }).id });
+  return (
+    <AutomationsShell search={Route.useSearch()} id={id}>
+      <Outlet />
+    </AutomationsShell>
+  );
 }

@@ -111,11 +111,11 @@ async function said<T>(p: Promise<T>): Promise<T> {
 
 export const openRoutine = defineAction({
   id: 'automations.open',
-  title: 'Open a routine',
+  title: 'Open an automation, on its flow or its runs',
   kind: 'view',
-  input: z.strictObject({ routine: id }),
-  run: ({ router }, { routine }) => go(router, automationHref(routine)),
-  did: () => 'Opened the routine',
+  input: z.strictObject({ routine: id, view: z.optional(z.enum(['flow', 'runs'] as const)) }),
+  run: ({ router }, { routine, view }) => go(router, automationHref(routine), { view: view === 'runs' ? 'runs' : undefined }),
+  did: () => 'Opened the automation',
   target: ({ routine }) => ({ kind: 'routine', id: routine }),
 });
 

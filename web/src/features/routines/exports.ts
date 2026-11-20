@@ -1,5 +1,5 @@
 // Automations, Rules and Listening: the only file other code imports from this feature.
-export { AutomationsPage, RoutinesPage, type RoutinesSearch } from './AutomationsPage';
+export { AutomationsPage, AutomationsShell, RoutinesPage, type RoutinesSearch } from './AutomationsPage';
 export { AutomationPage, type AutomationSearch } from './AutomationPage';
 export { RulesPage, type RulesSearch } from './RulesPage';
 export { ListeningPage, type ListeningSearch } from './ListeningPage';

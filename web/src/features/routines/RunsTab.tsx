@@ -7,22 +7,22 @@ import { BarChart } from '@/kit/Chart';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
+import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
-import { Segmented } from '@/kit/Segmented';
 import { EmptyRow, Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtWhen } from '@/lib';
-import { List, PageMore } from '@/pagekinds';
-import { automationHref, LISTENING } from './actions';
-import { automationsHead, rangeOf, routinesHref, type RoutinesSearch } from './AutomationsPage';
+import { FilterRow, ItemHead } from '@/pagekinds';
+import { automationHref, LISTENING, ROUTINES } from './actions';
+import { RangePick, rangeOf, routinesHref, type RoutinesSearch } from './AutomationsPage';
 import { KIND_ICONS, KIND_WORDS, KINDS, money, RANGE_BUCKET, RANGE_SECONDS, RANGE_WORDS, RANGES, took, type Range } from './flow';
-import { Facet, ListChoices, Rail, useWidth } from './overview';
-import { actorKey, Face, PageOwner, press, Word } from './parts';
+import { useWidth } from './overview';
+import { actorKey, Face, press, Word } from './parts';
 import { allRunsQuery, routinesQuery, RUN_STATUSES, statsQuery, type AnyRun, type RunStatus } from './queries';
 import { runWords } from './words';
 
-/* Automations › Runs (automations-overview.ts auAllHTML): the runs per bucket over the range as a chart, then every
-   run across them newest first, fifty at a time. Status and range live in the address; trigger and owner narrow it in
-   the filters, as on the list. A run opens its automation's Runs; one of Tico's own jobs opens in the panel. */
+/* Automations › Runs, the content beside the sidebar (automations-overview.ts auAllHTML): the runs per bucket over the
+   range as a chart, then every run across them newest first, fifty at a time. Status and range live in the address;
+   trigger and owner narrow it from the filter menu. A run opens its automation's Runs; Tico's own job opens in the panel. */
 
 const STATUS: Record<RunStatus, string> = { failed: 'Failed', waiting: 'Waiting', running: 'Running', done: 'Done' };
 const STATUS_ICON: Record<RunStatus, 'alert' | 'pause' | 'play' | 'check'> = { failed: 'alert', waiting: 'pause', running: 'play', done: 'check' };
@@ -45,7 +45,6 @@ export function RunsTab({ search }: { search: RoutinesSearch }) {
   const phone = useCards();
   const [kinds, setKinds] = useState<string[]>([]);
   const [owner, setOwner] = useState('');
-  const [filters, setFilters] = useState(!phone);
   const by = { trigger: kinds.length ? kinds.join(',') : undefined, owner: owner || undefined };
   const q = useSuspenseInfiniteQuery(allRunsQuery(range, status, by));
   const stats = useQuery(statsQuery(range));
@@ -60,118 +59,125 @@ export function RunsTab({ search }: { search: RoutinesSearch }) {
   const shown = new Set(autos.filter((a) => (!kinds.length || kinds.includes(a.trigger.type)) && (!owner || a.owner_id === owner)).map((a) => a.id));
   const narrowed = kinds.length > 0 || !!owner;
   const on = kinds.length + +!!owner + +!!status;
+  const filters = [
+    ...(status ? [{ label: STATUS[status], onClear: () => show({ range: search.range }) }] : []),
+    ...kinds.map((k) => ({ label: KIND_WORDS[k] ?? k, onClear: () => pickKind(k) })),
+    ...(owner ? [{ label: nameOf(owner), onClear: () => setOwner('') }] : []),
+  ];
 
   return (
-    <List
-      {...automationsHead(search.range)}
-      actions={
-        <>
-          {!phone && <Segmented label="Time range" options={RANGES.map((r) => ({ value: r, label: r }))} value={range} onValueChange={(r) => show({ status, range: r })} />}
-          <IconButton icon="filter" label="Filters" on={(filters && !search.panel) || on > 0} onClick={() => setFilters(!filters || !!search.panel)} data-phone />
-          <PageOwner page="automations" />
-        </>
-      }
-      more={
-        phone ? (
-          <PageMore>
-            <ListChoices range={range} phone onRange={(r) => show({ status, range: r })} />
-          </PageMore>
-        ) : undefined
-      }
-      sections={
-        <div className="au-split">
-          <Rail open={filters && !search.panel}>
-            <Facet
-              label="Run"
-              picked={status ? [status] : []}
-              onPick={(v) => show({ status: v === status ? undefined : (v as RunStatus), range: search.range })}
-              choices={RUN_STATUSES.map((s) => ({ value: s, label: STATUS[s], icon: STATUS_ICON[s] }))}
-            />
-            <Facet label="Trigger" picked={kinds} onPick={pickKind} choices={KINDS.map((k) => ({ value: k, label: KIND_WORDS[k]!, icon: KIND_ICONS[k] }))} />
-            {owners.length > 0 && (
-              <Facet
-                label="Owner"
-                picked={owner ? [owner] : []}
-                onPick={(v) => setOwner(owner === v ? '' : v)}
-                choices={owners.map((o) => ({ value: o, label: nameOf(o), lead: <Face id={o} size={16} /> }))}
-              />
+    <>
+      <ItemHead
+        title="Runs"
+        target="tab:runs"
+        back={{ to: ROUTINES, label: 'Automations' }}
+        actions={
+          <>
+            <RangePick range={range} onPick={(r) => show({ status, range: r })} />
+            <Menu trigger={<IconButton icon="filter" label="Filter runs" on={on > 0} />}>
+              <MenuSub label="Run">
+                <MenuItem label="All" on={!status} onSelect={() => show({ range: search.range })} />
+                {RUN_STATUSES.map((x) => (
+                  <MenuItem key={x} label={STATUS[x]} icon={STATUS_ICON[x]} on={x === status} onSelect={() => show({ status: x === status ? undefined : x, range: search.range })} />
+                ))}
+              </MenuSub>
+              <MenuSub label="Trigger">
+                {KINDS.map((k) => (
+                  <MenuItem key={k} label={KIND_WORDS[k]!} icon={KIND_ICONS[k]} on={kinds.includes(k)} onSelect={() => pickKind(k)} />
+                ))}
+              </MenuSub>
+              {owners.length > 0 && (
+                <MenuSub label="Owner">
+                  {owners.map((o) => (
+                    <MenuItem key={o} label={nameOf(o)} lead={<Face id={o} size={16} />} on={o === owner} onSelect={() => setOwner(owner === o ? '' : o)} />
+                  ))}
+                </MenuSub>
+              )}
+            </Menu>
+            {phone && (
+              <Menu trigger={<IconButton icon="clock" label="Time range" />}>
+                {RANGES.map((r) => (
+                  <MenuItem key={r} label={RANGE_WORDS[r]} on={r === range} onSelect={() => show({ status, range: r })} />
+                ))}
+              </Menu>
             )}
-          </Rail>
-          <div className="au-main">
-            <RunsChart range={range} stats={stats.data} only={narrowed ? shown : null} failed={stats.isError} />
-            {phone ? (
-              <PhoneRuns runs={runs} range={search.range} empty={noRuns(range, status)} />
-            ) : (
-              <Table label="Runs" stick>
-                <thead>
-                  <tr>
-                    <Th>When</Th>
-                    <Th>Status</Th>
-                    <th scope="col" className="au-c-name">
-                      Automation
-                    </th>
-                    <th scope="col" className="au-c-by">
-                      Started by
-                    </th>
-                    <th scope="col" className="au-c-out">
-                      Outcome
-                    </th>
-                    <Th num>Steps</Th>
-                    <Th num>Time</Th>
-                    <Th num>Cost</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.length ? (
-                    runs.map((x) => (
-                      <Tr key={x.id} linked className="au-row">
-                        <td className="au-c-when" title={fmtWhen(x.started_at)}>
-                          <Link href={runHref(x, search.range)} data-target={`run:${x.id}`}>
-                            <Ago at={x.started_at} />
-                          </Link>
-                        </td>
-                        <td className="au-c-st">{MARKED.has(x.status) && <Word icon={x.status === 'failed' ? 'alert' : 'pause'}>{SHORT[x.status] ?? runWords(x.status)}</Word>}</td>
-                        <td className="au-c-name">
-                          <span className="au-name">
-                            <Icon name={KIND_ICONS[x.trigger] ?? 'spark'} />
-                            <span className="au-name-t">{x.automation_name}</span>
-                          </span>
-                        </td>
-                        <td className="au-c-by" title={x.started_by ?? ''}>
-                          {x.started_by}
-                        </td>
-                        <td className={x.status === 'failed' ? 'au-c-out is-failed' : 'au-c-out'} title={x.outcome ?? ''}>
-                          {x.outcome}
-                          {(x.count ?? 0) > 1 && <span className="au-times">{` ×${x.count}`}</span>}
-                        </td>
-                        <Td num zero={x.step_count == null}>
-                          {x.step_count ?? '—'}
-                        </Td>
-                        <Td num zero={!took(x.started_at, x.finished_at)}>
-                          {took(x.started_at, x.finished_at) || '—'}
-                        </Td>
-                        <Td num zero={!x.cost}>
-                          {x.cost ? money(x.cost) : '—'}
-                        </Td>
-                      </Tr>
-                    ))
-                  ) : (
-                    <EmptyRow span={8}>{noRuns(range, status)}</EmptyRow>
-                  )}
-                </tbody>
-              </Table>
-            )}
-            {q.hasNextPage && (
-              <div className="au-more">
-                <Button variant="quiet" busy={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
-                  More
-                </Button>
-              </div>
-            )}
+          </>
+        }
+      />
+      <div className="conv-body au-body" data-scroll>
+        <FilterRow filters={filters} />
+        <RunsChart range={range} stats={stats.data} only={narrowed ? shown : null} failed={stats.isError} />
+        {phone ? (
+          <PhoneRuns runs={runs} range={search.range} empty={noRuns(range, status)} />
+        ) : (
+          <Table label="Runs" stick>
+            <thead>
+              <tr>
+                <Th>When</Th>
+                <Th>Status</Th>
+                <th scope="col" className="au-c-name">
+                  Automation
+                </th>
+                <th scope="col" className="au-c-by">
+                  Started by
+                </th>
+                <th scope="col" className="au-c-out">
+                  Outcome
+                </th>
+                <th scope="col" className="num au-c-steps">
+                  Steps
+                </th>
+                <th scope="col" className="num au-c-time">
+                  Time
+                </th>
+                <Th num>Cost</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.length ? (
+                runs.map((x) => (
+                  <Tr key={x.id} linked className="au-row">
+                    <td className="au-c-when" title={fmtWhen(x.started_at)}>
+                      <Link href={runHref(x, search.range)} data-target={`run:${x.id}`}>
+                        <Ago at={x.started_at} />
+                      </Link>
+                    </td>
+                    <td className="au-c-st">{MARKED.has(x.status) && <Word icon={x.status === 'failed' ? 'alert' : 'pause'}>{SHORT[x.status] ?? runWords(x.status)}</Word>}</td>
+                    <td className="au-c-name">
+                      <span className="au-name">
+                        <Icon name={KIND_ICONS[x.trigger] ?? 'spark'} />
+                        <span className="au-name-t">{x.automation_name}</span>
+                      </span>
+                    </td>
+                    <td className="au-c-by" title={x.started_by ?? ''}>
+                      {x.started_by}
+                    </td>
+                    <td className={x.status === 'failed' ? 'au-c-out is-failed' : 'au-c-out'} title={x.outcome ?? ''}>
+                      {x.outcome}
+                      {(x.count ?? 0) > 1 && <span className="au-times">{` ×${x.count}`}</span>}
+                    </td>
+                    <td className={x.step_count == null ? 'num zero au-c-steps' : 'num au-c-steps'}>{x.step_count ?? '—'}</td>
+                    <td className={took(x.started_at, x.finished_at) ? 'num au-c-time' : 'num zero au-c-time'}>{took(x.started_at, x.finished_at) || '—'}</td>
+                    <Td num zero={!x.cost}>
+                      {x.cost ? money(x.cost) : '—'}
+                    </Td>
+                  </Tr>
+                ))
+              ) : (
+                <EmptyRow span={8}>{noRuns(range, status)}</EmptyRow>
+              )}
+            </tbody>
+          </Table>
+        )}
+        {q.hasNextPage && (
+          <div className="au-more">
+            <Button variant="quiet" busy={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
+              More
+            </Button>
           </div>
-        </div>
-      }
-    />
+        )}
+      </div>
+    </>
   );
 }
 

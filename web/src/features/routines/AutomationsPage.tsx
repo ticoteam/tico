@@ -1,18 +1,19 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { createContext, use, useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { useCards } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { EmptyRow, GroupRow, Table, Td, Th, Tr } from '@/kit/Table';
 import { toast } from '@/kit/Toast';
-import { List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { FilterRow, ItemHead, ListAndItem, PageMore, PanelSlot, Section, usePagePanelOpen } from '@/pagekinds';
 import { automationHref, BUILTINS, ROUTINES, type Builtin, type RoutineState } from './actions';
 import { BuiltinPanel } from './BuiltinPanel';
 import { NewInbox } from './Templates';
@@ -34,7 +35,7 @@ import {
   type Range,
   type SortBy,
 } from './flow';
-import { Bars, Facet, ListChoices, Rail, type Bucket, type Choice } from './overview';
+import { Bars, ListChoices, type Bucket } from './overview';
 import { actorKey, Face, Find, PageOwner, press, Word } from './parts';
 import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, statsQuery, systemJobsQuery, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
@@ -45,19 +46,21 @@ import { maintenanceWords, scheduleWords, startsWords } from './words';
 import './routines.css';
 import './automations.css';
 
-/* Automations (ui/app/automations-overview.ts): the filters down the left with a count per choice, then every
-   automation in a dense table with its last run, its next, and its runs, failures and cost over the time range, grouped
-   by what starts it. Runs is every run across them with a chart; Webhooks the incoming ones. One automation opens as its
-   own page; Tico's own jobs and a webhook open in `?panel=`. */
+/* Automations (ui/app/automations*.ts), as a sidebar and its content: one sheet, the kit's list-and-item page. The
+   sidebar lists every automation under what starts it (or its owner), each with its mark and last run, and leads with
+   the page's own views: All (every automation in a dense table with its last and next run, its bars, runs, failures and
+   cost over the time range), Runs (the chart and every run) and Webhooks. The content shows the one picked in full: its
+   flow, its runs, its editors in the panel. Tico's own jobs and a webhook open in `?panel=`. */
 
 export interface RoutinesSearch {
-  tab?: 'webhooks' | 'runs';
+  /** The content when no automation is open: All (also on a phone, where the sidebar shows first), Runs, Webhooks. */
+  tab?: 'all' | 'webhooks' | 'runs';
   panel?: string;
   /** Runs: which runs. */
   status?: RunStatus;
   /** The counts' and the chart's time range. */
   range?: Range;
-  /** Automations: the words searched for, and which state shows. */
+  /** The words searched for, and which state shows. */
   q?: string;
   state?: RoutineState;
 }
@@ -68,23 +71,33 @@ export const routinesHref = (search: RoutinesSearch) => {
   return q ? `${ROUTINES}?${q}` : ROUTINES;
 };
 
-export const routinesTabs = (range?: Range): readonly PageTab[] => [
-  { label: 'Automations', to: ROUTINES, search: { tab: '', ...(range ? { range } : {}) }, target: 'tab:routines' },
-  { label: 'Runs', to: ROUTINES, search: { tab: 'runs', ...(range ? { range } : {}) }, target: 'tab:runs' },
-  { label: 'Webhooks', to: ROUTINES, search: { tab: 'webhooks' }, target: 'tab:webhooks' },
-];
-
-export const automationsHead = (range?: Range) => ({ title: 'Automations', path: ROUTINES, tabs: routinesTabs(range), className: 'rr au' });
 /** The range the address names, else the last hour (as the old page opened). */
 export const rangeOf = (s: { range?: Range }): Range => s.range ?? '1h';
 
-export function RoutinesPage({ search }: { search: RoutinesSearch }) {
-  if (search.tab === 'runs') return <RunsTab search={search} />;
-  return search.tab === 'webhooks' ? <WebhooksTab panel={search.panel} /> : <AutomationsTab search={search} />;
-}
-export { RoutinesPage as AutomationsPage };
-
 const close = () => void press('automations.closePanel', {});
+
+/** The time range, in the content's head on a computer (a phone picks it in the sidebar's "⋯"). */
+export function RangePick({ range, onPick }: { range: Range; onPick: (r: Range) => void }) {
+  if (useCards()) return null;
+  return <Segmented label="Time range" options={RANGES.map((r) => ({ value: r, label: r }))} value={range} onValueChange={onPick} />;
+}
+
+// ---------------------------------------------------------------- the sidebar's choices, shared with the content
+
+interface Picks {
+  team: string;
+  owner: string;
+}
+interface Shell {
+  picks: Picks;
+  setPicks: (p: Picks) => void;
+  group: GroupBy;
+  sort: SortBy;
+  closed: string[];
+  fold: (k: string) => void;
+}
+const ShellCtx = createContext<Shell | null>(null);
+const useShell = (): Shell => use(ShellCtx) ?? { picks: { team: '', owner: '' }, setPicks: () => {}, group: 'trigger', sort: 'last', closed: [], fold: () => {} };
 
 // ---------------------------------------------------------------- the rows
 
@@ -168,46 +181,29 @@ interface Stat {
 }
 const NO_STAT: Stat = { runs: 0, failed: 0, cost: 0, buckets: [] };
 
-// ---------------------------------------------------------------- the list
+// ---------------------------------------------------------------- what the filters leave, in order and in groups
 
-interface Picks {
-  kinds: string[];
-  team: string;
-  owner: string;
+/** Tico's own jobs have no owner in the list: they are Tico's. */
+const TICO = 'tico';
+const ownerKey = (it: Item) => it.owner ?? TICO;
+
+function useNameOf() {
+  const actors = useActors();
+  return (id: string | null) => (id && id !== TICO ? (actors.find((a) => a.id === actorKey(id) || (a.slug && `bot:${a.slug}` === id))?.name ?? id.replace(/^\w+:/, '')) : 'Tico');
 }
 
-function AutomationsTab({ search }: { search: RoutinesSearch }) {
-  const { q, state, panel } = search;
-  const range = rangeOf(search);
-  const phone = useCards();
+/** The automations the search and the filters leave, sorted and grouped as the sidebar's "⋯" says. */
+function useShown(search: RoutinesSearch, statOf: (it: Item) => Stat = () => NO_STAT) {
   const { items, none } = useItems(search);
-  const stats = useQuery(statsQuery(range));
-  const actors = useActors();
-  const [picks, setPicks] = useState<Picks>({ kinds: [], team: '', owner: '' });
-  const [group, setGroup] = useState<GroupBy>('trigger');
-  const [sort, setSort] = useState<SortBy>('last');
-  const [closed, setClosed] = useState<string[]>([]);
-  // the filters show beside the list on a computer, and under the head on a phone once asked for
-  const [filters, setFilters] = useState(!phone);
-  const [inbox, setInbox] = useState(false);
-  const built = panel?.startsWith('builtin:') ? (BUILTINS.find((b) => `builtin:${b}` === panel) ?? null) : null;
-  const listed = (to: RoutinesSearch) => void press('automations.list', { q: to.q, state: to.state });
-  const setRange = (r: Range) => void press('automations.list', { q, state, range: r });
-
-  const per = new Map<string, Stat>((stats.data?.automations ?? []).map((s) => [s.id, s]));
-  const statOf = (it: Item): Stat => per.get(it.builtin ? BUILTIN_STATS[it.builtin] : it.id) ?? NO_STAT;
-  const nameOf = (id: string | null) => (id ? (actors.find((a) => a.id === actorKey(id) || (a.slug && `bot:${a.slug}` === id))?.name ?? id.replace(/^\w+:/, '')) : 'Tico');
+  const { picks, group, sort } = useShell();
+  const nameOf = useNameOf();
+  const { q, state } = search;
   const words = (it: Item) => `${it.name} ${it.trigger} ${nameOf(it.owner)} ${KIND_WORDS[it.kind] ?? ''}`.toLowerCase();
-  const matches = (it: Item, skip?: keyof Picks | 'state') =>
-    (skip === 'kinds' || !picks.kinds.length || picks.kinds.includes(it.kind)) &&
+  const matches = (it: Item, skip?: 'state' | 'team' | 'owner') =>
     (skip === 'state' || !state || it.state === state) &&
     (skip === 'team' || !picks.team || it.team === picks.team) &&
     (skip === 'owner' || !picks.owner || ownerKey(it) === picks.owner) &&
     (!q || words(it).includes(q.toLowerCase()));
-  const shown = items.filter((it) => matches(it));
-  const count = (skip: keyof Picks | 'state', f: (it: Item) => boolean) => items.filter((it) => matches(it, skip) && f(it)).length;
-
-  // sorted, then grouped in the old order: what starts it, by owner, or not at all
   const lastAt = (it: Item) => it.at ?? '';
   const order: Record<SortBy, (a: Item, b: Item) => number> = {
     last: (a, b) => lastAt(b).localeCompare(lastAt(a)),
@@ -216,7 +212,7 @@ function AutomationsTab({ search }: { search: RoutinesSearch }) {
     cost: (a, b) => statOf(b).cost - statOf(a).cost,
     name: (a, b) => a.name.localeCompare(b.name),
   };
-  const rows = [...shown].sort(order[sort]);
+  const rows = items.filter((it) => matches(it)).sort(order[sort]);
   const keyOf = (it: Item) => (group === 'trigger' ? it.kind : group === 'owner' ? ownerKey(it) : '');
   const groups: { key: string; label: string; rows: Item[] }[] = [];
   for (const it of rows) {
@@ -231,106 +227,141 @@ function AutomationsTab({ search }: { search: RoutinesSearch }) {
   };
   if (group === 'trigger') groups.sort((a, b) => rank(a.key) - rank(b.key));
   if (group === 'owner') groups.sort((a, b) => a.label.localeCompare(b.label));
+  const count = (skip: 'state' | 'team' | 'owner', f: (it: Item) => boolean) => items.filter((it) => matches(it, skip) && f(it)).length;
+  return { items, none, rows, groups, count, nameOf, grouped: group !== 'none' };
+}
 
-  // a column empty for every automation over the range leaves (decided from the whole list, so typing never moves one)
-  const has = {
-    next: items.some((it) => it.next),
-    trend: items.some((it) => statOf(it).runs > 0),
-    runs: items.some((it) => statOf(it).runs > 0),
-    failed: items.some((it) => statOf(it).failed > 0),
-    cost: items.some((it) => statOf(it).cost >= 0.005),
-  };
+// ---------------------------------------------------------------- the sidebar
 
-  const pick = (key: 'team' | 'owner', v: string) => setPicks((p) => ({ ...p, [key]: p[key] === v ? '' : v }));
-  const pickKind = (v: string) => setPicks((p) => ({ ...p, kinds: p.kinds.includes(v) ? p.kinds.filter((k) => k !== v) : [...p.kinds, v] }));
+/** The page: the sidebar of automations, and `children`, the content, beside it (the open one, or All, Runs, Webhooks). */
+export function AutomationsShell({ search, id, children }: { search: RoutinesSearch & { view?: string }; id?: string; children: ReactNode }) {
+  const [picks, setPicks] = useState<Picks>({ team: '', owner: '' });
+  const [group, setGroup] = useState<GroupBy>('trigger');
+  const [sort, setSort] = useState<SortBy>('last');
+  const [closed, setClosed] = useState<string[]>([]);
+  const fold = (k: string) => setClosed((c) => (c.includes(k) ? c.filter((x) => x !== k) : [...c, k]));
+  const shell: Shell = { picks, setPicks, group, sort, closed, fold };
+  return (
+    <ShellCtx value={shell}>
+      <Sidebar search={search} id={id} setGroup={(g) => (setGroup(g), setClosed([]))} setSort={setSort}>
+        {children}
+      </Sidebar>
+    </ShellCtx>
+  );
+}
+
+function Sidebar({ search, id, setGroup, setSort, children }: { search: RoutinesSearch; id?: string; setGroup: (g: GroupBy) => void; setSort: (s: SortBy) => void; children: ReactNode }) {
+  const { q, state, panel, tab } = search;
+  const range = rangeOf(search);
+  const phone = useCards();
+  const { picks, setPicks, group, sort, closed, fold } = useShell();
+  const { items, none, groups, count, nameOf, grouped } = useShown(search);
+  const [inbox, setInbox] = useState(false);
+  // an editor open in the panel takes the sidebar's room: the flow and its editor need it more
+  const editing = usePagePanelOpen();
+  const keep = { q, state, range: search.range };
+  const listed = (to: { q?: string; state?: RoutineState }) => void press('automations.list', { ...to, range: search.range });
   const teams = [...new Set(items.map((it) => it.team).filter(Boolean))].sort();
   const owners = [...new Set(items.map(ownerKey))].map((o) => ({ o, name: nameOf(o === TICO ? null : o) })).sort((a, b) => a.name.localeCompare(b.name));
-  const on = picks.kinds.length + +!!picks.team + +!!picks.owner + +!!state;
-
-  const rail = (
-    <Rail open={filters && !panel}>
-      <Facet
-        label="Trigger"
-        picked={picks.kinds}
-        onPick={pickKind}
-        choices={KINDS.map((k) => ({ value: k, label: KIND_WORDS[k]!, icon: KIND_ICONS[k], count: count('kinds', (it) => it.kind === k) }))}
-      />
-      <Facet
-        label="Status"
-        picked={state ? [state] : []}
-        onPick={(v) => listed({ q, state: state === v ? undefined : (v as RoutineState) })}
-        choices={(Object.keys(STATE_WORDS) as AutoState[]).map((k) => ({ value: k, label: STATE_WORDS[k], icon: STATE_ICON[k], count: count('state', (it) => it.state === k) }))}
-      />
-      {teams.length > 0 && (
-        <Facet label="Team" picked={picks.team ? [picks.team] : []} onPick={(v) => pick('team', v)} choices={teams.map((t) => ({ value: t, label: t, icon: 'people', count: count('team', (it) => it.team === t) }))} />
-      )}
-      <Facet
-        label="Owner"
-        picked={picks.owner ? [picks.owner] : []}
-        onPick={(v) => pick('owner', v)}
-        choices={owners.map(({ o, name }): Choice => ({ value: o, label: name, lead: o === TICO ? <Icon name="gear" /> : <Face id={o} size={16} />, count: count('owner', (it) => ownerKey(it) === o) }))}
-      />
-    </Rail>
+  const built = panel?.startsWith('builtin:') ? panel.slice(8) : '';
+  const view = id ? '' : tab === 'runs' ? 'runs' : tab === 'webhooks' ? 'webhooks' : 'all';
+  // on a phone the sidebar shows first; anything picked shows alone, with a way back
+  const open = !!id || (phone ? !!tab : false) || !!panel;
+  const filters = [
+    ...(state ? [{ label: STATE_WORDS[state as AutoState], onClear: () => listed({ q }) }] : []),
+    ...(picks.team ? [{ label: picks.team, onClear: () => setPicks({ ...picks, team: '' }) }] : []),
+    ...(picks.owner ? [{ label: nameOf(picks.owner === TICO ? null : picks.owner), onClear: () => setPicks({ ...picks, owner: '' }) }] : []),
+  ];
+  const nav = (key: 'all' | 'runs' | 'webhooks', label: string, icon: 'list' | 'clock' | 'link', n?: number) => (
+    <Row key={key} className="tl-row au-nav" title={label} href={routinesHref({ ...keep, tab: key })} selected={view === key && !built} target={`tab:${key}`}>
+      <Icon name={icon} />
+      <span className="row-title">{label}</span>
+      <span className="row-age">{n ?? ''}</span>
+    </Row>
   );
-
-  const span = 4 + +has.next + +has.trend + +has.runs + +has.failed + +has.cost;
-  const fold = (k: string) => setClosed((c) => (c.includes(k) ? c.filter((x) => x !== k) : [...c, k]));
-  const emptyWords = items.length ? 'No automations match these filters' : 'No automations';
-  const table = phone ? (
-    <PhoneRows groups={groups} grouped={group !== 'none'} closed={closed} onFold={fold} statOf={statOf} range={range} empty={emptyWords} />
-  ) : (
-    <Table label="Automations" stick>
-      <thead>
-        <tr>
-          <th scope="col" className="au-c-name">
-            Name
-          </th>
-          <th scope="col" className="au-c-trig">
-            Trigger
-          </th>
-          <Th>Owner</Th>
-          <Th>Last run</Th>
-          {has.next && (
-            <th scope="col" className="au-c-next">
-              Next
-            </th>
-          )}
-          {has.trend && <th scope="col" className="au-c-trend">{`Last ${range}`}</th>}
-          {has.runs && <Th num>Runs</Th>}
-          {has.failed && <Th num>Failed</Th>}
-          {has.cost && (
-            <th scope="col" className="num au-c-cost">
-              Cost
-            </th>
-          )}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.length ? (
-          groups.map((g) => (
-            <GroupRows key={g.key} grouped={group !== 'none'} label={g.label} open={!closed.includes(g.key)} onFold={() => fold(g.key)} span={span} count={g.rows.length}>
-              {g.rows.map((it) => (
-                <ItemRow key={it.id} it={it} s={statOf(it)} has={has} range={range} selected={built !== null && it.builtin === built} />
-              ))}
-            </GroupRows>
-          ))
-        ) : (
-          <EmptyRow span={span}>{emptyWords}</EmptyRow>
-        )}
-      </tbody>
-    </Table>
+  const row = (it: Item) => (
+    <Row
+      key={it.id}
+      className={it.state === 'off' ? 'tl-row au-srow is-off' : 'tl-row au-srow'}
+      title={it.name}
+      href={it.builtin ? routinesHref({ ...keep, panel: `builtin:${it.builtin}` }) : `${it.href}${q || state || search.range ? `?${new URLSearchParams(Object.entries(keep).filter((e): e is [string, string] => !!e[1])).toString()}` : ''}`}
+      selected={it.id === id || (!!it.builtin && it.builtin === built)}
+      target={`routine:${it.id}`}
+    >
+      <Icon name={KIND_ICONS[it.kind] ?? 'spark'} />
+      <span className="row-title">{it.name}</span>
+      <span className="au-srow-mark">
+        {it.failed ? (
+          <span title="Last run failed">
+            <Icon name="alert" />
+          </span>
+        ) : it.hold ? (
+          <span title="On hold">
+            <Icon name="pause" />
+          </span>
+        ) : it.state === 'off' ? (
+          <span title="Off">
+            <Icon name="minus" />
+          </span>
+        ) : it.builtin ? (
+          <span title="Built in">
+            <Icon name="lock" />
+          </span>
+        ) : null}
+      </span>
+      {it.at ? <Ago at={it.at} className="row-age" /> : <span className="row-age" />}
+    </Row>
   );
-
+  const choose = (label: string, values: { value: string; label: string; n: number }[], on: string, pick: (v: string) => void) =>
+    values.length > 0 && (
+      <MenuSub label={label}>
+        <MenuItem label="All" on={!on} onSelect={() => pick('')} />
+        {values.map((v) => (
+          <MenuItem key={v.value} label={v.label} meta={String(v.n)} on={v.value === on} onSelect={() => pick(v.value === on ? '' : v.value)} />
+        ))}
+      </MenuSub>
+    );
   return (
-    <List
-      {...automationsHead(search.range)}
-      search={!none && <Find label="Search automations" value={q} onFind={(words) => listed({ q: words, state })} />}
+    <ListAndItem
+      title="Automations"
+      path={ROUTINES}
+      className={editing ? 'rr au has-panel' : 'rr au'}
+      listLabel="Automations"
+      itemLabel="Automation"
+      open={open}
       actions={
         <>
-          {!phone && <Segmented label="Time range" options={RANGES.map((r) => ({ value: r, label: r }))} value={range} onValueChange={setRange} />}
-          <IconButton icon="filter" label="Filters" on={(filters && !panel) || on > 0} onClick={() => setFilters(!filters || !!panel)} data-phone />
-          <PageOwner page="automations" />
-          <Menu trigger={<Button variant="primary">{phone ? 'Add' : 'Add automation'}</Button>}>
+          <Menu trigger={<IconButton icon="filter" label="Filter automations" on={filters.length > 0} data-phone />}>
+            {choose(
+              'Status',
+              (Object.keys(STATE_WORDS) as AutoState[]).map((k) => ({ value: k, label: STATE_WORDS[k], n: count('state', (it) => it.state === k) })),
+              state ?? '',
+              (v) => listed({ q, state: (v || undefined) as RoutineState | undefined }),
+            )}
+            {choose(
+              'Team',
+              teams.map((t) => ({ value: t, label: t, n: count('team', (it) => it.team === t) })),
+              picks.team,
+              (v) => setPicks({ ...picks, team: v }),
+            )}
+            {choose(
+              'Owner',
+              owners.map(({ o, name }) => ({ value: o, label: name, n: count('owner', (it) => ownerKey(it) === o) })),
+              picks.owner,
+              (v) => setPicks({ ...picks, owner: v }),
+            )}
+          </Menu>
+          <Menu
+            trigger={
+              phone ? (
+                <Button variant="primary" aria-label="Add automation" data-phone>
+                  Add
+                </Button>
+              ) : (
+                <IconButton icon="plus" label="Add automation" />
+              )
+            }
+          >
             {WHEN.map(([k, l]) => (
               <MenuItem key={k} label={l} icon={KIND_ICONS[k]} onSelect={() => void press('automations.start', { when: k })} />
             ))}
@@ -342,28 +373,147 @@ function AutomationsTab({ search }: { search: RoutinesSearch }) {
       }
       more={
         <PageMore>
-          <ListChoices group={group} sort={sort} range={range} phone={phone} onGroup={(g) => (setGroup(g), setClosed([]))} onSort={setSort} onRange={setRange} />
+          <ListChoices group={group} sort={sort} range={range} phone={phone} onGroup={setGroup} onSort={setSort} onRange={(r) => void press('automations.list', { q, state, range: r })} />
         </PageMore>
       }
-      sections={
-        <div className="au-split">
-          {rail}
-          <div className="au-main">
-            {table}
-            {stats.isError && <p className="au-note">{"Counts didn't load"}</p>}
+      search={
+        <>
+          {!none && <Find label="Search automations" value={q} onFind={(words) => listed({ q: words, state })} wide />}
+          <FilterRow filters={filters} />
+        </>
+      }
+      list={
+        <div className="au-side">
+          <div className="au-navs" role="group" aria-label="Views">
+            {nav('all', 'All automations', 'list', items.length)}
+            {nav('runs', 'Runs', 'clock')}
+            {nav('webhooks', 'Webhooks', 'link')}
           </div>
+          {groups.length ? (
+            groups.map((g) =>
+              grouped ? (
+                <Section key={g.key} name={g.label} count={g.rows.length} open={!closed.includes(g.key)} onOpenChange={() => fold(g.key)} target={`section:${g.key}`}>
+                  {g.rows.map(row)}
+                </Section>
+              ) : (
+                g.rows.map(row)
+              ),
+            )
+          ) : (
+            <Empty title={items.length ? 'Nothing matches' : 'No automations yet'} />
+          )}
         </div>
       }
-      panel={panel === 'routine:new' ? <RoutinePanel id="new" onClose={close} /> : built ? <BuiltinPanel which={built} onClose={close} /> : null}
+      conversation={children}
     />
   );
 }
 
-/** Tico's own jobs have no owner in the list: they are Tico's. */
-const TICO = 'tico';
-const ownerKey = (it: Item) => it.owner ?? TICO;
+// ---------------------------------------------------------------- the content when none is open
 
-const STATE_ICON: Record<AutoState, 'check' | 'alert' | 'pause' | 'minus'> = { on: 'check', failed: 'alert', hold: 'pause', off: 'minus' };
+export function RoutinesPage({ search }: { search: RoutinesSearch }) {
+  if (search.tab === 'runs') return <RunsTab search={search} />;
+  if (search.tab === 'webhooks') return <WebhooksTab panel={search.panel} />;
+  return <AllTab search={search} />;
+}
+export { RoutinesPage as AutomationsPage };
+
+/** All: every automation the filters leave, in the dense table with its counts over the range. */
+function AllTab({ search }: { search: RoutinesSearch }) {
+  const { panel } = search;
+  const range = rangeOf(search);
+  const phone = useCards();
+  const stats = useQuery(statsQuery(range));
+  const { closed, fold } = useShell();
+  const per = new Map<string, Stat>((stats.data?.automations ?? []).map((s) => [s.id, s]));
+  const statOf = (it: Item): Stat => per.get(it.builtin ? BUILTIN_STATS[it.builtin] : it.id) ?? NO_STAT;
+  const { items, rows, groups, grouped } = useShown(search, statOf);
+  const built = panel?.startsWith('builtin:') ? (BUILTINS.find((b) => `builtin:${b}` === panel) ?? null) : null;
+  const setRange = (r: Range) => void press('automations.list', { q: search.q, state: search.state, range: r });
+
+  // a column empty for every automation over the range leaves (decided from the whole list, so typing never moves one)
+  const has = {
+    next: items.some((it) => it.next),
+    trend: items.some((it) => statOf(it).runs > 0),
+    runs: items.some((it) => statOf(it).runs > 0),
+    failed: items.some((it) => statOf(it).failed > 0),
+    cost: items.some((it) => statOf(it).cost >= 0.005),
+  };
+  const span = 4 + +has.next + +has.trend + +has.runs + +has.failed + +has.cost;
+  const emptyWords = items.length ? 'No automations match these filters' : 'No automations';
+  return (
+    <>
+      <ItemHead
+        title="All automations"
+        target="tab:all"
+        back={{ to: ROUTINES, label: 'Automations' }}
+        actions={
+          <>
+            <RangePick range={range} onPick={setRange} />
+            <PageOwner page="automations" />
+          </>
+        }
+      />
+      <div className="conv-body au-body" data-scroll>
+        {phone ? (
+          <PhoneRows groups={groups} grouped={grouped} closed={closed} onFold={fold} statOf={statOf} range={range} empty={emptyWords} />
+        ) : (
+          <Table label="Automations" stick>
+            <thead>
+              <tr>
+                <th scope="col" className="au-c-name">
+                  Name
+                </th>
+                <th scope="col" className="au-c-trig">
+                  Trigger
+                </th>
+                <Th>Owner</Th>
+                <Th>Last run</Th>
+                {has.next && (
+                  <th scope="col" className="au-c-next">
+                    Next
+                  </th>
+                )}
+                {has.trend && <th scope="col" className="au-c-trend">{`Last ${range}`}</th>}
+                {has.runs && <Th num>Runs</Th>}
+                {has.failed && <Th num>Failed</Th>}
+                {has.cost && (
+                  <th scope="col" className="num au-c-cost">
+                    Cost
+                  </th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length ? (
+                groups.map((g) => (
+                  <GroupRows key={g.key} grouped={grouped} label={g.label} open={!closed.includes(g.key)} onFold={() => fold(g.key)} span={span} count={g.rows.length}>
+                    {g.rows.map((it) => (
+                      <ItemRow key={it.id} it={it} s={statOf(it)} has={has} range={range} selected={built !== null && it.builtin === built} />
+                    ))}
+                  </GroupRows>
+                ))
+              ) : (
+                <EmptyRow span={span}>{emptyWords}</EmptyRow>
+              )}
+            </tbody>
+          </Table>
+        )}
+        {stats.isError && <p className="au-note">{"Counts didn't load"}</p>}
+      </div>
+      {panel === 'routine:new' ? (
+        <PanelSlot>
+          <RoutinePanel id="new" onClose={close} />
+        </PanelSlot>
+      ) : built ? (
+        <PanelSlot>
+          <BuiltinPanel which={built} onClose={close} />
+        </PanelSlot>
+      ) : null}
+    </>
+  );
+}
+
 
 function GroupRows({ grouped, label, open, onFold, span, count, children }: {
   grouped: boolean;
@@ -508,25 +658,22 @@ function WebhooksTab({ panel }: { panel?: string }) {
     </Button>
   );
   return (
-    <List
-      {...automationsHead()}
-      state={list.length ? 'ready' : 'empty'}
-      empty={{ title: 'No webhooks yet', action: add }}
-      actions={
-        <>
-          {list.length > 0 && add}
-          {adding && <HookDialog onMade={setMade} onClose={() => setAdding(false)} />}
-        </>
-      }
-      sections={
-        <Section name="Incoming" count={list.length} target="section:incoming">
-          {list.map((h) => (
-            <HookRow key={h.id} h={h} selected={h.id === open} />
-          ))}
-        </Section>
-      }
-      panel={
-        open && (
+    <>
+      <ItemHead title="Webhooks" target="tab:webhooks" back={{ to: ROUTINES, label: 'Automations' }} actions={list.length > 0 && add} />
+      <div className="conv-body au-body" data-scroll>
+        {list.length ? (
+          <Section name="Incoming" count={list.length} target="section:incoming">
+            {list.map((h) => (
+              <HookRow key={h.id} h={h} selected={h.id === open} />
+            ))}
+          </Section>
+        ) : (
+          <Empty title="No webhooks yet">{add}</Empty>
+        )}
+      </div>
+      {adding && <HookDialog onMade={setMade} onClose={() => setAdding(false)} />}
+      {open && (
+        <PanelSlot>
           <WebhookPanel
             key={open}
             id={open}
@@ -538,9 +685,9 @@ function WebhooksTab({ panel }: { panel?: string }) {
               close();
             }}
           />
-        )
-      }
-    />
+        </PanelSlot>
+      )}
+    </>
   );
 }
 
