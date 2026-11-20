@@ -1,19 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { stamp } from '@/conversation';
 import { FileFrame, fileSize } from '@/features/library/exports';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { PageBones } from './FileView';
-import { tabAddress } from './model';
 import { Go } from './parts';
-import { addressesOf, answeredQuery, emailFileUrl, emailSendQuery, taskDetailQuery, type EmailFile, type Letter, type MailSend, type TaskData } from './queries';
+import { addressesOf, answeredQuery, emailFileUrl, emailSendQuery, type EmailFile, type Letter, type MailSend, type TaskData } from './queries';
+import { useMatterOf } from './Waiting';
 import { isWord, WordPages, WordSheet } from './Word';
 
 /* An email the task asks about, exactly as it will go (plan/approvals.html, "Email"): the envelope in Tico's look (its
-   subject, From, To, Cc and its files as cards), then the message on paper, the letter it carries under it, and the
-   email it answers. A file opens in this same sheet in its place, and the address keeps which (`part`); a Word file
+   subject, From, To, Cc, the email it answers and its files as cards), then the message on paper and the letter it
+   carries under it. A file opens in this same sheet in its place, and the address keeps which (`part`); a Word file
    is drawn as its pages, with Download beside it. */
 
 /** "DOCX", "PDF": the type badge on a file's card. */
@@ -22,7 +22,7 @@ const extOf = (name: string) => /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCa
 /** A file read as a document (a letter): a PDF, a Word file or a web page. */
 const isDoc = (f: EmailFile) => isWord(f.name, f.type) || /^(application\/pdf|text\/html)\b/i.test(f.type ?? '') || /\.(pdf|html?)$/i.test(f.name);
 
-export function Email({ task, send, part, at }: { task: string; send: string; part?: number; at: { to: string; search: { tab?: string } } }) {
+export function Email({ task, send, part, at, lead }: { task: string; send: string; part?: number; at: { to: string; search: { tab?: string } }; lead?: ReactNode }) {
   const q = useQuery(emailSendQuery(task, send));
   if (q.isError || q.data?.preview_complete === false)
     return (
@@ -62,6 +62,8 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
   const letter = files.find(isDoc);
   return (
     <div className="ap-scroll">
+      {/* What is read before the email: the case in brief, and the decision when it is shown on the matter. */}
+      {lead}
       <div className="ap-env">
         <h2 className="ap-subj">{s.subject}</h2>
         <dl className="ap-hdr">
@@ -85,6 +87,7 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
               <dd>{who.bcc.join(', ')}</dd>
             </>
           )}
+          <Answered task={task} send={s} />
         </dl>
         {files.length > 0 && (
           <div className="ap-atts">
@@ -109,7 +112,6 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
           {body}
         </article>
         {letter && <LetterInline send={send} f={letter} />}
-        <Answered task={task} send={s} />
       </div>
     </div>
   );
@@ -129,8 +131,9 @@ function LetterInline({ send, f }: { send: string; f: EmailFile }) {
 /** "Dana Ruiz <dana@…>" → "Dana Ruiz"; a bare address stays. */
 const senderOf = (l: Letter) => /^"?([^"<]+?)"?\s*</.exec((l.from_header ?? '').trim())?.[1]?.trim() || l.from_addr || l.from_header || '';
 
-/** The email this one answers, under it: who wrote it and when, its first lines, the whole of it on a press. Not read,
-    or not readable here (no mail connection, no read of that mailbox), it is not shown. */
+/** The email this one answers, a row of the envelope: who wrote it and when, its first line, the whole of it on a
+    press. Not read, or not readable here (no mail connection, no read of that mailbox), the row is not shown: the send
+    itself does not carry who wrote the original. */
 function Answered({ task, send }: { task: string; send: MailSend }) {
   const q = useQuery(answeredQuery(task, send.id, send.mailbox, send.reply_to_id ?? ''));
   const [open, setOpen] = useState(false);
@@ -138,35 +141,30 @@ function Answered({ task, send }: { task: string; send: MailSend }) {
   const text = (l?.body || l?.snippet || '').trim();
   if (!l || !text) return null;
   const at = l.epoch ? new Date(l.epoch * 1000) : l.date;
+  const when = stamp(at);
   return (
-    <section className={open ? 'ap-paper ap-orig is-open' : 'ap-paper ap-orig'} aria-label="In reply to">
-      <button type="button" className="ap-orig-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <small>In reply to</small>
-        <b>{senderOf(l)}</b>
-        <time>{stamp(at)}</time>
-        <Icon name="chevron" />
-      </button>
-      <div className="ap-orig-body">{text}</div>
-    </section>
+    <div className={open ? 'ap-orig is-open' : 'ap-orig'} role="region" aria-label="In reply to">
+      <dt>In reply to</dt>
+      <dd>
+        <button type="button" className="ap-orig-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <b>{[senderOf(l), when].filter(Boolean).join(', ')}</b>
+          <Icon name="chevron" />
+        </button>
+        <div className="ap-orig-body">{text}</div>
+      </dd>
+    </div>
   );
 }
 
-/** Where an email's send came from, when that is another task than the one open (its `task_id`: the matter the agent
-    worked on when it queued the email): one quiet link to it in the head's line. */
+/** The matter an email's OK came from (`useMatterOf`): one quiet link to it in the head's line, never to another OK. */
 export function EmailSource({ t, send }: { t: TaskData; send: string }) {
-  const mail = useQuery(emailSendQuery(t.id, send));
-  const id = mail.data?.send.task_id;
-  const other = id && id !== t.id ? id : undefined;
-  const parent = other && t.parent?.id === other ? t.parent : null;
-  const src = useQuery({ ...taskDetailQuery(other), enabled: !!other && !parent, retry: false });
-  const title = parent?.title ?? src.data?.title;
-  if (!other || !title) return null;
-  const to = src.data?.id === other ? tabAddress(src.data, undefined, false).to : `/task/${encodeURIComponent(other)}`;
+  const matter = useMatterOf(t, send);
+  if (!matter) return null;
   return (
     <>
       {' · '}
-      <Go to={to} className="tv-from">
-        From {title}
+      <Go to={matter.to} className="tv-from">
+        From {matter.title}
       </Go>
     </>
   );

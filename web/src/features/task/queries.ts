@@ -23,6 +23,8 @@ export type TaskData = TaskDetail['task'] & {
   children: TaskChild[];
   can_comment: boolean;
   mover: boolean;
+  /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
+  note?: string | null;
 };
 
 export interface TaskChild {

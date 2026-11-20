@@ -5,6 +5,15 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import type { ChatMessage, ReplyQuote } from './types';
 
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An agent's words for itself when nothing names it: its slug in words ("release-owner" reads "Release owner"); an
+    id is no name ("Agent"). */
+export const agentWords = (actor: string): string => {
+  const rest = actor.replace(/^bot:/, '');
+  return ID.test(rest) ? 'Agent' : rest.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+};
+
 const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([id, a]) => [id, { name: a.name }]));
 
 /** Names from the directory the app already holds; nothing is fetched for a quote. Redraws when a name changes,
@@ -15,7 +24,7 @@ function useNames(): Record<string, { name: string }> {
 }
 
 const nameOf = (names: Record<string, { name: string }>, actor: string, me: string | undefined) =>
-  actor === me ? 'You' : (names[actor]?.name ?? actor.replace(/^(human|bot):/, ''));
+  actor === me ? 'You' : (names[actor]?.name ?? (actor.startsWith('human:') ? 'Teammate' : agentWords(actor)));
 
 /** A message's start in plain words, as a quote shows it. */
 export function excerpt(text: string | null | undefined): string {

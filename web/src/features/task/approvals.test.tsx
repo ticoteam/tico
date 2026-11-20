@@ -406,14 +406,16 @@ describe('what the person needs beside the email', () => {
     expect(await screen.findByText('letter.docx did not load')).toBeTruthy();
   });
 
-  it('shows the email it answers under it, a few lines until pressed @approvals', async () => {
+  it('shows the email it answers in the envelope, its first line until pressed @approvals', async () => {
     const original = { msg_id: 'm1', thread_id: 'th1', from_header: 'Dana Ruiz <dana@example.test>', from_addr: 'dana@example.test', epoch: 1763400000, body: 'Dear Legal,\nYour delivery was late.\nI want a refund.\nPlease reply by Friday.' };
     const mailRead = withMail({}, { reply_to_id: 'm1', thread_id: 'th1' });
     reply = (url) => (url.includes('/api/v2/mail/messages/m1?mailbox=legal%40example.test') ? { body: original } : mailRead(url));
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
     const answered = await screen.findByRole('region', { name: 'In reply to' });
+    // in the envelope, under From and To: above the message and its letter, not under them
+    expect(answered.closest('.ap-env')).toBeTruthy();
     const head = within(answered).getByRole('button', { expanded: false });
-    expect(head.textContent).toContain('Dana Ruiz');
+    expect(head.textContent).toContain('Dana Ruiz, ');
     expect(within(answered).getByText(/Your delivery was late/)).toBeTruthy();
     fireEvent.click(head);
     expect(within(answered).getByRole('button', { expanded: true })).toBeTruthy();
@@ -438,6 +440,37 @@ describe('what the person needs beside the email', () => {
     const from = await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' });
     expect(from.getAttribute('href')).toBe('/tasks/p9/40');
     expect(screen.getAllByRole('link', { name: /^From / })).toHaveLength(1);
+  });
+
+  it('names the matter, not an earlier OK, when the email was queued on that OK @approvals', async () => {
+    const earlier = task({ id: 't4', number: 39, title: 'Send: Re: Notice of claim → dana@example.test', status: 'closed', pipeline_id: 'general', to_leave: [] });
+    const mailRead = withMail({}, { task_id: 't4' });
+    reply = (url) =>
+      url.endsWith('/api/v2/tasks/t4')
+        ? { body: { task: earlier, runs: [], children: [], parent: { id: 't5', title: 'Late-delivery claim: Dana Ruiz', label: null, step: null } } }
+        : mailRead(url);
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const from = await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' });
+    expect(from.getAttribute('href')).toBe('/task/t5');
+    expect(screen.queryByRole('link', { name: /^From Send/ })).toBeNull();
+  });
+
+  it('names the matter that waits on the OK when the send names none @approvals', async () => {
+    shown = task({ relations: { depends_on: [{ id: 't5', title: 'Late-delivery claim: Dana Ruiz', status: 'open', owner_id: 'bot:lo', direction: 'in' }] } } as Partial<TaskData>);
+    const earlier = task({ id: 't4', title: 'Send an email', status: 'closed', to_leave: [] });
+    const mailRead = withMail({}, { task_id: 't4' });
+    reply = (url) => (url.endsWith('/api/v2/tasks/t4') ? { body: { task: earlier, runs: [], children: [] } } : mailRead(url));
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    expect((await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' })).getAttribute('href')).toBe('/task/t5');
+  });
+
+  it('names no source when the only one is another OK @approvals', async () => {
+    const earlier = task({ id: 't4', title: 'Send: Re: Notice of claim → dana@example.test', status: 'closed', to_leave: [] });
+    const mailRead = withMail({}, { task_id: 't4' });
+    reply = (url) => (url.endsWith('/api/v2/tasks/t4') ? { body: { task: earlier, runs: [], children: [] } } : mailRead(url));
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    await within(await decision()).findByText('Email to Dana Ruiz');
+    await waitFor(() => expect(screen.queryByRole('link', { name: /^From / })).toBeNull());
   });
 
   it('names no source when the email was queued on the task that is open @approvals', async () => {
@@ -466,5 +499,86 @@ describe('on a phone, the decision holds the bottom', () => {
     expect(within(chat).getByRole('region', { name: 'The decision' })).toBeTruthy();
     // one box: the page's own dock steps aside on the Chat tab
     expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+  });
+});
+
+describe('the matter shows the email that waits on the person', () => {
+  const matter = (more: Partial<TaskData> = {}) =>
+    task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [], ...more });
+  const sub = task({ id: 't1', number: 12, title: 'Send: Re: Notice of claim → dana@example.test', pipeline_id: 'general' });
+  const serve = (m: TaskData, children: unknown[], state = 'waiting_approval') => {
+    reply = (url) => {
+      if (url.includes('/api/v2/tasks/%2340') || url.endsWith('/api/v2/tasks/t5')) return { body: { task: m, runs: [], children, can_comment: true, mover: true } };
+      if (url.endsWith('/api/v2/tasks/t1')) return { body: { task: sub, runs: [], children: [], parent: { id: 't5', title: m.title, label: null, step: null } } };
+      if (url.endsWith('/api/v2/email/sends/s1')) return { body: { ...mail, send: { ...mail.send, state } } };
+      return null;
+    };
+  };
+
+  it('opens on the email: its brief, then the decision of its "Send:" sub-task, then the email, Approve bound to what was shown @approvals', async () => {
+    serve(matter({ note: 'Dana Ruiz wants a refund for a late delivery.' } as Partial<TaskData>), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }]);
+    const router = show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    const brief = await screen.findByRole('region', { name: 'Brief' });
+    const box = await decision();
+    const env = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    // the brief reads first, the decision right under it, the email after
+    expect(brief.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box.compareDocumentPosition(env) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(brief).getByText('Dana Ruiz wants a refund for a late delivery.')).toBeTruthy();
+    expect(within(box).getByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(within(box).getByText('Sends now')).toBeTruthy();
+    fireEvent.click(await ready(box));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-mail' } }));
+  });
+
+  it('on its other pages the decision sits at the top, its name opening the email @approvals', async () => {
+    serve(matter({ relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as Partial<TaskData>), []);
+    show(<TaskPage task="40" pipeline="p9" tab="details" />, '/tasks/p9/40/details');
+    const box = await decision();
+    expect(box.closest('.tv-waits')).toBeTruthy();
+    expect((await within(box).findByRole('link', { name: 'Email to Dana Ruiz' })).getAttribute('href')).toBe('/tasks/general/12');
+  });
+
+  it('shows nothing once the email is no longer to go out, or with no OK hung on it @approvals', async () => {
+    serve(matter(), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }], 'canceled');
+    show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
+    await waitFor(() => expect(queryClient.getQueryData([...keys.tasks.detail('t1'), 'email', 's1'])).toBeTruthy());
+    await act(async () => {});
+    expect(document.querySelector('.tv-waits')).toBeNull();
+    expect(sent).toEqual([]);
+  });
+});
+
+describe('an email’s OK reads with the matter it answers', () => {
+  it('names the matter and its brief above the email @approvals', async () => {
+    shown = task({ title: 'Send: Re: Notice of claim → dana@example.test' });
+    const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [], note: 'Dana Ruiz wants a refund.' } as Partial<TaskData>);
+    reply = (url) => {
+      if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1'))
+        return { body: { task: shown, runs: [], children: [], parent: { id: 't5', title: matter.title, label: null, step: null } } };
+      if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
+      return null;
+    };
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const brief = await screen.findByRole('region', { name: 'Brief' });
+    expect(within(brief).getByRole('link', { name: 'Late-delivery claim: Dana Ruiz' }).getAttribute('href')).toBe('/tasks/p9/40');
+    expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();
+    const body = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    expect(brief.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows nothing more when the matter has no note @approvals', async () => {
+    const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [] });
+    reply = (url) => {
+      if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1'))
+        return { body: { task: shown, runs: [], children: [], parent: { id: 't5', title: matter.title, label: null, step: null } } };
+      if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
+      return null;
+    };
+    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    await screen.findByText('Dear Ms. Ruiz, our response is attached.');
+    await waitFor(() => expect(queryClient.getQueryData(keys.tasks.detail('t5'))).toBeTruthy());
+    expect(screen.queryByRole('region', { name: 'Brief' })).toBeNull();
   });
 });

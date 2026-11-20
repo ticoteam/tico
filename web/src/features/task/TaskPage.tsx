@@ -21,11 +21,13 @@ import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
+import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, personOf, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { PageView, useVersions, VersionBar } from './Versions';
+import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
+import { waitSlugs } from './waits';
 import './task.css';
 
 export interface TaskPageProps {
@@ -80,6 +82,21 @@ export function TaskPage({ task, pipeline, tab, file, flow = false }: TaskPagePr
   return <TaskView key={t.id} t={t} tab={tab} file={file} flow={flow} />;
 }
 
+/** A tab of the open task, or an email's OK hung on it (`wait`, its OK task). */
+type Tab = TaskTab & { wait?: TaskData };
+
+/** One tab per email's OK that waits on the person, first and marked (one the person asked changes on is not marked): "Email", or "Email to <who>" when there are two. */
+function waitTabs(items: Waiting[], own: TaskTab[]): Tab[] {
+  const mails = items.flatMap((x) => (x.send ? [{ ...x, send: x.send }] : []));
+  const slugs = waitSlugs(mails.length, own.map((x) => x.slug));
+  return mails.map(({ sub, send }, i) => {
+    const to = sendTitle(sub.title)?.to;
+    // Changes asked: the tab stays, not marked as waiting on the person.
+    const mark = decisionOf(sub) ? ('ask' as const) : ('none' as const);
+    return { slug: slugs[i]!, label: mails.length > 1 && to ? `Email to ${personOf(to)}` : 'Email', mark, email: send, wait: sub };
+  });
+}
+
 /** A tab's mark (parts-kit.js tab): approved, waits on you, not yet. */
 function markOf(x: TaskTab) {
   if (x.mark === 'ok') return <Icon name="check" label="Approved" />;
@@ -91,14 +108,17 @@ function markOf(x: TaskTab) {
 function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
   const navigate = useNavigate();
   const files = useQuery(taskFilesQuery(t.id));
-  const tabs = tabsOf(t, files.data);
+  // An email's OK filed as its own task (a "Send:" sub-task) that waits on the person: the matter opens on it.
+  const waiting = useWaiting(t);
+  const own = tabsOf(t, files.data);
+  const tabs: Tab[] = [...waitTabs(waiting.items, own), ...own];
   const known = tab !== undefined && tabs.some((x) => x.slug === tab);
-  const unresolved = !!tab && !known && !files.isSuccess;
+  const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  if (first === null && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
+  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
   const opened = first ?? defaultTab(tabs);
   const on = known ? tab : opened;
   useEffect(() => {
@@ -161,8 +181,21 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       <PageView task={t.id} vs={versions} at={at} />
     ) : current?.file ? (
       <FileTab task={t.id} f={current.file} />
+    ) : current?.wait && current.email ? (
+      <EmailView
+        task={current.wait.id}
+        send={current.email}
+        part={search.part}
+        at={address}
+        lead={
+          <div className="tv-lead">
+            <Brief note={t.note} />
+            <Decision t={current.wait} flow={false} />
+          </div>
+        }
+      />
     ) : current?.email ? (
-      <EmailView task={t.id} send={current.email} part={search.part} at={address} />
+      <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet && <MatterBrief t={t} send={current.email} />} />
     ) : current?.chat && t.conversation_id ? (
       // A phone's Chat tab: the decision sits over its message box, and stands in for it while changes are asked.
       <Conversation
@@ -199,6 +232,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       framed
       body={
         <div className="tv-view">
+          {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
+          {!quiet && !current?.wait && <WaitingOnYou items={waiting.items} />}
           {body}
           {!current?.chat && <Decision t={t} flow={flow} dock />}
         </div>

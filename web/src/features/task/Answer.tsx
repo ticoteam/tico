@@ -9,7 +9,7 @@ import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
 import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
-import { Face } from './parts';
+import { Face, Go } from './parts';
 import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
@@ -24,12 +24,14 @@ export interface DecisionProps {
   dock?: boolean;
   /** Told while "What should change?" is open: the chat's own message box steps aside, so there is one place to type. */
   onAsking?: (asking: boolean) => void;
+  /** Shown away from the thing it decides (a matter's page): its name opens the thing. */
+  open?: string;
 }
 
 /** The decision while something waits on the person, or "Changes asked" once they asked for changes. An answer is shown
     first, which takes the request away; the box is held through the send, and after a refusal until the task's truth
     is back, so it can still say why. */
-export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
+export function Decision({ t, flow, dock = false, onAsking, open }: DecisionProps) {
   const me = useQuery(meQuery).data?.id;
   const [held, setHeld] = useState<{ r: TaskRequirement; sending: boolean } | null>(null);
   const live = decisionOf(t);
@@ -39,9 +41,9 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
   const asked = r ? null : changesAskedOf(t, me);
   if (!r && !asked) return null;
   const box = r ? (
-    <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
+    <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} open={open} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (
-    <Asked t={t} r={asked as TaskRequirement} />
+    <Asked t={t} r={asked as TaskRequirement} open={open} />
   );
   return dock ? (
     <div className="dock" data-dock>
@@ -75,10 +77,22 @@ interface AnswerProps {
   onAsking?: (asking: boolean) => void;
   /** Told which requirement is being answered (`sending` while it is sent), and null once the answer is taken. */
   hold?: (r: TaskRequirement | null, sending?: boolean) => void;
+  open?: string;
+}
+
+/** The thing's name: a link to it when the box is shown away from it. */
+function Named({ name, open }: { name: string; open?: string }) {
+  return open ? (
+    <Go to={open} className="an-name">
+      {name}
+    </Go>
+  ) : (
+    <b className="an-name">{name}</b>
+  );
 }
 
 /** The decision itself: the thing's name, who asks, what Approve does, then Request changes and Approve. */
-export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
+export function Answer({ t, r, flow, onAsking, hold, open }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
   const navigate = useNavigate();
@@ -158,7 +172,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     <section className={asking ? 'answer dcx is-asking' : 'answer dcx'} aria-label="The decision" data-target={`task-answer:${t.id}`}>
       <div className="dcx-top">
         <FlowMark />
-        <b className="an-name">{name}</b>
+        <Named name={name} open={open} />
         {!fault && (changed || effect) && <span className="dcx-eff">{changed ? 'Changed' : effect}</span>}
         <span className="grow" />
         <Face id={askerOf(t, r)} />
@@ -209,14 +223,14 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
 }
 
 /** Changes asked: the request waits on the agent's new version, and is out of the person's Flow until then. */
-function Asked({ t, r }: { t: TaskData; r: TaskRequirement }) {
+function Asked({ t, r, open }: { t: TaskData; r: TaskRequirement; open?: string }) {
   const { name } = useNamed(t, r);
   const at = clock(r.answer?.at);
   return (
     <section className="answer dcx is-asked" aria-label="The decision" data-target={`task-answer:${t.id}`}>
       <div className="dcx-top">
         <i className="hollow" />
-        <b className="an-name">{name}</b>
+        <Named name={name} open={open} />
         <span className="dcx-eff">{at ? `Changes asked, ${at}` : 'Changes asked'}</span>
         <span className="grow" />
         <Face id={askerOf(t, r)} />
