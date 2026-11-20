@@ -1,11 +1,12 @@
 """Helpers that other tests share, moved out of test_finance_ad_spend.py so they import no test file."""
 
-import io
 import json
-import urllib.error
 import urllib.parse
 from collections.abc import Callable
 from typing import Any
+
+import httpx
+
 from backend.credentials import Vault
 from backend.finance import ad_import as AI
 from backend.finance.store import ads as SA
@@ -16,22 +17,8 @@ from backend.tests.helpers.finance_fixtures import AT, OWNER
 Handler = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
 
 
-class _Response:
-    def __init__(self, status: int, body: Any) -> None:
-        self.status, self._raw = status, json.dumps(body).encode()
-
-    def read(self) -> bytes:
-        return self._raw
-
-    def __enter__(self) -> "_Response":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
-
-
 class FakeNet:
-    """Answers by (method, path prefix); remembers every call. A handler returns (status, JSON body)."""
+    """Answers by (method, URL prefix); remembers every call. A handler returns (status, JSON body)."""
 
     def __init__(self) -> None:
         self.routes: list[tuple[str, str, Handler]] = []
@@ -40,24 +27,23 @@ class FakeNet:
     def on(self, method: str, prefix: str, handler: Handler) -> None:
         self.routes.insert(0, (method, prefix, handler))
 
-    def __call__(self, request: Any, *, timeout: float) -> _Response:
-        method, url = request.get_method(), request.full_url
-        headers = {k.lower(): v for k, v in request.header_items()}
-        self.calls.append((method, url, headers, request.data))
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        method, url = request.method, str(request.url)
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        data = request.content or None
+        self.calls.append((method, url, headers, data))
         for m, prefix, handler in self.routes:
             if m == method and url.startswith(prefix):
-                status, body = handler(method, url, headers, request.data)
-                if status >= 400:
-                    raise urllib.error.HTTPError(url, status, "x", {}, io.BytesIO(json.dumps(body).encode()))  # type: ignore[arg-type]
-                return _Response(status, body)
-        raise urllib.error.HTTPError(url, 404, "x", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
+                status, body = handler(method, url, headers, data)
+                return httpx.Response(status, json=body)
+        return httpx.Response(404, json={})
 
     def urls(self, part: str) -> list[str]:
         return [u for _, u, _, _ in self.calls if part in u]
 
 
-def http(net: FakeNet, slept: list[float] | None = None) -> AI.Http:
-    return AI.Http(opener=net, sleep=(slept.append if slept is not None else (lambda _: None)))
+def http(net: FakeNet) -> AI.Http:
+    return AI.Http(transport=httpx.MockTransport(net))
 
 
 def key(

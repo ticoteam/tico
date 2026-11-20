@@ -252,10 +252,18 @@ soupsieve==4.1.2
     # via
     #   -c requirements.txt
     #   beautifulsoup4
+stamina==26.1.0
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
 starlette==1.10.0
     # via
     #   -c requirements.txt
     #   fastapi
+tenacity==9.2.1
+    # via
+    #   -c requirements.txt
+    #   stamina
 time-machine==2.16.0
     # via -r requirements-dev.in
 types-protobuf==7.35.1.20260906

@@ -121,8 +121,12 @@ slack-sdk==3.47.0
     # via -r requirements.in
 soupsieve==4.1.2
     # via beautifulsoup4
+stamina==26.1.0
+    # via -r requirements.in
 starlette==1.10.0
     # via fastapi
+tenacity==9.2.1
+    # via stamina
 types-protobuf==7.35.1.20260906
     # via livekit
 typing-extensions==4.16.0

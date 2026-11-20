@@ -1,12 +1,13 @@
 """Helpers that other tests share, moved out of test_google_connect.py so they import no test file."""
 
 import base64
-import io
 import json
-import urllib.error
 import urllib.parse
+
+import httpx
 import pytest
-from backend import google_connect, google_tokens
+
+from backend import google_connect, google_tokens, outbound_http
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers, post
@@ -68,12 +69,11 @@ class FakeGoogle:
     def __call__(self, fields, uri=google_connect.TOKEN_URI):
         self.calls.append(dict(fields))
         self.uris.append(uri)
-        if isinstance(self.error, OSError) and not hasattr(self.error, "code"):
-            raise self.error
+        if isinstance(self.error, OSError):  # Google out of reach
+            raise outbound_http.Failed("no answer") from self.error
         if self.error:
-            raise urllib.error.HTTPError(
-                uri, self.status, "Refused", {}, io.BytesIO(json.dumps({"error": self.error}).encode())
-            )
+            refusal = json.dumps({"error": self.error}).encode()
+            raise outbound_http.Failed("refused", outbound_http.Reply(self.status, httpx.Headers(), refusal))
         return dict(
             self.answer
             or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": google_connect.G + "gmail.readonly"}

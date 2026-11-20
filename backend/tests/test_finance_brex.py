@@ -10,13 +10,12 @@ token that is not an admin, a second live card account, a row in another currenc
 probe's budget, a 429 waited out, a redirect never followed, and the connections route. Runs on an in-memory fake of
 Brex's account and transaction reads; nothing is sent anywhere."""
 
-import io
 import json
 import re
-import urllib.error
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 import pytest
 
 from backend.finance import actions as FA
@@ -41,7 +40,6 @@ from backend.tests.helpers.finance_brex import (  # noqa: F401
     LATER,
     ORDERS,
     POSTED_AT_START,
-    _Reply,
     _card_amount,
     _since,
     brex_pass,
@@ -465,44 +463,32 @@ def test_the_same_credential_is_not_connected_twice(books):
     assert done.status != "committed"
 
 
-def test_a_429_is_waited_out_and_retried_and_a_redirect_is_never_followed(monkeypatch):
-    waits: list[float] = []
+def _net(handle: Callable[[httpx.Request], httpx.Response]) -> httpx.MockTransport:
+    return httpx.MockTransport(handle)
+
+
+def test_a_429_is_retried_and_a_redirect_is_never_followed():
     calls: list[str] = []
 
-    def throttled(request: Any, timeout: float) -> _Reply:
-        calls.append(request.full_url)
+    def throttled(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
         if len(calls) == 1:
-            raise urllib.error.HTTPError(request.full_url, 429, "slow down", {"Retry-After": "3"}, io.BytesIO(b""))
-        return _Reply(b'{"items": [{"id": "card_acc_1"}], "next_cursor": null}')
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, content=b'{"items": [{"id": "card_acc_1"}], "next_cursor": null}')
 
-    client = brex.Brex(
-        "tok",
-        base="https://api.brex.com",
-        opener=throttled,  # type: ignore[arg-type]
-        sleep=waits.append,
-    )
-    got = client.card_accounts()
+    got = brex.Brex("tok", base="https://api.brex.com", transport=_net(throttled)).card_accounts()
     assert got.status == 200 and brex.listed(got)[0]["id"] == "card_acc_1"
-    assert waits == [3.0] and len(calls) == 2
+    assert len(calls) == 2
 
     redirects: list[str] = []
 
-    def redirected(request: Any, timeout: float) -> _Reply:
-        redirects.append(request.full_url)
-        raise urllib.error.HTTPError(
-            request.full_url, 302, "found", {"Location": "https://evil.example/x"}, io.BytesIO(b"")
-        )
+    def redirected(request: httpx.Request) -> httpx.Response:
+        redirects.append(str(request.url))
+        return httpx.Response(302, headers={"Location": "https://evil.example/x"})
 
-    client = brex.Brex(
-        "tok",
-        base="https://api.brex.com",
-        opener=redirected,  # type: ignore[arg-type]
-        sleep=waits.append,
-    )
-    got = client.cash_accounts()
+    got = brex.Brex("tok", base="https://api.brex.com", transport=_net(redirected)).cash_accounts()
     assert got.status == 302 and redirects == ["https://api.brex.com/v2/accounts/cash?limit=100"]
     assert "redirect" in brex.error_text(got)
-    assert brex._NoRedirect().redirect_request(None, None, 302, "Found", {}, "https://evil.example/x") is None  # type: ignore[arg-type]
 
 
 def test_the_base_url_is_brex_s_own_unless_a_local_host_is_named(monkeypatch):
@@ -554,21 +540,16 @@ def test_the_connections_route_takes_a_brex_token_through_the_brex_probe(api, mo
 
 
 def test_the_connect_probe_has_a_budget_and_does_not_wait_out_a_long_retry_after():
-    waits: list[float] = []
+    calls: list[str] = []
 
-    def throttled(request: Any, timeout: float) -> _Reply:
-        raise urllib.error.HTTPError(request.full_url, 429, "slow down", {"Retry-After": "25"}, io.BytesIO(b""))
+    def throttled(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(429, headers={"Retry-After": "25"})
 
-    client = brex.Brex(
-        "tok",
-        base="https://api.brex.com",
-        opener=throttled,  # type: ignore[arg-type]
-        sleep=waits.append,
-        budget=brex_sync.PROBE_SECONDS,
-    )
+    client = brex.Brex("tok", base="https://api.brex.com", transport=_net(throttled), budget=brex_sync.PROBE_SECONDS)
     found, why = brex_sync.probe(client)
     assert not found and "Brex said 429" in why
-    assert waits == []
+    assert len(calls) == 1
 
 
 def test_a_card_purchase_posts_to_the_card_liability_and_its_expense_line(books):
@@ -774,21 +755,21 @@ def test_a_book_transfer_with_no_other_side_yet_is_noted_and_waits(books):
 
 
 def test_the_card_accounts_brex_answers_as_a_bare_array_read_as_one_page():
-    def opener(request: Any, timeout: float) -> _Reply:
-        return _Reply(json.dumps([card_account("card_acc_9")]).encode())
+    def bare(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[card_account("card_acc_9")])
 
-    got = brex.Brex("tok", base="https://api.brex.com", opener=opener).card_accounts()  # type: ignore[arg-type]
+    got = brex.Brex("tok", base="https://api.brex.com", transport=_net(bare)).card_accounts()
     assert got.status == 200 and [a["id"] for a in brex.listed(got)] == ["card_acc_9"]
 
 
 def test_posted_at_start_is_sent_with_no_zone():
     seen: list[str] = []
 
-    def opener(request: Any, timeout: float) -> _Reply:
-        seen.append(request.full_url)
-        return _Reply(b'{"items": [], "next_cursor": null}')
+    def empty(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=b'{"items": [], "next_cursor": null}')
 
-    client = brex.Brex("tok", base="https://api.brex.com", opener=opener)  # type: ignore[arg-type]
+    client = brex.Brex("tok", base="https://api.brex.com", transport=_net(empty))
     client.card_transactions(brex_sync._start("2026-01-01"))
     assert "posted_at_start=2026-01-01T00%3A00%3A00" in seen[0] and "Z" not in seen[0].split("posted_at_start=")[1]
 

@@ -9,8 +9,9 @@ import io
 import json
 import threading
 import time
-import urllib.error
 from decimal import Decimal
+
+import httpx
 
 from backend import trigger_presets as P
 from backend.finance import actions as FA
@@ -40,20 +41,16 @@ from backend.tests.helpers.finance_banking import LATER, _arrives, _card_for_eve
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"
 
 
-class _Opener:
-    """urlopen for the adapter: answers (status, body, headers) in order, remembering each request."""
+def _net(*answers):
+    """A transport for the adapter: answers (status, body, headers) in order; the list it returns keeps each request."""
+    seen, queue = [], list(answers)
 
-    def __init__(self, *answers):
-        self.answers, self.seen = list(answers), []
+    def handle(request):
+        seen.append(request)
+        status, body, headers = queue.pop(0)
+        return httpx.Response(status, headers=headers, json=body)
 
-    def __call__(self, request, *, timeout):
-        self.seen.append(request)
-        status, body, headers = self.answers.pop(0)
-        if status >= 400:
-            raise urllib.error.HTTPError(request.full_url, status, "no", headers, io.BytesIO(json.dumps(body).encode()))
-        response = io.BytesIO(json.dumps(body).encode())
-        response.status = status
-        return response
+    return httpx.MockTransport(handle), seen
 
 
 def test_a_debit_card_program_holds_cash_and_a_credit_program_is_a_liability_that_holds_none(books):
@@ -80,23 +77,22 @@ def test_a_debit_card_program_holds_cash_and_a_credit_program_is_a_liability_tha
 
 
 def test_the_adapter_reads_recorded_answers_waits_out_429_and_names_the_ip_allowlist():
-    waits = []
-    opener = _Opener(
+    transport, seen = _net(
         (429, {}, {"Retry-After": "2"}),
         (200, MERCURY["accounts"], {}),
         (200, MERCURY["credit"], {}),
         (200, MERCURY["users"], {}),
         (403, {"message": "ip"}, {}),
     )
-    m = Mercury("tok-acme", opener=opener, sleep=waits.append)
+    m = Mercury("tok-acme", transport=transport)
     found, why = sync.probe(m)
-    assert not why and waits == [2.0]
+    assert not why and seen[0].url == seen[1].url  # the 429 was tried again
     assert [a["id"] for a in found["accounts"]] == ["acct-chk", "acct-sav"]  # the external account is not ours
     assert found["accounts"][0]["last4"] == "2222" and found["accounts"][0]["current"] == 12_525_050
     assert "000011112222" not in json.dumps(found)  # never the full number
     assert found["credit"][0]["current"] == -125_025
-    assert all(r.full_url.startswith("https://api.mercury.com/") for r in opener.seen)
-    assert opener.seen[0].get_header("Authorization") == "Bearer tok-acme"
+    assert all(str(r.url).startswith("https://api.mercury.com/") for r in seen)
+    assert seen[0].headers["Authorization"] == "Bearer tok-acme"
     refused = m.card_state("card-eve", "freeze")
     assert refused.refused_write and error_text(refused, write=True) == IP_HINT
 
@@ -1297,9 +1293,8 @@ def test_card_use_follows_the_ledger_across_open_months_and_a_reopened_month(boo
         assert remaining(c, "2026-11-20T12:00:00.000000Z") == (0, 20_000, 80_000)
 
 
-def test_the_client_calls_real_urlopen_over_http_with_the_timeout_by_keyword_and_amounts_as_numbers():
-    """Regression: urlopen's 2nd positional arg is data, so a positional timeout broke every real Mercury call, and
-    Decimal amounts went out as strings. Runs the default opener against a local HTTP server, no fake opener."""
+def test_the_client_calls_over_real_http_with_amounts_as_numbers():
+    """Regression: Decimal amounts went out as strings. Runs the real client against a local HTTP server, no fake."""
     seen = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -1361,9 +1356,9 @@ def test_a_response_cut_short_and_an_amount_too_big_to_send_exactly_answer_unrea
         server.server_close()
     sent = []
     assert (
-        Mercury("tok", opener=lambda r, *, timeout: sent.append(r)).request_send_money(
-            "acct", {"amount": Decimal("1e13")}
-        )
+        Mercury(
+            "tok", transport=httpx.MockTransport(lambda r: sent.append(r) or httpx.Response(200))
+        ).request_send_money("acct", {"amount": Decimal("1e13")})
         == Answer(None, {})
         and not sent
     )

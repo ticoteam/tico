@@ -284,9 +284,9 @@ def test_meta_rate_limits_back_off_then_go_on(books: Store):
         return real(m, url, h, b)
 
     net.on("GET", AI.GRAPH + "/act_", busy)
-    slept: list[float] = []
-    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net, slept)).status == "ok"
-    assert len(slept) == 2 and spends(books)[("111", "2026-10-10", "c1")] == 100
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
+    asked = [u for _, u, _, _ in net.calls if u.startswith(AI.GRAPH + "/act_")]
+    assert asked[0] == asked[1] == asked[2] and spends(books)[("111", "2026-10-10", "c1")] == 100  # two retries
 
 
 def test_a_next_page_on_another_host_is_not_followed(books: Store):
@@ -304,6 +304,21 @@ def test_a_next_page_on_another_host_is_not_followed(books: Store):
     )
     assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
     assert not net.urls("evil.example")
+
+
+def test_a_next_page_on_graph_is_followed_without_the_token_its_link_carries(books: Store):
+    iid, net, _ = meta(books)
+    pages = [
+        {
+            "data": [{"account_id": "111", "name": "A", "currency": "USD"}],
+            "paging": {"next": AI.GRAPH + "/me/adaccounts?access_token=EAA-secret&after=x"},
+        }
+    ]
+    net.on("GET", AI.GRAPH + "/me/adaccounts", lambda *_: (200, pages.pop(0) if pages else {"data": []}))
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
+    followed = [(u, h) for _, u, h, _ in net.calls if "after=x" in u]
+    assert followed and all(h["authorization"].startswith("Bearer ") for _, h in followed)
+    assert not net.urls("EAA-secret")
 
 
 # ------------------------------------------------------------------------------------------------ Google Ads

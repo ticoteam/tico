@@ -21,7 +21,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import company_billing, github, slack_gateway, slack_requests, tico_storage
+from backend import company_billing, github, outbound_http, slack_gateway, slack_requests, tico_storage
 from backend.finance import stripe_sync
 from backend.finance.mercury import Answer
 from backend.github_app import GitHubApp
@@ -146,22 +146,20 @@ def test_a_stripe_refusal_is_said_without_echoing_the_body():
 # -- Slack: the gateway's Web API call and its error (backend/slack_gateway.py SlackAPI; bots' reads, slack_requests) --
 
 
-class FakeUrlopen:
-    """urllib.request.urlopen for SlackAPI.call: answers with the recorded payload and keeps each URL asked for."""
+class FakeSlack:
+    """Slack's Web API as the gateway's SlackAPI.call meets it: answers with the recorded payload and keeps each URL."""
 
     def __init__(self, payload):
         self.payload, self.urls = payload, []
 
-    def __call__(self, request, timeout):
-        self.urls.append(request.full_url)
-        response = io.BytesIO(json.dumps(self.payload).encode())
-        response.status, response.headers = 200, {}
-        return response
+    def __call__(self, request):
+        self.urls.append(str(request.url))
+        return httpx.Response(200, json=self.payload)
 
 
 def test_slack_history_is_read_by_its_message_fields(monkeypatch):
-    opened = FakeUrlopen(recorded("slack_answers.json")["history"])
-    monkeypatch.setattr(slack_gateway.urllib.request, "urlopen", opened)
+    opened = FakeSlack(recorded("slack_answers.json")["history"])
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(opened))
     page, cursor = slack_gateway.SlackAPI("xoxb-contract", "").history_range("C012ABCDEFG", "1.0", "2.0")
     assert opened.urls == [
         slack_gateway.API
@@ -176,9 +174,8 @@ def test_slack_history_is_read_by_its_message_fields(monkeypatch):
 
 
 def test_a_slack_missing_scope_is_slacks_own_error_code(monkeypatch):
-    monkeypatch.setattr(
-        slack_gateway.urllib.request, "urlopen", FakeUrlopen(recorded("slack_answers.json")["missing_scope"])
-    )
+    missing = FakeSlack(recorded("slack_answers.json")["missing_scope"])
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(missing))
     with pytest.raises(slack_gateway.SlackError) as caught:
         slack_gateway.SlackAPI("xoxb-contract", "").history_range("C012ABCDEFG", "1.0", "2.0")
     assert (caught.value.method, caught.value.code) == ("conversations.history", "missing_scope")

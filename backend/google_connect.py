@@ -34,15 +34,13 @@ import json
 import logging
 import secrets
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 
 from . import models as M
-from . import routines
+from . import outbound_http, routines
 from .google_workspace import acts as acts_allowed, oauth_client, permissions
 from .store import H, P, Problem
 
@@ -251,12 +249,10 @@ def redirect_uri(settings):
 
 def post_token(fields, uri=TOKEN_URI):
     """Google's answer to a form post to one of its OAuth endpoints: the token endpoint, or revoke (REVOKE_URI). Raises
-    urllib.error.HTTPError on a refusal, OSError when Google can't be reached. Tests replace this function."""
-    request = urllib.request.Request(
-        uri, data=urllib.parse.urlencode(fields).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"}
-    )
-    with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
-        return json.loads(answer.read().decode() or "{}")
+    outbound_http.Failed, carrying Google's refusal when it answered one; ValueError when the answer is not JSON. Tests
+    replace this function."""
+    reply = outbound_http.send("POST", uri, data=dict(fields), timeout=GOOGLE_SECONDS).check()
+    return json.loads(reply.content.decode() or "{}")
 
 
 def revoke_at_google(token):
@@ -267,10 +263,7 @@ def revoke_at_google(token):
     try:
         post_token({"token": token}, REVOKE_URI)
         return True
-    except urllib.error.HTTPError as error:
-        with error:
-            return False
-    except (OSError, ValueError):
+    except (outbound_http.Failed, ValueError):
         return False
 
 
@@ -280,22 +273,30 @@ def google_token(client, fields):
     fields = dict(fields, client_id=client[0], client_secret=client[1])
     try:
         answer = post_token(fields)
-    except urllib.error.HTTPError as e:
-        with e:
-            try:
-                error = str(json.loads(e.read().decode() or "{}").get("error") or "")
-            except (OSError, ValueError, AttributeError):
-                error = ""
-            # Google's own outage is a network failure to the person, not a refused grant.
-            kind = "network" if e.code >= 500 else TOKEN_ERRORS.get(error.strip().lower(), "error")
-            raise Problem("google_refused", f"Google refused it ({error or e.code})", 409, extra={"kind": kind})
-    except (OSError, ValueError) as e:
+    except outbound_http.Failed as e:
+        if e.reply is None:
+            raise Problem(
+                "google_refused",
+                f"Tico's server could not reach Google ({type(e.__cause__ or e).__name__})",
+                409,
+                extra={"kind": "network"},
+            ) from None
+        try:
+            error = str(json.loads(e.reply.content.decode() or "{}").get("error") or "")
+        except (ValueError, AttributeError):
+            error = ""
+        # Google's own outage is a network failure to the person, not a refused grant.
+        kind = "network" if e.reply.status >= 500 else TOKEN_ERRORS.get(error.strip().lower(), "error")
+        raise Problem(
+            "google_refused", f"Google refused it ({error or e.reply.status})", 409, extra={"kind": kind}
+        ) from None
+    except ValueError as e:
         raise Problem(
             "google_refused",
             f"Tico's server could not reach Google ({type(e).__name__})",
             409,
             extra={"kind": "network"},
-        )
+        ) from None
     if not isinstance(answer, dict) or not answer.get("access_token"):
         raise Problem("google_refused", "Google returned no access token", 409, extra={"kind": "error"})
     return answer

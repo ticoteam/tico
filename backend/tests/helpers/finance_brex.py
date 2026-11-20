@@ -18,24 +18,6 @@ CASH_TWO = "cash_acc_2"
 LATER = ("2026-10-15T13:00:00.000000Z", "2026-10-15T14:00:00.000000Z", "2026-10-15T15:00:00.000000Z")
 
 
-class _Reply:
-    """What Brex's opener hands back: a context manager with a body."""
-
-    status = 200
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
-
-    def __enter__(self) -> "_Reply":
-        return self
-
-    def __exit__(self, *_exc: object) -> bool:
-        return False
-
-    def read(self) -> bytes:
-        return self._body
-
-
 def money(amount: int, currency: str = "USD") -> dict[str, Any]:
     return {"amount": amount, "currency": currency}
 

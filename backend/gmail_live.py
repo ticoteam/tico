@@ -15,12 +15,10 @@ import base64
 import builtins
 import json
 import uuid
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from . import google_tokens
+from . import google_tokens, outbound_http
 from .email_content import MAX_RAW
 from .mail_lib.gmail import normalize
 from .store import Problem
@@ -49,43 +47,41 @@ ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024  # one attachment read through Tico; a bi
 def gmail_call(url, *, token, data=None, max_bytes=HTTP_MAX_BYTES, method=None):
     """(status, JSON object), or status 0 when Gmail cannot answer. A call with `data` is a POST unless `method` says
     PUT. Tests replace this function."""
-    request = urllib.request.Request(
-        url, method=method, headers={"Accept": "application/json", "Authorization": "Bearer " + token}
-    )
+    headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
+    body = None
     if data is not None:
-        request.data = json.dumps(data).encode()
-        request.add_header("Content-Type", "application/json")
+        body = json.dumps(data).encode()
+        headers["Content-Type"] = "application/json"
     try:
-        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            status, raw = answer.status, answer.read(max_bytes + 1)
-    except urllib.error.HTTPError as refused:
-        with refused:
-            refused.close()
-            return refused.code, {}
-    except (OSError, ValueError):
+        reply = outbound_http.send(
+            method or ("GET" if body is None else "POST"),
+            url,
+            headers=headers,
+            content=body,
+            timeout=SECONDS,
+            max_bytes=max_bytes,
+        )
+    except outbound_http.Failed:
         return 0, {}
-    if len(raw) > max_bytes:
+    if not reply.ok:
+        return reply.status, {}
+    if len(reply.content) > max_bytes:
         raise Problem("gmail_size", "This Gmail response is too large; open it in Gmail", 502)
-    if not raw and data is not None and status in (200, 204):
-        return status, {}
+    if not reply.content and data is not None and reply.status in (200, 204):
+        return reply.status, {}
     try:
-        body = json.loads(raw)
+        found = reply.json()
     except (ValueError, UnicodeError):
         return 0, {}
-    return (status, body) if isinstance(body, dict) else (0, {})
+    return (reply.status, found) if isinstance(found, dict) else (0, {})
 
 
 def gmail_delete_call(url, *, token):
     """The HTTP status of one DELETE, or 0 when Gmail cannot answer. Tests replace this function."""
-    request = urllib.request.Request(url, method="DELETE", headers={"Authorization": "Bearer " + token})
     try:
-        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            return answer.status
-    except urllib.error.HTTPError as refused:
-        with refused:
-            refused.close()
-            return refused.code
-    except (OSError, ValueError):
+        headers = {"Authorization": "Bearer " + token}
+        return outbound_http.send("DELETE", url, headers=headers, timeout=SECONDS, max_bytes=0).status
+    except outbound_http.Failed:
         return 0
 
 
@@ -527,26 +523,20 @@ def label_delete(c, mailbox, label_id):
 def send_call(url, *, token, body, content_type, method=None):
     """(status, JSON object) for one messages.send or large drafts.create (POST) or drafts.update (PUT), or status 0
     when Gmail did not answer. Tests replace this."""
-    request = urllib.request.Request(
-        url,
-        data=body,
-        method=method,
-        headers={"Accept": "application/json", "Content-Type": content_type, "Authorization": "Bearer " + token},
-    )
+    headers = {"Accept": "application/json", "Content-Type": content_type, "Authorization": "Bearer " + token}
     try:
-        with urllib.request.urlopen(request, timeout=SEND_SECONDS) as answer:
-            status, raw = answer.status, answer.read(HTTP_MAX_BYTES)
-    except urllib.error.HTTPError as refused:
-        with refused:
-            refused.close()
-            return refused.code, {}
-    except (OSError, ValueError):
+        reply = outbound_http.send(
+            method or "POST", url, headers=headers, content=body, timeout=SEND_SECONDS, max_bytes=HTTP_MAX_BYTES
+        )
+    except outbound_http.Failed:
         return 0, {}
+    if not reply.ok:
+        return reply.status, {}
     try:
-        found = json.loads(raw)
+        found = json.loads(reply.content[:HTTP_MAX_BYTES])
     except (ValueError, UnicodeError):
-        return status, {}
-    return status, found if isinstance(found, dict) else {}
+        return reply.status, {}
+    return reply.status, found if isinstance(found, dict) else {}
 
 
 def _upload_body(raw, meta):

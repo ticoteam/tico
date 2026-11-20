@@ -110,7 +110,7 @@ def test_a_failing_hook_never_fails_the_import_and_a_failed_import_rings_nothing
     try:
         assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
         net.on("GET", AI.GRAPH + "/act_", lambda *_: (500, {"error": {"message": "down"}}))
-        assert AI.run(books, Vault(books), iid, now=LATER, http_=http(net, slept=[])).status == "failed"
+        assert AI.run(books, Vault(books), iid, now=LATER, http_=http(net)).status == "failed"
     finally:
         AI.AFTER_RUN.remove(broken)
         AI.AFTER_RUN.remove(heard)
