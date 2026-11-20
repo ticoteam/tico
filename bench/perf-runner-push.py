@@ -160,7 +160,7 @@ def measure(label, binary):
             time.sleep(GAP)
         flips, hints = [], []
         for n in range(SAMPLES):
-            with store.transaction() as c:
+            with store.transaction(notify=True) as c:  # as the Gateway routes write it
                 record = gateway_connection._row(c)
                 if n % 2 == 0:
                     record = {**record, "key": "vault:bench-placeholder"}  # connected: no value, the hint only

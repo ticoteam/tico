@@ -464,7 +464,7 @@ def check_now(store, vault, settings=None, opener=None):
     if not secret:
         return None
     result = G.check(secret, base, opener=opener)
-    with store.transaction() as c:
+    with store.transaction(notify=True) as c:  # a key that comes or goes tells the computers (_write)
         record_check(c, result, fingerprint, H.now(), settings)
     return result
 
@@ -851,7 +851,7 @@ def _unchanged(c, record):
 
 def _keep(store, vault, record, answer, now, install, secret, what, via=""):
     key_value = _clean_key(answer["key"])
-    with store.transaction() as c:
+    with store.transaction(notify=True) as c:  # a key that comes or goes tells the computers (_write)
         if not _unchanged(c, record):
             return None
         after = {
@@ -888,7 +888,7 @@ def _keep(store, vault, record, answer, now, install, secret, what, via=""):
 def _note(store, record, code, now, stopped=""):
     """Keep why the last try did not work, for Health and the hour's wait. `stopped`: Tico turned the install off; its
     key is dropped and nothing is asked again under this invite (or, with none, at all)."""
-    with store.transaction() as c:
+    with store.transaction(notify=True) as c:  # a key that comes or goes tells the computers (_write)
         if not _unchanged(c, record):
             return None
         after = dict(record)

@@ -376,7 +376,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         who = request.state.identity
         auth.domain(who)
         vault = app.state.vault
-        with store.transaction() as c:
+        with store.transaction(notify=True) as c:  # a key that comes or goes tells the computers (_write)
             gateway_connection.save(
                 c,
                 vault,
@@ -400,7 +400,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     def gateway_clear(request: Request):
         who = request.state.identity
         auth.domain(who)
-        with store.transaction() as c:
+        with store.transaction(notify=True) as c:  # a key that comes or goes tells the computers (_write)
             gateway_connection.clear(c, who, H.now(), settings)
             return gateway_connection.view(c, settings, manage=True)
 
