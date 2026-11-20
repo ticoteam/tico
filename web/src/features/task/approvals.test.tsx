@@ -9,6 +9,7 @@ import type * as conversations from '@/conversation';
 import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { forgetPlaces, notePlace } from '@/lib';
 import { decisionName, effectOf, sendTitle } from './model';
 import type { TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
@@ -88,6 +89,7 @@ beforeEach(() => {
   shown = task();
   reply = () => null;
   queryClient.clear();
+  forgetPlaces();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const actors = [{ id: 'bot:lo', kind: 'agent', name: 'Legal Owner' }];
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
@@ -116,6 +118,10 @@ function show(node: ReactNode, at: string) {
     ),
   });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  // as the shell does: each address shown is noted, so closing a task goes back to where it was opened from
+  const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
+  note(router.state.location);
+  router.subscribe('onResolved', (e) => note(e.toLocation));
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -628,8 +634,44 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/ok`, body: { shown_hash: 'h-mail' } }]));
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
-    // the email went with its ask: the matter's own page opens in its place, never a blank page
+    // nothing else on it waits on the person: the task closes (opened from nowhere here, so to Tasks)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+  });
+
+  it('opened from a board, Approve closes the task once nothing on it waits: back to the board as it was, Undo offered @approvals', async () => {
+    const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
+    serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
+    const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
+    await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+    fireEvent.click(await ready(await decision()));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
+    expect(router.state.location.search).toEqual({ owner: 'bot:lo' });
+    // stepped back, not pushed: the board is where it was in the history
+    expect(router.history.canGoBack()).toBe(false);
+    // the email's own toast follows it through its undo window
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+  });
+
+  it('when something else on the task still waits, Approve stays on it and opens that ask @approvals', async () => {
+    const page = req({ requirement_id: 'rpage', kind: 'page', line: 'Review page', shows: [], approval: { document: 'Review page', file_id: 'd1', version: 1, visit_id: 'v1', unchecked: false } } as Partial<TaskRequirement>);
+    const asking = { ...matter, to_leave: [page, ...(matter.to_leave ?? []).slice(1)] } as TaskData;
+    const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
+    serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
+    const own = reply;
+    reply = (url, method) => (method === 'GET' && (url.includes('/api/v2/tasks/%2336461') || url.endsWith('/api/v2/tasks/19ca7418')) ? { body: { task: asking, runs: [], children, can_comment: true, mover: true } } : own(url, method));
+    const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
+    await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+    // two asks: the email's (over the email) and the matter's own page
+    const box = await waitFor(() => {
+      const found = screen.getAllByRole('region', { name: 'The decision' }).find((b) => within(b).queryByText('Email to Dana Ruiz'));
+      expect(found).toBeTruthy();
+      return found as HTMLElement;
+    });
+    fireEvent.click(await ready(box));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));
+    // the email's own toast follows it through its undo window
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
   });
 
   it('a refused Approve says why, over the email, with Approve there to press again @approvals', async () => {
@@ -650,13 +692,15 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
 
   it('Request changes answers the sub-task’s ask @approvals', async () => {
     serve((url) => (url.endsWith(`/asks/${rid}/answer`) ? { body: { task: send(req({ requirement_id: rid, may: ['undo'], answer: { id: 'a8', value: 'no', by: 'human:me', at: '2026-11-19T10:14:00Z', note: 'Shorter' } } as Partial<TaskRequirement>)) } } : null));
-    open();
+    const router = open();
     const box = await decision();
     fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
     fireEvent.change(within(box).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Shorter' } });
     fireEvent.click(within(box).getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/answer`, body: { value: 'no', note: 'Shorter' } }]));
     expect(await screen.findByText(/^Changes asked/)).toBeTruthy();
+    // nothing else on it waits on the person: the task closes too
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
 });
 

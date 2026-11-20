@@ -1,4 +1,4 @@
-import { Link, useLocation } from '@tanstack/react-router';
+import { Link, useLocation, useRouter } from '@tanstack/react-router';
 import type { HTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useAction } from '@/actions';
 import { useActor } from '@/data';
@@ -10,22 +10,25 @@ import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
 import type { Stage, TaskItem } from './queries';
-import { chatAddress } from '@/lib';
+import { chatAddress, leaveFlow } from '@/lib';
 
-/** The head's Flow button: the play mark and how many tasks wait on you (parts-kit.js playBtn). On Flow it goes back.
-    It stays in a phone's head. */
+/** The head's Flow button: the play mark and how many tasks wait on you (parts-kit.js playBtn). On Flow it says so
+    ("Flow · 3"), and × leaves it, back to the page Flow was entered from. It stays in a phone's head. */
 export function FlowButton({ on, count }: { on: boolean; count: number }) {
+  const router = useRouter();
+  if (on)
+    return (
+      <span className="flow-on" data-target="tasks:flow" data-phone>
+        <span className="li-play is-on">
+          <FlowMark play live />
+          <b>{count > 0 ? `Flow · ${count}` : 'Flow'}</b>
+        </span>
+        <IconButton icon="close" label="Exit Flow" quiet onClick={() => leaveFlow(router)} />
+      </span>
+    );
   return (
-    <Link
-      to={on ? '/tasks' : '/flow'}
-      className={on ? 'li-play is-on' : 'li-play'}
-      aria-pressed={on}
-      aria-label="Flow"
-      title="Flow"
-      data-target="tasks:flow"
-      data-phone
-    >
-      <FlowMark play live={on} />
+    <Link to="/flow" className="li-play" aria-pressed={false} aria-label="Flow" title="Flow" data-target="tasks:flow" data-phone>
+      <FlowMark play />
       {count > 0 && <b>{count}</b>}
     </Link>
   );

@@ -9,6 +9,7 @@ import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
 import { toast } from '@/kit/Toast';
 import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
+import { answered } from './answered';
 import { Face } from './parts';
 import { followSend } from './sending';
 import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
@@ -157,7 +158,9 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
           },
         }),
       });
-    if (!flow) return;
+    // Outside Flow the open task's page decides: the next ask on it, or back to where it was opened from. Not once the
+    // person has moved on.
+    if (!flow) return void (here.current && answered());
     const to = next ? tabAddress(next, undefined, true) : { to: '/flow', search: {} };
     void navigate({ to: to.to as never, search: to.search as never });
   };
@@ -170,6 +173,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     if (!res.ok) return refused(res);
     setAsking(false);
     setNote('');
+    if (!flow && here.current) answered();
   };
 
   return (
