@@ -19,7 +19,7 @@ from fastapi import Request
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import connectors_floor, gcal_live, routines
+from . import gcal_live, routines
 from . import google_workspace as workspace
 from .store import H, P, Problem, encode
 
@@ -219,7 +219,6 @@ def calendar_allowed(c, who, address, person=None, change=False):
 
 
 def install(app, store, execution, mutate):
-    connectors_floor.install(app, store, execution)  # until the floor moves past 0.6's connectors job
     CALENDAR_OFF = (
         "The company turned Create and change calendar events off in Tico (Tools > Settings > Email > What Tico "
         "may do), so Tico will not add the event"

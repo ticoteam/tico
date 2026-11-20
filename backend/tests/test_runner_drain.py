@@ -57,7 +57,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         {
             "version": "test",
             "platform": "test",
-            "release": "0.6.0-rc.1",
+            "release": "0.6.21",
             "readiness": {b: True for b in bots},
             "update": {"state": "waiting", "running": 1, "handed_back": 3},
         },
@@ -78,7 +78,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         {
             "version": "test",
             "platform": "test",
-            "release": "0.6.0-rc.1",
+            "release": "0.6.21",
             "readiness": {b: True for b in bots},
             "update": {"state": "idle"},
         },

@@ -1418,11 +1418,11 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
         assert row["bot"] == "ops" and row["reason"] == "slow"  # nothing says it is updating: a bug
         c.execute(
             "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
-            "VALUES(?,'0.6.0-rc.1','docker','waiting','0.6.0-rc.2',?)",
+            "VALUES(?,'0.6.21','docker','waiting','0.6.22',?)",
             (runner, H.now()),
         )
         [row] = health._waiting(c, online)[2]
-        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.6.0-rc.2"
+        assert row["reason"] == "updating" and row["running"] == 1 and row["target"] == "0.6.22"
         [turn] = row["turns"]
         assert turn["run"] == "a-dev" and turn["bot"] == "dev" and turn["task_title"] == ""  # a chat: no task
         since = turn["since"][11:16]
@@ -1431,7 +1431,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
     held = found["runner_outdated"]
     assert held["kind"] == maintenance_health.SETUP
     assert (
-        f"Team box is holding new work to update to Tico 0.6.0-rc.2: it starts once dev's turn (running since {since} "
+        f"Team box is holding new work to update to Tico 0.6.22: it starts once dev's turn (running since {since} "
         "UTC) ends; it holds 1 queued job(s) for ops."
     ) in held["detail"]
     # Nothing to update by hand, and nothing to watch: BotOps is told not to hold its own computer watching this one.

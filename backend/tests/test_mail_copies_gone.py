@@ -1,8 +1,8 @@
 """Mail spec v1.1 PR 5: no computer syncs, books or holds mail, and the server keeps no copy of it.
 
-The copy tables are gone from a new database and from `tico sql`. Each route a 0.6 computer's connectors job still
-polls answers "nothing to do" (backend/connectors_floor.py), so that job idles until the computer updates; the routes it
-reaches only after claiming work are gone. No code imports the retired mail CLI, and the migration that drops the
+The copy tables are gone from a new database and from `tico sql`. The routes the retired computer-side connectors job
+polled (v0.6.0-rc.1 through v0.6.20) are gone too: the floor (runner_versions.MIN_RUNNER_RELEASE, 0.6.21) pauses such a
+computer with the reason until it updates. No code imports the retired mail CLI, and the migration that drops the
 copies settles the appointments a computer was asked to book, once.
 """
 
@@ -12,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from backend import connectors_floor
-
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
 from backend.tests.helpers.sql import column, query
 
@@ -21,8 +19,8 @@ MIGRATION = importlib.import_module("backend.migrations.20261117062123_drop_mail
 ROOT = Path(__file__).resolve().parents[2]
 COPIES = ("mail_fts", "mail_messages", "mail_mailboxes", "connector_snapshots", "connector_reports")
 BOX = "ana@acme.example"
-# What a 0.6 computer's connectors job asks every 45 seconds (runner_support/connectors.py at v0.6.0-rc.1 and v0.6.19),
-# with the bodies it sends, and the answer its client reads as "nothing to do".
+# What the retired connectors job asked every 45 seconds (runner_support/connectors.py at v0.6.0-rc.1 through v0.6.20),
+# with the bodies it sent, and the answer that once meant "nothing to do".
 POLLS = (
     ("GET", "runners/connectors", None, {"connectors": []}),
     ("GET", "connectors/calendar/targets", None, {"people": [], "hours": 24}),
@@ -32,7 +30,6 @@ POLLS = (
     ("POST", "automations/mail-actions/claim", {"mailbox": BOX}, {"actions": []}),
     ("POST", "connectors/email/sends/claim", {"mailbox": BOX}, {"send": None}),
 )
-OK = {"ok": True}
 REPORTS = (
     ("connectors/mail/google/gc-1/result", {"status": "failed", "kind": "error", "message": "x", "hint": "y"}),
     (
@@ -45,7 +42,7 @@ REPORTS = (
     ("connectors/health", {"service": "mail", "failing": [], "ok_accounts": [BOX]}),
     ("connectors/mail/messages", {"mailbox": BOX, "messages": [], "deleted": [], "synced_at": "2026-11-17T00:00:00Z"}),
 )
-# Reached only with work a claim handed out, which none now does.
+# Reached only with work a claim handed out.
 GONE = ("connectors/email/sends/preflight", "connectors/email/sends/es-1/dispatch")
 # The rc.1 local mail CLI's token asks (connectors/mail/oauth.py server_workspace_token and server_token).
 TOKENS = (
@@ -71,32 +68,15 @@ def test_a_new_database_has_no_mail_copy_and_tico_sql_lists_none(api):
         assert query(api, f"SELECT * FROM {table}", expected=422)["error"]["code"] == "sql"
 
 
-def test_a_0_6_computers_connectors_job_is_told_there_is_nothing_to_do(api):
+def test_the_retired_connectors_jobs_routes_are_gone(api):
+    """Below the floor now: none of what that job asked is served, to a computer or anyone else."""
     machine = runner(api)
-    for method, path, body, nothing in POLLS:
+    asks = [(method, path, body) for method, path, body, _ in POLLS]
+    asks += [("POST", path, body) for path, body in REPORTS + TOKENS]
+    asks += [("POST", path, {"mailbox": BOX}) for path in GONE]
+    for method, path, body in asks:
         r = api.request(method, "/api/v2/" + path, json=body, headers=headers(machine["token"]))
-        assert r.status_code == 200 and r.json() == nothing, (path, r.status_code, r.text)
-    with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0]
-    for path, body in REPORTS:
-        assert post(api, path, body, machine["token"]) == OK, path
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == before  # a report changes nothing
-    for path in GONE:
-        post(api, path, {"mailbox": BOX}, machine["token"], expected=405)
-    # A person or a bot is not a computer: refused, as the old routes refused them.
-    get(api, "connectors/mail/targets", "ana-test", expected=403)
-    post(api, "connectors/email/sends/claim", {"mailbox": BOX}, "ana-test", expected=403)
-
-
-def test_a_0_6_bots_local_mail_cli_is_told_where_mail_went(api):
-    machine = runner(api)
-    for path, body in TOKENS:
-        error = post(api, path, body, machine["token"], expected=403)["error"]
-        assert error["code"] == error["detail"] == connectors_floor.MOVED and not error["retryable"], path
-        # What rc.1's _broker_call prints for a refusal it has no special case for: the code, after the mailbox.
-        shown = "Tico's server would not give access to " + BOX + ": " + error["code"]
-        assert shown.endswith("moved to the server: use `tico email …` / `tico calendar …`."), shown
+        assert r.status_code in (404, 405), (path, r.status_code, r.text)
 
 
 def test_no_code_imports_the_retired_mail_cli():

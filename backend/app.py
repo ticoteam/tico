@@ -2192,14 +2192,6 @@ def _install_features(
 
     install_cards(app, store, auth, mutate, settings, task_view)
 
-    @app.get("/api/v2/runners/me/memory-tidy-keeps")
-    def retired_memory_tidy_keeps(request: Request):
-        """The retired Nightly memory tidy pilot's Keep queue: always empty. Today's runner never asks, but 0.6.x
-        runners ask every 15 seconds; remove this once 0.6.0 leaves the supported window."""
-        if request.state.identity.role != "runner":
-            raise Problem("identity", "A registered computer is required", 403)
-        return {"keeps": []}
-
     turn_work.install(app, store, auth)
     from . import run_view
 

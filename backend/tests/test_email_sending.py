@@ -608,8 +608,9 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     calls = workspace(monkeypatch, answer)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    # No computer leases mail: a 0.6 computer that still asks is handed nothing (backend/connectors_floor.py).
-    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
+    # No computer leases mail: the route a computer once claimed sends from is gone.
+    gone = inbox.post("/api/v2/connectors/email/sends/claim", json={"mailbox": BOX}, headers=headers(machine["token"]))
+    assert gone.status_code in (404, 405), gone.text
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == int(state == "sent")
     [call] = calls
@@ -683,8 +684,6 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     autonomous(inbox)
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
-    machine = runner(inbox)
-    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 1
     assert [call["token"] for call in calls] == ["ya29.own"]

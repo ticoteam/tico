@@ -181,10 +181,10 @@ def test_chains_waiting_on_an_earlier_action_do_not_crowd_out_ready_work(api, li
     assert all(r["state"] in ("queued", "claimed") for r in rows(api) if r["id"] != ready)
 
 
-def test_an_older_computer_that_asks_for_actions_is_handed_none(api, live):
+def test_no_computer_can_claim_mail_actions_any_more(api, live):
     machine = organizer(api)
     queued(api, "archive", "label", "leave", "draft", "send", "forward", "unsubscribe")
-    assert claim(api, machine["token"]) == {"actions": []}
+    assert claim(api, machine["token"]) in (404, 405)
     assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api))
 
 
@@ -299,7 +299,7 @@ def test_only_the_server_recovers_expired_workspace_computer_leases(api, live):
             "UPDATE automation_mail_actions SET state='claimed',claimed_by=?,claimed_at=?,attempts=1 WHERE id=?",
             (machine["runner_id"], H.shift(H.now(), minutes=-M.MAIL_LEASE_MINUTES - 1), mid),
         )
-    assert claim(api, machine["token"]) == {"actions": []}
+    assert claim(api, machine["token"]) in (404, 405)
     assert rows(api)[0]["state"] == "claimed" and not live["writes"]
     M.drain_workspace_mail(api.app.state.store)
     (row,) = rows(api)
