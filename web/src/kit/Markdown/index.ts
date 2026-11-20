@@ -1,1 +1,1 @@
-export { Markdown, blocks, headings, type Block, type Heading, type MarkdownProps } from './Markdown';
+export { Markdown, headings, type Heading, type MarkdownProps } from './Markdown';
