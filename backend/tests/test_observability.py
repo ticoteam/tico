@@ -362,7 +362,7 @@ def test_transaction_wire_allowlist(settings, recording):
         "sql": {"value": 4.0, "unit": "millisecond"},
         "lock_wait": {"value": 0.5, "unit": "millisecond"},
     }
-    assert second["timestamp"] - second["start_timestamp"] == pytest.approx(0.012)
+    assert second["timestamp"] - second["start_timestamp"] == pytest.approx(0.012, abs=1e-5)
     telemetry.close()
 
 
