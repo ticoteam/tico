@@ -3892,16 +3892,6 @@ def install(app, store, auth, task_views, task_view):
                         **({"needs_version": held["version"]} if held else {}),
                     },
                 )
-                # The stream's first check, here rather than inside its first round: a burst of reconnecting streams
-                # checks its sign-ins side by side, not one after another on the round's one thread, and the round's
-                # own check of each then falls inside SIGN_IN_RECHECK_SECONDS. A refusal ends it as the round's would.
-                try:
-                    await asyncio.to_thread(check)
-                except Problem:
-                    for topic, data in watch.drain():
-                        yield _frame(None, topic, data)
-                    yield "event: expired\ndata: {}\n\n"
-                    return
                 deadline = time.monotonic() + LIFETIME_SECONDS
                 quiet_since = time.monotonic()
                 due = True  # the first read catches up from `after`
