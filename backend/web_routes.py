@@ -7,7 +7,7 @@ address is a link from when the app lived there (a bookmark, an agent's message,
 to the same address without /next, its query kept (the browser keeps the fragment). Any other GET that no route or
 mount answered is the page itself: the app routes in the browser, and an old app address (`/#/task/12`) opens its page
 there (web/src/router.tsx). The server's own prefixes (SERVER) never fall through to the page, so an unknown API path
-is still a 404. The folder is read on each request, so a build written while the server runs is served at once; with
+is still the plain 404. The folder is read on each request, so a build written while the server runs is served at once; with
 no build the page is a 404.
 
 `register` goes before any route that could answer /next; `register_page` goes after every other route and mount.
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
+from starlette.exceptions import HTTPException
 
 from .config import Settings
 from .store import Problem
@@ -88,5 +89,6 @@ def register_page(app: FastAPI, settings: Settings) -> None:
     @app.api_route("/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def web_page(request: Request, rest: str = "") -> Response:
         if rest.split("/", 1)[0] in SERVER:
-            raise Problem("not_found", "Not found", 404)
+            # The plain 404 an address no route answers gets, as before this route existed (the CLI and MCP read it so).
+            raise HTTPException(404)
         return file_reply(request, page_file(settings), PAGE_TYPE)
