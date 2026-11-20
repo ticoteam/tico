@@ -83,6 +83,35 @@ def seed(api):
                 "VALUES(?,?,'pr',?,?,'open','bot:x',?,'acme/app',?,'{}')",
                 (H.new_id(), tid, f"https://github.example/acme/app/pull/{k + 1}", f"PR {k + 1}", H.now(), k + 1),
             )
+        # Each computer's readiness report names every bot on it, as a runner's heartbeat does, and the computers stay
+        # online and awake for the whole run (seen ahead of now, awake for an hour), so two checkouts' answers compare.
+        hosted = collections.defaultdict(list)
+        for bot, runner in c.execute("SELECT bot,runner_id FROM assignments ORDER BY bot"):
+            hosted[runner].append(bot)
+        for runner, bots_on in hosted.items():
+            document = {
+                "schema_version": 1,
+                "runtimes": {"fake": {"ready": True, "version": "1.0"}},
+                "bots": {
+                    slug: {
+                        "ready": True,
+                        "runtime": "fake",
+                        "model": "",
+                        "repository_present": True,
+                        "repository_revision": "0" * 40,
+                        "configuration_valid": True,
+                        "problems": [],
+                        # Its tools' checks: TIDY's reports average about 1.8 KB a bot (Nov 19).
+                        "tools": [{"name": f"tool{i:02d}", "ok": True, "version": "1.0.0"} for i in range(30)],
+                    }
+                    for slug in bots_on
+                },
+            }
+            c.execute(
+                "INSERT OR REPLACE INTO runner_states(runner_id,last_seen_at,awake_since,version,readiness,capabilities) "
+                "VALUES(?,?,?,'1.0',?,'[\"screen\"]')",
+                (runner, H.shift(H.now(), hours=6), H.shift(H.now(), hours=-1), json.dumps(document)),
+            )
     from backend import health
 
     health.record_never_stuck(store)  # the hourly reading Health's Tasks check shows
@@ -104,10 +133,12 @@ def measure(api, path, token):
     assert first.status_code == 200, (path, first.status_code, first.text[:300])
     with overload.counting(store, seen):
         api.get(path, headers=headers(token))
+    cpu = []
     for _ in range(RUNS):
-        t = time.perf_counter()
+        t, p = time.perf_counter(), time.process_time()
         api.get(path, headers=headers(token))
         times.append((time.perf_counter() - t) * 1000)
+        cpu.append((time.process_time() - p) * 1000)
     if CONCURRENT:
         # Under load: CONCURRENT readers at once, as a busy hub's polls overlap. Each statement stepped then waits
         # for the GIL behind the others' Python, so a read's statement count shows in its time.
@@ -120,7 +151,8 @@ def measure(api, path, token):
 
         with ThreadPoolExecutor(CONCURRENT) as pool:
             times = list(pool.map(timed, range(CONCURRENT * RUNS)))
-    return seen, statistics.median(times), len(first.content), first.json()
+    # CPU time too: on a busy computer the wall time mostly measures the other processes.
+    return seen, statistics.median(times), statistics.median(cpu), len(first.content), first.json()
 
 
 def report(api):
@@ -133,8 +165,10 @@ def report(api):
     answers = {}
     for path in PATHS:
         for token in TOKENS:
-            seen, ms, size, answer = measure(api, path, token)
-            print(f"{path:40s} {token:9s} {len(seen):6d} statements {ms:9.1f} ms {size / 1024:8.1f} KB")
+            seen, ms, cpu, size, answer = measure(api, path, token)
+            print(
+                f"{path:40s} {token:9s} {len(seen):6d} statements {ms:9.1f} ms {cpu:9.1f} ms CPU, one at a time {size / 1024:8.1f} KB"
+            )
             answers[f"{path} {token}"] = blank_clock(answer)
             if os.environ.get("SIZES") and isinstance(answer, list) and answer and isinstance(answer[0], dict):
                 fields = collections.Counter()

@@ -529,6 +529,20 @@ ASSIGNED_COLUMNS = (
     "r.platform,r.version,r.awake_since,r.screen,r.capabilities"
 )
 ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?"
+# The computer's part of ASSIGNED_COLUMNS, in its order.
+RUNNER_FIELDS = (
+    "label",
+    "owner_id",
+    "last_seen_at",
+    "revoked_at",
+    "readiness",
+    "platform",
+    "version",
+    "awake_since",
+    "screen",
+    "capabilities",
+)
+RUNNER_COLUMNS = "r.id AS runner_id," + ",".join("r." + k for k in RUNNER_FIELDS)
 
 
 def prime_machines(c, slugs):
@@ -549,15 +563,41 @@ def prime_machines(c, slugs):
             (CONFIG_SQL, f"SELECT {BS.CONFIG} AS config,bot FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})"),
             (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
             (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
-            (
-                ASSIGNED_SQL,
-                ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
-                f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})",
-            ),
             ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})"),
         ):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
+    read_cache.prime(c, ASSIGNED_SQL, _assigned_rows(c, sorted(set(slugs))))
+
+
+def _assigned_rows(c, slugs):
+    """{(bot,): ASSIGNED_SQL's row or None} for these bots. Each computer's row (its readiness report, which names
+    every bot on it, its screen and capabilities) is read once for all of its bots, not once per bot; a bot whose
+    computer has no row has none, as the join gives."""
+    assigned = []
+    for part in H.chunks(slugs):
+        marks = ",".join("?" * len(part))
+        assigned += c.execute(f"SELECT bot,runner_id,generation FROM assignments WHERE bot IN ({marks})", part)
+    computers = {}
+    for part in H.chunks(sorted({row["runner_id"] for row in assigned})):
+        computers.update(
+            (row["runner_id"], row)
+            for row in c.execute(
+                f"SELECT {RUNNER_COLUMNS} FROM runners_with_state r WHERE r.id IN ({','.join('?' * len(part))})",
+                part,
+            )
+        )
+    found = {}
+    for row in assigned:
+        computer = computers.get(row["runner_id"])
+        if computer is not None:
+            found[row["bot"]] = {
+                "runner_id": row["runner_id"],
+                "generation": row["generation"],
+                **{k: computer[k] for k in RUNNER_FIELDS},
+                "bot": row["bot"],
+            }
+    return {(s,): found.get(s) for s in slugs}
 
 
 def machine(c, bot):

@@ -53,6 +53,9 @@ PATHS = (
     else (
         "/api/v2/bots",
         "/api/v2/bots?include_archived=1",
+        "/api/v2/bots?fields=slug,online",
+        "/api/v2/bots?fields=slug,task_flow",
+        "/api/v2/bots?fields=slug,status,queued",
         f"/api/v2/bots/{BOTS[5]}",
         f"/api/v2/bots/{FILE_BOT}/tools",
         f"/api/v2/bots/{FILE_BOT}/files?limit=3",
@@ -107,6 +110,9 @@ def seed(api):
                 tasks[row["owner_id"]].append(row["id"])
                 if k % 4 == 0:
                     X.ok_ask(c, row["id"], row["owner_id"], X.ANA, f"OK {k}")
+                if k % 10 == 1:  # private to Ana, who filed it (and Cara, on every other one's reader list)
+                    readers = json.dumps(["human:cara"]) if k % 20 == 1 else None
+                    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (readers, row["id"]))
     with store.transaction() as c:
         for n, slug in enumerate(BOTS):
             mine = tasks.get("bot:" + slug) or []
@@ -114,6 +120,47 @@ def seed(api):
                 H.status_set(c, "bot:" + slug, slug, state="idle", focus="Working", task_id=mine[0])
             if n % 9 == 0 and mine:
                 c.execute("INSERT INTO bot_control(bot,draining,claim_task) VALUES(?,0,?)", (slug, mine[-1]))
+            if n % 5 == 0:  # a run working one of its tasks now (bot_rows._live_runs): that task is `going`
+                job = c.execute(
+                    "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                    "WHERE j.bot_id=? AND j.state='queued' AND m.wake_key IS NOT NULL ORDER BY j.rowid LIMIT 1",
+                    (slug,),
+                ).fetchone()
+                if job:
+                    run = f"run-{n:04d}"
+                    c.execute(
+                        "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,"
+                        "created_at,started_at) VALUES(?,?,?,?,1,?,'running',?,?,?)",
+                        (run, job[0], slug, f"r{n % 4}", run, H.shift(H.now(), hours=6), H.now(), H.now()),
+                    )
+                    c.execute("UPDATE jobs SET state='leased', attempt_id=? WHERE id=?", (run, job[0]))
+        # Each computer's readiness report names every bot on it, as a runner's heartbeat does (TIDY: 10 to 100 KB).
+        for r in range(4):
+            hosted = [slug for n, slug in enumerate(BOTS) if n % 4 == r]
+            document = {
+                "schema_version": 1,
+                "runtimes": {"fake": {"ready": True, "version": "1.0"}},
+                "bots": {
+                    slug: {
+                        "ready": True,
+                        "runtime": "fake",
+                        "model": "",
+                        "repository_present": True,
+                        "repository_revision": "0" * 40,
+                        "configuration_valid": True,
+                        "problems": [],
+                        # Its tools' checks: TIDY's reports average about 1.8 KB a bot (Nov 19).
+                        "tools": [{"name": f"tool{i:02d}", "ok": True, "version": "1.0.0"} for i in range(30)],
+                    }
+                    for slug in hosted
+                },
+            }
+            c.execute(
+                "INSERT OR REPLACE INTO runner_states(runner_id,last_seen_at,awake_since,version,readiness,capabilities) "
+                "VALUES(?,?,?,'1.0',?,'[\"screen\"]')",
+                # Seen ahead of now and awake for an hour, so the computers stay online and awake for the whole run.
+                (f"r{r}", H.shift(H.now(), hours=6), H.shift(H.now(), hours=-1), json.dumps(document)),
+            )
     people = ["human:ana", "human:ben", "human:cara"]
     with store.transaction() as c:
         for n in range(THREADS):
@@ -247,11 +294,14 @@ def measure(api, path, token):
     r = api.get(path, headers=headers(token))
     with counting(store, seen):
         api.get(path, headers=headers(token))
+    cpu = []
     for _ in range(RUNS):
-        t = time.perf_counter()
+        t, p = time.perf_counter(), time.process_time()
         api.get(path, headers=headers(token))
         times.append((time.perf_counter() - t) * 1000)
-    return r, seen, statistics.median(times)
+        cpu.append((time.process_time() - p) * 1000)
+    # CPU time too: on a busy computer the wall time mostly measures the other processes.
+    return r, seen, statistics.median(times), statistics.median(cpu)
 
 
 def shape(sql):
@@ -268,10 +318,11 @@ def report(api):
     answers = {}
     for path in PATHS:
         for token in CALLERS:
-            r, seen, ms = measure(api, path, token)
+            r, seen, ms, cpu = measure(api, path, token)
             answers[f"{token} {path}"] = [r.status_code, r.json()]
             print(
-                f"{path[:44]:44s} {token:9s} {r.status_code} {len(seen):6d} statements {ms:9.1f} ms {len(r.content) / 1024:8.1f} KB"
+                f"{path[:44]:44s} {token:9s} {r.status_code} {len(seen):6d} statements {ms:9.1f} ms {cpu:9.1f} ms CPU "
+                f"{len(r.content) / 1024:8.1f} KB"
             )
             if os.environ.get("STATEMENTS"):
                 for q, k in collections.Counter(shape(q) for q in seen).most_common(8):

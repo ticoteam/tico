@@ -166,7 +166,7 @@ def register(app, auth, settings, settings_admin, store):
         # The one task its claims are limited to (POST /api/v2/bots/{bot}/control scope): its id when this reader
         # may read the task, or only that a limit is on.
         scope = rows.scopes.get(slug)
-        scoped_task = H.task(c, scope) if scope else None
+        scoped_task = H.task_untagged(c, scope) if scope and rows.wants("claim_task") else None
         row["claim_scoped"] = bool(scope)
         row["claim_task"] = scope if scoped_task and privacy.task_readable(c, who, scoped_task) else None
         status = rows.statuses.get(slug)
@@ -175,9 +175,9 @@ def register(app, auth, settings, settings_admin, store):
         row["online"] = bool(
             assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
         )
-        row["queued"] = rows.queued[slug]
-        row["notes"] = rows.notes[slug]
-        harness = rows.external_harness(slug)
+        row["queued"] = rows.queued.get(slug, 0)
+        row["notes"] = rows.notes.get(slug, 0)
+        harness = rows.external_harness(slug) if rows.wants("agent", "online") else None
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
         if external:
@@ -207,6 +207,8 @@ def register(app, auth, settings, settings_admin, store):
             raise Problem("can", "can is read or write", 422)
         wanted = [name for name in dict.fromkeys(f.strip() for f in (fields or "").split(",")) if name]
         activity = not wanted or any(name in ACTIVITY for name in wanted)
+        # Of the activity, only what the named fields need is read (BotRows `fields`).
+        shown_activity = [name for name in wanted if name in ACTIVITY] if wanted else None
         # Archived bots are gone from every picker; an admin view that needs them asks with ?include_archived=1.
         with_archived = (include_archived or "").lower() in ("1", "true", "yes")
         from .chat_goals import readable_active
@@ -229,12 +231,13 @@ def register(app, auth, settings, settings_admin, store):
                 [bot["id"] for bot, _ in shown],
                 {bot["id"] for bot, level in shown if level["read"]},
                 activity=activity,
+                fields=shown_activity,
             )
             redact = teammate_access.bot_redactor(c, who, auth)  # people and groups the caller may not see
             out = []
             for bot, level in shown:
                 row = bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows, activity)
-                if activity:
+                if activity and rows.wants("goal_active"):
                     row["goal_active"] = readable_active(c, auth, who, bot["id"], rows.goals.get(bot["id"], []))
                 row = redact(row)
                 out.append({k: v for k, v in row.items() if k in wanted} if wanted else row)

@@ -6,7 +6,7 @@ from backend import task_privacy as privacy
 from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
 from backend.tests.helpers.run_failures import failing, hold_bot, setup
 from backend.tests.helpers.status_reads import busy, page
 
@@ -105,6 +105,40 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
     assert ops["reason"].startswith("Its computer refused the run before it started.")
     assert (cpo["attempt_id"], cpo["kind"], cpo["action"]) == ("marked", "stopped", "review")
     assert "lease ran out" in cpo["reason"]
+
+
+def test_primed_computers_are_each_read_once_and_give_each_bot_what_it_reads_alone(api):
+    """prime_machines reads each computer's row once for all of its bots (its readiness report names every one of them,
+    9 MB a page on TIDY, Nov 19, when read once per bot), and each bot's machine() is what it reads alone: two bots on one
+    computer, a bot on a revoked computer, and one with no computer at all."""
+    from backend import views
+
+    store = api.app.state.store
+    one, two = runner(api), runner(api, label="Other Mac")
+    for bot, computer in (("ops", one), ("finance", one), ("cpo", two)):
+        assign(api, computer, bot)
+    ready(api, one, ["ops", "finance"])
+    ready(api, two, ["cpo"])
+    with store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), two["runner_id"]))
+    slugs = ["ops", "finance", "cpo", "inbox"]
+    with store.read_transaction() as c:
+        alone = {slug: views.machine(c, slug) for slug in slugs}
+    seen = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(seen.append)  # once: setting one clears the snapshot's cache (store.pooled)
+        views.prime_machines(c, slugs)
+        primed = len(seen)
+        together = {slug: views.machine(c, slug) for slug in slugs}
+        c.set_trace_callback(None)
+    primed, after = seen[:primed], seen[primed:]
+    assert together == alone
+    assert alone["ops"]["online"] and alone["ops"]["machine"]["runner_id"] == one["runner_id"]
+    assert not alone["cpo"]["online"] and alone["cpo"]["machine"]["runner_id"] == two["runner_id"]
+    assert alone["inbox"]["machine"] is None
+    computers = [sql for sql in primed if "runners_with_state" in sql]
+    assert len(computers) == 1 and "assignments" not in computers[0], computers  # not once per bot, through the join
+    assert not [sql for sql in after if "assignments" in sql], after
 
 
 def unprimed(monkeypatch):

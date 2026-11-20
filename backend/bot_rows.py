@@ -147,34 +147,43 @@ def _live_runs(c, slugs):
 def task_flow(c, tasks_by_bot, who=None):
     """{bot: {"going", "waiting"}} over each bot's open tasks the reader may see: `going` has a live run, `waiting` is
     the bot's turn with nothing running (it is woken by the never-stuck check). A task that waits on a person,
-    another task or room counts in neither."""
-    every = [row for tasks in tasks_by_bot.values() for row in tasks]
-    waits = H.task_waits(c, [row["id"] for row in every]) if every else {}
+    another task or room counts in neither. What a task waits on is read only for the tasks it decides: the readable
+    ones with no live run, on the engine (one off it waits on nothing, waiting_on_many), not every open task."""
     live = _live_runs(c, list(tasks_by_bot))
-    out = {}
+    going, pending = {}, {}
     for bot, tasks in tasks_by_bot.items():
-        going = waiting = 0
         running, rooms = live.get(bot, (set(), set()))
+        going[bot], pending[bot] = 0, []
         for row in tasks:
             if who is not None and not privacy.task_readable(c, who, row):
                 continue
             if row["id"] in running or (row.get("conversation_id") and row["conversation_id"] in rooms):
-                going += 1
-                continue
-            first = (waits.get(row["id"]) or [None])[0]
+                going[bot] += 1
+            elif row.get("pipeline_id"):
+                pending[bot].append(row["id"])
+    every = [tid for ids in pending.values() for tid in ids]
+    waits = H.task_waits(c, every) if every else {}
+    out = {}
+    for bot in tasks_by_bot:
+        waiting = 0
+        for tid in pending[bot]:
+            first = (waits.get(tid) or [None])[0]
             if first is not None and first.state == "bot" and first.who == "bot:" + bot:
                 waiting += 1
-        out[bot] = {"going": going, "waiting": waiting}
+        out[bot] = {"going": going[bot], "waiting": waiting}
     return out
 
 
 class BotRows:
-    def __init__(self, c, who, slugs, readable, activity=True):
+    def __init__(self, c, who, slugs, readable, activity=True, fields=None):
         """`slugs`: the bots shown; `readable`: those the caller may read, whose activity is read too unless
-        `activity` is False."""
+        `activity` is False. `fields`: the activity fields the answer keeps (GET /api/v2/bots?fields=), None for all;
+        only what those need is read."""
         privacy.snapshot(c)
         slugs = list(dict.fromkeys(slugs))
         read = [slug for slug in slugs if slug in readable]
+        wanted = None if fields is None else set(fields)
+        self.wants = lambda *names: wanted is None or any(name in wanted for name in names)
         self.configs = {r["bot"]: r for r in read_cache.configs(c, slugs)}
         # The originals of shared bots, which a branch follows.
         sources = {source_of(_json(row["config"])) for row in self.configs.values()} - {""} - set(self.configs)
@@ -185,41 +194,52 @@ class BotRows:
         self.assignments, self.draining, self.scopes, self.statuses, self.status_inputs = {}, set(), {}, {}, {}
         self.queued, self.notes, self.task_flow = {}, {}, {}
         if read and activity:
-            self.assignments = _by(
-                c,
-                "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
-                "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-                "WHERE a.bot IN ({})",
-                read,
-            )
-            self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
-            self.scopes = {
-                bot: row["claim_task"]
-                for bot, row in _by(
-                    c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read
-                ).items()
-            }
-            self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
-            self.status_inputs = privacy.status_inputs(c, list(self.statuses))
-            # Work that will run, not work fenced behind a run nobody reviewed.
-            self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
-            self.notes = H.notes_waiting_counts(c, read, limit=500)
-            stored = []
-            for part in H.chunks(read):
-                stored += c.execute(
-                    "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
-                    ["bot:" + slug for slug in part],
-                ).fetchall()
-            tasks = {}
-            for task in map(dict, stored):
-                tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
-            # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it
-            # reads none: the rows just read stand for every one-task read of them (the waits' too).
-            H.prime_task_rows(c, stored)
-            H.prime_tasks(c, [t["id"] for ts in tasks.values() for t in ts] + list(self.scopes.values()))
-            self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+            if self.wants("assignment", "online"):
+                self.assignments = _by(
+                    c,
+                    "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
+                    "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+                    "WHERE a.bot IN ({})",
+                    read,
+                )
+            if self.wants("draining"):
+                self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
+            if self.wants("status"):
+                self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
+                self.status_inputs = privacy.status_inputs(c, list(self.statuses))
+            if self.wants("queued"):
+                # Work that will run, not work fenced behind a run nobody reviewed.
+                self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
+            if self.wants("notes"):
+                self.notes = H.notes_waiting_counts(c, read, limit=500)
+            if self.wants("task_flow", "goal_active"):
+                stored = []
+                for part in H.chunks(read):
+                    stored += c.execute(
+                        "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
+                        ["bot:" + slug for slug in part],
+                    ).fetchall()
+                tasks = {}
+                for task in map(dict, stored):
+                    tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
+                # The rows just read stand for every one-task read of these tasks (H.task_untagged, the privacy checks,
+                # the waits' waiting_on.prime, a goal's room check). Their tags are not read: nothing here shows or
+                # checks one.
+                H.prime_task_rows(c, stored)
+                if self.wants("task_flow"):
+                    self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+            if self.wants("claim_scoped", "claim_task"):
+                self.scopes = {
+                    bot: row["claim_task"]
+                    for bot, row in _by(
+                        c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read
+                    ).items()
+                }
+                if self.wants("claim_task"):
+                    # For the reader's check on each scoped task (H.task_untagged), which reads none of its tags.
+                    H.prime_tasks(c, list(self.scopes.values()), with_tags=False)
         self.goals = {}
-        for part in H.chunks(slugs if activity else []):
+        for part in H.chunks(slugs if activity and self.wants("goal_active") else []):
             for row in c.execute(
                 "SELECT bot,conversation_id FROM chat_goals WHERE status='active' AND bot IN "
                 f"({','.join('?' * len(part))})",

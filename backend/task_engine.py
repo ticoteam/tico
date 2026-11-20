@@ -491,7 +491,7 @@ def shut_out(
     goes_private = not private and bool(new_owner) and bool(H.private_tasks_default(conn, new_owner))
     if not private and not goes_private:
         return None
-    full: Row = H.task(conn, row["id"]) or row
+    full: Row = H.task_untagged(conn, row["id"]) or row  # who may read it: no tag says
     after: Row = {**full, "owner_id": owner, "private": 1}
     blocked: list[tuple[str, str]] = []
     if private and new_owner and not names(target, new_owner) and not H.task_private_readable(conn, new_owner, full):
