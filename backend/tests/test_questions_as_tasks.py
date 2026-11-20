@@ -532,7 +532,9 @@ def test_a_dependency_on_a_private_question_names_it_only_to_its_readers(c, gene
     made = H.task_create(c, BUILDER, "Renew the lease", "", BUILDER, private=True, readers=["cara"], lint=False)
     X.ran(c, made["id"], BUILDER)
     asked = _ask(c, E.task(c, made["id"]), checked=False)
-    assert TR.relate(c, BUILDER, made["id"], asked["task_id"], "depends_on")
+    # Written before questions could not be depended on (`relate` refuses it now): an older row is still named only to
+    # a reader of the question.
+    TR._insert(c, BUILDER, made["id"], asked["task_id"], "depends_on", H.now())
     hidden = str(TC.task_view(c, made["id"], CARA)["waits"])
     assert asked["task_id"] not in hidden and "Friday" not in hidden
     assert "Friday" in str(TC.task_view(c, made["id"], ANA)["waits"])  # Ana reads her question
@@ -545,3 +547,16 @@ def test_the_question_wait_names_its_person_only_as_its_who_like_a_marks(c, gene
     waits = {w.who: w for w in W.of(c, E.task(c, parent["id"])) if w.state == W.PERSON}
     assert waits[ANA].line == Q.LINE and "Ana" not in waits[ANA].line  # no name in its words, as a ❓'s line has none
     assert waits[BEN].line == "Which venue?"
+
+
+def test_no_task_may_depend_on_a_question(c, general):
+    from backend import task_relations as TR
+
+    parent = _parent(c)
+    asked = _ask(c, parent)
+    other = _parent(c, "Print the flyers")
+    for args in ((other["id"], asked["task_id"], "depends_on"), (parent["id"], asked["task_id"], "depends-on")):
+        with pytest.raises(H.Refused) as refused:
+            TR.relate(c, ANA, *args)
+        assert refused.value.detail == Q.BLOCKS
+    assert c.execute("SELECT COUNT(*) FROM task_relations WHERE kind='depends_on'").fetchone()[0] == 0

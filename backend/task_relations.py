@@ -343,6 +343,10 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
     until = str(until).strip().lower() if until else None
     if until and (kind != "depends_on" or until not in UNTIL):
         H.refuse(conn, actor, "kind", f"Only a depends_on holds until {' or '.join(UNTIL)}, not {kind} until {until}")
+    if kind == "depends_on" and not remove:
+        from . import questions
+
+        questions.refuse_blocking(conn, actor, to_id)  # a question is no dependency, as a ❓ never was one
     one_sided = kind in ("after", "depends_on")
     mover = _mover(conn, actor, mover)
     rows = [_task(conn, actor, tid) for tid in (from_id, to_id)]

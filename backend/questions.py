@@ -271,6 +271,16 @@ def rule_text(conn: sqlite3.Connection, stored: Mapping[str, Any], text: str) ->
     return text
 
 
+BLOCKS = "A question can't block another task"
+
+
+def refuse_blocking(conn: sqlite3.Connection, by: str, task_id: str) -> None:
+    """Refuse making any task depend on a question task (task_relations.relate, every route and the CLI): a ❓ was never
+    something to depend on, and its parent waits on it through its row, not a dependency."""
+    if get(conn, task_id):
+        H.refuse(conn, by, "kind", BLOCKS)
+
+
 def refuse_move(conn: sqlite3.Connection, row: Mapping[str, Any], kind: str, by: str) -> None:
     """A question task never leaves the stage it was filed in (task_engine.move and refile), so no stage's sign-off can
     sit in front of its answer: while it is open only a close moves it, and once it has a question row it is never
