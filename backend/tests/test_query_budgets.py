@@ -25,8 +25,8 @@ BUDGETS = {
     "GET /api/v2/bots": 95,  # 79
     "GET /api/v2/places/person:me": 357,  # 297
     "GET /api/v2/tasks?status=open&limit=500": 114,  # 95
-    "GET /api/v2/tasks?status=open&limit=500&counts=stage&brief=true": 120,  # 100: the board
-    "GET /api/v2/tasks?owner=bot:bot001&status=open&brief=true&limit=200": 94,  # 78: a bot's open tasks
+    "GET /api/v2/tasks?status=open&limit=500&counts=stage&brief=true": 122,  # 101: the board
+    "GET /api/v2/tasks?owner=bot:bot001&status=open&brief=true&limit=200": 95,  # 79: a bot's open tasks
     "GET /api/status": 54,  # 45
     "GET /api/v2/usage?group=bot": 21,  # 17 (255 before one snapshot and one spend read for every bot)
     "GET /api/v2/usage?group=day": 16,  # 13
@@ -36,6 +36,10 @@ BUDGETS = {
     "POST /api/v2/attempts/{aid}/events": 71,  # 59
     "POST /api/v2/runner-claude-logins": 14,  # 11
     "GET /api/v2/runner-credential-grants": 35,  # 29
+}
+# Bytes of the answer, for the lists whose weight was the cost: the size when the budget was set (the comment) plus 10%.
+BYTE_BUDGETS = {
+    "GET /api/v2/tasks?status=open&limit=500&counts=stage&brief=true": 1_285_000,  # 1,167,828 (1,459,644 with whole tags)
 }
 NOW = "2026-11-18T15:00:00Z"  # a Wednesday afternoon
 TARGET_MS = 1000  # every route's p95 target
@@ -224,8 +228,10 @@ def test_the_busiest_routes_stay_inside_their_statement_budgets_at_tidy_scale(ti
             prepare()
             cold(store)
             with counted(store) as seen:
-                answered(route, call())
+                response = call()
+            answered(route, response)
             counts.append(len(seen))
+            size = len(response.content) if response is not None else 0
             worst = seen if len(seen) >= len(worst) else worst
         for _ in range(CALLS):  # timed apart: the trace callback costs, and a traced connection is not reused
             prepare()
@@ -241,6 +247,10 @@ def test_the_busiest_routes_stay_inside_their_statement_budgets_at_tidy_scale(ti
         )
         if max(counts) > BUDGETS[route]:
             over.append(f"  {route}: {max(counts)} statements, budget {BUDGETS[route]}\n{shapes(worst)}")
+        if size > BYTE_BUDGETS.get(route, size):
+            over.append(f"  {route}: {size} bytes, budget {BYTE_BUDGETS[route]}")
+        if route in BYTE_BUDGETS:
+            report[-1] += f"  {size} bytes"
     request.node.user_properties.append(
         (
             "summary",

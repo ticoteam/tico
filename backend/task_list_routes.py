@@ -641,6 +641,19 @@ def readers(auth):
             value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
         return value
 
+    def list_tags(c, who, rows):
+        """{tag id: what a list row shows of it}: LIST_TAG_FIELDS, or the whole tag's placeholder when a page it names
+        is one the reader may not open. Each distinct tag on the page is checked whole, in one pass, before it is cut
+        down, so a denied page in its notes still hides it (files.readable_page_refs, as a full read does)."""
+        from .files import readable_page_refs
+
+        distinct = {tag["id"]: tag for row in rows for tag in row.get("tags") or ()}
+        checked = readable_page_refs(c, auth, who, list(distinct.values()))
+        return {
+            tag_id: shown if shown.get("removed") is True else {k: shown[k] for k in LIST_TAG_FIELDS if k in shown}
+            for tag_id, shown in zip(distinct, checked, strict=True)
+        }
+
     def task_views(rows, c, who, visible_sql="1"):
         """One task-list page, brief (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): each row's plain fields
         and the engine's brief ones (turn, late, snoozed), with a fixed number of reads for the whole page. `rows`
@@ -731,12 +744,12 @@ def readers(auth):
         # time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         task_reads.brief(c, rows, visible_sql)
+        tags = list_tags(c, who, rows)
         result = []
         for row in rows:
             value = plain_view(row, c)
             value.pop("checkpoint", None)  # up to a page of text per task; the full task view carries it
-            # Each tag by what a row shows of it; the whole tag is at GET /api/v2/tags/{id} and on the task's own read.
-            value["tags"] = [{k: tag[k] for k in LIST_TAG_FIELDS} for tag in value["tags"]]
+            value["tags"] = [dict(tags[tag["id"]]) for tag in value["tags"]]
             value.update(
                 {
                     "parent_id": parents.get(row["id"]),
