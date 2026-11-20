@@ -1,6 +1,7 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { said } from './model';
 import {
   addSubtask,
   answerAsk,
@@ -29,18 +30,6 @@ const task = z.string().check(z.minLength(1), z.maxLength(100));
 /** Another task as a person names it: its number, or its id. */
 const other = z.string().check(z.minLength(1), z.maxLength(200));
 
-/** The run's error as "code: reason" and a line for each thing missing, so the control can say why. */
-async function said<T>(p: Promise<T>): Promise<T> {
-  try {
-    return await p;
-  } catch (e) {
-    const err = e as { status?: number; code?: string; message?: string; extra?: { missing?: unknown } };
-    if (err.status === 401 || err.status === 403 || !err.code) throw e;
-    const missing = Array.isArray(err.extra?.missing) ? err.extra.missing.map((m) => `\n- ${String(m)}`).join('') : '';
-    throw Object.assign(new Error(err.message), { status: err.status, code: `${err.code}: ${err.message ?? ''}${missing}` });
-  }
-}
-
 export const rename = defineAction({
   id: 'task.rename',
   title: 'Rename a task',
@@ -49,38 +38,6 @@ export const rename = defineAction({
   run: (_ctx, i) => said(renameTask(i.task, i.title.trim())),
   did: () => 'Renamed',
   target: (i) => ({ kind: 'task-title', id: i.task }),
-});
-
-export const move = defineAction({
-  id: 'task.move',
-  title: 'Move a task',
-  kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)) }),
-  run: (_ctx, i) => said(moveTask(i.task, i.to)),
-  did: (i) => (i.to === 'closed' ? 'Closed' : i.to === 'reopen' ? 'Reopened' : 'Moved'),
-  target: (i) => ({ kind: 'task-stage', id: i.task }),
-});
-
-/** Flow's Move back: to a stage before the one it is in. */
-export const moveBack = defineAction({
-  id: 'task.moveBack',
-  title: 'Move a task back',
-  kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)) }),
-  run: (_ctx, i) => said(moveTask(i.task, i.to)),
-  did: () => 'Moved back',
-  target: (i) => ({ kind: 'task-stage', id: i.task }),
-});
-
-/* Past what is missing, with a reason on record. The server decides who may; Tico acts with the person's rights. */
-export const moveAnyway = defineAction({
-  id: 'task.moveAnyway',
-  title: 'Move a task past what is missing',
-  kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)), why: z.string().check(z.minLength(1), z.maxLength(2000)) }),
-  run: (_ctx, i) => said(moveTask(i.task, i.to, i.why.trim())),
-  did: () => 'Moved',
-  target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 
 export const give = defineAction({
@@ -155,13 +112,16 @@ export const relate = defineAction({
   target: (i) => ({ kind: 'task-relations', id: i.task }),
 });
 
+/** A new subtask by its title (and owner), or another task put under it (`subtask`, its number or id). */
 export const subtask = defineAction({
   id: 'task.subtask',
   title: 'Add a subtask',
   kind: 'change',
-  input: z.strictObject({ task, title: z.string().check(z.minLength(1), z.maxLength(300)), owner: z.optional(z.string().check(z.minLength(1), z.maxLength(200))) }),
-  run: (_ctx, i) => said(addSubtask(i.task, i.title.trim(), i.owner)),
-  did: () => 'Added a subtask',
+  input: z
+    .strictObject({ task, title: z.optional(z.string().check(z.minLength(1), z.maxLength(300))), owner: z.optional(z.string().check(z.minLength(1), z.maxLength(200))), subtask: z.optional(other) })
+    .check(z.refine((i) => !i.title !== !i.subtask, 'Give a title or a subtask, not both')),
+  run: (_ctx, i) => said(i.subtask ? setTaskParent(i.subtask, i.task) : addSubtask(i.task, (i.title ?? '').trim(), i.owner)),
+  did: (i) => (i.subtask ? 'Made it a subtask' : 'Added a subtask'),
   target: (i) => ({ kind: 'task-subtasks', id: i.task }),
 });
 
@@ -302,19 +262,9 @@ export const newPage = defineAction({
 
 /* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
 
-import { deleteTask, followTask, moveTaskTo, setTaskHuman, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
+import { deleteTask, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
 
-const actor =z.string().check(z.minLength(1), z.maxLength(200));
-
-export const setHuman = defineAction({
-  id: 'task.setHuman',
-  title: 'Set the person accountable for a task',
-  kind: 'change',
-  input: z.strictObject({ task, human: z.nullable(actor) }),
-  run: (_ctx, i) => said(setTaskHuman(i.task, i.human)),
-  did: (i) => (i.human ? 'Set the Human' : 'Took the Human off'),
-  target: (i) => ({ kind: 'task-human', id: i.task }),
-});
+const actor = z.string().check(z.minLength(1), z.maxLength(200));
 
 export const setSize = defineAction({
   id: 'task.setSize',
@@ -370,17 +320,6 @@ export const setReaders = defineAction({
   target: (i) => ({ kind: 'task-visible', id: i.task }),
 });
 
-/** Follow or unfollow: the person, or `actor` (someone who already sees the task). */
-export const follow = defineAction({
-  id: 'task.follow',
-  title: 'Follow a task',
-  kind: 'change',
-  input: z.strictObject({ task, actor: z.optional(actor), following: z.boolean() }),
-  run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following })),
-  did: (i) => (i.following ? 'Following' : 'Unfollowed'),
-  target: (i) => ({ kind: 'task-followers', id: i.task }),
-});
-
 /** Open again a finished task, with why (docs/dev/pipelines-v3.md C24). */
 export const reopen = defineAction({
   id: 'task.reopen',
@@ -389,22 +328,6 @@ export const reopen = defineAction({
   input: z.strictObject({ task, why: z.string().check(z.minLength(1), z.maxLength(2000)) }),
   run: (_ctx, i) => said(moveTask(i.task, 'reopen', i.why.trim())),
   did: () => 'Reopened',
-  target: (i) => ({ kind: 'task-stage', id: i.task }),
-});
-
-/** To another pipeline, at its `stage` (its first when left out). On the task's page, the address follows it there. */
-export const moveTo = defineAction({
-  id: 'task.moveTo',
-  title: 'Move a task to another pipeline',
-  kind: 'change',
-  input: z.strictObject({ task, pipeline: z.string().check(z.minLength(1), z.maxLength(200)), stage: z.optional(z.string().check(z.minLength(1), z.maxLength(200))), why: z.optional(z.string().check(z.maxLength(2000))) }),
-  run: async ({ router }, i) => {
-    const r = await said(moveTaskTo(i.task, i.pipeline, i.stage, i.why?.trim() || undefined));
-    const path = router.state.location.pathname;
-    const n = r.task.number ?? r.task.id;
-    if (path.startsWith('/tasks/')) await router.navigate({ to: `/tasks/${encodeURIComponent(r.task.pipeline_id ?? i.pipeline)}/${n}` });
-  },
-  did: () => 'Moved it',
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 

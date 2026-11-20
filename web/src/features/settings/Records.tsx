@@ -10,9 +10,7 @@ import { Link as To } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { run } from '@/actions/run';
-import { refusal } from '@/actions';
 import { fmtDate } from '@/lib';
-import { toast } from '@/kit/Toast';
 import { FiguresStrip, Section } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
 import { fixHref } from './fixes';
@@ -231,22 +229,6 @@ function CheckRow({ c }: { c: HealthCheck }) {
         <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
       </span>
     </div>
-  );
-}
-
-/** The page head's one button: read every check again now. */
-export function CheckNow() {
-  const [busy, setBusy] = useState(false);
-  const check = async () => {
-    setBusy(true);
-    const r = await run('settings.checkHealth', {}, { via: 'click' });
-    setBusy(false);
-    if (!r.ok) toast(refusal(r, "Couldn't check"));
-  };
-  return (
-    <Button busy={busy} onClick={() => check()}>
-      Check now
-    </Button>
   );
 }
 

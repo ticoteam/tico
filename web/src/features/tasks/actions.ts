@@ -1,5 +1,6 @@
 import * as z from 'zod/mini';
 import { defineAction, refusalFor, toldOf } from '@/actions';
+import { moveTask as moveOne, moveTaskTo, said as taskSaid } from '@/features/task/routing';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
 import {
@@ -8,10 +9,8 @@ import {
   createPipeline,
   createTask,
   listsOf,
-  makeSubtask,
   mergeTask,
   moveMany,
-  moveTask,
   pipelinesQuery,
   removeRequester,
   savePipeline,
@@ -110,27 +109,6 @@ async function said<T>(run: () => Promise<T>, fallback: string): Promise<T> {
   }
 }
 
-export const move = defineAction({
-  id: 'tasks.move',
-  title: 'Move a task to a stage',
-  kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id or name, or next, done or closed')) }),
-  run: (_ctx, { task, to }) => said(() => moveTask(task, to), "Couldn't move the task"),
-  did: (_input, out) => (out ? `Moved #${out.number ?? out.id}` : 'Moved the task'),
-  target: ({ task }, out) => ({ kind: 'task', id: out?.number ?? task }),
-});
-
-/** One task under another as its subtask (a card let go over another's card, Make it a subtask). */
-export const subtask = defineAction({
-  id: 'tasks.makeSubtask',
-  title: 'Make a task a subtask of another',
-  kind: 'change',
-  input: z.strictObject({ task, parent: task }),
-  run: (_ctx, { task, parent }) => said(() => makeSubtask(task, parent), "Couldn't make it a subtask"),
-  did: (_input, out) => (out ? `Made #${out.number ?? out.id} a subtask` : 'Made it a subtask'),
-  target: ({ parent }) => ({ kind: 'task', id: parent }),
-});
-
 /** Merge a task into another: `into` stays and gets its details, the task is closed as a duplicate. It cannot be undone
     (backend/task_merge.py has no way back), so it is the person's own press. */
 export const merge = defineAction({
@@ -173,25 +151,47 @@ function tell(left: Skipped, total: number) {
   return left;
 }
 
-export const moveAll = defineAction({
-  id: 'tasks.moveMany',
-  title: 'Move tasks to a stage',
+/** One task (`tasks` is its id) or many (a list), to `to`: a stage (back is a stage before the one it is in), next, done,
+    closed or reopen. With `pipeline`, to that pipeline's stage `to` (its first when left out), and on the task's page the
+    address follows it. `anyway` moves past what the stage still needs, with `why` on record. One task's refusal carries
+    what is missing (task/model.ts said); many say what was left in a toast, and Close says so and takes it back. */
+export const move = defineAction({
+  id: 'tasks.move',
+  title: 'Move tasks',
   kind: 'change',
-  input: z.strictObject({ tasks, to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id, or done, closed or reopen')) }),
-  run: async (_ctx, { tasks, to }) => {
-    const { moved, movedUnseen, skipped } = await said(() => moveMany(tasks, to), "Couldn't move the tasks");
-    const left = tell(skipped, tasks.length);
-    // Closing is the one a slip makes: it says so and takes it back.
-    const closed = moved.length + movedUnseen;
-    if (to === 'closed' && closed > 0)
-      toast({
-        text: `Closed ${plural(closed)}`,
-        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen') } : undefined,
-      });
-    return left;
+  input: z
+    .strictObject({
+      tasks: z.union([task, tasks.check(z.minLength(1))]),
+      to: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id or name, or next, done, closed or reopen'))),
+      pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(200), z.describe('another pipeline, by id or name'))),
+      anyway: z.optional(z.boolean()),
+      why: z.optional(z.string().check(z.maxLength(2000))),
+    })
+    .check(
+      z.refine((i) => !!(i.to || i.pipeline), 'Say where: to, pipeline or both'),
+      z.refine((i) => !i.anyway || !!i.why?.trim(), 'Moving anyway needs a why'),
+    ),
+  run: async ({ router }, { tasks: ids, to, pipeline, why }) => {
+    const reason = why?.trim() || undefined;
+    if (Array.isArray(ids)) {
+      const { moved, movedUnseen, skipped } = await said(() => moveMany(ids, to, pipeline, reason), "Couldn't move the tasks");
+      tell(skipped, ids.length);
+      const closed = moved.length + movedUnseen;
+      if (to === 'closed' && closed > 0)
+        toast({ text: `Closed ${plural(closed)}`, action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen') } : undefined });
+      return undefined;
+    }
+    if (!pipeline) return (await taskSaid(moveOne(ids, to ?? '', reason))).task;
+    const { task: t } = await taskSaid(moveTaskTo(ids, pipeline, to, reason));
+    if (/^\/tasks\/[^/]+\/(?!edit$)[^/]+/.test(router.state.location.pathname)) await router.navigate({ to: `${where(t.pipeline_id ?? pipeline)}/${t.number ?? t.id}` });
+    return t;
   },
-  did: ({ tasks, to }) => (to === 'closed' ? `Closed ${plural(tasks.length)}` : `Moved ${plural(tasks.length)}`),
-  target: ({ to }) => (to === 'done' || to === 'closed' || to === 'reopen' ? null : { kind: 'stage', id: to }),
+  did: ({ tasks: ids, to }, out) => {
+    const verb = to === 'closed' ? 'Closed' : to === 'reopen' ? 'Reopened' : 'Moved';
+    return Array.isArray(ids) ? `${verb} ${plural(ids.length)}` : out ? `${verb} #${out.number ?? out.id}` : verb;
+  },
+  target: ({ tasks: ids, to }, out) =>
+    !Array.isArray(ids) ? { kind: 'task', id: out?.number ?? ids } : to && !['next', 'done', 'closed', 'reopen'].includes(to) ? { kind: 'stage', id: to } : null,
 });
 
 export const assignAll = defineAction({
@@ -212,18 +212,7 @@ export const snoozeAll = defineAction({
   did: ({ tasks }) => `Snoozed ${plural(tasks.length)}`,
 });
 
-/* ---------------------------------------------------------------- Edit pipeline */
-
-export const editPipeline = defineAction({
-  id: 'tasks.editPipeline',
-  title: 'Edit pipeline',
-  kind: 'view',
-  input: z.strictObject({ pipeline, open: z.optional(z.boolean()) }),
-  // Its own page (`/tasks/<pipeline>/edit`); closing it goes back to the pipeline.
-  run: ({ router }, { pipeline, open = true }) => router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline) }),
-  did: ({ open = true }) => (open ? 'Opened Edit pipeline' : 'Closed Edit pipeline'),
-  target: ({ pipeline }) => ({ kind: 'page', id: `${where(pipeline)}/edit` }),
-});
+/* ---------------------------------------------------------------- Edit pipeline (its page is /tasks/<pipeline>/edit; ?new=1 makes one) */
 
 const stageDraft = z.strictObject({
   id: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a saved stage id; leave out for a new stage'))),
@@ -245,9 +234,9 @@ const pipelineFacts = {
     `version` is the settings_version the person read: someone else's save in between is refused (task_changed). A
     removed stage that holds tasks needs `move_to`, where they go: that moves them and deletes the stage, which cannot be
     undone, so it is the person's own press, never Tico's. */
-export const savePipelineStages = defineAction({
-  id: 'tasks.savePipeline',
-  title: 'Save a pipeline',
+export const editPipeline = defineAction({
+  id: 'tasks.editPipeline',
+  title: 'Edit a pipeline',
   kind: 'change',
   input: z.strictObject({
     pipeline,
@@ -261,18 +250,6 @@ export const savePipelineStages = defineAction({
   run: (_ctx, { pipeline, stages, version, move_to, ...facts }) => savePipeline(pipeline, { stages, facts, version, moveTo: move_to }),
   did: () => 'Saved the pipeline',
   target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
-});
-
-/** New pipeline: the editor's page, empty (`/tasks/<pipeline>/edit?new=1`; Back goes to the pipeline on screen). */
-export const newPipeline = defineAction({
-  id: 'tasks.newPipeline',
-  title: 'New pipeline',
-  kind: 'view',
-  input: z.strictObject({ pipeline, open: z.optional(z.boolean()) }),
-  run: ({ router }, { pipeline, open = true }) =>
-    router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline), search: open ? ({ new: true } as never) : undefined }),
-  did: ({ open = true }) => (open ? 'Opened New pipeline' : 'Closed New pipeline'),
-  target: ({ pipeline }) => ({ kind: 'page', id: `${where(pipeline)}/edit` }),
 });
 
 /** Makes a pipeline (the company's owner and Admins; the server says so to anyone else) and opens it. */

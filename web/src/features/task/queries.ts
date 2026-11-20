@@ -145,12 +145,16 @@ export function setTaskDue(id: string, due: string | null) {
 
 export const tagTask = (id: string, labels: string[]) => change(id, { labels }, (idem) => post(taskPath(id), { labels }, idem));
 
-/** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. */
+/** `to`: a stage's id or name, or next, done, closed or reopen. `why` moves it past what is missing. It moves at once
+    in its detail and on each list's row, and goes back if the server refuses. */
 export function moveTask(id: string, to: string, why?: string) {
   const pipelines = queryClient.getQueryData(pipelinesQuery.queryKey);
+  const now = new Date().toISOString();
   const shown = (t: TaskData): Fields => {
     const stages = pipelines?.find((p) => p.id === t.pipeline_id)?.stages ?? queryClient.getQueryData(retiredStagesQuery(t.pipeline_id ?? '').queryKey);
-    const stage = stages?.find((s) => s.id === to);
+    const stage = stages?.find((s) => s.id === to || s.name.toLowerCase() === to.toLowerCase());
+    // A list's row has no stage of its own, only its id.
+    if (stage && !t.stage) return { stage_id: stage.id, stage_since: now };
     if (stage && t.stage) return { stage_id: stage.id, stage: { ...t.stage, id: stage.id, name: stage.name, side: !!stage.side } };
     if (to === 'closed') return { status: 'closed' };
     if (to === 'done') return { status: 'done' };
@@ -258,9 +262,10 @@ const reread = (id: string) => queryClient.invalidateQueries({ queryKey: keys.ta
 /** A task as a person names it: its number (412, #412) or its id. */
 const named = (other: string) => refOf(other.trim().replace(/^#/, ''));
 
-/** Put the task under `parent` as its subtask. */
+/** Put the task under `parent` as its subtask: the answer shows wherever the task does, and both are read again. */
 export async function setTaskParent(id: string, parent: string) {
-  const r = await api.post<TaskResult>(`${taskPath(id)}/parent`, { parent: named(parent) });
+  const r = await change(id, {}, (idem) => post(`${taskPath(id)}/parent`, { parent: named(parent) }, idem));
+  void reread(parent);
   await reread(id);
   return r;
 }
@@ -339,13 +344,8 @@ export function dropLink(id: string, link: string) {
 
 import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
 
-/** Someone following a task (backend/task_followers.py). */
-export interface Follower {
-  actor: string;
-}
-/** The detail's task as Details reads its facts: its followers (null for a task with no thread of its own) and its
-    goal, which the schema's task leaves out. */
-export type TaskFacts = TaskData & { followers?: Follower[] | null; goal_id?: string | null };
+/** The detail's task as Details reads its facts: its goal, which the schema's task leaves out. */
+export type TaskFacts = TaskData & { goal_id?: string | null };
 
 /** Who may see it: its team, the public roadmap too, or only its people. */
 export type Visible = 'team' | 'public' | 'private';
@@ -377,9 +377,6 @@ export const taskGoalQuery = (goal: string) =>
 
 /** A field edit (POST /api/v2/tasks/{tid}): shown at once, the server's task in its place. */
 const edit = (id: string, fields: Fields | ((t: TaskData) => Fields), body: object) => change(id, fields, (idem) => post(taskPath(id), body, idem));
-
-/** The person accountable for it, whoever owns it; null takes them off. */
-export const setTaskHuman = (id: string, human: string | null) => edit(id, { human_id: human }, { human: human ?? '' });
 
 export const setTaskSize = (id: string, size: number) => edit(id, { size }, { size });
 
@@ -417,22 +414,6 @@ export function setTaskReaders(id: string, add: string[], remove: string[]) {
     optimistic: (cur: TaskData | undefined) => cur && { ...cur, readers: [...new Set([...(cur.readers ?? []), ...add])].filter((r) => !remove.includes(r)) },
     send: (idem) => api.post<ReadersAnswer>(`${taskPath(id)}/readers`, { add, remove }, { idempotencyKey: idem }),
     settle: (cur: TaskData | undefined, answer) => cur && { ...cur, readers: answer.readers, private: answer.private },
-  });
-}
-
-/** Follow or unfollow: the person themselves, or `actor` (PUT /api/v2/tasks/{tid}/followers). */
-type FollowersAnswer = { followers: Follower[] | null };
-export function followTask(id: string, change: { actor?: string; following: boolean }) {
-  const who = change.actor ?? queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
-  const shown = (list: Follower[]): Follower[] => {
-    const rest = list.filter((f) => f.actor !== who);
-    return change.following ? [...rest, { actor: who }] : rest;
-  };
-  return write<FollowersAnswer>({
-    key: keys.tasks.detail(id),
-    optimistic: (cur: TaskFacts | undefined) => cur && { ...cur, followers: shown(cur.followers ?? []) },
-    send: (idem) => api.put<FollowersAnswer>(`${taskPath(id)}/followers`, change, { idempotencyKey: idem }),
-    settle: (cur: TaskFacts | undefined, answer) => cur && { ...cur, followers: answer.followers },
   });
 }
 

@@ -18,7 +18,7 @@ import { fmtDate } from '@/lib';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
-import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
+import { Face, isPending, OwnerButton, taskHref, useMove, useOpenEditor, waitsOnMe } from './parts';
 import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
@@ -117,7 +117,7 @@ function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapS
 
 function MoreMenu({ p, search, none }: { p: Pipeline; search: RoadmapSearch; none: boolean }) {
   const openTasks = useAction('tasks.open');
-  const edit = useAction('tasks.editPipeline');
+  const edit = useOpenEditor();
   const cards = useCards();
   const actors = useActors();
   const tags = useQuery(tagsQuery).data ?? [];
@@ -129,7 +129,7 @@ function MoreMenu({ p, search, none }: { p: Pipeline; search: RoadmapSearch; non
         </MenuSub>
       )}
       <MenuItem icon="tasks" label={`Open ${p.name}`} onSelect={() => void openTasks.run({ pipeline: p.id })} />
-      {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
+      {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => edit(p.id)} />}
     </PageMore>
   );
 }
@@ -206,7 +206,7 @@ function Track({ p, t }: { p: Pipeline; t: TaskItem }) {
 /** A roadmap row (more.js roadmapRow): mark, title, Late and the lock, the track, owner, date; "⋯" holds Requesters. */
 function RoadmapRow({ t, p, me }: { t: TaskItem; p: Pipeline; me: string | undefined }) {
   const requesters = useAction('tasks.openRequesters');
-  const move = useAction('tasks.move');
+  const move = useMove();
   const locked = !!t.visibility && t.visibility !== 'public';
   const row = (
     <Row className="task rm" href={isPending(t) ? undefined : taskHref(p.id, t)} title={t.title} target={`task:${t.number ?? t.id}`}>
@@ -234,7 +234,7 @@ function RoadmapRow({ t, p, me }: { t: TaskItem; p: Pipeline; me: string | undef
       ? [
           <MenuRule key="rule" />,
           ...p.stages.map((s) => (
-            <MenuItem key={s.id} label={s.name} on={s.id === t.stage_id} onSelect={() => s.id !== t.stage_id && void move.run({ task: t.id, to: s.id })} />
+            <MenuItem key={s.id} label={s.name} on={s.id === t.stage_id} onSelect={() => s.id !== t.stage_id && void move(t.id, s.id)} />
           )),
         ]
       : []),

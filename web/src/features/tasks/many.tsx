@@ -31,7 +31,7 @@ export const snoozeChoices = () => [
 
 /** Move to ›, Assign to ›, Snooze ›, then Close: what both a stage's "⋯" and the Select bar do to a set of tasks. */
 function useMany(ids: readonly string[], after?: () => void) {
-  const move = useAction('tasks.moveMany');
+  const move = useAction('tasks.move');
   const assign = useAction('tasks.assignMany');
   const snooze = useAction('tasks.snoozeMany');
   const done = (p: Promise<unknown>) => void p.finally(() => after?.());

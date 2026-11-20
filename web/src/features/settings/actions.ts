@@ -87,7 +87,6 @@ import {
 } from './queries';
 import {
   askQuery,
-  healthQuery,
   markChangelogRead,
   resetAsk,
   roadmapQuery,
@@ -382,18 +381,6 @@ export const reportsDirect = defineAction({
 });
 
 // ---------------------------------------------------------------- security
-
-export const screenMode = defineAction({
-  id: 'settings.setScreening',
-  title: 'Change how a door is screened',
-  kind: 'change',
-  input: z.strictObject({ door: z.enum(['webhook', 'mail', 'idea', 'watcher', 'document', 'slack'] as const), mode: z.enum(['off', 'warn', 'hold'] as const) }),
-  // Holding is the strict side and stays Tico's; anything looser is the person's own press.
-  can: (ctx, { mode }) => !(mode !== 'hold' && ctx.via === 'tico'),
-  run: (_ctx, { door, mode }) => setScreening({ [door]: mode }),
-  did: ({ mode }) => `Screening set to ${mode}`,
-  target: ({ door }) => setting(`screen-${door}`),
-});
 
 export const detector = defineAction({
   id: 'settings.setDetector',
@@ -1229,18 +1216,6 @@ export const askReset = defineAction({
   run: () => resetAsk(),
   did: () => 'Using the team default',
   target: () => setting('ask'),
-});
-
-export const healthCheck = defineAction({
-  id: 'settings.checkHealth',
-  title: 'Check health now',
-  kind: 'view',
-  input: z.strictObject({}),
-  run: async (ctx) => {
-    await ctx.queryClient.refetchQueries({ queryKey: healthQuery.queryKey, exact: true });
-  },
-  did: () => 'Checked',
-  target: () => setting('health'),
 });
 
 export const changelogRead = defineAction({

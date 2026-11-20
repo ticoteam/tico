@@ -43,7 +43,6 @@ import {
   type DirectorySynced,
   type DirectoryView,
   type PageOwnerRow,
-  type ScreenMode,
 } from './queries';
 
 const bare = (actor: string) => actor.replace(/^human:/, '');
@@ -736,22 +735,12 @@ function EveryonesTokens() {
 
 // ---------------------------------------------------------------- Security
 
-const MODES: { value: ScreenMode; label: string }[] = [
-  { value: 'off', label: 'Off' },
-  { value: 'warn', label: 'Warn' },
-  { value: 'hold', label: 'Hold' },
-];
-// Email can warn but not hold (old app ui/app/settings-release.ts screeningHTML).
-const MAIL_MODES = MODES.filter((m) => m.value !== 'hold');
-
 export function Security() {
   const screening = useQuery(screeningQuery);
   const support = useQuery(supportQuery);
   const letIn = useQuery({ ...supportAccessQuery, retry: false });
   const v = screening.data as ScreeningFull | undefined;
   if (!v) return null;
-  // One choice for every door but mail, which has its own.
-  const others = Object.keys(v.modes).filter((d) => d !== 'mail');
   return (
     <>
       <Section name="Screening" target="setting:screening">
@@ -768,21 +757,6 @@ export function Security() {
             checked={v.layers.model}
             onChange={(on) => void act('settings.setDetector', { detector: 'model', on })}
           />
-          {others.length > 0 && (
-            <Line label="When caught" target="setting:screen-doors">
-              <Segmented
-                label="When caught"
-                options={MODES}
-                value={v.modes[others[0]!] ?? 'off'}
-                onValueChange={(mode) => others.forEach((door) => void act('settings.setScreening', { door, mode }))}
-              />
-            </Line>
-          )}
-          {'mail' in v.modes && (
-            <Line label="In mail" target="setting:screen-mail">
-              <Segmented label="In mail" options={MAIL_MODES} value={v.modes.mail ?? 'off'} onValueChange={(mode) => void act('settings.setScreening', { door: 'mail', mode })} />
-            </Line>
-          )}
           <ScreeningMore recent={v.recent} />
         </Facts>
       </Section>

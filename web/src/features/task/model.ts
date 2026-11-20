@@ -165,6 +165,18 @@ export function reasonOf(error: string | undefined): string {
 /** A refused press's toast: "Not saved", then why. */
 export const failedToast = (r: Pick<Result, 'error' | 'why'>): RefusalToast => refusal(r, 'Not saved', 'You can’t do that on this task');
 
+/** The run's error as "code: reason" and a line for each thing missing, so the control can say why. */
+export async function said<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p;
+  } catch (e) {
+    const err = e as { status?: number; code?: string; message?: string; extra?: { missing?: unknown } };
+    if (err.status === 401 || err.status === 403 || !err.code) throw e;
+    const missing = Array.isArray(err.extra?.missing) ? err.extra.missing.map((m) => `\n- ${String(m)}`).join('') : '';
+    throw Object.assign(new Error(err.message), { status: err.status, code: `${err.code}: ${err.message ?? ''}${missing}` });
+  }
+}
+
 export interface Refusal {
   code: string;
   reason: string;

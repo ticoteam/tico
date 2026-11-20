@@ -347,9 +347,9 @@ describe('a mailbox', () => {
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/mailboxes/m1/accesses/a1', method: 'PATCH', body: { level: 'read' } }]));
     fireEvent.click(within(box).getByRole('button', { name: 'Check now' }));
     expect(await screen.findByText('Connected')).toBeTruthy();
-    expect(await run('tools.setMailboxAccess', { mailbox: 'm1', access: 'a1', level: 'none' }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(await run('tools.setAccess', { kind: 'mailbox', id: 'm1', who: 'a1', level: 'none' }, { via: 'tico' })).toMatchObject({ ok: true });
     queryClient.setQueryData(mailboxQuery('m1').queryKey, mailbox({ accesses: [{ id: 'a1', grantee_id: 'helper', grantee_type: 'bot', implicit: false, level: 'read', name: 'Helper' }] }) as never);
-    expect(await run('tools.setMailboxAccess', { mailbox: 'm1', access: 'a1', level: 'read_write' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('tools.setAccess', { kind: 'mailbox', id: 'm1', who: 'a1', level: 'read_write' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('tools.addMailboxAccess', { mailbox: 'm1', type: 'person', who: 'p2', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('tools.shareMailbox', { mailbox: 'm1' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
@@ -384,9 +384,9 @@ describe('a Tico address', () => {
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/inbound/inboxes/i1/audience', method: 'PUT', body: { audience: 'team', group_id: 'g1' } }]));
     fireEvent.click(screen.getByRole('button', { name: 'Check connection' }));
     expect(await screen.findByText('Connected')).toBeTruthy();
-    expect(await run('tools.setInboxReaders', { inbox: 'i1', audience: 'team', group: 'g1' }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(await run('tools.setAccess', { kind: 'inbox', id: 'i1', who: 'group:g1', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: true });
     queryClient.setQueryData(inboxesQuery.queryKey, [{ ...box, audience: 'team' }]);
-    expect(await run('tools.setInboxReaders', { inbox: 'i1', audience: 'company' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('tools.setAccess', { kind: 'inbox', id: 'i1', who: 'company', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('tools.checkInbox', {}, { via: 'tico' })).toMatchObject({ ok: true });
   });
 });
@@ -435,8 +435,8 @@ describe('a website', () => {
         { url: '/api/v2/website-tools/w1/accounts/a1/access/human%3Ap1', method: 'PUT', body: { on: false } },
       ]),
     );
-    expect(await run('tools.setAccountAccess', { tool: 'w1', account: 'a1', subject: 'bots', on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('tools.setAccountAccess', { tool: 'w1', account: 'a1', subject: 'human:p1', on: false }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(await run('tools.setAccess', { kind: 'account', id: 'a1', tool: 'w1', who: 'bots', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('tools.setAccess', { kind: 'account', id: 'a1', tool: 'w1', who: 'human:p1', level: 'none' }, { via: 'tico' })).toMatchObject({ ok: true });
     expect(await run('tools.removeAccount', { tool: 'w1', account: 'a1' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('tools.deleteWebsite', { tool: 'w1' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     await pick('ops@example.com options', 'Remove account');
@@ -594,8 +594,8 @@ describe('one mailing address', () => {
     const before = reads(sent)().filter((u) => u === '/api/v2/postal/addresses').length;
     fireEvent.click(within(page).getByRole('button', { name: 'Check connection' }));
     await waitFor(() => expect(reads(sent)().filter((u) => u === '/api/v2/postal/addresses').length).toBe(before + 1));
-    expect(await tico('tools.setAddressAccess', { address: 'as1', type: 'person', who: 'p2', read: true })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect((await tico('tools.setAddressAccess', { address: 'as1', type: 'bot', who: 'b1', read: false })).ok).toBe(true);
+    expect(await tico('tools.setAccess', { kind: 'address', id: 'as1', who: 'human:p2', level: 'read' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect((await tico('tools.setAccess', { kind: 'address', id: 'as1', who: 'bot:b1', level: 'none' })).ok).toBe(true);
   });
 
   it('its letters open their scan and their task, and an admin retries a failed one; an address waiting on Form 1583 shows its steps @s868', async () => {
@@ -878,7 +878,7 @@ describe('Google', () => {
     expect(await run('tools.disconnectMyGoogle', {}, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     // letters: Tico narrows, never widens
     expect(await run('tools.setIntake', { inbox: 'm1', senders: ['scans@example.test'] }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('tools.setLetterAccess', { type: 'bot', who: 'fern', read: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('tools.setAccess', { kind: 'letters', who: 'bot:fern', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('tools.setLegalMail', { bot: 'fern' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(sent.length).toBe(before);
   });
@@ -1023,9 +1023,9 @@ describe('letters', () => {
   it('lets someone read every letter and takes it back; nobody but a person or an agent', async () => {
     const sent = serve();
     at('/library/tools');
-    expect((await run('tools.setLetterAccess', { type: 'bot', who: 'fern', read: true }, { via: 'click' })).ok).toBe(true);
-    expect((await run('tools.setLetterAccess', { type: 'person', who: 'p1', read: false }, { via: 'click' })).ok).toBe(true);
-    expect((await run('tools.setLetterAccess', { type: 'admins', who: 'x', read: true }, { via: 'click' })).ok).toBe(false);
+    expect((await run('tools.setAccess', { kind: 'letters', who: 'bot:fern', level: 'read' }, { via: 'click' })).ok).toBe(true);
+    expect((await run('tools.setAccess', { kind: 'letters', who: 'human:p1', level: 'none' }, { via: 'click' })).ok).toBe(true);
+    expect((await run('tools.setAccess', { kind: 'letters', who: 'admins:x', level: 'read' }, { via: 'click' })).ok).toBe(false);
     expect(list(sent)).toEqual([
       ['PUT', '/api/v2/postal/addresses/all/grants/bot/fern', { level: 'read' }],
       ['DELETE', '/api/v2/postal/addresses/all/grants/person/p1'],
@@ -1384,7 +1384,7 @@ describe('Tools', () => {
     expect(screen.queryByRole('menuitem', { name: 'Pat Sample' })).toBeNull();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Robin Sample' }));
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/api-tools/t1/access/human%3Ap2', method: 'PUT', body: { level: 'read' } }]));
-    expect(await run('tools.setAccess', { tool: 't1', subject: 'human:p3', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(await run('tools.setAccess', { kind: 'api', id: 't1', who: 'human:p3', level: 'read' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 
   it('a website shows its site and logins, and adds an account @s865 @s924', async () => {

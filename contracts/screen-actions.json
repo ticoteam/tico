@@ -7524,16 +7524,6 @@
       }
     },
     {
-      "id": "settings.checkHealth",
-      "title": "Check health now",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.defaultModel",
       "title": "Change the model a new agent uses",
       "kind": "change",
@@ -8119,38 +8109,6 @@
         "required": [
           "person",
           "role"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.setScreening",
-      "title": "Change how a door is screened",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "door": {
-            "enum": [
-              "webhook",
-              "mail",
-              "idea",
-              "watcher",
-              "document",
-              "slack"
-            ]
-          },
-          "mode": {
-            "enum": [
-              "off",
-              "warn",
-              "hold"
-            ]
-          }
-        },
-        "required": [
-          "door",
-          "mode"
         ],
         "additionalProperties": false
       }
@@ -9215,34 +9173,6 @@
       }
     },
     {
-      "id": "task.follow",
-      "title": "Follow a task",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "actor": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "following": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "task",
-          "following"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "task.give",
       "title": "Give a task to someone",
       "kind": "change",
@@ -9322,121 +9252,6 @@
         "required": [
           "task",
           "page"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.move",
-      "title": "Move a task",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "task",
-          "to"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.moveAnyway",
-      "title": "Move a task past what is missing",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "why": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          }
-        },
-        "required": [
-          "task",
-          "to",
-          "why"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.moveBack",
-      "title": "Move a task back",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "task",
-          "to"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.moveTo",
-      "title": "Move a task to another pipeline",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "pipeline": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "stage": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "why": {
-            "type": "string",
-            "maxLength": 2000
-          }
-        },
-        "required": [
-          "task",
-          "pipeline"
         ],
         "additionalProperties": false
       }
@@ -9634,38 +9449,6 @@
         "required": [
           "task",
           "due"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.setHuman",
-      "title": "Set the person accountable for a task",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "human": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "task",
-          "human"
         ],
         "additionalProperties": false
       }
@@ -9969,11 +9752,15 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "subtask": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": [
-          "task",
-          "title"
+          "task"
         ],
         "additionalProperties": false
       }
@@ -10272,315 +10059,7 @@
     },
     {
       "id": "tasks.editPipeline",
-      "title": "Edit pipeline",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "pipeline": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a pipeline id"
-          },
-          "open": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "pipeline"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.filter",
-      "title": "Filter tasks",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120,
-                "description": "an actor id: human:<id> or bot:<slug>"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "waiting": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120,
-                "description": "an actor id: human:<id> or bot:<slug>"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "asked": {
-            "anyOf": [
-              {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 120,
-                "description": "an actor id: human:<id> or bot:<slug>"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "tag": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 120,
-                "description": "a tag key"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "due": {
-            "anyOf": [
-              {
-                "enum": [
-                  "overdue",
-                  "week",
-                  "any"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "late": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "q": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 200
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.makeSubtask",
-      "title": "Make a task a subtask of another",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "parent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          }
-        },
-        "required": [
-          "task",
-          "parent"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.move",
-      "title": "Move a task to a stage",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a stage id or name, or next, done or closed"
-          }
-        },
-        "required": [
-          "task",
-          "to"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.moveMany",
-      "title": "Move tasks to a stage",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "tasks": {
-            "maxItems": 500,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100,
-              "description": "a task id"
-            }
-          },
-          "to": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a stage id, or done, closed or reopen"
-          }
-        },
-        "required": [
-          "tasks",
-          "to"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.newPipeline",
-      "title": "New pipeline",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "pipeline": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a pipeline id"
-          },
-          "open": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "pipeline"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.open",
-      "title": "Open Tasks",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "pipeline": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a pipeline id"
-          }
-        },
-        "required": [
-          "pipeline"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.openRequesters",
-      "title": "Show who asked for a feature",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "open": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.openRoadmap",
-      "title": "Open Roadmap",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.removeRequester",
-      "title": "Remove a requester",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "requester": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a requester id"
-          }
-        },
-        "required": [
-          "task",
-          "requester"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.savePipeline",
-      "title": "Save a pipeline",
+      "title": "Edit a pipeline",
       "kind": "change",
       "input": {
         "type": "object",
@@ -10719,6 +10198,237 @@
         "required": [
           "pipeline",
           "stages"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.filter",
+      "title": "Filter tasks",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waiting": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asked": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "description": "an actor id: human:<id> or bot:<slug>"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "description": "a tag key"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due": {
+            "anyOf": [
+              {
+                "enum": [
+                  "overdue",
+                  "week",
+                  "any"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "late": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "q": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.move",
+      "title": "Move tasks",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "description": "a task id"
+              },
+              {
+                "minItems": 1,
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "description": "a task id"
+                }
+              }
+            ]
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a stage id or name, or next, done, closed or reopen"
+          },
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "another pipeline, by id or name"
+          },
+          "anyway": {
+            "type": "boolean"
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.open",
+      "title": "Open Tasks",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          }
+        },
+        "required": [
+          "pipeline"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.openRequesters",
+      "title": "Show who asked for a feature",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a task id"
+          },
+          "open": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.openRoadmap",
+      "title": "Open Roadmap",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tasks.removeRequester",
+      "title": "Remove a requester",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a task id"
+          },
+          "requester": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a requester id"
+          }
+        },
+        "required": [
+          "task",
+          "requester"
         ],
         "additionalProperties": false
       }
@@ -11901,15 +11611,33 @@
       "input": {
         "type": "object",
         "properties": {
+          "kind": {
+            "enum": [
+              "api",
+              "account",
+              "mailbox",
+              "address",
+              "letters",
+              "inbox"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "the API tool, account, mailbox, mailing address or inbox; none for letters"
+          },
           "tool": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 200,
+            "description": "an account's website"
           },
-          "subject": {
+          "who": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 220,
+            "description": "human:<id>, bot:<slug>, group:<id> or bots; a mailbox access id; company for an inbox"
           },
           "level": {
             "enum": [
@@ -11920,80 +11648,9 @@
           }
         },
         "required": [
-          "tool",
-          "subject",
-          "level"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setAccountAccess",
-      "title": "Change who may use a website account",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "tool": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "account": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "subject": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 220
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "tool",
-          "account",
-          "subject",
-          "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setAddressAccess",
-      "title": "Change who may read one address’s letters",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "address": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "type": {
-            "enum": [
-              "person",
-              "bot"
-            ]
-          },
-          "who": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "read": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "address",
-          "type",
+          "kind",
           "who",
-          "read"
+          "level"
         ],
         "additionalProperties": false
       }
@@ -12028,37 +11685,6 @@
         "required": [
           "bot",
           "mode"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setInboxReaders",
-      "title": "Choose who reads an address or number",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "inbox": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "audience": {
-            "enum": [
-              "company",
-              "team"
-            ]
-          },
-          "group": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "inbox",
-          "audience"
         ],
         "additionalProperties": false
       }
@@ -12152,36 +11778,6 @@
         },
         "required": [
           "bot"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setLetterAccess",
-      "title": "Change who may read every letter",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "enum": [
-              "person",
-              "bot"
-            ]
-          },
-          "who": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "read": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "type",
-          "who",
-          "read"
         ],
         "additionalProperties": false
       }
@@ -12286,39 +11882,6 @@
           "organize_mail",
           "send_mail",
           "change_calendar"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tools.setMailboxAccess",
-      "title": "Change someone's level on a mailbox",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "mailbox": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "access": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "level": {
-            "enum": [
-              "read",
-              "read_write",
-              "none"
-            ]
-          }
-        },
-        "required": [
-          "mailbox",
-          "access",
-          "level"
         ],
         "additionalProperties": false
       }

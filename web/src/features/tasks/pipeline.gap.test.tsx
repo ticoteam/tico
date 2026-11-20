@@ -221,12 +221,12 @@ describe('Pipeline editor @s138', () => {
     show(<TasksPage pipeline="ops" search={{}} />, '/tasks/ops');
     await screen.findByRole('heading', { level: 1, name: 'Tasks' });
     const stages = [{ id: 'o1', name: 'Inbox', side: false }];
-    expect(await run('tasks.savePipeline', { pipeline: 'ops', stages, move_to: { pipeline: 'ops', stage: 'o1' } }, { via: 'tico' })).toMatchObject({
+    expect(await run('tasks.editPipeline', { pipeline: 'ops', stages, move_to: { pipeline: 'ops', stage: 'o1' } }, { via: 'tico' })).toMatchObject({
       ok: false,
       error: 'not_allowed',
     });
     expect(posts).toHaveLength(0);
-    expect(await run('tasks.savePipeline', { pipeline: 'ops', goal: 'Faster', stages: REC.stages.map(({ id, name, side }) => ({ id, name, side })) }, { via: 'tico' })).toMatchObject({
+    expect(await run('tasks.editPipeline', { pipeline: 'ops', goal: 'Faster', stages: REC.stages.map(({ id, name, side }) => ({ id, name, side })) }, { via: 'tico' })).toMatchObject({
       ok: true,
     });
     expect(posts[0]!.body).toMatchObject({ goal: 'Faster', settings_version: 5 });

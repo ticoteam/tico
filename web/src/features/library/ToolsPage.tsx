@@ -362,7 +362,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           name={a.name}
           at={a.last_used_at}
           level={a.level}
-          onLevel={manage && !a.fixed ? (level) => void press('tools.setAccess', { tool: id, subject: a.subject, level }) : undefined}
+          onLevel={manage && !a.fixed ? (level) => void press('tools.setAccess', { kind: 'api', id, who: a.subject, level }) : undefined}
         />
       ))}
       whoCount={t?.access.length || undefined}
@@ -370,7 +370,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
         manage && (
           <AddSomeone
             choices={actors.filter((a) => !t?.access.some((x) => x.subject === a.id))}
-            onPick={(subject) => void press('tools.setAccess', { tool: id, subject, level: 'read' }, 'Not added')}
+            onPick={(subject) => void press('tools.setAccess', { kind: 'api', id, who: subject, level: 'read' }, 'Not added')}
           />
         )
       }
@@ -464,7 +464,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const editable = (a: Account) => a.can_manage && a.kind === 'shared';
   const accounts = t?.accounts ?? [];
   const many = accounts.length > 1;
-  const give = (a: Account, subject: string) => press('tools.setAccountAccess', { tool: id, account: a.id, subject, on: true }, 'Not added');
+  const give = (a: Account, subject: string) => press('tools.setAccess', { kind: 'account', id: a.id, tool: id, who: subject, level: 'read' }, 'Not added');
   const choices = (a: Account) => {
     const has = new Set(a.access.map((p) => p.subject));
     return [
@@ -551,7 +551,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
           actor={r.actor}
           name={r.name}
           right={many && <span className="row-ctx">{label(a)}</span>}
-          onRemove={editable(a) && !r.via ? () => void press('tools.setAccountAccess', { tool: id, account: a.id, subject: r.subject, on: false }, 'Not removed') : undefined}
+          onRemove={editable(a) && !r.via ? () => void press('tools.setAccess', { kind: 'account', id: a.id, tool: id, who: r.subject, level: 'none' }, 'Not removed') : undefined}
         />
       )))}
       whoActions={

@@ -568,19 +568,6 @@ export const toolsCheck = defineAction({
   target: (i) => ({ kind: 'tool-connect', id: `api:${i.tool}` }),
 });
 
-export const toolsSetAccess = defineAction({
-  id: 'tools.setAccess',
-  title: 'Change who may use a tool',
-  kind: 'change',
-  input: z.strictObject({ tool: id, subject: id, level: z.enum(['read', 'read_write', 'none'] as const) }),
-  can: (ctx, i) =>
-    ctx.via !== 'tico' ||
-    LEVEL[i.level] <= LEVEL[ctx.queryClient.getQueryData(apiToolQuery(i.tool).queryKey)?.access.find((a) => a.subject === i.subject)?.level ?? 'none'],
-  run: (_ctx, i) => setAccess(i.tool, i.subject, i.level),
-  did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
-  target: (i) => ({ kind: 'tool-who', id: `api:${i.tool}` }),
-});
-
 /* Adding a tool. Tico may add one when nothing secret is typed (an API's address, an MCP server it signs in to); a
    token, a client secret or a password is the person's own. Each add opens the new tool. */
 
@@ -1202,18 +1189,6 @@ export const toolsSetIntake = defineAction({
   target: () => ({ kind: 'tool-can', id: 'address' }),
 });
 
-export const toolsSetLetterAccess = defineAction({
-  id: 'tools.setLetterAccess',
-  title: 'Change who may read every letter',
-  kind: 'change',
-  input: z.strictObject({ type: z.enum(['person', 'bot'] as const), who: id, read: z.boolean() }),
-  // Tico may take the read away, never give it.
-  can: (ctx, i) => ctx.via !== 'tico' || !i.read,
-  run: (_ctx, i) => setLetterGrant(i.type, i.who, i.read),
-  did: (i) => (i.read ? 'Can read letters' : 'Removed'),
-  target: () => ({ kind: 'tool-who', id: 'address' }),
-});
-
 export const toolsSetLegalMail = defineAction({
   id: 'tools.setLegalMail',
   title: 'Choose who gets legal letters',
@@ -1274,6 +1249,80 @@ export const toolsCheckLetters = defineAction({
    anything that cannot be undone are the person's own. */
 
 const subjectIn = z.string().check(z.minLength(1), z.maxLength(220));
+
+/* Who may use a tool, by the kind of thing it is: an API tool, a website's account (`tool` is the website), a mailbox
+   (`who` is the access row), a mailing address, every letter (no id), or a Tico address or number (read by `company` or
+   one team, `group:<id>`). One action over each one's own write. Tico may narrow access, never widen it. */
+const ACCESS = ['api', 'account', 'mailbox', 'address', 'letters', 'inbox'] as const;
+type AccessIn = { kind: (typeof ACCESS)[number]; id?: string; tool?: string; who: string; level: keyof typeof LEVEL };
+
+/** A postal grant's grantee from `human:<id>` or `bot:<slug>`. */
+function grantee(who: string): ['person' | 'bot', string] {
+  const m = /^(human|bot):(.+)$/.exec(who);
+  if (!m) throw Object.assign(new Error('who: expected human:<id> or bot:<slug>'), { code: 'bad_input' });
+  return [m[1] === 'bot' ? 'bot' : 'person', m[2]!];
+}
+
+function writeAccess(i: AccessIn) {
+  const at = i.id ?? '';
+  const give = i.level !== 'none';
+  switch (i.kind) {
+    case 'api':
+      return setAccess(at, i.who, i.level);
+    case 'account':
+      return setAccountAccess(i.tool ?? '', at, i.who, give);
+    case 'mailbox':
+      return i.level === 'none' ? removeMailboxAccess(at, i.who) : setMailboxLevel(at, i.who, i.level);
+    case 'address':
+      return setAddressGrant(at, ...grantee(i.who), give);
+    case 'letters':
+      return setLetterGrant(...grantee(i.who), give);
+    case 'inbox':
+      return i.who === 'company' ? setInboxReaders(at, 'company', null) : setInboxReaders(at, 'team', i.who.replace(/^group:/, ''));
+  }
+}
+
+export const toolsSetAccess = defineAction({
+  id: 'tools.setAccess',
+  title: 'Change who may use a tool',
+  kind: 'change',
+  input: z
+    .strictObject({
+      kind: z.enum(ACCESS),
+      id: z.optional(id.check(z.describe('the API tool, account, mailbox, mailing address or inbox; none for letters'))),
+      tool: z.optional(id.check(z.describe("an account's website"))),
+      who: subjectIn.check(z.describe('human:<id>, bot:<slug>, group:<id> or bots; a mailbox access id; company for an inbox')),
+      level: z.enum(['read', 'read_write', 'none'] as const),
+    })
+    .check(
+      z.refine(
+        (i) => (i.kind === 'letters') === !i.id && (i.kind === 'account') === !!i.tool && (i.kind !== 'inbox' || i.level === 'read'),
+        'Give the id (an account its tool too; letters none), and an inbox only read',
+      ),
+    ),
+  can: (ctx, i) => {
+    if (ctx.via !== 'tico') return true;
+    if (i.kind === 'inbox') return i.who !== 'company' && was.inbox(i.id ?? '')?.audience === 'company';
+    const had =
+      i.kind === 'api'
+        ? ctx.queryClient.getQueryData(apiToolQuery(i.id ?? '').queryKey)?.access.find((a) => a.subject === i.who)?.level
+        : i.kind === 'mailbox'
+          ? was.mailbox(i.id ?? '')?.accesses.find((a) => a.id === i.who)?.level
+          : undefined;
+    return LEVEL[i.level] <= LEVEL[had ?? 'none'];
+  },
+  run: (_ctx, i) => writeAccess(i),
+  did: (i) => (i.level === 'none' ? 'Removed' : 'Saved'),
+  target: (i) =>
+    ({
+      api: { kind: 'tool-who', id: `api:${i.id}` },
+      account: site(i.tool ?? ''),
+      mailbox: { kind: 'tool-who', id: `mailbox:${i.id}` },
+      address: { kind: 'tool', id: `address:${i.id}` },
+      letters: { kind: 'tool-who', id: 'address' },
+      inbox: { kind: 'tool', id: `tico:${i.id}` },
+    })[i.kind],
+});
 
 /** Tools narrowed to who has access: a team (`group:<id>`) or a teammate (`human:<id>`, `bot:<id>`); none shows all. */
 export const toolsFilterWho = defineAction({
@@ -1375,20 +1424,6 @@ export const toolsAddMailboxAccess = defineAction({
   target: (i) => ({ kind: 'tool-who', id: `mailbox:${i.mailbox}` }),
 });
 
-export const toolsSetMailboxAccess = defineAction({
-  id: 'tools.setMailboxAccess',
-  title: "Change someone's level on a mailbox",
-  kind: 'change',
-  input: z.strictObject({ mailbox: id, access: id, level: z.enum(['read', 'read_write', 'none'] as const) }),
-  // Tico may lower a level or take it away, never raise one.
-  can: (ctx, i) =>
-    ctx.via !== 'tico' ||
-    LEVEL[i.level] <= LEVEL[was.mailbox(i.mailbox)?.accesses.find((a) => a.id === i.access)?.level ?? 'none'],
-  run: (_ctx, i) => (i.level === 'none' ? removeMailboxAccess(i.mailbox, i.access) : setMailboxLevel(i.mailbox, i.access, i.level)),
-  did: (i) => (i.level === 'none' ? 'Removed' : 'Changed'),
-  target: (i) => ({ kind: 'tool-who', id: `mailbox:${i.mailbox}` }),
-});
-
 /** Google asked again, and the mailbox read again. */
 export const toolsCheckMailbox = defineAction({
   id: 'tools.checkMailbox',
@@ -1428,18 +1463,6 @@ export const toolsStopMailbox = defineAction({
 
 /* A Tico address or number. */
 
-export const toolsSetInboxReaders = defineAction({
-  id: 'tools.setInboxReaders',
-  title: 'Choose who reads an address or number',
-  kind: 'change',
-  input: z.strictObject({ inbox: id, audience: z.enum(['company', 'team'] as const), group: z.optional(id) }),
-  // Tico may narrow it from everyone to one team, never open it wider.
-  can: (ctx, i) => ctx.via !== 'tico' || (i.audience === 'team' && was.inbox(i.inbox)?.audience === 'company'),
-  run: (_ctx, i) => setInboxReaders(i.inbox, i.audience, i.group ?? null),
-  did: () => 'Saved',
-  target: (i) => ({ kind: 'tool', id: `tico:${i.inbox}` }),
-});
-
 /** The inbound connection read again. */
 export const toolsCheckInbox = defineAction({
   id: 'tools.checkInbox',
@@ -1478,18 +1501,6 @@ export const toolsDeleteWebsite = defineAction({
   },
   did: () => 'Deleted',
   target: () => ({ kind: 'page', id: '/library/tools' }),
-});
-
-export const toolsSetAccountAccess = defineAction({
-  id: 'tools.setAccountAccess',
-  title: 'Change who may use a website account',
-  kind: 'change',
-  input: z.strictObject({ tool: id, account: id, subject: subjectIn, on: z.boolean() }),
-  // Tico may take a login away, never give one.
-  can: (ctx, i) => ctx.via !== 'tico' || !i.on,
-  run: (_ctx, i) => setAccountAccess(i.tool, i.account, i.subject, i.on),
-  did: (i) => (i.on ? 'Added' : 'Removed'),
-  target: (i) => site(i.tool),
 });
 
 // ---------------------------------------------------------------- tier-2 gaps: skills (s781 s782 s783 s804)
@@ -1580,18 +1591,6 @@ export const toolsRetrySend = defineAction({
 });
 
 /* A mailing address. */
-
-export const toolsSetAddressAccess = defineAction({
-  id: 'tools.setAddressAccess',
-  title: 'Change who may read one address’s letters',
-  kind: 'change',
-  input: z.strictObject({ address: id, type: z.enum(['person', 'bot'] as const), who: id, read: z.boolean() }),
-  // Read takes in private letters and scans: Tico may take it away, never give it.
-  can: (ctx, i) => ctx.via !== 'tico' || !i.read,
-  run: (_ctx, i) => setAddressGrant(i.address, i.type, i.who, i.read),
-  did: (i) => (i.read ? 'Can read its letters' : 'Removed'),
-  target: (i) => ({ kind: 'tool', id: `address:${i.address}` }),
-});
 
 export const toolsRetryLetter = defineAction({
   id: 'tools.retryLetter',

@@ -1,14 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { run } from '@/actions';
-import { meQuery, useActors } from '@/data';
+import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
@@ -20,8 +20,8 @@ import { failedToast, reasonOf } from './model';
 import { Face, Go, NameOf } from './parts';
 import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFacts, type Visible } from './queries';
 
-/* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
-   Developer, Goal, Roadmap, People, Visible to, Followers, the public text; and the Meetings section. Each value edits
+/* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size,
+   Developer, Goal, Roadmap, People, Visible to, the public text; and the Meetings section. Each value edits
    in place or through a small pick, and saves at once. */
 
 const act = async (id: string, input: object) => {
@@ -33,18 +33,6 @@ const act = async (id: string, input: object) => {
 function useNames() {
   const actors = useActors();
   return (id: string) => actors.find((a) => a.id === id)?.name ?? 'Someone';
-}
-
-/** People only, for the Human. */
-function PeopleItems({ current, onPick }: { current: string | null | undefined; onPick: (id: string) => void }) {
-  const people = useActors().filter((a) => a.kind === 'person');
-  return (
-    <>
-      {people.map((a) => (
-        <MenuItem key={a.id} label={a.name} lead={<Face id={a.id} size={16} decorative />} on={a.id === current} onSelect={() => onPick(a.id)} />
-      ))}
-    </>
-  );
 }
 
 /** A face that opens a short menu (take them off). */
@@ -91,11 +79,10 @@ export function SizeFact({ t }: { t: TaskData }) {
   );
 }
 
-/** Human, Developer, Goal, Roadmap, People, Visible to, Followers: after Tags. */
+/** Developer, Goal, Roadmap, People, Visible to: after Tags. */
 export function MoreFacts({ t }: { t: TaskFacts }) {
   return (
     <>
-      <HumanFact t={t} />
       {t.assignee_id && t.assignee_id !== t.owner_id && (
         <Kv k="Developer">
           <Face id={t.assignee_id} />
@@ -108,40 +95,7 @@ export function MoreFacts({ t }: { t: TaskFacts }) {
       <RoadmapFact t={t} />
       <PeopleFact t={t} />
       <VisibleFact t={t} />
-      {Array.isArray(t.followers) && <FollowersFact t={t} followers={t.followers} />}
     </>
-  );
-}
-
-function HumanFact({ t }: { t: TaskData }) {
-  const human = t.human_id ?? null;
-  const set = (to: string | null) => act('task.setHuman', { task: t.id, human: to });
-  return (
-    <PickKv
-      k="Human"
-      label="Human"
-      target={`task-human:${t.id}`}
-      value={
-        human ? (
-          <>
-            <Face id={human} />
-            <span>
-              <NameOf id={human} />
-            </span>
-          </>
-        ) : (
-          none
-        )
-      }
-    >
-      <PeopleItems current={human} onPick={set} />
-      {human && (
-        <>
-          <MenuRule />
-          <MenuItem label="None" icon="close" onSelect={() => set(null)} />
-        </>
-      )}
-    </PickKv>
   );
 }
 
@@ -277,37 +231,6 @@ function VisibleFact({ t }: { t: TaskData }) {
         <MenuItem key={v} label={VISIBLE[v]} on={v === now} onSelect={() => v !== now && void act('task.setVisible', { task: t.id, to: v })} />
       ))}
     </PickKv>
-  );
-}
-
-function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: string }[] }) {
-  const nameOf = useNames();
-  const me = useQuery(meQuery).data?.id;
-  const mine = followers.find((f) => f.actor === me);
-  const follow = (input: object) => act('task.follow', { task: t.id, ...input });
-  return (
-    <div className="dt-kv" data-target={`task-followers:${t.id}`}>
-      <span className="dt-k">Followers</span>
-      <span className="dt-v">
-        <span className="faces">
-          {followers.map((f) =>
-            f.actor === me ? (
-              <Face key={f.actor} id={f.actor} />
-            ) : (
-              <FaceMenu key={f.actor} id={f.actor} label={nameOf(f.actor)}>
-                <MenuItem label="Take off" icon="close" onSelect={() => follow({ actor: f.actor, following: false })} />
-              </FaceMenu>
-            ),
-          )}
-        </span>
-        <button type="button" className="dt-act" onClick={() => follow({ following: !mine })}>
-          {mine ? 'Unfollow' : 'Follow'}
-        </button>
-        <Menu align="start" trigger={<IconButton icon="plus" label="Add a follower" size="sm" quiet />}>
-          <ActorItems current={null} onPick={(id) => follow({ actor: id, following: true })} />
-        </Menu>
-      </span>
-    </div>
   );
 }
 
