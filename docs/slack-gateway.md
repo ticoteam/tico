@@ -212,7 +212,7 @@ org's rules and screening, and then has the gateway act:
 - `POST /api/v2/slack/dms` is the bot's message to the person in Tico, which `originate` copies into their Slack DM.
 
 With the gateway not connected, or not claiming a request within 8 seconds, each route answers 503 and says what to
-start.
+start. A computer on v0.6.0-rc.1 still runs its own connector with a granted `SLACK_BOT_TOKEN` (older computers only).
 
 ## Link previews
 
@@ -285,7 +285,8 @@ interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.
    the old one, save.
 2. **Install App**, reinstall to the Acme workspace (Slack shows the reinstall banner).
 3. If the Bot User OAuth Token changed, paste it in Tools > Slack (or, with `TICO_SLACK_SECRET_ARN` set,
-   update `bot_token` in that secret). The app-level token
+   update `bot_token` in that secret), and in the `SLACK_BOT_TOKEN` credential granted to bots if any computer
+   is still on v0.6.0-rc.1 (older computers only). The app-level token
    (`xapp-`, `connections:write`, **Basic Information → App-Level Tokens**) is unchanged by a
    reinstall.
 4. Restart the gateway unit (`configure` with the same values does it) and check the log for

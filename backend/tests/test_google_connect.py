@@ -432,11 +432,13 @@ def test_the_computer_no_longer_finishes_sign_ins(app):
     machine = runner(app)
     r = app.post("/api/v2/connectors/mail/google/gc_x/exchange", json={}, headers=headers(machine["token"]))
     assert r.status_code == 405, r.text
-    # The token ask and the sign-in poll of the retired computer-side mail job are gone (the floor is past it).
-    for path in ("connectors/mail/google/token", "connectors/mail/google/claim"):
-        r = app.post("/api/v2/" + path, json={}, headers=headers(machine["token"]))
-        assert r.status_code in (404, 405), (path, r.text)
-    assert app.get("/api/v2/runners/connectors", headers=headers(machine["token"])).status_code in (404, 405)
+    # A token ask is refused with where mail went (backend/connectors_floor.py).
+    r = app.post("/api/v2/connectors/mail/google/token", json={}, headers=headers(machine["token"]))
+    assert r.status_code == 403 and "tico email" in r.json()["error"]["code"], r.text
+    # An rc.1 computer still polls for a sign-in to finish: it is handed none (backend/connectors_floor.py).
+    claimed = app.post("/api/v2/connectors/mail/google/claim", json={}, headers=headers(machine["token"]))
+    assert claimed.json() == {"connect": None}
+    assert get(app, "runners/connectors", machine["token"]) == {"connectors": []}  # no computer runs mail or calendar
 
 
 def test_the_migration_ends_computer_held_grants_with_one_reconnect_and_drops_the_handoff():

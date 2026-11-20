@@ -5,7 +5,7 @@ kind: api
 summary: Read channel history, post to listed internal channels and DM people through Tico's Slack gateway; a DM to Tico or an @Tico wakes the employee it is for.
 access: "`$HUB_DIR/connectors/slack.py`, which asks Tico — never the Slack API, an SDK or curl"
 credentials:
-  - none in a bot's environment — Tico's Slack gateway holds the company's token (Tools > Slack)
+  - SLACK_BOT_TOKEN — older computers only (v0.6.0-rc.1's connector reads it); a newer computer needs no Slack token, and the grant goes when the oldest supported release moves past rc.1
 declared_as: |
   - service: slack
     identity: the company workspace

@@ -8,11 +8,11 @@
    "computer_label": "Test Mac",
    "computer_logins_v1": true,
    "config": {
-    "compact_at": 250000,
     "model": "hermes-profile",
     "name": "ops",
     "repo_access_mode": "own",
     "runtime": "fake",
+    "session": "task",
     "status": "active"
    },
    "conversation": {
@@ -23,7 +23,6 @@
     "closed_at": null,
     "created": "2026-01-01T00:00:00.000000Z",
     "created_at": "2026-01-01T00:00:00.000000Z",
-    "deleted_at": null,
     "id": "00000000-0000-4000-8000-000000000003",
     "kind": "chat",
     "last_message_at": "2026-01-01T00:00:00.000000Z",
@@ -82,8 +81,7 @@
      "seq": 1,
      "superseded_at": null,
      "to_actor": "bot:ops",
-     "wait_s": null,
-     "wake_key": null
+     "wait_s": null
     }
    ],
    "id": "00000000-0000-4000-8000-000000000001",
@@ -92,7 +90,7 @@
    "learned": null,
    "lease_seconds": 90,
    "lease_until": "2026-01-01T00:00:00.000000Z",
-   "login_class": "other",
+   "login_class": "review",
    "mailbox_levels": {},
    "mailboxes": [],
    "message": {
@@ -127,8 +125,7 @@
     "seq": 1,
     "superseded_at": null,
     "to_actor": "bot:ops",
-    "wait_s": null,
-    "wake_key": null
+    "wait_s": null
    },
    "next_run": [],
    "notes": [],

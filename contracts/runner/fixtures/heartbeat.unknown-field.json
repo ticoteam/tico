@@ -58,7 +58,7 @@
    "schema_version": 1,
    "worktrees": true
   },
-  "release": "0.6.21",
+  "release": "0.6.0-rc.1",
   "update": {
    "error": "",
    "state": "idle",

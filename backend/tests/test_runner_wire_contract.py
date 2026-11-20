@@ -171,7 +171,7 @@ def heartbeat_body(bot):
         "readiness": readiness(bot),
         "mail_agent_instructions": {},
         "agent_instructions": {},
-        "release": "0.6.21",
+        "release": "0.6.0-rc.1",
         "kind": "docker",
         "update": {"state": "idle", "target": "", "error": ""},
         "profiles": [],
@@ -187,7 +187,7 @@ def test_the_retired_packet_capability_is_still_accepted_on_a_heartbeat(api):
     computer = runner(api)
     assign(api, computer, "ops")
     body = heartbeat_body("ops")
-    # The retired Nightly memory tidy pilot's: the kept 0.6.21 contract still lists it, so the server still takes it.
+    # The retired Nightly memory tidy pilot's: a runner of the previous release in the window still sends it.
     body["capabilities"].append("memory_tidy_packets_v1")
     assert not W.errors(body, ref("Heartbeat"), REQUESTS)
     post(api, "runners/heartbeat", body, token=computer["token"])
@@ -327,8 +327,8 @@ def test_the_committed_requests_are_the_servers_models():
 
 
 def kept():
-    # A copy below the minimum runner release is not served any more (runner_versions.MIN_RUNNER_RELEASE, 0.6.21).
-    return [path for version, path in W.window(W.releases()) if version >= (0, 6, 21)]
+    # A copy below the minimum runner release is not served any more (runner_versions.MIN_RUNNER_RELEASE, 0.6.0-rc.1).
+    return [path for version, path in W.window(W.releases()) if version >= (0, 6, 0)]
 
 
 def test_the_contract_is_compatible_both_ways_with_every_release_in_the_window():
@@ -361,9 +361,6 @@ def test_an_old_runners_requests_still_drive_this_server(api):
         aid = ""
         for name, case in TURN:
             recorded = json.loads((path / W.FIXTURES / ("%s.%s.json" % (name, case))).read_text())
-            if name == "heartbeat":
-                # The copy's own recording may predate its release; the computer replaying it runs that release.
-                recorded["request"]["release"] = path.name
             if name == "claim":
                 post(api, "chat/ops", {"text": "Please summarize the current work."})
             response = api.post(
@@ -428,7 +425,7 @@ def test_this_runner_reads_every_answer_a_kept_release_recorded():
 def test_one_hour_cache_writes_are_an_optional_field_a_new_runner_sends_only_when_the_server_says_so(api):
     """`cache_write_1h_tokens` (RunUsagePart): an old runner never sends it and is still priced (the server guesses the
     split), and a new runner sends it only once the server's features name `usage_cache_write_1h` (runner-rs
-    execute.rs `served`), so an older server never sees it. Without that gate the field would break 0.6.21."""
+    execute.rs `served`), so an older server never sees it. Without that gate the field would break 0.6.0."""
     for name in ("RunUsagePart", "RunUsage"):
         model = REQUESTS["$defs"][name]
         assert "cache_write_1h_tokens" in model["properties"] and "cache_write_1h_tokens" not in model.get(

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import time_machine
 
 from backend.store import H
-from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.api import get, post
 
 
 BOX = "ana@acme.example"
@@ -41,9 +41,8 @@ def last_run(api, aid):
     return get(api, f"automations/{aid}/runs")["runs"][0]
 
 
-def claim(api, token):
-    """The status the retired computer-side claim answers: the route is gone (the floor is past that job)."""
-    return api.post("/api/v2/automations/mail-actions/claim", json={"mailbox": BOX}, headers=headers(token)).status_code
+def claim(api, token, expected=200):
+    return post(api, "automations/mail-actions/claim", {"mailbox": BOX}, token, expected=expected)
 
 
 def later(minutes):
