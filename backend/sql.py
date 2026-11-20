@@ -808,11 +808,17 @@ class Gates:
 
     def __init__(self, inner, private, denied, page):
         self.inner, self.denied, self.page = inner, bool(denied), page
-        # Every task id: the unfiltered tasks view, read by its primary key (not a copy of 18,000 ids per request).
-        self.tasks, self.messages = inner("tasks"), inner("messages")
+        self.all_tasks = inner("tasks")
+        self.messages = inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
         self.carriers = '"' + private("run_carriers") + '"'
+
+    def known(self, value):
+        """A task with this id exists: one primary-key lookup in the unfiltered tasks view. Not a per-request copy of
+        every task id, and not `IN (SELECT id ...)`, which through a view builds a list of all of them per statement.
+        Only ever asked about a text value, so it reads as `IN` did."""
+        return f"EXISTS (SELECT 1 FROM {self.all_tasks} known_task WHERE known_task.id={value})"
 
     def strings(self, value):
         """No string in this JSON names a denied task the way ReadIndex.references finds one."""
@@ -843,12 +849,14 @@ class Gates:
             if self.denied
             else ""
         )
+        # The ids "task", "answers" and "inputs" are left to the full check: in this shape `refs` (top=False) reads the
+        # first as a repeated key and the others as inherited keys, so the old table of spellings never held them.
         return (
             f"EXISTS (SELECT 1 FROM (SELECT CASE {spelled} END AS id) plain WHERE {tid} IS NOT NULL "
             f"AND {refs} IN (json_object('task',{tid}),'{{\"task\": '||json_quote({tid})||'}}',"
             f"json_object('task_id',{tid}),'{{\"task_id\": '||json_quote({tid})||'}}') "
             f"AND instr({refs},'\\')=0 AND instr({refs},'live_meeting')=0 "
-            f"AND {tid} IN (SELECT id FROM {self.tasks}){denied})"
+            f"AND {tid} NOT IN ('task','answers','inputs') AND {self.known(tid)}{denied})"
         )
 
     def task(self, refs, key):
@@ -858,11 +866,11 @@ class Gates:
         path = f"'$.{key}'"
         listed = (
             f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
-            f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})"
+            f"NOT {self.known('element.value')} OR element.value IN (SELECT id FROM {self.denied_tasks})"
         )
         return (
             f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
-            f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
+            f"{self.known(f'json_extract({refs},{path})')} AND "
             f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
             f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))"
         )
@@ -974,8 +982,9 @@ def materialize(conn, index, tables, inner, function, private):
     }
     tables["tasks"] = ("id " + visible, tables["tasks"][1])
     # The few rooms with meeting provenance (ReadIndex rooms=True): the room predicate asks Python about these alone.
-    create("bound_rooms", sorted(index.bound_rooms))
-    create("meeting_rooms", sorted(index.meeting_rooms))
+    # Unsorted: a set may hold a NULL room id (create drops it), which sorted() cannot order against text.
+    create("bound_rooms", index.bound_rooms)
+    create("meeting_rooms", index.meeting_rooms)
     rooms = create("readable_conversations", "SELECT id FROM main.conversations WHERE " + tables["conversations"][0])
     tables = {
         table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)

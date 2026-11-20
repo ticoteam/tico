@@ -102,23 +102,17 @@ class ReadIndex:
                     )
                 )
 
-    CACHES = (
-        "message_sources",
-        "target_message",
-        "attempt_sources",
-        "attempt",
-        "plain_room",
-        "conversation",
-        "direct_message",
-        "direct_parent",
-        "string_sources",
-    )
-
     def release(self):
-        """Empty this snapshot's caches now. Each wraps a bound method of this index, a cycle that otherwise holds every
-        cached row until the cyclic collector runs."""
-        for name in self.CACHES:
-            getattr(self, name).cache_clear()
+        """Drop this snapshot's caches now, once its connection is closed and nothing asks again. Each LRU wraps a bound
+        method of this index (or of its meeting sources), a cycle that otherwise holds every cached row and map until
+        the cyclic collector runs."""
+        for owner in (self, getattr(self, "meetings", None)):
+            if owner is None:
+                continue
+            for value in list(vars(owner).values()):
+                if hasattr(value, "cache_clear"):
+                    value.cache_clear()
+            vars(owner).clear()
 
     @cached_property
     def task_ids(self):
