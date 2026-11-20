@@ -310,11 +310,13 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
       // checked: the first roster answer comes without teams, and the next read is held until the panel is open.
       if (!isPhone) {
         const early = await pageAs(browser, hub, 'dana');
-        let reads = 0, release = () => {};
-        const held = new Promise<void>(go => { release = go; });
+        // Boot waits for its roster read before it draws any page (ui/app/boot.ts), so the panel can only be open
+        // before the teams when an earlier answer came without them; the read that brings them is held until then.
+        let reads = 0, release = () => {}, holding = () => {};
+        const held = new Promise<void>(go => { release = go; }), waiting = new Promise<void>(go => { holding = go; });
         await early.route(u => new URL(u).pathname === '/api/humans', async route => {
           const n = ++reads, res = await route.fetch(), body = await res.json();
-          if (n === 1) delete body.org_groups; else await held;
+          if (n === 1) delete body.org_groups; else { holding(); await held; }
           await route.fulfill({status: res.status(), contentType: 'application/json', body: JSON.stringify(body)});
         });
         // pageAs has booted already: the thread opens in a fresh load, whose roster read is the first one routed.
@@ -327,6 +329,8 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
         await box.waitFor({timeout: t(15000)});
         assert.equal(await box.locator('[value=team]').count(), 0, 'no team row before the roster has its teams');
         const again = early.evaluate(() => refresh(true));
+        await waiting;
+        assert.equal(await box.locator('[value=team]').count(), 0, 'still no team row while the roster read is held');
         release();
         await again;
         await box.locator('.thd-aud-word').waitFor({timeout: t(15000)});
