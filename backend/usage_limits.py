@@ -383,6 +383,38 @@ def by_bot(c, start, end, subscription, default=None):
     return memo[key]
 
 
+def prime_spent(c, windows, subscription, default):
+    """Fill by_bot's memo on `default` for several [start, end) windows from one read of their runs, each window's
+    figures as by_bot reads them alone: a bot with no run in a window has no entry there. Without a memo, nothing."""
+    if not isinstance(default, Default):
+        return
+    memo = default.memo
+    wanted = [w for w in dict.fromkeys(windows) if ("spent", *w, bool(subscription)) not in memo]
+    if len(wanted) < 2:
+        return
+    from .usage_records import RUNS
+
+    sums = ", ".join(
+        "sum(CASE WHEN started_at >= ? AND started_at < ? THEN coalesce(est_cost_usd, 0) END)" for _ in wanted
+    )
+    found = [{} for _ in wanted]
+    for row in c.execute(
+        f"SELECT bot, {sums} FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
+        "AND (? OR coalesce(billing, 'api') != 'subscription') GROUP BY bot",
+        (
+            *(bound for window in wanted for bound in window),
+            min(start for start, _ in wanted),
+            max(end for _, end in wanted),
+            1 if subscription else 0,
+        ),
+    ):
+        for k, amount in enumerate(row[1:]):
+            if amount is not None:
+                found[k][row[0]] = float(amount)
+    for window, amounts in zip(wanted, found, strict=True):
+        memo[("spent", *window, bool(subscription))] = amounts
+
+
 def spent(c, bot, start, end, subscription, default=None):
     """The estimate for the bot's runs that started in [start, end)."""
     return by_bot(c, start, end, subscription, default).get(bot, 0.0)
@@ -432,6 +464,7 @@ def spent_now(c, bot=None, scope=None, at=None, default=None):
     {"30m": usd, "hour": usd, "day": usd, ...}. Budget adds these up the org chart."""
     default = default if default is not None else company(c)
     when, subscription = bounds(at), default["count_subscription"]
+    prime_spent(c, [when[name][1:] for name, _ in periods(c)], subscription, default)
     out = {}
     for name, label_ in periods(c):
         _, start, end = when[name]
