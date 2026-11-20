@@ -3874,7 +3874,7 @@ def install(app, store, auth, mutate):
             )
             built = (
                 {**view(c, dict(r), who, chart=chart, jobs=jobs, flow=flow), "pending": pending.get(r["id"], 0)}
-                for r, flow in itertools.islice(visible, start, None)
+                for r, flow in itertools.islice(visible, min(start, len(rows)), None)
             )
             shown, more = page(built, max(1, min(limit, 500)), start, LIST_BYTES)
         return {"automations": shown, "next": more}

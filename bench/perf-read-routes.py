@@ -169,6 +169,7 @@ def paths(api):
     out = [
         "/api/v2/automations",
         "/api/v2/automations?limit=20&cursor=40",
+        "/api/v2/automations?cursor=9223372036854775808",
         "/api/v2/automations?limit=500",
         "/api/v2/notes",
         "/api/v2/notes?limit=500",
@@ -177,8 +178,12 @@ def paths(api):
         "/api/v2/tasks?status=closed&sort=finished&snoozed=hide&brief=1&limit=200",
         "/api/v2/tasks?status=done&sort=finished&lane=company&limit=50",
     ]
-    first = api.get(out[6], headers=headers()).json()
-    out.append(out[6] + "&after=" + first["next_after"])
+    # The Done archive's next page, and one far down it (the 40th), each from the page before.
+    page = api.get(out[7], headers=headers()).json()
+    out.append(out[7] + "&after=" + page["next_after"])
+    for _ in range(39):
+        page = api.get(out[7] + "&after=" + page["next_after"], headers=headers()).json()
+    out.append(out[7] + "&after=" + page["next_after"])
     return out
 
 
@@ -283,8 +288,13 @@ def explain(api):
                 sql = next(q for q in seen if "done_at" in q)
                 plan = " / ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql))
                 print(f"{token} {name}: {timed(card, ctx, s):.2f} ms | {plan[:300]}")
-            for status in ("done", "closed"):
-                page = dict(status=status, order="finished", limit=201, visible=visible, snoozed="hide")
+            # A page 8,000 rows down the Done archive, by its keyset start.
+            deep = c.execute(
+                "SELECT COALESCE(done_at,closed_at,updated_at,created_at,''), id FROM tasks WHERE status='done' "
+                "ORDER BY 1 DESC, 2 DESC LIMIT 1 OFFSET 8000"
+            ).fetchone()
+            for status, after in (("done", None), ("closed", None), ("done", list(deep))):
+                page = dict(status=status, order="finished", limit=201, visible=visible, snoozed="hide", after=after)
                 seen = []
                 c.set_trace_callback(seen.append)
                 rows = H.tasks(c, **page)
@@ -292,7 +302,7 @@ def explain(api):
                 sql = next(q for q in seen if "ORDER BY COALESCE(done_at" in q)
                 plan = " / ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql))
                 print(
-                    f"{token} finished {status} page ({len(rows)} rows): {timed(H.tasks, c, **page):.2f} ms | {plan[:300]}"
+                    f"{token} finished {status}{' deep' if after else ''} page ({len(rows)} rows): {timed(H.tasks, c, **page):.2f} ms | {plan[:300]}"
                 )
 
 

@@ -76,6 +76,10 @@ def ensure(c):
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {action}; END")
 
 
+def _clock(c, name):
+    return c.execute("SELECT value FROM row_clock WHERE name=?", (name,)).fetchone()[0]
+
+
 def _shared(c, name, statement, build):
     cache = getattr(c, "row_cache", None)
     if (
@@ -85,7 +89,7 @@ def _shared(c, name, statement, build):
     ):
         return build(c, statement)
     try:
-        clock = c.execute("SELECT value FROM row_clock WHERE name=?", (name,)).fetchone()[0]
+        clock = _clock(c, name)
     except (sqlite3.OperationalError, TypeError):
         # Not made yet (a file opened before Store.initialize): read without sharing.
         return build(c, statement)
@@ -103,10 +107,12 @@ def _shared(c, name, statement, build):
         if flight.ok:
             # The same clock is the same committed rows, so the leader's read is this reader's too.
             return flight.found
-        # The leader's read failed: one of its waiters reads next, the others wait for that one.
+        # The leader's read failed or was not this clock's: one of its waiters reads next, the others wait for it.
     try:
         flight.found = build(c, statement)
-        flight.ok = True
+        # Outside a snapshot the clock and the rows are two reads: the rows are this clock's only if no change
+        # committed between them, as the counters only go up. Otherwise this reader keeps its rows and shares none.
+        flight.ok = c.in_transaction or _clock(c, name) == clock
     finally:
         with cache.lock:
             del cache.building[key]

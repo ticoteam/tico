@@ -287,3 +287,21 @@ def test_a_read_at_an_older_clock_never_replaces_a_newer_entry(store):
     # This snapshot's clock is older than the published entry: it reads its own rows and leaves the entry alone.
     assert {r["id"] for r in request(store, row_clock.parties)} == {"secret"}
     assert store.row_cache.values["parties"] == (clock + 1, newer)
+
+
+def test_rows_read_outside_a_snapshot_after_a_change_are_not_shared_as_the_older_clock(store, monkeypatch):
+    # Outside a transaction the clock and the rows are two reads. A change that commits between them is in the rows
+    # but not the clock: those rows must not be kept, or handed to a reader, as the older clock's.
+    store.row_cache = row_clock.Cache()
+    real = row_clock._rows
+
+    def changed_first(c, statement):
+        with store.transaction() as w:
+            w.execute("UPDATE tasks SET requester_id='bot:later' WHERE id='secret'")
+        return real(c, statement)
+
+    monkeypatch.setattr(row_clock, "_rows", changed_first)
+    with store.read() as c:
+        assert not c.in_transaction
+        assert parties(c)["secret"]["requester_id"] == "bot:later"
+    assert "parties" not in store.row_cache.values and not store.row_cache.building
