@@ -10,9 +10,10 @@ import { TaskById, TaskChat } from './TaskPage';
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 // The conversation itself is tested in its own folder: here, only which one the task's chat opens.
-vi.mock('@/conversation', () => ({
+vi.mock('@/conversation', async () => ({
   Conversation: ({ id, title }: { id: string; title: string }) => <section aria-label={`Chat with ${title}`} data-conversation={id} />,
   MessageBones: () => <div role="status" aria-label="Loading messages" />,
+  SessionLine: (await import('@/conversation/Session')).SessionLine,
 }));
 
 /* Made-up rows only. */
@@ -57,12 +58,22 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const actors = [{ id: 'bot:a1', kind: 'agent', name: 'Birch Builder' }];
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
-  vi.stubGlobal('fetch', async (url: string) => {
-    const body = String(url).includes('/api/v2/tasks/') ? { task, runs: [], children: [], comments: [], events: [], messages: [], has_more: false } : {};
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  });
+  serveRoom({ id: 'c7', task_id: 't1', title: task.title });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+/** The task's own room (`task_id` is the task), or its owner's main chat (none). */
+function serveRoom(room: Record<string, unknown>) {
+  vi.stubGlobal('fetch', async (url: string) => {
+    const u = String(url);
+    const body = u.includes('/api/v2/tasks/')
+      ? { task, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
+      : u.includes('/api/v2/threads/c7')
+        ? room
+        : {};
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+}
 
 describe('a task’s chat', () => {
   it('names who has the task and opens their conversation on it @s53', async () => {
@@ -71,6 +82,19 @@ describe('a task’s chat', () => {
     expect(chat.getAttribute('data-conversation')).toBe('c7');
     // The name goes to the owner's page.
     expect(screen.getByRole('link', { name: 'Birch Builder' }).getAttribute('href')).toBe('/team/a1');
+  });
+
+  it('says under the name that this is the task’s own chat, or its owner’s main chat', async () => {
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    expect((await screen.findByRole('link', { name: 'Fix the sign-in page' })).getAttribute('href')).toBe('/task/t1');
+    expect(screen.queryByText('Main chat')).toBeNull();
+  });
+
+  it('says "Main chat" when the task was filed in its owner’s main chat', async () => {
+    serveRoom({ id: 'c7', task_id: null, title: 'Chat with Birch Builder' });
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    await screen.findByText('Main chat');
+    expect(screen.queryByRole('link', { name: 'Fix the sign-in page' })).toBeNull();
   });
 });
 

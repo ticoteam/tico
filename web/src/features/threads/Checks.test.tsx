@@ -195,6 +195,8 @@ describe('The second chat @s225 @s226', () => {
     expect(await screen.findByText('Ask me about the tests.')).toBeTruthy();
     expect(calls.some((c) => c.url.includes('/api/v2/threads/dm?with=bot%3Aqa'))).toBe(true);
     expect(screen.getByRole('textbox', { name: 'Message QA' })).toBeTruthy();
+    // The head says this is the agent's main chat, not a task's.
+    expect(screen.getByText('Main chat')).toBeTruthy();
   });
 });
 
