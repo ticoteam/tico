@@ -3,6 +3,7 @@ import { api } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
+  NeedsYouItem,
   PipelineSettings,
   PipelineSettingsList,
   PipelineSettingsResult,
@@ -624,6 +625,8 @@ export interface FlowItem {
   /** What it asks of the person, when an ask holds it (`ask`): its kind ("ok", "page"), who asked and what it shows
       ("email:<send id>", "page:<file>@<v>"). */
   ask?: { kind: string; by: string | null; shows: string[] };
+  /** A question to the person, a task of its own: the agent that asked it. */
+  question?: { asker: string };
 }
 
 /** One of Flow's sections: a pipeline's stage and its tasks that wait on you. */
@@ -634,15 +637,24 @@ export interface FlowGroup {
   items: FlowItem[];
 }
 
-/** Sections in pipeline order, then stage order: "Engineering › QA". */
+const QUESTIONS = 'questions';
+
+/** Questions first (an agent waits on each), then sections in pipeline order, then stage order: "Engineering › QA". */
 export function flowGroups(items: readonly FlowItem[], pipelines: readonly Pipeline[]): FlowGroup[] {
   const out = new Map<string, FlowGroup>();
   const rank = (it: FlowItem) => {
+    if (it.question) return -1;
     const pi = pipelines.findIndex((p) => p.id === it.pipeline_id);
     const si = pi < 0 ? -1 : (pipelines[pi]?.stages.findIndex((s) => s.id === it.stage_id) ?? -1);
     return (pi < 0 ? 999 : pi) * 1000 + (si < 0 ? 999 : si);
   };
   for (const it of [...items].sort((a, b) => rank(a) - rank(b))) {
+    if (it.question) {
+      let q = out.get(QUESTIONS);
+      if (!q) out.set(QUESTIONS, (q = { key: QUESTIONS, pipe: 'Tasks', stage: 'Questions', items: [] }));
+      q.items.push(it);
+      continue;
+    }
     const key = `${it.pipeline_id}:${it.stage_id}`;
     let g = out.get(key);
     if (!g) {
@@ -661,7 +673,20 @@ export interface Flow {
   items: FlowItem[];
 }
 
-/** Every task that waits on the person, across pipelines (GET /api/v2/needs-you). Asks without a task stay in chats. */
+/** A question to the person as Needs you lists it: a task of its own, asked on the agent's task (`parent`). A ❓ on a
+    message is also kind `question`, with a `mark_id` and no round. The schema does not name these fields yet. */
+interface QuestionItem {
+  task_id: string;
+  number: number | null;
+  title: string;
+  asker: string;
+  since: string | null;
+  round: number;
+}
+const isQuestionTask = (it: NeedsYouItem): it is NeedsYouItem & QuestionItem => it.kind === 'question' && typeof (it as { round?: unknown }).round === 'number';
+
+/** Every task that waits on the person, across pipelines (GET /api/v2/needs-you): a question to them opens as its own
+    task. Asks without a task stay in chats. */
 export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
   // The Flow loader still needs this result if the shell unsubscribes.
@@ -669,6 +694,23 @@ export const flowQuery = queryOptions({
     const seen = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of await needsYouItems()) {
+      if (isQuestionTask(it)) {
+        if (seen.has(it.task_id)) continue;
+        seen.add(it.task_id);
+        items.push({
+          id: it.task_id,
+          number: it.number,
+          title: it.title,
+          pipeline_id: null,
+          stage_id: null,
+          owner_id: it.task?.owner_id ?? null,
+          late: false,
+          stuck: false,
+          since: it.since ?? new Date().toISOString(),
+          question: { asker: it.asker },
+        });
+        continue;
+      }
       const t = it.task;
       if (!t || seen.has(t.id)) continue;
       seen.add(t.id);

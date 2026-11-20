@@ -20,7 +20,8 @@ function FlowRow({ it }: { it: FlowItem }) {
       mark={<FlowMark />}
       late={it.late}
       pills={<Blocks t={it} />}
-      avatar={<Face actor={it.owner_id} />}
+      // a question shows who asks it: its owner is the person reading
+      avatar={<Face actor={it.question?.asker ?? it.owner_id} />}
       at={it.since}
     />
   );
