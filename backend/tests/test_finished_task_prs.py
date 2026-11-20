@@ -48,6 +48,7 @@ def _github(api, monkeypatch, open_now, answers=None):
     monkeypatch.setattr(service, "mint", lambda *a, **k: ("t", "later"))
     monkeypatch.setattr(service, "_call", fetch)
     monkeypatch.setattr(G, "_finished_retry", {})
+    monkeypatch.setattr(G, "_finished_list_due", {})
     return service, seen
 
 
@@ -119,6 +120,10 @@ def test_a_pr_closed_after_its_task_finished_leaves_aged_prs_in_one_pass(api, mo
     assert _link(api, t[1])["state"] == "open" and _link(api, t[2])["state"] == "open"
     assert _named(api) == ["PR #2", "PR #3"]
     assert _bursts(api) == before  # a finished task's owner is not woken
+    # Within FINISHED_LIST_INTERVAL_S the repo's open PRs are not listed again.
+    assert _refresh(service, monkeypatch) == 0 and seen == [LIST, LIST + "/1"]
+    # Once the 30-minute interval elapses, the listing runs again.
+    G._finished_list_due.clear()
     assert _refresh(service, monkeypatch) == 0 and seen[-1] == LIST  # nothing left to read
 
 
@@ -163,6 +168,7 @@ def test_merged_missing_and_failed_reads_and_a_failed_list(api, monkeypatch):
     assert _link(api, t[2])["state"] == "open"  # its read failed: read again after the wait
     assert _named(api) == []  # but it is not open on GitHub, so Health no longer names it
     reads = [p for p in seen if p != LIST]
+    G._finished_list_due.clear()
     assert _refresh(service, monkeypatch) == 0
     assert [p for p in seen if p != LIST] == reads  # the failed read backs off
 
@@ -174,3 +180,18 @@ def test_the_github_sync_step_runs_it(api, monkeypatch):
     monkeypatch.setattr(G, "refresh_finished_task_prs", lambda service: ran.append(service))
     heartbeat.github_sync(SimpleNamespace(app=api.app, store=api.app.state.store))
     assert ran == [api.app.state.github_app]
+
+
+def test_open_pr_listing_is_rate_limited_to_thirty_minutes_per_repo(api, monkeypatch):
+    waiting(api, ["done"])
+    service, seen = _github(api, monkeypatch, open_now={1})
+    clock = [1000.0]
+    monkeypatch.setattr(G.time, "monotonic", lambda: clock[0])
+    assert _refresh(service, monkeypatch) == 0
+    assert seen == [LIST]
+    clock[0] += G.FINISHED_LIST_INTERVAL_S - 1
+    assert _refresh(service, monkeypatch) == 0
+    assert seen == [LIST]
+    clock[0] += 1
+    assert _refresh(service, monkeypatch) == 0
+    assert seen == [LIST, LIST]

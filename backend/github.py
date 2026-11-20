@@ -639,7 +639,9 @@ def refresh_conflicts(service: Any) -> int:
 
 FINISHED_READS_PER_PASS = 10
 FINISHED_LIST_PAGES = 10  # 100 open pull requests a page: a repository with more is not inferred from (below)
-_finished_retry = {}  # link id -> monotonic time a failed read may be tried again
+FINISHED_LIST_INTERVAL_S = 1800  # list a repository's open PRs at most once every 30 minutes
+_finished_retry = {}  # (repo, number) -> monotonic time a failed read may be tried again
+_finished_list_due = {}  # (id(service), repo) -> monotonic time this repo's open PRs may be listed again
 
 
 def _open_pr_numbers(service, repo):
@@ -691,8 +693,16 @@ def refresh_finished_task_prs(service: Any) -> int:
         )
     if not rows:
         return 0
+    now = time.monotonic()
+    for stale in [k for k, due in _finished_list_due.items() if due <= now]:
+        _finished_list_due.pop(stale, None)
     gone = {}  # (repo, number) -> its links, for each pull request no longer open
+    listed = []
     for repo in dict.fromkeys(str(r["repo"]).lower() for r in rows):
+        list_key = (id(service), repo)
+        if list_key in _finished_list_due:
+            continue
+        listed.append(repo)
         try:
             open_now = _open_pr_numbers(service, repo)
         except Exception:
@@ -703,6 +713,14 @@ def refresh_finished_task_prs(service: Any) -> int:
         for r in rows:
             if str(r["repo"]).lower() == repo and int(r["number"]) not in open_now:
                 gone.setdefault((repo, int(r["number"])), []).append(r)
+    for stale in [k for k, due in _finished_retry.items() if due <= now]:
+        _finished_retry.pop(stale, None)
+    due = [(key, links) for key, links in gone.items() if key not in _finished_retry]
+    # Rate-limit each repo's open-PR listing to FINISHED_LIST_INTERVAL_S once its backlog fits in one pass.
+    overflow = {repo for (repo, _), _ in due[FINISHED_READS_PER_PASS:]}
+    for repo in listed:
+        if repo not in overflow:
+            _finished_list_due[(id(service), repo)] = now + FINISHED_LIST_INTERVAL_S
     if not gone:
         return 0
     with service.store.transaction() as c:
@@ -714,10 +732,6 @@ def refresh_finished_task_prs(service: Any) -> int:
                         "UPDATE task_links SET detail=json_remove(coalesce(detail,'{}'),'$.health_wait') WHERE id=?",
                         (r["id"],),
                     )
-    now = time.monotonic()
-    for stale in [k for k, due in _finished_retry.items() if due <= now]:
-        _finished_retry.pop(stale, None)
-    due = [(key, links) for key, links in gone.items() if key not in _finished_retry]
     read = 0
     for (repo, number), links in due[:FINISHED_READS_PER_PASS]:
         try:
