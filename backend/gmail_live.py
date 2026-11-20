@@ -79,7 +79,8 @@ def gmail_call(url, *, token, data=None, max_bytes=HTTP_MAX_BYTES, method=None):
 def gmail_delete_call(url, *, token):
     """The HTTP status of one DELETE, or 0 when Gmail cannot answer. Tests replace this function."""
     try:
-        return outbound_http.send("DELETE", url, headers={"Authorization": "Bearer " + token}, timeout=SECONDS).status
+        headers = {"Authorization": "Bearer " + token}
+        return outbound_http.send("DELETE", url, headers=headers, timeout=SECONDS, max_bytes=0).status
     except outbound_http.Failed:
         return 0
 

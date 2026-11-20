@@ -26,6 +26,14 @@ def net(monkeypatch):
 
 
 DOWN = httpx.ConnectError("down")
+
+
+class _CutShort(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b'{"ok": '
+        raise httpx.ReadError("connection dropped")
+
+
 MOVED = httpx.Response(302, headers={"Location": "https://elsewhere.example/"})
 
 
@@ -105,7 +113,11 @@ def test_slack_calls_raise_slack_s_own_errors_and_downloads_follow_no_redirect(n
     with pytest.raises(slack_gateway.SlackError) as limited:
         api.users_info("U1")
     assert limited.value.retry_after == 7
-    for _ in range(2):
+    net["answers"] += [
+        httpx.Response(429, headers={"Retry-After": "7"}, stream=_CutShort()),
+        httpx.Response(302, json={"ok": True, "ts": "1.0"}),
+    ]
+    for _ in range(4):  # a 5xx, no answer, a cut-off 429 and a redirect: a post's fate is unknown, never rescheduled
         with pytest.raises(slack_gateway.SlackUnreachable):
             api.users_info("U1")
     net["answers"] += [httpx.Response(200, content=b"pdf", headers={"Content-Type": "application/pdf"}), MOVED]

@@ -162,10 +162,13 @@ class SlackAPI:
         except outbound_http.Failed as exc:
             raise SlackUnreachable(f"Slack {method}: {type(exc.__cause__ or exc).__name__}") from exc
         status, hdrs, raw = reply.status, reply.headers, reply.content
+        if not reply.complete or not 200 <= status < 600 or 300 <= status < 400:
+            # A cut-off answer or a redirect says nothing sure about a post: after one it is `uncertain`.
+            raise SlackUnreachable(f"Slack {method}: HTTP {status}" + ("" if reply.complete else ", cut short"))
         lowered = {k.lower(): v for k, v in hdrs.items()}
         if status == 429:
             try:
-                wait = int(float(lowered.get("retry-after", RATE_LIMIT_DEFAULT)))
+                wait = int(float(outbound_http.header(hdrs, "retry-after") or RATE_LIMIT_DEFAULT))
             except (TypeError, ValueError):
                 wait = RATE_LIMIT_DEFAULT
             raise SlackError(method, "ratelimited", retry_after=max(1, wait))
