@@ -1050,7 +1050,7 @@ class Docs:
             sql += " AND rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"
             params = (expression,)
         for row in c.execute(sql, params):
-            page = {**json.loads(row["search_parse"]), "body": row["body"]}
+            page = {**json.loads(row["search_parse"]), "body": row["body"], "folded": row["body"].casefold()}
             best = manual.best_section(page, tokens, weights)
             if not best:
                 continue
@@ -1062,19 +1062,19 @@ class Docs:
                 score += 100 * sum(weights[t] for t in tokens if manual._has(page["title_words"], t))
             elif row["path"].startswith("_librarian/"):
                 score *= 0.2
-            out.append(
-                {
-                    "type": "internal",
-                    "id": row["id"],
-                    "path": row["path"],
-                    "title": row["title"],
-                    "section": section["heading"],
-                    "anchor": section["anchor"],
-                    "excerpt": manual._excerpt(manual.section_text(page, section), tokens),
-                    "score": round(score, 3),
-                }
-            )
-        return sorted(out, key=lambda r: -r["score"])[:limit]
+            found = {
+                "type": "internal",
+                "id": row["id"],
+                "path": row["path"],
+                "title": row["title"],
+                "section": section["heading"],
+                "anchor": section["anchor"],
+                "excerpt": row["body"][section["start"] : section["end"]],  # the excerpt made for the results kept
+                "score": round(score, 3),
+            }
+            out.append(found)
+        out = sorted(out, key=lambda r: -r["score"])[:limit]
+        return [{**r, "excerpt": manual._excerpt(" ".join(r["excerpt"].split()), tokens)} for r in out]
 
     @staticmethod
     def expressions(tokens):

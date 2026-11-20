@@ -93,6 +93,7 @@ def page_text(name, text, title=None):
         "name": name,
         "title": title,
         "body": text,
+        "folded": text.casefold(),
         "sections": out,
         "title_words": title_words,
         "words": _vocabulary(title_words + "".join(s["words"] for s in out)),  # the page's, for query_weights
@@ -165,15 +166,21 @@ def query_weights(wanted):
 def best_section(page, wanted, weights=None):
     weights = weights or query_weights(wanted)
     best = None
-    titled = {t: _has(page["title_words"], t) for t in wanted}
+    terms = [(t, " " + _stem(t), _stem(t)) for t in wanted]  # `_has` of each term is `key in` a vocabulary
+    titled = {t: key in page["title_words"] for t, key, _ in terms}
+    folded = page["folded"]
+    spans = len(folded) == len(page["body"])  # casefold kept each character one character, so the spans fit it
     for section in page["sections"]:
-        have = [t for t in wanted if titled[t] or _has(section["words"], t)]
+        words, head = section["words"], section["head_words"]
+        have = [term for term in terms if titled[term[0]] or term[1] in words]
         if not have:
             continue
-        body = page["body"][section["start"] : section["end"]].casefold()  # as section_text has it, for count
+        at, to = section["start"], section["end"]
+        if not spans:
+            folded, at, to = page["body"][at:to].casefold(), 0, None
         score = sum(
-            weights[t] * (10 + 5 * titled[t] + 15 * _has(section["head_words"], t) + min(body.count(_stem(t)), 5))
-            for t in have
+            weights[t] * (10 + 5 * titled[t] + 15 * (key in head) + min(folded.count(stem, at, to), 5))
+            for t, key, stem in have
         )
         if best is None or score > best[0]:
             best = (score, section)
