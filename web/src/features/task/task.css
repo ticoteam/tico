@@ -236,7 +236,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* an email's OK hung on the matter, at the top of its other pages: a pointer to its Email tab, no Approve */
 .tv-waits{flex:none;display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--pad-task)}
-.tv-pointer .dcx-top .dcx-eff{position:static;line-height:inherit}
 
 /* the case in brief, then the decision, read before the email itself */
 .tv-lead{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4) var(--pad-task) 0}

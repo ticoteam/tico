@@ -123,6 +123,13 @@ describe('the quiet line where the email shows', () => {
     await waitFor(() => expect(queryClient.getQueryData(['email-send-state', 's1'])).toBeTruthy());
     expect(container.textContent).toBe('');
   });
+
+  it('shows nothing for a canceled send: an agent cancels one to rewrite it, nothing failed', async () => {
+    send = { state: 'canceled', send_after: '2026-11-19T13:00:00Z', finished_at: '2026-11-19T13:10:00Z' };
+    const { container } = shown(<SendMark send="s1" />);
+    await waitFor(() => expect(queryClient.getQueryData(['email-send-state', 's1'])).toBeTruthy());
+    expect(container.textContent).toBe('');
+  });
 });
 
 describe("a task row's send", () => {
@@ -133,5 +140,13 @@ describe("a task row's send", () => {
     expect(rowWhere({ ...row, state: 'pending', finished_at: null }, NOW)?.kind).toBe('sending');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-19T05:23:00Z' }, NOW)?.kind).toBe('sent');
     expect(rowWhere({ ...row, state: 'sent', finished_at: '2026-11-17T05:23:00Z' }, NOW)).toBeNull();
+  });
+
+  it('says nothing once canceled, and Not sent only when it failed, was blocked, or is unsure', () => {
+    const ended = '2026-11-19T13:10:00Z';
+    expect(rowWhere({ ...row, state: 'canceled', finished_at: ended }, NOW)).toBeNull();
+    expect(rowWhere({ ...row, state: 'failed', finished_at: ended, detail: 'Gmail refused the message' }, NOW)).toEqual({ kind: 'not_sent', detail: 'Gmail refused the message' });
+    expect(rowWhere({ ...row, state: 'blocked', finished_at: ended }, NOW)?.kind).toBe('not_sent');
+    expect(rowWhere({ ...row, state: 'unknown', finished_at: ended }, NOW)?.kind).toBe('unsure');
   });
 });

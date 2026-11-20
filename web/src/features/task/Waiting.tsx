@@ -56,7 +56,6 @@ function Pointer({ sub, send, to }: { sub: TaskData; send: string; to: string })
       <div className="dcx-top">
         <FlowMark />
         <b className="an-name">{decisionName(sub, r, who ? personOf(who) : undefined)}</b>
-        <span className="dcx-eff">waits on you</span>
         <span className="grow" />
         <Button onClick={() => navigate({ to: to as never })}>Open</Button>
       </div>

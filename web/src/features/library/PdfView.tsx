@@ -168,6 +168,20 @@ export function PdfView({ src, title, url, name, sign }: { src: string; title: s
   const [full, setFull] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [signing, setSigning] = useState(false);
+  const expand = useRef<HTMLButtonElement>(null);
+  // Escape closes the full view whichever control in it has focus: taken on the way down (capture), before a control,
+  // the sheet the PDF sits in (shell/Frame.tsx) or Flow (routes/__root.tsx) can take it, keep it, or act on it too.
+  useEffect(() => {
+    if (!full) return;
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFull(false);
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [full]);
   const startSigning = () => {
     setFull(false);
     setSigning(true);
@@ -191,7 +205,7 @@ export function PdfView({ src, title, url, name, sign }: { src: string; title: s
       <div className="fv-pdf-tools">
         <span className="fv-pdf-count">{count}</span>
         <ZoomButtons zoom={zoom} onZoom={setZoom} />
-        <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setFull(true)} />
+        <IconButton ref={expand} icon="expand" label="Expand" size="sm" quiet onClick={() => setFull(true)} />
         {sign && (
           <Button variant="quiet" icon="edit" className="fv-pdf-sign" onClick={startSigning}>
             Sign
@@ -202,7 +216,7 @@ export function PdfView({ src, title, url, name, sign }: { src: string; title: s
         <BaseDialog.Portal>
           <BaseDialog.Backdrop className="scrim kit-scrim" />
           <BaseDialog.Viewport className="scrim kit-viewport fv-pdf-viewport">
-            <BaseDialog.Popup className="fv-pdf-full" aria-label={title}>
+            <BaseDialog.Popup className="fv-pdf-full" aria-label={title} finalFocus={expand}>
               <div className="fv-pdf-bar">
                 <span>{title}</span>
                 <span className="grow" />

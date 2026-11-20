@@ -29,6 +29,12 @@ export const PAGE_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-s
 
 type FileVersion = TaskFileView['versions'][number];
 
+/** Only a person signs (backend/file_signings.py); the server also checks they may write on the task. */
+function useIsPerson(): boolean {
+  const role = useQuery(meQuery).data?.role;
+  return role === 'person' || role === 'owner';
+}
+
 const currentOf = (f: TaskFileView): FileVersion | undefined => f.versions.find((x) => x.n === f.current_version) ?? f.versions.at(-1);
 
 /** A tab's content: a page from its page read (its own address, its live parts), or, when the server answers that it
@@ -62,6 +68,7 @@ export function DocFrame({ task, doc }: { task: string; doc: TaskDocument }) {
 
 /** One of the task's other files as a tab, at its current version: an HTML file may be a page linked to the task. */
 export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
+  const isPerson = useIsPerson();
   const v = currentOf(f);
   if (!v) return null;
   const name = f.title || f.name;
@@ -79,7 +86,8 @@ export function FileTab({ task, f }: { task: string; f: TaskFileView }) {
         <WordPages url={v.url} name={name} />
       </>
     );
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} />;
+  // The tab is the file at its current version, so a person may sign it here as in its file view.
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={f.name} size={v.size} signable={isPerson} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} file={file} />;
 }
 
@@ -133,8 +141,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const pair = versions.find((x) => v && x.n < v.n) ?? versions.find((x) => v && x.n > v.n);
   // The server's rule (ui/app/task-files.ts tfCanRemove): its owner, its requester, or someone who may move tasks.
   const mayRemove = t.mover || [t.owner_id, t.requester_id].includes(me.data?.id ?? '');
-  // Only a person signs (backend/file_signings.py); the server also checks they may write on the task.
-  const isPerson = me.data?.role === 'person' || me.data?.role === 'owner';
+  const isPerson = useIsPerson();
   // The task's pictures, each at its current version: the full size view walks them.
   const pictures = list.flatMap((x) => {
     const cur = currentOf(x);

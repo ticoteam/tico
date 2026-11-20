@@ -63,6 +63,30 @@ describe('PdfView', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  it('closes on Escape whichever control in its bar has focus, takes the key from the page around it, and gives focus back to Expand', async () => {
+    vi.mocked(openPdf).mockResolvedValue(fakePdf(2).open);
+    // the sheet around the PDF has its own Escape (shell/Frame.tsx); it must not also run
+    const around = vi.fn();
+    document.addEventListener('keydown', around);
+    render(<PdfView src="blob:x/1" title="Lease" url="/api/v2/mail/s/2" name="lease.pdf" sign={{ file: 'f1', version: 2, name: 'lease.pdf' }} />);
+    const expand = await screen.findByRole('button', { name: 'Expand' });
+    expand.focus();
+    fireEvent.click(expand);
+    const dialog = await screen.findByRole('dialog', { name: 'Lease' });
+    expect(within(dialog).getByRole('button', { name: 'Sign' })).toBeTruthy();
+    const out = within(dialog).getByRole('button', { name: 'Zoom out' });
+    out.focus();
+    // a control that keeps its keys to itself: Escape still closes the view
+    const keep = (e: KeyboardEvent) => e.stopPropagation();
+    out.addEventListener('keydown', keep);
+    fireEvent.keyDown(out, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(around).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(expand));
+    document.removeEventListener('keydown', around);
+    out.removeEventListener('keydown', keep);
+  });
+
   it('opens in a tab of its own when PDF.js cannot read it', async () => {
     vi.mocked(openPdf).mockRejectedValue(new Error('Invalid PDF structure'));
     render(<PdfView src="/api/v2/files/f1" title="Lease" url="/api/v2/files/f1" />);

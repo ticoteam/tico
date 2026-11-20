@@ -10,6 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { forgetPlaces, notePlace } from '@/lib';
+import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
 import type { TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
@@ -18,6 +19,8 @@ import { TaskChat, TaskPage } from './TaskPage';
    what was shown, Request changes is a message to the agent. Made-up rows only; every answer is stubbed. */
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
+// PDF.js has no canvas or worker here: a PDF reads as one page (test/fakePdf.ts).
+vi.mock('@/features/library/pdf', () => ({ openPdf: vi.fn(() => Promise.resolve(fakePdf(1).open)) }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 // The conversation is tested in its own folder: here a stand-in with its foot and, while it may post, its message box.
 vi.mock('@/conversation', async (orig) => ({
@@ -571,13 +574,29 @@ describe('the matter shows the email that waits on the person', () => {
     const router = show(<TaskPage task="40" pipeline="p9" tab="deadlines" />, '/tasks/p9/40/deadlines');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
     expect(await within(pointer).findByText('Email to Dana Ruiz')).toBeTruthy();
-    expect(within(pointer).getByText('waits on you')).toBeTruthy();
+    // one label on the bar: the dot says it waits on you to a screen reader, no second line drawn over the name
+    expect(within(pointer).queryByText(/waits on you/i)).toBeNull();
+    expect(within(pointer).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
     fireEvent.click(within(pointer).getByRole('button', { name: 'Open' }));
     // the Email tab, where the decision sits over the email (the test above)
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    expect(sent).toEqual([]);
+  });
+
+  it('on a PDF tab while it waits on the person, the PDF still offers Sign under the pointer @approvals', async () => {
+    const at = { n: 1, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 2048, url: '/api/v2/files/pdf1?v=1', answers: [], ask: null };
+    const pdf = { id: 'pdf1', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 1, links: [], writers: [], versions: [at] };
+    serve(matter({ relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as unknown as Partial<TaskData>), []);
+    const inner = reply;
+    reply = (url, method) => (url.endsWith('/api/v2/tasks/t5/files?all=1') ? { body: { files: [pdf] } } : inner(url, method));
+    show(<TaskPage task="40" pipeline="p9" tab="declaration-pdf" />, '/tasks/p9/40/declaration-pdf');
+    const pointer = await screen.findByRole('region', { name: 'Waits on you' });
+    expect(await within(pointer).findByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sign' })).toBeTruthy();
     expect(sent).toEqual([]);
   });
 
