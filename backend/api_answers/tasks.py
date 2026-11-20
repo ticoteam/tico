@@ -558,6 +558,15 @@ class TaskDetail(TypedDict):
 
 
 @answer
+class SignedVersion(TypedDict):
+    """A version a person's signing in Tico made (backend/file_signings.py)."""
+
+    by: str
+    by_name: str
+    at: str
+
+
+@answer
 class TaskFileVersion(TypedDict):
     n: int
     size: int
@@ -576,6 +585,7 @@ class TaskFileVersion(TypedDict):
     height: int | None
     duration_ms: int | None
     media_state: str | None
+    signed: SignedVersion | None
 
 
 @answer

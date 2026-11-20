@@ -22,7 +22,9 @@ async def parser_work(fn, *args):
         raise
 
 
-async def parse(request, limit, directory):
+async def parse(request, limit, directory, allowed=("name", "note", "ask")):
+    """The form's text fields (only `allowed`) and its file parts (`file`, an optional `poster`), each file spooled to a
+    private temporary file as it arrives and hashed. The caller closes the returned stack."""
     _, options = parse_options_header(request.headers.get("content-type", ""))
     boundary = options.get(b"boundary")
     if not boundary or len(boundary) > 200:
@@ -86,7 +88,7 @@ async def parse(request, limit, directory):
             part["sha"] = hashlib.sha256()
             part["filename"] = opts[b"filename"].decode("utf-8")
             part["mime"] = headers.get(b"content-type", b"application/octet-stream").decode("ascii")
-        elif name not in ("name", "note", "ask"):
+        elif name not in allowed:
             fail("Unknown upload field")
 
     def data(data, start, end):

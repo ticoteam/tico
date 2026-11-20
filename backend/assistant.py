@@ -659,6 +659,10 @@ _PROPOSABLE_BOTOPS = [
         ("POST", r"/api/v2/directory/(sync|preview)"),
         ("POST", r"/api/v2/(slack|github/app)/disconnect"),
         ("DELETE", r"/api/v2/files/[^/]+"),
+        # Signing a PDF, and the signature it places, are the person's own act in their own session
+        # (backend/file_signings.py).
+        ("POST", r"/api/v2/files/[^/]+/signings"),
+        (None, r"/api/v2/me/signature"),
         ("POST", r"/api/v2/access/owner"),
         ("POST", r"/api/v2/enrollments"),
         ("POST", r"/api/v2/seats/[^/]+/hire"),

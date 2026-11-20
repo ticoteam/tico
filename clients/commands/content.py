@@ -396,6 +396,21 @@ def files_delete(api, args):
     return _as_person(api).call("DELETE", f"files/{args['id']}", None, _key(args))
 
 
+@tool(
+    "tico_file_signings",
+    "Who signed a file in Tico, newest first: each signing names the person, when, the version they signed and the "
+    "new version it made (attach that one), the SHA-256 of both, and what they added on which page. Read only; a "
+    "person signs in the web app.",
+    {"id": _s("File id")},
+    required=("id",),
+)
+def files_signings(api, args):
+    fid = str(args["id"])
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", fid):
+        raise ValueError("Use an opaque Tico file ID, not a URL or path")
+    return api.get(f"files/{fid}/signings")
+
+
 def _file_target(api, target, command):
     """A review target as the API takes it: {file, version} for FILE[@N], or {path, digest} for a path in this
     checkout, read here (its bytes now)."""
@@ -1147,6 +1162,11 @@ FILE = (
         example="tico file read f1 --version 2",
     ),
     Command("file delete", "the owner deletes a file for good: its bytes leave storage", example="tico file delete f1"),
+    Command(
+        "file signings",
+        "who signed which version of a file in Tico, and when: attach the version a signing made",
+        example="tico file signings f1",
+    ),
     Command(
         "file approved",
         "exit 0 when a person approved this exact version on a review question, 1 when not, 2 on bad input",

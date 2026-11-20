@@ -128,6 +128,27 @@
 .fv-pdf-bar>span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .fv-pdf-bar .ib,.fv-pdf-bar .fv-pdf-count{color:var(--on-scrim)}
 .fv-pdf-full .fv-pdf-pages{border-radius:var(--r-block)}
+/* Sign (PdfView, PdfSign): the corner's Sign; in sign mode the bar's tools and a line saying where a tap places the
+   armed one. Each page has a layer for its marks: a crosshair while a tool is armed. A mark is dragged by its body and
+   sized by its corner; the selected one shows its outline, its close and its corner. What it says is in the PDF's own
+   Helvetica and ink, as Save writes it. */
+.fv-pdf-tools .fv-pdf-sign{height:var(--ctl-sm)}
+.fv-pdf-bar .btn{color:var(--on-scrim)}
+.fv-pdf-bar .btn-fill{color:inherit}
+.sg-bar{flex-wrap:wrap;row-gap:var(--s-1)}
+.sg-bar .btn.is-on{background:var(--hover)}
+.sg-hint{color:var(--on-scrim);opacity:.8;white-space:nowrap}
+.fv-signed{color:var(--muted);white-space:nowrap}
+.sg-layer{position:absolute;inset:0}
+.sg-layer.is-armed{cursor:crosshair}
+.sg-mark{position:absolute;display:flex;cursor:move;touch-action:none;outline:1px dashed transparent;outline-offset:2px}
+.sg-mark:hover,.sg-mark:focus-visible{outline-color:var(--line-strong)}
+.sg-mark.is-on{outline:1px solid var(--focus)}
+.sg-mark img{width:100%;height:100%;display:block;pointer-events:none;user-select:none}
+.sg-mark input{width:100%;min-width:0;margin:0;padding:0;border:0;background:none;color:var(--paper-ink);outline:0;white-space:nowrap}
+.sg-remove{position:absolute;top:calc(-1 * var(--s-6));right:calc(-1 * var(--s-1));background:var(--raised);box-shadow:var(--lift-paper)}
+.sg-size{position:absolute;right:calc(-1 * var(--s-1h));bottom:calc(-1 * var(--s-1h));width:12px;height:12px;border-radius:50%;background:var(--focus);cursor:nwse-resize;touch-action:none}
+.sg-draw .sg-pad{display:block;width:100%;height:180px;border-radius:var(--r-ctl);background:var(--paper);box-shadow:inset 0 0 0 1px var(--line-strong);touch-action:none;cursor:crosshair}
 
 /* ---------- skills: one list, proposals first; a skill's text with its facts beside it ---------- */
 .lib .avs{display:inline-flex;align-items:center;justify-content:flex-end;min-width:0}

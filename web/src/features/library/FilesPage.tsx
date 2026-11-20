@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { meQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -19,6 +20,7 @@ import { FileGet, linkOf, Preview } from './FileViewer';
 import { Face, Find, KindGlyph, OwnerButton, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
+import { signedLine } from './signing';
 import './library.css';
 
 /* Files (files.js filesPage, filePage): every file teammates made or added, newest first in Today, This week and
@@ -263,6 +265,9 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
   const n = version ?? shown?.version ?? file.version;
   const mime = shown?.mime ?? (older ? '' : file.mime ?? '');
   const url = fileUrl(id, n);
+  const me = useQuery(meQuery);
+  // A task's file at its current version, to a person: a PDF offers Sign (the server checks the rest).
+  const signable = !!file.task_id && !older && (me.data?.role === 'person' || me.data?.role === 'owner');
 
   return (
     <Document
@@ -313,6 +318,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
           name={shown?.name ?? (older ? '' : file.name)}
           size={shown?.size ?? (older ? undefined : file.size)}
           link={linkOf(file)}
+          signable={signable}
         />
       }
       sideFacts
@@ -340,7 +346,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
                     href={fileHref(search, id, v.current ? undefined : v.version)}
                   >
                     <b>v{v.version}</b>
-                    <span>{when(v.created_at)}</span>
+                    {v.signed ? <span title={signedLine(v.signed)}>{signedLine(v.signed)}</span> : <span>{when(v.created_at)}</span>}
                     <Face actor={v.actor} />
                   </Link>
                 ))}

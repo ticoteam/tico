@@ -72,6 +72,8 @@ export interface PreviewProps {
   link?: string;
   /** `url` sends the bytes only as a download (an email's frozen attachment): they are read here and shown. */
   held?: boolean;
+  /** A task's PDF at its current version, shown to a person: it offers Sign (PdfSign.tsx). */
+  signable?: boolean;
 }
 /** Where a linked file lives (file-review.ts frvLink): only a web address, so a link never runs anything here. */
 export function linkOf(f: { locator?: string; open?: Record<string, unknown> | null } | undefined): string {
@@ -110,7 +112,7 @@ export function FileGet({ url, link }: { url: string; link: string }) {
 }
 
 /** One file's face, by its type, else its name. */
-export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false }: PreviewProps) {
+export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false, signable = false }: PreviewProps) {
   const view = viewOf(mime, kind, name ?? title);
   const asText = AS_TEXT.has(view);
   const shows = view !== 'office' && view !== 'none';
@@ -175,7 +177,10 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
         <audio src={src} controls aria-label={title} />
       </div>
     );
-  if (view === 'pdf') return <PdfView src={src} title={title} url={url} name={name} />;
+  if (view === 'pdf') {
+    const sign = signable && id && version && !held ? { file: id, version, name: name || title } : undefined;
+    return <PdfView src={src} title={title} url={url} name={name} sign={sign} />;
+  }
   return <iframe className="fv-frame" src={src} title={title} />;
 }
 
