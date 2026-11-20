@@ -428,7 +428,10 @@ def _match(c, v, actors):
     sql = (
         f"SELECT r.*, {thread_rail.ACTIVITY} AS activity FROM conversations r "
         "WHERE r.id IN (SELECT m.thread_id FROM thread_members m WHERE m.actor=:a0) "
-        f"AND {thread_rail.root_open(c, v, thread_rail.DM_MATCH_AUDIENCES)} AND r.deleted_at IS NULL "
+        # The open roots of these audiences are the open-thread index's rows: only its finished-task roots are checked.
+        f"AND {thread_rail.OPEN_ROOT} AND "
+        f"{thread_rail.task_open(c, v, thread_rail.OPEN_THREADS, source=thread_rail.OPEN_THREADS_FROM)} "
+        "AND r.deleted_at IS NULL "
         f"AND {thread_rail.DM_MATCH_AUDIENCES} "
         f"AND (SELECT COUNT(*) FROM thread_members m WHERE {others})=:n "
         f"AND NOT EXISTS (SELECT 1 FROM thread_members m WHERE {others} AND m.actor NOT IN "
@@ -665,6 +668,22 @@ def install(app, store, auth, mutate, rule_check):
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
             return thread_rail.catch_up(c, v, cursor=cursor, limit=limit or thread_rail.CATCH_UP_LIMIT)
+
+    @app.get(
+        "/api/v2/threads/catch-up/count",
+        **api_v2(
+            "Threads",
+            "countThreadCatchUp",
+            "Catch up's badge alone: `count`, how many items GET /api/v2/threads/catch-up lists (at most 99), and `ids`, their roots, in its order; no thread views or messages",
+            "ThreadCatchUpCount",
+        ),
+    )
+    def catch_up_count(request: Request):
+        """Catch up's `count` and the roots it counts (`ids`), without reading any item's messages: the menu's badge."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            count, ids = thread_rail.catch_up_count(c, v)
+            return {"count": count, "ids": ids}
 
     @app.get(
         "/api/v2/threads/home/{actor}",

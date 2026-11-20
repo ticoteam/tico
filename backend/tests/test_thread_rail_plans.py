@@ -48,10 +48,18 @@ def old_rail_lists(c, v, marks):
     )
 
 
+def old_browse_where(c, v, marks):
+    """Browse as it was: every root, the finished-task check over every company and team root first."""
+    company = f"{thread_rail._audience()} IN ('company','team')"
+    readable = threads.readable_sql(c, v, "r")
+    return "conversations r", [thread_rail.root_open(c, v, company), company, readable, f"NOT {thread_rail._in(marks)}"]
+
+
 def old_walk_where(c, v, rest, args):
     """Catch up's walk as it was: the finished-task check first, readable built whole, the reader's membership before
-    something new, and no pass over finished tasks' roots on lists."""
-    old = [threads.readable_sql(c, v, "r"), rest[2], rest[0], rest[3]]
+    something new, no pass over finished tasks' roots on lists, and every root tested (rest[0], the roots that may hold
+    something new, read by id, left out)."""
+    old = [threads.readable_sql(c, v, "r"), rest[3], rest[1], rest[4]]
     return [thread_rail.root_open(c, v, " AND ".join(old), args), *old], "1", {}
 
 
@@ -176,11 +184,11 @@ def test_readable_sql_reads_task_rooms_as_before(api):
 
 
 def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
-    """Every reader's rail (each page, its cursors, Catch up's count and ids, its Unread rows, its DMs) and Catch up
-    are the same from the index and with the cheap terms first as from the old SQL: readable_sql's old legacy order,
-    every open root with the finished-task check first, and the walk's old term order."""
+    """Every reader's rail (each page, its cursors, Catch up's count and ids, its Unread rows, its DMs), Catch up and
+    Browse are the same from the indexes and with the cheap terms first as from the old SQL: readable_sql's old legacy
+    order, every open root with the finished-task check first, and the walk's old term order."""
     _seed(api)
-    paths = ("threads/rail", "threads/catch-up")
+    paths = ("threads/rail", "threads/catch-up", "threads/browse")
     new = {(p, t): _pages(api, t, p) for p in paths for t in READERS.values()}
     real = threads.readable_sql
     monkeypatch.setattr(
@@ -188,8 +196,10 @@ def test_the_rail_and_catch_up_answer_as_the_old_sql(api, monkeypatch):
     )
     monkeypatch.setattr(thread_rail, "_rail_lists", old_rail_lists)
     monkeypatch.setattr(thread_rail, "_walk_where", old_walk_where)
+    monkeypatch.setattr(thread_rail, "_browse_where", old_browse_where)
     for (path, token), pages in new.items():
         assert _pages(api, token, path) == pages, f"{path} changed for {token}"
+    assert any(p["threads"] for t in READERS.values() for p in new[("threads/browse", t)])  # Browse lists some
     rail = {t: new[("threads/rail", t)] for t in READERS.values()}
     assert len(rail["ana-test"]) > 1, {t: len(p) for t, p in rail.items()}  # its cursors are compared too
     titles = {t: [r["title"] for p in pages for r in p["pinned"] + p["threads"]] for t, pages in rail.items()}
