@@ -1325,11 +1325,13 @@ def seed_external(c, who, text, source_name, source_kind):
 # once to every team, on, followed by all bots and met only by a bot's question to a person (`kind:ask`). The team edits
 # it or turns it off on the Rules page like any rule; the marker stays, so it is never added again.
 # Its tone only: the ask's shape (a short first line that stands on its own, no paths or ids) is checked in code
-# (backend/ask_shape.py). A team's stored copy still in earlier built-in words is brought up to date by migration
-# 20261116234252_asks_to_a_person_choices_optional; one the team edited keeps its words.
+# (backend/ask_shape.py). It only warns: a style rule never stops a question reaching its person (the ask is delivered
+# and the bot is told the rule). A team's stored copy still in earlier built-in words is brought up to date by
+# migrations 20261116234252_asks_to_a_person_choices_optional and 20261120223442_asks_to_a_person_warns; one the team
+# edited keeps its words and its setting.
 ASKS_TO_A_PERSON = (
     "A bot's ask or task for a person is in plain words, says in one line why it matters, and uses no Markdown or "
-    "file paths. Choices are optional. Otherwise it is refused, and the bot rewrites it."
+    "file paths. Choices are optional."
 )
 ASKS_TO_A_PERSON_ADDED = "rules.asks_to_a_person"  # registry_metadata: added once; never again
 
@@ -1348,7 +1350,7 @@ def ensure_builtin(c):
         "who": _json({"everyone": False, "all_bots": True, "groups": [], "bots": [], "people": []}),
         "with_scope": _json({"groups": [], "bots": [], "people": []}),
         "where_terms": ASKS_ONLY,
-        "if_broken": "block",
+        "if_broken": "warn",
         "status": "active",
         "suggested_by": H.TICO_ACTOR,
         "decided_by": H.TICO_ACTOR,

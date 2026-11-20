@@ -246,7 +246,8 @@ def questions(api, token="ana-test"):
 
 
 def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
-    """Silent break 3: the built-in "Asks to a person" rule is judged for a bot's ❓, and refuses one that breaks it."""
+    """Silent break 3: the built-in "Asks to a person" rule is judged for a bot's ❓. It only warns: one that breaks it
+    is still asked and marked for its person, and the bot is told the rule."""
     api, judge = ruled
     judge.needles = {OR.ASKS_TO_A_PERSON: "**"}
     task = task_for_ops(api)
@@ -255,10 +256,12 @@ def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
     [call] = judge.calls
     assert [rule_row["text"] for rule_row in call["state"]["rules"]] == [OR.ASKS_TO_A_PERSON]
     r = ask_on(api, task, text="Should it go out **Friday**?")
-    assert r.status_code == 200 and r.json()["held"]["state"] == "held", r.text  # held for Ana: not posted, not marked
-    assert "question" not in r.json()
-    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body LIKE '%**Friday**%'")[0]["n"] == 0
-    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE line LIKE '%Friday**%'")[0]["n"] == 0
+    assert r.status_code == 200 and "held" not in r.json(), r.text
+    assert r.json()["rule_warning"]["rules"][0]["text"] == OR.ASKS_TO_A_PERSON
+    [mark] = sql(api, "SELECT line FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (task["id"],))
+    assert mark["line"] == "Should it go out **Friday**?", "listed by the bot's words, not the warning line"
+    assert [q["mark_id"] for q in questions(api)] == [r.json()["question"]["id"]]
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
 def test_a_question_mark_is_in_the_persons_needs_you_until_they_reply_and_files_nothing(ruled):

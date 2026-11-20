@@ -8,9 +8,11 @@ applied inside it.
 - Warn: the write goes, with the warning line on what the recipient reads (`warn_on`), and the answer carries it.
 - Hold: nothing is written but the hold; the answer names the rule. Send anyway is the hold's own route
   (`org_rule_check.send`): only whoever may send a hold today, and it replays the same write (`TaskRules.replay`).
-- An ask a rule covers (docs/dev/pipelines-v3.md, "How a rule stops the next one"): a bot's ask is refused with the rule's
-  words, under `COVERS`, an engine-style refusal that never counts toward quarantine. With the judge out the ask goes;
-  a cause here (`LOCAL`: every call slot busy, the day's calls spent, too long to check) refuses it to try again.
+- An ask a rule covers (docs/dev/pipelines-v3.md, "How a rule stops the next one"): a bot's ask a Block or Escalate rule
+  finds broken is refused with the rule's words, under `COVERS`, an engine-style refusal that never counts toward
+  quarantine. With the judge out the ask goes; a cause here (`LOCAL`: every call slot busy, the day's calls spent, too
+  long to check) refuses it to try again. A Warn rule never stops an ask: the ask reaches its person and the bot is told
+  the rule (`rule_warning`), whether it was found broken or could not be checked.
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
@@ -75,8 +77,9 @@ def said_text(
 
 
 def covering(verdict: Row | None) -> list[Row]:
-    """The rules a verdict found broken, strictest first: what covers an ask. Nothing for no verdict, a pass, a check
-    that could not run (the ask goes: better one extra ask than a lost one) or one already decided."""
+    """The Block and Escalate rules a verdict found broken, strictest first: what covers an ask. Nothing for no verdict,
+    a pass, a check that could not run (the ask goes: better one extra ask than a lost one), one already decided, or a
+    broken rule that only warns (the ask goes with its warning)."""
     if not verdict or "refused" in verdict or "applied" in verdict or verdict.get("draft"):
         return []
     if verdict.get("check") == "structured":
@@ -88,8 +91,21 @@ def covering(verdict: Row | None) -> list[Row]:
     if verdict.get("outcome") != "broken":
         return []
     found: list[Row] = verdict.get("rules") or []
-    broken = [r for r in found if r.get("id") in (verdict.get("broken") or [])]
+    broken = [
+        r for r in found if r.get("id") in (verdict.get("broken") or []) and (r.get("if_broken") or "block") != "warn"
+    ]
     return sorted(broken, key=lambda r: -org_rule_check.STRICT.get(r.get("if_broken") or "block", 2))
+
+
+def only_warns(verdict: Row | None) -> bool:
+    """Whether every rule a verdict met only warns: nothing it finds, or fails to check, can stop the write."""
+    if not verdict or "refused" in verdict or "applied" in verdict:
+        return False
+    rules: list[Row] = list(verdict.get("rules") or [])
+    judged: Row | None = verdict.get("judged") if verdict.get("check") == "structured" else None
+    if judged:
+        rules += list(judged.get("rules") or [])
+    return bool(rules) and all(r.get("if_broken") == "warn" for r in rules)
 
 
 # A check that could not run for a cause here, not the judge being out: nothing about the judge's health, so it never
@@ -99,7 +115,8 @@ def covering(verdict: Row | None) -> list[Row]:
 #   the hold path a too-long output already takes: held when a Block or Escalate rule matches, delivered with a line
 #   saying it could not be checked when every rule is Warn.
 # A bot's ask (or OK ask) with any of them is refused, nothing written, never counted toward quarantine: an ask is
-# never let through unchecked by a cap the bot itself can spend.
+# never let through unchecked by a cap the bot itself can spend, when a rule it meets could hold it. When every rule it
+# meets only warns, the ask goes, with the line saying it could not be checked (busy: unchecked, as the judge out is).
 LOCAL = ("busy", "day_cap", "too_large")
 NOT_ASKED_LOCAL = {
     "busy": "Not asked yet: the rule check is busy. Try again in a minute.",
@@ -249,7 +266,7 @@ class TaskRules:
     ) -> Any:
         """The verdict for one task write by `who`, outside the write, or None (nothing to check). `late`: when every
         rule it meets only warns, the check runs right after the write (org_rule_check `check_as`); never for a bot's
-        ask (`ask`), which a rule that only warns still refuses (`covering`). `said` is the
+        ask (`ask`), checked before it is asked so the bot's answer carries any warning. `said` is the
         write's (label, text) pairs; `to` who it reaches besides the task's people, `also(c)` anyone else; `hands_over`
         that it gives the task to `to`. The write's place is its task's thread (`place`). A task the caller may not
         read is `org_rule_check.refused`. Any other error is a refusal too: the write never goes unchecked because
@@ -357,9 +374,12 @@ class TaskRules:
     @staticmethod
     def _refused(c: Any, who: Any, verdict: Row, ask: bool) -> None:
         """What stops a write before the gate: a cause here (`LOCAL`) refuses a bot's ask and makes any write wait out
-        a busy check; a bot's ask a rule covers is refused with the rule's words."""
+        a busy check; a bot's ask a rule covers is refused with the rule's words. A bot's ask that only Warn rules meet
+        is never refused here: it is asked, with its warning."""
         cause = local_cause(verdict)
         bot_ask = ask and H.is_bot(str(verdict.get("author") or ""))
+        if bot_ask and only_warns(verdict):
+            return
         if bot_ask and cause:
             raise Problem("task_rule_unchecked", NOT_ASKED_LOCAL[cause], 503, retryable=True)
         if cause == "busy":

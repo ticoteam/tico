@@ -149,7 +149,8 @@ def test_a_block_rule_or_a_mix_with_one_still_holds_before_anything_is_saved(rul
 
 
 def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
-    """A warn rule refuses a bot's ask (here an OK of what it shows) it covers (task_rule_gate `covering`), so that ask is never left for later."""
+    """A bot's ask (here an OK of what it shows) is checked before it is saved, never left for later, so the bot's
+    answer carries the warning; a Warn rule never stops it (task_rule_gate `covering`)."""
     api, _ = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
@@ -164,7 +165,9 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
         },
         headers=headers("ops-test"),
     )
-    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert r.status_code == 200 and r.json()["rule_warning"]["rules"][0]["text"] == COLOR, r.text
+    assert r.json()["requirement_id"]
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
 
 
 def test_a_judge_that_fails_after_the_write_keeps_it_and_records_it_unchecked(ruled):
