@@ -134,9 +134,9 @@ def parent_wait_id(row: Mapping[str, Any]) -> str:
     return PREFIX + str(row["person_id"])
 
 
-def line(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
-    """What a question's wait on its parent says, to every reader: who it waits on, never its words."""
-    return f"A question to {H.actor_name(conn, row['person_id'])}"
+# What a question's wait on its parent says, to every reader: never its words, nor a name. Who it waits on is the
+# wait's `who`, an actor id each reader is shown as a ❓ wait's is (teammate_access.Known), never text in the line.
+LINE = "A question"
 
 
 def is_wait(value: object) -> bool:

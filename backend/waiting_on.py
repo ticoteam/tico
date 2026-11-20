@@ -117,7 +117,9 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS and task_depends.is_wait(said.requirement_id):
-            return replace(said, who=None, line=task_depends.UNNAMED, about=None)
+            # Its wait id ends with the task it depends on: that goes too.
+            unnamed_id = str(said.requirement_id).rsplit(":", 1)[0] + ":"
+            return replace(said, who=None, line=task_depends.UNNAMED, about=None, requirement_id=unnamed_id)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)
@@ -583,10 +585,9 @@ def of(
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
     for q in asking_questions:
-        # Said the same to every reader, list, wake and note: who it waits on, never its words or its task, which only
-        # a reader of the question reads (its own task, and the parent's `questions`).
-        line = questions.line(conn, q)
-        out.append(Wait(PERSON, q["person_id"], line, questions.parent_wait_id(q), q["updated_at"], ask=True))
+        # Said the same to every reader, list, wake and note: never its words, task or a name, which only a reader of the
+        # question reads (its own task, and the parent's `questions`).
+        out.append(Wait(PERSON, q["person_id"], questions.LINE, questions.parent_wait_id(q), q["updated_at"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).

@@ -495,14 +495,14 @@ def test_what_the_parent_waits_on_never_names_the_question(c, general):
     asked = _ask(c, E.task(c, made["id"]), checked=False)  # Ana is let in; the question is hers and the bot's
     for viewer in (CARA, ANA):  # whether or not they may open the question
         [wait] = [w for w in TC.task_view(c, made["id"], viewer)["waits"] if w["state"] == W.PERSON]
-        assert (wait["who"], wait["line"], wait["requirement_id"]) == (ANA, "A question to Ana", "question:" + ANA)
+        assert (wait["who"], wait["line"], wait["requirement_id"]) == (ANA, Q.LINE, "question:" + ANA)
     said = str(TC.task_view(c, made["id"], CARA)) + str(W.of(c, E.task(c, made["id"])))
     assert asked["task_id"] not in said and "Friday" not in said
     # A note's outcome quotes what the task waits on: the same words, never the question's.
     parent = _parent(c)
     _ask(c, parent)
     record = {"sent": {"task": parent["id"]}, "delivery": {"task_id": parent["id"]}}
-    assert note_outcomes.outcome(c, record, actor=ANA)["summary"] == "A question to Ana"
+    assert note_outcomes.outcome(c, record, actor=ANA)["summary"] == Q.LINE
 
 
 def test_the_backfill_skips_a_mark_whose_refs_name_another_task(c, general):
@@ -523,3 +523,25 @@ def test_the_backfill_skips_a_mark_whose_refs_name_another_task(c, general):
         "its message is not a plain ❓ comment on its task: unexpected send_defer_for",
         "its message names another task, whose readers it keeps",
     ]
+
+
+def test_a_dependency_on_a_private_question_names_it_only_to_its_readers(c, general):
+    from backend import task_calls as TC
+    from backend import task_relations as TR
+
+    made = H.task_create(c, BUILDER, "Renew the lease", "", BUILDER, private=True, readers=["cara"], lint=False)
+    X.ran(c, made["id"], BUILDER)
+    asked = _ask(c, E.task(c, made["id"]), checked=False)
+    assert TR.relate(c, BUILDER, made["id"], asked["task_id"], "depends_on")
+    hidden = str(TC.task_view(c, made["id"], CARA)["waits"])
+    assert asked["task_id"] not in hidden and "Friday" not in hidden
+    assert "Friday" in str(TC.task_view(c, made["id"], ANA)["waits"])  # Ana reads her question
+
+
+def test_the_question_wait_names_its_person_only_as_its_who_like_a_marks(c, general):
+    parent = _parent(c)
+    QM.ask(c, BUILDER, parent["id"], BEN, "Which venue?")
+    _ask(c, E.task(c, parent["id"]))
+    waits = {w.who: w for w in W.of(c, E.task(c, parent["id"])) if w.state == W.PERSON}
+    assert waits[ANA].line == Q.LINE and "Ana" not in waits[ANA].line  # no name in its words, as a ❓'s line has none
+    assert waits[BEN].line == "Which venue?"
