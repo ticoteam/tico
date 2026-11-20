@@ -19,7 +19,6 @@ from pydantic import Field
 
 from .models import Contract
 from .store import H, Problem
-from . import task_privacy as privacy
 
 KINDS = ("api", "sql", "browser", "mail", "cli")
 WRITES = ("never", "approval", "allowed")
@@ -325,8 +324,6 @@ def learning_counts(c):
 
 
 def add_learning(c, who, service, text):
-    if privacy.private_execution(c, who):
-        raise Problem("privacy", "Private task work cannot be published as a company learning", 403)
     day = H.now()[:10]
     n = c.execute(
         "SELECT count(*) FROM learnings WHERE actor=? AND substr(created_at,1,10)=?", (who.actor, day)

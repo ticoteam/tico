@@ -518,10 +518,9 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
 
 
 def private_finance_run(c, who) -> bool:
-    """Whether a run may make Finance actions (`tico finance act`) while it works the Finance Owner's own private work: the
-    Books check and Watch tasks, which the system opens for it (`deliver`) and no person files. Every task the run
-    carries must be one of them, and the run must be the Finance Owner's own; anything else keeps the private refusal.
-    Nothing here widens who reads a task or lets anyone publish it: the task stays private (task_privacy.guard_write)."""
+    """Whether a run works only the Finance Owner's own private work: the Books check and Watch tasks, which the system
+    opens for it (`deliver`) and no person files. Every task the run carries must be one of them, and the run must be
+    the Finance Owner's own. From there it makes only PRIVATE_FINANCE_KINDS (private_finance_kind_allowed)."""
     from . import task_privacy as TP
 
     if not getattr(who, "attempt_id", None) or who.role != "bot" or who.actor != ACTOR:

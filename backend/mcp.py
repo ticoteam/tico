@@ -468,31 +468,18 @@ def task_dry_run(c, auth, who, body):
             and (not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"])))
         ):
             problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
-        # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
-        # someone who cannot read it, or a private task's reach refused.
-        from . import task_privacy as privacy
-
         try:
-            parent = (
-                H.task(c, auth.task(c, who, auth.resolve_task(c, who, named_parent))["id"]) if named_parent else None
-            )
-            related = [auth.resolve_task(c, who, ref) for ref in related_refs]
-            privacy.require_create(
-                c,
-                who,
-                body.private,
-                target,
-                parent,
-                title=body.title,
-                body=body.body,
-                from_private_work=body.from_private,
-                texts=privacy.create_texts(body),
-                related=related,
-            )
+            # The create's own refusals of a parent it cannot read or a relation it cannot name.
+            if named_parent:
+                auth.task(c, who, auth.resolve_task(c, who, named_parent))
+            for ref in related_refs:
+                auth.resolve_task(c, who, ref)
         except Problem as exc:
             problems.append(exc.detail)
         if body.readers:
             # The create's reader refusals (hubdb.new_readers, task_privacy.require_readers), none of them counted.
+            from . import task_privacy as privacy
+
             probe = H.CLOSE_PROBE.set(True)
             try:
                 parties = {"owner_id": target, "requester_id": who.actor, "readers": None}

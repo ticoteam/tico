@@ -229,7 +229,7 @@ class TaskCreate(Contract):
     harness: ID | None = None
     # Where its runs compact; none is the bot's (backend/task_run_models.py). It needs no model: alone it keeps the bot's.
     compact_at: CompactAt | None = None
-    # A company-visible task a private task's owning bot files from that work, in its own words (task_privacy.from_private).
+    # Older clients' name for `private: false` from a run on a private task (app.task_create).
     from_private: StrictBool = False
     # A bot files a person's own ask (Ideas: say it once, #227): `for_actor` (`--for human:X`) is the requester, and
     # `from_message` the message the person sent it in, which the bot must read. Both or neither.

@@ -589,16 +589,15 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
     drain(api)
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x", "private": True}, "ben-test")
     attempt = claim(api, machine)
-    # Its turn may not ask for a credential at all: refused, not a card nobody can see.
+    # Its turn asks for a credential as any turn does: the card goes to someone who reads the task.
     asked = api.post(
         "/api/v2/credential-requests",
         json={"env": "ACME_CRM_TOKEN", "label": "the Acme CRM token"},
         headers=headers(attempt["token"]),
     )
-    assert asked.status_code == 403
+    assert asked.status_code == 200, asked.text
     refused(api, machine, attempt)
-    [card] = cards(api, t)
-    assert card["person"] == "human:ana"  # the company owner can read it
+    assert {card["person"] for card in cards(api, t)} == {"human:ana"}  # the company owner can read it
     assert shown(api, t, "ben-test")["task"]["status"] == "open"
     monkeypatch.setattr(api.app.state.store.settings, "owner_email", "cara@acme.example")
     with api.app.state.store.transaction() as c:

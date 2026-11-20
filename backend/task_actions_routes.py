@@ -496,10 +496,10 @@ def register_core(
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if body.from_private:
-            pass  # company-visible, its words checked (task_privacy.from_private)
-        elif privacy.private_execution(c, who):
-            if body.private is False:
-                raise Problem("privacy", privacy.COMPANY_REFUSAL, 403)
+            # Older clients' name for `private: false` from a private task's run.
+            body = body.model_copy(update={"private": False, "from_private": False})
+        elif body.private is None and privacy.private_execution(c, who):
+            # What a run on private work files is private unless it asks for company-visible (`private: false`).
             body = body.model_copy(update={"private": True})
         request_id = body.request_id
         handoff = who.role == "bot" and who.actor != "bot:" + BOTOPS and not who.via
@@ -556,34 +556,9 @@ def register_core(
                 )
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
             request_id = None
-        # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
-        # task with no person on it, filed by the bot that owns it, makes them its reader.
-        reach_to = privacy.require_create(
-            c,
-            source,
-            body.private,
-            owner,
-            H.task(c, parent_id) if parent_id else None,
-            actor=who.actor,
-            title=body.title,
-            body=body.body,
-            from_private_work=body.from_private,
-            texts=privacy.create_texts(body),
-            related=[other for other, _ in others],
-        )
-        # The private tasks a company-visible task from private work comes from: their history says so.
-        kept = (
-            privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None)
-            if body.from_private
-            else []
-        )
-        # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
-        sealed = (
-            not reach_to
-            and not kept
-            and privacy.private_execution(c, source)
-            and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None
-        )
+        # A subtask for a person under a private task with no person on it, filed by the bot that owns it, makes them
+        # its reader.
+        reach_to = privacy.reach_for(c, source, owner, H.task(c, parent_id) if parent_id else None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
         # other one finishes. A bot set to `tasks` has opted out of that on both sides: it does
@@ -629,20 +604,19 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
+        asked_public = body.private is False
         # Delegation retains the bot's sensitive default and cannot use a person's
         # explicit-public choice to override either creator or assignee defaults.
         if actual_bot and body.private is False:
             body = body.model_copy(update={"private": None})
         if actual_bot and H.private_tasks_default(c, actual_bot):
             body = body.model_copy(update={"private": True})
-        private = not kept and bool(
-            (
-                body.private
-                if body.private is not None
-                else H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
-            )
-            or parent
-            and H.task_private(c, parent)
+        defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
+        # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
+        # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
+        public = asked_public and body.private is not True and not (actual_bot and defaults)
+        private = not public and bool(
+            (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
         )
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
@@ -694,10 +668,6 @@ def register_core(
                         and H.is_human(source_task["requester_id"])
                     ):
                         requester_actor = source_task["requester_id"]
-            if requester_actor and not privacy.readable(c, requester_actor, privacy.attempt_tasks(c, who.attempt_id)):
-                raise Problem(
-                    "privacy", "The verified requester cannot receive this private execution's other context", 403
-                )
         if body.for_actor:
             # A bot files a person's own ask: the person asked for it, so it is theirs (Ideas: say it once, #227).
             requester_actor = filed_for(c, who, body.for_actor, body.from_message)
@@ -735,7 +705,7 @@ def register_core(
             number=body.number,
             mover=mover(c, who) or None,
             own_room=H.actor_id(owner) != settings.assistant_bot,
-            from_private=bool(kept),
+            public=public,
             same=same,
             follow=body.follow,
             # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
@@ -767,39 +737,6 @@ def register_core(
         task_caps.record(c, row["id"], who.actor, owner, at=row["created_at"])
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
-        for source_row in kept:
-            # The private task's readers see what was filed; the new task's, only that it came from private work.
-            H._task_event(
-                c,
-                source_row["id"],
-                who.actor,
-                "filed_from_private",
-                None,
-                row["id"],
-                f"Filed a company-visible task from this private task: {body.title}",
-            )
-        if kept:
-            H._task_event(c, row["id"], who.actor, "from_private", None, who.actor, "Filed from a private task")
-        if sealed:
-            # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
-            H._task_event(
-                c,
-                parent_id,
-                who.actor,
-                "handed",
-                None,
-                owner,
-                f"Handed to {(H.bot(c, H.actor_id(owner)) or {}).get('slug') or H.actor_id(owner)} in a private subtask",
-            )
-            H._task_event(
-                c,
-                row["id"],
-                who.actor,
-                "sealed",
-                None,
-                who.actor,
-                f"Filed by {(H.bot(c, H.actor_id(who.actor)) or {}).get('slug') or H.actor_id(who.actor)} from private work it does not share",
-            )
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
             # reviewer's default comes from its own setting.
@@ -992,7 +929,6 @@ def register_core(
 
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
-        # The create's own privacy refusals run as the bot and its run (privacy.require_create).
         return task_create(
             c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest, rule=org_rule_check.decided(gate)
         )

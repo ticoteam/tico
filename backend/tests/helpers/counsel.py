@@ -49,7 +49,7 @@ def source(api, name="Acme Vendor", kind="vendor"):
 
 def counsel_run(api):
     """Counsel's runner claims its next job: the run on the read task a person just opened. Its token is the run's own,
-    so every call it makes goes through the API's private-run guard (backend/task_privacy.py guard_write)."""
+    so every call it makes goes through the Rules Owner's route scope (backend/counsel.py read_refused)."""
     from backend.tests.helpers.api import assign, claim, ready, runner
 
     r = runner(api, "ana")

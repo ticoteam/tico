@@ -462,10 +462,6 @@ Turn on **Private** to limit reads to the requester, the owner, its readers and 
 the person who asked for it can make it company-visible again; a bot never can. Reassigning a private task gives the
 new owner access and takes it from the old one, unless they are still the requester, a reader or a manager.
 
-A bot's run on a private task writes its own task and thread, not company-wide resources; a refusal names the route.
-Mail is not held back by it: the bot drafts, checks and queues email in any mailbox it may write, and a send that needs
-an OK asks it, on a private task of its own, of the inbox's approver alone.
-
 ### Who can see a private task
 
 A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on it. A group
@@ -484,17 +480,17 @@ names everyone in it, read at each check.
   `{"to": "next", "let_see": ["<actor>", ...]}`, the list the task's `turn.share` gives; refused, adding nobody, when
   it now waits on someone else). A bot is never told how to share it: its refusal names the person to ask.
 
-### A private task with no person on it
+### Work on a private task
 
-A private task between two bots has nobody who could act on it. Its owning bot (or that bot's manager) may:
+A run on a private task can do everything a run on a public task can: use the browser, draft and send mail, publish
+pages, post in other threads, write rules and file tasks. Privacy stays on the reading side: the private task, its
+chat and files are seen only by its readers, wherever they are listed. A mail send that needs an OK still asks it, on
+a private task of its own, of the inbox's approver alone.
 
-- **Bring in one person**, by filing a sub-task for them under it (`tico task create --owner <person> --parent <task>`).
-  They become a reader of that task only. Once a person reads it, a hand-off to someone else is refused.
-- **Hand work to another bot in a sealed sub-task**: `tico task create --owner <bot> --parent <task>`. The other bot
-  reads only the words written into the sub-task, never the parent. Words copied from the private work (12 or more in
-  a row, or a secret-shaped value) are refused, naming the check, never the text.
-- **File a company-visible task from the private work**: `tico task create --from-private --owner <bot>
-  [--parent <task>]`. It carries only its own words, under the same checks, and the private task stays sealed.
+- A task a private task's run files is private, with its assignee and requester able to read it; `--public`
+  (`"private": false`) files it company-visible, under the private task too. The private parent stays hidden.
+- A sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first such
+  person a reader of that task only. Anyone after that gets the sub-task alone.
 
 `POST /api/v2/tasks/dry-run` makes the same checks as a create and writes nothing.
 

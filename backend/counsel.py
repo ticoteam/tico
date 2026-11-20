@@ -68,10 +68,6 @@ STOP_WORDS = frozenset(
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
 
-# A quote shorter than this from a private read could be a word that is in any document: too little to tie the
-# suggestion to the version it cites.
-PRIVATE_QUOTE_MIN = 20
-
 
 class RuleRead(Contract):
     file_id: str | None = Field(default=None, max_length=100)
@@ -740,39 +736,6 @@ def postal_scan(c, auth, who, ident, rest, query):
     elif rest:
         return False
     return postal_mail.scan_access(c, auth, who, ident) is True
-
-
-def private_suggestion(c, who, data):
-    """A rule the Rules Owner writes from a private run. Its read tasks are private, and a private run publishes nothing
-    company-wide (backend/task_privacy.py guard_write), except this: on its own read task, the Rules Owner suggests external
-    rules for that read's From, each citing that read's file version with a quote of at least PRIVATE_QUOTE_MIN
-    characters (check_cite then finds it in that version), whose quote only the file's readers see (org_rules.view).
-    While it may, its reads are scoped to that read (read_refused). Anything else from a private run is refused here.
-    A run that is not private is left to the route."""
-    from .task_privacy import private_execution
-
-    if not is_counsel(who) or not private_execution(c, who):
-        return
-    read = run_read(c, who)
-    if not read:
-        raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
-    cite = data.get("cite") or {}
-    source = O._source_named(c, data.get("source_id")) if data.get("source_id") else None
-    if data.get("kind") != "external" or not read["source_id"] or source != read["source_id"]:
-        raise Problem(
-            "privacy", "From a document's read, the Rules Owner suggests external rules for that read's From only", 403
-        )
-    if cite.get("file_id") != read["file_id"] or _version(cite.get("version")) != read["version"]:
-        raise Problem(
-            "privacy",
-            "From a document's read, the Rules Owner's rule cites that document at the version its task "
-            f"names: file {read['file_id']} version {read['version']}",
-            403,
-        )
-    if len(normal(cite.get("quote"))) < PRIVATE_QUOTE_MIN:
-        raise Problem(
-            "validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422
-        )
 
 
 # Every call the Rules Owner may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added

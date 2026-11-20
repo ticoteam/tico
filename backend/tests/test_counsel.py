@@ -834,12 +834,12 @@ def test_counsel_cites_only_the_version_it_was_asked_to_read(api):
     newer = new_version(api, file_id, CONTRACT + "\nAmendment: nothing new for us.")
     assert newer == first + 1
     token = counsel_run(api)[1]["token"]
-    # The unreviewed version is not citable, even though it holds the quote.
-    assert suggest(api, file_id, CONSENT, version=newer, token=token).status_code == 403
+    # The unreviewed version is not citable, even though it holds the quote: the run never read it.
+    assert suggest(api, file_id, CONSENT, version=newer, token=token).status_code == 404
     # The asked version is, and a cite that names no version is refused before any quote is checked.
     ok = suggest(api, file_id, CONSENT, version=first, token=token)
     assert ok.status_code == 200 and ok.json()["cite"]["version"] == first
-    assert suggest(api, file_id, CONSENT, token=token).status_code == 403
+    assert suggest(api, file_id, CONSENT, token=token).status_code == 404
     # Counsel outside that run cites nothing.
     assert suggest(api, file_id, CONSENT, version=first).status_code == 403
 
@@ -854,12 +854,12 @@ def test_counsel_must_name_the_version_when_more_than_one_was_read(api, monkeypa
     assert second["file"]["version"] == 2
     # Each read's run cites its own version, and names it.
     r, attempt = counsel_run(api)
-    assert suggest(api, second["file"]["id"], CONSENT, token=attempt["token"]).status_code == 403
-    assert suggest(api, second["file"]["id"], CONSENT, version=2, token=attempt["token"]).status_code == 403
+    assert suggest(api, second["file"]["id"], CONSENT, token=attempt["token"]).status_code == 404
+    assert suggest(api, second["file"]["id"], CONSENT, version=2, token=attempt["token"]).status_code == 404
     assert suggest(api, second["file"]["id"], CONSENT, version=1, token=attempt["token"]).status_code == 200
     finish(api, r, attempt)
     attempt = next_counsel_run(api, r)
-    assert suggest(api, second["file"]["id"], CONSENT, version=1, token=attempt["token"]).status_code == 403
+    assert suggest(api, second["file"]["id"], CONSENT, version=1, token=attempt["token"]).status_code == 404
     assert suggest(api, second["file"]["id"], CONSENT, version=2, token=attempt["token"]).status_code == 200
 
 
@@ -1378,12 +1378,11 @@ def task_state(api, task_id):
         return dict(c.execute("SELECT status, private, version FROM tasks WHERE id=?", (task_id,)).fetchone())
 
 
-def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(api):
+def test_counsel_suggests_from_its_private_read_run_and_cites_only_what_it_read(api):
     org(api)
     counsel_on(api)
     file_id, version = store_file(api, CONTRACT)
     read = read_document(api, file_id)
-    other_source = source(api, name="Globex", kind="customer")
     assert task_state(api, read["task_id"])["private"]
     r, attempt = counsel_run(api)
 
@@ -1405,15 +1404,9 @@ def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(a
     made = api.post("/api/v2/rules", headers=run(), json=rule)
     assert made.status_code == 200, made.text
     assert made.json()["status"] == "suggested" and made.json()["cite"]["quote"] == cite["quote"]
-    # Only that: a rule with no cite, another version, another From, an internal rule, a new From or an edit is refused.
-    for body in (
-        {**rule, "cite": None},
-        {**rule, "cite": {**cite, "version": version + 1}},
-        {**rule, "source_id": other_source},
-        {"kind": "internal", "text": "Keep consent records."},
-    ):
-        refused = api.post("/api/v2/rules", headers=run(), json=body)
-        assert refused.status_code == 403, (body, refused.text)
+    # A cite of a version it did not read is refused; a new From or an edit is not a Rules Owner route.
+    refused = api.post("/api/v2/rules", headers=run(), json={**rule, "cite": {**cite, "version": version + 1}})
+    assert refused.status_code == 404, refused.text
     assert (
         api.post("/api/v2/rule-sources", headers=run(), json={"name": "Initech", "kind": "vendor"}).status_code == 403
     )
@@ -1531,13 +1524,11 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
     ):
         refused = api.get(path, headers=run)
         assert refused.status_code == 403 and "Globex" not in refused.text, (path, refused.text)
-    # A quote of a word or two ties a suggestion to nothing: refused on this path.
-    assert run_suggests(api, attempt, file_id, version, quote="five years.").status_code == 422
     finish(api, r, attempt)
     assert task_state(api, read["task_id"])["status"] == "done"
 
 
-def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the_read(api):
+def test_a_run_carrying_a_second_private_task_neither_cites_nor_finishes_the_read(api):
     org(api)
     counsel_on(api)
     file_id, version = store_file(api, CONTRACT)
@@ -1548,7 +1539,7 @@ def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the
     r, attempt = counsel_run(api)
     with api.app.state.store.transaction() as c:
         H.event(c, "bot:rules-owner", "task.next-run.carried", attempt["id"], {"task_id": asked["task_id"]})
-    assert run_suggests(api, attempt, file_id, version).status_code == 403
+    assert run_suggests(api, attempt, file_id, version).status_code == 404
     finish(api, r, attempt, text="Read it. Globex price list is secret.")
     assert task_state(api, read["task_id"])["status"] != "done"
     assert not any("Globex" in note for note in done_notes(api, read["task_id"]))

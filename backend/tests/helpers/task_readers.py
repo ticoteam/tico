@@ -44,7 +44,11 @@ def dry_run(api, body, token):
     return post(api, "tasks/dry-run", body, token)["problems"]
 
 
-def refused(api, body, token):
-    r = api.post("/api/v2/tasks", json=body, headers=headers(token))
-    assert r.status_code == 403, r.text
-    return r.json()["error"]["detail"]
+def carry(api, attempt, row):
+    """The run also carries `row`, as when its prompt brought that task in: a message on that task is one of the
+    run's inputs (task_privacy.attempt_tasks)."""
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        said = H.task_comment(c, H.TICO_ACTOR, row["id"], "Look at this task too.", wake=False)
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], said["id"]))

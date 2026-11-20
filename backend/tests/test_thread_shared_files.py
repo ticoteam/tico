@@ -2,12 +2,11 @@
 thread. A file already in Tico goes by `<file id>@<version>` (thread_api.shared_files); a file from the bot's checkout
 goes through the thread upload route, as a person's does. Either way the thread's readers open it from the message.
 
-The private-task fence (task_privacy.private_thread_destination) still decides where a run carrying a private task may
-post: only in that task's own thread, with files or without. Fictional people only: ben chats with the bot ops.
+A run carrying a private task posts with files wherever a run on a public task may: its own task's thread and the
+bot's Home alike. Fictional people only: ben chats with the bot ops.
 """
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.task_privacy import PRIVATE_THREAD_REFUSAL
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.threads_private_execution import (  # noqa: F401  (the autouse fixture)
@@ -87,21 +86,17 @@ def test_a_bot_streams_a_file_from_its_checkout_into_its_home(api):
     assert (got.status_code, got.content) == (200, b"Dear Acme,")
 
 
-def test_a_private_run_attaches_its_file_in_its_own_task_thread_and_nowhere_else(api):
+def test_a_private_run_attaches_its_file_in_its_own_task_thread_and_elsewhere(api):
     row, attempt = private_run(api)
     fid = library_file(api, attempt, row["id"])
-    own = post(api, attempt, row["conversation_id"], [f"{fid}@1"])
-    assert own.status_code == 200, own.text
-    assert opened(api, own.json(), "ben-test").status_code == 200
-    elsewhere = post(api, attempt, home(api), [f"{fid}@1"])
-    assert elsewhere.status_code == 403, elsewhere.text
-    assert elsewhere.json()["error"]["detail"] == PRIVATE_THREAD_REFUSAL
-    for thread_id, status in ((row["conversation_id"], 200), (home(api), 403)):
+    for thread_id in (row["conversation_id"], home(api)):
+        sent = post(api, attempt, thread_id, [f"{fid}@1"])
+        assert sent.status_code == 200, sent.text
+        assert opened(api, sent.json(), "ben-test").status_code == 200
         upload = api.post(
             f"/api/v2/uploads/threads/{thread_id}/messages",
             data={"text": "The letter"},
             files={"files": ("letter.txt", b"Dear Acme,", "text/plain")},
             headers=headers(attempt["token"]),
         )
-        assert upload.status_code == status, upload.text
-    assert upload.json()["error"]["detail"] == PRIVATE_THREAD_REFUSAL
+        assert upload.status_code == 200, upload.text

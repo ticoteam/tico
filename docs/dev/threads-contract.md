@@ -224,7 +224,7 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
   and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `tico sql` and the legacy
   per-message check (`task_privacy.message_readable` → `threads.legacy_gate`) hide new messages from them.
 - A hidden message renders as a quiet "not shown" row in timelines and is skipped on SSE.
-- New posts can't widen anything (`H.path_mentioned`, `guard_write` keep running in the write door).
+- New posts can't widen anything (`H.path_mentioned` keeps running in the write door).
 
 ### 2.4 Entry points (`backend/threads.py`)
 

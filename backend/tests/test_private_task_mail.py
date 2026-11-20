@@ -1,5 +1,5 @@
-"""A bot's run on a private task drafts and queues mail from a mailbox it may write (backend/task_privacy.py
-guard_write): the mailbox's own level decides, and the send waits on the inbox's send gate, whose OK is a private task
+"""A bot's run on a private task drafts and queues mail from a mailbox it may write, as any run does: the mailbox's
+own level decides, and the send waits on the inbox's send gate, whose OK is a private task
 of its approver alone. Synthetic fixtures only: ana's inbox, the bot ops, fictional people ben (the private task's
 requester) and cara (the named approver)."""
 
@@ -65,9 +65,10 @@ def test_a_private_run_drafts_and_queues_a_send_and_the_ok_goes_only_to_its_appr
         assert task_asks.grant(c, queued["approval_id"])["ok_by_id"] == "human:cara"
 
 
-def test_a_private_run_still_cannot_write_a_company_wide_resource_and_is_told_the_rule(inbox):
+def test_a_private_run_is_judged_by_the_route_alone_as_any_run_is(inbox):
+    """The company sending policy is an admin's (acting as themselves): a run is refused it by the route, not because
+    its task is private."""
     _, attempt = private_run(inbox)
     refused = inbox.put("/api/v2/email/sending-policy", json={"mode": "never"}, headers=headers(attempt["token"]))
     assert refused.status_code == 403, refused.text
-    error = refused.json()["error"]
-    assert error["code"] == "privacy" and "/api/v2/email/sending-policy" in error["detail"], error
+    assert refused.json()["error"]["code"] != "privacy", refused.text

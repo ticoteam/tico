@@ -4577,7 +4577,7 @@ def task_create(
     reconcile_related=True,
     trigger=None,
     trigger_source=None,
-    from_private=False,
+    public=False,
     routine=False,
     same=None,
     occurrence=None,
@@ -4660,9 +4660,9 @@ def task_create(
     requester = actor
     if private is False and (not is_human(actor) or VIA.get()):
         private = None  # a bot cannot override a sensitive default to publish
-    # A task filed from private work (app.task_create, task_privacy.from_private) is company-visible under its private
-    # parent: its words were checked to carry nothing of the parent.
-    private = not from_private and bool(
+    # `public`: its filer asked for it company-visible (app.task_create, `private: false`), so a private parent does not
+    # make it private; the parent stays its own readers'.
+    private = not public and bool(
         (private if private is not None else private_tasks_default(conn, actor) or private_tasks_default(conn, target))
         or parent
         and task_private(conn, parent)
@@ -4677,7 +4677,7 @@ def task_create(
         ):
             refuse_stage_reader(conn, actor, parent)
         private, readers = True, shared
-    # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
+    # A private pipeline's task is private whatever was asked, `public` too; its readers are written before it
     # enters (backend/private_pipelines.py).
     pipeline_id = str(pipeline or GENERAL_PIPELINE)
     pipe = task_engine.pipeline(conn, pipeline_id)

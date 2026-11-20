@@ -476,7 +476,6 @@ def run(args, who=None):
                 "pipeline",
                 "private",
                 "follow",
-                "from_private",
                 "top",
                 "request_id",
                 "number",
@@ -525,29 +524,13 @@ def run(args, who=None):
         if sub == "attach":
             if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
                 from clients import hubtools
-                from clients.commands._shared import DOCUMENT_NOTE, document_attachment, private_document
+                from clients.commands._shared import DOCUMENT_NOTE, document_attachment
 
                 if getattr(args, "note", None) is not None:
                     raise APIError("validation", DOCUMENT_NOTE, 422)
                 fields = {"path": args.file, "task": args.id, "as": args.doc}
                 fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-
-                def embedded():
-                    from clients import bot_files as BF, visual_embed
-
-                    if not visual_embed.is_page(args.file):
-                        raise APIError("validation", "A document is an .html file", 422)
-                    return visual_embed.embed(BF.checkout_root(), args.file)[0].decode("utf-8", errors="replace")
-
-                published = private_document(
-                    lambda: hubtools.pages_publish_path(client, fields),
-                    client,
-                    args.id,
-                    args.doc,
-                    embedded,
-                    fields["operation_id"],
-                )
-                return document_attachment(published, args.doc)
+                return document_attachment(hubtools.pages_publish_path(client, fields), args.doc)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)
