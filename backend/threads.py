@@ -4011,7 +4011,7 @@ def _finish_sql(t="t"):
     )
 
 
-def revived_roots(c, v, roots=None):
+def revived_roots(c, v, roots=None, *, per_row=False):
     """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
     (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
     other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
@@ -4025,7 +4025,7 @@ def revived_roots(c, v, roots=None):
         # viewers never hands one the other's answer.
         key = ("revived_roots", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
         return read_cache.value(c, key, lambda: _revived_roots(c, v, None), shared=True)
-    return _revived_roots(c, v, roots)
+    return _revived_roots(c, v, roots, per_row=per_row)
 
 
 REVIVED_CHUNK = 400  # roots per revival query when a caller names them (revived_within)
@@ -4067,7 +4067,9 @@ def revival_scope(c, v, within, args=None, *, source="conversations r"):
     return frozenset(roots), frozenset(root for root in roots if known[root])
 
 
-def _revived_roots(c, v, roots):
+def _revived_roots(c, v, roots, *, per_row=False):
+    """`per_row`: the roots are few (one thread's view), so their readable check is readable_sql's per-row form, not
+    the list of every readable root it otherwise builds."""
     from . import task_privacy
 
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
@@ -4075,7 +4077,7 @@ def _revived_roots(c, v, roots):
     for m in c.execute(
         "SELECT r.id AS revived_root, m.* FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
-        f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
+        f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r', per_row=per_row)}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
         "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
@@ -4146,10 +4148,13 @@ def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
 
 
 def task_hidden(c, v, root_id):
-    """Whether the rail leaves this root out for its task: finished, and no post the viewer reads since."""
+    """Whether the rail leaves this root out for its task: finished, and no post the viewer reads since. One root, so its
+    readable checks are per row: building the list of every readable thread and task cost more than the rest of a
+    thread's view (13 ms each at 19k conversations)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    revived = revived_roots(c, v, [root_id], per_row=True)
     row = c.execute(
-        f"SELECT {task_open_sql(c, v, 'r', revived_roots(c, v, [root_id]))} FROM conversations r WHERE r.id=?",
+        f"SELECT {task_open_sql(c, v, 'r', revived, per_row=True)} FROM conversations r WHERE r.id=?",
         (root_id,),
     ).fetchone()
     return row is not None and not row[0]
