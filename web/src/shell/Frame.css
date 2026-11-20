@@ -28,6 +28,9 @@
 .shell-edge-mark{display:grid;place-items:center;min-height:24px}
 .shell-edge-mark>.ico{width:18px;height:18px;color:var(--muted)}
 .shell-edge-name{writing-mode:vertical-rl;transform:rotate(180deg);font-size:var(--t-xs);font-weight:var(--w-strong);white-space:nowrap}
+/* a control on an edge that is not its tap target: search on Tico's, right under the Dot; the name moves down for it */
+.shell-edge[data-act] .shell-edge-mark{margin-bottom:calc(var(--ctl) + var(--s-1))}
+.shell-edge-act{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step) + var(--s-3h) + 24px + var(--s-2));width:var(--tuck-edge);display:flex;justify-content:center}
 /* the menu's edge: the company's mark from its phone lip, and the Flow mark when something waits on you */
 .shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:var(--s-2h)}
 .shell-edge-lip>:not(.co-mark,.lip-end){display:none}

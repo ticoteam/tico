@@ -85,7 +85,6 @@ export interface MenuProps {
   folded?: boolean;
   /* a note above the foot, open menu only: the offline bar */
   note?: ReactNode;
-  onSearch?: () => void;
   /* the company pick's menu (the root's rows: this company, the others the desktop app holds, Add company); without
      it the pick is a plain button that calls onPickCompany */
   companyMenu?: ReactNode;
@@ -238,7 +237,6 @@ export function Menu(p: MenuProps) {
           ) : null}
         </div>
         <footer className="nav-foot">
-          <IconButton icon="search" label="Search" quiet onClick={p.onSearch} />
           <Help n={c.support} quiet onClick={p.onHelp} />
           {can('settings') ? (
             <Link className="ib ib-quiet" to={to('/settings')} aria-label="Settings" title="Settings">
@@ -500,7 +498,6 @@ export function Menu(p: MenuProps) {
         <header className="m-head">
           {pick}
           <span className="grow" />
-          <IconButton icon="search" label="Search" onClick={p.onSearch} />
           <IconButton icon="chevdown" label="Tuck the menu away" quiet onClick={phone.tuck} />
         </header>
         <nav className="m-scroll" aria-label="Main">
@@ -517,7 +514,6 @@ export function Menu(p: MenuProps) {
       <header className="nav-head">
         {pick}
         <span className="grow" />
-        <IconButton icon="search" label="Search" onClick={p.onSearch} />
         {sheet.canFold ? <IconButton icon="panel" label="Fold the menu" quiet onClick={sheet.toggleFold} /> : null}
       </header>
       <div className="nav-scroll">

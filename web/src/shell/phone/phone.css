@@ -29,7 +29,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --top:calc(var(--sat) + 57px);   /* where a raised card stops: the page's head stays in view above it */
   --half:410px;               /* Tico at half: this much of its card shows */
   --kb:0px;--vv-top:0px;
-  --edgeT:calc(var(--sab) + 30px);   /* Tico drawn in to its edge (plan/layers.html, page tapped): the stack's last line */
+  --edgeT:calc(var(--sab) + 58px);   /* the bar on its own under whatever holds the bottom: the stack's last line */
   --cards-h:calc(var(--sab) + var(--lipT) + var(--lipM) + var(--lipC));
   --p:0;--f:0;
   --r-layer:24px;
@@ -142,7 +142,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone.has-chat>.ly-menu.is-behind>.lip::before{display:none}
 /* a control that stands on a lip without being part of its tap target ("Join", mute) */
 .phone .lip-act{position:absolute;top:0;right:14px;z-index:1;display:flex;align-items:center;gap:6px;transition:opacity var(--dur) var(--ease)}
-.phone .ly-tico>.lip-act{height:var(--lipT)}
+.phone .ly-tico>.lip-act{height:var(--lipT);right:8px}
 .phone .ly-chat>.lip-act{height:38px}
 .phone .full{position:absolute;left:0;right:0;top:0;height:100%;display:flex;flex-direction:column;opacity:0;pointer-events:none;transition:opacity var(--dur) var(--ease)}
 .phone .ly.is-up>.lip,.phone .ly.is-up>.lip-act{opacity:0;pointer-events:none}
@@ -169,7 +169,13 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 
 /* Tico: the front card. Its Dot stays where it is while the lip turns into the card's head. */
 .phone .tico-dot{position:absolute;left:16px;top:16px;z-index:3;pointer-events:none;display:block}
-.phone .ly-tico>.lip{height:var(--lipT);padding-left:56px;font-size:var(--t-md)}
+/* the bar: Tico drawn as a chat box (its Dot inside, the composer's well, line and corners) and search beside it, one
+   level, one kind of quick action. The box is the lip: a tap types to Tico, a drag pulls the card. */
+.phone .ly-tico>.lip,.phone>.nub>.nub-tico{left:8px;right:60px;top:7px;height:calc(var(--lipT) - 14px);border-radius:12px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line);font-size:var(--t-md)}
+.phone .ly-tico>.lip{padding-left:44px}
+.phone .ly-tico>.lip::before{top:-7px;height:7px}
+.phone :is(.ly-tico,.nub)>.lip-act>.ib{width:44px;height:44px;border-radius:12px;background:var(--well);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink-2)}
+.phone :is(.ly-tico,.nub)>.lip-act>.ib .ico{width:20px;height:20px}
 .phone .ly-tico .lip .lip-t{color:var(--muted)}
 .phone .ly-tico .lip .lip-say{color:var(--ink);white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;line-height:21px}
 .phone .ly-tico .lip .lip-did{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:15px;min-width:0}
@@ -219,10 +225,11 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone.is-handle>.pg{bottom:var(--edgeT)}
 .phone.is-handle>.ly-chat>.full{height:calc(100% - var(--edgeT))}
 .phone.is-handle .p-dock{padding-bottom:10px}
-.phone>.nub{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);bottom:0;z-index:var(--z-tico);height:var(--edgeT);padding:0 0 var(--sab);border:0;
-  border-radius:14px 14px 0 0;background:var(--c-tico);box-shadow:var(--lift-2),0 -10px 26px -10px var(--up);display:grid;place-items:center;opacity:0;pointer-events:none;
+.phone>.nub{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);bottom:0;z-index:var(--z-tico);height:var(--edgeT);
+  border-radius:14px 14px 0 0;background:var(--c-tico);box-shadow:var(--lift-2),0 -10px 26px -10px var(--up);opacity:0;pointer-events:none;
   transform:translateY(100%);touch-action:none;-webkit-tap-highlight-color:transparent;transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
-.phone>.nub::before{content:"";position:absolute;left:0;right:0;top:-8px;height:8px}      /* a 30px edge is a 38px target */
+.phone>.nub>.nub-tico{position:absolute;display:flex;align-items:center;gap:10px;padding:0 14px 0 8px;border:0;color:var(--muted);text-align:left;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.phone>.nub>.lip-act{height:58px;right:8px}
 .phone.is-handle>.nub{opacity:1;pointer-events:auto;transform:none;transition:transform 260ms var(--card-ease) var(--card-dur),opacity var(--dur) var(--ease) var(--card-dur)}
 .phone.is-handle[data-card^="tico"]>.nub,.phone[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(100%);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
 

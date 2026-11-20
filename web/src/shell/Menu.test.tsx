@@ -46,7 +46,6 @@ describe('Menu', () => {
     expect(within(nav).getByRole('link', { name: /^Tasks/ }).getAttribute('aria-current')).toBe('page');
     expect(within(nav).getByRole('link', { name: 'Settings' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
-    expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Engineering Manager' })).toBeTruthy();
   });
 
@@ -57,13 +56,12 @@ describe('Menu', () => {
     expect(within(nav).getByRole('link', { name: /^Library/ })).toBeTruthy();
   });
 
-  it('folded, keeps every row as an icon with its name, and the company, search and settings reachable', async () => {
+  it('folded, keeps every row as an icon with its name, and the company and settings reachable', async () => {
     const nav = await show({ folded: true }, '/team/qa');
     // the faces are the rows showing: your direct reports, each folded
     for (const name of ['Tasks', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
     expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
-    expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count
   });
 
@@ -96,11 +94,12 @@ describe('Menu', () => {
     expect(within(nav).getByRole('button', { name: 'Tico support' }).parentElement?.querySelector('.slot-n')).toBeNull();
   });
 
-  it('the Search at its head opens search (each page keeps its own head) @s1190', async () => {
-    const search = vi.fn();
-    const nav = await show({ onSearch: search });
-    fireEvent.click(within(nav).getByRole('button', { name: 'Search' }));
-    expect(search).toHaveBeenCalledOnce();
+  it('has no search of its own, open or folded: search is beside Tico (each page keeps its own head) @s1190', async () => {
+    let nav = await show();
+    expect(within(nav).queryByRole('button', { name: 'Search' })).toBeNull();
+    document.body.innerHTML = '';
+    nav = await show({ folded: true });
+    expect(within(nav).queryByRole('button', { name: 'Search' })).toBeNull();
   });
 
   it('opens the Company fold on a company page, with its pages, and keeps the Library shut @s1198', async () => {
@@ -328,17 +327,15 @@ describe('Menu', () => {
     localStorage.clear();
   });
 
-  it('on a phone, the menu is a card from its lip: the rows, search at its head, and a way to tuck it away @s1210', async () => {
-    const search = vi.fn();
-    const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} onSearch={search} />} /> });
+  it('on a phone, the menu is a card from its lip: the rows and a way to tuck it away; search is on the bar @s1210', async () => {
+    const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} />} /> });
     render(<RouterProvider router={createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) })} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open Menu' }));
     const card = screen.getByRole('dialog', { name: 'Menu' });
     const nav = within(card).getByRole('navigation', { name: 'Main' });
     for (const name of ['Tasks', 'Calendar', 'Company', 'Library']) expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeTruthy();
     expect(within(nav).getByRole('tab', { name: 'Threads' })).toBeTruthy();
-    fireEvent.click(within(card).getByRole('button', { name: 'Search' }));
-    expect(search).toHaveBeenCalledOnce();
+    expect(within(card).queryByRole('button', { name: 'Search' })).toBeNull();
     fireEvent.click(within(card).getByRole('button', { name: 'Tuck the menu away' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy();

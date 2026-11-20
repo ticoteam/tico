@@ -80,11 +80,40 @@ describe('PhoneCards', () => {
     expect(document.activeElement).toBe(lip);
   });
 
-  it("Tico's lip raises it to half; Back closes it", async () => {
-    render(cards());
-    fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
+  it("the bar: Tico's box and search side by side; the box raises Tico at its latest, the cursor already in its box; Back closes it", async () => {
+    const search = vi.fn();
+    const tico = (
+      <>
+        <div className="chat-body" data-testid="tico-chat" />
+        <div className="composer">
+          <textarea aria-label="Message Tico" />
+        </div>
+      </>
+    );
+    render(<PhoneCards page={<h1>Finance</h1>} tico={tico} menu={null} lipActs={{ tico: <button type="button" onClick={search}>Search</button> }} />);
+    const box = screen.getByRole('button', { name: 'Open Tico' });
+    expect(box.textContent).toBe('Tico');
+    // search stands beside the box, not inside its tap target
+    const find = screen.getAllByRole('button', { name: 'Search' }).find((b) => b.closest('.ly-tico'))!;
+    expect(box.contains(find)).toBe(false);
+    fireEvent.click(find);
+    expect(search).toHaveBeenCalledOnce();
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+
+    // iOS raises the keyboard only for a focus inside the tap's own handler: the box has the cursor before the tap is over
+    const chat = screen.getByTestId('tico-chat');
+    Object.defineProperty(chat, 'scrollHeight', { value: 900, configurable: true });
+    let during: Element | null = null;
+    const look = () => (during = document.activeElement);
+    window.addEventListener('click', look);
+    fireEvent.click(box);
+    window.removeEventListener('click', look);
+    const field = screen.getByRole('textbox', { name: 'Message Tico' });
+    expect(during).toBe(field);
+    expect(document.activeElement).toBe(field);
+    expect(chat.scrollTop).toBe(900);
     expect(screen.getByRole('dialog', { name: 'Tico' })).toBeTruthy();
-    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico-half');
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico');
     window.history.back();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
@@ -328,7 +357,7 @@ describe('phone: the cards behind a raised one peek above it', () => {
     render(cards({ chat: true }));
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Finance Owner' }), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
-    expect(phone().dataset.card).toBe('tico-half');
+    expect(phone().dataset.card).toBe('tico'); // the bar's box: Tico all the way up, ready to type
     for (const s of ['menu', 'chat']) {
       expect(ly(s).classList.contains('is-behind')).toBe(true);
       expect(ly(s).closest('[inert]')).toBeNull();
@@ -356,8 +385,8 @@ describe('phone: the cards behind a raised one peek above it', () => {
   it('a page that holds the bottom (a handle) still shows the peeks once Tico is raised from it', () => {
     render(<PhoneCards page={<h1>Fix the export</h1>} tico={<p>Tico's chat</p>} menu={<p>Menu</p>} handle />);
     expect(ly('menu').hasAttribute('inert')).toBe(true);
-    fireEvent.click(document.querySelector<HTMLElement>('.phone > .nub')!);
-    expect(phone().dataset.card).toBe('tico-half');
+    fireEvent.click(document.querySelector<HTMLElement>('.phone > .nub > .nub-tico')!);
+    expect(phone().dataset.card).toBe('tico');
     expect(ly('menu').classList.contains('is-behind')).toBe(true);
     expect(ly('menu').hasAttribute('inert')).toBe(false);
   });
@@ -473,13 +502,25 @@ describe("phone: Tico's Dot never sits on a field", () => {
       if (m[1]!.includes('is-call') && /(>\.full|\.nub)/.test(m[1]!)) expect(m[2]).not.toMatch(/height|bottom/);
   });
 
-  it('with a chat up, the handle is the stack’s, outside the chat card, and opens Tico', () => {
-    render(cards({ chat: true }));
+  it('with a chat up, the bar is the stack’s, outside the chat card: Tico’s box opens Tico, search is beside it', () => {
+    const search = vi.fn();
+    render(
+      <PhoneCards
+        page={<h1>Finance</h1>}
+        tico={<textarea aria-label="Message Tico" />}
+        menu={null}
+        chat={<p>Owner's chat</p>}
+        lipActs={{ tico: <button type="button" onClick={search}>Search</button> }}
+      />,
+    );
     const nub = document.querySelector<HTMLElement>('.phone > .nub');
     expect(nub?.closest('.ly')).toBeNull();
     expect(nub?.hasAttribute('inert')).toBe(false);
     expect(document.querySelector<HTMLElement>('.phone')?.style.getPropertyValue('--dock-h')).toBe('');
-    fireEvent.click(nub!);
-    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico-half');
+    fireEvent.click(within(nub!).getByRole('button', { name: 'Search' }));
+    expect(search).toHaveBeenCalledOnce();
+    fireEvent.click(within(nub!).getByRole('button', { name: 'Open Tico' }));
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico');
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Tico' }));
   });
 });

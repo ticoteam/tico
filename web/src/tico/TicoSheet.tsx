@@ -3,6 +3,9 @@ import { useLocation } from '@tanstack/react-router';
 import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
+import { IconButton } from '@/kit/IconButton';
+// the open/close state alone, not the dialog: Tico's sheet only opens it
+import { openSearch } from '@/search/state';
 import { Sheet, SheetHead, TICO_MARK } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
@@ -11,7 +14,8 @@ import { askedFrom, usePageName } from './pageName';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
 
-/* Tico's sheet (system/shell.js ticoPane): the head with the Dot, then Tico's own chat and its composer. The Dot follows
+/* Tico's sheet (system/shell.js ticoPane): the head with the Dot and search (talking to Tico or searching: both start
+   here, on the phone's bar too), then Tico's own chat and its composer. The Dot follows
    Tico's runs in the room (Conversation sets it). Tucked, the frame draws its edge with the Dot. While
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
    Tico about the open page (Chips). */
@@ -25,7 +29,9 @@ export function TicoSheet() {
   const phone = usePhoneCards();
   return (
     <Sheet kind="tico" label="Tico">
-      <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />} />
+      <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
+        <IconButton icon="search" label="Search" onClick={() => openSearch()} />
+      </SheetHead>
       {power?.available === false ? (
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (
