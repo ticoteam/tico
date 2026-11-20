@@ -220,8 +220,8 @@ function threadSettingsOpen(view: ThvView): void {
     } catch (e) { if (dlg.open) status.textContent = errorMessage(e, ''); else toast(errorMessage(e, ''), true); }
     finally { b.disabled = false; }
   };
-  // The panel can be open when a roster read brings teams it did not have, or changes them (refresh.ts sends
-  // tico:roster after each): Who can read follows them, keeping a choice not yet saved.
+  // The panel can open before boot has the roster (an address change routes while boot waits for it), and a later read
+  // can change the teams: Who can read follows each tico:roster (boot.ts, refresh.ts), keeping a choice not yet saved.
   let teams = thdTeamsKey();
   const followRoster = () => {
     if (!dlg.open) return;

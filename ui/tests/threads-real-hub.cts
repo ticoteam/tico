@@ -21,7 +21,6 @@ const KICKOFF = 'Kickoff notes';
 const RISKS = 'Sub question about the risks';
 const HOME_NOTE = 'Standup moves to ten';
 const BOT = 'builder-claude';
-declare function refresh(force?: boolean): Promise<void>;
 
 // One API call as a teammate, by token: the same shape the counsel journey uses (ui/tests/org-rules-counsel.cts).
 async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p: string, body?: unknown) {
@@ -306,36 +305,28 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
       await share.locator('[data-close]').first().click();
 
-      // Opened before the roster has its teams, Who can read gains A team when they land, with the saved choice still
-      // checked: the first roster answer comes without teams, and the next read is held until the panel is open.
+      // Opened before boot has the roster, Who can read gains A team when it lands, with the saved choice still checked.
+      // pageAs returns at the page's load, while boot still waits for its roster read; an address change then routes at
+      // once. That read is held here until the panel is open.
       if (!isPhone) {
         const early = await pageAs(browser, hub, 'dana');
-        // Boot waits for its roster read before it draws any page (ui/app/boot.ts), so the panel can only be open
-        // before the teams when an earlier answer came without them; the read that brings them is held until then.
         let reads = 0, release = () => {}, holding = () => {};
         const held = new Promise<void>(go => { release = go; }), waiting = new Promise<void>(go => { holding = go; });
         await early.route(u => new URL(u).pathname === '/api/humans', async route => {
-          const n = ++reads, res = await route.fetch(), body = await res.json();
-          if (n === 1) delete body.org_groups; else { holding(); await held; }
-          await route.fulfill({status: res.status(), contentType: 'application/json', body: JSON.stringify(body)});
+          if (++reads === 1) { holding(); await held; }
+          await route.continue();
         });
-        // pageAs has booted already: the thread opens in a fresh load, whose roster read is the first one routed.
-        await early.goto(hub.url + '/#/thread/' + secret.id);
-        reads = 0;
         await early.reload();
-        await early.locator('.thv-title', {hasText: 'Pricing war room'}).waitFor({timeout: t(15000)});
+        await waiting;
+        await early.goto(hub.url + '/#/thread/' + secret.id);
+        await early.locator('.thv-title', {hasText: 'Pricing war room'}).waitFor({timeout: t(5000)});
         await early.locator('[data-thv-menu]').click();
         const box = early.locator('#thread-settings[open] .thd-aud');
-        await box.waitFor({timeout: t(15000)});
-        assert.equal(await box.locator('[value=team]').count(), 0, 'no team row before the roster has its teams');
-        const again = early.evaluate(() => refresh(true));
-        await waiting;
-        assert.equal(await box.locator('[value=team]').count(), 0, 'still no team row while the roster read is held');
+        await box.waitFor({timeout: t(5000)});
+        assert.equal(await box.locator('[value=team]').count(), 0, 'no team row while boot waits for the roster');
         release();
-        await again;
         await box.locator('.thd-aud-word').waitFor({timeout: t(15000)});
         assert.ok(await box.locator('[name=audience][value=members]').isChecked(), 'the saved choice stays checked');
-        assert.ok(reads >= 2, `the roster was read again (${reads})`);
         await early.context().close();
       }
 
