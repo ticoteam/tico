@@ -7,7 +7,7 @@ import { ticoRoomQuery } from '@/conversation';
 import { configQuery, meQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { TOGGLE_MUTE, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
-import { AssetRecovery, PlanLock } from '@/features/notices/exports';
+import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
@@ -282,7 +282,7 @@ function App() {
         <Frame
           arrangement={callChat ? 'chat' : arrangement}
           tico={<TicoSheet />}
-          menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
+          menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : <DesktopMove />} />}
           page={page}
           chat={chat}
           list={list}
