@@ -2,6 +2,8 @@
 """The never-stuck check (docs/dev/pipelines-v3.md, "The never-stuck check").
 
     check(conn, now=None) -> dict[str, int]      one pass over every open task, on the Heartbeat every 10 seconds
+    check_read_first(store, locked, now, failures)   the Heartbeat's pass: in a read snapshot first, under the write
+                                                 lock only when it has something to write
     rules_hold(conn) -> list[str]                the seven rules that hold at all times; empty when they do (each
                                                  sentence a `Break`, carrying the ids of the tasks it is about)
 
@@ -32,10 +34,19 @@ A pass is one write transaction, opened by the caller. Each task is done on its 
 work out is left as it was and named in `failures`, and the pass goes on to the next one. Doing a pass twice is
 harmless: every wake has a key made from the task's visit, the level, the try and when the task last changed.
 
+The Heartbeat runs the pass in a read snapshot first (`check_read_first`), where every statement that would write is
+refused. Nearly every pass writes nothing (TIDY, Nov 19: 27 of 3,037 passes did something, each holding the write lock
+about 0.4 s, 5-95 s on a busy host). Such a pass is done: it is the pass a write transaction at that snapshot would have
+run. A pass that asks to write is thrown away, and run again under the write lock from the start.
+
 Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
-from collections.abc import Callable, Iterable
+import logging
+import sqlite3
+import threading
+from collections.abc import Callable, Generator, Iterable
+from contextlib import AbstractContextManager, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 from . import (
@@ -54,7 +65,7 @@ from . import waiting_on as W
 from .prompt_cache import CACHE_WARM_S
 
 if TYPE_CHECKING:
-    import sqlite3
+    from .store import Store
 
 Row = dict[str, Any]
 
@@ -133,11 +144,15 @@ def _manager(conn: "sqlite3.Connection", row: Row, seen: dict[str, str | None]) 
 
 # ----------------------------------------------------------------------------- the pass
 def check(
-    conn: "sqlite3.Connection", now: str | None = None, failures: list[tuple[str, Exception]] | None = None
+    conn: "sqlite3.Connection",
+    now: str | None = None,
+    failures: list[tuple[str, Exception]] | None = None,
+    stop: "Callable[[], bool] | None" = None,
 ) -> dict[str, int]:
     """One pass. Returns what it did: snoozes ended, tasks moved, bots woken, tasks handed to a manager bot, tasks
     whose ladder rests (`to_person`), and tasks that became late. A task that raised is rolled back on its own and added to
-    `failures` with its error; without the list, the error is raised."""
+    `failures` with its error; without the list, the error is raised. `stop` (the read pass's, `check_read_first`) is
+    asked before each task: once it says so the pass ends with `Stopped`."""
     H = _h()
     at: str = now or H.now()
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
@@ -157,6 +172,8 @@ def check(
     ahead: Ahead | None = None
     quiet = 0  # tasks in a row that changed nothing
     for n, (task_id, wake_up) in enumerate(todo):
+        if stop is not None and stop():
+            raise Stopped
         read: tuple[Row, list[R.Standing], list[W.Wait]] | None = None
         if not wake_up:
             # Every task still to do is read together. A task that changed something (a move may make room in a
@@ -219,6 +236,107 @@ def check(
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_stage_rules")
     return done
+
+
+# ----------------------------------------------------------------------------- the pass in a read snapshot first
+# What a pass may do in a read snapshot: read, and mark and undo its own savepoints. Anything else would change the
+# database (or a connection's lasting state), so it is refused and the pass is run under the write lock.
+_READ_ACTIONS = {
+    sqlite3.SQLITE_SELECT,
+    sqlite3.SQLITE_READ,
+    sqlite3.SQLITE_FUNCTION,
+    getattr(sqlite3, "SQLITE_RECURSIVE", 33),
+    sqlite3.SQLITE_SAVEPOINT,
+    sqlite3.SQLITE_TRANSACTION,
+}
+_READ_PRAGMAS = {"data_version", "table_info", "table_xinfo", "index_list", "index_info", "index_xinfo"}
+
+
+class Stopped(Exception):
+    """The read pass asked to write: it is run again under the write lock."""
+
+
+class _Refused:
+    """The read snapshot's authorizer: it allows reads and refuses, and remembers, every statement that would write.
+    SQLite asks it as each statement is compiled, and installing it recompiles any statement the connection kept, so
+    no write runs unasked. The pass may catch the refusal as an error of its own: `asked` still says it wanted to."""
+
+    def __init__(self) -> None:
+        self.asked = False
+
+    def __call__(self, action: int, first: str | None, second: str | None, _db: str | None, _source: str | None) -> int:
+        if action in _READ_ACTIONS or (action == sqlite3.SQLITE_PRAGMA and (second is None or first in _READ_PRAGMAS)):
+            return sqlite3.SQLITE_OK
+        self.asked = True
+        return sqlite3.SQLITE_DENY
+
+
+class _HeldLogs(logging.Filter):
+    """The read pass's log lines, held back: a pass that writes nothing logs them as the pass, and one run again under
+    the write lock drops them (that run logs its own; a refused write must not read as a refused move)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.thread, self.records = threading.get_ident(), list[logging.LogRecord]()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.thread != self.thread:
+            return True
+        if not self.records or self.records[-1] is not record:  # one record is offered to every root handler
+            self.records.append(record)
+        return False
+
+
+@contextmanager
+def _held_logs() -> Generator[_HeldLogs]:
+    # A server with no handler of its own logs through `lastResort`, which no logger lists.
+    held = _HeldLogs()
+    handlers = [*logging.getLogger().handlers, *([logging.lastResort] if logging.lastResort else [])]
+    for handler in handlers:
+        handler.addFilter(held)
+    try:
+        yield held
+    finally:
+        for handler in handlers:
+            handler.removeFilter(held)
+
+
+def check_read_first(
+    store: "Store",
+    locked: "Callable[[], AbstractContextManager[sqlite3.Connection]]",
+    now: str | None = None,
+    failures: list[tuple[str, Exception]] | None = None,
+) -> dict[str, int]:
+    """`check`, first in one read snapshot with every write refused. When the pass wrote nothing (asked for no write,
+    left no after-commit work, raised nothing) it is the whole pass, and its failures are the pass's. Otherwise it is
+    thrown away and `check` runs again from the start in `locked()`, the step's write transaction, as it always did."""
+    at: str = now or _h().now()
+    tried: list[tuple[str, Exception]] = []
+    refused, done = _Refused(), None
+    with _held_logs() as held:
+        # The authorizer stays on this connection for its read only: the pool closes a connection given one.
+        snapshot = cast("AbstractContextManager[sqlite3.Connection]", store.read_transaction())
+        with snapshot as c:
+            c.set_authorizer(refused)
+            try:
+                done = check(c, at, tried, stop=lambda: refused.asked)
+            except Exception:  # noqa: BLE001 - any error: the pass runs again under the write lock, which raises it
+                done = None
+            finally:
+                c.set_authorizer(None)
+            after: list[Any] = getattr(c, "after_commit", None) or []
+            refused.asked = refused.asked or bool(after)
+            after.clear()
+        wrote_nothing = done is not None and not refused.asked and (failures is not None or not tried)
+        records = held.records if wrote_nothing else []
+    for record in records:
+        logging.getLogger(record.name).handle(record)
+    if wrote_nothing and done is not None:
+        if failures is not None:
+            failures.extend(tried)
+        return done
+    with locked() as c:
+        return check(c, at, failures)
 
 
 # ----------------------------------------------------------------------------- a bot's snooze on a ready task
