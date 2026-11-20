@@ -10886,16 +10886,6 @@
       }
     },
     {
-      "id": "threads.compose",
-      "title": "New message",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "threads.join",
       "title": "Join a thread",
       "kind": "change",
@@ -10975,13 +10965,13 @@
       }
     },
     {
-      "id": "threads.new",
-      "title": "Send a new message",
-      "kind": "change",
+      "id": "threads.message",
+      "title": "Message a teammate, a team or a few teammates",
+      "kind": "view",
       "input": {
         "type": "object",
         "properties": {
-          "members": {
+          "with": {
             "type": "array",
             "items": {
               "type": "string",
@@ -10991,20 +10981,10 @@
               "description": "human:<id>, bot:<slug> or group:<id>"
             },
             "maxItems": 50
-          },
-          "body": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 20000
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 200
           }
         },
         "required": [
-          "members",
-          "body"
+          "with"
         ],
         "additionalProperties": false
       }

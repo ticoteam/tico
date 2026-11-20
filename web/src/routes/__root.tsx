@@ -11,7 +11,7 @@ import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { flowGroups, flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
-import { groupsQuery, teamSlug, whoHref } from '@/features/team/routing';
+import { teamSlug, whoHref } from '@/features/team/routing';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -92,7 +92,7 @@ const SupportChat = lazy(() => import('@/features/support/exports').then((m) => 
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
 const ChatSheet = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.ChatSheet })));
 const MenuThreads = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.MenuThreads })));
-const TeamThread = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.TeamThread })));
+const MessagePick = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.MessagePick })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
@@ -171,8 +171,8 @@ function App() {
   // answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
   const known = useDirectory((d) => (who ? isTeammate(who, (key) => d.byId[key], me.data?.id) : false));
-  // a team's page is its thread stretching, its page beside it, as a teammate's is their chat
-  const isActor = (w: string) => w.startsWith('team:') || (known ?? isTeammate(w, undefined, me.data?.id));
+  // a team's page is a plain page (its thread is a row in Threads); a teammate's page is your DM with them
+  const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
@@ -236,7 +236,7 @@ function App() {
     );
   } else if (arrangement === 'agent' && a) {
     widgets = page;
-    page = decodeURIComponent(a).startsWith('team:') ? <TeamSheet who={decodeURIComponent(a)} /> : <TeammateSheet who={decodeURIComponent(a)} />;
+    page = <TeammateSheet who={decodeURIComponent(a)} />;
     chat = undefined;
   }
   // A call with agents: their chat beside the page while the call bar shows, until it is closed.
@@ -309,14 +309,13 @@ const mate = (a: Actor): MenuMate => ({
   live: a.working,
 });
 
-function teamsOf(d: Directory, meId: string | undefined, asks: Asks, homeOf: (team: string) => string | undefined): MenuTeam[] {
+function teamsOf(d: Directory, meId: string | undefined, asks: Asks): MenuTeam[] {
   // a DM names an agent by its id or slug; the directory knows both
   const asking = new Set([...asks.mates].map((x) => d.byId[x]?.id ?? x));
   const by = new Map<string, MenuTeam>();
   for (const a of d.actors) {
     if (!a.team || a.id === meId) continue;
-    const home = homeOf(a.team);
-    const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, needs: !!home && asks.homes.has(home), members: [] };
+    const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, members: [] };
     t.members.push({ ...mate(a), needs: asking.has(a.id) });
     by.set(a.team, t);
   }
@@ -334,18 +333,14 @@ function AppMenu({ note }: { note: ReactNode }) {
   const self = useActor(me?.id);
   const { data: catchUp } = useQuery(catchUpQuery);
   const { data: list } = useInfiniteQuery(threadListQuery);
-  const { data: groups } = useQuery(groupsQuery);
   const asks = asksOf(catchUp, list?.pages.flatMap((p) => p.rows) ?? [], me?.id);
-  const homeOf = (team: string) => {
-    const g = groups?.find((x) => x.name === team);
-    return g && `group:${g.id}`;
-  };
-  const teams = useDirectory((d) => teamsOf(d, me?.id, asks, homeOf));
+  const teams = useDirectory((d) => teamsOf(d, me?.id, asks));
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowQuery);
   const { data: support } = useQuery(supportUnreadQuery);
   const companies = useCompanies();
   const [calling, setCalling] = useState(false);
+  const [messaging, setMessaging] = useState(false);
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
     ? mate(self)
@@ -367,17 +362,20 @@ function AppMenu({ note }: { note: ReactNode }) {
             <MenuThreads asks={asks.threads} />
           </Suspense>
         }
-        asks={{ team: asks.mates.size > 0 || (teams ?? []).some((t) => t.needs), threads: asks.threads.size > 0 }}
         note={note}
         onSearch={() => openSearch()}
         onHelp={press('support.open')}
-        onMessage={press('threads.compose')}
+        onMessage={() => setMessaging(true)}
         onCall={() => setCalling(true)}
+        onAutomations={press('shell.goTo', { to: '/company/routines' })}
         companyMenu={<CompanyRows name={name} all={companies} />}
         accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
       />
       <Later on={calling}>
         <StartCall open={calling} onOpenChange={setCalling} sheet />
+      </Later>
+      <Later on={messaging}>
+        <MessagePick open={messaging} onOpenChange={setMessaging} />
       </Later>
     </>
   );
@@ -507,35 +505,6 @@ function TeammateSheet({ who }: { who: string }) {
       />
       <Suspense fallback={null}>
         <TeammateChat who={who} />
-      </Suspense>
-    </Sheet>
-  );
-}
-
-/* A team's own page: its thread stretching (updates and meetings are cards in it), its faces in the head, the team's
-   page beside it. */
-function TeamSheet({ who }: { who: string }) {
-  const name = who.slice(who.indexOf(':') + 1);
-  const faces = useDirectory((d) => d.actors.filter((a) => a.team === name).slice(0, 5)) ?? [];
-  return (
-    <Sheet kind="chat" label={name}>
-      <SheetHead
-        kind="side"
-        title={name}
-        lead={
-          <span className="head-ic">
-            <Icon name="people" />
-          </span>
-        }
-      >
-        <span className="faces">
-          {faces.map((a) => (
-            <Avatar key={a.id} decorative kind={a.kind} name={a.name} initials={short(a.name)} hue={a.hue ?? 0} size={16} />
-          ))}
-        </span>
-      </SheetHead>
-      <Suspense fallback={null}>
-        <TeamThread who={who} />
       </Suspense>
     </Sheet>
   );

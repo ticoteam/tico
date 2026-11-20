@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { sendMessage, timelineQuery, type ChatMessage } from '@/conversation';
+import type { ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { toPage, type Letter, type ListPage, type Member, type Text, type Thread, type ThreadList, type Update } from './model';
 import { chatActor } from '@/lib';
@@ -124,13 +124,16 @@ export function renameThread(id: string, title: string) {
   });
 }
 
-export function archiveThread(id: string, archived: boolean) {
-  return write({
+/** Archive a thread: its row leaves the list at once and goes to Archived at its foot. */
+export async function archiveThread(id: string, archived: boolean) {
+  const out = await write({
     key: threadKeys.list,
     optimistic: (d: ThreadList | undefined) =>
       d && { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.filter((t) => t.id !== id || !archived) })) },
     send: (idempotencyKey) => api.patch<Thread>(`/api/v2/threads/${enc(id)}`, { archived }, { idempotencyKey }),
   });
+  void queryClient.invalidateQueries({ queryKey: memberKeys.archived });
+  return out;
 }
 
 export async function addPeople(id: string, actors: string[]) {
@@ -165,38 +168,21 @@ export function readAll(ids: string[]) {
 }
 
 /**
- * A new DM with these people and its first message; two or more others need a name. Nothing shows before the server
- * answers (there is no thread id to show it under); the answer goes first in the list. Without `body` the DM is only
- * opened (or made).
+ * The one group DM for exactly these people (you too): the open one, or a new one. Nothing is sent. The server still
+ * asks a new one with two or more others for a name, so it is named after its people, as its row shows it anyway.
+ * The answer goes first in the list.
  */
-export function startNew(members: string[], body?: string, title?: string) {
+export function groupDm(members: string[], title: string) {
   return write({
     key: threadKeys.list,
     optimistic: (d: ThreadList | undefined) => d,
-    send: (idempotencyKey) =>
-      api.post<Thread & { message?: unknown }>(
-        '/api/v2/threads/dm',
-        { members, ...(body ? { body } : {}), ...(title ? { title } : {}) },
-        { idempotencyKey },
-      ),
+    send: (idempotencyKey) => api.post<Thread>('/api/v2/threads/dm', { members, title }, { idempotencyKey }),
     settle: (d: ThreadList | undefined, t) => {
       const [first, ...more] = d?.pages ?? [];
       if (!d || !first || !t?.id) return d;
       return { ...d, pages: [{ ...first, rows: [t, ...first.rows.filter((r) => r.id !== t.id)] }, ...more] };
     },
   });
-}
-
-/**
- * A first message with files. The DM's start takes no files, so the DM is made first and the message then goes the
- * conversation's own way (its upload form), showing in the thread at once and marked "Not sent" if it fails.
- */
-export async function startWithFiles(members: string[], text: string, files: File[], me: string, title?: string) {
-  const t = await startNew(members, undefined, title);
-  if (!t?.id) return t;
-  await queryClient.ensureInfiniteQueryData(timelineQuery(t.id));
-  void sendMessage({ id: t.id, variant: 'page', text, files, me });
-  return t;
 }
 
 /* ---------------------------------------------------------------- mail */
@@ -216,8 +202,15 @@ export interface Mailbox {
 
 export const mailboxesQuery = queryOptions({
   queryKey: mailKeys.boxes,
-  queryFn: async ({ signal }) => (await api.get<{ mailboxes: Mailbox[] }>('/api/v2/mail/mailboxes', { signal })).mailboxes,
+  queryFn: async ({ signal }) => (await api.get<{ mailboxes?: Mailbox[] }>('/api/v2/mail/mailboxes', { signal })).mailboxes ?? [],
 });
+
+/** A mailbox's inbox, its first page: what the menu's Threads list shows from it (the mailbox page reads the rest). */
+export const inboxQuery = (box: string) =>
+  queryOptions({
+    queryKey: [...mailKeys.list(box), 'inbox'] as const,
+    queryFn: ({ signal }) => api.get<{ messages: Letter[] }>(`/api/v2/mail/messages${qs({ mailbox: box, limit: PAGE })}`, { signal }),
+  });
 
 export const letterQuery = (box: string, id: string) =>
   queryOptions({
@@ -252,8 +245,12 @@ const organize = (box: string, action: string, ids: string[], idempotencyKey: st
 export function archiveMail(box: string, thread: string, letters: string[]) {
   return write({
     key: mailLists(box),
-    optimistic: (d: MailList | undefined) =>
-      d && { ...d, pages: d.pages.map((p) => ({ ...p, messages: p.messages.filter((l) => l.thread_id !== thread) })) },
+    // the mailbox page's lists and the menu's inbox (one page, no `pages`)
+    optimistic: (d: MailList | { messages: Letter[] } | undefined) => {
+      const keep = (list: Letter[]) => list.filter((l) => l.thread_id !== thread);
+      if (!d) return d;
+      return 'pages' in d ? { ...d, pages: d.pages.map((p) => ({ ...p, messages: keep(p.messages) })) } : { ...d, messages: keep(d.messages) };
+    },
     send: (idempotencyKey) => organize(box, 'archive', letters, idempotencyKey),
   });
 }
@@ -262,11 +259,11 @@ export function archiveMail(box: string, thread: string, letters: string[]) {
 export function markMailUnread(box: string, letter: string) {
   return write({
     key: mailLists(box),
-    optimistic: (d: MailList | undefined) =>
-      d && {
-        ...d,
-        pages: d.pages.map((p) => ({ ...p, messages: p.messages.map((l) => (l.msg_id === letter ? { ...l, labels: [...(l.labels ?? []), 'UNREAD'] } : l)) })),
-      },
+    optimistic: (d: MailList | { messages: Letter[] } | undefined) => {
+      const mark = (list: Letter[]) => list.map((l) => (l.msg_id === letter ? { ...l, labels: [...(l.labels ?? []), 'UNREAD'] } : l));
+      if (!d) return d;
+      return 'pages' in d ? { ...d, pages: d.pages.map((p) => ({ ...p, messages: mark(p.messages) })) } : { ...d, messages: mark(d.messages) };
+    },
     send: (idempotencyKey) => organize(box, 'mark_unread', [letter], idempotencyKey),
   });
 }

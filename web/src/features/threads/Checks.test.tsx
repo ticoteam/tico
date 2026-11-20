@@ -13,6 +13,7 @@ import { Browse } from './Browse';
 import { ChatSheet } from './ChatSheet';
 import { LearnedPage } from './LearnedPage';
 import { MailPage, MessagingPage } from './MailPage';
+import { MessagePick } from './MessagePick';
 import type { Thread } from './model';
 import { learnedQuery, mailboxesQuery, threadKeys, updateListQuery, updateQuery, viewersQuery } from './queries';
 import { ThreadHead } from './ThreadHead';
@@ -140,74 +141,48 @@ describe('A chat with an agent @s605', () => {
   });
 });
 
-describe('New message @s158', () => {
-  it('picks a teammate, sends the first message and lands in the new thread', async () => {
-    serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm') ? ok(thread({ id: 't5', title: '' })) : undefined));
-    const router = show(<ThreadsPage pane="new" />, '/threads/new');
-    fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'ana' } });
-    fireEvent.click(within(screen.getByRole('listbox', { name: 'Suggestions' })).getByRole('option', { name: /Ana Ruiz/ }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Message Ana Ruiz' }), { target: { value: 'Lunch at noon?' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/t5'));
-    expect(sent('POST', '/api/v2/threads/dm')?.body).toEqual({ members: ['human:ana'], body: 'Lunch at noon?' });
-  });
+describe('Message @s158', () => {
+  const pick = () => show(<MessagePick open onOpenChange={() => undefined} />, '/threads');
 
-  it('keeps the draft when a rule holds the message', async () => {
-    serve((url, method) => (method === 'POST' && url.endsWith('/threads/dm') ? ok({ held: true }) : undefined));
-    const router = show(<ThreadsPage pane="new" />, '/threads/new');
-    fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'ana' } });
+  it('one name goes to your DM with them, on their page; nothing is sent', async () => {
+    serve((url) => (url.includes('/api/v2/groups') ? ok([]) : undefined));
+    const router = pick();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'To' }), { target: { value: 'ana' } });
     fireEvent.click(screen.getByRole('option', { name: /Ana Ruiz/ }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Message Ana Ruiz' }), { target: { value: 'Lunch at noon?' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/threads/dm')).toBeTruthy());
-    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
-    expect((screen.getByRole('textbox', { name: 'Message Ana Ruiz' }) as HTMLTextAreaElement).value).toBe('Lunch at noon?');
-    expect(router.state.location.pathname).toBe('/threads/new');
+    expect(screen.getByText('Ana Ruiz', { selector: '.to-chip' })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'To' }), { key: 'Enter' });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/ana'));
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  it('keeps the attachment when sending before choosing a recipient', async () => {
-    serve();
-    show(<ThreadsPage pane="new" />, '/threads/new');
-    const box = (await screen.findByRole('textbox', { name: 'Message a teammate' })) as HTMLTextAreaElement;
-    fireEvent.change(box, { target: { value: 'A draft' } });
-    const file = new File(['draft'], 'notes.txt', { type: 'text/plain' });
-    fireEvent.change(box.parentElement!.querySelector('input[type="file"]')!, { target: { files: [file] } });
-    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
-    fireEvent.click(send);
-    await waitFor(() => expect(send.disabled).toBe(false));
-    expect(box.value).toBe('A draft');
-    expect(screen.getByRole('button', { name: 'Remove notes.txt' })).toBeTruthy();
-    expect(sent('POST', '/api/v2/threads/dm')).toBeUndefined();
+  it('a team goes to its thread', async () => {
+    serve((url) =>
+      url.includes('/api/v2/groups')
+        ? ok([{ id: 'g1', name: 'Growth', parent: '', people: [], bots: [] }])
+        : url.includes('/threads/home/') ? ok(thread({ id: 'h1', title: 'Growth', audience: 'home', home: { actor: 'group:g1' } })) : undefined,
+    );
+    const router = pick();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'To' }), { target: { value: 'gro' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Growth' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/h1'));
+    expect(sent('GET', '/api/v2/threads/home/group%3Ag1')).toBeTruthy();
   });
 
-  it('keeps a first message with files when its thread timeline fails to load', async () => {
-    serve((url, method) => {
-      if (method === 'POST' && url.endsWith('/threads/dm')) return ok(thread({ id: 'new-with-files' }));
-      if (url.includes('/threads/new-with-files/timeline')) return { status: 500, body: { detail: 'unavailable' } };
-      return undefined;
-    });
-    const router = show(<ThreadsPage pane="new" />, '/threads/new');
-    await screen.findByRole('textbox', { name: 'To' });
+  it('several names go to the one group DM for that set, found or made with no message', async () => {
+    serve((url, method) =>
+      url.includes('/api/v2/groups') ? ok([]) : method === 'POST' && url.endsWith('/threads/dm') ? ok(thread({ id: 'g7', title: 'Ana, QA', audience: 'personal' })) : undefined,
+    );
+    const router = pick();
+    const to = await screen.findByRole('combobox', { name: 'To' });
+    fireEvent.change(to, { target: { value: 'ana' } });
     fireEvent.click(screen.getByRole('option', { name: /Ana Ruiz/ }));
-    const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message Ana Ruiz' });
-    fireEvent.change(box, { target: { value: 'A draft' } });
-    const file = new File(['draft'], 'notes.txt', { type: 'text/plain' });
-    fireEvent.change(box.parentElement!.querySelector('input[type="file"]')!, { target: { files: [file] } });
-    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
-    fireEvent.click(send);
-    await waitFor(() => expect(sent('GET', '/threads/new-with-files/timeline')).toBeTruthy());
-    await waitFor(() => expect(send.disabled).toBe(false));
-    expect(box.value).toBe('A draft');
-    expect(screen.getByRole('button', { name: 'Remove notes.txt' })).toBeTruthy();
-    expect(sent('POST', '/uploads/threads/new-with-files/messages')).toBeUndefined();
-    expect(router.state.location.pathname).toBe('/threads/new');
-  });
-
-  it('offers a named thread that matches the words', async () => {
-    serve();
-    show(<ThreadsPage pane="new" />, '/threads/new');
-    fireEvent.change(await screen.findByRole('textbox', { name: 'To' }), { target: { value: 'launch' } });
-    expect(screen.getByRole('option', { name: /Launch plan/ }).getAttribute('href')).toBe('/threads/t1');
+    fireEvent.change(to, { target: { value: 'qa' } });
+    fireEvent.click(screen.getByRole('option', { name: /QA/ }));
+    // with the chips named, the one row is the set
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Ana, QA']);
+    fireEvent.click(screen.getByRole('option', { name: 'Ana, QA' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/threads/g7'));
+    expect(sent('POST', '/api/v2/threads/dm')?.body).toEqual({ members: ['human:ana', 'bot:qa'], title: 'Ana, QA' });
   });
 });
 
@@ -251,6 +226,37 @@ describe('Mail @s159', () => {
     expect(row.getAttribute('href')).toBe('/threads/mail?box=help%40example.test&open=th1');
     expect(await screen.findByText('Hi, is the March invoice paid?')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Invoice question' })).toBeTruthy();
+  });
+
+  it('the box talks only to the mailbox\'s agent, about this mail, never to whoever wrote', async () => {
+    serve((url, method) =>
+      url.includes('/mail/messages')
+        ? ok({ messages: [letter()] })
+        : url.includes('/mail/threads/th1')
+          ? ok({ messages: [letter({ body: 'Hi, is the March invoice paid?' })] })
+          : url.includes('/threads/dm?with=bot%3Aqa')
+            ? ok(thread({ id: 'd9', title: '', audience: 'personal' }))
+            : method === 'POST' && url.endsWith('/threads/d9/messages')
+              ? ok({ id: 'm9', seq: 9, thread_id: 'd9', sender_id: 'human:me', body: 'Is it paid?', created_at: ago(0) })
+              : undefined,
+    );
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test', agent_bot: 'qa' }]);
+    const router = show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(screen.queryByRole('textbox', { name: /Reply to/ })).toBeNull();
+    const box = await screen.findByRole('textbox', { name: 'Message QA' });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.change(box, { target: { value: 'Is it paid?' } });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent('POST', '/api/v2/threads/d9/messages')).toBeTruthy());
+    expect(sent('POST', '/api/v2/threads/d9/messages')?.body).toEqual({
+      text: 'Is it paid?',
+      refs: { page: { path: '/threads/mail?box=help%40example.test&open=th1', title: 'Invoice question' } },
+    });
+    expect(all('POST', '/api/v2/email/sends')).toEqual([]);
+    expect(all('POST', '/api/v2/mail/drafts')).toEqual([]);
+    // the DM opens beside
+    await waitFor(() => expect(new URLSearchParams(router.state.location.searchStr).get('chat')).toBe('agent:qa'));
   });
 });
 
@@ -340,35 +346,6 @@ describe('An open mail @s159', () => {
     expect(screen.getByText('2.1 MB')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(sent('POST', '/api/v2/mail/messages/organize')?.body).toEqual({ mailbox: 'help@example.test', action: 'archive', ids: ['l1'] }));
-  });
-
-  it('replies from the box: drafted in the thread, then sent through the send gate', async () => {
-    openMail();
-    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
-    show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
-    const reply = await screen.findByRole('textbox', { name: 'Reply to Sam Lee' });
-    expect(screen.queryByRole('button', { name: 'Attach a file' })).toBeNull();
-    fireEvent.change(reply, { target: { value: 'Yes, done.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/email/sends')?.body).toEqual({ mailbox: 'help@example.test', draft_id: 'd1', thread_id: 'th1' }));
-    expect(sent('POST', '/api/v2/mail/drafts')?.body).toEqual({ mailbox: 'help@example.test', body: 'Yes, done.', reply_to: 'th1' });
-  });
-
-  it('names the sender the mail API replies to in a thread with multiple senders', async () => {
-    serve((url) =>
-      url.includes('/mail/threads/th1')
-        ? ok({
-            messages: [
-              letter(),
-              letter({ msg_id: 'l2', from_addr: 'mara@example.test', from_header: 'Mara <mara@example.test>' }),
-              letter({ msg_id: 'l3', from_addr: 'Help@example.test', from_header: 'Help <Help@example.test>' }),
-            ],
-          })
-        : undefined,
-    );
-    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
-    show(<MailPage box={box.address} open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
-    expect(await screen.findByRole('textbox', { name: 'Reply to Mara' })).toBeTruthy();
   });
 
   it('returns to the selected mailbox and search when closing a letter from its back link', async () => {

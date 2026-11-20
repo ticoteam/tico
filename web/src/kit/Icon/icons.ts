@@ -57,6 +57,7 @@ export const ICONS = {
   send: [['path', { d: 'M12 19V5M6 11l6-6 6 6' }]],
   share: [['rect', { x: '3.5', y: '4.5', width: '17', height: '12', rx: '2.5' }], ['path', { d: 'M12 13.5V8M9.5 10.5L12 8l2.5 2.5M8.5 20h7' }]],
   shrink: [['path', { d: 'M19.5 9.5H14V4M4.5 14.5H10V20M14 9.5l6-6M10 14.5l-6 6' }]],
+  sms: [['path', { d: 'M5 5h14a2 2 0 012 2v8a2 2 0 01-2 2h-8l-4 3v-3H5a2 2 0 01-2-2V7a2 2 0 012-2z' }]],
   smile: [['circle', { cx: '12', cy: '12', r: '9' }], ['path', { d: 'M8.5 14a4 4 0 007 0M9 9.5v.2M15 9.5v.2' }]],
   spark: [['path', { d: 'M4 16l4-5 4 3 4-7 4 4' }]],
   square: [['rect', { x: '4.5', y: '4.5', width: '15', height: '15', rx: '3' }]],

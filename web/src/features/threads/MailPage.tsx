@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQueries, useQuery, useSuspenseQuery } from '@tanst
 import { defaultStringifySearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
-import { clock, Composer, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
+import { clock, dayKey, dayLabel, MessageBones, stamp } from '@/conversation';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -17,10 +17,10 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
 import { ItemHead, ListAndItem, PageMore, type ItemHeadProps } from '@/pagekinds';
-import { letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
-import { ChatWith, press, useMe } from './people';
+import { contactsOf, letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
+import { ChatWith, press } from './people';
 import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, textsBySenderQuery, type Mailbox } from './queries';
-import { NewButton, useThreadTabs } from './ThreadsPage';
+import { AgentBox } from './AgentBox';
 import './threads.css';
 
 const DRAFT = 'DRAFT';
@@ -38,7 +38,6 @@ export interface MailPageProps {
 
 /** Mail: the company's mailboxes, a row per conversation, the open one in full with a reply box. */
 export function MailPage({ box, open, view, q: words }: MailPageProps) {
-  const tabs = useThreadTabs('/threads');
   const boxes = useSuspenseQuery(mailboxesQuery).data;
   const selected = boxes.find((b) => b.address === box);
   const mailbox = selected ?? boxes[0];
@@ -74,7 +73,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
   };
   return (
     <ListAndItem
-      title="Threads"
+      title="Mail"
       path="/threads/mail"
       className="is-mail"
       actions={
@@ -86,11 +85,9 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
               ))}
             </Menu>
           )}
-          <NewButton />
         </>
       }
       search={<SettledSearch label="Find mail" placeholder="Find mail" value={words ?? ''} onSettle={(next) => void press('mail.find', { box: selected?.address, q: next || undefined })} wide />}
-      tabs={tabs}
       listLabel="Mail"
       list={
         <>
@@ -144,7 +141,8 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
           ? {
               itemHead: <LetterHead box={mailbox} id={letterId} back={back} />,
               item: <LetterBody box={current} id={letterId} />,
-              foot: mailbox.may?.send !== false && <Reply box={current} id={letterId} />,
+              // the box talks only to the mailbox's agent, never to whoever wrote (the agent drafts any reply)
+              foot: typeof mailbox.agent_bot === 'string' && <MailAgentBox box={current} id={letterId} agent={mailbox.agent_bot} />,
               itemLabel: 'Mail',
             }
           : {})}
@@ -237,25 +235,11 @@ function LetterBody({ box, id }: { box: string; id: string }) {
   );
 }
 
-/** The reply box under an open mail: what is typed is drafted in the thread and sent through the send gate. */
-function Reply({ box, id }: { box: string; id: string }) {
-  const me = useMe();
+/** Under an open mail: a box to the mailbox's agent about this mail. */
+function MailAgentBox({ box, id, agent }: { box: string; id: string; agent: string }) {
   const { data } = useQuery(letterQuery(box, id));
-  if (!me) return null;
-  // The mail API returns oldest first and replies to the newest letter from outside the mailbox, if there is one.
-  const mailbox = box.toLowerCase();
-  const to = data?.findLast((l) => (l.from_addr ?? '').toLowerCase() !== mailbox) ?? data?.at(-1);
-  const name = to?.from_addr ? senderName(to) : 'this mail';
-  return (
-    <Composer
-      id={`mail:${id}`}
-      me={me}
-      to={name}
-      label={`Reply to ${name}`}
-      attach={false}
-      onSend={(text) => press('mail.reply', { box, letter: id, text })}
-    />
-  );
+  const title = data?.[0]?.subject || '(no subject)';
+  return <AgentBox agent={`bot:${agent}`} page={{ path: `/threads/mail${defaultStringifySearch({ box, open: id })}`, title }} />;
 }
 
 /** What the mailbox's agent works from; written in the agent's own files, so read only here. */
@@ -312,7 +296,6 @@ export interface MessagingPageProps {
 /** Messaging: one row per contact who texted the company's numbers, newest first; the open one as a chat. Read only:
     the server receives texts and sends none. */
 export function MessagingPage({ open }: MessagingPageProps) {
-  const tabs = useThreadTabs('/threads');
   const [words, setWords] = useState('');
   const list = useInfiniteQuery(words ? textsBySenderQuery(words) : textListQuery);
   const find = words.toLowerCase();
@@ -323,11 +306,9 @@ export function MessagingPage({ open }: MessagingPageProps) {
   };
   return (
     <ListAndItem
-      title="Threads"
+      title="Messaging"
       path="/threads/messaging"
-      actions={<NewButton />}
       search={<SettledSearch label="Find a conversation" placeholder="Find a conversation" value={words} onSettle={setWords} wide />}
-      tabs={tabs}
       listLabel="Messaging"
       list={
         contacts.length === 0 && words ? (
@@ -364,13 +345,6 @@ export function MessagingPage({ open }: MessagingPageProps) {
         : {})}
     />
   );
-}
-
-/** The newest text from each contact, newest first. */
-function contactsOf(texts: Text[]): Text[] {
-  const by = new Map<string, Text>();
-  for (const t of texts) if (!by.has(t.from ?? '')) by.set(t.from ?? '', t);
-  return [...by.values()];
 }
 
 function ContactRow({ t, selected }: { t: Text; selected: boolean }) {

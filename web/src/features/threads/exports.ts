@@ -7,7 +7,7 @@ export { ChatSheet, type ChatSheetProps } from './ChatSheet';
 export { LearnedPage } from './LearnedPage';
 export { loadThreads, updatesSearch, loadUpdates, loadLearned, type UpdatesSearch } from './routing';
 export { MenuThreads, type MenuThreadsProps } from './MenuThreads';
-export { TeamThread, type TeamThreadProps } from './TeamThread';
+export { MessagePick, type MessagePickProps } from './MessagePick';
 export {
   threadListQuery,
   threadQuery,

@@ -44,6 +44,22 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .org>.tree-row{position:relative}
 .org>.tree-row::before{content:"";position:absolute;left:-8px;top:15px;width:7px;border-top:1px solid var(--line-strong)}
 .ca-src{flex:none;border-top:1px solid var(--line);padding:var(--s-1) 0 var(--s-1h);display:grid;gap:calc(var(--s-0) / 2)}
+/* a Threads row (pass 7): face, title, one quiet mark, then its age or the Dot; Archive on hover, or a swipe */
+.cr{position:relative;overflow:hidden;touch-action:pan-y}
+.cr>.tree-row{transition:transform var(--dur-fast) var(--ease)}
+.cr .cr-mark{width:13px;height:13px;color:var(--faint);flex:none}
+.cr .cr-age{font-size:var(--t-xs);color:var(--muted);font-weight:var(--w-text);flex:none}
+.cr .cr-arch{position:absolute;right:var(--s-1);top:50%;transform:translateY(-50%);display:none}
+@media (hover:hover){
+  .cr:hover .cr-arch,.cr:focus-within .cr-arch{display:inline-grid}
+  .cr:has(.cr-arch):hover .cr-age,.cr:has(.cr-arch):focus-within .cr-age{visibility:hidden}
+}
+.cr.is-swiped>.tree-row{transform:translateX(-84px)}
+.cr-swipe{position:absolute;right:0;top:0;bottom:0;width:80px;border:0;border-radius:var(--r-row);background:var(--well-2);color:var(--ink);font:inherit;font-size:var(--t-xs);display:grid;place-items:center;align-content:center;gap:calc(var(--s-0) / 2);cursor:pointer}
+.cr-swipe .ico{width:15px;height:15px}
+.ca-src .grp{width:100%;border:0;background:none;font:inherit;cursor:pointer;text-align:left}
+.ca-src .grp .faces{margin-left:auto}
+.ca-arch{border:0;background:none;font:inherit;cursor:pointer;text-align:left;margin-top:var(--s-2)}
 .grp{height:var(--ctl-sm);display:flex;align-items:center;gap:var(--s-1h);padding:0 var(--s-2h) 0 var(--s-2);border-radius:var(--r-row);color:var(--ink-2);font-weight:var(--w-strong)}
 .grp:hover{background:var(--well-2)}
 .grp.is-active{background:var(--selected);color:var(--ink)}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asksOf, byDay, letterRows, senderName, titleOf, toPage, type Letter, type Thread } from './model';
+import { asksOf, byDay, conversationsOf, letterRows, outsideOf, senderName, titleOf, toPage, type Letter, type Thread } from './model';
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 12, min)).toISOString();
 const row = (id: string, min: number, extra: Partial<Thread> = {}): Thread => ({
@@ -40,9 +40,9 @@ describe('names', () => {
   it('shows a mail conversation once, with its newest letter and how many it holds', () => {
     const l = (id: string, thread: string, epoch: number): Letter => ({ msg_id: id, thread_id: thread, mailbox: 'm', epoch, subject: id });
     const rows = letterRows([l('1', 't', 10), l('2', 't', 20), l('3', 'u', 5)]);
-    expect(rows.map((r) => [r.letter.msg_id, r.count])).toEqual([
-      ['2', 2],
-      ['3', 1],
+    expect(rows.map((r) => [r.letter.msg_id, r.count, r.ids])).toEqual([
+      ['2', 2, ['1', '2']],
+      ['3', 1, ['3']],
     ]);
   });
 
@@ -68,6 +68,24 @@ describe('what asks you', () => {
     );
     expect([...a.threads].sort()).toEqual(['d1', 'd4', 'h1']);
     expect([...a.mates].sort()).toEqual(['bot:qa', 'human:ana']);
-    expect([...a.homes]).toEqual(['group:g1']);
+  });
+});
+
+describe('Team and Threads', () => {
+  it('Threads holds every conversation but your 1:1 DMs and agents\' own rooms; nothing is in both', () => {
+    const one = row('d1', 1, { audience: 'personal', dm_with: [{ actor: 'bot:qa' }] });
+    const group = row('d2', 2, { audience: 'personal', dm_with: [{ actor: 'human:ana' }, { actor: 'human:jo' }], dm_with_count: 2 });
+    const agent = row('h1', 3, { audience: 'home', home: { actor: 'bot:qa' } });
+    const team = row('h2', 4, { audience: 'home', home: { actor: 'group:g1' } });
+    const task = row('k1', 5, { task_id: 'k1' });
+    expect(conversationsOf([one, group, agent, team, task, row('t1', 6)], 'human:me').map((t) => t.id)).toEqual(['d2', 'h2', 't1']);
+  });
+
+  it('a thread with a Slack destination and not a team\'s is from outside; its one agent handles it', () => {
+    const members = (actors: string[]) => ({ members: { members: actors.map((actor) => ({ actor })) } });
+    expect(outsideOf(row('s1', 1, members(['human:me', 'slack:C1', 'bot:fin'])))).toEqual({ handler: 'bot:fin' });
+    expect(outsideOf(row('s2', 1, members(['human:me', 'slack:C1'])))).toEqual({ handler: undefined });
+    expect(outsideOf(row('s3', 1, { ...members(['slack:C1', 'bot:gm']), audience: 'home', home: { actor: 'group:g1' } }))).toBeUndefined();
+    expect(outsideOf(row('s4', 1, members(['human:me', 'bot:fin'])))).toBeUndefined();
   });
 });

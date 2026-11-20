@@ -1,8 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+// eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
+import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
 import { ItemHead } from '@/pagekinds';
 import type { Thread, ThreadList } from './model';
@@ -35,6 +37,7 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({ component: () => node });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  bind({ router });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -64,23 +67,117 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('The menu\'s Threads list @s156', () => {
-  it('lists conversations newest first, bold when new, the Dot where one asks you, no counts, no tasks', async () => {
+  it('lists every conversation but your 1:1 DMs, newest first: bold when new, its age or the Dot, no counts, no tasks', async () => {
     serve(() => ({ status: 200, body: {} }));
     const task = { ...thread('k1', 'Fix the build', 1, 2), task_id: 'k1' };
-    queryClient.setQueryData(threadKeys.list, { pages: [{ rows: [thread('t1', 'Launch plan', 2, 3), thread('t2', 'Hiring', 30), task], next: null }], pageParams: [null] });
+    const dm = { ...thread('d1', 'Chat with Ana', 3), audience: 'personal' as const, dm_with: [{ actor: 'human:ana' }] };
+    const group = { ...thread('d2', '', 4), audience: 'personal' as const, dm_with: [{ actor: 'human:ana' }, { actor: 'human:jo' }], dm_with_count: 2 };
+    const agentHome = { ...thread('h1', 'QA Owner', 5), audience: 'home' as const, home: { actor: 'bot:qa' } };
+    const teamHome = { ...thread('h2', 'Growth', 6), audience: 'home' as const, home: { actor: 'group:g1' } };
+    queryClient.setQueryData(threadKeys.list, {
+      pages: [{ rows: [thread('t1', 'Launch plan', 2, 3), thread('t2', 'Hiring', 30), task, dm, group, agentHome, teamHome], next: null }],
+      pageParams: [null],
+    });
     show(<MenuThreads asks={new Set(['t2'])} />, '/threads/t2');
     const launch = await screen.findByTitle('Launch plan');
     expect(launch.getAttribute('href')).toBe('/threads/t1');
     expect(launch.className).toContain('is-new');
     expect(launch.querySelector('.dot')).toBeNull();
-    expect(launch.textContent).toBe('Launch plan');
+    expect(launch.textContent).toBe('Launch plan2m');
     const hiring = screen.getByTitle('Hiring');
     expect(hiring.className).not.toContain('is-new');
     expect(hiring.getAttribute('aria-current')).toBe('page');
+    // the Dot stands in for the age
     expect(hiring.querySelector('.dot')?.getAttribute('aria-label')).toBe('Asks you');
+    expect(hiring.querySelector('time')).toBeNull();
     expect(screen.queryByTitle('Fix the build')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Mail' }).getAttribute('href')).toBe('/threads/mail');
-    expect(screen.getByRole('link', { name: 'Messaging' }).getAttribute('href')).toBe('/threads/messaging');
+    // your DM with one teammate and an agent's own room are in Team; a group DM and a team's thread are here
+    expect(screen.queryByTitle('Ana')).toBeNull();
+    expect(screen.queryByTitle('QA Owner')).toBeNull();
+    expect(screen.getByTitle('ana, jo')).toBeTruthy();
+    expect(screen.getByTitle('Growth').getAttribute('href')).toBe('/threads/h2');
+    expect([...document.querySelectorAll('.tree-row')].map((r) => r.getAttribute('title'))).toEqual(['Launch plan', 'ana, jo', 'Growth', 'Hiring']);
+    expect(screen.queryByRole('link', { name: 'Mail' })).toBeNull();
+    expect(document.querySelector('.count')).toBeNull();
+  });
+
+  it('sets mail and texts among them, each with its source mark, opening its mailbox or its texts', async () => {
+    serve((url) => {
+      if (url.includes('/mail/mailboxes'))
+        return { status: 200, body: { mailboxes: [{ address: 'orders@fernhill.example', connection: 'workspace', may: { organize: true } }, { address: 'off@x', connection: 'none' }] } };
+      if (url.includes('/mail/messages'))
+        return {
+          status: 200,
+          body: { messages: [{ msg_id: 'l1', thread_id: 'mt1', mailbox: 'orders@fernhill.example', epoch: Math.floor(Date.now() / 1000) - 600, from_header: 'Ruth Ames <ruth@cedarmill.example>', subject: 'Cedar Mill: 2027 price terms', labels: ['UNREAD'] }] },
+        };
+      if (url.includes('/inbound/messages')) return { status: 200, body: { messages: [{ message_id: 's1', received_at: at(20), from: '+15035550142' }], next: null } };
+      return { status: 200, body: {} };
+    });
+    queryClient.setQueryData(threadKeys.list, seeded());
+    show(<MenuThreads asks={new Set()} />, '/threads');
+    const mail = await screen.findByTitle('Ruth Ames: Cedar Mill: 2027 price terms');
+    expect(mail.getAttribute('href')).toBe('/threads/mail?box=orders%40fernhill.example&open=mt1');
+    expect(mail.className).toContain('is-new');
+    expect(mail.querySelector('[aria-label="Mail"]')).toBeTruthy();
+    const text = await screen.findByTitle('+15035550142');
+    expect(text.querySelector('[aria-label="Text"]')).toBeTruthy();
+    expect([...document.querySelectorAll('.tree-row')].map((r) => r.getAttribute('title'))).toEqual([
+      'Launch plan',
+      'Ruth Ames: Cedar Mill: 2027 price terms',
+      '+15035550142',
+      'Hiring',
+    ]);
+    // a text has no archive yet; mail and threads do
+    expect(text.closest('.cr')?.querySelector('.cr-arch')).toBeNull();
+    expect(mail.closest('.cr')?.querySelector('.cr-arch')).toBeTruthy();
+  });
+
+  it('Archive is the one verb: on a row, it leaves and folds into Archived at the foot', async () => {
+    const asked: { url: string; method: string; body?: string }[] = [];
+    let archived: Thread[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      asked.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body as string | undefined });
+      const body = String(url).includes('/threads/archived')
+        ? { threads: archived, next_cursor: null }
+        : init?.method === 'PATCH'
+          ? ((archived = [{ ...thread('t2', 'Hiring', 30), archived_at: at(1) }]), archived[0])
+          : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    queryClient.setQueryData(threadKeys.list, seeded());
+    show(<MenuThreads asks={new Set()} />, '/threads');
+    const hiring = await screen.findByTitle('Hiring');
+    expect(screen.queryByRole('button', { name: 'Archived' })).toBeNull();
+    fireEvent.click(hiring.closest('.cr')!.querySelector<HTMLButtonElement>('.cr-arch')!);
+    await waitFor(() => expect(screen.queryByTitle('Hiring')).toBeNull());
+    expect(JSON.parse(asked.find((c) => c.method === 'PATCH')!.body!)).toEqual({ archived: true });
+    const fold = await screen.findByRole('button', { name: /Archived/, expanded: false });
+    fireEvent.click(fold);
+    expect((await screen.findByTitle('Hiring')).getAttribute('href')).toBe('/threads/t2');
+    expect(screen.getByTitle('Hiring').closest('.cr')?.querySelector('.cr-arch')).toBeNull();
+  });
+
+  it('a swipe to the left on a touch screen shows Archive; a tap puts the row back', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    // jsdom has no PointerEvent: one that carries the pointer's kind and place
+    class Pointer extends MouseEvent {
+      pointerType: string;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerType = init.pointerType ?? '';
+      }
+    }
+    vi.stubGlobal('PointerEvent', Pointer);
+    queryClient.setQueryData(threadKeys.list, seeded());
+    show(<MenuThreads asks={new Set()} />, '/threads');
+    const row = (await screen.findByTitle('Hiring')).closest('.cr')!;
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 200, clientY: 10 });
+    fireEvent.pointerMove(row, { pointerType: 'touch', clientX: 120, clientY: 12 });
+    expect(row.className).toContain('is-swiped');
+    expect(within(row as HTMLElement).getByRole('button', { name: 'Archive' }).className).toBe('cr-swipe');
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 60, clientY: 10 });
+    fireEvent.click(screen.getByTitle('Hiring'));
+    expect(row.className).not.toContain('is-swiped');
   });
 
   it('shows a rename at once and takes it back when the server refuses it', async () => {

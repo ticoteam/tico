@@ -91,14 +91,13 @@ export const isMuted = (t: Thread | undefined) => t?.me?.notify === 'muted';
 
 /* ---------------------------------------------------------------- what asks you */
 
-/** What asks the viewer something: the Dot on a row (plan/threads-team.html "What needs you"). No number. */
+/** What asks the viewer something: the Dot on its row, and only there (plan/threads-team.html "What needs you"). No
+    number, no Dot on a tab or a folded team. */
 export interface Asks {
   /** Thread ids. */
   threads: ReadonlySet<string>;
   /** Teammates (actor ids) whose DM with the viewer asks them. */
   mates: ReadonlySet<string>;
-  /** The owners of Homes that ask (`group:<id>` for a team's thread). */
-  homes: ReadonlySet<string>;
 }
 
 /**
@@ -110,21 +109,40 @@ export interface Asks {
 export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
   const threads = new Set<string>();
   const mates = new Set<string>();
-  const homes = new Set<string>();
   const add = (t: Thread) => {
     if (t.task_id) return;
     threads.add(t.id);
     const other = t.audience === 'personal' ? othersOf(t, me)[0] : undefined;
     if (other) mates.add(other);
-    if (t.audience === 'home' && typeof t.home?.actor === 'string') homes.add(t.home.actor);
   };
   for (const it of catchUp?.items ?? []) if (it.mention) add(it.thread);
   for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t);
-  return { threads, mates, homes };
+  return { threads, mates };
 }
 
-/** The menu's Threads list: every conversation you are in, newest first. A task's thread belongs to its task. */
-export const conversationsOf = (rows: readonly Thread[]) => rows.filter((t) => !t.task_id);
+/** The team whose own thread this is (its Home, `group:<id>`): the group's id. */
+export const teamOf = (t: Pick<Thread, 'audience' | 'home'>) => {
+  const owner = t.audience === 'home' && typeof t.home?.actor === 'string' ? t.home.actor : '';
+  return owner.startsWith('group:') ? owner.slice('group:'.length) : undefined;
+};
+
+/** What the Team tab holds, not Threads: your DM with one teammate, and an agent's own Home (its room is the agent's,
+    as your DM is). */
+export const isOneToOne = (t: Thread, me: string | undefined) =>
+  (t.audience === 'personal' && (Number(t.dm_with_count) || othersOf(t, me).length) <= 1) || (t.audience === 'home' && !teamOf(t));
+
+/** The menu's Threads list: every conversation but your 1:1 DMs (those are in Team), newest first. A task's thread
+    belongs to its task. Nothing shows in both tabs. */
+export const conversationsOf = (rows: readonly Thread[], me: string | undefined) => rows.filter((t) => !t.task_id && !isOneToOne(t, me));
+
+/** A thread from outside (a Slack channel or DM not linked to a team): one of its members is a `slack:` destination.
+    Its box talks only to the agent that handles it: the one agent in it. */
+export function outsideOf(t: Thread | undefined): { handler?: string } | undefined {
+  const members = (t?.members?.members ?? []).map((m) => m.actor);
+  if (!t || teamOf(t) || !members.some((a) => a.startsWith('slack:'))) return undefined;
+  const agents = members.filter((a) => a.startsWith('bot:'));
+  return { handler: agents.length === 1 ? agents[0] : undefined };
+}
 
 /* ---------------------------------------------------------------- mail and texts */
 
@@ -151,15 +169,18 @@ export interface Letter {
 export interface LetterRow {
   letter: Letter;
   count: number;
+  /** Every loaded letter's id (what Archive takes). */
+  ids: string[];
 }
 
 export function letterRows(letters: Letter[]): LetterRow[] {
   const by = new Map<string, LetterRow>();
   for (const l of letters) {
     const row = by.get(l.thread_id);
-    if (!row) by.set(l.thread_id, { letter: l, count: 1 });
+    if (!row) by.set(l.thread_id, { letter: l, count: 1, ids: [l.msg_id] });
     else {
       row.count += 1;
+      row.ids.push(l.msg_id);
       if ((l.epoch ?? 0) > (row.letter.epoch ?? 0)) row.letter = l;
     }
   }
@@ -188,6 +209,13 @@ export interface Text {
   preview?: string;
   body?: string;
   text?: string;
+}
+
+/** The newest text from each contact, newest first. */
+export function contactsOf(texts: Text[]): Text[] {
+  const by = new Map<string, Text>();
+  for (const t of texts) if (!by.has(t.from ?? '')) by.set(t.from ?? '', t);
+  return [...by.values()];
 }
 
 /* ---------------------------------------------------------------- updates */

@@ -315,7 +315,8 @@ export const ROWS: readonly Row[] = [
     path: /^#\/calendar(?:\/.*)?$/,
     to: (_m, q) => at('/calendar', { view: q.get('view'), date: q.get('date'), q: q.get('q') }),
   },
-  { page: 'New message', path: /^#\/threads\/new$/, to: () => '/threads/new' },
+  // New message is the menu's Message picker now: the old address opens Threads.
+  { page: 'New message', path: /^#\/threads\/new$/, to: () => '/threads' },
   { page: 'Thread', path: /^#\/thread\/([^/]+)(?:\/.*)?$/, to: ([id]) => `/threads/${seg(id)}` },
   // A recruiting seat's Applicants: adding an agent is in Settings › Agents in the new design.
   { page: 'Recruiting seat', path: /^#\/seat\/(.+)$/, to: () => '/settings/agents' },
