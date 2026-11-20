@@ -110,8 +110,8 @@ lists them.
 ## Search
 
 The search box (and `GET /api/v2/docs/search`) looks through internal docs, external contents and links together. Internal docs are ranked by
-their best section, with SQLite FTS5's bm25 over each section's heading and text and its doc's title and path (heading
-matches weighted most); a doc whose title or path the words name comes first. Each result includes the section, its
+their best section, with SQLite FTS5's bm25 over each section's heading and text and its doc's title and path (title and
+heading matches weighted most); a doc whose title or path the words name comes first. Each result includes the section, its
 anchor and an excerpt of its text. The manual's sections are ranked the same way. Each source ranks its own results, and
 the results of several sources (team, external, manual) are interleaved by position; a result's `score` orders them.
 A question written as a sentence keeps all meaningful words and maps old Tico words using the glossary's "Instead of"
