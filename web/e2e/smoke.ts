@@ -1,5 +1,5 @@
 // A first run of the new app in a real browser, against a server already running on a rehearsal copy (e2e/hub).
-//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, responsive, dev, light (default: all)
+//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, menutaps, responsive, dev, light (default: all)
 // Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173 (HUB= and APP= point elsewhere). Pictures hold
 // real data: keep them local.
 /// <reference lib="dom" />
@@ -296,6 +296,74 @@ async function peekTaps(page: Page, card: 'menu' | 'chat', front: 'tico' | 'menu
   return true;
 }
 
+/** From a Settings page, the phone's menu opened by a tap and by a drag, each top-level place tapped lands there with
+    the menu tucked: Tasks, Calendar, Company, Library, Settings, a teammate (Team) and a thread (Threads). A drag makes no
+    click of its own, and the tap after it once did nothing at all. */
+async function phoneMenuTaps(browser: Browser, name: string) {
+  note(`phone menu taps (${name})`);
+  const { ctx, page } = await open(browser, true, '/settings/agents', true);
+  const cdp = name === 'chromium' ? await ctx.newCDPSession(page) : null;
+  const card = () => page.locator('.phone').getAttribute('data-card');
+  const menu = page.locator('.ly-menu .full');
+  // a finger up the menu's lip: touch moves and no click, as a swipe makes
+  const swipe = async () => {
+    const box = await page.locator('.ly-menu > .lip').boundingBox();
+    if (!cdp || !box) return false;
+    const x = box.x + box.width / 2;
+    let y = box.y + box.height / 2;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    for (let i = 0; i < 12; i++) {
+      y -= 40;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+      await page.waitForTimeout(16);
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    return true;
+  };
+  const places: [string, RegExp, () => Promise<unknown>][] = [
+    ['Tasks', /^\/tasks/, () => menu.getByRole('link', { name: /^Tasks/ }).first().tap()],
+    ['Calendar', /^\/calendar/, () => menu.getByRole('link', { name: 'Calendar', exact: true }).tap()],
+    ['Company', /^\/company\/?$/, () => menu.getByRole('link', { name: 'Company', exact: true }).tap()],
+    ['Library', /^\/library/, () => menu.getByRole('link', { name: 'Library', exact: true }).tap()],
+    ['Settings', /^\/settings\/?$/, () => menu.getByRole('link', { name: 'Settings', exact: true }).tap()],
+    ['a teammate', /^\/team\//, async () => (await menu.getByRole('tab', { name: 'Team' }).tap(), menu.locator('a.tree-row').first().tap())],
+    ['a thread', /^\/threads\//, async () => (await menu.getByRole('tab', { name: 'Threads' }).tap(), menu.locator('a[href^="/threads/"]').first().tap())],
+  ];
+  try {
+    for (const how of ['tap', 'drag'] as const) {
+      if (how === 'drag' && !cdp) {
+        note('  drag: chromium only (touch events through CDP)');
+        continue;
+      }
+      for (const [label, want, pick] of places) {
+        await page.goto(`${APP}/settings/agents`);
+        await page.locator('.ly-menu > .lip').waitFor();
+        await settle(page, 1500);
+        if (how === 'tap') await page.locator('.ly-menu > .lip').tap();
+        else await swipe();
+        await settle(page, 700);
+        if ((await card()) !== 'menu') {
+          bad(`${how}: the menu did not come up (card: ${await card()})`);
+          continue;
+        }
+        const missed = await pick().then(
+          () => '',
+          (e: Error) => e.message.split('\n')[0],
+        );
+        if (missed) {
+          bad(`${how}: no ${label} in the menu (${missed})`);
+          continue;
+        }
+        await page.waitForURL((u) => want.test(u.pathname), { timeout: 5000 }).catch(() => {});
+        const at = new URL(page.url()).pathname;
+        check(want.test(at) && (await card()) === 'none', `${how} → ${label}: lands on ${at}`, `${how} → ${label}: at ${at}, card ${await card()}`);
+      }
+    }
+  } finally {
+    await ctx.close();
+  }
+}
+
 /** No Tico mark (the stack's handle, Tico's Dot on its lip) drawn over a message box or a field that can be seen. */
 async function noTicoOnFields(page: Page, where: string) {
   const hits = await page.evaluate(() => {
@@ -397,17 +465,19 @@ const browser = await chromium.launch();
 try {
   if (['boot', 'menu', 'sheets', 'keys'].some(want)) await desktop(browser);
   if (want('phone')) await phone(browser, 'chromium');
+  if (want('menutaps')) await phoneMenuTaps(browser, 'chromium');
   if (want('responsive')) await responsive(browser);
   if (want('dev')) await dev(browser);
   if (want('light')) await light(browser);
 } finally {
   await browser.close();
 }
-if (want('phone') && process.env.WEBKIT !== '0') {
+if ((want('phone') || want('menutaps')) && process.env.WEBKIT !== '0') {
   const wk = await webkit.launch().catch(() => null);
   if (wk) {
     try {
-      await phone(wk, 'webkit');
+      if (want('phone')) await phone(wk, 'webkit');
+      if (want('menutaps')) await phoneMenuTaps(wk, 'webkit');
     } finally {
       await wk.close();
     }

@@ -1,14 +1,17 @@
-import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
+import { ApiError } from '@/api/client';
 import { meQuery, useActor, useDirectory } from '@/data';
 import { Button } from '@/kit/Button';
+import { Empty } from '@/kit/Empty';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
 import { MenuItem } from '@/kit/Menu';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { chatAddress, fmtAge } from '@/lib';
 import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pagekinds';
 import { Face, Go, NameOf, PanelLink, usd } from './parts';
@@ -17,7 +20,9 @@ import './company.css';
 
 /* Company (pages/3-company/company.js companyPage): a Dashboard, Floor variant. Figures across the top, each from its
    own area and linking to its page; then one hall per team with its pipelines, every stage a stack of tasks per owner.
-   A stage opens its tasks in a panel (`?panel=stage:<pipeline>:<stage>`). */
+   A stage opens its tasks in a panel (`?panel=stage:<pipeline>:<stage>`).
+   Nothing here waits on another part: the head draws at once, each figure when its own read answers, and the Floor
+   with its own bars and its own fault, so a slow or failed read never holds or blanks the page. */
 
 export interface CompanySearch {
   panel?: string;
@@ -27,15 +32,17 @@ const CAP = 7;
 type Factory = { id: string | null; manager_id: string | null; name: string; pipelines: Pipeline[] };
 
 export function CompanyPage({ search }: { search: CompanySearch }) {
-  const { data: floor } = useSuspenseQuery(floorQuery);
+  const floor = useQuery(floorQuery);
   const navigate = useNavigate();
   const open = parseStage(search.panel);
   const close = () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: undefined }) as never });
   // Set up: the owner's first-run steps (setup.open), for a new company and again from the ⋯.
   const setup = useAction('setup.open', {});
-  const halls = floor.factories as Factory[];
+  const halls = (floor.data?.factories ?? []) as Factory[];
   const pipeline = open && halls.flatMap((h) => h.pipelines).find((p) => p.id === open.pipeline);
   const stage = pipeline && pipeline.stages.find((s) => s.id === open.stage);
+  // a refusal is the page's no-access state; any other fault stays in the Floor's own place
+  const refused = floor.error instanceof ApiError && floor.error.status === 403;
   return (
     <Dashboard
       title="Company"
@@ -48,7 +55,7 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
           </PageMore>
         )
       }
-      state={halls.length ? 'ready' : 'empty'}
+      state={refused ? 'no-access' : floor.isSuccess && !halls.length ? 'empty' : 'ready'}
       empty={{
         title: 'Nothing is running yet',
         action: setup.can && (
@@ -59,11 +66,21 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
       }}
       figures={<CompanyFigures />}
       chart={
-        <div className="floor">
-          {halls.map((h) => (
-            <Hall key={h.id ?? h.name} hall={h} open={open} />
-          ))}
-        </div>
+        floor.isPending ? (
+          <SkeletonRows rows={4} />
+        ) : floor.isError ? (
+          <Empty icon="alert" title="Floor did not load">
+            <Button busy={floor.isFetching} onClick={() => void floor.refetch()}>
+              Try again
+            </Button>
+          </Empty>
+        ) : (
+          <div className="floor">
+            {halls.map((h) => (
+              <Hall key={h.id ?? h.name} hall={h} open={open} />
+            ))}
+          </div>
+        )
       }
       panel={pipeline && stage && <StagePanel key={search.panel} pipeline={pipeline} stage={stage} onClose={close} />}
     />

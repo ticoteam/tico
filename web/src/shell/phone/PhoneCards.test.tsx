@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, Link, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -389,6 +389,92 @@ describe('phone: the cards behind a raised one peek above it', () => {
   it('while typing, the cards in front go under the keyboard and the peeks behind stay, clear of the box', () => {
     expect(rule('.phone[data-typing]>.ly:not(.is-up):not(.is-behind)')).toContain('--ty:calc(100% + 48px)');
     expect(rule('.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full')).toContain('--vis:calc(100% - var(--at) - var(--kb))');
+  });
+});
+
+describe('phone: a place picked in the menu opens it', () => {
+  /** The cards as the root draws them, on the browser's own history, with the menu's two kinds of rows: a link to a
+      page, and a row that goes somewhere without being a link (the account menu's Settings). */
+  function shell(onPicked = vi.fn()) {
+    window.history.replaceState(null, '', '/settings/agents');
+    function Shell() {
+      const r = useRouter();
+      return (
+        <PhoneCards
+          page={<h1>{useLocation({ select: (l) => l.pathname })}</h1>}
+          tico={<p>Tico's chat</p>}
+          menu={
+            <>
+              <header className="m-head">Menu</header>
+              <Link to={'/calendar' as never} onClickCapture={onPicked}>
+                Calendar
+              </Link>
+              <button type="button" onClick={() => void r.navigate({ to: '/settings' as never })}>
+                Settings
+              </button>
+            </>
+          }
+        />
+      );
+    }
+    const router = createRouter({ routeTree: createRootRoute({ component: Shell }) });
+    render(<RouterProvider router={router} />);
+    return router;
+  }
+  const card = () => document.querySelector('.phone')?.getAttribute('data-card');
+  const raise = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Menu' }));
+    expect(card()).toBe('menu');
+  };
+  /** A finger's tap: it presses first, as every real tap does, then clicks. */
+  const tap = (el: Element) => {
+    fireEvent.pointerDown(el, { button: 0, pointerId: 9, clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(el, { button: 0, pointerId: 9, clientX: 10, clientY: 10 });
+    fireEvent.click(el);
+  };
+  const settle = () => act(() => new Promise((r) => setTimeout(r, 20)));
+
+  it('lands on the page after the menu was dragged, though the drag made no click of its own (a finger never clicks after a pan)', async () => {
+    vi.stubGlobal('DOMMatrixReadOnly', class { m42 = 0; });
+    try {
+      const router = shell();
+      await raise();
+      // the menu's head held and moved, then let go with no click after it (the browser took the touch, or a pan)
+      const head = document.querySelector('.ly-menu .m-head')!;
+      fireEvent.pointerDown(head, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(head, { pointerId: 1, clientX: 100, clientY: 160 });
+      fireEvent.pointerCancel(head, { pointerId: 1, clientX: 100, clientY: 160 });
+      expect(card()).toBe('menu');
+      tap(screen.getByRole('link', { name: 'Calendar' }));
+      await settle();
+      expect(router.state.location.pathname).toBe('/calendar');
+      expect(card()).toBe('none');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens the page in the menu’s place, so Back goes to the page before; the menu’s own handler still runs', async () => {
+    const picked = vi.fn();
+    const router = shell(picked);
+    await raise();
+    const length = window.history.length;
+    tap(screen.getByRole('link', { name: 'Calendar' }));
+    await settle();
+    expect(router.state.location.pathname).toBe('/calendar');
+    expect(card()).toBe('none');
+    expect(picked).toHaveBeenCalledTimes(1);
+    expect(window.history.length).toBe(length);
+    expect(window.history.state?.['tico-next:card']).toBeUndefined();
+  });
+
+  it('a row that is not a link (the account menu’s Settings) tucks the menu as its page opens', async () => {
+    const router = shell();
+    await raise();
+    tap(screen.getByRole('button', { name: 'Settings' }));
+    await settle();
+    expect(router.state.location.pathname).toBe('/settings');
+    expect(card()).toBe('none');
   });
 });
 
