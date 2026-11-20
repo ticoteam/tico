@@ -178,6 +178,41 @@ def test_the_transactions_cursor_pages_without_gaps_or_repeats(books):
             FR.transactions(c, OWNER, cursor="not-a-cursor", at=AT)
 
 
+def test_a_payout_entry_shows_its_lines_once_on_each_of_its_feed_rows(books):
+    """A payout's one entry stands for many feed rows. Each row carries the entry's lines once, read in one pass: a row
+    carried every line once per row of its entry (3.3 MB for a page of 200), read entry by entry and vendor by vendor."""
+    with books.transaction() as c:
+        ids = _bank(c)
+        payout = str(spend(c, "6100", 3_000, team="web", day="2026-10-11", vendor="Stripe")["entry_id"])
+        for i in range(30):
+            SK.insert(
+                c,
+                "fin_feed_txns",
+                {
+                    "money_account_id": ids["bank"],
+                    "provider_id": f"charge-{i}",
+                    "txn_date": f"2026-10-{11 + i % 3:02d}",
+                    "amount": -100,
+                    "currency": "USD",
+                    "status": "posted",
+                    "entry_id": payout,
+                    "counterparty": f"Customer {i}",
+                    "created_at": AT,
+                    "created_by": "system:finance",
+                },
+            )
+        read: list[str] = []
+        c.set_trace_callback(read.append)
+        whole = FR.transactions(c, OWNER, limit=200, at=AT)
+        c.set_trace_callback(None)
+        rows = [r for r in whole["rows"] if r["kind"] == "feed" and r["entry_id"] == payout]
+        assert len(rows) == 30
+        assert all([x["amount"] for x in r["lines"]] == [3_000] for r in rows), rows[0]["lines"]
+        assert sum("FROM fin_lines WHERE entry_id" in q for q in read) == 1, read
+        assert sum("FROM fin_vendor_aliases" in q for q in read) < 10, read  # not one per counterparty
+        assert [r["id"] for r in _all(c, OWNER, limit=7)] == [r["id"] for r in whole["rows"]]
+
+
 def _pages(c, viewer, **kw):
     """Every row through the cursor, a row at a time; no page is empty short of the end."""
     rows, cursor = [], None

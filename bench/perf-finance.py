@@ -235,7 +235,10 @@ def main() -> None:
         store.initialize(seed_market=False)
         FA.use_vault(Vault(store))
         t = time.perf_counter()
-        if not reuse:
+        if reuse:
+            with store.transaction() as c:
+                F._seed(c)  # the org again: a start syncs the people from the registry folder, which has no teams
+        else:
             seed(store)
             if kept.name:
                 with store.read() as c:
