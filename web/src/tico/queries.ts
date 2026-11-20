@@ -2,30 +2,33 @@
 // `availability`): it is on when the assistant agent is active; only the owner may turn it on, and not while it is held.
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { Assistant } from '@/api/schema';
 import { queryClient, quietRoot, write } from '@/data';
-import { ticoRoomQuery } from '@/conversation';
+import { readTicoInfo, ticoRoomQuery, type TicoInfo } from '@/conversation';
 import { onRefetch } from '@/live';
 
 // Read again after the person's own turn-on and when the stream is back.
 quietRoot('tico');
 
-export type TicoPower = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'>;
+export type TicoPower = Omit<TicoInfo, 'room_id'>;
 
+/** Whether Tico is on; read with its room (conversation `readTicoInfo`), so the two cost one read. */
 export const ticoPowerQuery = queryOptions({
   queryKey: ['tico', 'power'] as const,
-  queryFn: async ({ signal }): Promise<TicoPower> => {
-    const a = await api.get<Assistant>('/api/v2/assistant', { signal });
-    return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state };
+  queryFn: async (): Promise<TicoPower> => {
+    const { available, bot, can_turn_on, state } = await readTicoInfo();
+    return { available, bot, can_turn_on, state };
   },
 });
 
 /* Someone turned the Assistant on or off: the server sends every stream a `bots` event naming it (backend/events.py
    `_bots`). The event's `status` is a status line, not the power, so this reads the power again instead, and the room
-   too while there is none yet (turning it on opens one). */
-onRefetch<{ bot?: string }>('bots', (e) => {
-  const slug = queryClient.getQueryData(ticoPowerQuery.queryKey)?.bot ?? 'assistant';
+   too while there is none yet (turning it on opens one). Most of these events are the status line moving while Tico
+   works; one whose agent state (`bot_state`) is the one already known changed nothing here, and reads nothing. */
+onRefetch<{ bot?: string; status?: { bot_state?: string | null } | null }>('bots', (e) => {
+  const power = queryClient.getQueryData(ticoPowerQuery.queryKey);
+  const slug = power?.bot ?? 'assistant';
   if (e.bot !== slug) return [];
+  if (power && e.status?.bot_state != null && e.status.bot_state === power.state) return [];
   return queryClient.getQueryData(ticoRoomQuery.queryKey)
     ? [ticoPowerQuery.queryKey]
     : [ticoPowerQuery.queryKey, ticoRoomQuery.queryKey];

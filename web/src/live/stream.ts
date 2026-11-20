@@ -75,6 +75,7 @@ let tries = 0;
 let openedAt = 0;
 let hiddenAt = 0;
 let wasDown = false; // read quiet areas again once the stream is back
+let heldRestart = false; // the follows changed before the first stream said where it starts: reconnect from there
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let restartTimer: ReturnType<typeof setTimeout> | undefined;
 let offlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -148,6 +149,7 @@ function advance(seq: number | null): void {
 function connect(): void {
   clearTimeout(retryTimer);
   clearTimeout(restartTimer);
+  heldRestart = false; // this stream asks for the follows as they are now
   if (!started || status === 'signed-out') return;
   es?.close();
   const source = new EventSource(url());
@@ -159,12 +161,17 @@ function connect(): void {
     if (!mine()) return;
     clearOffline();
     if (after == null) {
-      // A first stream starts from now. What was read before it opened may have missed a change in between: read
-      // what is on screen once more (not the person: the gate would take a failed read for a fault).
+      // A first stream starts from now and reads nothing again: the page's reads went out with it, and reading a
+      // board's whole list twice cost more than the rare change between the two (a reconnect after a gap still reads
+      // the quiet areas again, isLive). Follows that changed while it opened reconnect from its number, so the
+      // stream runs on without a gap.
       after = seqOf(parse(e));
-      // cancelRefetch false: a page's loader may be reading the same thing right now; cancelling it would fail the page.
-      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== keys.me()[0] }, { cancelRefetch: false });
-      return isLive();
+      isLive();
+      if (heldRestart) {
+        heldRestart = false;
+        restartTimer = setTimeout(connect, RESTART_MS);
+      }
+      return;
     }
     // A resumed stream keeps its own number, and the server replays from it. The cookie may be someone else's by
     // now (another tab signed in): ask who it is before held changes go out under it.
@@ -367,6 +374,7 @@ export function stopLive(): void {
   tries = 0;
   hiddenAt = 0;
   wasDown = false;
+  heldRestart = false;
   dropFrame();
   resetPatchState();
   document.removeEventListener('visibilitychange', onVisibility);
@@ -380,6 +388,12 @@ export function stopLive(): void {
 /** The follows changed: reconnect once, from where the stream was, with the new narrowing. */
 export function restartLive(): void {
   if (!started || status === 'signed-out' || !es) return; // a stream waiting to retry opens with the new scope
+  // Before the first stream says where it starts, a new one would start from a later "now" and leave a gap; it
+  // reconnects from that number once it comes (and the first stream does not open and close two or three times).
+  if (after == null) {
+    heldRestart = true;
+    return;
+  }
   clearTimeout(restartTimer);
   restartTimer = setTimeout(connect, RESTART_MS);
 }

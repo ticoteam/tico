@@ -42,6 +42,15 @@ describe("Tico's power follows the server", () => {
     expect(queryClient.getQueryData(ticoPowerQuery.queryKey)).toEqual(off);
   });
 
+  it('reads nothing while only its status line moves (its state is the one known)', () => {
+    FakeEventSource.last.feed(frame(901, 'bots', { bot: 'assistant', status: { bot_state: 'archived', current: 'Replying' } }));
+    flushFrame();
+    expect(stale()).toBe(false);
+    FakeEventSource.last.feed(frame(902, 'bots', { bot: 'assistant', status: { bot_state: 'active' } }));
+    flushFrame();
+    expect(stale()).toBe(true);
+  });
+
   it('leaves it alone when another agent changed', () => {
     FakeEventSource.last.feed(frame(901, 'bots', { bot: 'sales', status: null }));
     flushFrame();
