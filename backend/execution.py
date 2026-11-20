@@ -4591,7 +4591,11 @@ class Execution:
             else None
         )
         if failed is not None and loads is not None:
-            failed.open_holds = loads.holds
+            # A narrow read for one job keeps what earlier checks in this claim read (company_waiter checks one job of
+            # each waiter, with no write between): a failure recorded for an earlier bot is looked up in it.
+            failed.open_holds = (
+                loads.holds.joined(failed.open_holds) if isinstance(loads.holds, claim_loads.Part) else loads.holds
+            )
         now = H.now()
         for row in assigned:
             bot = row["bot"]

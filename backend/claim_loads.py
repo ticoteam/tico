@@ -63,11 +63,23 @@ class Loads:
 class Part(Mapping):
     """A mapping read for some of its keys: `rows` holds every entry whose key is `inside(key)`, exactly as the whole
     mapping has it. Any other key, an iteration or a length reads the whole (`whole()`), once. Its truth is the
-    whole's: `rows`, else `any_()` (whether the whole has an entry), else the whole read."""
+    whole's: `rows`, else `any_` (whether the whole has an entry, read with the rows), else the whole read."""
 
     def __init__(self, rows, inside, whole, any_=None):
         self.rows, self.inside, self._read, self._any = rows, inside, whole, any_
         self._whole = None
+
+    def joined(self, other):
+        """This and `other`, read in the same snapshot with no write between: the rows of both, inside either. Another
+        kind of mapping (an earlier whole read, or none yet) is replaced, as a later read always replaced it."""
+        if not isinstance(other, Part):
+            return self
+        return Part(
+            {**other.rows, **self.rows},
+            lambda key: self.inside(key) or other.inside(key),
+            self._read,
+            self._any if self._any is not None else other._any,
+        )
 
     def whole(self):
         if self._whole is None:
@@ -89,11 +101,11 @@ class Part(Mapping):
     def __len__(self):
         return len(self.whole())
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         if self.rows:
             return True
         if self._whole is None and self._any is not None:
-            return bool(self._any())
+            return bool(self._any)
         return bool(self.whole())
 
 

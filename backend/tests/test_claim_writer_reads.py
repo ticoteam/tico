@@ -49,9 +49,15 @@ def test_the_claims_recheck_under_the_write_lock_reads_no_whole_hold_or_grant_ta
     inside = locked(seen)
     assert inside, "the claim wrote"
     assert EVERY_HOLD not in inside
-    # The recheck read this computer's grants only. (The hand-out's own read of the plans it gives the turn,
-    # model_subscriptions.for_claim, still reads every computer's, once.)
+    # The recheck read this computer's grants only. The hand-out's own read of the plans it gives the turn
+    # (model_subscriptions.for_claim) still reads every computer's: once, and no more.
     assert any("g.runner_id IN" in s for s in inside)
+    every_grant = [
+        s
+        for s in inside
+        if "FROM computer_subscriptions g LEFT JOIN" in s and "g.runner_id IN" not in s and not s.startswith("SELECT 1")
+    ]
+    assert len(every_grant) == 1, every_grant
 
 
 def test_a_narrow_read_answers_its_keys_as_the_whole_read_does_and_reads_the_whole_for_any_other(api):
@@ -72,3 +78,17 @@ def test_a_narrow_read_answers_its_keys_as_the_whole_read_does_and_reads_the_who
             == whole[(holds.CLAIM_ERROR, "job", "theirs", "finance")]
         )
         assert dict(part) == whole
+
+
+def test_a_narrow_read_joined_to_an_earlier_one_keeps_the_earlier_bots_keys(api):
+    """company_waiter checks one job of each waiter in turn, with no write between: a claim error recorded for an
+    earlier waiter's bot is looked up after the later check's read, in what the earlier read found."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        holds.put(c, holds.CLAIM_ERROR, "bot", "ops", actor=H.TICO_ACTOR, bot_id="ops")
+        first = claim_loads.open_holds_of(c, ["ops"])
+        later = claim_loads.open_holds_of(c, ["finance"]).joined(first)
+        key = (holds.CLAIM_ERROR, "bot", "ops", "ops")
+        assert later.get(key) == first.get(key) is not None
+        assert later._whole is None
+        assert claim_loads.open_holds_of(c, ["ops"]).joined({}).inside(key)

@@ -415,7 +415,8 @@ def given_of(c, runner_ids):
         _given_rows(c, sorted(wanted)) if wanted else {},
         lambda key: isinstance(key, tuple) and len(key) == 2 and key[0] in wanted,
         lambda: _given(c),
-        lambda: c.execute("SELECT 1 " + _GIVEN_FROM + " LIMIT 1").fetchone() is not None,
+        # Whether any computer is given one, read now with the rows (the whole read's truth), once.
+        c.execute("SELECT 1 " + _GIVEN_FROM + " LIMIT 1").fetchone() is not None,
     )
 
 
@@ -432,11 +433,12 @@ def _given_rows(c, runner_ids=None):
     """_given's entries, for every computer or (`runner_ids`) for these."""
     found = {}
     people = set()
-    # The whole read scans the grants in table order: a few computers' are read in that order too.
-    only = f" AND g.runner_id IN ({','.join('?' * len(runner_ids))}) ORDER BY g.rowid" if runner_ids is not None else ""
+    # In table order, whole or for a few computers, so one computer's keys come in the same order either way (for_claim
+    # takes a computer's other runtimes in it).
+    only = f" AND g.runner_id IN ({','.join('?' * len(runner_ids))})" if runner_ids is not None else ""
     for r in c.execute(
         "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-        "s.status,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only,
+        "s.status,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only + " ORDER BY g.rowid",
         list(runner_ids or ()),
     ):
         sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
