@@ -346,6 +346,11 @@ def work_task_id(message, conversation=None):
     return H.message_task_id(message, conversation)
 
 
+def stage_wake(refs):
+    """A wake that hands a bot its turn on a task (task_wakes.add): the stage's work to do, not news to read."""
+    return isinstance(refs, dict) and refs.get("wake") == "task_turn" and not refs.get("quiet")
+
+
 def job_lane(c, bot, config, message, conversation):
     """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
     its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
@@ -6537,6 +6542,11 @@ class Execution:
             incoming_task = work_task_id(H.message(c, row["id"]), incoming_conversation)
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue  # a new task gets its own run, even in the same bot room
+            if stage_wake(json.loads(row["refs"] or "{}")) and not stage_wake(origin.get("refs")):
+                # A task's turn is never steered into a run something else started (a person's chat about it): read
+                # there as news, it was answered and the run ended with the stage's work not begun (Nov 20: a
+                # storyboard OK'd while the bot's machine woke, then a question). It starts its own run after this one.
+                continue
             if (
                 job_lane(c, attempt["bot_id"], followed, H.message(c, row["id"]), incoming_conversation)
                 != attempt["lane"]
@@ -7665,13 +7675,16 @@ class Execution:
             # room carries notices for many tasks, so only the ones about this turn's own task
             # (or, for a turn with no task, the ones about none) count as read.
             turn_task = work_task_id(msg, conv)
+            # A task's turn is more than news: unless this run was one, it keeps its own run (inputs).
+            works = stage_wake(msg.get("refs"))
             for extra in c.execute(
                 "SELECT j.id,j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                 "WHERE j.bot_id=? AND j.state='queued' AND m.kind='notice' "
                 "AND m.conversation_id=? AND m.created_at<=? AND j.id<>?",
                 (row["bot_id"], conv["id"], row["created_at"], row["job_id"]),
             ).fetchall():
-                if work_task_id(H.message(c, extra["message_id"]), conv) != turn_task:
+                queued = H.message(c, extra["message_id"])
+                if work_task_id(queued, conv) != turn_task or (stage_wake(queued.get("refs")) and not works):
                     continue
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, extra["id"]))
                 H.mark_delivered(c, H.TICO_ACTOR, extra["message_id"])
