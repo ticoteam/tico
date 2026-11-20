@@ -91,6 +91,12 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
   const toggle = (name: string) => setFolded((was) => (was.has(name) ? new Set([...was].filter((x) => x !== name)) : new Set([...was, name])));
   const none = mine ? 'No budget yet' : 'No budgets yet';
   const meter = (r: { spent: number | null; amount: number | null }) => (r.amount ? <Meter pct={((r.spent ?? 0) / r.amount) * 100} pace={pace.pace} /> : null);
+  // What is left of a budget; nothing where there is no budget.
+  const left = (r: { spent: number | null; amount: number | null }) => {
+    if (!r.amount) return '';
+    const v = r.amount - (r.spent ?? 0);
+    return v < 0 ? <span className="word-late">{cash(v)}</span> : cash(v);
+  };
   const name = (r: BudgetLine) =>
     mine ? (
       r.budget.name
@@ -147,6 +153,7 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
                 <col />
                 <col className="t-col" />
                 <col className="t-col" />
+                {!id && <col className="t-col" />}
                 <col className="t-meter" />
               </colgroup>
               <thead>
@@ -158,20 +165,25 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
                   <th scope="col" className="num">
                     Budget
                   </th>
+                  {/* a row open beside it leaves no room for Left: the panel says it */}
+                  {!id && (
+                    <th scope="col" className="num">
+                      Left
+                    </th>
+                  )}
                   <th scope="col">{pace.words}</th>
                 </tr>
               </thead>
               <tbody>
-                {all.length === 0 && <EmptyRow span={4}>{none}</EmptyRow>}
+                {all.length === 0 && <EmptyRow span={id ? 4 : 5}>{none}</EmptyRow>}
                 {groups.map((g) => [
                   g.name && (
                     <GroupRow
                       key={`g:${g.name}`}
                       name={g.name}
-                      count={g.rows.filter((r) => r.depth === 0).length}
                       open={!folded.has(g.name)}
                       onToggle={() => toggle(g.name)}
-                      span={4}
+                      span={id ? 4 : 5}
                     />
                   ),
                   ...(folded.has(g.name) ? [] : g.rows).map((r) => (
@@ -183,6 +195,7 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
                       <td className="t-name">{titled(r)}</td>
                       <td className="num t-fig">{cash(r.spent)}</td>
                       <td className="num">{cash(r.amount)}</td>
+                      {!id && <td className="num">{left(r)}</td>}
                       <td className="t-bar">{meter(r)}</td>
                     </tr>
                   )),
@@ -192,6 +205,7 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
                     <td className="t-name">Total</td>
                     <td className="num">{cash(spent)}</td>
                     <td className="num">{cash(amount)}</td>
+                    {!id && <td className="num">{left({ spent, amount })}</td>}
                     <td className="t-bar">{meter({ spent, amount })}</td>
                   </tr>
                 )}
@@ -275,7 +289,7 @@ function BudgetPanel({
         )
       }
     >
-      <div className="money">
+      <div className="money pbody">
         <Pfig big={cash(spent)} sub={amount != null ? `of ${cash(amount)} this ${per}` : monthName(now)}>
           {amount ? <Meter pct={((spent ?? 0) / amount) * 100} pace={pace.pace} /> : null}
         </Pfig>

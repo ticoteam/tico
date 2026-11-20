@@ -7,7 +7,7 @@ import type { PageBaseProps, PageTab } from '@/pagekinds';
 import { useCaps } from './caps';
 import { ActLink, useViewAs } from './parts';
 import { pageOwnersQuery } from './queries';
-import { FINANCE_TABS, type FinanceTab } from './search';
+import { FINANCE_TABS } from './search';
 import './money.css';
 
 export const FIN = '/company/finance';
@@ -73,7 +73,5 @@ export function FinanceOwner() {
     </span>
   );
 }
-
-export const TAB_NAME = Object.fromEntries(FINANCE_TABS) as Record<FinanceTab, string>;
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;

@@ -241,12 +241,12 @@ describe('Budgets @s404 @s462 @s463', () => {
     expect(await screen.findByRole('link', { name: 'Tools' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Earlier' })).toBeNull();
     expect(screen.queryByLabelText('Search budgets')).toBeNull();
-    expect(screen.queryByRole('columnheader', { name: 'Left' })).toBeNull();
+    expect(screen.getByRole('columnheader', { name: 'Left' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Quarter' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'budgets', period: 'quarter' }));
     const row = (await screen.findByRole('link', { name: 'Tools' })).closest('tr')!;
     await waitFor(() => expect(within(row).getByText('$900')).toBeTruthy());
-    expect(within(row).getByText('$450')).toBeTruthy();
+    expect(within(row).getAllByText('$450')).toHaveLength(2); // spent, and left
     expect(gets.some((u) => u.includes('budget_vs_actual') && u.includes('period=quarter') && u.includes(`start=${addMonths(ym, -2)}-01`))).toBe(true);
   });
 

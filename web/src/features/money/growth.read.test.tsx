@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { GrowthPage } from './Growth';
+import { firstRead, ymOf } from './model';
 import type { GrowthFig, GrowthRead } from './queries';
 import { validateGrowthSearch } from './search';
 
@@ -135,7 +136,7 @@ describe('Growth on the one read @s400', () => {
     // Revenue tiles: CAC and LTV to CAC, payback under it, kept with its cohort.
     const tiles = screen.getByRole('group', { name: 'Headline' });
     expect(within(tiles).getByText('LTV to CAC')).toBeTruthy();
-    expect(within(tiles).getByText('payback 3.1 months')).toBeTruthy();
+    expect(within(tiles).getByText('3.1 mo payback')).toBeTruthy();
     expect(within(tiles).getByText('Jul cohort of 140')).toBeTruthy();
     // the scope tabs are not awaited with the read
     expect(await screen.findByRole('link', { name: 'Alpha' })).toBeTruthy();
@@ -190,7 +191,9 @@ describe('Growth on the one read @s400', () => {
           value: { kept_d30: f(null, { status: 'not_yet' }), cost_per_retained: f(null, { status: 'no_spend' }) },
         },
         retention: [
-          { cohort: '2026-10', entered: 180, kept_d30: { value: null, n: 0, status: 'not_yet' } },
+          // this month's cohort, whose first read is still to come; last year's was never pushed
+          { cohort: ymOf(new Date()), entered: 180, kept_d30: { value: null, n: 0, status: 'not_yet' } },
+          { cohort: '2025-01', entered: 180, kept_d30: { value: null, n: 0, status: 'not_yet' } },
           { cohort: '2026-09', entered: 180, kept_d30: { value: null, n: 12, status: 'too_few' } },
         ],
       }),
@@ -205,7 +208,8 @@ describe('Growth on the one read @s400', () => {
     expect(screen.queryByText('CAC')).toBeNull();
     expect(screen.queryByText(/LTV/)).toBeNull();
     const retention = screen.getByRole('table', { name: 'Retention' });
-    expect(within(retention).getByText('first read Nov 30')).toBeTruthy();
+    expect(within(retention).getByText(`first read ${firstRead(ymOf(new Date()), 30)}`)).toBeTruthy();
+    expect(within(retention).getByText('not supplied')).toBeTruthy();
     expect(within(retention).getByText('12 of 180 old enough')).toBeTruthy();
   });
 });

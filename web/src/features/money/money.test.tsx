@@ -604,10 +604,10 @@ describe('Finance tabs and sources', () => {
     });
     show('finance', '/company/finance?tab=balance');
     const assets = await screen.findByRole('table', { name: 'Assets' });
-    expect(within(assets).getByText('Total assets').closest('tr')!.textContent).toContain('$5,000');
+    expect(within(assets).getAllByText('Assets').at(-1)!.closest('tr')!.textContent).toContain('$5,000');
     const other = screen.getByRole('table', { name: 'Liabilities and equity' });
     expect(within(other).getByText('Total liabilities').closest('tr')!.textContent).toContain('$1,000');
-    expect(within(other).getByText('Liabilities and Equity').closest('tr')!.textContent).toContain('$5,000');
+    expect(within(other).getByText('Liabilities and equity').closest('tr')!.textContent).toContain('$5,000');
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'Import history' })).toBeTruthy();
   });
@@ -662,8 +662,8 @@ describe('Finance tabs and sources', () => {
     });
     show('finance', '/company/finance?tab=access');
     const table = await screen.findByRole('table', { name: 'Access' });
-    expect(within(table).getByText('Everything').closest('tr')!.textContent).toContain('Yes');
-    expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Yes');
+    expect(within(table).getByText('Everything').closest('tr')!.textContent).toContain('Any amount');
+    expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Any amount');
     // Those who see nothing fold into one line, which opens them.
     fireEvent.click(screen.getByRole('button', { name: /1 other sees nothing/ }));
     expect(await within(table).findAllByRole('row')).toHaveLength(4);

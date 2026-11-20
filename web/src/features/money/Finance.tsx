@@ -11,8 +11,8 @@ import { useBooksReturn } from './booksReturn';
 import { BudgetsPage } from './Budgets';
 import { useCaps } from './caps';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
-import { FIN, FinanceOwner, plural, TAB_NAME, useFinanceHead } from './head';
-import { ActLink, readState, usePress, useViewAs } from './parts';
+import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
+import { ActLink, readState, usePhone, usePress, useViewAs } from './parts';
 import { PnlPage } from './Pnl';
 import { SourcesPage } from './Sources';
 import {
@@ -74,11 +74,24 @@ const KIND_TAB: Record<string, FinanceTab> = {
   period_ready: 'balance',
 };
 
+/** A waiting item's row: its name (the label without the amount the server writes after it), its day, and its amount.
+    A bill or invoice says when it is due; an entry, the day it came in. */
+function waitParts(it: { kind: string; label: string } & Record<string, unknown>, now: Date) {
+  const cents = typeof it.amount === 'number' ? it.amount : null;
+  const cut = cents != null ? it.label.lastIndexOf(' · ') : -1;
+  const name = cut > 0 ? it.label.slice(0, cut) : it.label;
+  const raw = typeof it.due_date === 'string' ? it.due_date : typeof it.date === 'string' ? it.date : '';
+  const when = raw ? fmtDate(raw.slice(0, 10), now) : '';
+  const due = it.kind === 'bill_due' || it.kind === 'invoice_overdue';
+  return { name, day: when && due ? `Due ${when}` : when, amount: cents != null ? cash(cents, cents % 100 !== 0) : '' };
+}
+
 /** The overview: four figures, then one column of sections as the mock stacks them (finance.js `overview`): revenue and
     spend by week, what waits on you, what changed. Each Section puts its name on the page edge itself, so none sits in
     the kind's padded chart slot or its two-column widget grid. */
 function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { mayReadSources: boolean; mayReadPayables: boolean; mayReadReceivables: boolean }) {
   const press = usePress();
+  const phone = usePhone();
   const head = useFinanceHead();
   const as = useViewAs();
   const now = new Date();
@@ -104,7 +117,9 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
   const expense = (w?.expense ?? []).map((c) => c / 100);
   const scale = axis([...income, ...expense]);
   const n = income.length;
-  const xl = w ? [0, 4, 8, n - 1].filter((i, k, a) => i >= 0 && i < n && a.indexOf(i) === k).map((i) => [i, fmtDate(w.columns[i]?.start ?? '', now)] as const) : [];
+  // Four dates under the weeks; on a phone, where four would run into each other, the first, middle and last.
+  const ticks = phone ? [0, Math.round((n - 1) / 2), n - 1] : [0, 4, 8, n - 1];
+  const xl = w ? ticks.filter((i, k, a) => i >= 0 && i < n && a.indexOf(i) === k).map((i) => [i, fmtDate(w.columns[i]?.start ?? '', now)] as const) : [];
   const waits = inbox.data?.items ?? [];
   const changed = brief.data?.lines ?? [];
   const owed = mayReadReceivables ? invoices : undefined;
@@ -169,37 +184,48 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
               </div>
             </Section>
           )}
-          <Section name="Waits on you" count={waits.length}>
-            <Table label="Waits on you">
-              <tbody>
-                {waits.map((it) => {
-                  const tab = KIND_TAB[it.kind] ?? 'overview';
-                  return (
-                    <tr key={it.id}>
-                      <td className="t-name">
-                        <FlowMark size={12} className="t-mark" />
-                        <ActLink to={FIN} search={{ tab, panel: undefined }} action="finance.setTab" input={{ tab }}>
-                          {it.label}
-                        </ActLink>
-                      </td>
-                      <td className="t-words">{TAB_NAME[tab]}</td>
+          {waits.length > 0 && (
+            <Section name="Waits on you" count={waits.length}>
+              <Table label="Waits on you">
+                <colgroup>
+                  <col />
+                  {!phone && <col className="t-line" />}
+                  <col className="t-col" />
+                </colgroup>
+                <tbody>
+                  {waits.map((it) => {
+                    const tab = KIND_TAB[it.kind] ?? 'overview';
+                    const { name, day, amount } = waitParts(it, now);
+                    return (
+                      <tr key={`${it.kind}:${it.id}`}>
+                        <td className="t-name">
+                          <FlowMark size={12} className="t-mark" />
+                          <ActLink to={FIN} search={{ tab, panel: undefined }} action="finance.setTab" input={{ tab }}>
+                            {name}
+                          </ActLink>
+                        </td>
+                        {!phone && <td className="t-words">{day}</td>}
+                        <td className="num t-fig">{amount}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            </Section>
+          )}
+          {changed.length > 0 && (
+            <Section name="Changed" count={changed.length}>
+              <Table label="Changed">
+                <tbody>
+                  {changed.map((line, i) => (
+                    <tr key={i}>
+                      <td className="t-name">{line}</td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
-          </Section>
-          <Section name="Changed" count={changed.length}>
-            <Table label="Changed">
-              <tbody>
-                {changed.map((line, i) => (
-                  <tr key={i}>
-                    <td className="t-name">{line}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Section>
+                  ))}
+                </tbody>
+              </Table>
+            </Section>
+          )}
         </div>
       }
     />

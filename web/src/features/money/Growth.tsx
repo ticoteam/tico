@@ -14,7 +14,7 @@ import { EmptyRow, Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, Section, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
 import { ChannelPanel, ManagerFace } from './GrowthPanels';
-import { axis, count, firstRead, growthMonths, isYm, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind } from './model';
+import { axis, count, firstRead, growthMonths, isYm, loudHealth, monShort, monthName, pct, ratio, readDay, statusWord, valueKind } from './model';
 import { ActLink, usePhone, usePress } from './parts';
 import {
   growthManager,
@@ -94,14 +94,15 @@ function tilesOf(d: GrowthRead): Tile[] {
           { key: 'signups', label: 'Sign-ups', fig: h.signups, write: count, spark: (p) => p.signups },
           { key: 'new', label: 'New customers', fig: h.new_customers, write: count, spark: (p) => p.new_customers },
           { key: 'cost', label: 'Cost', fig: h.cost, write: money, spark: (p) => p.cost },
-          { key: 'cac', label: 'CAC', fig: h.cac, write: (v) => usd(v, true), spark: (p) => p.cac },
+          // cents only under $100, where they matter: six tiles leave no room for "$132.61"
+          { key: 'cac', label: 'CAC', fig: h.cac, write: (v) => usd(v, v < 100), spark: (p) => p.cac },
           h.ltv_cac
             ? {
                 key: 'ltv',
                 label: 'LTV to CAC',
                 fig: h.ltv_cac,
                 write: ratio,
-                sub: shown(h.payback_months) ? `payback ${ratio(h.payback_months.value)} months` : undefined,
+                sub: shown(h.payback_months) ? `${ratio(h.payback_months.value)} mo payback` : undefined,
               }
             : null,
           { key: 'kept', label: 'Kept', fig: h.kept, write: (v) => pct(v), spark: (p) => p.kept },
@@ -128,9 +129,10 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const segs = segments.data?.segments ?? [];
   const series = d.series ?? [];
   const month = d.period;
-  const asOf = new Date(`${d.as_of.slice(0, 10)}T00:00:00`);
+  const day = readDay(d.as_of);
+  const asOf = new Date(`${day}T00:00:00`);
   const months = growthMonths(month, asOf);
-  const thisMonth = d.as_of.slice(0, 7);
+  const thisMonth = day.slice(0, 7);
   const open = panelOf(search.panel);
   const opened = open?.[0] === 'channel' ? open[1] : undefined;
 
@@ -143,8 +145,10 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const blank = funnelBlank && !metrics.length && !anyone;
   const loud = loudHealth(d.health);
 
+  // Past four tiles a trend line leaves no room for the figure: the tiles then show figures alone (finance.js: the four
+  // figures lose their trend lines in the narrower page).
   const spark = (pick?: (p: GrowthPoint) => number | null) => {
-    if (!pick) return undefined;
+    if (!pick || (!phone && tiles.length > 4)) return undefined;
     const pts = series.map(pick).filter((v): v is number => v != null);
     return pts.length > 1 ? <Sparkline points={pts} /> : undefined;
   };
@@ -170,7 +174,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   }));
   const strip = (list: Figure[], label: string) =>
     list.length > 0 && (
-      <div className="gr-tiles" style={{ ['--gr-n' as string]: Math.min(list.length, 6) }}>
+      <div className={list.length > 4 ? 'gr-tiles is-many' : 'gr-tiles'} style={{ ['--gr-n' as string]: Math.min(list.length, 6) }}>
         <FiguresStrip figures={list} label={label} />
       </div>
     );
@@ -199,7 +203,6 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
       }}
       actions={
         <>
-          <ManagerFace />
           <div className="month-pick" data-target="range:growth" data-phone>
             <Select
               label="Month"
@@ -210,6 +213,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
             />
             {d.partial && <span className="gr-partial">partial</span>}
           </div>
+          <ManagerFace />
         </>
       }
       tabs={tabs}
@@ -275,7 +279,10 @@ function OwnerFace({ id }: { id: string }) {
     always shown when it has anyone. On a phone: channel, new, CAC. A retention company has no CAC column. */
 function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?: string; phone: boolean; cac: boolean }) {
   const rows = read.channels.filter((c) => c.slug !== 'unknown' || c.signups > 0 || (c.new_customers ?? 0) > 0);
-  const span = (phone ? 2 : 6) + (cac ? 1 : 0);
+  // With a channel open beside it the table keeps channel, new, cost and CAC, so the names keep their room; the panel
+  // has the rest (finance.js: tables drop columns beside a panel).
+  const narrow = phone || !!selected;
+  const span = (phone ? 2 : narrow ? 3 : 6) + (cac ? 1 : 0);
   const word = (c: GrowthChannel) => <span className="zero">{statusWord(c.status)}</span>;
   return (
     <Section name="Channels" count={rows.filter((c) => c.slug !== 'unknown').length} target="growth:channels">
@@ -284,8 +291,9 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
           <col />
           <col className="t-n" />
           {!phone && <col className="t-col" />}
-          {cac && <col className="t-col" />}
-          {!phone && (
+          {/* wide enough for "no customers" */}
+          {cac && <col className="t-src" />}
+          {!narrow && (
             <>
               <col className="t-col" />
               {/* the shares' heads are two words: 76 less padding is narrower than "Cost share", which ran into its neighbors */}
@@ -310,7 +318,7 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
                 CAC
               </th>
             )}
-            {!phone && (
+            {!narrow && (
               <>
                 <th scope="col" className="num">
                   Budget
@@ -336,7 +344,8 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
                     'Unknown'
                   ) : (
                     <span className="gr-chan">
-                      {c.owner && <OwnerFace id={c.owner} />}
+                      {/* a channel with no owner keeps the face's room, so every name starts on one line */}
+                      {c.owner ? <OwnerFace id={c.owner} /> : <span className="gr-noface" aria-hidden="true" />}
                       <ActLink
                         to={GROWTH}
                         search={{ tab: undefined, panel: `channel:${c.slug}` }}
@@ -365,7 +374,7 @@ function Channels({ read, selected, phone, cac }: { read: GrowthRead; selected?:
                     )}
                   </td>
                 )}
-                {!phone && (
+                {!narrow && (
                   <>
                     <td className="num">
                       {usd(c.budget)}
@@ -458,12 +467,14 @@ const WINDOWS = [
 /** One retention cell: the share kept and how many were old enough to judge, or when it can first be read. */
 function KeptCell({ cohort, w, days }: { cohort: GrowthCohort; w: GrowthCohort['kept_d30']; days: number }) {
   if (!w) return <td className="num" />;
-  if (w.status === 'not_yet')
+  if (w.status === 'not_yet') {
+    const day = firstRead(cohort.cohort, days);
     return (
       <td className="num">
-        <span className="zero">first read {firstRead(cohort.cohort, days)}</span>
+        <span className="zero">{day ? `first read ${day}` : statusWord('not_supplied')}</span>
       </td>
     );
+  }
   if (w.status === 'too_few')
     return (
       <td className="num">

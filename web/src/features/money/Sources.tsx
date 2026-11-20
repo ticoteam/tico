@@ -287,7 +287,7 @@ function SourcePanel({ row: r, group, all, admin, onReconnect }: { row: Src; gro
         ))
       }
     >
-      <div className="money">
+      <div className="money pbody">
         <Facts label="Source">
           <LabelValue label="Feeds">{group}</LabelValue>
           {r.last4 && <LabelValue label="Account">{`Ends in ${r.last4}`}</LabelValue>}

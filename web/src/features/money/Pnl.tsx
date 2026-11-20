@@ -135,6 +135,10 @@ function PhoneStatement({ pnl, open }: { pnl: Pnl; open: string | null }) {
 function Statement({ pnl, open }: { pnl: Pnl; open: string | null }) {
   const rows = statement(pnl);
   const cols = pnl.columns;
+  // With a line open beside it the statement keeps four columns, two before this one and one after, so the names keep
+  // their room (finance.js: "The statement keeps four months").
+  const now = nowCol(cols);
+  const shown = cols.map((_, i) => i).filter((i) => !open || cols.length <= 4 || (i >= Math.min(now - 2, cols.length - 4) && i < Math.max(now + 2, 4)));
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (name: string) => setFolded((was) => (was.has(name) ? new Set([...was].filter((x) => x !== name)) : new Set([...was, name])));
   const cell = (v: number | null, i: number, pct = false) => {
@@ -154,24 +158,27 @@ function Statement({ pnl, open }: { pnl: Pnl; open: string | null }) {
       <Table label="P&L" stick>
         <colgroup>
           <col />
-          {cols.map((c) => (
-            <col key={c.start} className="t-col" />
+          {shown.map((i) => (
+            <col key={cols[i]!.start} className="t-col" />
           ))}
         </colgroup>
         <thead>
           <tr>
             <th scope="col">Line</th>
-            {cols.map((c) => (
-              <th key={c.start} scope="col" className={c.state === 'current' ? 'num is-now' : c.state === 'future' ? 'num proj' : 'num'}>
-                {colLabel(c, pnl.period)}
-              </th>
-            ))}
+            {shown.map((i) => {
+              const c = cols[i]!;
+              return (
+                <th key={c.start} scope="col" className={c.state === 'current' ? 'num is-now' : c.state === 'future' ? 'num proj' : 'num'}>
+                  {colLabel(c, pnl.period)}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
           {rows.map((r: StatementRow, k) => {
             if (r.kind === 'group')
-              return <GroupRow key={`g${k}`} name={r.name} open={!folded.has(r.name)} onToggle={() => toggle(r.name)} span={cols.length + 1} />;
+              return <GroupRow key={`g${k}`} name={r.name} open={!folded.has(r.name)} onToggle={() => toggle(r.name)} span={shown.length + 1} />;
             if (r.kind === 'line' && folded.has(under[k] ?? '')) return null;
             if (r.kind === 'line')
               return (
@@ -182,13 +189,13 @@ function Statement({ pnl, open }: { pnl: Pnl; open: string | null }) {
                     </ActLink>
                     {r.locked && <Icon name="lock" />}
                   </td>
-                  {r.values.map((v, i) => cell(v, i))}
+                  {shown.map((i) => cell(r.values[i] ?? null, i))}
                 </tr>
               );
             return (
               <tr key={`${r.kind}${k}`} className={`is-${r.kind}`}>
                 <td className="t-name">{r.name}</td>
-                {r.values.map((v, i) => cell(v, i, r.kind === 'pct'))}
+                {shown.map((i) => cell(r.values[i] ?? null, i, r.kind === 'pct'))}
               </tr>
             );
           })}
@@ -253,7 +260,7 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
         )
       }
     >
-      <div className="money">
+      <div className="money pbody">
         <Pfig big={cash(v)} sub={budget && col.state !== 'future' ? `of ${cash(budget)} ${span}` : colLabel(col, pnl.period)}>
           {budget ? <Meter pct={((v ?? 0) / budget) * 100} pace={pnl.period === 'month' && col.state === 'current' ? paceOf().pace : undefined} /> : null}
         </Pfig>
@@ -279,7 +286,7 @@ function LinePanel({ pnl, account }: { pnl: Pnl; account: string }) {
         </Section>
         <Section name="Latest">
           {(now.data?.entries ?? []).map((e) => (
-            <Prow key={`${e.entry_id}:${e.line_id}`} name={e.vendor_name || e.description || ''} sub={fmtDate(e.date)} fig={cash(e.amount, true)} />
+            <Prow key={`${e.entry_id}:${e.line_id}`} name={e.vendor_name || e.description || e.memo || 'Entry'} sub={fmtDate(e.date)} fig={cash(e.amount, true)} />
           ))}
         </Section>
       </div>
