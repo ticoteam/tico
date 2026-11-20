@@ -1,9 +1,10 @@
 """A bot's reply inherits the file refusal of what its run read, so deleting that page never refuses a comment write.
 
-A run took in, as an input folded beside the comment that started it, the wake an OK's answer wrote about a page. The
-bot replied on the task. Once the page is deleted the run is refused to everyone (task_privacy.attempt_pages_readable),
-and so is the reply that names it: before, the reply stayed listed, and the comment write's response (which carries
-the task's thread) named a run nobody may read, so require_payload refused every later comment after saving it.
+A run on a task took in, as an input folded beside the task's wake that started it, the wake an OK's answer wrote
+about a page. The bot replied on the task. Once the page is deleted the run is refused to everyone
+(task_privacy.attempt_pages_readable), and so is the reply that names it: before, the reply stayed listed, and the
+comment write's response (which carries the task's thread) named a run nobody may read, so require_payload refused
+every later comment after saving it.
 """
 
 import json
@@ -54,15 +55,16 @@ def test_a_reply_from_a_run_that_read_a_deleted_page_leaves_and_comments_still_s
         token="ops-test",
     )["id"]
     fid = page(api, attempt, task=tid, title="Folio").json()["page"]["file_id"]
-    # The answer to an OK of the page wakes the owner bot, with the page among the wake's sources.
-    review_answer(api, review_ask(api, "ops-test", [{"file": fid}], parent=tid, question="Is it ready?"), "Approve")
-    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "delivery": "steer"})
     machine = runner(api)
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
+    # The bot's turn on the task starts from the task's own wake, which names no page.
     run = post(api, "jobs/claim", {"bot": "finance", "start_places": True}, token=machine["token"])["attempt"]
     post(api, f"attempts/{run['id']}/started", {"thread_id": "folio"}, token=machine["token"])
-    # The running turn takes in what is queued for it on the task: the wake comes in beside the comment.
+    # While it runs, the answer to an OK of the page wakes the owner bot again, with the page among the wake's sources.
+    review_answer(api, review_ask(api, "ops-test", [{"file": fid}], parent=tid, question="Is it ready?"), "Approve")
+    # The running turn takes in what is queued for it on the task: a later wake of the same task's turn comes in as an
+    # input (a task's wake is only ever kept out of a run something else started, such as a person's chat).
     post(api, f"attempts/{run['id']}/inputs", {}, token=machine["token"])
     with api.app.state.store.read() as c:
         root = c.execute(
