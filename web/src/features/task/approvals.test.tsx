@@ -558,6 +558,82 @@ describe('the matter shows the email that waits on the person', () => {
   });
 });
 
+describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-task', () => {
+  // The shape of a real case: the matter asks nothing itself (a page, its links done, its owner done); its turn is the
+  // Send sub-task, whose OK of the email is the ask. A second, plain sub-task sits beside it.
+  const rid = '47dfc023';
+  const ask = req({ requirement_id: rid, may: ['ok', 'no', 'give', 'withdraw'] });
+  const ownerDone = req({ requirement_id: 'rdone', kind: 'owner_done', line: 'Done', may: ['done', 'give'], shows: [], asked_by: null });
+  const send = (asked: TaskRequirement = ask) =>
+    task({ id: 'b78be168', number: 36462, title: 'Send: Re: Notice of claim → dana@example.test', pipeline_id: 'legal-responses', to_leave: [ownerDone, asked] });
+  const matter = task({
+    id: '19ca7418',
+    number: 36461,
+    title: 'Flores: reply email',
+    pipeline_id: 'legal-responses',
+    documents: [{ file_id: 'd1', name: 'Review page', kind: 'markdown', version: 1 }],
+    to_leave: [
+      req({ requirement_id: 'rpage', kind: 'page', line: 'Review page', may: [], shows: [], asked_by: null }),
+      req({ requirement_id: 'rlinked', kind: 'linked_done', line: 'Linked tasks done', met: true, may: [], shows: [], asked_by: null }),
+      req({ requirement_id: 'rowner', kind: 'owner_done', line: 'Done', may: ['done', 'give'], shows: [], asked_by: null }),
+    ],
+    turn: { state: 'tasks', who: 'b78be168', line: 'Send: Re: Notice of claim → dana@example.test', requirement_id: 'rpage', ask: false },
+  } as unknown as Partial<TaskData>);
+  const children = [
+    { id: 'b78be168', title: 'Send: Re: Notice of claim → dana@example.test', status: 'open', owner_id: 'bot:lo' },
+    { id: 'c0ffee00', title: 'Review the reply', status: 'open', owner_id: 'bot:lo' },
+  ];
+  const serve = (post: (url: string) => Reply | Promise<Reply> | null) => {
+    reply = (url, method) => {
+      if (method === 'POST') return post(url);
+      if (url.includes('/api/v2/tasks/%2336461') || url.endsWith('/api/v2/tasks/19ca7418')) return { body: { task: matter, runs: [], children, can_comment: true, mover: true } };
+      if (url.endsWith('/api/v2/tasks/b78be168')) return { body: { task: send(), runs: [], children: [], parent: { id: '19ca7418', title: matter.title, label: null, step: null } } };
+      if (url.endsWith(`/api/v2/oks/${rid}`)) return { body: { requirement_id: rid, subject: 'email_send:s1', content: {}, shown_hash: 'h-grant', standing: 'waiting', task_id: 'b78be168' } };
+      return null;
+    };
+  };
+  const open = () => show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses/36461/email');
+
+  it('Approve answers the sub-task’s ask with the hash of the email as shown, and says so @approvals', async () => {
+    const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
+    serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
+    const router = open();
+    fireEvent.click(await ready(await decision()));
+    await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/ok`, body: { shown_hash: 'h-mail' } }]));
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Approved: Email to Dana Ruiz'));
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+    // the email went with its ask: the matter's own page opens in its place, never a blank page
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));
+  });
+
+  it('a refused Approve says why, over the email, with Approve there to press again @approvals', async () => {
+    let refuse = () => {};
+    serve(() => new Promise<Reply>((done) => (refuse = () => done({ status: 422, body: { error: { code: 'ok_refused', detail: 'This OK is no longer asked.' } } }))));
+    open();
+    fireEvent.click(await ready(await decision()));
+    await waitFor(() => expect(sent.map((x) => x.url)).toEqual([`/api/v2/tasks/b78be168/asks/${rid}/ok`]));
+    // while it is sent, the email and its decision stay on screen
+    await act(async () => {});
+    expect(screen.getByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
+    await act(async () => refuse());
+    const box = await decision();
+    expect((await within(box).findByRole('alert')).textContent).toContain('This OK is no longer asked.');
+    expect(within(box).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.getByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
+  });
+
+  it('Request changes answers the sub-task’s ask @approvals', async () => {
+    serve((url) => (url.endsWith(`/asks/${rid}/answer`) ? { body: { task: send(req({ requirement_id: rid, may: ['undo'], answer: { id: 'a8', value: 'no', by: 'human:me', at: '2026-11-19T10:14:00Z', note: 'Shorter' } } as Partial<TaskRequirement>)) } } : null));
+    open();
+    const box = await decision();
+    fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
+    fireEvent.change(within(box).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Shorter' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/answer`, body: { value: 'no', note: 'Shorter' } }]));
+    expect(await screen.findByText(/^Changes asked/)).toBeTruthy();
+  });
+});
+
 describe('an email’s OK reads with the matter it answers', () => {
   it('names the matter and its brief above the email @approvals', async () => {
     shown = task({ title: 'Send: Re: Notice of claim → dana@example.test' });

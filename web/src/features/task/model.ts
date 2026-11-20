@@ -1,6 +1,6 @@
 import { refusal, type RefusalToast, type Result } from '@/actions';
 import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
-import type { TaskData } from './queries';
+import { PENDING_ANSWER, type TaskData } from './queries';
 
 /* Plain rules of the open task: its tabs and their marks, the decision that waits on the person, and its addresses. */
 
@@ -134,6 +134,11 @@ export function effectOf(t: TaskData, r: TaskRequirement): string {
 /** A request the person asked changes on: it waits on the agent's new version (plan/approvals.html, Changes asked). */
 export function changesAskedOf(t: TaskData, me: string | undefined): TaskRequirement | null {
   return (me && t.to_leave?.find((r) => !r.met && r.answer?.value === 'no' && r.answer.by === me)) || null;
+}
+
+/** A request whose answer is being sent (answerAsk shows it at once, before the server takes it). */
+export function answeringOf(t: TaskData): TaskRequirement | null {
+  return t.to_leave?.find((r) => r.answer?.id === PENDING_ANSWER) ?? null;
 }
 
 /** "Dana Ruiz" from "Dana Ruiz <dana@example.com>"; a bare address stays as it is. */
