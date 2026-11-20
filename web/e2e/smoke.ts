@@ -187,7 +187,57 @@ async function phone(browser: Browser, name: string) {
     check(page.url() !== atCal, `Back after a navigation from a card: ${new URL(page.url()).pathname}`, 'Back after navigating from a card stayed (stranded card entry)');
     note(`  history ${histBefore} → ${await page.evaluate(() => history.length)}`);
   } else bad('no menu lip button');
+
+  // Tico's Dot never sits on a field: not the handle on a raised chat's message box, not a lip on a page's own box
+  await page.goto(`${APP}/threads`);
+  await settle(page, 2500);
+  const thread = await page.evaluate(() =>
+    [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href') ?? '').find((h) => /^\/threads\/[0-9a-f-]{36}$/.test(h)),
+  );
+  if (thread) {
+    await page.goto(`${APP}${thread}`);
+    await settle(page, 2500);
+    await noTicoOnFields(page, 'a thread');
+  }
+  await page.goto(`${APP}/tasks`);
+  await settle(page, 2500);
+  const task = await page.evaluate(() =>
+    [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href') ?? '').find((h) => /^\/tasks\/[^/]+\/[^/]+/.test(h) && !h.endsWith('/edit')),
+  );
+  if (task) {
+    await page.goto(`${APP}${task}`);
+    await settle(page, 2500);
+    const chatLip = page.locator('.phone>.ly-chat>.lip');
+    if (await chatLip.isVisible()) {
+      await chatLip.tap();
+      await settle(page, 1200);
+      await noTicoOnFields(page, "a task's chat, raised");
+      await page.setViewportSize({ width: 390, height: 508 }); // a keyboard that resizes the page (Android)
+      await page.locator('.phone .ly-chat textarea').first().focus();
+      await settle(page, 900);
+      await noTicoOnFields(page, "a task's chat, typing");
+      await page.setViewportSize({ width: 390, height: 844 });
+    }
+  }
   await ctx.close();
+}
+
+/** No Tico mark (the stack's handle, Tico's Dot on its lip) drawn over a message box or a field that can be seen. */
+async function noTicoOnFields(page: Page, where: string) {
+  const hits = await page.evaluate(() => {
+    const seen = (el: Element) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getBoundingClientRect().height > 0;
+    const marks = [...document.querySelectorAll('.phone>.nub, .phone .tico-dot')].filter(seen);
+    const fields = [...document.querySelectorAll('.composer, textarea, input:not([type=hidden]), [contenteditable]')].filter(seen);
+    const over: string[] = [];
+    for (const m of marks)
+      for (const f of fields) {
+        const a = m.getBoundingClientRect();
+        const b = f.getBoundingClientRect();
+        if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) over.push(`${m.className} on ${f.className || f.tagName}`);
+      }
+    return over;
+  });
+  check(!hits.length, `no Tico mark on a field: ${where}`, `Tico on a field (${where}): ${hits.join(', ')}`);
 }
 
 async function responsive(browser: Browser) {

@@ -34,7 +34,7 @@ export interface PhoneCardsProps {
   lipActs?: Partial<Record<'tico' | 'chat' | 'call', ReactNode>>;
   /** Tico speaking while tucked: up to two lines on its lip. */
   peek?: ReactNode;
-  /** The page holds the bottom itself (a task that waits on you): the stack becomes the handle. */
+  /** The page holds the bottom itself (a task that waits on you): the stack draws in to Tico's edge under it. */
   handle?: boolean;
   /** Names for the chat and call cards, read by screen readers ("Finance Owner", "Seed box pricing"). */
   labels?: { chat?: string; call?: string };
@@ -260,19 +260,6 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     };
   }, []);
 
-  // ---------- the handle sits on the top edge of whatever holds the bottom ----------
-  useLayoutEffect(() => {
-    const el = root.current;
-    if (!el || !handleMode) return;
-    const dock = el.querySelector<HTMLElement>(card === 'chat' ? ':scope > .ly-chat :is(.p-dock,[data-dock])' : ':scope > .pg :is(.p-dock,[data-dock])');
-    if (!dock) return;
-    const put = () => el.style.setProperty('--dock-h', `${dock.offsetHeight}px`);
-    put();
-    const ro = new ResizeObserver(put);
-    ro.observe(dock);
-    return () => ro.disconnect();
-  }, [card, handleMode, second]);
-
   // ---------- drag: the card follows the finger, release picks a stop by distance and speed ----------
   const drag = useRef<Drag | null>(null);
   const dragged = useRef(false);
@@ -492,8 +479,9 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
             <Dot size={TICO_MARK_LIP} />
           </span>,
         )}
+        {/* Tico drawn in to its edge under whatever holds the bottom: the stack's last line, never on a field */}
         <button className="nub" type="button" aria-label="Open Tico" inert={!nubOn} aria-hidden={!nubOn || undefined} onClick={() => raise('tico-half')}>
-          <Dot state="rest" size={18} />
+          <Dot state="rest" size={14} />
         </button>
         <i className="ph-sab" aria-hidden="true" />
       </div>
