@@ -229,8 +229,8 @@ def no_cached_calendar_reads():
     connectors.forget_live()
 
 
-# What tests attach with record_property("summary", text), printed at the end of the run: a report a passing test keeps
-# (backend/tests/test_query_budgets.py's timings), which xdist would otherwise drop with the test's output.
+# What tests attach as ("summary", text) to request.node.user_properties, printed at the end of the run: a report a passing
+# test keeps (backend/tests/test_query_budgets.py's timings), which xdist would otherwise drop with the test's output.
 SUMMARIES = []
 
 

@@ -20,6 +20,7 @@ from backend.store import H
 ROOT = Path(__file__).resolve().parents[3]
 OPEN = 250  # open tasks the engine makes; copies bring them to OPEN_TOTAL
 OPEN_TOTAL = 1100
+FINISHED = 25  # of them the engine finishes, the templates of the finished copies
 TASKS = 18500
 MESSAGES = 40000
 FOLLOWERS = 30000
@@ -32,8 +33,17 @@ ROOM_MESSAGES = 3  # each finished task's room gets this many posts until MESSAG
 GUARDS = ("tasks_enter_only", "tasks_move_only")
 
 
+# The seeds this company is made with, by name.
+BENCHES = {
+    "perf-hub-overload": ROOT / "bench" / "perf-hub-overload.py",
+    "perf-status-health": ROOT / "bench" / "perf-status-health.py",
+    "perf-holds-pages": ROOT / "bench" / "perf-holds-pages.py",
+    "perf-runner-polls": ROOT / "bench" / "perf-runner-polls.py",
+}
+
+
 def bench(name):
-    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), ROOT / "bench" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), BENCHES[name])
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -44,10 +54,27 @@ def _columns(c, table):
     return [row[1] for row in c.execute(f"PRAGMA table_info({table})")]
 
 
+def finish_some(c):
+    """FINISHED of the engine's open tasks finished by the engine, as finished tasks are: in their pipeline's Done stage,
+    with the visits that took them there. The finished copies in `fill` are copies of these."""
+    from backend import task_engine as E
+
+    ids = [
+        row[0]
+        for row in c.execute(
+            "SELECT id FROM tasks WHERE status='open' AND pipeline_id IS NOT NULL ORDER BY rowid DESC LIMIT ?",
+            (FINISHED,),
+        )
+    ]
+    for task_id in ids:
+        E.move(c, task_id, E.DONE, "human:ana", "Finished", seen_version=E.task(c, task_id)["version"])
+
+
 def fill(c):
-    """Copies of the engine's open tasks up to OPEN_TOTAL open and TASKS in all, each with its own room (a copy of its
-    template's), ROOM_MESSAGES posts in the finished ones' rooms up to MESSAGES, and the requester and owner of each
-    copy following its room, up to FOLLOWERS."""
+    """Copies of the engine's tasks up to OPEN_TOTAL open and TASKS in all, open ones of its open tasks and finished ones
+    of those it finished (finish_some), each with its template's visits and its own room (a copy of its template's);
+    ROOM_MESSAGES posts in the finished ones' rooms up to MESSAGES, every tenth room's last one after the task finished;
+    and the requester and owner of each copy following its room, up to FOLLOWERS."""
     guards = {
         name: sql
         for name, sql in c.execute("SELECT name, sql FROM sqlite_schema WHERE type='trigger'")
@@ -56,32 +83,37 @@ def fill(c):
     for name in guards:
         c.execute(f"DROP TRIGGER {name}")
     c.execute(
-        "CREATE TEMP TABLE scale_template AS SELECT row_number() OVER (ORDER BY rowid) - 1 AS k, id, conversation_id "
-        "FROM tasks WHERE status='open' AND pipeline_id IS NOT NULL AND conversation_id IS NOT NULL"
+        "CREATE TEMP TABLE scale_template AS SELECT status='open' AS open, "
+        "row_number() OVER (PARTITION BY status='open' ORDER BY rowid) - 1 AS k, id, conversation_id "
+        "FROM tasks WHERE status IN ('open','done') AND pipeline_id IS NOT NULL AND conversation_id IS NOT NULL"
     )
-    templates = c.execute("SELECT count(*) FROM scale_template").fetchone()[0]
+    opens, finished = (
+        c.execute("SELECT count(*) FROM scale_template WHERE open=?", (flag,)).fetchone()[0] for flag in (1, 0)
+    )
     existing = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
     copies = TASKS - existing
     reopened = OPEN_TOTAL - c.execute("SELECT count(*) FROM tasks WHERE status='open'").fetchone()[0]
     c.execute(
         "CREATE TEMP TABLE scale_copy AS WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<?-1) "
-        "SELECT i, printf('scale-task-%06d', i) AS id, printf('scale-room-%06d', i) AS room, "
-        "(SELECT id FROM scale_template WHERE k = i % ?) AS template, i < ? AS open, "
+        "SELECT i, printf('scale-task-%06d', i) AS id, printf('scale-room-%06d', i) AS room, i < ? AS open, "
         "strftime('%Y-%m-%dT%H:%M:%fZ', ?, printf('-%d minutes', 30 + i * 3)) AS at FROM n",
-        (copies, templates, reopened, H.now()),
+        (copies, reopened, H.now()),
+    )
+    c.execute("ALTER TABLE scale_copy ADD COLUMN template TEXT")
+    c.execute(
+        "UPDATE scale_copy SET template=(SELECT id FROM scale_template s WHERE s.open=scale_copy.open "
+        "AND s.k = scale_copy.i % (CASE WHEN scale_copy.open THEN ? ELSE ? END))",
+        (opens, finished),
     )
     tasks = _columns(c, "tasks")
     given = {
         "id": "x.id",
         "number": "NULL",
         "conversation_id": "x.room",
-        "status": "CASE WHEN x.open THEN 'open' ELSE 'done' END",
-        "stage_id": "CASE WHEN x.open THEN t.stage_id ELSE NULL END",
-        "stage_entered_at": "CASE WHEN x.open THEN x.at ELSE NULL END",
-        "created_at": "x.at",
+        "created_at": "strftime('%Y-%m-%dT%H:%M:%fZ', x.at, '-2 days')",
         "updated_at": "x.at",
-        "done_at": "CASE WHEN x.open THEN NULL ELSE x.at END",
-        "closed_at": "CASE WHEN x.open THEN NULL ELSE x.at END",
+        "done_at": "CASE WHEN t.done_at IS NULL THEN NULL ELSE x.at END",
+        "closed_at": "CASE WHEN t.closed_at IS NULL THEN NULL ELSE x.at END",
         "occurrence": "NULL",
         "occurrence_step": "NULL",
         "request_id": "NULL",
@@ -91,10 +123,16 @@ def fill(c):
         "FROM scale_copy x JOIN tasks t ON t.id = x.template"
     )
     visits = _columns(c, "visits")
-    given = {"id": "printf('scale-visit-%06d', x.i)", "task_id": "x.id", "entered_at": "x.at", "last_change_at": "x.at"}
-    c.execute(  # an open copy is in its template's stage, as the engine's visit there says
+    given = {
+        "id": "printf('scale-visit-%06d-%s', x.i, v.id)",
+        "task_id": "x.id",
+        "entered_at": "CASE WHEN v.left_at IS NULL THEN x.at ELSE strftime('%Y-%m-%dT%H:%M:%fZ', x.at, '-1 day') END",
+        "left_at": "CASE WHEN v.left_at IS NULL THEN NULL ELSE x.at END",
+        "last_change_at": "x.at",
+    }
+    c.execute(  # each copy has been where its template has, ending where it is now
         f"INSERT INTO visits({','.join(visits)}) SELECT {','.join(given.get(col, 'v.' + col) for col in visits)} "
-        "FROM scale_copy x JOIN visits v ON v.task_id = x.template AND v.left_at IS NULL WHERE x.open"
+        "FROM scale_copy x JOIN visits v ON v.task_id = x.template"
     )
     rooms = _columns(c, "conversations")
     given = {
@@ -117,13 +155,21 @@ def fill(c):
     )
     rows = (MESSAGES - c.execute("SELECT count(*) FROM messages").fetchone()[0]) // ROOM_MESSAGES
     for seq in range(1, ROOM_MESSAGES + 1):
+        # The last post in every tenth room came after its task finished: a finished room someone wrote in again.
+        late = "x.i % 10 = 0" if seq == ROOM_MESSAGES else "0"
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at,seq,refs) "
             "SELECT printf('scale-msg-%06d-%d', x.i, ?), x.room, CASE WHEN ? % 2 THEN t.owner_id ELSE t.requester_id END, "
-            "'say', printf('Update %d on finished item %d', ?, x.i), x.at, ?, json_object('task', x.id) "
+            "'say', printf('Update %d on finished item %d', ?, x.i), "
+            f"CASE WHEN {late} THEN strftime('%Y-%m-%dT%H:%M:%fZ', x.at, '+20 minutes') "
+            "ELSE strftime('%Y-%m-%dT%H:%M:%fZ', x.at, printf('-%d minutes', 60 - ?)) END, ?, json_object('task', x.id) "
             "FROM scale_copy x JOIN tasks t ON t.id = x.id WHERE NOT x.open ORDER BY x.i LIMIT ?",
-            (seq, seq, seq, seq, rows),
+            (seq, seq, seq, seq, seq, rows),
         )
+    c.execute(
+        "UPDATE conversations SET last_message_at=(SELECT max(created_at) FROM messages m WHERE m.conversation_id="
+        "conversations.id) WHERE id LIKE 'scale-room-%' AND last_seq>0"
+    )
     c.execute(
         "UPDATE conversations SET last_seq=0, last_message_at=created_at WHERE id LIKE 'scale-room-%' "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=conversations.id)"
@@ -211,6 +257,8 @@ def build(api):
 
     def seeded(api):
         engine_made(api)
+        with store.transaction() as c:
+            finish_some(c)
         with store.transaction() as c:
             fill(c)
 
