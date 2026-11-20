@@ -173,7 +173,7 @@ describe('a task’s tabs: pages and plain files', () => {
   it('draws a PDF file in the browser’s own viewer from its address', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="letter-pdf" />, '/tasks/p1/12/letter-pdf');
     const frame = await screen.findByTitle('letter.pdf');
-    expect(frame.getAttribute('src')).toBe('/api/v2/files/pdf1?v=2');
+    expect(frame.getAttribute('src')).toBe('/api/v2/files/pdf1?v=2#toolbar=0&navpanes=0&view=FitH');
   });
 
   it('keeps a file tab’s address when the file list fails, then opens that file on retry', async () => {
@@ -189,7 +189,7 @@ describe('a task’s tabs: pages and plain files', () => {
       expect(router.state.location.pathname).toBe(path);
       unavailable = false;
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-      expect((await screen.findByTitle('letter.pdf')).getAttribute('src')).toBe('/api/v2/files/pdf1?v=2');
+      expect((await screen.findByTitle('letter.pdf')).getAttribute('src')).toBe('/api/v2/files/pdf1?v=2#toolbar=0&navpanes=0&view=FitH');
       expect(router.state.location.pathname).toBe(path);
     } finally {
       reply = () => null;
@@ -370,7 +370,7 @@ describe('an email the task asks about', () => {
   it('shows a PDF attachment inline, read and held as a PDF', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=3');
     const frame = await screen.findByTitle('terms.pdf');
-    expect(frame.getAttribute('src')).toBe('blob:held');
+    expect(frame.getAttribute('src')).toBe('blob:held#toolbar=0&navpanes=0&view=FitH');
     expect(calls).toContain('GET /api/v2/email/sends/s1/attachments/3');
   });
 });

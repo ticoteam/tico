@@ -419,7 +419,7 @@ describe('what the person needs beside the email', () => {
     reply = withMail({}, { attachments: files });
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
     const letter = await screen.findByRole('group', { name: 'letter.pdf' });
-    await waitFor(() => expect(letter.querySelector('iframe')?.getAttribute('src')).toBe('blob:letter'));
+    await waitFor(() => expect(letter.querySelector('iframe')?.getAttribute('src')).toBe('blob:letter#toolbar=0&navpanes=0&view=FitH'));
     expect(screen.queryByRole('group', { name: 'exhibit.pdf' })).toBeNull();
     for (const name of ['photo.jpg', 'letter.pdf', 'exhibit.pdf']) expect(screen.getByRole('link', { name: new RegExp(name.replace('.', '\\.')) })).toBeTruthy();
   });

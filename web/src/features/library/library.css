@@ -111,6 +111,17 @@
 .modal.fv-dialog .fv-desk,.modal.fv-dialog .fv-frame{margin:0}
 .modal.fv-dialog .modal-row{align-items:center}
 .lib.fv-embed{flex:1;min-height:0;display:flex;flex-direction:column}
+/* a PDF (PdfView): the viewer's pages fill the frame, Expand at its corner clear of the scroll bar; over the window,
+   the frame fills the scrim under one bar on the scrim's ink, as a picture's does (kit/PictureViewer) */
+.lib .fv-pdf{flex:1;min-width:0;min-height:0;display:flex;position:relative}
+.lib .fv-pdf-expand{position:absolute;top:var(--s-2);right:calc(var(--s-3) + var(--s-6));background:var(--raised);box-shadow:var(--lift-paper)}
+.fv-pdf-viewport{padding:var(--s-4);place-items:stretch}
+.fv-pdf-full{min-width:0;min-height:0;display:flex;flex-direction:column;gap:var(--s-2);outline:0;transition:opacity var(--dur-enter) var(--ease)}
+.fv-pdf-full[data-starting-style],.fv-pdf-full[data-ending-style]{opacity:0}
+.fv-pdf-bar{flex:none;display:flex;align-items:center;gap:var(--s-2);color:var(--on-scrim);font-size:var(--t-sm)}
+.fv-pdf-bar>span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fv-pdf-bar .ib{color:var(--on-scrim)}
+.fv-pdf-full iframe{flex:1;min-height:0;width:100%;border:0;border-radius:var(--r-block);background:var(--desk)}
 
 /* ---------- skills: one list, proposals first; a skill's text with its facts beside it ---------- */
 .lib .avs{display:inline-flex;align-items:center;justify-content:flex-end;min-width:0}

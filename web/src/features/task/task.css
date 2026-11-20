@@ -200,8 +200,10 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-sheet p,.ap-sheet h3{margin-top:var(--s-2)}
 .ap-sheet h3{font-weight:var(--w-title);font-size:var(--t-base)}
 .ap-sheet .li{padding-left:var(--s-4)}
-/* the email's letter, read where it lies under the message: a PDF or a web page in a frame a page tall */
-.ap-doc{flex:none;width:100%;max-width:640px;height:min(860px,110vh);display:flex;flex-direction:column}
+/* the email's letter, read where it lies under the message: a PDF or a web page in a frame as tall as the pane (the
+   scroll is its size container), so scrolled to, its pages are one scroll that fills the pane */
+.ap-scroll{container-type:size}
+.ap-doc{flex:none;width:100%;max-width:640px;height:calc(100cqh - var(--pad-paper) * 2);min-height:320px;display:flex;flex-direction:column}
 .ap-doc .lib.fv-embed .fv-frame{margin:0;border-radius:var(--r-paper);box-shadow:var(--lift-paper);background:var(--shot-page)}
 .ap-doc .lib.fv-embed .fv-none{border-radius:var(--r-paper);background:var(--surface)}
 /* the email it answers, a row of the envelope: who and when, its first line, the whole of it on a press */
@@ -262,7 +264,9 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .ap-orig-head{min-height:32px}
   .ap-mail{padding:var(--s-5) var(--s-4) var(--s-6)}
   .ap-sheet{padding:var(--s-8) var(--s-6)}
+  .ap-scroll{container-type:normal}
   .ap-doc{height:min(720px,90vh)}
+  .ap-doc:has(.fv-none){height:auto;min-height:0}
   .ap-doc .lib.fv-embed .fv-frame{border-radius:0;box-shadow:none}
   /* the decision holds the bottom: name, what Approve does and the face on one line, two buttons half the width each */
   .answer.dcx{padding:var(--s-0) 0 0 var(--s-1h)}
