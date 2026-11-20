@@ -19,7 +19,7 @@ import { whoHref } from '@/features/team/routing';
 import { DETAILS, earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face, Go, Mark } from './parts';
-import { pipelineStagesQuery, waitingQuery, type TaskData } from './queries';
+import { retiredStagesQuery, waitingQuery, type TaskData } from './queries';
 
 /* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
    and next, and "⋯" with the rest. */
@@ -28,8 +28,10 @@ const failed = (r: Result, action?: { label: string; run: () => void }) => toast
 
 /** The task's pipeline's stages, in order. */
 function useStages(t: TaskData) {
-  const stages = useQuery(pipelineStagesQuery);
-  return stages.data?.find((p) => p.id === t.pipeline_id)?.stages ?? [];
+  const id = t.pipeline_id ?? '';
+  const stages = useQuery({ ...pipelinesQuery, select: (pipelines) => pipelines.find((p) => p.id === id)?.stages });
+  const retired = useQuery({ ...retiredStagesQuery(id), enabled: !!id && stages.isSuccess && !stages.data });
+  return stages.data ?? retired.data ?? [];
 }
 
 /** The rest of the where line after the pipeline (parts-kit.js where): the stage, who has it, how long, Late. */
@@ -203,8 +205,8 @@ export function OwnerPick({ t }: { t: TaskData }) {
 }
 
 /** Flow's order: the tasks that wait on the person, and where Flow goes once this one is off their hands. */
-function useFlowOrder(t: TaskData) {
-  const waiting = useQuery(waitingQuery);
+function useFlowOrder(t: TaskData, enabled = true) {
+  const waiting = useQuery({ ...waitingQuery, enabled });
   const navigate = useNavigate();
   const rows = waiting.data ?? [];
   const i = rows.findIndex((w) => w.id === t.id);
@@ -278,7 +280,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
   const mayDelete = t.mover || (!!me && t.requester_id === me);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const order = useFlowOrder(t);
+  const order = useFlowOrder(t, flow && t.status === 'open');
   const give = useGive(t, order.next);
   const back = earlierStages(useStages(t), t.stage_id);
 

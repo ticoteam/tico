@@ -5,14 +5,22 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
+import { flowQuery } from '@/features/tasks/routing';
 import { useFollow } from '@/live/follow';
-import type { TaskData } from './queries';
+import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
+import { loadTask } from './routing';
 import { TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
 type Reply = { status: number; body: unknown };
+function holdReply() {
+  let resolve!: (reply: Reply) => void;
+  const promise = new Promise<Reply>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 const calls: string[] = [];
 const sent: { url: string; body: Record<string, unknown> }[] = [];
 function serve(reply: (url: string, method: string, body: Record<string, unknown>) => Reply | Promise<Reply>) {
@@ -113,6 +121,48 @@ afterEach(() => {
   vi.mocked(useFollow).mockClear();
 });
 
+describe('task route loading', () => {
+  it.each([['spec', 'f1'], [undefined, 'f2']] as const)('starts the selected page read while files are pending for tab %s', async (tab, file) => {
+    const manifest = holdReply();
+    serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : base(url)));
+    const loaded = loadTask(queryClient, '12', tab);
+    const finished = vi.fn();
+    void loaded.then(finished);
+    try {
+      await waitFor(() => expect(finished).toHaveBeenCalledWith({ task: expect.objectContaining({ id: 't1' }), tab: tab ?? 'qa-report' }));
+      expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1');
+      expect(calls).toContain(`GET /api/v2/pages/${file}`);
+      expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.fetchStatus).toBe('fetching');
+    } finally {
+      manifest.resolve({ status: 200, body: { files: [] } });
+      await loaded;
+      await queryClient.prefetchQuery(taskFilesQuery('t1'));
+    }
+  });
+
+  it.each(['attachment-pdf', 'details', undefined])('waits for the files when the route needs them for tab %s', async (tab) => {
+    const manifest = holdReply();
+    const t = task();
+    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6'] }];
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return manifest.promise;
+      return base(url);
+    });
+    const loaded = loadTask(queryClient, '12', tab);
+    const finished = vi.fn();
+    void loaded.then(finished);
+    try {
+      await waitFor(() => expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1'));
+      expect(finished).not.toHaveBeenCalled();
+      expect(calls.some((url) => url.startsWith('GET /api/v2/pages/'))).toBe(false);
+    } finally {
+      manifest.resolve({ status: 200, body: { files: [{ id: 'f6', name: 'attachment.pdf', versions: [] }] } });
+    }
+    await expect(loaded).resolves.toMatchObject({ tab: tab ?? 'attachment-pdf' });
+  });
+});
+
 describe('one open task', () => {
   it('opens on the page that waits on the person, with every tab a link, and follows the task @s51 @s54 @s74 @s780 @s789', async () => {
     serve(base);
@@ -145,12 +195,36 @@ describe('one open task', () => {
     expect(within(due).getByRole('button', { name: 'None' })).toBeTruthy();
   });
 
+  it('uses one pipeline list and skips the Flow ordering read on a regular task', async () => {
+    serve(base);
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Stage: Review' }));
+    expect(await screen.findByRole('menuitem', { name: 'Build' })).toBeTruthy();
+    expect(calls.filter((url) => url.startsWith('GET /api/v2/pipelines'))).toEqual(['GET /api/v2/pipelines']);
+    expect(calls).not.toContain('GET /api/v2/needs-you?limit=200');
+  });
+
+  it('loads the stages of an ended task’s retired pipeline by id', async () => {
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(task({ status: 'done' })) };
+      if (url.endsWith('/api/v2/pipelines')) return { status: 200, body: { pipelines: [] } };
+      if (url.endsWith('/api/v2/pipelines/p1')) return { status: 200, body: { pipeline: { stages: [{ id: 's1', name: 'Build', side: false }] } } };
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    fireEvent.click(await screen.findByRole('button', { name: 'Stage: Done' }));
+    expect(await screen.findByRole('menuitem', { name: 'Build' })).toBeTruthy();
+    expect(calls).toContain('GET /api/v2/pipelines/p1');
+  });
+
   it('inside Flow, keeps the tab in the search @s126', async () => {
     serve(base);
+    await queryClient.prefetchQuery(flowQuery);
     show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
     const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
     expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/flow/12?tab=spec');
     expect(screen.getByRole('link', { name: 'Flow' }).getAttribute('href')).toBe('/flow');
+    expect(calls.filter((url) => url === 'GET /api/v2/needs-you?limit=200')).toHaveLength(1);
   });
 
   it('shows an approval at once and takes it back with the server’s reason when refused @s109', async () => {
@@ -343,6 +417,27 @@ describe('a page’s versions, a new page and a picture', () => {
     expect(marked.getAttribute('srcdoc')).toMatch(/<del[^>]*>email\.<\/del> <ins[^>]*>email or phone\.<\/ins>/);
     expect(screen.getByRole('button', { name: '1 change' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: 'Next change' })).toBeTruthy();
+  });
+
+  it('shows the selected older version even if the read for its change count fails', async () => {
+    const t = withVersions();
+    const doc = t.documents![0]!;
+    doc.version = 3;
+    doc.versions = [...versions, { ...versions[1]!, n: 3 }];
+    const selected = holdReply();
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
+      if (url.endsWith('/api/v2/files/f1?v=1')) return { status: 503, body: {} };
+      if (url.endsWith('/api/v2/files/f1?v=2')) return selected.promise;
+      return base(url);
+    });
+    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?v=2');
+    try {
+      await waitFor(() => expect(queryClient.getQueryState(pageVersionQuery('f1', 1).queryKey)?.status).toBe('error'));
+    } finally {
+      selected.resolve(html('/api/v2/files/f1?v=2')!);
+    }
+    expect((await frame('Spec, v2')).getAttribute('srcdoc')).toContain('Sign in with your email or phone.');
   });
 
   it('lets the reader leave a linked comparison with no text changes', async () => {
