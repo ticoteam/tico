@@ -15,7 +15,18 @@ def test_resolution_order_bot_then_company_then_first_provider_then_error():
     assert P.resolve(company, {"runtime": "default", "model": "default"}) == ("codex", "gpt-6-sol")
     assert P.resolve(company, {"runtime": "claude"}) == ("claude", "claude-opus-5-5")
     first = P._record({"enabled": ["google", "openai"]})
-    assert P.resolve(first, {}) == ("gemini", "gemini-3.8-flash")
+    assert P.resolve(first, {}) == ("gemini", "gemini-4-neon")
+    assert P.fill(first, {}) == {"runtime": "gemini", "model": "gemini-4-neon", "harness": "antigravity"}
+    assert P.fill(first, {"runtime": "gemini", "harness": "gemini"}) == {
+        "runtime": "gemini",
+        "model": "gemini-4-neon",
+        "harness": "antigravity",
+    }
+    assert P.default_fallbacks(first)[0] == {
+        "runtime": "gemini",
+        "harness": "antigravity",
+        "model": "gemini-4-neon",
+    }
     with pytest.raises(P.NoProvider) as refused:
         P.resolve(none, {})
     assert "Settings > Computers" in refused.value.detail and refused.value.status == 409
@@ -194,3 +205,57 @@ def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
     assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
     assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
+
+
+def test_gemini_4_neon_is_antigravity_only_recommended_and_claims_with_xhigh(api):
+    from backend import updates
+    from backend.tests.helpers.api import assign, claim, post, put, ready, runner
+
+    put(
+        api, "providers", {"enabled": ["google"], "runtime": "gemini", "model": "gemini-4-neon", "expected_revision": 0}
+    )
+    listed = {
+        m["id"]: m for m in api.get("/api/v2/models", headers={"Authorization": "Bearer ana-test"}).json()["models"]
+    }
+    neon, flash = listed["gemini-4-neon"], listed["gemini-3.8-flash"]
+    assert neon["harnesses"] == ["antigravity"] and neon["efforts"] == ["low", "medium", "high", "xhigh"]
+    assert neon.get("recommended") is True and not flash.get("recommended")
+    assert flash["harnesses"] == ["gemini", "antigravity"]
+    # Direct Gemini API drafts skip Antigravity-only Neon for a Gemini-harness model.
+    assert updates.own_model(
+        P._record({"enabled": ["google"], "runtime": "gemini", "model": "gemini-4-neon"}), {"GEMINI_API_KEY": "k"}
+    ) == (
+        "google",
+        "k",
+        "gemini-3.8-flash",
+    )
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
+    refused = api.post(
+        "/api/v2/bots/ops/model",
+        json={"model": "gemini-4-neon", "harness": "gemini", "expected_revision": revision},
+        headers={"Authorization": "Bearer ana-test"},
+    )
+    assert refused.status_code == 422
+    saved = post(
+        api,
+        "bots/ops/model",
+        {"model": "gemini-4-neon", "effort": "xhigh", "expected_revision": revision},
+    )
+    assert (saved["runtime"], saved["harness"], saved["model"], saved["effort"]) == (
+        "gemini",
+        "antigravity",
+        "gemini-4-neon",
+        "xhigh",
+    )
+    post(api, "chat/ops", {"text": "Say hello."})
+    config = claim(api, r)["config"]
+    assert (config["runtime"], config["harness"], config["model"], config["reasoning_effort"]) == (
+        "gemini",
+        "antigravity",
+        "gemini-4-neon",
+        "xhigh",
+    )

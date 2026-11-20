@@ -231,7 +231,7 @@ def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, comp
         # Another conversation is another warm scope: its own process and home, so a provider conversation of its own.
         assert calls[1]["pid"] == calls[0]["pid"]
         assert calls[-1]["pid"] != calls[0]["pid"] and all("--conversation" not in c["argv"] for c in calls)
-        assert calls[-1]["argv"][calls[-1]["argv"].index("--model") + 1] == "gemini-3.8-flash-low"
+        assert calls[-1]["argv"][calls[-1]["argv"].index("--model") + 1] == "gemini-4-neon-low"
     elif computer.harness in ("pi", "cursor"):
         # Pi's session id and Cursor's chat id are the thread: its turns name the first one, another thread its own.
         option = "--session-id" if computer.harness == "pi" else "--resume"

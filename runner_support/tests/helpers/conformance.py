@@ -24,7 +24,7 @@ MODELS = {
     "claude": "claude-sonnet-5",
     "codex": "gpt-5.5",
     "gemini": "gemini-3.8-flash",
-    "antigravity": "gemini-3.8-flash",
+    "antigravity": "gemini-4-neon",
     "musecode": "muse-spark-1.3",
     "pi": "kimi-k3",
     "cursor": "cursor-auto",

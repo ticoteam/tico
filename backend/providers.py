@@ -236,12 +236,22 @@ MODEL_CATALOG = tuple(
             "default_effort": "high",
         },
         {
+            "id": "gemini-4-neon",
+            "context_tokens": 1_048_576,
+            "label": "gemini 4 neon",
+            "runtime": "gemini",
+            "provider": "google",
+            "harnesses": ("antigravity",),
+            "recommended": True,
+            "efforts": ("low", "medium", "high", "xhigh"),
+            "default_effort": "high",
+        },
+        {
             "id": "gemini-3.8-flash",
             "context_tokens": 1_048_576,
             "label": "gemini 3.8 flash",
             "runtime": "gemini",
             "provider": "google",
-            "recommended": True,
             "efforts": ("low", "medium", "high"),
             "default_effort": "high",
         },
@@ -1091,7 +1101,9 @@ def default_fallbacks(record):
         if runtime in seen or not model:
             continue
         seen.add(runtime)
-        rows.append({"runtime": runtime, "harness": runtime, "model": model})
+        supported = tuple((MODEL_BY_ID.get(model) or {}).get("harnesses") or ())
+        harness = runtime if not supported or runtime in supported else supported[0]
+        rows.append({"runtime": runtime, "harness": harness, "model": model})
     # Except under the two choices that include the Gateway: it goes last, after every signed-in provider
     # (backend/models_preset.py). A runner without a relay for the turn leaves it out (gateway_relay.rs admit).
     gateway = models_preset.fallback_row(record)
@@ -1281,7 +1293,12 @@ def fill(record, config):
         runtime, model = resolve(record, config)
     except ProviderError:
         return config
-    return {**config, "runtime": runtime, "model": model}
+    out = {**config, "runtime": runtime, "model": model}
+    supported = tuple((MODEL_BY_ID.get(model) or {}).get("harnesses") or ())
+    harness = str(config.get("harness") or "").strip()
+    if supported and (harness or runtime) not in supported:
+        out["harness"] = supported[0]
+    return out
 
 
 def bot_choice(c, settings, config, record=None):
