@@ -71,7 +71,7 @@ TAGS = {
     'Support': 'Reports to Tico support (docs/support.md).',
     'Rules': "Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
     "due dates and sources.",
-    'Risk': "Risks: tags of kind risk that any task can carry, the matter facts of each tagged task, and the rules and "
+    'Risk': "Risks: tags of kind risk that any task can carry, the matter facts and key dates of each tagged task, and the rules and "
     "documents linked to a risk.",
     # Page history (backend/page_history.py): a person's own, kept 30 days; Tico reads it as the person.
     'Page history': "The pages the signed-in person opened in the app in the last 30 days, newest first, kept so Tico "
