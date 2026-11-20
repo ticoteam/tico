@@ -124,18 +124,20 @@ def test_primed_computers_are_each_read_once_and_give_each_bot_what_it_reads_alo
     slugs = ["ops", "finance", "cpo", "inbox"]
     with store.read_transaction() as c:
         alone = {slug: views.machine(c, slug) for slug in slugs}
-    primed, after = [], []
+    seen = []
     with store.read_transaction() as c:
-        c.set_trace_callback(primed.append)
+        c.set_trace_callback(seen.append)  # once: setting one clears the snapshot's cache (store.pooled)
         views.prime_machines(c, slugs)
-        c.set_trace_callback(after.append)
+        primed = len(seen)
         together = {slug: views.machine(c, slug) for slug in slugs}
         c.set_trace_callback(None)
+    primed, after = seen[:primed], seen[primed:]
     assert together == alone
     assert alone["ops"]["online"] and alone["ops"]["machine"]["runner_id"] == one["runner_id"]
     assert not alone["cpo"]["online"] and alone["cpo"]["machine"]["runner_id"] == two["runner_id"]
     assert alone["inbox"]["machine"] is None
-    assert len([sql for sql in primed if "runners_with_state" in sql]) == 1, primed
+    computers = [sql for sql in primed if "runners_with_state" in sql]
+    assert len(computers) == 1 and "assignments" not in computers[0], computers  # not once per bot, through the join
     assert not [sql for sql in after if "assignments" in sql], after
 
 
