@@ -494,3 +494,29 @@ def test_json_receipt_replays_across_upgrade(api):
         )
     again = api.post(url, json=body, headers=h)
     assert again.status_code == 200 and again.json() == first.json()
+
+
+@pytest.mark.parametrize('rehearsal', [False, True])
+def test_bytes_no_place_holds_answer_404_not_a_503_to_retry(api, rehearsal):
+    """A version whose bytes are on no disk or bucket this server reads (a rehearsal copy has no attachments) is a 404
+    that says so, not a 503 that invites a retry; its metadata still reads. Bytes behind a bucket that failed stay 503."""
+    tid = task(api)
+    first = attach(api, tid, 'plan.md', b'First plan')
+    attach(api, tid, 'plan.md', b'Second plan')
+    blobs = api.app.state.blobs
+    blobs.rehearsal = rehearsal
+    with api.app.state.store.read() as c:
+        series, digest = c.execute(
+            'SELECT v.file_id, b.digest FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id WHERE v.blob_id=?',
+            (first,),
+        ).fetchone()
+    (blobs.directory / blobs.key(digest)).unlink()
+    h = headers('ana-test')
+    assert api.get(f'/api/v2/files/{series}/meta?v=1', headers=h).status_code == 200
+    missing = api.get(f'/api/v2/files/{series}?v=1', headers=h)
+    assert missing.status_code == 404 and missing.json()['error']['code'] == 'file_missing', missing.text
+    assert ('rehearsal' in missing.json()['error']['detail']) is rehearsal
+    assert api.get(f'/api/v2/files/{series}?v=2', headers=h).content == b'Second plan'
+    blobs._earlier = [object()]  # an earlier bucket may hold it: that read failing is still worth a retry
+    blobs._open_earlier = lambda digest, span: None
+    assert api.get(f'/api/v2/files/{series}?v=1', headers=h).status_code == 503

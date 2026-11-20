@@ -1811,7 +1811,10 @@ class Files:
             "LEFT JOIN task_file_reviews r ON r.file_id=b.id AND r.version=1 WHERE a.task_id=? "
             "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)",
             (task_id,),
-        )
+        ).fetchall()
+        # Each attachment's checks below read its links and the pages it may hold: all of them together, once.
+        privacy.prime_blobs(c, [b["id"] for b in assets])
+        prime_page_references(c, [b["id"] for b in assets])
         for b in assets:
             if all_pages and len(out) >= limit:
                 break
