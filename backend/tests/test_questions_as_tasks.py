@@ -1,0 +1,314 @@
+"""Questions as tasks (backend/questions.py): with the company switch on, a bot's question to a person is a task filed
+under the task it works on, answered in one write that relays the answer, restarts the parent and wakes the bot once.
+Synthetic rows only: the fictional company's people and bots."""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from backend import late_rule
+from backend import question_marks as QM
+from backend import questions as Q
+from backend import task_engine as E
+from backend import waiting_on as W
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
+    not_a_friday,
+    ruled,
+    sql,
+    task_for_ops,
+)
+
+ANA, BEN, CARA = X.ANA, "human:ben", "human:cara"
+BUILDER, REVIEWER, MANAGER = "bot:builder", "bot:reviewer", "bot:manager"
+START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)
+ASKED = "Should the launch note go out on Friday?\nBoth drafts are on the task."
+
+
+@pytest.fixture
+def c(company, time_machine):
+    time_machine.move_to(START, tick=False)
+    with company.transaction() as conn:
+        Q.set_enabled(conn, True, H.TICO_ACTOR)
+        yield conn
+
+
+@pytest.fixture
+def general(c):
+    for slug in ("builder", "reviewer", "manager"):
+        X.bot(c, slug)
+    return X.pipeline(c, manager=MANAGER)
+
+
+def _parent(c, title="Write the launch note", by=ANA):
+    row = X.new_task(c, by, title, assignee=BUILDER)
+    X.ran(c, row["id"], BUILDER)
+    return E.task(c, row["id"])
+
+
+def _ask(c, parent, bot=BUILDER, person=ANA, text=ASKED, **more):
+    return Q.ask(c, bot, parent["id"], person, text, **more)
+
+
+def _queued(c, bot):
+    return c.execute("SELECT COUNT(*) FROM jobs WHERE bot_id=? AND state='queued'", (H.actor_id(bot),)).fetchone()[0]
+
+
+def test_an_ask_files_a_question_the_parent_waits_on(c, general):
+    parent = _parent(c)
+    asked = _ask(c, parent, link_url="https://pay.example/login")
+    task = E.task(c, asked["task_id"])
+    assert (task["owner_id"], task["requester_id"], task["title"]) == (ANA, BUILDER, ASKED.splitlines()[0])
+    assert task["body"] == ASKED.splitlines()[1]
+    # Not filed work: the filed-task holds and wakes never see it.
+    assert c.execute("SELECT 1 FROM links WHERE to_task_id=?", (asked["task_id"],)).fetchone() is None
+    parent = E.task(c, parent["id"])
+    assert [(w.state, w.who, w.ask) for w in W.of(c, parent)] == [(W.PERSON, ANA, True)]
+    assert W.turn(c, parent) is None and W.persons_turn(W.of(c, parent))
+    with pytest.raises(H.Refused):
+        QM.refuse_ending(c, BUILDER, parent["id"])
+    [item] = [i for i in W.needs(c, ANA) if i["kind"] == Q.KIND]
+    assert item["task_id"] == asked["task_id"] and item["parent"]["id"] == parent["id"]
+    assert (item["asker"], item["round"], item["link_url"]) == (BUILDER, 1, "https://pay.example/login")
+    # The parent's own asks list it once, as the question item, never as an ask on the parent.
+    assert not [i for i in W.needs(c, ANA) if i.get("task_id") == parent["id"]]
+
+
+def test_asking_again_reopens_the_same_question_and_two_bots_ask_two(c, general):
+    parent = _parent(c, by=REVIEWER)  # both bots are its parties: only a party files under a task
+    first = _ask(c, parent)
+    again = _ask(c, parent, text="Friday or Monday, then?")
+    assert again["task_id"] == first["task_id"] and again["round"] == 2
+    Q.answer(c, first["task_id"], ANA, "Monday.", 2)
+    third = _ask(c, E.task(c, parent["id"]), text="And the time?")
+    assert (third["task_id"], third["round"], third["state"]) == (first["task_id"], 3, "open")
+    assert E.task(c, first["task_id"])["status"] == "open"
+    said = [m["body"] for m in H.task_comments(c, first["task_id"]) if m["sender_id"] == BUILDER]
+    assert said == [ASKED, "Friday or Monday, then?", "And the time?"]  # old wording stays in its chat
+    other = _ask(c, E.task(c, parent["id"]), bot=REVIEWER, text="Is the tone right?")
+    assert other["task_id"] != first["task_id"]
+    assert sorted(q["asker_id"] for q in Q.on_parent(c, E.task(c, parent["id"]))) == [BUILDER, REVIEWER]
+
+
+def test_an_answer_ends_it_relays_it_restarts_the_parent_and_wakes_the_bot_once(c, general):
+    parent = _parent(c)
+    asked = _ask(c, parent)
+    before = E.task(c, parent["id"])["visit"]
+    assert _queued(c, BUILDER) == 0
+    Q.answer(c, asked["task_id"], ANA, "Yes, Friday.", 1)
+    row = Q.get(c, asked["task_id"])
+    assert (row["ended_reason"], row["answered_by_id"]) == (Q.ANSWERED, ANA)
+    assert E.task(c, asked["task_id"])["status"] == "done"
+    relayed = [m for m in H.task_comments(c, parent["id"]) if m["body"].startswith("Re: ")]
+    assert [(m["sender_id"], m["body"]) for m in relayed] == [
+        (ANA, "Re: Should the launch note go out on Friday?: Yes, Friday.")
+    ]
+    parent = E.task(c, parent["id"])
+    assert W.turn(c, parent) == BUILDER
+    assert _queued(c, BUILDER) == 1
+    assert parent["visit"]["progress_mark"] != before["progress_mark"]
+    visit = parent["visit"]
+    assert late_rule.last_answers(c, [(visit["id"], parent["id"], visit["entered_at"])]) == {
+        visit["id"]: row["answered_at"]
+    }
+    assert Q.read(c, asked["task_id"], "1")["answer_text"] == "Yes, Friday."
+
+
+def test_an_answer_while_the_bot_still_waits_on_another_question_wakes_nobody(c, general):
+    parent = _parent(c)
+    first = _ask(c, parent)
+    _ask(c, E.task(c, parent["id"]), person=BEN, text="Can you check the numbers?")
+    Q.answer(c, first["task_id"], ANA, "Yes.", 1)
+    assert _queued(c, BUILDER) == 0
+    assert W.turn(c, E.task(c, parent["id"])) is None
+
+
+def test_an_old_round_or_someone_else_is_told_to_look_again(c, general):
+    asked = _ask(c, _parent(c))
+    _ask(c, E.task(c, Q.get(c, asked["task_id"])["parent_id"]), text="Monday instead?")
+    for by, at in ((ANA, 1), (BEN, 2)):
+        with pytest.raises(Q.QuestionError) as refused:
+            Q.answer(c, asked["task_id"], by, "Yes.", at)
+        assert refused.value.status == 409
+    with pytest.raises(Q.QuestionError) as automation:
+        Q.answer(c, asked["task_id"], ANA, "Yes.", 2, via="automation")
+    assert automation.value.status == 403
+    assert Q.get(c, asked["task_id"])["ended_reason"] is None
+
+
+def test_a_private_parent_its_person_cannot_read_keeps_the_answer_on_the_question(c, general):
+    made = H.task_create(c, BUILDER, "Renew the lease", "", BUILDER, private=True, lint=False)
+    X.ran(c, made["id"], BUILDER)
+    asked = _ask(c, E.task(c, made["id"]), person=CARA, checked=False)  # lets Cara in, as a ❓ does
+    c.execute("UPDATE tasks SET readers='[]' WHERE id=?", (made["id"],))
+    Q.answer(c, asked["task_id"], CARA, "Renew it for a year.", 1)
+    parent_chat = H.task_comments(c, made["id"])
+    assert not [m for m in parent_chat if "Renew it for a year" in (m.get("body") or "")]
+    told = c.execute(
+        "SELECT body FROM messages WHERE wake_key LIKE ?", (f"{made['id']}:%:question:{asked['task_id']}:1",)
+    ).fetchall()
+    assert len(told) == 1 and asked["task_id"] in told[0][0]
+
+
+def _two_stages(c):
+    stage = {"owner": "assignee", "expected_minutes": 60, "requirements": [{"kind": "owner_done"}]}
+    X.pipeline(c, "dev", "Dev", stages=({"name": "Build", **stage}, {"name": "Check", **stage}), manager=MANAGER)
+    row = X.new_task(c, ANA, "Build the page", "dev", assignee=BUILDER)
+    X.ran(c, row["id"], BUILDER)
+    return E.task(c, row["id"])
+
+
+@pytest.mark.parametrize(
+    "ending",
+    ["withdrawn", "closed_by_person", "done_by_person", "parent_ended", "parent_moved", "asker_gone", "person_gone"],
+)
+def test_each_ending(c, general, ending):
+    parent = _two_stages(c) if ending == "parent_moved" else _parent(c)
+    asked = _ask(c, parent, person=BEN if ending == "person_gone" else ANA)
+    qid = asked["task_id"]
+    if ending == "withdrawn":
+        Q.withdraw(c, qid, BUILDER)
+    elif ending == "closed_by_person":
+        E.move(c, qid, E.CLOSED, ANA, "Not mine")
+    elif ending == "done_by_person":
+        E.move(c, qid, E.DONE, ANA, "Did it")
+    elif ending == "parent_ended":
+        E.move(c, parent["id"], E.CLOSED, ANA, "Not needed")
+    elif ending == "parent_moved":
+        E.move(c, parent["id"], E.NEXT, ANA, "On to checking")
+    elif ending == "asker_gone":
+        c.execute("UPDATE bots SET state='archived' WHERE id='builder'")
+        QM.clear_gone(c)
+    else:
+        X.left(c, BEN)
+        QM.clear_gone(c)
+    reason = {"closed_by_person": Q.WITHDRAWN, "done_by_person": Q.ANSWERED}.get(ending, ending)
+    assert Q.get(c, qid)["ended_reason"] == reason
+    assert E.task(c, qid)["status"] == ("done" if ending == "done_by_person" else "closed")
+    assert Q.on_parent(c, E.task(c, parent["id"])) == []
+    if ending in ("closed_by_person", "person_gone"):
+        assert _queued(c, BUILDER) == 1  # the bot is told on the parent
+
+
+def test_only_its_person_snoozes_it_and_their_snooze_hides_it(c, general):
+    asked = _ask(c, _parent(c))
+    with pytest.raises(H.Refused):
+        E.snooze(c, asked["task_id"], BUILDER, "Later")
+    E.snooze(c, asked["task_id"], ANA, "After lunch", "2030-01-07T13:00:00Z")
+    assert not [i for i in W.needs(c, ANA) if i["kind"] == Q.KIND]
+    [held] = [i for i in W.needs(c, ANA, "only") if i["kind"] == Q.KIND]
+    assert held["snoozed_until"] == "2030-01-07T13:00:00Z"
+
+
+def test_give_to_moves_it_to_another_person_and_never_to_a_bot(c, general):
+    asked = _ask(c, _parent(c))
+    Q.give(c, asked["task_id"], BEN, ANA)
+    assert Q.get(c, asked["task_id"])["person_id"] == BEN and E.task(c, asked["task_id"])["owner_id"] == BEN
+    with pytest.raises(H.Refused):
+        E.reassign(c, asked["task_id"], REVIEWER, BEN, "A bot can do it")
+    Q.answer(c, asked["task_id"], BEN, "Done.", 1)
+    assert Q.get(c, asked["task_id"])["answered_by_id"] == BEN
+
+
+def test_the_backfill_turns_each_open_task_question_mark_once(c, general):
+    parent = _parent(c)
+    mark = QM.ask(c, BUILDER, parent["id"], ANA, ASKED)
+    first = Q.backfill(c)
+    assert (first["before"]["open_task_marks"], first["after"]["open_task_marks"]) == (1, 0)
+    [turned] = first["turned"]
+    row = Q.get(c, turned["task_id"])
+    assert (row["source_mark_id"], row["parent_id"], row["person_id"], row["created_at"]) == (
+        mark["id"],
+        parent["id"],
+        ANA,
+        mark["created_at"],
+    )
+    assert QM.get(c, mark["id"])["cleared_reason"] == "question"
+    again = Q.backfill(c)
+    assert again["turned"] == [] and again["after"] == first["after"]
+
+
+# ---- through the API -------------------------------------------------------------------------------------------------
+
+
+def _switch(api, on):
+    with api.app.state.store.transaction() as conn:
+        Q.set_enabled(conn, on, H.TICO_ACTOR)
+
+
+def test_the_route_asks_a_mark_with_the_switch_off_and_a_question_task_with_it_on(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/questions", json={"to": "ana", "text": "Which tone?"}, headers=headers("ops-test")
+    )
+    assert r.status_code == 200, r.text
+    assert "question_task" not in r.json() and sql(api, "SELECT * FROM questions") == []
+    _switch(api, True)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ben", "text": "Which tone?", "link": "https://acme.example/drafts"},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    asked = r.json()["question_task"]
+    assert (asked["person"], asked["link_url"], asked["round"]) == ("human:ben", "https://acme.example/drafts", 1)
+    path = f"/api/v2/tasks/{asked['task_id']}/question/answer"
+    stale = api.post(path, json={"text": "Warm.", "round": 2}, headers=headers("ben-test"))
+    assert stale.status_code == 409, stale.text
+    done = api.post(path, json={"text": "Warm.", "round": 1}, headers=headers("ben-test"))
+    assert done.status_code == 200 and done.json()["question"]["state"] == "answered", done.text
+    read = api.get(f"/api/v2/tasks/{asked['task_id']}", headers=headers("ben-test")).json()["task"]["question"]
+    assert (read["state"], read["answered_by"], read["answer_text"]) == ("answered", "human:ben", "Warm.")
+
+
+def test_a_deleted_parent_ends_its_questions_and_a_deleted_question_releases_its_parent(c, general):
+    from backend import task_delete
+
+    parent = _parent(c)
+    asked = _ask(c, parent)
+    task_delete.delete_tasks(c, [asked["task_id"]], apply=True, actor=ANA, keep_work=True)
+    assert Q.get(c, asked["task_id"])["ended_reason"] == Q.WITHDRAWN
+    assert W.turn(c, E.task(c, parent["id"])) == BUILDER
+    again = _ask(c, E.task(c, parent["id"]), text="Which day, then?")
+    task_delete.delete_tasks(c, [parent["id"]], apply=True, actor=ANA, keep_work=True)
+    assert Q.get(c, again["task_id"])["ended_reason"] == Q.PARENT_ENDED
+
+
+def test_the_question_routes_reply_give_reassign_and_withdraw(ruled):
+    api, _ = ruled
+    _switch(api, True)
+    task = task_for_ops(api)
+
+    def ask(text):
+        r = api.post(
+            f"/api/v2/tasks/{task['id']}/questions", json={"to": "ben", "text": text}, headers=headers("ops-test")
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["question_task"]
+
+    asked = ask("Which tone?")
+    qid = asked["task_id"]
+    # Ben's reply in the question's own chat is his answer to the round open now.
+    r = api.post(f"/api/v2/tasks/{qid}/comments", json={"text": "Warm."}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    [row] = sql(api, "SELECT ended_reason, answered_by_id FROM questions WHERE task_id=?", (qid,))
+    assert (row["ended_reason"], row["answered_by_id"]) == ("answered", "human:ben")
+    assert ask("And the length?")["round"] == 2
+    r = api.post(f"/api/v2/tasks/{qid}/question/give", json={"to": "cara"}, headers=headers("ben-test"))
+    assert r.status_code == 200 and r.json()["question"]["person"] == "human:cara", r.text
+    version = sql(api, "SELECT version FROM tasks WHERE id=?", (qid,))[0]["version"]
+    r = api.post(
+        f"/api/v2/tasks/{qid}/owner",
+        json={"owner": "finance", "why": "A bot can do it", "version": version},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code >= 400 and Q.NOT_A_PERSON in r.text, r.text
+    r = api.post(f"/api/v2/tasks/{qid}/question/withdraw", json={"reason": "Found it"}, headers=headers("ben-test"))
+    assert r.status_code == 403, r.text
+    r = api.post(f"/api/v2/tasks/{qid}/question/withdraw", json={"reason": "Found it"}, headers=headers("ops-test"))
+    assert r.status_code == 200 and r.json()["question"]["state"] == "withdrawn", r.text
+    parent = api.get(f"/api/v2/tasks/{task['id']}", headers=headers("ops-test")).json()["task"]
+    assert parent["questions"] == []
