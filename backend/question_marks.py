@@ -148,6 +148,9 @@ def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object, *, closing
             return
     found = open_of(conn, by, task_id)
     if not found:
+        from . import questions
+
+        questions.refuse_ending(conn, by, task_id)  # and its open question there (backend/questions.py)
         return
     detail = STILL_OPEN.format(
         name=H.actor_name(conn, found["person_id"]), line=found["line"], message=found["message_id"]
@@ -228,7 +231,11 @@ def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
     """Clear each open ❓ (on `task_id`, or anywhere) whose person can no longer answer it: they left, lost sign-in, or
     can no longer read the chat (`cleared_reason` 'addressee_gone'). Nobody else is asked for them: on a task, its bot
     is handed the task back and told the question went nowhere, so it can ask someone who can. Run when the roster or
-    a task's readers change, and on each never-stuck pass for anything else. Returns the cleared marks' ids."""
+    a task's readers change, and on each never-stuck pass for anything else. Returns the cleared marks' ids. The open
+    questions there whose person or bot left end too (questions.end_gone)."""
+    from . import questions
+
+    questions.end_gone(conn, task_id)
     if task_id:
         found = conn.execute("SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (str(task_id),))
         gone = [m for m in (dict(r) for r in found) if not answerable(conn, m)]
@@ -564,6 +571,17 @@ def _check(
     return target
 
 
+def check(conn: sqlite3.Connection, bot: str, task_id: str, person: str, body: str, *, checked: bool = True) -> str:
+    """Every check a ❓ on a task runs before its message is written (`_check`), for a question asked as a task
+    (backend/questions.py). Returns the person."""
+    return _check(conn, bot, task_id, person, body, None, checked=checked)
+
+
+def addressee(conn: sqlite3.Connection, bot: str, person: str, task_id: str) -> str:
+    """The person a bot's question on a task may be given to (`_addressee`, as Give to checks it)."""
+    return _addressee(conn, bot, person, None, task_id)
+
+
 def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, checked: bool = True) -> Row:
     """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark, with
     `replaced` the open ❓ it cleared ({id, line, created_at}) or None.
@@ -678,8 +696,8 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
         return []
     meta: Any = H._json(refs, {}) or {}
     via: Any = cast(Row, meta).get("via") if refs and isinstance(meta, dict) else None
-    if via not in REPLY_VIA:
-        return []
+    if via not in REPLY_VIA or (isinstance(meta, dict) and cast(Row, meta).get("question_relay")):
+        return []  # a question's answer relayed onto its parent's chat answers that question only (questions.RELAY)
     room = room_of(conv)
     found = conn.execute(
         "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",

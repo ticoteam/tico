@@ -124,13 +124,17 @@ def ask_on(
     why: str,
 ) -> str:
     """`asker`, a bot, asks `person` `question` on `task`, with `why` it matters: its message on the task's chat, marked
-    ❓ (backend/question_marks.py). A person who may not read a private task is let in first, as an OK filed for a
-    person is (task_asks.ask_ok). Returns the mark's id."""
-    from . import question_marks
+    ❓ (backend/question_marks.py), or, with the company's questions_as_tasks on, a question filed under the task
+    (backend/questions.py). A person who may not read a private task is let in first, as an OK filed for a person is
+    (task_asks.ask_ok). Returns the mark's id, or the question task's."""
+    from . import question_marks, questions
 
     if not is_bot(asker):
         raise ValueError("only bots write questions")  # Tico never does (`author`)
     line, said = shaped(question, why)
+    if questions.enabled(conn):
+        filed = questions.ask(conn, asker, str(task["id"]), person, f"{line}\n\n{said}", checked=False)
+        return str(filed["task_id"])
     asked: Row = question_marks.ask(conn, asker, str(task["id"]), person, f"{line}\n\n{said}", checked=False)
     return str(asked["id"])
 

@@ -631,6 +631,8 @@ KEEP = (
             "ask_opinions",
             # A person's snooze of one ask in their own Needs you (backend/ask_snoozes.py): kept with its tasks.
             "ask_snoozes",
+            # What makes a task a question (backend/questions.py): kept with its tasks.
+            "questions",
             # Flow's suggested rules (removed): the old rows, read by nothing, kept with their pipelines.
             "flow_suggestions",
             "flow_suggestion_runs",
