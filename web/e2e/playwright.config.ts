@@ -8,8 +8,7 @@ export default defineConfig({
   // one server and one browser at a time: light on the machine, and nothing shared between journeys
   workers: 1,
   fullyParallel: false,
-  // a flaky journey is a broken journey: no retries
-  retries: 0,
+  // a flaky journey is a broken journey: Playwright's default of no retries stands
   timeout: 120_000,
   expect: { timeout: 15_000 },
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
