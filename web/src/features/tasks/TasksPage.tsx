@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActor, useActors } from '@/data';
+import { TaskSend, useTaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -372,15 +373,17 @@ const picker = (toggle: BodyProps['toggle'], id: string) =>
 
 function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: string | undefined; picked?: boolean; onPick?: (e: MouseEvent) => void }) {
   const mark = onPick ? <Pick on={!!picked} /> : markOf(t, me);
+  const send = useTaskSend(t);
   const inner = (
     <>
       <span className="card-title">{t.title}</span>
       <span className="card-foot">
-        {(mark || t.late || t.blocks?.length) && (
+        {(mark || t.late || t.blocks?.length || send) && (
           <span className="card-marks">
             {mark}
             {t.late && <LatePill />}
             <Blocks t={t} />
+            <TaskSend send={send} />
           </span>
         )}
         <span className="card-end">

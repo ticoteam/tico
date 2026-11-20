@@ -2,3 +2,4 @@
 export { TaskPage, TaskChat, TaskById, type TaskPageProps, type TaskChatProps } from './TaskPage';
 export { loadTask, taskRefQuery, taskDetailQuery, taskAddress, taskSearch, type TaskSearch } from './routing';
 export { useApprovalCards, approvalCard, type ApprovalScope } from './ThreadCards';
+export { SendMark, TaskSend, useTaskSend } from './sending';

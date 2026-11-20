@@ -7,3 +7,6 @@
 .toast.is-named{max-width:calc(100% - 48px)}
 .toast.is-named span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .toast.is-named span b{font-weight:var(--w-strong)}
+/* A long line (why an email was not sent) ends in an ellipsis inside the window. */
+.kit-toast{max-width:calc(100vw - 32px)}
+.kit-toast > span{min-width:0;overflow:hidden;text-overflow:ellipsis}

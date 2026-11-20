@@ -7,6 +7,7 @@ import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { PageBones } from './FileView';
 import { Go } from './parts';
+import { SendMark, useSendOf } from './sending';
 import { addressesOf, answeredQuery, emailFileUrl, emailSendQuery, type EmailFile, type Letter, type MailSend, type TaskData } from './queries';
 import { useMatterOf } from './Waiting';
 import { isWord, WordPages, WordSheet } from './Word';
@@ -24,6 +25,7 @@ const isDoc = (f: EmailFile) => isWord(f.name, f.type) || /^(application\/pdf|te
 
 export function Email({ task, send, part, at, lead }: { task: string; send: string; part?: number; at: { to: string; search: { tab?: string } }; lead?: ReactNode }) {
   const q = useQuery(emailSendQuery(task, send));
+  const kept = useSendOf(task);
   if (q.isError || q.data?.preview_complete === false)
     return (
       <Empty icon="alert" title="The email did not load">
@@ -66,6 +68,7 @@ export function Email({ task, send, part, at, lead }: { task: string; send: stri
       {lead}
       <div className="ap-env">
         <h2 className="ap-subj">{s.subject}</h2>
+        <SendMark send={send} approved={kept === send} />
         <dl className="ap-hdr">
           {s.mailbox.includes('@') && (
             <>

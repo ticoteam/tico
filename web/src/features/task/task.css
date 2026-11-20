@@ -285,3 +285,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .fv-bar>b{min-width:0;flex:1}
   .fv-bar>.grow{display:none}
 }
+/* An approved email's one quiet line: "Sending · 1:40", "Sent 5:23 AM"; on its tab under the subject, on a card in its marks. */
+.send-mark{color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums;white-space:nowrap}
+.send-mark.is-off{color:var(--ink-2)}
+.ap-env > .send-mark{display:block;margin-top:var(--s-0)}

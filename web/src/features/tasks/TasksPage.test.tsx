@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { writePref } from '@/prefs';
 import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
@@ -654,5 +655,27 @@ describe('Flow @s5 @s112', () => {
     show(<FlowPage />, '/flow');
     expect(await screen.findByRole('heading', { name: 'Nothing waits on you' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Tasks' }).getAttribute('href')).toBe('/tasks');
+  });
+});
+
+describe('an approved email on its card @s0', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('the card whose turn is the email says Sending with the time left, then Sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-11-19T13:20:00Z'));
+    let send: Record<string, unknown> = { state: 'pending', send_after: '2026-11-19T13:21:40Z', finished_at: null };
+    serve((url) => (url.endsWith('/api/v2/email/sends/s1') ? { status: 200, body: { send: { id: 's1', recipients: [], attachments: [], detail: '', ...send } } } : { status: 200, body: {} }));
+    // Approved on the matter's Send task, the matter's turn.
+    writePref('approved-sends.v1', { st1: { send: 's1', at: Date.now() } });
+    seed([task('a1', 7, 'Acme lease: reply letter', 's1', { turn: { state: 'tasks', who: 'st1', line: 'Send: Reply', requirement_id: null, ask: false, since: null, until: null } })]);
+    show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+    const card = (await screen.findByTitle('Acme lease: reply letter')).closest('.card') as HTMLElement;
+    expect(await within(card).findByText('Sending · 1:40')).toBeTruthy();
+    const at = '2026-11-19T13:21:41Z';
+    send = { state: 'sent', send_after: '2026-11-19T13:21:40Z', finished_at: at };
+    await act(() => queryClient.invalidateQueries({ queryKey: ['email-send-state', 's1'] }));
+    const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(at));
+    expect(await within(card).findByText(`Sent ${time}`)).toBeTruthy();
   });
 });
