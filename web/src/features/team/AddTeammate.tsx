@@ -5,23 +5,32 @@ import { useAction } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
+import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
 import { Icon, type IconName } from '@/kit/Icon';
-import { Pill } from '@/kit/Pill';
+import { IconButton } from '@/kit/IconButton';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
+import { SkeletonRows } from '@/kit/Skeleton';
 import type { AddStep } from './actions';
-import { computersQuery, groupsQuery, templatesQuery } from './queries';
+import { cloudAgentsQuery, computersQuery, groupsQuery, isOpenRequest, seatsQuery, templatesQuery } from './queries';
 import './team.css';
 
-const TITLE: Record<AddStep, string> = { pick: 'Add teammate', new: 'New agent', template: 'From a template', person: 'Invite a person' };
+const TITLE: Record<AddStep, string> = {
+  pick: 'Add teammate',
+  new: 'New agent',
+  template: 'From a template',
+  person: 'Invite a person',
+  cloud: 'Cloud agents',
+};
 const PICKS: [AddStep, IconName, string][] = [
   ['new', 'spark', 'New agent'],
   ['template', 'library', 'From a template'],
 ];
 
 /**
- * Add teammate (mates.js ADD): a new agent, one from a template, or an invite for a person. External agents are one
- * dimmed line. The step is in the address (`?add=`), so Back steps back.
+ * Add teammate (mates.js ADD): a new agent, one from a template, an invite for a person, or a cloud agent (the mock's
+ * External agent line, the old app's Cloud agents). The step is in the address (`?add=`), so Back steps back.
  */
 export function AddTeammate({
   step,
@@ -69,16 +78,17 @@ export function AddTeammate({
             <span>Invite a person</span>
             <Icon name="chevron" />
           </button>
-          <span className="add-person is-soon" aria-disabled="true">
+          <button type="button" className="add-person" onClick={() => to('cloud')} data-target="team:cloud">
             <Icon name="link" />
-            <span>External agent</span>
-            <Pill>Coming soon</Pill>
-          </span>
+            <span>Cloud agents</span>
+            <Icon name="chevron" />
+          </button>
         </>
       )}
       {step === 'new' && <NewAgent team={team} />}
       {step === 'template' && <FromTemplate team={team} />}
       {step === 'person' && <Invite team={team} />}
+      {step === 'cloud' && <CloudAgents team={team} />}
     </Dialog>
   );
 }
@@ -203,6 +213,72 @@ function Invite({ team: start }: { team: string }) {
           Send invite
         </Button>
       </div>
+    </>
+  );
+}
+
+/** Cloud agents (cloud-agents.ts): the coding agents others make. One Tico connects is added as an agent under the
+    team's lead; any other is requested, and a seat holds its place until Tico support connects it. */
+function CloudAgents({ team: start }: { team: string }) {
+  const { data: agents, isError } = useQuery(cloudAgentsQuery);
+  const { data: seats } = useQuery(seatsQuery);
+  const add = useAction('agents.addCloud');
+  const request = useAction('agents.requestCloud');
+  const cancel = useAction('agents.cancelCloudRequest');
+  const [team, setTeam] = useState(start);
+  // The row waiting on the server: one press at a time.
+  const [busy, setBusy] = useState('');
+  const press = async (id: string, go: () => Promise<unknown>) => {
+    setBusy(id);
+    try {
+      await go();
+    } finally {
+      setBusy('');
+    }
+  };
+  const asked = (id: string) => seats?.find((x) => x.agent === id && isOpenRequest(x) && (x.team ?? '') === team);
+  const into = team || undefined;
+  return (
+    <>
+      <TeamPick value={team} onValueChange={setTeam} />
+      {isError ? (
+        <Empty icon="alert" title="Cloud agents did not load" />
+      ) : !agents ? (
+        <SkeletonRows rows={8} label="Loading cloud agents" />
+      ) : (
+        <div className="tpl-list cloud-list" role="list" aria-label="Cloud agents">
+          {agents.map((a) => {
+            const seat = asked(a.id);
+            return (
+              <div key={a.id} role="listitem" className="tpl cloud" data-target={`cloud:${a.id}`}>
+                <Avatar kind="agent" name={a.name} size={28} />
+                <span className="tpl-name">{a.name}</span>
+                <span className="tpl-line" title={a.line}>
+                  {a.line}
+                </span>
+                <span className="cloud-act">
+                  {a.supported ? (
+                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => void press(a.id, () => add.run({ agent: a.id, team: into }))}>
+                      Add
+                    </Button>
+                  ) : seat ? (
+                    <>
+                      <span className="cloud-mark">{seat.request_state === 'canceling' ? 'Canceling' : 'Requested'}</span>
+                      <Menu trigger={<IconButton icon="more" label={`More on ${a.name}`} size="sm" quiet busy={busy === a.id} />}>
+                        <MenuItem label="Cancel request" icon="close" onSelect={() => void press(a.id, () => cancel.run({ seat: seat.id }))} />
+                      </Menu>
+                    </>
+                  ) : (
+                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => void press(a.id, () => request.run({ agent: a.id, team: into }))}>
+                      Request
+                    </Button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

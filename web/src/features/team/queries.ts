@@ -9,11 +9,19 @@ import type {
   BrowserInputDone,
   BrowserOpen,
   BrowserOpened,
+  CloudAgent,
+  CloudAgentAdd,
+  CloudAgentAdded,
+  CloudAgentList,
+  CloudAgentRequest,
   ComputerScreen,
   Problem,
   ScreenMode,
   ScreenSession,
   ScreenSessionStart,
+  Seat as ChartSeat,
+  SeatCanceled,
+  SeatList,
   Task,
   TeammateAccessView,
 } from '@/api/schema';
@@ -1218,3 +1226,49 @@ export const slackQuery = (person: string) =>
     message to Tico (POST /api/v2/assistant/messages, at most 8000 characters), which makes it there (ui bot-details.ts). */
 export const TICO_TEXT_MAX = 8000;
 export const tellTico = (text: string) => api.post<unknown>('/api/v2/assistant/messages', { text });
+
+/* ---------------------------------------------------------------- cloud agents */
+
+/** The cloud coding agents (GET /api/v2/cloud-agents): a fixed list; the supported ones are added, the rest requested. */
+export const cloudAgentsQuery = queryOptions({
+  queryKey: ['team', 'cloud-agents'] as const,
+  queryFn: async ({ signal }): Promise<CloudAgent[]> => (await api.get<CloudAgentList>('/api/v2/cloud-agents', { signal })).agents,
+  staleTime: Infinity,
+});
+
+/** The open seats with their cloud agent request (GET /api/v2/seats): `agent` and `request_state` say what is asked. */
+export const seatsQuery = queryOptions({
+  queryKey: ['team', 'seats'] as const,
+  queryFn: async ({ signal }): Promise<ChartSeat[]> => (await api.get<SeatList>('/api/v2/seats', { signal })).seats,
+});
+
+/** A request still with Tico support: filed, being filed, or being canceled. Building and ready are on their way too. */
+export const isOpenRequest = (seat: Pick<ChartSeat, 'agent' | 'request_state'>) =>
+  !!seat.agent && !!seat.request_state && seat.request_state !== 'canceled';
+
+/** Add a supported agent as a Tico agent on its harness, under `reports_to` in `team` (POST /api/v2/cloud-agents/{id}/add). */
+export async function addCloudAgent(agent: string, body: CloudAgentAdd): Promise<CloudAgentAdded & { slug: string }> {
+  const made = await api.post<CloudAgentAdded & { slug: string }>(`/api/v2/cloud-agents/${at(agent)}/add`, body);
+  directoryAgain();
+  void queryClient.invalidateQueries({ queryKey: ['team'] });
+  return made;
+}
+
+/** Request an agent Tico does not connect yet: a Recruiting seat holds its place and Tico support hears of it. */
+export async function requestCloudAgent(agent: string, body: CloudAgentRequest): Promise<ChartSeat> {
+  const seat = await api.post<ChartSeat>(`/api/v2/cloud-agents/${at(agent)}/request`, body);
+  queryClient.setQueryData(seatsQuery.queryKey, (seats: ChartSeat[] | undefined) => seats && [...seats.filter((x) => x.id !== seat.id), seat]);
+  void queryClient.invalidateQueries({ queryKey: ['team'] });
+  return seat;
+}
+
+/** Withdraw a request: Tico support hears of it and the seat closes (POST /api/v2/seats/{id}/cancel-request). */
+export async function cancelCloudRequest(seat: string): Promise<SeatCanceled> {
+  const out = await write({
+    key: seatsQuery.queryKey,
+    optimistic: (seats: ChartSeat[] | undefined) => seats?.filter((x) => x.id !== seat),
+    send: (idempotencyKey) => api.post<SeatCanceled>(`/api/v2/seats/${at(seat)}/cancel-request`, {}, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: ['team'] });
+  return out;
+}
