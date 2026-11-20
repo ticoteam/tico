@@ -36,6 +36,10 @@ electronFuses:
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
+  # Flipping fuses breaks Electron's own ad-hoc signature, and an Apple-chip Mac kills an app whose signature does not
+  # match. This signs it ad-hoc again, so an unsigned build (no DESKTOP_MAC_CERT) still opens; a real identity signs
+  # over it.
+  resetAdHocDarwinSignature: true
 mac:
   target:
     - target: dmg
