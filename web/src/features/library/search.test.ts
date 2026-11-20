@@ -51,7 +51,9 @@ describe('library search', () => {
     const asked: string[] = [];
     vi.stubGlobal('fetch', async (url: string) => {
       asked.push(new URL(url, 'http://x').pathname);
-      if (url.startsWith('/api/v2/files/search')) return json({ results: [{ id: 'f1', title: 'frost-dates.csv' }] });
+      // a copy of the same file on another task reads the same: one row
+      if (url.startsWith('/api/v2/files/search'))
+        return json({ results: [{ id: 'f1', title: 'frost-dates.csv', updated_at: '2026-01-02T10:00:00Z' }, { id: 'f9', title: 'frost-dates.csv' }] });
       if (url.startsWith('/api/v2/entities/find/person')) return json({ rows: [{ id: 'c1', name: 'Robin Frost', type: 'person' }] });
       if (url.startsWith('/api/v2/entities/find/organization')) return json({ rows: [{ id: 'c2', name: 'Frost Farms', type: 'organization' }] });
       return json({});
@@ -59,6 +61,7 @@ describe('library search', () => {
     const files = await filesFind.find('frost', sig());
     const contacts = await contactsFind.find('frost', sig());
     expect(runs(files)).toEqual([['frost-dates.csv', { id: 'files.open', input: { file: 'f1' } }]]);
+    expect(files[0]!.meta).toBeTruthy(); // when it changed, as Docs show
     expect(contacts.map((h) => [h.title, h.meta, h.run])).toEqual([
       ['Robin Frost', 'Person', { id: 'contacts.open', input: { contact: 'c1', type: 'person' } }],
       ['Frost Farms', 'Organization', { id: 'contacts.open', input: { contact: 'c2', type: 'organization' } }],

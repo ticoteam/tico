@@ -132,7 +132,7 @@ export const docsFind = defineSearch({
   },
 });
 
-/** The server's file search (titles and text). */
+/** The server's file search (titles and text), one row per name. */
 export const filesFind = defineSearch({
   group: 'Files',
   order: 61,
@@ -141,12 +141,18 @@ export const filesFind = defineSearch({
     const words = q.trim().slice(0, 200);
     if (words.length < 2) return [];
     const { results } = await fetchFor(fileSearchQuery(words), signal);
-    return results.slice(0, HITS).map((f) => ({
-      key: `file:${f.id}`,
-      title: f.title,
-      lead: { icon: 'file' as const },
-      run: { id: 'files.open', input: { file: f.id } },
-    }));
+    // the server answers each copy and version of a file: rows that read the same are one, the newest first in its place
+    const seen = new Set<string>();
+    return results
+      .filter((f) => !seen.has(f.title) && !!seen.add(f.title))
+      .slice(0, HITS)
+      .map((f) => ({
+        key: `file:${f.id}`,
+        title: f.title,
+        meta: (f.updated_at && fmtDate(f.updated_at)) || undefined,
+        lead: { icon: 'file' as const },
+        run: { id: 'files.open', input: { file: f.id } },
+      }));
   },
 });
 

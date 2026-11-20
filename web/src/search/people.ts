@@ -7,6 +7,7 @@ import { matches } from './results';
 export const people = defineSearch({
   group: 'People',
   order: 50,
+  boost: 150,
   find: async (q) => {
     if (!q.trim()) return [];
     const d = await queryClient.ensureQueryData(directoryQuery);

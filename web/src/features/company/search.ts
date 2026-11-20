@@ -2,28 +2,23 @@ import { queryClient } from '@/data';
 import { defineSearch, type SearchHit } from '@/search/define';
 import { HITS } from '@/search/helpers';
 import { matches } from '@/search/results';
-import { floorQuery, goalsTreeQuery, productsQuery, strategyQuery } from './queries';
+import { goalsTreeQuery, productsQuery, strategyQuery } from './queries';
 
 const none = () => undefined;
 const lead = { icon: 'company' as const };
 
-/* Cmd+K: the Company's pipelines (from the Floor), goals, bets and products by name, each going to its page. */
+/* Cmd+K: the Company's goals, bets and products by name, each going to its page. Pipelines are Tasks' own group. */
 export const companySearch = defineSearch({
   group: 'Company',
   order: 70,
   find: async (q) => {
     if (!q.trim()) return [];
-    const [floor, tree, strategy, products] = await Promise.all([
-      queryClient.ensureQueryData(floorQuery).catch(none),
+    const [tree, strategy, products] = await Promise.all([
       queryClient.ensureQueryData(goalsTreeQuery).catch(none),
       queryClient.ensureQueryData(strategyQuery).catch(none),
       queryClient.ensureQueryData(productsQuery).catch(none),
     ]);
     const hits: SearchHit[] = [
-      ...(floor?.factories ?? [])
-        .flatMap((f) => f.pipelines)
-        .filter((p) => matches(p.name, q))
-        .map((p) => ({ key: `pipeline:${p.id}`, title: p.name, meta: 'Pipeline', lead, run: { id: 'tasks.open', input: { pipeline: p.id } } })),
       ...(tree?.goals ?? [])
         .filter((g) => matches(g.title, q))
         .map((g) => ({ key: `goal:${g.id}`, title: g.title, meta: 'Goal', lead, run: { id: 'goals.open', input: { goal: g.id } } })),

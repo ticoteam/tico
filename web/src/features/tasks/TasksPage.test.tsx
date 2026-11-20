@@ -445,6 +445,16 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(posts[1]?.body).toEqual({ ids: ['a1'], to: 'reopen' });
   });
 
+  it("search's New task lands with the box up; closing it takes new=1 out of the address", async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([task('a1', 7, 'Fix the export', 's2')]);
+    const router = show(<TasksPage pipeline="eng" search={{ new: 1 }} />, '/tasks/eng?new=1');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Title')).toBeTruthy();
+    fireEvent.keyDown(within(dialog).getByLabelText('Title'), { key: 'Escape' });
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('new'));
+  });
+
   it("a stage's + files the task, then moves it into that stage @s24", async () => {
     serve((url, method) => {
       if (method === 'POST' && url === '/api/v2/tasks') return { status: 200, body: { task: task('n1', 9, 'Check the copy', 's1') } };

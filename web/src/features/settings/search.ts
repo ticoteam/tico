@@ -13,6 +13,12 @@ export const settingsSearch = defineSearch({
       .map(([section, name]) => ({ section, title: `Settings, ${name}` }))
       .filter((s) => matches(s.title, q))
       .slice(0, HITS)
-      .map(({ section, title }) => ({ key: `settings:${section}`, title, lead: { icon: 'gear' as const }, run: { id: 'settings.open', input: { section } } }));
+      .map(({ section, title }) => ({
+        key: `settings:${section}`,
+        title,
+        name: title.slice(title.indexOf(', ') + 2),
+        lead: { icon: 'gear' as const },
+        run: { id: 'settings.open', input: { section } },
+      }));
   },
 });

@@ -11,6 +11,9 @@ export interface SearchHit {
   /** Stable for the thing it names ('task:412'); Recent keeps one of each. */
   key: string;
   title: string;
+  /** The thing's own name, when the title says more or less: "Billing" for "Settings, Billing", "#412" for a task.
+      Ranking reads it beside the title. */
+  name?: string;
   /** The right column: a stage, a time, a team. */
   meta?: string;
   lead?: Lead;
@@ -23,6 +26,9 @@ export interface SearchProvider {
   group: string;
   /** Lower comes first. */
   order: number;
+  /** Added to its best hit when the groups are ranked (results.ts rank): a teammate by name comes before a file or a
+      task that is named after them. */
+  boost?: number;
   /** It asks the server: the dialog waits for a pause in the typing before calling it. */
   remote?: boolean;
   /** From the cache where it can; a server search should go through the one cache too. */

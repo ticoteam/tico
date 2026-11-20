@@ -9,6 +9,9 @@
 .pal-field input{flex:1;min-width:0;border:0;outline:0;background:none;color:var(--ink);padding:0}
 .pal-field input::placeholder{color:var(--muted)}
 .pal-list{min-height:0;overflow:auto;scrollbar-width:none;padding:var(--s-1) var(--s-1h) var(--s-1h)}
+/* opened with nothing to show yet (no words, nothing used before): the field alone, no empty list under a line */
+.pal-list:empty{display:none}
+.pal:has(>.pal-list:empty)>.pal-field{border-bottom:0}
 .pal-set{display:contents}
 /* a group's name is bigger and heavier than its rows (Chris, Nov 18); its count stays small */
 .pal-group{height:38px;display:flex;align-items:flex-end;gap:var(--s-2);padding:0 var(--s-2) calc(var(--s-2) - 1px);color:var(--ink)}

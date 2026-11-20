@@ -5,6 +5,8 @@ import type { SearchHit, SearchProvider } from './providers';
 export interface Group {
   name: string;
   hits: SearchHit[];
+  /** The provider's boost (define.ts). */
+  boost?: number;
 }
 
 const RECENT_KEY = 'tico-next:search-recent';
@@ -20,9 +22,55 @@ export function matches(text: string, q: string): boolean {
   return words(q).every((w) => t.includes(w));
 }
 
+const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Leading marks a name may carry ("#concierge", "#412"), not part of what is typed. */
+const bare = (t: string) => t.replace(/^[^\p{L}\p{N}]+/u, '');
+
+/**
+ * How well a text answers the words, for ranking: 0 when a word is missing. The whole text, then its start, then the
+ * start of a word for every word, then anywhere; and among those a short text the words mostly fill beats a long one,
+ * so a teammate, a page or a setting by its name comes before a task that mentions it.
+ */
+export function score(text: string, q: string): number {
+  const t = text.toLowerCase().trim();
+  const ws = words(q);
+  if (!ws.length || !ws.every((w) => t.includes(w))) return 0;
+  const phrase = bare(ws.join(' '));
+  const name = bare(t);
+  const atWord = (w: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(bare(w) || w)}`, 'u').test(t);
+  const base = name === phrase ? 1000 : name.startsWith(phrase) ? 600 : ws.every(atWord) ? 400 : 200;
+  return base + Math.round(400 * Math.min(1, phrase.length / Math.max(1, name.length)));
+}
+
+/** A hit's score: by its title or its own name, whichever answers better. */
+export const hitScore = (h: SearchHit, q: string): number => Math.max(score(h.title, q), h.name ? score(h.name, q) : 0);
+
+const runKey = (h: SearchHit) => `${h.run.id}:${JSON.stringify(h.run.input)}`;
+
+/**
+ * The groups, best answer first: each by its best hit, ties in provider order (Actions last). Nothing shows twice: a
+ * thing two groups find stays in the better one, and an action that only opens a thing already found ("Open
+ * Engineering" beside the Engineering pipeline) is left out.
+ */
+export function rank(groups: Group[], q: string): Group[] {
+  const found = groups.filter((g) => g.name !== ACTIONS);
+  const runs = new Set(found.flatMap((g) => g.hits.map(runKey)));
+  const opens = new Set(found.flatMap((g) => g.hits.map((h) => `open ${h.title.toLowerCase()}`)));
+  const out = groups
+    .map((g) => (g.name === ACTIONS ? { ...g, hits: g.hits.filter((h) => !runs.has(runKey(h)) && !opens.has(h.title.toLowerCase())) } : g))
+    .filter((g) => g.hits.length);
+  const best = new Map(out.map((g) => [g, Math.max(...g.hits.map((h) => hitScore(h, q))) + (g.boost ?? 0)]));
+  const seen = new Set<string>();
+  return out
+    .map((g, i) => ({ g, i }))
+    .sort((a, b) => best.get(b.g)! - best.get(a.g)! || a.i - b.i)
+    .map(({ g }) => ({ ...g, hits: g.hits.filter((h) => !seen.has(runKey(h)) && !!seen.add(runKey(h))) }))
+    .filter((g) => g.hits.length);
+}
+
 /** The text cut into plain and matched runs, for `<mark>`. */
 export function highlight(text: string, q: string): { text: string; hit: boolean }[] {
-  const ws = words(q).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const ws = words(q).map(esc);
   if (!ws.length) return [{ text, hit: false }];
   return text
     .split(new RegExp(`(${ws.join('|')})`, 'gi'))
@@ -89,8 +137,8 @@ export async function gather(
   const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
   const found = new Map<SearchProvider, Group>();
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
-  const groups = () => [...from.flatMap((p) => found.get(p) ?? []), ...(acts.hits.length ? [acts] : [])];
-  if (acts.hits.length && !signal.aborted) early?.([acts]);
+  const groups = () => rank([...from.flatMap((p) => found.get(p) ?? []), ...(acts.hits.length ? [acts] : [])], q);
+  if (acts.hits.length && !signal.aborted) early?.(groups());
   await Promise.all(
     from.map(async (p) => {
       if (p.remote && !(await wait)) return;
@@ -102,7 +150,9 @@ export async function gather(
         return;
       }
       if (!hits.length || signal.aborted) return;
-      found.set(p, { name: p.group, hits });
+      // a list searched here, best first; a server's own order is its ranking and stays
+      if (!p.remote) hits = hits.map((h, i) => ({ h, i, s: hitScore(h, q) })).sort((a, b) => b.s - a.s || a.i - b.i).map(({ h }) => h);
+      found.set(p, { name: p.group, hits, ...(p.boost ? { boost: p.boost } : {}) });
       early?.(groups());
     }),
   );

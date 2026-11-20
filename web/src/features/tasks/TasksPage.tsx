@@ -1,5 +1,5 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, useActor } from '@/data';
@@ -94,6 +94,13 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   // A stage's count is the server's (under the filters, past what was read); a read without counts has only its rows.
   const countOf = (stage: string, loaded: number) => stageCount(tasks, stage, loaded) ?? (cut ? undefined : loaded);
   const onNew = () => setNewIn({ stage: null });
+  // search's "New task" lands here with `new=1`: the box is up, and closing it takes the word out of the address
+  const navigate = useNavigate();
+  const composing = newIn ?? (search.new ? { stage: null } : null);
+  const closeNew = () => {
+    setNewIn(null);
+    if (search.new) void navigate({ to: '.', search: ((prev: TasksSearch) => ({ ...prev, new: undefined })) as never, replace: true });
+  };
 
   const page = {
     ...head,
@@ -138,13 +145,13 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
       ) : (
         <List {...page} sections={bare || (body ? <Sections {...body} edit={p?.mayChange} /> : null)} />
       )}
-      {newIn && (
+      {composing && (
         <NewTask
           open
-          onOpenChange={(o) => !o && setNewIn(null)}
+          onOpenChange={(o) => !o && closeNew()}
           pipelines={pipes}
           pipeline={pipeline}
-          stage={newIn.stage}
+          stage={composing.stage}
           owner={filters.owner ?? null}
         />
       )}
