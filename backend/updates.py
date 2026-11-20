@@ -1048,6 +1048,15 @@ def own_model(record, env=None):
         via = provider if provider in J.LLM_KEYS else "openrouter" if runtime == providers.CATCH_ALL_RUNTIME else None
         key = (env.get(J.LLM_KEYS[via]) or "").strip() if via else ""
         model = record["model"] if provider == default else (providers.recommended(provider) or {}).get("id")
+        if (
+            model
+            and runtime
+            and runtime not in ((providers.MODEL_BY_ID.get(model) or {}).get("harnesses") or (runtime,))
+        ):
+            model = next(
+                (row["id"] for row in providers.provider_models(provider) if runtime in (row.get("harnesses") or ())),
+                "",
+            )
         if key and model:
             return via, key, openrouter.model_id(model) if via == "openrouter" else model
     return None

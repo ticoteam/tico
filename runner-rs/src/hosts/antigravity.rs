@@ -4,6 +4,7 @@
 //! `--conversation`. A failed or interrupted turn is never replayed. `agy` runs in a session of its own and is
 //! stopped as a process group.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -18,8 +19,8 @@ use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::util::{log, py_dumps, text_of};
 
 pub const NAME: &str = "antigravity";
-pub const DEFAULT_MODEL: &str = "gemini-3.8-flash";
-const EFFORTS: &[&str] = &["low", "medium", "high"];
+pub const DEFAULT_MODEL: &str = "gemini-4-neon";
+const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const USAGE_KEYS: [&str; 3] = ["input_tokens", "output_tokens", "cache_read_tokens"];
 
@@ -99,6 +100,8 @@ struct Inner {
     settings: Option<Settings>,
     provider: Option<String>,
     usage: Value,
+    /// Per-step usage emitted by `step_update` in the active turn, keyed by `step_index`.
+    step_usage: BTreeMap<i64, Value>,
     /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
     streamed: (String, String),
     new_message: bool,
@@ -135,6 +138,7 @@ impl AntigravityHost {
                 settings: None,
                 provider: None,
                 usage: json!({}),
+                step_usage: BTreeMap::new(),
                 streamed: Default::default(),
                 new_message: false,
                 tx,
@@ -408,6 +412,7 @@ impl AntigravityHost {
         }
         inner.turn = Some(turn.clone());
         (inner.streamed, inner.new_message) = Default::default();
+        inner.step_usage.clear();
         let _ = inner.tx.send(event(
             "status",
             Some(thread_id),
@@ -487,6 +492,13 @@ impl AntigravityHost {
         }
         let Some(turn) = turn else { return Ok(()) };
         let (tid, turn) = (tid.as_deref(), Some(turn.as_str()));
+        if let Some(usage) = step.get("usage").filter(|u| u.is_object()) {
+            let idx = step
+                .get("step_index")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| inner.step_usage.len() as i64);
+            inner.step_usage.insert(idx, usage.clone());
+        }
         if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
             let text = text_of(&step["text_delta"]);
             inner.streamed.0.push_str(&text);
@@ -522,20 +534,30 @@ impl AntigravityHost {
         if crate::util::truthy(result.get("conversation_id")) {
             self.remember(inner, &text_of(&result["conversation_id"]))?;
         }
-        // Antigravity reports the process's running total: this turn spent the difference.
         let usage = result
             .get("usage")
             .filter(|u| u.is_object())
             .cloned()
             .unwrap_or(json!({}));
         let mut delta = Map::new();
-        for k in USAGE_KEYS {
-            delta.insert(
-                k.into(),
-                json!((count(&usage[k]) - count(&inner.usage[k])).max(0)),
-            );
+        if !inner.step_usage.is_empty() {
+            // Current agy reports per-step usage on step_update and conversation-cumulative usage on result
+            // (including across --conversation cold resumes), so summing this turn's steps avoids double-counting.
+            for k in USAGE_KEYS {
+                let sum: i64 = inner.step_usage.values().map(|u| count(&u[k])).sum();
+                delta.insert(k.into(), json!(sum.max(0)));
+            }
+        } else {
+            // Older agy builds report only the process's running total on result: this turn spent the difference.
+            for k in USAGE_KEYS {
+                delta.insert(
+                    k.into(),
+                    json!((count(&usage[k]) - count(&inner.usage[k])).max(0)),
+                );
+            }
         }
         inner.usage = usage;
+        inner.step_usage.clear();
         let (i, o, c) = (
             count(&delta["input_tokens"]),
             count(&delta["output_tokens"]),
@@ -875,15 +897,62 @@ mod tests {
     }
 
     #[test]
-    fn efforts_follow_the_python_host() {
+    fn efforts_accept_xhigh_and_reject_unsupported_levels() {
         let s = Settings {
-            effort: Some("xhigh".into()),
+            effort: Some("max".into()),
             ..Default::default()
         };
         assert!(argv(&["agy".into()], &s, None, None).is_err());
         assert_eq!(
+            argv(&["agy".into()], &s, Some("xhigh"), None).unwrap()[6],
+            "gemini-4-neon-xhigh"
+        );
+        assert_eq!(
             argv(&["agy".into()], &s, Some("high"), None).unwrap()[6],
-            "gemini-3.8-flash-high"
+            "gemini-4-neon-high"
+        );
+    }
+
+    #[test]
+    fn step_usage_keeps_resumed_turn_tokens_separate_from_conversation_totals() {
+        let dir =
+            std::env::temp_dir().join(format!("agy-step-usage-{}", uuid::Uuid::new_v4().simple()));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AntigravityHost::new(&dir, vec!["agy".into()], tx);
+        let mut inner = host.inner();
+        inner.thread = Some("t1".into());
+        inner.turn = Some("turn-1".into());
+        host.on_event(
+            &mut inner,
+            &json!({"event": "step_update", "step_update": {"step_index": 6, "state": "DONE", "step_type": "agent_response", "text_delta": "ok", "usage": {"input_tokens": 900, "output_tokens": 50, "cache_read_tokens": 200}}}),
+        )
+        .unwrap();
+        host.on_event(
+            &mut inner,
+            &json!({"event": "step_update", "step_update": {"step_index": 8, "state": "DONE", "step_type": "agent_response", "text_delta": "!", "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 300}}}),
+        )
+        .unwrap();
+        host.on_event(
+            &mut inner,
+            &json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok!", "usage": {"input_tokens": 20000, "output_tokens": 500, "cache_read_tokens": 8000}}}),
+        )
+        .unwrap();
+        drop(inner);
+        let mut tokens = None;
+        while let Ok(ev) = rx.try_recv() {
+            if ev["kind"] == "tokens" {
+                tokens = Some(ev);
+            }
+        }
+        let tokens = tokens.expect("tokens event");
+        assert_eq!(
+            (
+                tokens["input"].as_i64(),
+                tokens["output"].as_i64(),
+                tokens["cached"].as_i64(),
+                tokens["total"].as_i64()
+            ),
+            (Some(1000), Some(60), Some(500), Some(1060))
         );
     }
 }

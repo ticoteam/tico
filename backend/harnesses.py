@@ -118,7 +118,8 @@ def resolve_harness(config, runtime=None):
 
 
 def attach_harnesses(model):
-    return {**model, "harnesses": harnesses_for_runtime(model["runtime"])}
+    harnesses = tuple(model["harnesses"]) if "harnesses" in model else harnesses_for_runtime(model["runtime"])
+    return {**model, "harnesses": harnesses}
 
 
 def normalize_fallback(value):
