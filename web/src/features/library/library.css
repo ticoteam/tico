@@ -111,17 +111,23 @@
 .modal.fv-dialog .fv-desk,.modal.fv-dialog .fv-frame{margin:0}
 .modal.fv-dialog .modal-row{align-items:center}
 .lib.fv-embed{flex:1;min-height:0;display:flex;flex-direction:column}
-/* a PDF (PdfView): the viewer's pages fill the frame, Expand at its corner clear of the scroll bar; over the window,
-   the frame fills the scrim under one bar on the scrim's ink, as a picture's does (kit/PictureViewer) */
+/* a PDF (PdfView): PDF.js's pages as one scroll on the desk, each a sheet as wide as the frame (wider when zoomed in,
+   centred while it fits); the page count, zoom and Expand float at the corner clear of the scroll bar. Over the window
+   the scroll fills the scrim under one bar on the scrim's ink, as a picture's does (kit/PictureViewer) */
 .lib .fv-pdf{flex:1;min-width:0;min-height:0;display:flex;position:relative}
-.lib .fv-pdf-expand{position:absolute;top:var(--s-2);right:calc(var(--s-3) + var(--s-6));background:var(--raised);box-shadow:var(--lift-paper)}
+.fv-pdf-pages{flex:1;min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3);padding:var(--s-3);background:var(--desk);outline:0}
+.lib .fv-pdf .fv-pdf-pages{margin:0 var(--s-3) var(--s-3);border-radius:var(--r-card)}
+.fv-pdf-page{position:relative;flex:none;margin:0 auto;background:var(--paper);box-shadow:var(--lift-paper)}
+.fv-pdf-page>canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.lib .fv-pdf-tools{position:absolute;top:var(--s-2);right:calc(var(--s-3) + var(--s-6));display:flex;align-items:center;gap:var(--s-1);padding:var(--s-1) var(--s-1) var(--s-1) var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-paper)}
+.fv-pdf-count{color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums;white-space:nowrap}
 .fv-pdf-viewport{padding:var(--s-4);place-items:stretch}
 .fv-pdf-full{min-width:0;min-height:0;display:flex;flex-direction:column;gap:var(--s-2);outline:0;transition:opacity var(--dur-enter) var(--ease)}
 .fv-pdf-full[data-starting-style],.fv-pdf-full[data-ending-style]{opacity:0}
 .fv-pdf-bar{flex:none;display:flex;align-items:center;gap:var(--s-2);color:var(--on-scrim);font-size:var(--t-sm)}
 .fv-pdf-bar>span:first-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.fv-pdf-bar .ib{color:var(--on-scrim)}
-.fv-pdf-full iframe{flex:1;min-height:0;width:100%;border:0;border-radius:var(--r-block);background:var(--desk)}
+.fv-pdf-bar .ib,.fv-pdf-bar .fv-pdf-count{color:var(--on-scrim)}
+.fv-pdf-full .fv-pdf-pages{border-radius:var(--r-block)}
 
 /* ---------- skills: one list, proposals first; a skill's text with its facts beside it ---------- */
 .lib .avs{display:inline-flex;align-items:center;justify-content:flex-end;min-width:0}

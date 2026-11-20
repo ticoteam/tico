@@ -6,11 +6,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { FileFrame } from '@/features/library/exports';
+import { fakePdf } from '@/test/fakePdf';
 import type { TaskData } from './queries';
 import { tabLabel } from './model';
 import { TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+// PDF.js has no canvas or worker here: a PDF reads as one page (test/fakePdf.ts).
+const openPdf = vi.hoisted(() => vi.fn());
+vi.mock('@/features/library/pdf', () => ({ openPdf }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
 /* A task's tabs are its pages, its Markdown files, its other files and the emails it asks about, each drawn by type in
@@ -58,6 +62,7 @@ beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:held');
 });
 beforeEach(() => {
+  openPdf.mockImplementation(() => Promise.resolve(fakePdf(1).open));
   calls.length = 0;
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
@@ -170,10 +175,10 @@ describe('a task’s tabs: pages and plain files', () => {
     expect(calls.some((c) => c.includes('/api/v2/pages/md1'))).toBe(false);
   });
 
-  it('draws a PDF file in the browser’s own viewer from its address', async () => {
+  it('draws a PDF file’s pages with PDF.js from its address', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="letter-pdf" />, '/tasks/p1/12/letter-pdf');
-    const frame = await screen.findByTitle('letter.pdf');
-    expect(frame.getAttribute('src')).toBe('/api/v2/files/pdf1?v=2#toolbar=0&navpanes=0&view=FitH');
+    expect(await screen.findByRole('region', { name: 'letter.pdf' })).toBeTruthy();
+    expect(openPdf).toHaveBeenLastCalledWith('/api/v2/files/pdf1?v=2');
   });
 
   it('keeps a file tab’s address when the file list fails, then opens that file on retry', async () => {
@@ -189,7 +194,8 @@ describe('a task’s tabs: pages and plain files', () => {
       expect(router.state.location.pathname).toBe(path);
       unavailable = false;
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-      expect((await screen.findByTitle('letter.pdf')).getAttribute('src')).toBe('/api/v2/files/pdf1?v=2#toolbar=0&navpanes=0&view=FitH');
+      expect(await screen.findByRole('region', { name: 'letter.pdf' })).toBeTruthy();
+      expect(openPdf).toHaveBeenLastCalledWith('/api/v2/files/pdf1?v=2');
       expect(router.state.location.pathname).toBe(path);
     } finally {
       reply = () => null;
@@ -285,7 +291,7 @@ describe('the file viewer, by type', () => {
 
   it('knows a file by its name when the type says nothing', async () => {
     at({ mime: 'application/octet-stream', name: 'scan.pdf' });
-    expect((await screen.findByTitle('Thing')).tagName).toBe('IFRAME');
+    expect(await screen.findByRole('region', { name: 'Thing' })).toBeTruthy();
   });
 
   it('offers a Word file by name and size, with Download and Open, and no made-up preview', async () => {
@@ -302,14 +308,6 @@ describe('the file viewer, by type', () => {
     at({ mime: 'application/zip', name: 'logs.zip', size: 900 });
     expect(await screen.findByRole('link', { name: 'Download' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Open' })).toBeNull();
-  });
-
-  it('offers a PDF by name with Download where the browser has no PDF viewer, never an empty frame', async () => {
-    vi.stubGlobal('navigator', { ...navigator, pdfViewerEnabled: false });
-    at({ mime: 'application/pdf', name: 'letter.pdf', size: 4096 });
-    expect(await screen.findByRole('heading', { name: 'letter.pdf' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/f1?v=1');
-    expect(document.querySelector('iframe')).toBeNull();
   });
 });
 
@@ -369,8 +367,8 @@ describe('an email the task asks about', () => {
 
   it('shows a PDF attachment inline, read and held as a PDF', async () => {
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=3');
-    const frame = await screen.findByTitle('terms.pdf');
-    expect(frame.getAttribute('src')).toBe('blob:held#toolbar=0&navpanes=0&view=FitH');
+    expect(await screen.findByRole('region', { name: 'terms.pdf' })).toBeTruthy();
+    expect(openPdf).toHaveBeenLastCalledWith('blob:held');
     expect(calls).toContain('GET /api/v2/email/sends/s1/attachments/3');
   });
 });

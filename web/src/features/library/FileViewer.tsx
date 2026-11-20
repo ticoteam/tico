@@ -113,10 +113,7 @@ export function FileGet({ url, link }: { url: string; link: string }) {
 export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false }: PreviewProps) {
   const view = viewOf(mime, kind, name ?? title);
   const asText = AS_TEXT.has(view);
-  // A browser without a PDF viewer (a headless one, or one set to download PDFs) draws a framed PDF as an empty box:
-  // there it is offered by name, as an Office file is.
-  const noPdf = view === 'pdf' && typeof navigator !== 'undefined' && navigator.pdfViewerEnabled === false;
-  const shows = view !== 'office' && view !== 'none' && !noPdf;
+  const shows = view !== 'office' && view !== 'none';
   const words = useQuery({ ...fileTextQuery(id, version), enabled: !link && !held && asText });
   const kept = useQuery({ ...heldFileQuery(url, HELD_TYPE[view] ?? mime, asText), enabled: !link && held && shows });
   if (link) {
