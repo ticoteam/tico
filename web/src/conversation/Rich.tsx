@@ -127,8 +127,9 @@ export function loneWebLink(text: string): WebPointer | null {
 }
 
 /**
- * A link alone in a message as a card: the page's picture, title and site, as the server read them. Until the server
- * answers, and when the page has no preview, it is the message's own words (`words`: the chip).
+ * A link alone in a message as a card: where it really goes (its host, from the address), then the page's picture and
+ * title as the server read them, which the page wrote and so read second. Until the server answers, and when the page
+ * has no preview, it is the message's own words (`words`: the chip).
  */
 export function LinkCard({ p, words }: { p: WebPointer; words: ReactNode }) {
   const preview = useQuery(linkPreviewQuery(p.href)).data;
@@ -144,11 +145,11 @@ export function LinkCard({ p, words }: { p: WebPointer; words: ReactNode }) {
         </span>
       )}
       <span className="lcard-text">
-        <b>{preview.title}</b>
-        <span className="lcard-site">
+        <span className="lcard-host">
           <Icon name={p.icon} />
-          <span>{preview.site_name}</span>
+          <span>{p.site}</span>
         </span>
+        <span className="lcard-title">{preview.title}</span>
       </span>
     </a>
   );

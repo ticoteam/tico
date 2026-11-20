@@ -174,8 +174,8 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .pcard-hit:focus-visible{outline:var(--focus-ring);outline-offset:calc(var(--focus-gap) * -1)}
 @media (hover:none){.pcard-foot .ico.end{opacity:1}}
 
-/* a link alone in a message, when the server has read the page (backend/link_preview.py): its picture, title and
-   site, the picture served from /api/. A wide picture tops the card; a small or square one sits at its start. */
+/* a link alone in a message, when the server has read the page (backend/link_preview.py): the real host first, then
+   the page's own title, muted, and its picture, served from /api/. A wide picture tops the card; a small or square one sits at its start. */
 .lcard{display:grid;width:min(100%,360px);border-radius:var(--r-card);overflow:hidden;box-shadow:inset 0 0 0 1px var(--line-strong);background:var(--surface);color:var(--ink);text-decoration:none;transition:background var(--dur-fast) var(--ease)}
 .lcard:hover{background:var(--hover)}
 .lcard:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
@@ -184,10 +184,10 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .lcard.is-thumb{grid-template-columns:56px 1fr;align-items:center}
 .lcard.is-thumb .lcard-pic{width:56px;height:56px;aspect-ratio:auto;border-bottom:0;border-right:1px solid var(--line)}
 .lcard-text{display:grid;gap:var(--s-0);min-width:0;padding:var(--s-2) var(--s-3)}
-.lcard-text b{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:var(--t-sm);font-weight:var(--w-strong);line-height:var(--lh)}
-.lcard-site{display:flex;align-items:center;gap:var(--s-1);min-width:0;font-size:var(--t-xs);color:var(--muted)}
-.lcard-site>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.lcard-site .ico{width:12px;height:12px;flex:none}
+.lcard-host{display:flex;align-items:center;gap:var(--s-1);min-width:0;font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink)}
+.lcard-host>span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lcard-host .ico{width:13px;height:13px;flex:none;color:var(--muted)}
+.lcard-title{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;font-size:var(--t-sm);line-height:var(--lh);color:var(--muted)}
 .bubble .lcard,.mine-col .lcard{justify-self:end}
 .tip-title{display:block;max-width:280px;font-weight:var(--w-strong)}
 

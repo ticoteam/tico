@@ -322,7 +322,9 @@ When a person opens a thread with a link to an outside web page, the server (nev
 a day for its title, site name, description and picture (`GET /api/v2/link-preview`, backend/link_preview.py). The page's
 site sees a plain request from the server with no cookie or credential, and nothing about who posted or read the link.
 The picture is made small, kept in the server's database and served from `/api/`, so a thread never loads anything from
-the outside site. Private and internal addresses are never fetched. An answer is kept a day and deleted the day after.
+the outside site. Private and internal addresses are never fetched, and a rehearsal copy fetches nothing. An answer
+is kept a day, then deleted. Because the first person to open a thread fetches the page, whoever wrote a link only they
+use can tell from their own site's log that someone opened the thread, and when; the site never learns who.
 
 ## Tico models through Tico HQ
 

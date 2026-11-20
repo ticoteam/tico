@@ -312,13 +312,15 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(document.querySelector('.lcard')).toBeNull();
   });
 
-  it('a link alone becomes a card with the title, site and picture the server read', async () => {
+  it('a link alone becomes a card with its real host, then the title and picture the server read', async () => {
     previewOf({ status: 200, body: { url: LONE, title: 'Cedar raised bed, 4 ft', site_name: 'Acme Garden', description: null, image: '/api/v2/link-preview/images/abc', image_width: 480, image_height: 251 } });
     show([msg(1, 'bot:qa', LONE)]);
     const card = await screen.findByRole('link', { name: /Cedar raised bed, 4 ft/ });
     expect(card.className).toBe('lcard');
     expect(card.getAttribute('href')).toBe(LONE);
-    expect(card.textContent).toContain('Acme Garden');
+    // where it really goes reads first; what the page says of itself reads second
+    expect(card.querySelector('.lcard-host')?.textContent).toBe('shop.acme.example');
+    expect(card.querySelector('.lcard-title')?.textContent).toBe('Cedar raised bed, 4 ft');
     expect(card.querySelector('img')?.getAttribute('src')).toBe('/api/v2/link-preview/images/abc');
     expect(calls.some((c) => !c.url.startsWith('/api/'))).toBe(false); // nothing loads from the outside site
   });
