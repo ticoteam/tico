@@ -936,7 +936,7 @@
     },
     {
       "id": "automations.list",
-      "title": "Search or filter the automations, or pick their time range",
+      "title": "Search or filter the automations or their runs, or pick the time range",
       "kind": "view",
       "input": {
         "type": "object",
@@ -959,6 +959,19 @@
               "1h",
               "24h",
               "7d"
+            ]
+          },
+          "tab": {
+            "enum": [
+              "runs"
+            ]
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "waiting",
+              "running",
+              "done"
             ]
           }
         },

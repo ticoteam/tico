@@ -287,9 +287,9 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type AnyRun = AutomationOverviewRuns['runs'][number];
 
 /** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
-export const allRunsQuery = (range: RunRange, status?: RunStatus, by: { trigger?: string; owner?: string } = {}) =>
+export const allRunsQuery = (range: RunRange, status?: RunStatus, by: { trigger?: string; owner?: string; ids?: string } = {}) =>
   infiniteQueryOptions({
-    queryKey: ['routines', 'all-runs', range, status ?? '', by.trigger ?? '', by.owner ?? ''],
+    queryKey: ['routines', 'all-runs', range, status ?? '', by.trigger ?? '', by.owner ?? '', by.ids ?? ''],
     queryFn: ({ signal, pageParam }) => {
       const q = new URLSearchParams({
         range,
@@ -297,6 +297,7 @@ export const allRunsQuery = (range: RunRange, status?: RunStatus, by: { trigger?
         ...(status ? { status } : {}),
         ...(by.trigger ? { trigger: by.trigger } : {}),
         ...(by.owner ? { owner: by.owner } : {}),
+        ...(by.ids ? { ids: by.ids } : {}),
         ...(pageParam ? { before: pageParam } : {}),
       });
       return api.get<AutomationOverviewRuns>(`/api/v2/automations/runs?${q.toString()}`, { signal });

@@ -33,7 +33,7 @@ export function List({ tabs, filter, figures, sections, panel, ...page }: ListPr
 
 /* The pages under an area that are named by their own step (the menu's Company and Library rows): their bars carry
    the page's name, so the title does not change when the page arrives. */
-const NAMED = new Set(['strategy', 'finance', 'growth', 'products', 'risk', 'routines', 'listening', 'rules', 'usage', 'files', 'docs', 'tools', 'skills', 'contacts']);
+const NAMED = new Set(['strategy', 'finance', 'growth', 'products', 'risk', 'automations', 'listening', 'rules', 'usage', 'files', 'docs', 'tools', 'skills', 'contacts']);
 const word = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** The title a page has before its reads arrive: its own name where the address says it ("/library/docs" is Docs),

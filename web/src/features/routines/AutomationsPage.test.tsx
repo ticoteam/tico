@@ -173,15 +173,15 @@ describe('Automations', () => {
     automations: rows.map((r) => ({ ...r, buckets: [{ ok: r.runs - r.failed, failed: 0 }, { ok: 0, failed: r.failed }] })),
   });
 
-  it('lists each automation in the sidebar and in All’s table, grouped by what starts it, each opening beside the sidebar @s509', async () => {
+  it('lists each automation in All’s table, grouped by what starts it, each opening beside the sidebar, the filter rail beside it @s509', async () => {
     record();
     queryClient.setQueryData(routinesQuery.queryKey, [routine()]);
     show('/company/automations');
     const table = await screen.findByRole('table', { name: 'Automations' });
     expect(href(within(table).getByRole('link', { name: 'Morning numbers' }))).toBe('/company/automations/r1');
-    // the sidebar lists it under what starts it too, opening it beside the sidebar
-    expect(href(within(sidebar()).getByRole('link', { name: /Morning numbers/ }))).toBe('/company/automations/r1');
-    expect(within(sidebar()).getByRole('region', { name: 'Schedule' })).toBeTruthy();
+    // the sidebar is the old filter rail: what starts it, with a count
+    expect(within(within(sidebar()).getByRole('group', { name: 'Trigger' })).getByRole('button', { name: /Schedule\s*1/ })).toBeTruthy();
+    expect(href(within(sidebar()).getByRole('link', { name: /All automations/ }))).toBe('/company/automations?tab=all');
     expect(within(table).getByRole('button', { name: /Schedule/ })).toBeTruthy();
     expect(within(table).getByText('Every day at 7:00 AM')).toBeTruthy();
   });
@@ -227,7 +227,7 @@ describe('Automations', () => {
     expect(screen.queryByRole('link', { name: /Old cleanup/ })).toBeNull();
   });
 
-  it('filters by status from the sidebar’s filter, with a count per choice; status lives in the address @s509', async () => {
+  it('the rail filters the table: any of the triggers picked, one status (in the address), and they combine @s509', async () => {
     record();
     queryClient.setQueryData(routinesQuery.queryKey, [
       routine(),
@@ -235,24 +235,49 @@ describe('Automations', () => {
       routine({ id: 'r3', name: 'Old cleanup', enabled: false, trigger: { type: 'event', name: 'task.created' } }),
     ]);
     const router = show('/company/automations');
-    await screen.findByRole('table', { name: 'Automations' });
-    expect(within(sidebar()).getByRole('region', { name: 'Event' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Filter automations' }));
-    const sub = await screen.findByRole('menuitem', { name: 'Status' });
-    fireEvent.pointerEnter(sub, { pointerType: 'mouse' });
-    fireEvent.mouseEnter(sub);
-    fireEvent.mouseMove(sub);
-    fireEvent.click(sub);
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Last run failed\s*1/ }));
+    const table = await screen.findByRole('table', { name: 'Automations' });
+    const trigger = within(sidebar()).getByRole('group', { name: 'Trigger' });
+    expect(within(trigger).getByRole('button', { name: /Schedule\s*2/ })).toBeTruthy();
+    fireEvent.click(within(trigger).getByRole('button', { name: /Event/ }));
+    await waitFor(() => expect(within(table).queryByRole('link', { name: 'Morning numbers' })).toBeNull());
+    expect(within(table).getByRole('link', { name: 'Old cleanup' })).toBeTruthy();
+    // a second trigger adds its automations
+    fireEvent.click(within(trigger).getByRole('button', { name: /Schedule/ }));
+    expect(await within(table).findByRole('link', { name: 'Morning numbers' })).toBeTruthy();
+
+    const status = within(sidebar()).getByRole('group', { name: 'Status' });
+    fireEvent.click(within(status).getByRole('button', { name: /Last run failed\s*1/ }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ state: 'failed' }));
-    expect(await within(sidebar()).findByRole('link', { name: /Weekly invoices/ })).toBeTruthy();
-    expect(within(sidebar()).queryByRole('link', { name: /Morning numbers/ })).toBeNull();
+    await waitFor(() => expect(within(table).queryByRole('link', { name: 'Morning numbers' })).toBeNull());
+    expect(within(table).getByRole('link', { name: 'Weekly invoices' })).toBeTruthy();
+    expect(within(status).getByRole('button', { name: /Last run failed/ }).getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: 'Clear Last run failed' }));
     await waitFor(() => expect(router.state.location.search).toEqual({}));
 
     const r = await run('automations.list', { q: 'nothing like it' }, { via: 'tico' });
     expect(r.ok).toBe(true);
     expect(await screen.findByText('No automations match these filters')).toBeTruthy();
+  });
+
+  it('a filter picked while an automation is open shows the list again', async () => {
+    record();
+    queryClient.setQueryData(routinesQuery.queryKey, [routine(), routine({ id: 'r3', name: 'Old cleanup', enabled: false })]);
+    const router = show('/company/automations/r1');
+    await screen.findByRole('heading', { name: 'Morning numbers' });
+    expect(href(within(content()).getByRole('link', { name: 'Automations' }))).toBe('/company/automations');
+    fireEvent.click(within(within(sidebar()).getByRole('group', { name: 'Status' })).getByRole('button', { name: /Off/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/company/automations'));
+    expect(router.state.location.search).toMatchObject({ state: 'off' });
+    expect(await within(screen.getByRole('table', { name: 'Automations' })).findByRole('link', { name: 'Old cleanup' })).toBeTruthy();
+  });
+
+  it('a run status in the rail shows the runs, narrowed', async () => {
+    record((url) => (url.includes('/automations/runs?') ? ok({ next: null, since: '2026-11-19T07:00:00Z', runs: [] }) : nothing()));
+    const router = show('/company/automations');
+    await screen.findByRole('table', { name: 'Automations' });
+    fireEvent.click(within(within(sidebar()).getByRole('group', { name: 'Run' })).getByRole('button', { name: /Failed/ }));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'runs', status: 'failed' }));
+    expect(await screen.findByText('No failed runs in the last hour')).toBeTruthy();
   });
 
   it('groups by owner from ⋯', async () => {
@@ -642,15 +667,10 @@ describe('Runs', () => {
 
   it('narrows by what starts it on the server, as the old page sent it', async () => {
     const sent = record((url) => (url.includes('/automations/runs?') ? ok(runs) : nothing()));
+    queryClient.setQueryData(routinesQuery.queryKey, [routine()]);
     show('/company/automations?tab=runs');
     await screen.findByRole('table', { name: 'Runs' });
-    fireEvent.click(screen.getByRole('button', { name: 'Filter runs' }));
-    const sub = await screen.findByRole('menuitem', { name: 'Trigger' });
-    fireEvent.pointerEnter(sub, { pointerType: 'mouse' });
-    fireEvent.mouseEnter(sub);
-    fireEvent.mouseMove(sub);
-    fireEvent.click(sub);
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Schedule' }));
+    fireEvent.click(within(within(sidebar()).getByRole('group', { name: 'Trigger' })).getByRole('button', { name: /Schedule/ }));
     await waitFor(() => expect(sent.reads.some((u) => u.includes('/automations/runs?') && u.includes('trigger=schedule'))).toBe(true));
   });
 });

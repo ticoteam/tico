@@ -4,10 +4,10 @@ import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
-import { Icon } from '@/kit/Icon';
+import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { useCards } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
@@ -37,7 +37,7 @@ import {
 } from './flow';
 import { Bars, ListChoices, type Bucket } from './overview';
 import { actorKey, Face, Find, PageOwner, press, Word } from './parts';
-import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, statsQuery, systemJobsQuery, type RunStatus } from './queries';
+import { heartbeatQuery, hooksQuery, maintenanceQuery, routinesQuery, RUN_STATUSES, statsQuery, systemJobsQuery, type RunStatus } from './queries';
 import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
 import type { Hook, Routine, SystemJob } from './types';
@@ -46,11 +46,13 @@ import { maintenanceWords, scheduleWords, startsWords } from './words';
 import './routines.css';
 import './automations.css';
 
-/* Automations (ui/app/automations*.ts), as a sidebar and its content: one sheet, the kit's list-and-item page. The
-   sidebar lists every automation under what starts it (or its owner), each with its mark and last run, and leads with
-   the page's own views: All (every automation in a dense table with its last and next run, its bars, runs, failures and
-   cost over the time range), Runs (the chart and every run) and Webhooks. The content shows the one picked in full: its
-   flow, its runs, its editors in the panel. Tico's own jobs and a webhook open in `?panel=`. */
+/* Automations (ui/app/automations*.ts), as the old page was: a sidebar, then a lot of content, on one sheet (the kit's
+   list-and-item page). The sidebar leads with the page's views, All automations, Runs and Webhooks, then is the old
+   filter rail: Run, Trigger, Status, Team and Owner, each choice with its mark and its count. Picking one narrows the
+   content's list. The content is All (every automation the filters leave in a dense table grouped by what starts it,
+   with its last and next run, its bars, runs, failures and cost over the time range), Runs (the chart and every run),
+   Webhooks, or the automation opened in full: its flow, its runs, its editors in the panel. Tico's own jobs and a
+   webhook open in `?panel=`. */
 
 export interface RoutinesSearch {
   /** The content when no automation is open: All (also on a phone, where the sidebar shows first), Runs, Webhooks. */
@@ -84,7 +86,10 @@ export function RangePick({ range, onPick }: { range: Range; onPick: (r: Range) 
 
 // ---------------------------------------------------------------- the sidebar's choices, shared with the content
 
+/** The sidebar's filters the address does not hold (status, run status and the search are in it): what starts it,
+    one team, one owner. Any of the triggers picked, and all of the rest, as the old rail combined them. */
 interface Picks {
+  kinds: string[];
   team: string;
   owner: string;
 }
@@ -97,7 +102,14 @@ interface Shell {
   fold: (k: string) => void;
 }
 const ShellCtx = createContext<Shell | null>(null);
-const useShell = (): Shell => use(ShellCtx) ?? { picks: { team: '', owner: '' }, setPicks: () => {}, group: 'trigger', sort: 'last', closed: [], fold: () => {} };
+const NO_PICKS: Picks = { kinds: [], team: '', owner: '' };
+const useShell = (): Shell => use(ShellCtx) ?? { picks: NO_PICKS, setPicks: () => {}, group: 'trigger', sort: 'last', closed: [], fold: () => {} };
+/** The sidebar's picks for the Runs view: what starts it and the owner go to the server; status, team and the search
+    leave a list of automations, sent as ids while it is short (automations-overview.ts auAllQuery). */
+export function useRunPicks(): { trigger?: string; owner?: string; picked: boolean } {
+  const { picks } = useShell();
+  return { trigger: picks.kinds.join(',') || undefined, owner: picks.owner || undefined, picked: !!(picks.kinds.length || picks.team || picks.owner) };
+}
 
 // ---------------------------------------------------------------- the rows
 
@@ -192,17 +204,19 @@ function useNameOf() {
   return (id: string | null) => (id && id !== TICO ? (actors.find((a) => a.id === actorKey(id) || (a.slug && `bot:${a.slug}` === id))?.name ?? id.replace(/^\w+:/, '')) : 'Tico');
 }
 
-/** The automations the search and the filters leave, sorted and grouped as the sidebar's "⋯" says. */
+/** The automations the search and the sidebar's filters leave, sorted and grouped as the sidebar's "⋯" says. The old
+    rail's rule: any of the triggers picked, and the one status, team and owner picked; the search on top. */
 function useShown(search: RoutinesSearch, statOf: (it: Item) => Stat = () => NO_STAT) {
   const { items, none } = useItems(search);
   const { picks, group, sort } = useShell();
   const nameOf = useNameOf();
   const { q, state } = search;
   const words = (it: Item) => `${it.name} ${it.trigger} ${nameOf(it.owner)} ${KIND_WORDS[it.kind] ?? ''}`.toLowerCase();
-  const matches = (it: Item, skip?: 'state' | 'team' | 'owner') =>
-    (skip === 'state' || !state || it.state === state) &&
-    (skip === 'team' || !picks.team || it.team === picks.team) &&
-    (skip === 'owner' || !picks.owner || ownerKey(it) === picks.owner) &&
+  const matches = (it: Item) =>
+    (!picks.kinds.length || picks.kinds.includes(it.kind)) &&
+    (!state || it.state === state) &&
+    (!picks.team || it.team === picks.team) &&
+    (!picks.owner || ownerKey(it) === picks.owner) &&
     (!q || words(it).includes(q.toLowerCase()));
   const lastAt = (it: Item) => it.at ?? '';
   const order: Record<SortBy, (a: Item, b: Item) => number> = {
@@ -212,7 +226,7 @@ function useShown(search: RoutinesSearch, statOf: (it: Item) => Stat = () => NO_
     cost: (a, b) => statOf(b).cost - statOf(a).cost,
     name: (a, b) => a.name.localeCompare(b.name),
   };
-  const rows = items.filter((it) => matches(it)).sort(order[sort]);
+  const rows = items.filter(matches).sort(order[sort]);
   const keyOf = (it: Item) => (group === 'trigger' ? it.kind : group === 'owner' ? ownerKey(it) : '');
   const groups: { key: string; label: string; rows: Item[] }[] = [];
   for (const it of rows) {
@@ -227,15 +241,14 @@ function useShown(search: RoutinesSearch, statOf: (it: Item) => Stat = () => NO_
   };
   if (group === 'trigger') groups.sort((a, b) => rank(a.key) - rank(b.key));
   if (group === 'owner') groups.sort((a, b) => a.label.localeCompare(b.label));
-  const count = (skip: 'state' | 'team' | 'owner', f: (it: Item) => boolean) => items.filter((it) => matches(it, skip) && f(it)).length;
-  return { items, none, rows, groups, count, nameOf, grouped: group !== 'none' };
+  return { items, none, rows, groups, nameOf, grouped: group !== 'none', narrowed: !!(picks.kinds.length || picks.team || picks.owner || state || q) };
 }
 
-// ---------------------------------------------------------------- the sidebar
+// ---------------------------------------------------------------- the sidebar: the old filter rail
 
-/** The page: the sidebar of automations, and `children`, the content, beside it (the open one, or All, Runs, Webhooks). */
+/** The page: the sidebar (All automations, Runs, Webhooks, then the filters), and `children`, the content, beside it. */
 export function AutomationsShell({ search, id, children }: { search: RoutinesSearch & { view?: string }; id?: string; children: ReactNode }) {
-  const [picks, setPicks] = useState<Picks>({ team: '', owner: '' });
+  const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [group, setGroup] = useState<GroupBy>('trigger');
   const [sort, setSort] = useState<SortBy>('last');
   const [closed, setClosed] = useState<string[]>([]);
@@ -250,77 +263,74 @@ export function AutomationsShell({ search, id, children }: { search: RoutinesSea
   );
 }
 
+const STATE_MARK: Record<AutoState, IconName> = { on: 'check', failed: 'alert', hold: 'pause', off: 'minus' };
+const RUN_WORDS: Record<RunStatus, string> = { failed: 'Failed', waiting: 'Waiting', running: 'Running', done: 'Done' };
+const RUN_MARK: Record<RunStatus, IconName> = { failed: 'alert', waiting: 'pause', running: 'play', done: 'check' };
+
+interface Choice {
+  value: string;
+  label: string;
+  /** How many automations have it; a choice none has is left out unless picked. None for runs (the server counts none). */
+  count?: number;
+  icon?: IconName;
+  lead?: ReactNode;
+}
+
+/** One section of the rail: its name, then a row per choice with its mark and its count. A pressed row is picked. */
+function Facet({ name, choices, picked, onPick }: { name: string; choices: readonly Choice[]; picked: readonly string[]; onPick: (v: string) => void }) {
+  const shown = choices.filter((c) => c.count === undefined || c.count > 0 || picked.includes(c.value));
+  if (!shown.length) return null;
+  return (
+    <Section name={name} target={`facet:${name.toLowerCase()}`}>
+      <div className="au-facet" role="group" aria-label={name}>
+        {shown.map((c) => {
+          const on = picked.includes(c.value);
+          return (
+            <button key={c.value} type="button" className={on ? 'row tl-row au-fb is-selected' : 'row tl-row au-fb'} aria-pressed={on} onClick={() => onPick(c.value)}>
+              <span className="au-fb-lead">{c.lead ?? (c.icon ? <Icon name={c.icon} /> : null)}</span>
+              <span className="row-title">{c.label}</span>
+              <span className="row-age">{c.count ?? ''}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 function Sidebar({ search, id, setGroup, setSort, children }: { search: RoutinesSearch; id?: string; setGroup: (g: GroupBy) => void; setSort: (s: SortBy) => void; children: ReactNode }) {
-  const { q, state, panel, tab } = search;
+  const { q, state, panel, tab, status } = search;
   const range = rangeOf(search);
   const phone = useCards();
-  const { picks, setPicks, group, sort, closed, fold } = useShell();
-  const { items, none, groups, count, nameOf, grouped } = useShown(search);
+  const { picks, setPicks, group, sort } = useShell();
+  const { items, none, nameOf } = useShown(search);
   const [inbox, setInbox] = useState(false);
   // an editor open in the panel takes the sidebar's room: the flow and its editor need it more
   const editing = usePagePanelOpen();
+  const runs = !id && tab === 'runs';
   const keep = { q, state, range: search.range };
-  const listed = (to: { q?: string; state?: RoutineState }) => void press('automations.list', { ...to, range: search.range });
+  /** A filter shows its list (as the old rail did): the runs while Runs is showing, else All, an open one closing. */
+  const filter = (to: { q?: string; state?: RoutineState; status?: RunStatus; runs?: boolean }) =>
+    void press('automations.list', { q: to.q, state: to.state, range: search.range, ...(to.runs ? { tab: 'runs', ...(to.status ? { status: to.status } : {}) } : {}) });
+  const here = { q, state, status, runs };
+  const pick = (next: Picks) => {
+    setPicks(next);
+    if (id || panel || tab === 'webhooks' || (phone && !tab)) filter({ ...here, runs: runs });
+  };
   const teams = [...new Set(items.map((it) => it.team).filter(Boolean))].sort();
   const owners = [...new Set(items.map(ownerKey))].map((o) => ({ o, name: nameOf(o === TICO ? null : o) })).sort((a, b) => a.name.localeCompare(b.name));
+  const count = (f: (it: Item) => boolean) => items.filter(f).length;
   const built = panel?.startsWith('builtin:') ? panel.slice(8) : '';
   const view = id ? '' : tab === 'runs' ? 'runs' : tab === 'webhooks' ? 'webhooks' : 'all';
   // on a phone the sidebar shows first; anything picked shows alone, with a way back
   const open = !!id || (phone ? !!tab : false) || !!panel;
-  const filters = [
-    ...(state ? [{ label: STATE_WORDS[state as AutoState], onClear: () => listed({ q }) }] : []),
-    ...(picks.team ? [{ label: picks.team, onClear: () => setPicks({ ...picks, team: '' }) }] : []),
-    ...(picks.owner ? [{ label: nameOf(picks.owner === TICO ? null : picks.owner), onClear: () => setPicks({ ...picks, owner: '' }) }] : []),
-  ];
-  const nav = (key: 'all' | 'runs' | 'webhooks', label: string, icon: 'list' | 'clock' | 'link', n?: number) => (
+  const nav = (key: 'all' | 'runs' | 'webhooks', label: string, icon: IconName, n?: number) => (
     <Row key={key} className="tl-row au-nav" title={label} href={routinesHref({ ...keep, tab: key })} selected={view === key && !built} target={`tab:${key}`}>
       <Icon name={icon} />
       <span className="row-title">{label}</span>
       <span className="row-age">{n ?? ''}</span>
     </Row>
   );
-  const row = (it: Item) => (
-    <Row
-      key={it.id}
-      className={it.state === 'off' ? 'tl-row au-srow is-off' : 'tl-row au-srow'}
-      title={it.name}
-      href={it.builtin ? routinesHref({ ...keep, panel: `builtin:${it.builtin}` }) : `${it.href}${q || state || search.range ? `?${new URLSearchParams(Object.entries(keep).filter((e): e is [string, string] => !!e[1])).toString()}` : ''}`}
-      selected={it.id === id || (!!it.builtin && it.builtin === built)}
-      target={`routine:${it.id}`}
-    >
-      <Icon name={KIND_ICONS[it.kind] ?? 'spark'} />
-      <span className="row-title">{it.name}</span>
-      <span className="au-srow-mark">
-        {it.failed ? (
-          <span title="Last run failed">
-            <Icon name="alert" />
-          </span>
-        ) : it.hold ? (
-          <span title="On hold">
-            <Icon name="pause" />
-          </span>
-        ) : it.state === 'off' ? (
-          <span title="Off">
-            <Icon name="minus" />
-          </span>
-        ) : it.builtin ? (
-          <span title="Built in">
-            <Icon name="lock" />
-          </span>
-        ) : null}
-      </span>
-      {it.at ? <Ago at={it.at} className="row-age" /> : <span className="row-age" />}
-    </Row>
-  );
-  const choose = (label: string, values: { value: string; label: string; n: number }[], on: string, pick: (v: string) => void) =>
-    values.length > 0 && (
-      <MenuSub label={label}>
-        <MenuItem label="All" on={!on} onSelect={() => pick('')} />
-        {values.map((v) => (
-          <MenuItem key={v.value} label={v.label} meta={String(v.n)} on={v.value === on} onSelect={() => pick(v.value === on ? '' : v.value)} />
-        ))}
-      </MenuSub>
-    );
   return (
     <ListAndItem
       title="Automations"
@@ -331,26 +341,6 @@ function Sidebar({ search, id, setGroup, setSort, children }: { search: Routines
       open={open}
       actions={
         <>
-          <Menu trigger={<IconButton icon="filter" label="Filter automations" on={filters.length > 0} data-phone />}>
-            {choose(
-              'Status',
-              (Object.keys(STATE_WORDS) as AutoState[]).map((k) => ({ value: k, label: STATE_WORDS[k], n: count('state', (it) => it.state === k) })),
-              state ?? '',
-              (v) => listed({ q, state: (v || undefined) as RoutineState | undefined }),
-            )}
-            {choose(
-              'Team',
-              teams.map((t) => ({ value: t, label: t, n: count('team', (it) => it.team === t) })),
-              picks.team,
-              (v) => setPicks({ ...picks, team: v }),
-            )}
-            {choose(
-              'Owner',
-              owners.map(({ o, name }) => ({ value: o, label: name, n: count('owner', (it) => ownerKey(it) === o) })),
-              picks.owner,
-              (v) => setPicks({ ...picks, owner: v }),
-            )}
-          </Menu>
           <Menu
             trigger={
               phone ? (
@@ -373,15 +363,10 @@ function Sidebar({ search, id, setGroup, setSort, children }: { search: Routines
       }
       more={
         <PageMore>
-          <ListChoices group={group} sort={sort} range={range} phone={phone} onGroup={setGroup} onSort={setSort} onRange={(r) => void press('automations.list', { q, state, range: r })} />
+          <ListChoices group={group} sort={sort} range={range} phone={phone} onGroup={setGroup} onSort={setSort} onRange={(r) => void press('automations.list', { ...keep, range: r, ...(runs ? { tab: 'runs', ...(status ? { status } : {}) } : {}) })} />
         </PageMore>
       }
-      search={
-        <>
-          {!none && <Find label="Search automations" value={q} onFind={(words) => listed({ q: words, state })} wide />}
-          <FilterRow filters={filters} />
-        </>
-      }
+      search={!none && <Find label="Search automations" value={q} onFind={(words) => filter({ ...here, q: words })} wide />}
       list={
         <div className="au-side">
           <div className="au-navs" role="group" aria-label="Views">
@@ -389,25 +374,66 @@ function Sidebar({ search, id, setGroup, setSort, children }: { search: Routines
             {nav('runs', 'Runs', 'clock')}
             {nav('webhooks', 'Webhooks', 'link')}
           </div>
-          {groups.length ? (
-            groups.map((g) =>
-              grouped ? (
-                <Section key={g.key} name={g.label} count={g.rows.length} open={!closed.includes(g.key)} onOpenChange={() => fold(g.key)} target={`section:${g.key}`}>
-                  {g.rows.map(row)}
-                </Section>
-              ) : (
-                g.rows.map(row)
-              ),
-            )
-          ) : (
-            <Empty title={items.length ? 'Nothing matches' : 'No automations yet'} />
+          <Facet
+            name="Run"
+            picked={runs && status ? [status] : []}
+            onPick={(v) => filter({ ...here, runs: true, status: runs && status === v ? undefined : (v as RunStatus) })}
+            choices={RUN_STATUSES.map((s) => ({ value: s, label: RUN_WORDS[s], icon: RUN_MARK[s] }))}
+          />
+          <Facet
+            name="Trigger"
+            picked={picks.kinds}
+            onPick={(v) => pick({ ...picks, kinds: picks.kinds.includes(v) ? picks.kinds.filter((k) => k !== v) : [...picks.kinds, v] })}
+            choices={KINDS.map((k) => ({ value: k, label: KIND_WORDS[k]!, icon: KIND_ICONS[k], count: count((it) => it.kind === k) }))}
+          />
+          <Facet
+            name="Status"
+            picked={state ? [state] : []}
+            onPick={(v) => filter({ ...here, state: state === v ? undefined : (v as RoutineState) })}
+            choices={(Object.keys(STATE_WORDS) as AutoState[]).map((k) => ({ value: k, label: STATE_WORDS[k], icon: STATE_MARK[k], count: count((it) => it.state === k) }))}
+          />
+          {teams.length > 0 && (
+            <Facet name="Team" picked={picks.team ? [picks.team] : []} onPick={(v) => pick({ ...picks, team: picks.team === v ? '' : v })} choices={teams.map((t) => ({ value: t, label: t, icon: 'people', count: count((it) => it.team === t) }))} />
           )}
+          <Facet
+            name="Owner"
+            picked={picks.owner ? [picks.owner] : []}
+            onPick={(v) => pick({ ...picks, owner: picks.owner === v ? '' : v })}
+            choices={owners.map(({ o, name }): Choice => ({ value: o, label: name, lead: o === TICO ? <Icon name="gear" /> : <Face id={o} size={16} />, count: count((it) => ownerKey(it) === o) }))}
+          />
         </div>
       }
       conversation={children}
     />
   );
 }
+
+/** What the sidebar has picked, as chips over the content, each clearing its own (the content says why it is narrow). */
+function Picked({ search }: { search: RoutinesSearch }) {
+  const { picks, setPicks } = useShell();
+  const nameOf = useNameOf();
+  const { q, state, status, tab } = search;
+  const runs = tab === 'runs';
+  const go = (to: { q?: string; state?: RoutineState; status?: RunStatus }) =>
+    void press('automations.list', { ...to, range: search.range, ...(runs ? { tab: 'runs', ...(to.status ? { status: to.status } : {}) } : {}) });
+  const chips = [
+    ...(runs && status ? [{ label: RUN_WORDS[status], onClear: () => go({ q, state }) }] : []),
+    ...picks.kinds.map((k) => ({ label: KIND_WORDS[k] ?? k, onClear: () => setPicks({ ...picks, kinds: picks.kinds.filter((x) => x !== k) }) })),
+    ...(state ? [{ label: STATE_WORDS[state as AutoState], onClear: () => go({ q, status }) }] : []),
+    ...(picks.team ? [{ label: picks.team, onClear: () => setPicks({ ...picks, team: '' }) }] : []),
+    ...(picks.owner ? [{ label: nameOf(picks.owner === TICO ? null : picks.owner), onClear: () => setPicks({ ...picks, owner: '' }) }] : []),
+    ...(q ? [{ label: `“${q}”`, onClear: () => go({ state, status }) }] : []),
+  ];
+  return <FilterRow filters={chips} />;
+}
+
+/** The automations the sidebar leaves, for Runs: their ids while the list is narrowed by more than the server reads. */
+export function useShownIds(search: RoutinesSearch): string[] | null {
+  const { rows } = useShown(search);
+  const { picks } = useShell();
+  return search.q || search.state || picks.team ? rows.map((r) => r.id) : null;
+}
+export { Picked };
 
 // ---------------------------------------------------------------- the content when none is open
 
@@ -455,6 +481,7 @@ function AllTab({ search }: { search: RoutinesSearch }) {
         }
       />
       <div className="conv-body au-body" data-scroll>
+        <Picked search={search} />
         {phone ? (
           <PhoneRows groups={groups} grouped={grouped} closed={closed} onFold={fold} statOf={statOf} range={range} empty={emptyWords} />
         ) : (

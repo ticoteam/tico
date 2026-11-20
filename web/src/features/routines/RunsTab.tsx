@@ -1,33 +1,33 @@
 import { useQuery, useSuspenseInfiniteQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { BarChart } from '@/kit/Chart';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { EmptyRow, Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtWhen } from '@/lib';
-import { FilterRow, ItemHead } from '@/pagekinds';
+import { ItemHead } from '@/pagekinds';
 import { automationHref, LISTENING, ROUTINES } from './actions';
-import { RangePick, rangeOf, routinesHref, type RoutinesSearch } from './AutomationsPage';
-import { KIND_ICONS, KIND_WORDS, KINDS, money, RANGE_BUCKET, RANGE_SECONDS, RANGE_WORDS, RANGES, took, type Range } from './flow';
+import { Picked, RangePick, rangeOf, routinesHref, useRunPicks, useShownIds, type RoutinesSearch } from './AutomationsPage';
+import { KIND_ICONS, money, RANGE_BUCKET, RANGE_SECONDS, RANGE_WORDS, RANGES, took, type Range } from './flow';
 import { useWidth } from './overview';
-import { actorKey, Face, press, Word } from './parts';
-import { allRunsQuery, routinesQuery, RUN_STATUSES, statsQuery, type AnyRun, type RunStatus } from './queries';
+import { press, Word } from './parts';
+import { allRunsQuery, routinesQuery, statsQuery, type AnyRun, type RunStatus } from './queries';
 import { runWords } from './words';
 
 /* Automations › Runs, the content beside the sidebar (automations-overview.ts auAllHTML): the runs per bucket over the
-   range as a chart, then every run across them newest first, fifty at a time. Status and range live in the address;
-   trigger and owner narrow it from the filter menu. A run opens its automation's Runs; Tico's own job opens in the panel. */
+   range as a chart, then every run across them newest first, fifty at a time. The sidebar's filters narrow them: the
+   run's status, what starts it and its owner on the server, its status, team and the search through the ids they leave.
+   A run opens its automation's Runs; Tico's own job opens in the panel. */
 
 const STATUS: Record<RunStatus, string> = { failed: 'Failed', waiting: 'Waiting', running: 'Running', done: 'Done' };
-const STATUS_ICON: Record<RunStatus, 'alert' | 'pause' | 'play' | 'check'> = { failed: 'alert', waiting: 'pause', running: 'play', done: 'check' };
 // Only these say something the row's words do not (a run that went through has no mark).
 const MARKED = new Set(['failed', 'waiting', 'held']);
+/** Ids sent with a page of runs; past this the page is narrowed here only (automations-overview.ts AU_IDS_MAX). */
+const IDS_MAX = 200;
 const SHORT: Record<string, string> = { failed: 'Failed', waiting: 'Waiting', held: 'Held' };
 const noRuns = (r: Range, status?: RunStatus) => `No ${status ? `${STATUS[status].toLowerCase()} ` : ''}runs in the ${RANGE_WORDS[r].toLowerCase()}`;
 
@@ -43,27 +43,20 @@ export function RunsTab({ search }: { search: RoutinesSearch }) {
   const { status } = search;
   const range = rangeOf(search);
   const phone = useCards();
-  const [kinds, setKinds] = useState<string[]>([]);
-  const [owner, setOwner] = useState('');
-  const by = { trigger: kinds.length ? kinds.join(',') : undefined, owner: owner || undefined };
+  const picks = useRunPicks();
+  // status, team and the search leave a list of automations: its ids go along while it is short (auAllQuery)
+  const ids = useShownIds(search);
+  const by = { trigger: picks.trigger, owner: picks.owner, ids: ids && ids.length <= IDS_MAX ? ids.join(',') || 'none' : undefined };
   const q = useSuspenseInfiniteQuery(allRunsQuery(range, status, by));
   const stats = useQuery(statsQuery(range));
   const autos = useQuery(routinesQuery).data ?? [];
-  const actors = useActors();
-  const nameOf = (id: string) => actors.find((a) => a.id === actorKey(id) || (a.slug && `bot:${a.slug}` === id))?.name ?? id.replace(/^\w+:/, '');
-  const runs = q.data.pages.flatMap((p) => p.runs);
+  const kinds = picks.trigger?.split(',') ?? [];
+  const keep = ids ? new Set(ids) : null;
+  const runs = q.data.pages.flatMap((p) => p.runs).filter((r) => !keep || keep.has(r.automation_id));
   const show = (next: { status?: RunStatus; range?: Range }) => void press('automations.showRuns', { status: next.status, range: next.range });
-  const pickKind = (v: string) => setKinds((k) => (k.includes(v) ? k.filter((x) => x !== v) : [...k, v]));
-  const owners = [...new Set([...autos.map((a) => a.owner_id ?? ''), ...runs.map((r) => r.owner_id ?? '')].filter(Boolean))].sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   // the automations the filters leave, for the chart's bars
-  const shown = new Set(autos.filter((a) => (!kinds.length || kinds.includes(a.trigger.type)) && (!owner || a.owner_id === owner)).map((a) => a.id));
-  const narrowed = kinds.length > 0 || !!owner;
-  const on = kinds.length + +!!owner + +!!status;
-  const filters = [
-    ...(status ? [{ label: STATUS[status], onClear: () => show({ range: search.range }) }] : []),
-    ...kinds.map((k) => ({ label: KIND_WORDS[k] ?? k, onClear: () => pickKind(k) })),
-    ...(owner ? [{ label: nameOf(owner), onClear: () => setOwner('') }] : []),
-  ];
+  const shown = new Set(autos.filter((a) => (!kinds.length || kinds.includes(a.trigger.type)) && (!picks.owner || a.owner_id === picks.owner) && (!keep || keep.has(a.id))).map((a) => a.id));
+  const narrowed = picks.picked || !!keep;
 
   return (
     <>
@@ -74,26 +67,6 @@ export function RunsTab({ search }: { search: RoutinesSearch }) {
         actions={
           <>
             <RangePick range={range} onPick={(r) => show({ status, range: r })} />
-            <Menu trigger={<IconButton icon="filter" label="Filter runs" on={on > 0} />}>
-              <MenuSub label="Run">
-                <MenuItem label="All" on={!status} onSelect={() => show({ range: search.range })} />
-                {RUN_STATUSES.map((x) => (
-                  <MenuItem key={x} label={STATUS[x]} icon={STATUS_ICON[x]} on={x === status} onSelect={() => show({ status: x === status ? undefined : x, range: search.range })} />
-                ))}
-              </MenuSub>
-              <MenuSub label="Trigger">
-                {KINDS.map((k) => (
-                  <MenuItem key={k} label={KIND_WORDS[k]!} icon={KIND_ICONS[k]} on={kinds.includes(k)} onSelect={() => pickKind(k)} />
-                ))}
-              </MenuSub>
-              {owners.length > 0 && (
-                <MenuSub label="Owner">
-                  {owners.map((o) => (
-                    <MenuItem key={o} label={nameOf(o)} lead={<Face id={o} size={16} />} on={o === owner} onSelect={() => setOwner(owner === o ? '' : o)} />
-                  ))}
-                </MenuSub>
-              )}
-            </Menu>
             {phone && (
               <Menu trigger={<IconButton icon="clock" label="Time range" />}>
                 {RANGES.map((r) => (
@@ -105,7 +78,7 @@ export function RunsTab({ search }: { search: RoutinesSearch }) {
         }
       />
       <div className="conv-body au-body" data-scroll>
-        <FilterRow filters={filters} />
+        <Picked search={search} />
         <RunsChart range={range} stats={stats.data} only={narrowed ? shown : null} failed={stats.isError} />
         {phone ? (
           <PhoneRuns runs={runs} range={search.range} empty={noRuns(range, status)} />

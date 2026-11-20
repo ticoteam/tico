@@ -2,30 +2,41 @@
    the runs chart, and one automation's flow of cards, its paths in columns and the inbox board. Greys only: what the
    old page coloured (a failed run, a destination) is a mark or a weight here. Everything sits under .au. */
 
-/* ---------- the sidebar: the page's views, then every automation under what starts it ---------- */
+/* ---------- the sidebar: the page's views, then the old filter rail ---------- */
 .au .au-side{display:grid;align-content:start}
 /* while an editor is open in the panel the sidebar steps aside; closing it brings the sidebar back */
 .au.has-panel>.tl{display:none}
 .au .au-navs{display:grid;gap:0;padding:var(--s-1) 0 var(--s-2);margin-bottom:var(--s-1);border-bottom:1px solid var(--line)}
-.au .au-nav,.au .au-srow{grid-template-columns:var(--ico) minmax(0,1fr) auto calc(var(--s-8) + var(--s-1));column-gap:var(--s-2);padding:0 var(--s-1h) 0 var(--s-3)}
-.au :is(.au-nav,.au-srow)>.ico{width:var(--ico);height:var(--ico);color:var(--muted)}
+.au .au-nav{grid-template-columns:var(--ico) minmax(0,1fr) auto calc(var(--s-8) + var(--s-1));column-gap:var(--s-2);padding:0 var(--s-1h) 0 var(--s-3)}
+.au .au-nav>.ico{width:var(--ico);height:var(--ico);color:var(--muted)}
 .au .au-nav .row-title{color:var(--ink);font-weight:var(--w-strong)}
-.au .au-nav .row-age,.au .au-srow .row-age{text-align:right;font-variant-numeric:tabular-nums}
-.au .au-srow .row-title{color:var(--ink)}
-.au .au-srow.is-off .row-title{color:var(--muted)}
-.au .au-srow-mark{display:grid;place-items:center;color:var(--muted)}
-.au .au-srow-mark .ico{width:var(--ico-sm);height:var(--ico-sm)}
+.au .au-nav .row-age{text-align:right;font-variant-numeric:tabular-nums}
 .au .au-side .pk-sec{margin-top:var(--s-1)}
+/* the rail: a row per choice, its mark, its words and its count; a picked one takes the kit's selected wash */
+.au .au-facet{display:grid;gap:0}
+.au .au-fb{grid-template-columns:var(--ico) minmax(0,1fr) auto;column-gap:var(--s-2);width:100%;padding:0 var(--s-2) 0 var(--s-3);border:0;background:none;font:inherit;text-align:left;cursor:pointer}
+.au .au-fb .row-title{color:var(--ink-2)}
+.au .au-fb.is-selected .row-title{color:var(--ink);font-weight:var(--w-strong)}
+.au .au-fb .row-age{font-variant-numeric:tabular-nums}
+.au .au-fb-lead{display:grid;place-items:center;color:var(--muted)}
+.au .au-fb-lead .ico{width:var(--ico-sm);height:var(--ico-sm)}
+.au .au-fb.is-selected .au-fb-lead{color:var(--ink)}
+.au .au-fb:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 
 /* ---------- the content beside it ---------- */
 .au .au-body{padding-top:var(--s-2)}
 .au .au-subbar{display:flex;align-items:center;gap:var(--s-3);min-height:var(--s-12);padding:0 var(--s-3) 0 var(--s-6);border-bottom:1px solid var(--line);flex:none;color:var(--muted);font-size:var(--t-sm)}
 .au .au-subbar>.au-sub-line{flex:1}
+.au .au-back{display:inline-flex;align-items:center;gap:var(--s-1);flex:none;color:var(--ink-2);font-weight:var(--w-strong);text-decoration:none}
+.au .au-back:hover{color:var(--ink)}
+.au .au-back .ico{width:var(--ico-sm);height:var(--ico-sm)}
+/* a phone's head has its own back arrow */
+:where(html[data-layout="cards"]) .au .au-back{display:none}
 .au .au-body{container-type:inline-size}
 /* the table: the name takes the room, the facts keep theirs */
 .au .au-body .table td,.au .au-body .table th{width:1%}
 /* the name and the words take what is left, cut short; the facts keep their own width */
-.au .au-body .table :is(td,th):is(.au-c-name,:first-child){width:60%;max-width:0}
+.au .au-body .table :is(td,th).au-c-name{width:60%;max-width:0}
 .au .au-body .table :is(.au-c-trig,.au-c-by,.au-c-out){width:40%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 /* a narrow list folds its least read columns first: the trend, then when it runs next and what it cost */
 @container (max-width:720px){
@@ -77,7 +88,7 @@
 .au .au-prow-2{padding-left:calc(var(--ico) + var(--s-2));color:var(--muted);font-size:var(--t-sm)}
 
 :where(html[data-layout="cards"]){
-  .au .au-nav,.au .au-srow{height:var(--tap)}
+  .au .au-nav,.au .au-fb{height:var(--tap)}
   .au .au-subbar{padding:0 var(--s-4);flex-wrap:wrap}
 }
 
@@ -219,4 +230,10 @@
   .au .au-run-row .au-run-out{grid-column:2/-1;grid-row:2;padding-bottom:var(--s-1h)}
   .au .au-run-row{height:auto;min-height:var(--tap);row-gap:0;padding-top:var(--s-1h)}
   .au .au-run-row>.au-run-n:last-child{display:none}
+}
+
+/* Runs, narrow: the outcome says more than the automation's name */
+@container (max-width:720px){
+  .au .au-body .table:has(.au-c-out) .au-c-name{width:35%}
+  .au .au-body .table:has(.au-c-out) .au-c-out{width:65%}
 }

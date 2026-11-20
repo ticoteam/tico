@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
+import { Link } from '@/kit/Link';
 import { MenuItem, MenuRule } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { Switch } from '@/kit/Switch';
@@ -10,10 +11,11 @@ import { fmtWhen } from '@/lib';
 import { Empty } from '@/kit/Empty';
 import { Segmented } from '@/kit/Segmented';
 import { ItemHead, PageMore, PanelSlot, SidePanel } from '@/pagekinds';
-import { automationHref, ROUTINES } from './actions';
+import { automationHref, ROUTINES, type RoutineState } from './actions';
+import { routinesHref } from './AutomationsPage';
 import { BoardItemEditor, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate, type Part } from './board';
-import { findStep, money, STEP_WORDS, took, type FlowStep } from './flow';
+import { findStep, money, STEP_WORDS, took, type FlowStep, type Range } from './flow';
 import { FlowView, useNamer } from './FlowView';
 import { Face, PageOwner, PanelRead, press, useConfirmRemove, Word } from './parts';
 import { routineQuery, routinesQuery, runPagesQuery } from './queries';
@@ -33,6 +35,10 @@ import './automations.css';
 export interface AutomationSearch {
   view?: 'runs';
   edit?: string;
+  /** The sidebar's search, status and range, kept from the list: Automations goes back to it as it was. */
+  q?: string;
+  state?: RoutineState;
+  range?: Range;
 }
 
 export function AutomationPage({ id, search }: { id: string; search: AutomationSearch }) {
@@ -128,6 +134,10 @@ function One({ r, search }: { r: Routine; search: AutomationSearch }) {
         more={more}
       />
       <div className="au-subbar">
+        <Link className="au-back" href={routinesHref({ q: search.q, state: search.state, range: search.range })}>
+          <Icon name="chevron" className="flip" />
+          Automations
+        </Link>
         <span className="au-sub-line">
           {owner && (
             <span className="au-owner">

@@ -426,10 +426,24 @@ export type RoutineState = (typeof ROUTINE_STATES)[number];
 
 export const listRoutines = defineAction({
   id: 'automations.list',
-  title: 'Search or filter the automations, or pick their time range',
+  title: 'Search or filter the automations or their runs, or pick the time range',
   kind: 'view',
-  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))), state: z.optional(z.enum(ROUTINE_STATES)), range: z.optional(z.enum(RUN_RANGES)) }),
-  run: ({ router }, i) => go(router, ROUTINES, { q: i.q?.trim() || undefined, state: i.state, range: i.range === RUNS_RANGE ? undefined : i.range }),
+  input: z.strictObject({
+    q: z.optional(z.string().check(z.maxLength(200))),
+    state: z.optional(z.enum(ROUTINE_STATES)),
+    range: z.optional(z.enum(RUN_RANGES)),
+    // the list it narrows: All (left out) or every run, then by the runs' own status too
+    tab: z.optional(z.enum(['runs'] as const)),
+    status: z.optional(z.enum(RUN_STATUSES)),
+  }),
+  run: ({ router }, i) =>
+    go(router, ROUTINES, {
+      tab: i.tab,
+      status: i.tab ? i.status : undefined,
+      q: i.q?.trim() || undefined,
+      state: i.state,
+      range: i.range === RUNS_RANGE ? undefined : i.range,
+    }),
   did: () => 'Listed the routines',
   target: () => ({ kind: 'tab', id: 'routines' }),
 });
