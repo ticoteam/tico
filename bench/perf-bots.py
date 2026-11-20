@@ -158,8 +158,8 @@ def seed(api):
             c.execute(
                 "INSERT OR REPLACE INTO runner_states(runner_id,last_seen_at,awake_since,version,readiness,capabilities) "
                 "VALUES(?,?,?,'1.0',?,'[\"screen\"]')",
-                # Seen ahead of now, so the computers stay online for the whole run and two runs compare.
-                (f"r{r}", H.shift(H.now(), hours=6), H.now(), json.dumps(document)),
+                # Seen ahead of now and awake for an hour, so the computers stay online and awake for the whole run.
+                (f"r{r}", H.shift(H.now(), hours=6), H.shift(H.now(), hours=-1), json.dumps(document)),
             )
     people = ["human:ana", "human:ben", "human:cara"]
     with store.transaction() as c:

@@ -567,15 +567,17 @@ def prime_machines(c, slugs):
         ):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
-        read_cache.prime(c, ASSIGNED_SQL, _assigned_rows(c, part))
+    read_cache.prime(c, ASSIGNED_SQL, _assigned_rows(c, sorted(set(slugs))))
 
 
 def _assigned_rows(c, slugs):
     """{(bot,): ASSIGNED_SQL's row or None} for these bots. Each computer's row (its readiness report, which names
     every bot on it, its screen and capabilities) is read once for all of its bots, not once per bot; a bot whose
     computer has no row has none, as the join gives."""
-    marks = ",".join("?" * len(slugs))
-    assigned = c.execute(f"SELECT bot,runner_id,generation FROM assignments WHERE bot IN ({marks})", slugs).fetchall()
+    assigned = []
+    for part in H.chunks(slugs):
+        marks = ",".join("?" * len(part))
+        assigned += c.execute(f"SELECT bot,runner_id,generation FROM assignments WHERE bot IN ({marks})", part)
     computers = {}
     for part in H.chunks(sorted({row["runner_id"] for row in assigned})):
         computers.update(

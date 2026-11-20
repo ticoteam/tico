@@ -84,7 +84,7 @@ def seed(api):
                 (H.new_id(), tid, f"https://github.example/acme/app/pull/{k + 1}", f"PR {k + 1}", H.now(), k + 1),
             )
         # Each computer's readiness report names every bot on it, as a runner's heartbeat does, and the computers stay
-        # online for the whole run (seen ahead of now), so two checkouts' answers compare.
+        # online and awake for the whole run (seen ahead of now, awake for an hour), so two checkouts' answers compare.
         hosted = collections.defaultdict(list)
         for bot, runner in c.execute("SELECT bot,runner_id FROM assignments ORDER BY bot"):
             hosted[runner].append(bot)
@@ -110,7 +110,7 @@ def seed(api):
             c.execute(
                 "INSERT OR REPLACE INTO runner_states(runner_id,last_seen_at,awake_since,version,readiness,capabilities) "
                 "VALUES(?,?,?,'1.0',?,'[\"screen\"]')",
-                (runner, H.shift(H.now(), hours=6), H.now(), json.dumps(document)),
+                (runner, H.shift(H.now(), hours=6), H.shift(H.now(), hours=-1), json.dumps(document)),
             )
     from backend import health
 
@@ -167,7 +167,7 @@ def report(api):
         for token in TOKENS:
             seen, ms, cpu, size, answer = measure(api, path, token)
             print(
-                f"{path:40s} {token:9s} {len(seen):6d} statements {ms:9.1f} ms {cpu:9.1f} ms CPU {size / 1024:8.1f} KB"
+                f"{path:40s} {token:9s} {len(seen):6d} statements {ms:9.1f} ms {cpu:9.1f} ms CPU, one at a time {size / 1024:8.1f} KB"
             )
             answers[f"{path} {token}"] = blank_clock(answer)
             if os.environ.get("SIZES") and isinstance(answer, list) and answer and isinstance(answer[0], dict):

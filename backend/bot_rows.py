@@ -212,7 +212,7 @@ class BotRows:
                 self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
             if self.wants("notes"):
                 self.notes = H.notes_waiting_counts(c, read, limit=500)
-            if self.wants("task_flow"):
+            if self.wants("task_flow", "goal_active"):
                 stored = []
                 for part in H.chunks(read):
                     stored += c.execute(
@@ -223,9 +223,11 @@ class BotRows:
                 for task in map(dict, stored):
                     tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
                 # The rows just read stand for every one-task read of these tasks (H.task_untagged, the privacy checks,
-                # the waits' waiting_on.prime). Their tags are not read: nothing here shows or checks one.
+                # the waits' waiting_on.prime, a goal's room check). Their tags are not read: nothing here shows or
+                # checks one.
                 H.prime_task_rows(c, stored)
-                self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+                if self.wants("task_flow"):
+                    self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
             if self.wants("claim_scoped", "claim_task"):
                 self.scopes = {
                     bot: row["claim_task"]
@@ -233,8 +235,9 @@ class BotRows:
                         c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read
                     ).items()
                 }
-                # For the reader's check on each scoped task (H.task_untagged), which reads none of its tags.
-                H.prime_tasks(c, list(self.scopes.values()), with_tags=False)
+                if self.wants("claim_task"):
+                    # For the reader's check on each scoped task (H.task_untagged), which reads none of its tags.
+                    H.prime_tasks(c, list(self.scopes.values()), with_tags=False)
         self.goals = {}
         for part in H.chunks(slugs if activity and self.wants("goal_active") else []):
             for row in c.execute(
