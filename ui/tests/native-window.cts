@@ -17,6 +17,7 @@ type Request = import('playwright').Request;
 type Pending = {resolve: (v: boolean) => void; reject: (e: Error) => void; origin: string};
 interface VisualWin {
   __calls: {origin: string}[]; __pending: Pending[]; __nativeOrigin: string;
+  __fetchesQuiet: () => Promise<void>;
   __boot: {route: string; server: {path: string; ms: number}[]; marks: {[k: string]: number; boot: number; roster: number; route: number}}[];
   __refresh: Promise<unknown>; __queuedAt: number; __queued: Promise<unknown>;
   __raf: (cb: (t: number) => void) => number; __heldRAF: ((t: number) => void)[];
@@ -60,6 +61,15 @@ async function visualHandshake(browser: Browser) {
     (() => {
     if (window.top !== window) return;
     window.EventSource = class { readyState = 0; addEventListener() {} removeEventListener() {} close() {} };
+    // Counts the page's fetches so the test can reload between them (see reload below).
+    const fetch0 = window.fetch; let open = 0, frozen = false; const idle = [];
+    const settle = () => { if (!open) idle.splice(0).forEach(resolve => resolve()); };
+    window.fetch = function (...args) {
+      if (frozen) return new Promise(() => {});
+      open++;
+      return fetch0.apply(this, args).finally(() => { open--; settle(); });
+    };
+    window.__fetchesQuiet = () => { frozen = true; return new Promise(resolve => { idle.push(resolve); settle(); }); };
     window.__calls = []; window.__pending = []; window.__nativeOrigin = ''; window.__boot = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
       if (command === 'bridge' && args.name === 'bootTiming') window.__boot.push(args.body);
@@ -81,14 +91,16 @@ async function visualHandshake(browser: Browser) {
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
   const threads = threadsFake({bot:'ops', messages:() => [message()]});
   // WebKit on Linux reports a fetch a reload cuts off as a page error ("Fetch API cannot load … due to access control
-  // checks"), and the page asks for support access a second after it loads. So the test reloads only once every
-  // request the page has made has its answer (a live stream never finishes, so it doesn't count).
+  // checks"), and the page starts fetches on its own timers (support access after 1 s, support tickets after 3 s). So
+  // before a reload the page starts no new fetch (each new one never answers) and every fetch it started has its
+  // answer; then every other request the page made (a live stream never finishes, so it doesn't count).
   const inFlight = new Set<Request>();
   let quiet = () => {};
   const answered = (request: Request) => { inFlight.delete(request); if (!inFlight.size) quiet(); };
   page.on('request', request => { if (request.resourceType() !== 'eventsource') inFlight.add(request); });
   page.on('requestfinished', answered); page.on('requestfailed', answered);
   const reload = async () => {
+    await page.evaluate(() => (window as unknown as VisualWin).__fetchesQuiet());
     if (inFlight.size) await new Promise<void>(resolve => { quiet = resolve; });
     await page.reload({waitUntil:'domcontentloaded'});
   };
