@@ -75,6 +75,9 @@ def fail(code, message):
 
 REFUSED = 3  # the exit code when Tico's CI cap refuses a builder's run
 PERMIT_TIMEOUT = 30  # seconds a permit request may take
+# Cloudflare in front of Tico refuses Python's default User-Agent (error 1010) with a 403 before Tico sees the ask, as
+# clients/tool_call.py notes, so the permit names its own agent.
+USER_AGENT = 'tico-remote-run'
 
 
 def rate_limit_wait():
@@ -283,7 +286,12 @@ def permit(run_id, cpus, minutes, environ=os.environ):
         url.rstrip('/') + '/api/v2/ci/permits',
         data=body,
         method='POST',
-        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'Idempotency-Key': run_id},
+        headers={
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': run_id,
+            'User-Agent': USER_AGENT,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=PERMIT_TIMEOUT) as response:
