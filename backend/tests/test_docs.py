@@ -138,22 +138,22 @@ def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
 
 
 def test_search_puts_a_named_doc_first_and_a_librarian_log_last_with_each_best_section(api):
-    log = make(api, "Questions and answers", "## Onboarding checklist\n\nOnboarding checklist, onboarding checklist.")
+    log = make(api, "Questions and answers", "## Expense report\n\nExpense report, expense report.")
     log = edit(api, log, path="_librarian/faq-log.md")["doc"]
-    week = make(api, "Week one", "# Week one\n\nLaptop.\n\n## Onboarding checklist\n\nThe onboarding checklist: forms.")
-    named = make(api, "Onboarding checklist", "Day one: a laptop. Ask in onboarding.")
-    by_path = make(api, "Day two", "Lunch.", path="hr/onboarding.md")
-    hits = call(api, "GET", "docs/search", params={"q": "onboarding checklist"})["results"]
+    week = make(api, "Week one", "# Week one\n\nLaptop.\n\n## Expense report\n\nThe expense report: receipts.")
+    named = make(api, "Expense report", "Day one: a laptop.")
+    by_path = make(api, "Day two", "Lunch.", path="finance/expense.md")
+    hits = call(api, "GET", "docs/search", params={"q": "expense report"})["results"]
     assert [h["id"] for h in hits] == [named["id"], week["id"], by_path["id"], log["id"]]
-    assert (hits[1]["section"], hits[1]["anchor"]) == ("Onboarding checklist", "onboarding-checklist")
-    assert hits[1]["excerpt"] == "The onboarding checklist: forms."
+    assert (hits[1]["section"], hits[1]["anchor"]) == ("Expense report", "expense-report")
+    assert hits[1]["excerpt"] == "The expense report: receipts."
     assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True)
     # Its path names a doc as its title does; and the team's named doc leads the manual's sections too.
-    assert call(api, "GET", "docs/search", params={"q": "hr onboarding"})["results"][0]["id"] == by_path["id"]
-    both = call(api, "GET", "docs/search", params={"q": "onboarding checklist", "collection": "all"})["results"]
+    assert call(api, "GET", "docs/search", params={"q": "finance expense"})["results"][0]["id"] == by_path["id"]
+    both = call(api, "GET", "docs/search", params={"q": "expense report", "collection": "all"})["results"]
     assert both[0]["id"] == named["id"] and {r["collection"] for r in both} == {"company", "manual"}
     assert archive(api, named) and named["id"] not in [
-        h["id"] for h in call(api, "GET", "docs/search", params={"q": "onboarding checklist"})["results"]
+        h["id"] for h in call(api, "GET", "docs/search", params={"q": "expense report"})["results"]
     ]
 
 
