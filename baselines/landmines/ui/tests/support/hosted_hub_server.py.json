@@ -1,5 +1,0 @@
-{
-  "ui/tests/support/hosted_hub_server.py": {
-    "no-fixed-sleep-py": 2
-  }
-}

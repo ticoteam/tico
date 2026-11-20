@@ -23,55 +23,12 @@ else:
     import flake_detect
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_MAP = {
-    "ui/app/calendar.js": ["calendar-page"],
-    "ui/app/calendar-row.js": ["calendar-page", "sidebar-first-paint"],
-    "ui/app/chat.js": ["chat", "imported-history"],
-    "ui/app/chat-outline.js": ["chat", "imported-history"],
-    "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
-    "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
-    "ui/github-connect.js": ["github-after-connect", "github-personal", "settings-forms"],
-}
-# Browser scripts a UI file runs as well as what the rules pick for it (rule 6): a check whose name does not hold the
-# file's stem. UI_MAP would replace the rest of the file's selection (its smoke set and named scripts); this adds.
-PIPELINE_VIEW = [
-    "board-flood",
-    "pipeline-ask",
-    "pipeline-blocked",
-    "pipeline-cards",
-    "pipeline-drag",
-    "pipeline-drop",
-    "pipeline-move",
-    "pipeline-rail",
-    "pipeline-side-stages",
-    "pipeline-snoozed",
-    "stage-column-menu",
-    "stage-review",
-    "stage-rules",
-    "tasks-header",
-]
-UI_ALSO = {
-    # A 1,000-task board in a flood of live changes: how the board draws, and how live task and Needs you changes reach it.
-    "ui/app/tasks-page.js": ["board-flood"],
-    # The pipeline view's own markup (.pv-*): every script that draws a board, its list or a phone's stage tabs. They name
-    # tasks-page.cts or a pipeline, not this file, so rule 4 alone picked three of them (main went red on stage-review,
-    # Nov 17: the stage ⋯ moved ▶ and a phone's tabs, and no check that measures them ran).
-    "ui/app/task-pipelines.js": PIPELINE_VIEW,
-    "ui/styles/task-pipelines.css": PIPELINE_VIEW,
-    "ui/styles/stage-rules.css": ["stage-rules", "stage-review", "stage-column-menu"],
-    # Move to… and picking many on a board (the picker is task-props.ts's).
-    "ui/app/task-props.js": ["pipeline-move", "stage-column-menu"],
-    # A stage's ⋯ on a board: Move all to…, Close all, Assign all to…, Snooze all….
-    "ui/app/task-pick.js": ["pipeline-move", "stage-column-menu"],
-    "ui/app/stage-menu.js": ["stage-column-menu"],
-    "ui/app/refresh.js": ["board-flood"],
-    "ui/app/live.js": ["board-flood"],
-}
+# Browser scripts a UI file runs instead of (UI_MAP) or as well as (UI_ALSO) what the rules pick for it. Empty since the
+# old web app (ui/) and its browser scripts went; the web app's tests run in web/.
+UI_MAP: dict[str, list[str]] = {}
+UI_ALSO: dict[str, list[str]] = {}
 # Checks whose inputs arrive through an HTTP request or catalog discovery.
 CHECK_ALSO = {
-    "backend/mail.py": ("ui/tests/e2e-tools.cts",),
-    "backend/mail_actions.py": ("ui/tests/redesign-e2e-automations.cts",),
-    "backend/model_subscriptions.py": ("ui/tests/computers-shared.cts",),
     "backend/threads.py": ("backend/tests/test_sql_parity.py",),
     "templates/catalog/*/card.yaml": ("backend/tests/test_recruiting.py",),
 }
@@ -119,9 +76,6 @@ UPGRADE_TESTS = (
 # Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
 # names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red
 # on guards the change's plan never picked:
-# - RELEASE_SHOTS runs scripts/screenshots/index.cts --list-pages, which lists every tracked ui/ file through git: a new
-#   ui/ file that no PAGES, SHARED or UNSHOWN entry names fails it (#3335 ui/app/browser-view.ts), and a gone one can
-#   leave a glob that matches no file. A ui/ file added or gone, outside the folders the harness ignores, picks it.
 # - CLI_SPEC parses every CLI command's example through hubcli.parser(): an example that names a file it reads
 #   (`--file signups.csv`) fails it when the test writes no stand-in for that kind of file (#3598, fixed by #3684).
 #   A change under clients/commands/ picks it.
@@ -129,44 +83,9 @@ UPGRADE_TESTS = (
 #   the map sees no edge from a command module to it: #3798 added `advice` to `tico computer performance` in
 #   clients/commands/computers.py without re-recording computer.json, and release validation for v0.6.66 went red
 #   (fixed by #4303). A change under clients/commands/ picks it too.
-# - GROWTH_FIXTURES writes the Growth read (backend/growth_core.py, reached through the API and growth_computed) into
-#   ui/tests/fixtures/growth-read-*.json and fails when the files are not the read, so the map sees no edge from a
-#   growth module to it: #4489 added `sources` to the read's health without writing the files again, and release
-#   validation for v0.6.110 went red. A change to backend/growth*.py picks it.
-# - UI_SHELL_SIZE builds the whole UI bundle and fails when a cold open of Home downloads more JavaScript than its ceiling
-#   (backend/ui_build.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
-#   build or the npm lockfile (esbuild's version decides the minified bytes) can move that number: each picks it.
-#   Between P05's two pull requests the shell crept from 341 to 383 KB with no check noticing.
-RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
 CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_FIXTURES = "clients/tests/test_cli_fixtures.py"
-GROWTH_FIXTURES = "backend/tests/test_growth_page_fixtures.py"
 CLI_COMMANDS = "clients/commands/"
-UI_SHELL_SIZE = "backend/tests/test_ui_shell_size.py"
-UI_SHELL_INPUTS = (
-    "backend/ui_build.py",
-    "scripts/build-ui.cjs",
-    "package.json",
-    "package-lock.json",
-)
-
-
-def moves_ui_shell(name):
-    """A path whose change can change what a cold open of Home downloads (UI_SHELL_SIZE): UI code, its page list or
-    parts list, a vendor script, or what builds and serves them. UI tests, baselines and docs cannot."""
-    if name in UI_SHELL_INPUTS:
-        return True
-    if not name.startswith("ui/") or name.startswith(SHOT_IGNORED) or name.endswith(".md"):
-        return False
-    return name.endswith((".ts", ".js", ".mjs", ".html", ".json"))
-
-
-SHOT_IGNORED = ("ui/tests/", "ui/baselines/", "ui/types/")
-
-
-def shot_listed(name):
-    """A ui/ file the release-shot harness classifies (select.cts NON_RENDERING ignores tests, baselines, types, docs)."""
-    return name.startswith("ui/") and not name.startswith(SHOT_IGNORED) and not name.endswith(".md")
 
 
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
@@ -1356,7 +1275,7 @@ def is_browser(name):
 def smoke(root=ROOT):
     """The smoke set's Python test files and browser scripts (SMOKE_FILE): what an uncertain change runs."""
     data = json.loads((root / SMOKE_FILE).read_text())
-    return sorted(e["file"] for e in data["python"]), sorted(e["script"] for e in data["browser"])
+    return sorted(e["file"] for e in data["python"]), sorted(e["script"] for e in data.get("browser", []))
 
 
 def name_status(text):
@@ -1458,10 +1377,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
-    9. Guard tests (`guards`, which a light plan keeps): a ui/ file the release-shot harness lists that is added or gone
-       runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES; a backend/growth*.py file runs
-       GROWTH_FIXTURES; a path that can move what a
-       cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
+    9. Guard tests (`guards`, which a light plan keeps): a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES.
     10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1667,22 +1583,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         notes.append("rule 8: a migration runs the upgrade tests")
     # Command-table sweeps apply only to changed command modules; they do not alter import traversal or hub counts.
     python |= {test for name in names for test in graph.command_sweeps_for(name)}
-    if any(shot_listed(n) and (n in added or n in gone) for n in names) and (root / RELEASE_SHOTS).is_file():
-        guards.add(RELEASE_SHOTS)
-        notes.append("rule 9: a new or gone ui/ file runs the release-shot table test")
     if any(n.startswith(CLI_COMMANDS) for n in names):
         cli_guards = {t for t in (CLI_SPEC, CLI_FIXTURES) if (root / t).is_file()}
         if cli_guards:
             guards |= cli_guards
             notes.append("rule 9: a CLI command change runs the CLI spec and frozen command-line tests")
-    if any(n.startswith("backend/growth") and n.endswith(".py") for n in names) and (root / GROWTH_FIXTURES).is_file():
-        guards.add(GROWTH_FIXTURES)
-        notes.append("rule 9: a Growth module change runs the Growth page fixture test")
-    if any(moves_ui_shell(n) for n in names) and (root / UI_SHELL_SIZE).is_file():
-        guards.add(UI_SHELL_SIZE)
-        notes.append("rule 9: a UI, bundler or UI build change runs the cold-open size ceiling")
     python |= guards
-    if any(n in CI_INPUTS for n in names) and not browser:
+    if any(n in CI_INPUTS for n in names) and not browser and (root / UI_RUNNER).is_file():
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
@@ -1722,12 +1629,15 @@ def smoke_check(root=ROOT):
     if not isinstance(data, dict):
         return [f"{SMOKE_FILE}: not a JSON object"]
     problems = []
-    try:
-        core = set(browser_scripts([], root))
-    except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
-        core = None
-        problems.append(f"cannot list the core browser scripts: {error}")
-    for kind, key in (("python", "file"), ("browser", "script")):
+    core = None
+    # The browser smoke set went with the old web app (ui/): a browser entry is checked only when one is there.
+    kinds = (("python", "file"), ("browser", "script")) if "browser" in data else (("python", "file"),)
+    if "browser" in data:
+        try:
+            core = set(browser_scripts([], root))
+        except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+            problems.append(f"cannot list the core browser scripts: {error}")
+    for kind, key in kinds:
         entries = data.get(kind)
         if not isinstance(entries, list) or not entries:
             problems.append(f"{kind}: no entries")
@@ -2164,7 +2074,7 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         if any(n.startswith("ui/") or n == UI_RUNNER or pinned(n) for n in names):
             direct |= set(smoke_scripts)
         browser = set(picked["browser"]) & direct
-        if any(n in CI_INPUTS for n in names) and not browser:
+        if any(n in CI_INPUTS for n in names) and not browser and (root / UI_RUNNER).is_file():
             browser.add(SMOKE_SCRIPT)
         out["browser"] = sorted(browser)
         record["browser_left"] = sorted(set(picked["browser"]) - browser)
@@ -2333,7 +2243,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
         counts, timings = cap_light(record, counts, timings)
         picked["python"] = sorted(counts)
     browser = None
-    if picked["browser"] != []:
+    # The core scripts (None) came from the old web app's runner, which went with ui/: there are none to list.
+    no_core = picked["browser"] is None and not (ROOT / UI_RUNNER).is_file()
+    if picked["browser"] != [] and not no_core:
         scripts = browser_scripts(picked["browser"] or [])
         # Timings are keyed by script stem (the runner writes stems), so a .cts script keeps its .cjs-shaped key.
         browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}

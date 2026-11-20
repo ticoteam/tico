@@ -514,20 +514,8 @@ FULL_PYTHON_SHARDS = 36
 
 
 def full_matrix():
-    """The full validation's gate VMs: the product part, four browser shards, FULL_PYTHON_SHARDS python shards and the
-    desktop part."""
+    """The full validation's gate VMs: the product part, FULL_PYTHON_SHARDS python shards and the desktop part."""
     jobs = [{"name": "product", "part": "product", "shard": "", "workers": "2", "runner": RUNNER}]
-    jobs += [
-        {
-            "name": f"browser-{k}",
-            "part": "browser",
-            "shard": f"{k}/4",
-            "workers": "2",
-            "runner": RUNNER,
-            "binaries": "no",
-        }
-        for k in range(1, 5)
-    ]
     jobs += [
         {
             "name": f"python-{k}",

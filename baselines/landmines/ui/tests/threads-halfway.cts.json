@@ -1,6 +1,0 @@
-{
-  "ui/tests/threads-halfway.cts": {
-    "no-fixed-wait-ui": 3,
-    "no-raised-timeout": 3
-  }
-}

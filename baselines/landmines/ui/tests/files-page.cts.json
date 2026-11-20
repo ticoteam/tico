@@ -1,6 +1,0 @@
-{
-  "ui/tests/files-page.cts": {
-    "no-fixed-wait-ui": 3,
-    "no-raised-timeout": 2
-  }
-}

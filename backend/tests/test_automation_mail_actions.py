@@ -13,10 +13,8 @@ def test_redesign_promo_sample_queues_danas_archive_without_a_mailbox_row():
     from evals.redesign import seeds
     from evals.redesign.harness import DANA_REF, Org
 
-    # The browser and this check use the same sample so it targets a message the connector can identify.
-    sample = json.loads(
-        (Path(__file__).resolve().parents[2] / "ui/tests/fixtures/redesign-automation-promo.json").read_text()
-    )
+    # A sample message the connector can identify.
+    sample = json.loads((Path(__file__).resolve().parent / "fixtures" / "redesign-automation-promo.json").read_text())
     with Org() as world:
         seeds.automations(world)
         listed = world.api("get", "/api/v2/automations")

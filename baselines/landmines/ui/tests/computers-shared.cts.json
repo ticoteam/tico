@@ -1,6 +1,0 @@
-{
-  "ui/tests/computers-shared.cts": {
-    "no-fixed-wait-ui": 2,
-    "no-raised-timeout": 1
-  }
-}

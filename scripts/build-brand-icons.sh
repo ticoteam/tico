@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerates every raster brand file from the SVGs in ui/assets/tico/ (the square mark, the
+# Regenerates every raster brand file from the SVGs in backend/assets/tico/ (the square mark, the
 # monochrome glyph; the wordmarks are used as SVG and need no export).
 #
 #   bash scripts/build-brand-icons.sh
@@ -10,8 +10,8 @@
 # desktop app with scripts/app.sh build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-BRAND=ui/assets/tico
-WEB=ui/assets
+BRAND=backend/assets/tico
+WEB=backend/assets
 APP=app/icons
 MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, the flat Liquid Dot
 TMP=$(mktemp -d)

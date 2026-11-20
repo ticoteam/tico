@@ -35,10 +35,10 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: (True, 'edge networks: ok'))
     monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
 
-    for builds_ok, overrides, workers, browser_jobs in (
-        (True, {}, '6', None),
-        (False, {}, '6', None),
-        (True, {'TICO_PYTHON_WORKERS': '2', 'TICO_UI_JOBS': '1'}, '2', '1'),
+    for builds_ok, overrides, workers in (
+        (True, {}, '6'),
+        (False, {}, '6'),
+        (True, {'TICO_PYTHON_WORKERS': '2'}, '2'),
     ):
         release_checks.os.environ = {'TICO_RUNNER_TEST_IMAGE': 'stale-runner:local', **overrides}
         monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
@@ -78,9 +78,8 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         assert all(f'--ignore={isolation_file}' in command for command in (python_command, alone_command))
         assert python_command[python_command.index('-n') + 1] == workers
         assert '--maxschedchunk=2' in python_command
-        assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs
         builds = {'build-server', 'build-runner', 'build-updater'}
-        assert builds <= calls['all-python'][2] and builds <= calls['all-browser'][2]
+        assert builds <= calls['all-python'][2] and 'all-browser' not in calls
         assert not calls['journey'][2]
         for offset, name in enumerate(calls, 1):
             code = 1 if name == 'build-runner' and not builds_ok else 0
@@ -263,7 +262,6 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(
         release_checks, 'shard_files', lambda index, total, env, native_first=False: [f'group{index}of{total}.py']
     )
-    monkeypatch.setattr(release_checks, 'browser_shard', lambda index, total: [f'page{index}of{total}'])
     calls, edge_checks = {}, []
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: edge_checks.append(len(calls)) or (True, 'ok'))
 
@@ -281,8 +279,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
     for part, shard, expected in (
         ('product', None, product),
-        ('browser', None, {'all-browser'}),
-        ('browser', (1, 2), {'browser-1-of-2'}),
+        ('browser', None, set()),  # the old web app's browser scripts went with ui/
         ('python', None, {'all-python'}),
         ('python', (2, 4), {'python-2-of-4'}),
         ('desktop', None, {'desktop-update'}),
@@ -301,12 +298,10 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
             assert ('group2of4.py' in command) == bool(shard)
             assert ('group2of4.py' in alone_command) == bool(shard)
             assert alone_command[alone_command.index('-n') + 1] == '0'
-        if shard and part == 'browser':  # only its own scripts, not --all
-            assert calls['browser-1-of-2'][2:] == ['page1of2']
     calls.clear()
     monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
     assert release_checks.release(SimpleNamespace(previous=None)) == 0
-    assert set(calls) == product | {'all-python', 'all-browser'}
+    assert set(calls) == product | {'all-python'}
     assert calls['all-python'][2:] == ['--python-tests', '2']
     # Given the images Release validation built, the product part tests those, pulled by digest, as their own version.
     release_checks.os.environ.update(

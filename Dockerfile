@@ -46,18 +46,8 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
-# The UI build: the page, the bundle and the compiled TypeScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
-# no Node, so only build/ui goes on from here. npm ci installs the lock's pinned esbuild and runs no package scripts.
-FROM node AS ui-build
-ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-WORKDIR /src
-COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
-COPY scripts/build-ui.cjs scripts/
-COPY ui ui
-RUN node scripts/build-ui.cjs
-
-# The web app at / (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web.
+# The web app at / (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web. The server image
+# has no Node, so only build/web goes on from here.
 FROM node AS web-build
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /src/web
@@ -109,7 +99,6 @@ ARG TICO_COMMIT
 ARG TICO_REPOSITORY
 WORKDIR /opt/tico
 COPY . /opt/tico
-COPY --from=ui-build /src/build/ui /opt/tico/build/ui
 COPY --from=web-build /src/build/web /opt/tico/build/web
 # Deployed task completion needs the source commit, not just the version label.
 RUN python - <<'PY'
@@ -134,7 +123,7 @@ RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
     .venv/bin/python -c 'import backend.app, runner_support.close_calls, runner_support.importers.service, runner_support.engine, clients.environments, yaml; yaml.CSafeLoader' \
-    && .venv/bin/python -m backend.ui_build --check \
+    && test -f build/web/index.html && test -f build/web/sw.js \
     && .venv/bin/python -m compileall -q backend runner_support runner clients
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it

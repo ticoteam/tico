@@ -1,6 +1,0 @@
-{
-  "ui/tests/settings-billing.cts": {
-    "no-fixed-wait-ui": 2,
-    "no-raised-timeout": 1
-  }
-}

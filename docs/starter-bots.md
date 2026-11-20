@@ -69,8 +69,7 @@ owns a KPI (Product Analyst and FP&A Analyst answer questions and explain number
 
 ## The templates
 
-Icons are [Material Symbols](https://fonts.google.com/icons) names in the style the UI already uses (Outlined, weight 300, no
-fill); `scripts/build-icon-font.py` adds every card's and group's icon to the subset font in `ui/vendor/fonts/`.
+Icons are [Material Symbols](https://fonts.google.com/icons) names (Outlined, weight 300, no fill).
 `suggest` is `default` (pre-checked for most teams), `common` or `niche`.
 
 ### Sales
@@ -317,7 +316,7 @@ templates add these fields to the existing ones (`template`, `slug`, `name`, `su
 | `lead` | `true` on exactly one template per group: its head, the template `groups.yaml` names as `head`. The template test requires exactly one and that they agree |
 | `team_templates` | Heads only: every other template in the group. What the head hires from |
 | `kind` | `helper` for a message bot template that serves one human (the Inbox Manager): no group, pack, head or `suggest`, and never on the team chart. Every other template is a role and leaves it out |
-| `icon` | A Material Symbols name that fits the role; it must be in `ui/vendor/fonts/icons.txt` (run `scripts/build-icon-font.py` after adding a template) |
+| `icon` | A Material Symbols name that fits the role |
 | `suggest` | `default` (pre-checked for most teams), `common` or `niche` |
 | `tags` | Short lowercase keywords a briefing answer is matched against: `b2b`, `b2c`, `saas`, `ecommerce`, `retail`, `services`, `enterprise`, `smb`, `outbound`, `content`, `paid-ads`, `field-service` and the role's own words |
 | `summary` | One crisp line of what it does, shown under each suggestion. Its first sentence (40 to 185 characters) is the setup line |

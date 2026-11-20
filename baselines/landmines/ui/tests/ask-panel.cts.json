@@ -1,6 +1,0 @@
-{
-  "ui/tests/ask-panel.cts": {
-    "no-raised-timeout": 1,
-    "timing-assert": 1
-  }
-}

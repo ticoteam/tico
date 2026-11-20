@@ -1,6 +1,0 @@
-{
-  "ui/tests/threads.cts": {
-    "no-fixed-wait-ui": 27,
-    "no-raised-timeout": 3
-  }
-}

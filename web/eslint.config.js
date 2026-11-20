@@ -12,7 +12,6 @@ const SERVER_FILES = ['src/api/**', 'src/data/**', 'src/live/**', 'src/*/queries
 // A later flat-config block replaces a rule entirely, so each folder's list repeats the shared part.
 const SHARED = [
   { regex: '^\\.\\./', message: 'Import through the @/ alias, not ../' },
-  { regex: '(^|/)ui/(app|styles)(/|$)', message: 'web/ imports nothing from ui/' },
   // routing.ts: what loads before a page's code (address checks, first reads, the shell's counts), never a component;
   // exports.ts: the rest. The first load carries only the routing files, so a page's code comes with its route.
   { regex: '^@/features/[^/]+/(?!exports$|routing$)', message: 'Use a feature only through its exports.ts or routing.ts' },
@@ -38,6 +37,7 @@ export default defineConfig(
   },
   { files: ['scripts/**', 'vite.config.ts', '*.config.js', 'e2e/**', 'parity/**'], languageOptions: { globals: globals.node } },
   { files: ['public/boot.js'], languageOptions: { sourceType: 'script' } },
+  { files: ['public/sw.js'], languageOptions: { sourceType: 'script', globals: globals.serviceworker } },
 
   // No fetch and no inline query outside the server files.
   {

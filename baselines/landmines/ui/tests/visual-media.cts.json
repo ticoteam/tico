@@ -1,6 +1,0 @@
-{
-  "ui/tests/visual-media.cts": {
-    "no-fixed-wait-ui": 6,
-    "no-raised-timeout": 5
-  }
-}

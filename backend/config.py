@@ -206,7 +206,6 @@ class Settings:
     registry_dir: Path = ROOT / "registry"
     # The bot templates onboarding offers. A deployment may ship its own set of cards.
     catalog_dir: Path = ROOT / "templates" / "catalog"
-    ui_dir: Path = ROOT / "ui"
     # The web app's build, served at / with its files under /next/ (backend/web_routes.py); a 404 while it is missing.
     web_dir: Path = ROOT / "build" / "web"
     integrations_dir: Path = ROOT / "integrations"

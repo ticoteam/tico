@@ -7,59 +7,11 @@ The license text for those grants is in licenses/Apache-2.0.txt.
 
 It includes third-party software, kept under its own license:
 
-  ui/vendor/marked.min.js
-      marked 18.2.1, MIT License. Copyright (c) 2011-2024 Christopher Jeffrey and
-      2018+ MarkedJS. Includes the Markdown license (BSD-3-Clause, John Gruber).
-      License text: ui/vendor/LICENSE-marked.md
-
   templates/employee-repo/ui/vendor/js-yaml.min.js
       js-yaml 4.3.2, MIT License. Copyright (C) 2011-2015 Vitaly Puzrin.
       License text: templates/employee-repo/ui/vendor/LICENSE-js-yaml
 
-  ui/vendor/docx-preview.min.js
-      docx-preview 0.4.1 (unmodified dist build), Apache License 2.0. Copyright (c) 2016-2023
-      Volodymyr Baydalka. License text: ui/vendor/LICENSE-docx-preview
-
-  ui/vendor/jszip.min.js
-      JSZip 3.10.2 (unmodified dist build), used under the MIT License (dual MIT or GPLv3).
-      Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, Antonio Afonso.
-      Includes pako, MIT License. License text: ui/vendor/LICENSE-jszip.md
-
-  ui/vendor/livekit-client.umd.min.js
-      LiveKit JavaScript SDK 2.5.7, Apache License 2.0.
-      License text: ui/vendor/LICENSE-livekit-client
-
-  ui/vendor/novnc/
-      noVNC 1.7.0 (@novnc/novnc, the core/ modules RFB needs, unmodified), Mozilla Public License 2.0.
-      Copyright (C) 2022 The noVNC authors (ui/vendor/novnc/AUTHORS). core/crypto/des.js keeps its own
-      BSD-style notice in its header. Includes pako (ui/vendor/novnc/vendor/pako/), MIT License.
-      License text: licenses/MPL-2.0.txt, ui/vendor/novnc/LICENSE.txt and ui/vendor/novnc/vendor/pako/LICENSE
-
-  ui/vendor/fonts/atkinson-hyperlegible-next-plain-zero.woff2 (a modified subset of Atkinson Hyperlegible Next, built by
-      scripts/build-text-font.py from ui/vendor/fonts/atkinson-hyperlegible-next.woff2; the zero has no slash, on ss09)
-      Atkinson Hyperlegible Next, Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
-      (https://github.com/googlefonts/atkinson-hyperlegible-next), SIL Open Font License 1.1.
-      License text: ui/vendor/fonts/LICENSE-atkinson-hyperlegible-next.txt
-
-  ui/vendor/fonts/inter-variable.woff2 (a subset of Inter 4.1 built by scripts/build-symbol-font.py: the arrows, check
-      marks and symbols Atkinson Hyperlegible Next lacks; only pages that show one of them load it)
-      Inter, Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter), SIL Open Font
-      License 1.1. License text: ui/vendor/fonts/LICENSE-inter.txt
-
-  ui/vendor/fonts/material-symbols-outlined.woff2 (a subset built by scripts/build-icon-font.py)
-  ui/assets/bot-symbols/
-      Material Symbols (Google), Apache License 2.0.
-      License text: ui/vendor/fonts/LICENSE-material-symbols.txt
-
-  ui/assets/observability-vendors.js
-      A build (npm run build:observability) of posthog-js (Apache-2.0 AND MIT) and
-      @sentry/browser (MIT), from the versions pinned in package.json. The build is
-      off until configured.
-
-  ui/tool-icons.ts
-      Service logo paths from Simple Icons (https://simpleicons.org), CC0 1.0 Universal. The marks
-      belong to their owners and are used only to say which service a bot uses, or which agent
-      Connect an agent (ui/connect-agent.ts) means.
-      The xAI and Grok marks in it are from Lobe Icons (https://github.com/lobehub/lobe-icons,
-      @lobehub/icons-static-svg 1.95.1), MIT License; neither is in Simple Icons.
-
+  web/ (the web app, built into build/web)
+      Bundles npm packages under their own licenses (web/package-lock.json), among them noVNC (@novnc/novnc, Mozilla
+      Public License 2.0, license text: licenses/MPL-2.0.txt) and the LiveKit JavaScript SDK (livekit-client, Apache
+      License 2.0). Its fonts keep their licenses beside them in web/public/fonts.

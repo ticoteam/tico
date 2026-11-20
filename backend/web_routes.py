@@ -10,9 +10,13 @@ there (web/src/router.tsx). The server's own prefixes (SERVER) never fall throug
 is still the plain 404. The folder is read on each request, so a build written while the server runs is served at once; with
 no build the page is a 404.
 
+The service worker browsers installed for this origin (scope /) asks /sw.js for its updates: it is the build's
+sw.js (web/public/sw.js), which shows Web Push.
+
 `register` goes before any route that could answer /next; `register_page` goes after every other route and mount.
 """
 
+import hashlib
 import mimetypes
 from pathlib import Path
 
@@ -22,12 +26,11 @@ from starlette.exceptions import HTTPException
 
 from .config import Settings
 from .store import Problem
-from .ui_bundle_routes import file_reply
-from .ui_build import IMMUTABLE
 
 OLD_PREFIX = "/next"
 ASSETS_PREFIX = "/next/assets/"
 PAGE_TYPE = "text/html; charset=utf-8"
+IMMUTABLE = "public, max-age=31536000, immutable"
 BUILD = "npm ci && npm run build, in web/"
 # First path segments the server answers itself: an address under one of them is never the app's page.
 SERVER = frozenset(
@@ -50,6 +53,33 @@ SERVER = frozenset(
         "styles",
     }
 )
+
+
+# Each sent file's ETag, by path, while its size and modified time stay the same.
+_ETAGS: dict[Path, tuple[tuple[int, int], str]] = {}
+
+
+def file_reply(request: Request, path: Path, media_type: str, cache_control: str | None = None) -> Response:
+    """The file at `path` with a strong ETag of its content (read again when it changes), and a 304 for a matching
+    If-None-Match (a weak form too: Cloudflare sends one)."""
+    source = path
+    try:
+        stat = source.stat()
+    except OSError:
+        raise Problem("not_found", "Not found", 404) from None
+    raw = source.read_bytes()
+    entry = _ETAGS.get(source)
+    if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
+        entry = _ETAGS[source] = ((stat.st_mtime_ns, stat.st_size), f'"{hashlib.sha256(raw).hexdigest()[:32]}"')
+    etag = entry[1]
+    headers = {"ETag": etag}
+    if cache_control:
+        headers["Cache-Control"] = cache_control
+    if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    if request.method == "HEAD":
+        return Response(None, media_type=media_type, headers={**headers, "Content-Length": str(len(raw))})
+    return Response(raw, media_type=media_type, headers=headers)
 
 
 def page_file(settings: Settings) -> Path:
@@ -83,6 +113,14 @@ def register(app: FastAPI, settings: Settings) -> None:
             # An older build's file is gone: never the page under a script's name.
             raise Problem("not_found", "Not found", 404)
         return RedirectResponse(moved(request), status_code=308)
+
+    @app.api_route("/sw.js", methods=["GET", "HEAD"], include_in_schema=False)
+    def service_worker(request: Request) -> Response:
+        # Revalidated on every update check (the middleware's private, no-cache), whatever its ?v=.
+        worker = Path(settings.web_dir).resolve() / "sw.js"
+        if not worker.is_file():
+            raise Problem("not_found", "Not found", 404)
+        return file_reply(request, worker, "text/javascript; charset=utf-8")
 
 
 def register_page(app: FastAPI, settings: Settings) -> None:

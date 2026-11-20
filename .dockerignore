@@ -20,8 +20,8 @@ runner-rs/target
 
 relay-rs/target
 
-# Dev-only trees. The server and runner never read them: backend/code_hash.py hashes backend, clients, runner,
-# runner_support, runner-rs/harnesses and ui, and the manual reads docs/*.md alone.
+# Dev-only trees. The server and runner never read them: backend/code_hash.py hashes backend, build/web, clients,
+# runner, runner_support and runner-rs/harnesses, and the manual reads docs/*.md alone.
 bench
 baselines
 e2e

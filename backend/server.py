@@ -8,6 +8,7 @@ import queue
 import secrets
 import signal
 import socket
+import sys
 import subprocess
 import threading
 from typing import TYPE_CHECKING
@@ -74,13 +75,12 @@ class _FreezeAfterStartup(_UvicornServer):
 def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
     from .config import Settings
     from .screen_binary import prepare
-    from . import background, ui_build
+    from . import background, web_build
 
-    # A server never starts on a UI build that is missing or out of date (backend/ui_build.py).
-    try:
-        ui_build.prepare(settings.ui_dir if settings else ui_build.ROOT / "ui")
-    except ui_build.StaleBuild as exc:
-        raise SystemExit(f"tico server: {exc}") from None
+    # A checkout builds the web app it serves at / when that build is missing or out of date (backend/web_build.py).
+    unbuilt = web_build.prepare(settings.web_dir if settings else web_build.ROOT / "build" / "web")
+    if unbuilt:
+        print(f"tico server: {unbuilt}; / answers 404 until it is built", file=sys.stderr, flush=True)
     binary = prepare()
     key = secrets.token_urlsafe(48)
     listener = socket.socket()

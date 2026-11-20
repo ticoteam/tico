@@ -123,7 +123,7 @@ EC2 instance with SQLite on an encrypted EBS volume, attachments in a private S3
 to S3 twice over (Litestream replicates about every minute; a verified bundle of the database and
 every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, routine,
 run and
-bot setting, serves the web interface (`ui/`), and runs the scheduler that turns due routines into
+bot setting, serves the web app (`web/`, built into `build/web`), and runs the scheduler that turns due routines into
 tasks. It never runs a bot. It runs from the Docker image ([install.md](install.md)). Beside it
 on the same host, the Slack gateway (`backend/slack_gateway.py`, its own unit) turns a DM to
 Tico or an `@Tico` in a channel into a message for the bot the decision model routes it to, posts the
@@ -702,7 +702,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `connectors/` | shared Slack and browser adapters bots use instead of vendor APIs (mail and calendar run on the server) |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
 | `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
-| `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
+| `web/` | the web app (React, built by Vite into `build/web` and served at `/`); `desktop/` is the Electron app around it |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
 | `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |

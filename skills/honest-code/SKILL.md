@@ -71,7 +71,7 @@ the pull request names that SHA. The 80% diff-coverage gate shows that lines ran
 ### Doubles
 
 - Use the real app and database: the `api` fixture (`conftest.py`), `live(api)` (`backend/tests/live.py`), and in the
-  browser `startHub` and `pageAs` (`ui/tests/support/real-hub.cts`).
+  browser `pageAs` on a real server (`web/e2e/hub/hub.ts`).
 - Outside is what does not ship with the code under test: the network, a model, HQ, another company's API, a CLI such
   as `gh` or `op`. Use a fake that exists (listed in `references/examples.md`); when it lacks a failure, add the failure
   to the fake. A client package tests against a live hub, or a recording transport with its reason.
@@ -98,8 +98,8 @@ fails with a message naming what never arrived; a loop that stops quietly at its
 | A state with no event | `wait_for(check, what)` in `backend/tests/helpers/wait.py`. Its poll is the one allowed sleep; it raises naming `what`. |
 | A later or fixed time | Find the clock the code reads. `H.now()`: `monkeypatch.setattr(H, "now", lambda: at)`. `time.time`, `datetime.now`: `time_machine.travel(..., tick=False)`. Freeze the clock, not the function that reads it. |
 | A product pause skipped, a budget run out | The module's `def _sleep(seconds)` or `def _monotonic()` seam; the test's steps advance a fake clock (`backend/tests/test_drains.py`). A `def`, never `_sleep = time.sleep` (L31). |
-| Drawn or written browser state | `until(check, what)` and `drawn(...)` in `ui/tests/support/e2e.cts`, or one `page.waitForFunction` that returns the value |
-| A request the page sends | `page.waitForResponse(...)` registered before the action, awaited after it (`ui/tests/changelog.cts:110-112`) |
+| Drawn or written browser state | One `page.waitForFunction` that returns the value, or Testing Library's `findBy…`/`waitFor` in a web unit test |
+| A request the page sends | `page.waitForResponse(...)` registered before the action, awaited after it |
 | A cost or speed promise | A count: draws, reads, SQL statements (`statement_scope.recorder`). Print milliseconds; never assert them. |
 
 - Wait and read in one call. A wait followed by a separate read still races.
@@ -142,7 +142,7 @@ test id and run ids to the Release Manager bot, which fixes or deletes it the sa
    route, a delay in the fake) makes the old failure happen on every run and shows you have the right cause.
 4. **Prove it.** Run it 20 times in a row (one test fits the local limit). pytest-repeat is not installed; loop:
    `python3 scripts/remote.py -- bash -c 'for i in $(seq 20); do .venv/bin/python -m pytest -q <file>::<test> || exit 1; done'`.
-   For a browser script, loop `node scripts/ui-tests.cts <name>` with `--setup browser`. Report "20 of 20, run <id>".
+   For a web unit test, loop `npx vitest run <file>` in web/. Report "20 of 20, run <id>".
 5. **If you cannot fix it today, delete it.** The commit body and the pull request body state: the test id, the run
    ids where it flipped, the cause if known, the behaviour that is now unchecked, and what still covers it or
    "nothing". If the behaviour is a security, privacy, money, approval or data-safety path, the same pull request adds

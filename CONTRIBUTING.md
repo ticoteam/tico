@@ -19,9 +19,9 @@ commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.
 ## Running the tests
 
 ```bash
-scripts/dev_setup.sh --browser                 # .venv, node_modules, Chromium and the pre-push hook; quick when done
+scripts/dev_setup.sh                           # .venv, node_modules and the pre-push hook; quick when done
 .venv/bin/python -m pytest -q                  # the default Python suite, in parallel (about a minute)
-npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
+(cd web && npm ci && npx vitest run)           # the web app's tests (npm run typecheck and npm run lint beside them)
 ```
 
 `scripts/dev_setup.sh` does only what is missing or stale, so run it again after a pull; `--rust` adds the Rust toolchain
@@ -29,10 +29,9 @@ npm run test:ui                                # the core browser scripts (CORE 
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
-tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
-list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cts --all` run them, and the release check does. Run
-them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
-for one file, `node scripts/ui-tests.cts <name>` for one browser script. If you touch `app/`, also run `cargo check`
+tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers); `python -m pytest -q -m slow` runs them,
+and the release check does. Run them too when you change what they cover. To run less while you work:
+`python -m pytest -q backend/tests/test_x.py` for one file. If you touch `app/`, also run `cargo check`
 there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
 the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
@@ -50,10 +49,8 @@ main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A
 do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
 
 `check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
-actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/
-TypeScript), the UI source suffix check, the
-OpenAPI spec (generated, never committed), Biome,
-the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
+actionlint, the migration order, node types (the scripts/ TypeScript), the
+OpenAPI spec (generated, never committed), the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
 file, which is what CI's static job runs on each pull request.
 
 `scripts/check_conflicts.sh` asks git whether the pushed commit merges into origin/main. When it would not, the push stops,
@@ -65,7 +62,7 @@ To push past the hook once, use `git push --no-verify`. The pull request's stati
 Where the local gate differs from CI:
 
 - Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
-- The baselines (ruff, tsc, UI strict, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
+- The baselines (ruff) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
 - `check.sh` uses `.venv/bin` first when there is one (`scripts/dev_setup.sh` makes it), then the Python and Node on your
   PATH. CI uses a pinned Python 3.15 venv and Node 24 with `npm ci`.
 - `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
@@ -83,25 +80,15 @@ ruff against `ruff-baseline.toml`, which extends `ruff.toml`; `ruff.toml` never 
 and `uvx ruff@0.15.9 format` needs no generated file. A branch from before the split tracks the old single files: rebase
 it, then run
 `python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
-entries, and commit. The generated `ui/types/api.d.ts` and the API spec are not committed: `scripts/check_ui_types.sh`
-writes the first, and `python3 -m backend.openapi_v2` prints the second.
+entries, and commit. The generated `web/src/api/schema.d.ts` and the API spec are not committed: `npm run gen:api` in
+web/ writes the first, and `python3 -m backend.openapi_v2` prints the second.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
-The UI's scripts have a strict type check (`python3 scripts/check_ui_strict.py`, run by `scripts/check.sh`), a loose
-type check of the `.js` files left (`bash scripts/check_ui_types.sh`) and a Biome lint (`bash scripts/check_ui_lint.sh`),
-all seconds long. Each counts findings per file against its own baseline file: `ui/baselines/strict/<path>.json` for a
-`.ts` file with strict findings (a new `.ts` file must be at zero), `ui/baselines/tsc/<path>.json` for a `.js` file, or
-`ui/baselines/biome/<path>.json` (a file with no findings has none). The counts only shrink: after you fix findings, lower the baseline with
-`python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
-`ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
-The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/`)
-has its own strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
-`tsconfig.node.json`, which `ui/tests/tsconfig.json` extends too, and every TypeScript file outside `ui/` must be in one.
-The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
-walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
-only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
-`python3 scripts/check_ui_routes.py --write`.
+The TypeScript that Node runs directly outside the apps (the `.cts` and `.mts` scripts under `scripts/`)
+has a strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
+`tsconfig.node.json`, and every such TypeScript file must be in one. The web app (`web/`) and the desktop app
+(`desktop/`) check their own TypeScript with `npm run typecheck`.
 
 ## Profiling API test setup
 
@@ -132,15 +119,13 @@ uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requ
 ```
 
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate
-the development lock. Keep major migrations separate. After changing the browser SDK pins in
-`package.json`, run `npm run build:observability` and the real SDK privacy and retry tests in
-`node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
+the development lock. Keep major migrations separate. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ### Advisory scan
 
 `scripts/osv_gate.py` runs the pinned OSV-Scanner (`scripts/pinned_tool.sh`) over every `requirements*.txt`,
-`package-lock.json` and `Cargo.lock`, the libraries in `ui/vendor/` and `templates/employee-repo/ui/vendor/`, and the uv
+`package-lock.json` and `Cargo.lock`, the libraries in `templates/employee-repo/ui/vendor/`, and the uv
 versions scripts pin. PR checks run it when one of those inputs changes, and the daily full release validation runs it
 too, so an advisory published against untouched inputs shows there as a red `advisories` job. It fails only on a known
 advisory, never on an older version, and prints RustSec maintenance notices without failing. It never changes a version.
@@ -179,10 +164,8 @@ company already owns, so their commits need no sign-off, and their pull requests
   task writes, the API schema), a regression or an edge case that would lose or duplicate work. No tests of
   wording or docs prose, trivial getters or exhaustive parametrizations of one path. Mark a test
   `@pytest.mark.slow` if it needs real git, Docker or a server.
-- Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
-- New UI files are TypeScript (`ui/app/name.ts`, strict types, no `any`). After `npm ci`, `npm run build:ui` builds
-  the UI into `build/ui/`, which is what the server serves (`npm run watch:ui` while editing, then reload).
-  `bash scripts/check_ui_types.sh` type-checks them.
+- The web app is TypeScript in `web/` (strict types, no `any`). `npm run build` there builds it into `build/web/`, which
+  is what the server serves at `/` (`npm run dev` while editing).
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.
 - Comments explain why, in the present tense. They do not name who asked or when.

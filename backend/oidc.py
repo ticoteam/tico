@@ -750,10 +750,10 @@ class Oidc:
 
 
 @functools.lru_cache(maxsize=4)
-def _wordmark(ui_dir, name):
-    """One of the wordmark SVGs, inlined so a sign-in page needs no second request."""
+def _wordmark(name):
+    """One of the wordmark SVGs (backend/assets/tico), inlined so a sign-in page needs no second request."""
     try:
-        svg = (Path(ui_dir) / "assets/tico" / name).read_text()
+        svg = (brand_icons.ASSETS / "tico" / name).read_text()
     except OSError:
         return ""
     return svg.replace("<svg ", '<svg class="logo" ', 1)
@@ -765,8 +765,8 @@ def _brand(settings):
     if settings.app_name != PRODUCT_NAME:
         return '<p class="brand">' + html.escape(settings.app_name) + "</p>"
     light, dark = (
-        _wordmark(settings.ui_dir, "tico-wordmark.svg"),
-        _wordmark(settings.ui_dir, "tico-wordmark-reversed.svg"),
+        _wordmark("tico-wordmark.svg"),
+        _wordmark("tico-wordmark-reversed.svg"),
     )
     return (
         '<div class="brand" role="img" aria-label="'

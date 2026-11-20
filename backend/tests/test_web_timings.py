@@ -218,19 +218,6 @@ def test_only_a_person_passes_the_senders_check():
     assert {flight.caller_kind(PEOPLE[t]) for t in ("qa-test", "runner-test")} == {"bot", "runner"}
 
 
-def test_the_browser_and_the_server_name_the_same_screens():
-    """A screen the page names but the server does not know would refuse the whole batch, silently losing it."""
-    import re
-    from pathlib import Path
-
-    source = (Path(__file__).resolve().parents[2] / "ui" / "observability.ts").read_text()
-    listed = re.search(r"const SCREENS = new Set<string \| undefined>\(\((.*?)\)\.split\(' '\)\);", source, re.S)
-    assert listed, "ui/observability.ts SCREENS moved: update this test"
-    screens = "".join(re.findall(r"'([^']*)'", listed.group(1))).split(" ")
-    assert sorted(screens) == sorted(flight.WEB_SCREENS)
-    assert {"/home", "/task/:task", "/thread/:thread", "/threads", "/bot/:bot", "/settings/:sub"} <= flight.WEB_ROUTES
-
-
 def test_task_view_and_home_are_kept_and_an_id_is_not(hub):
     app, client = hub
     good = [{"metric": "lcp", "route": "/task/:task", "ms": 900}, {"metric": "inp", "route": "/home", "ms": 60}]

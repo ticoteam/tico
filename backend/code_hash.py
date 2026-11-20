@@ -9,8 +9,8 @@ import hashlib
 import sys
 from pathlib import Path
 
-# build/ui: the UI build the image serves (scripts/build-ui.cjs, backend/ui_build.py): the page, the bundle, the maps.
-DIRS = ("backend", "build/ui", "clients", "runner", "runner_support", "runner-rs/harnesses", "ui")
+# build/web: the web app's build the image serves (web/, backend/web_routes.py): the page and its files.
+DIRS = ("backend", "build/web", "clients", "runner", "runner_support", "runner-rs/harnesses")
 SKIP = {"__pycache__", "node_modules", "tests"}
 
 

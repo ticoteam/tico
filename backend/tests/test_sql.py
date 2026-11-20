@@ -130,14 +130,6 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
         held.close()
 
 
-def test_the_sql_page_examples_all_run(api):
-    page = (Path(__file__).resolve().parents[2] / "ui/app/sql.ts").read_text()
-    examples = re.findall(r"""^  \['[^']+', "(.+)"\],?$""", page, re.M)
-    assert len(examples) >= 6
-    for sql in examples:
-        query(api, sql)
-
-
 def test_only_one_read_statement_is_accepted(api, monkeypatch):
     for sql in REJECTED:
         detail = error(api, sql)

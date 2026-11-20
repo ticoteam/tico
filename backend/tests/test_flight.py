@@ -510,11 +510,11 @@ def test_the_start_record_keeps_no_secret_and_flags_an_image_not_built_from_its_
     before = code_hash.digest(image)
     (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'  # patched\n")
     assert code_hash.digest(image) != before
-    # The JavaScript the image serves for the UI's TypeScript is code too (backend/ui_build.py).
-    (image / "build" / "ui" / "app").mkdir(parents=True)
-    (image / "build" / "ui" / "app" / "a.js").write_text("const A = 1;\n")
+    # The JavaScript the image serves for the web app is code too (backend/web_routes.py).
+    (image / "build" / "web" / "assets").mkdir(parents=True)
+    (image / "build" / "web" / "assets" / "a.js").write_text("const A = 1;\n")
     before = code_hash.digest(image)
-    (image / "build" / "ui" / "app" / "a.js").write_text("const A = 2;\n")
+    (image / "build" / "web" / "assets" / "a.js").write_text("const A = 2;\n")
     assert code_hash.digest(image) != before
 
 

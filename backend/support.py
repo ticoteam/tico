@@ -483,19 +483,8 @@ class Support:
             report=report.model_dump() if report else None,
         )
         if browser:
-            from pathlib import Path
-
-            ui = Path(__file__).resolve().parent.parent / "ui"
-            # A browser event names its script by the last part of its URL, which is .ts for a TypeScript file.
-            files = (
-                {p.name for p in ui.glob("*.ts")}
-                | {p.name for p in ui.glob("*.js")}
-                | {p.name for p in (ui / "app").glob("*.ts")}
-                | {p.name for p in (ui / "app").glob("*.js")}
-                | {p.name for p in (ui / "app").glob("*.ts")}
-                | {"sw.js"}  # ui/sw.ts is served at the root as sw.js, the name a worker's error gives
-                | bundle_files(ui)  # the bundle's scripts, the page parts' included (scripts/build-ui.cjs)
-            )
+            # A browser event names its script by the last part of its URL: one of the web app's own files.
+            files = build_files(self.settings.web_dir)
             bundle["browser"] = [
                 {**event.model_dump(), "file": event.file if event.file in files else ""} for event in browser
             ]
@@ -1163,9 +1152,10 @@ def install(app, store, settings, census):
         return support.remove(who, ticket_id)
 
 
-def bundle_files(ui):
-    """The file names of the bundle's scripts this server serves (backend/ui_build.py), as a browser event names them."""
-    from . import ui_build
+def build_files(web_dir):
+    """The file names of the web app's scripts this server serves (backend/web_routes.py), as a browser event names
+    them: its build's files and the service worker."""
+    from pathlib import Path
 
-    folder = ui_build.bundle_dir(ui)
-    return {p.name for p in folder.glob("app.bundle.*.js")} if folder.is_dir() else set()
+    folder = Path(web_dir)
+    return {p.name for p in (folder / "assets").glob("*.js")} | {p.name for p in folder.glob("*.js")} | {"sw.js"}

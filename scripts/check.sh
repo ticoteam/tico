@@ -3,16 +3,14 @@
 # non-zero exit if one fails. The checks run in parallel; each runs only when its inputs changed.
 #   scripts/check.sh          what changed since the merge-base with origin/main: committed, uncommitted and new files
 #   scripts/check.sh --all    every tracked file, every check (what CI's static job runs on every pull request)
-# The baselines (ruff, tsc, Biome, the API routes, UI strict, the pytest ignores) are compared with origin/main, as CI
+# The baselines (ruff, the pytest ignores) are compared with origin/main, as CI
 # compares a pull request with its base, so `git fetch origin main` first; the pre-push hook does. `git config
 # core.hooksPath .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this
 # differs from CI.
 # Checks: lint.sh (ruff baseline and ruff format), test collection (pytest --collect-only), shell_lint.sh (shellcheck),
 # actionlint (workflows), migration order, gates.sh (shared gate scripts and ast-grep rules with fixtures),
-# check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
 # check_node_types.py (the .cts/.mts scripts under scripts/, type-check strictly), the
 # OpenAPI document (backend.openapi_v2 --check), the status value table (build_status_docs.py --check),
-# check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
 set -uo pipefail
@@ -73,7 +71,6 @@ touched() { [ "$ALL" = 1 ] || grep -qE "$1" <<< "$TOUCHED"; }
 JOB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tico-check.XXXXXX")
 trap 'rm -rf "$JOB_DIR"' EXIT
 ENTRIES=()  # "S|name|reason" for a skipped check, "J|n" for job n
-UI_TYPES_JOB=""  # the ui types check's job number, once it is started
 NAMES=()
 PIDS=()
 
@@ -133,7 +130,7 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
 # lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
-if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^baselines/landmines/|^skills/honest-code/|^scripts/(lint|lint_baseline|landmines|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cts$|^ui/tests/.*\.cts$'; then
+if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^baselines/landmines/|^skills/honest-code/|^scripts/(lint|lint_baseline|landmines|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$'; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
@@ -216,14 +213,6 @@ for crate in $RUST_CRATES; do
 done
 if [ "$rust_any" = 0 ]; then skip "rust fmt" "no Rust crate changed"; fi
 
-# 6. The UI's generated API types (the check imports the backend) and tsc over the UI, as CI runs check_ui_types.sh.
-if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|check_ui_parts\.cjs|ui_baseline\.py)$'; then
-  UI_TYPES_JOB=${#NAMES[@]}
-  job "ui types (tsc, API types)" bash scripts/check_ui_types.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
-else
-  skip "ui types (tsc, API types)" "no UI, Python or API schema change"
-fi
-
 # 6b. The API spec is generated from the app's routes and never committed: it must generate, and the same bytes twice.
 #     The API guide's operation table (docs/api.md) follows the same tags.
 if touched '^backend/.*\.pyi?$|^docs/api\.md$|^scripts/build_api_docs\.py$'; then
@@ -240,46 +229,13 @@ else
   skip "status value lists (docs/status-and-state.md)" "no status list or its page changed"
 fi
 
-# 6c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
-# Its tsc reads ui/types/api.d.ts, which the ui types check writes from the backend's routes (so a Python change can
-# break a .ts file), and it starts once that check has finished.
-# ui/tests/tsconfig.json extends tsconfig.node.json, and rule 10 reads its options through check_node_types.py.
-if touched '\.pyi?$|^ui/|^tsconfig\.node\.json$|^scripts/(check_ui_strict|ui_baseline|gen_ui_types|check_node_types)\.py$'; then
-  strict=(python3 scripts/check_ui_strict.py ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"})
-  if [ -n "$UI_TYPES_JOB" ]; then strict=(after "$UI_TYPES_JOB" "${strict[@]}"); fi
-  job "ui strict (TypeScript, strict ratchet)" "${strict[@]}"
-else
-  skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
-fi
-
-# 6c'. The TypeScript outside ui/ (scripts/ .cts, .mts and .d.ts files Node runs) type-checks strictly, with no baseline
-# (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
-# a project. The base config and the npm packages whose types the scripts read are inputs too.
-if touched '^([^u]|u[^i]|ui[^/])[^[:space:]]*\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
+# 6c. The TypeScript Node runs (scripts/ and bench/ .cts, .mts and .d.ts files) type-checks strictly, with no baseline
+# (scripts/check_node_types.py). Any TypeScript file is an input: it must sit in a project. The base config and the
+# npm packages whose types the scripts read are inputs too.
+if touched '\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
   job "node types (scripts/ TypeScript)" python3 scripts/check_node_types.py
 else
-  skip "node types (scripts/ TypeScript)" "no TypeScript outside ui/ changed"
-fi
-
-# 6d. A check that picks UI source by a .js suffix alone stops covering each converted .ts file. Text only, a second.
-if touched '\.(py|sh|cjs|js|ts)$'; then
-  job "ui source suffixes" python3 scripts/check_ui_source_suffixes.py
-else
-  skip "ui source suffixes" "no script or source changed"
-fi
-
-# 7. Biome lint of the UI files, counted against ui/lint-baseline.json, as CI runs it.
-if touched '^ui/|^biome\.json$|^package(-lock)?\.json$|^scripts/(check_ui_lint\.sh|ui_baseline\.py)$'; then
-  job "ui lint (Biome)" bash scripts/check_ui_lint.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
-else
-  skip "ui lint (Biome)" "no UI or lint config changed"
-fi
-
-# 8. Every API path the UI calls is a route the backend serves. The app is imported, not run.
-if touched '\.pyi?$|^ui/|^scripts/(check_ui_routes\.(py|sh)|ui_baseline\.py)$'; then
-  job "ui routes (API paths)" bash scripts/check_ui_routes.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
-else
-  skip "ui routes (API paths)" "no UI or Python change"
+  skip "node types (scripts/ TypeScript)" "no TypeScript changed"
 fi
 
 # 9. The runner wire contract. It reads the contract and backend/models.py and takes a fraction of a second, so it runs

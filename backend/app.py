@@ -58,7 +58,7 @@ from . import names as actor_names
 from . import settings_catalog
 from .files import raw_media
 from . import company_server
-from . import hosted_updates, releases, runner_versions, ui_build
+from . import hosted_updates, releases, runner_versions
 from .census import Census
 from .providers import MODEL_BY_ID
 from .settings_admin import SettingsAdmin
@@ -87,7 +87,6 @@ from . import (
     task_links_routes,
     bot_seats_routes,
     fleet_runner_routes,
-    ui_bundle_routes,
     web_routes,
 )
 from .api_contract import api_v2
@@ -162,10 +161,6 @@ def create_app(settings=None):
 def _configure_app(
     app, settings, store, auth, execution, settings_admin, onboarding, recruiter, telemetry, census, recorder, flight
 ):
-    from .ui_compression import UiCompression
-
-    app.add_middleware(UiCompression)
-
     assistant_direct, assistant_instruction, assistant_mod, assistant_valid, botops_act, create_proposal = (
         _install_request_guard(
             lambda: MAX_REPORT_BYTES,
@@ -951,20 +946,9 @@ def _install_request_guard(
             status_code=503,
         )
 
-    # Bot text reaches the page as HTML; scripts run only from our own files (ui/app, ui/*.js), so a
-    # tag that slips through a renderer cannot run. The page carries no inline script today; one that
-    # is added to index.html is allowed by its hash, and any other inline script is refused.
-    import base64
-    import hashlib
-
-    try:
-        inline = re.findall(r"<script>(.*?)</script>", (settings.ui_dir / "index.html").read_text(), re.S)
-    except OSError:
-        inline = []
-    hashes = ["'sha256-" + base64.b64encode(hashlib.sha256(block.encode()).digest()).decode() + "'" for block in inline]
-    PAGE_POLICY = (
-        "script-src " + " ".join(["'self'", *hashes]) + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
-    )
+    # Bot text reaches the page as HTML; scripts run only from our own files (the web app's build), so a tag that slips
+    # through a renderer cannot run. The page carries no inline script, and any inline script is refused.
+    PAGE_POLICY = "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
 
     from .flight import Timing
 
@@ -1516,8 +1500,8 @@ def _install_request_guard(
                 request_failure(request, response.status_code)
             if response.status_code >= 500 and not getattr(request.state, "telemetry_captured", False):
                 telemetry.capture("request", status=response.status_code, route=error_route(request))
-            # The page and its files (StaticFiles sends an ETag) may be kept by the browser and
-            # revalidated: an unchanged script or stylesheet (ui/app, ui/styles) comes back as a 304, not in
+            # The page and its files (each sent with an ETag) may be kept by the browser and
+            # revalidated: an unchanged file comes back as a 304, not in
             # full on every load (slow loads on a phone). A deploy writes new files, so the
             # ETag changes and the new page arrives at once. Icons and images under /assets/ are
             # fresh for an hour. Everything else, the API above all, is never stored. Nothing
@@ -1541,19 +1525,11 @@ def _install_request_guard(
             if route_keeps or file_bytes:
                 pass  # the route's own "private, max-age=…" stands
             elif (
-                request.url.path.startswith((ui_build.BUNDLE_PREFIX, web_routes.ASSETS_PREFIX))
+                request.url.path.startswith(web_routes.ASSETS_PREFIX)
                 and response.status_code in (200, 304)
-                and response.headers.get("cache-control") == ui_build.IMMUTABLE
+                and response.headers.get("cache-control") == web_routes.IMMUTABLE
             ):
-                pass  # a bundle file is named by its content (scripts/build-ui.cjs, the web app's build): kept for a year
-            elif (
-                request.query_params.get("v")
-                and response.status_code in (200, 304)
-                and re.fullmatch(r"/(?:tico/ui/)?vendor/fonts/[\w.-]+\.woff2", request.url.path)
-            ):
-                # A font under its hashed URL (scripts/build-*-font.py): kept for a year. Inter's font-display is
-                # optional, so a font that had to be revalidated first could miss the first paint.
-                response.headers["Cache-Control"] = ui_build.IMMUTABLE
+                pass  # a file of the web app's build is named by its content: kept for a year
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (
                     "private, max-age=3600" if request.url.path.startswith("/assets/") else "private, no-cache"
@@ -2685,7 +2661,11 @@ def _install_features(
     install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
 
     web_routes.register(app, settings)  # /next before anything else could answer it (backend/web_routes.py)
-    ui_bundle_routes.register(app, auth, settings)
+    brand_icons.register(app)
+    if settings.demo:
+        from . import demo
+
+        demo.install(app, auth, settings)
     web_routes.register_page(app, settings)  # last: every address nothing above answered is the web app's page
     from . import cors
 

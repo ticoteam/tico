@@ -4,8 +4,7 @@
 # per group is its head: the template named in `head:` below, which is `lead: true`. A team's Manager is also
 # `lead: true` and does not take the head's seat. The head's card lists the rest of
 # the group in `team_templates:`; a card's `suggest:` says whether it is pre-checked (default), offered (common)
-# or offered only when the briefing asks for it (niche). `icon` is a Material Symbols name in the font the UI ships
-# (ui/vendor/fonts/icons.txt). `software_only: true` groups are offered only when software is the product.
+# or offered only when the briefing asks for it (niche). `icon` is a Material Symbols name. `software_only: true` groups are offered only when software is the product.
 # clients/tests/test_catalog.py checks this file against the cards. docs/starter-bots.md lists every template.
 
 departments:

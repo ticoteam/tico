@@ -49,24 +49,28 @@ def no_tsc(config):
     pytest.fail(f"tsc must not run on {config} while a rule before it fails")
 
 
-def test_the_real_projects_extend_the_shared_base_and_ui_tests_does_too():
+def test_the_real_projects_extend_the_shared_base():
     for config in node.PROJECTS:
         assert node.extends_problems(config) == [], config
-    ui_tests = json.loads((node.ROOT / "ui/tests/tsconfig.json").read_text())
-    assert (node.ROOT / "ui/tests" / ui_tests["extends"]).resolve() == (node.ROOT / node.BASE).resolve()
     assert "include" not in json.loads((node.ROOT / node.BASE).read_text())
 
 
 def test_clean_projects_pass_and_tsc_runs_on_each(tmp_path, monkeypatch):
     files = {
         "scripts/a.cts": "export {};\n",
-        "bench/b.cts": "export {};\n",
+        "scripts/tools/b.cts": "export {};\n",
     }
     project_root(tmp_path, monkeypatch, files)
     ran = []
     monkeypatch.setattr(node, "run_project", lambda config: ran.append(config) or (0, ""))
     assert node.check() == []
     assert ran == list(node.PROJECTS)
+
+
+def test_a_project_with_no_script_yet_passes_without_tsc(tmp_path, monkeypatch):
+    project_root(tmp_path, monkeypatch, {})
+    monkeypatch.setattr(node, "run_project", no_tsc)
+    assert node.check() == []
 
 
 def test_a_diagnostic_fails_with_no_baseline(tmp_path, monkeypatch):
@@ -127,7 +131,7 @@ def test_effective_config_runs_show_config_and_reports_a_config_tsc_cannot_read(
     monkeypatch.setattr(node.subprocess, "run", run)
     assert node.effective_config("scripts/tsconfig.json")["compilerOptions"] == GOOD_OPTIONS
     assert calls[0] == ([*node.TSC, "-p", "scripts/tsconfig.json", "--showConfig"], node.ROOT)
-    node.effective_config("ui/tests/tsconfig.json", root=tmp_path)
+    node.effective_config("tools/tsconfig.json", root=tmp_path)
     assert calls[1][1] == tmp_path
     with pytest.raises(node.ConfigError, match="bad/tsconfig.json: tsc --showConfig exited 1: error TS5083"):
         node.effective_config("bad/tsconfig.json")
@@ -137,9 +141,7 @@ def test_a_leaf_that_does_not_extend_the_base_fails(tmp_path, monkeypatch):
     root = project_root(tmp_path, monkeypatch, {"scripts/a.cts": "export {};\n"})
     monkeypatch.setattr(node, "run_project", no_tsc)
     (root / "scripts/tsconfig.json").write_text(json.dumps({"extends": "./other.json", "include": ["./**/*.cts"]}))
-    assert node.check() == [
-        "scripts/tsconfig.json: extends must name tsconfig.node.json (its options are shared with ui/tests/tsconfig.json)"
-    ]
+    assert node.check() == ["scripts/tsconfig.json: extends must name tsconfig.node.json (the shared options)"]
     (root / "scripts/tsconfig.json").write_text("{not json")
     assert "cannot be read as JSON" in node.check()[0]
 
@@ -151,8 +153,8 @@ def test_typescript_outside_every_project_fails(tmp_path, monkeypatch):
     assert problem.startswith("tools/new.mts: in no TypeScript project")
 
 
-def test_typescript_files_are_found_outside_ui_only(tmp_path, monkeypatch):
-    for rel in ("scripts/a.cts", "bench/b.mts", "bench/c.d.ts", "ui/app/d.ts", "scripts/e.py", "x/f.tsx"):
+def test_typescript_files_are_found_outside_the_apps_only(tmp_path, monkeypatch):
+    for rel in ("scripts/a.cts", "bench/b.mts", "bench/c.d.ts", "web/src/d.ts", "scripts/e.py", "x/f.tsx"):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text("")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -163,12 +165,12 @@ def test_typescript_files_are_found_outside_ui_only(tmp_path, monkeypatch):
 def test_a_declare_global_in_a_script_fails_and_a_declaration_file_may_hold_one(tmp_path, monkeypatch):
     files = {
         "scripts/a.cts": "declare global {\n  interface Window { x: number }\n}\nexport {};\n",
-        "bench/globals.d.ts": "declare global {\n  var helper: number;\n}\nexport {};\n",
-        "bench/b.mts": "declare const window: Window & typeof globalThis & {x: number};\nexport {};\n",
-        "bench/c.cts": "declare global {\n  interface Window { y: number }\n}\nexport {};\n",
+        "scripts/globals.d.ts": "declare global {\n  var helper: number;\n}\nexport {};\n",
+        "scripts/b.mts": "declare const window: Window & typeof globalThis & {x: number};\nexport {};\n",
+        "scripts/c.cts": "declare global {\n  interface Window { y: number }\n}\nexport {};\n",
     }
     project_root(tmp_path, monkeypatch, files)
     monkeypatch.setattr(node, "run_project", no_tsc)
     problems = node.check()
-    assert [problem.split(":")[0] for problem in problems] == ["bench/c.cts", "scripts/a.cts"]
+    assert [problem.split(":")[0] for problem in problems] == ["scripts/a.cts", "scripts/c.cts"]
     assert all("`declare global` is not allowed in a script" in problem for problem in problems)

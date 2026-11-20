@@ -28,7 +28,7 @@ from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api
 from backend.tests.helpers.oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
-UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
+UI = Path(__file__).resolve().parents[2] / "backend" / "assets"
 NOT_FOUND = "Not found"
 
 
@@ -1296,7 +1296,7 @@ def test_the_reader_host_serves_only_the_brand_files_from_assets(site):
     assert svg.status_code == 200 and svg.headers["content-type"] == "image/svg+xml"
     assert svg.content == (UI / "tico" / "tico-mark.svg").read_bytes()
     assert client.get("/assets/favicon-32.png").content == (UI / "favicon-32.png").read_bytes()
-    assert plain_404(client.get("/assets/observability-vendors.js"))
+    assert plain_404(client.get("/assets/icon-192.png"))
 
 
 def test_closed_answers_no_icon_on_the_reader_host(site):

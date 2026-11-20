@@ -5,59 +5,17 @@ Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 
 import re
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from backend import botops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
-from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
+from backend.settings_entries import ENTRIES
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
 from backend.tests.helpers.mcp import call as mcp
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
-
-UI = Path(__file__).resolve().parents[2] / "ui" / "app"
-# post('/v2/x', ...), put(`/v2/bots/${slug}/model`, ...), patch('/v2/a/' + id, ...), writeRequest('DELETE', '/v2/x')
-CALL = re.compile(r"\b(post|put|patch)\(\s*(['\"`])((?:(?!\2).)*)\2((?:\s*\+\s*[^,)]+)*)", re.S)
-RAW = re.compile(
-    r"writeRequest\(\s*'(DELETE|POST|PUT|PATCH)'\s*,\s*(['\"`])((?:(?!\2).)*)\2((?:\s*\+\s*[^,)]+)*)", re.S
-)
-
-
-def _template(path, tail):
-    """`/v2/a/${id}` + id + '/run' as `a/{x}{x}/run`, then each run of placeholders as one."""
-    for piece in (p.strip() for p in tail.split("+") if p.strip()):
-        quoted = re.fullmatch(r"(['\"`])([^'\"`]*)\1", piece)
-        path += quoted.group(2) if quoted else "{x}"
-    path = re.sub(r"(\{x\})+", "{x}", re.sub(r"\$\{[^}]*\}", "{x}", path))
-    return re.sub(r"^/?(v2/)?", "", path.split("?")[0])
-
-
-def settings_writes():
-    """(method, route) for every write the Settings pages make, `{x}` where the page fills a value in."""
-    found = set()
-    for name in SETTINGS_FILES:
-        text = (UI / name).read_text()
-        found |= {(m.group(1).upper(), _template(m.group(3), m.group(4))) for m in CALL.finditer(text)}
-        found |= {(m.group(1), _template(m.group(3), m.group(4))) for m in RAW.finditer(text)}
-    return found
-
-
-def _covers(route, written):
-    """An entry's route (`bots/{bot}/model`) covers a written one (`bots/{x}/model`) segment by segment; a
-    placeholder on either side stands for any one segment, and `{x}` inside a segment for any text there."""
-    mine, theirs = route.split("/"), written.split("/")
-    if len(mine) != len(theirs):
-        return False
-    for a, b in zip(mine, theirs):
-        if a == b or re.fullmatch(r"\{\w+\}", a) or b == "{x}":
-            continue
-        if "{x}" in b and re.fullmatch(re.escape(b).replace(r"\{x\}", ".*"), a):
-            continue
-        return False
-    return True
 
 
 def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():

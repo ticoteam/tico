@@ -1,5 +1,0 @@
-{
-  "ui/tests/native-window.cts": {
-    "no-raised-timeout": 2
-  }
-}
