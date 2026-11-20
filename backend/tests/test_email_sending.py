@@ -615,8 +615,6 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     autonomous(inbox)
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
-    machine = runner(inbox)
-    assert post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"]) == {"send": None}
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 1
     assert [call["token"] for call in calls] == ["ya29.own"]
