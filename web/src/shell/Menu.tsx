@@ -325,14 +325,15 @@ export function Menu(p: MenuProps) {
               {content}
             </button>
           ) : (
-            // choosing a section here opens it, and shuts the others
+            // choosing a section here opens it, and shuts the others (in the capture phase: on a phone the menu card
+            // takes the press over to open the page in the menu's place, and the link's own click never runs)
             <Link
               key={r.id}
               className="nav-item"
               to={to(`/${r.id}`)}
               activeProps={ACTIVE}
               activeOptions={{ exact: expanded }}
-              onClick={() => setSections({ [r.id]: true })}
+              onClickCapture={() => setSections({ [r.id]: true })}
             >
               {content}
             </Link>

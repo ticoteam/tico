@@ -183,6 +183,20 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     }
   }, [card, onCardChange, router]);
 
+  // The menu never stays up over a page it opened. Its links tuck it as they are pressed (onMenuClick); a row that goes
+  // somewhere without being a link (the account menu's Settings, a search result, another company) tucks it here, as
+  // the page changes. Its entry stays under the new page's, so Back returns to the menu, as Back does after a chat.
+  useEffect(
+    () =>
+      router?.subscribe('onBeforeNavigate', (ev) => {
+        // Back or Forward onto a card's own entry raises that card instead (onPop)
+        if (!ev.pathChanged || cardNow.current !== 'menu' || historyCard(ev.toLocation.state)) return;
+        navigating.current = true;
+        setCard('none');
+      }),
+    [router],
+  );
+
   const raise = (next: Exclude<PhoneCard, 'none'>) => setCard(next);
   const tuck = () => setCard('none');
   const tapLip = (s: Slot) => (s === 'tico' ? raise(card === 'tico-half' ? 'tico' : 'tico-half') : raise(s));
@@ -407,6 +421,13 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     if (next !== card) setCard(next);
   };
 
+  // A drag owns only the click its own release makes. A finger that moved makes none (touch never clicks after a pan),
+  // so the mark is dropped as the next press starts: else that press's tap, a place in the menu just dragged up, is
+  // eaten and does nothing.
+  const onPointerDownCapture = () => {
+    dragged.current = false;
+  };
+
   const onClickCapture = (e: { preventDefault(): void; stopPropagation(): void }) => {
     if (!dragged.current) return;
     dragged.current = false;
@@ -423,6 +444,8 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
 
   // a place picked in the menu: the menu tucks and the page comes forward. The menu's history entry gives way to the
   // page it opens (a replace, before the link's own push), so Back goes to the page before, not to a stranded menu.
+  // The press still reaches the menu's own handlers, in their capture phase (opening the section it picked): the
+  // link's own click never runs once this has taken the press.
   const onMenuClick = (e: MouseEvent<HTMLDivElement>) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!a) return;
@@ -430,7 +453,6 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const plain = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && !a.target && a.origin === location.origin;
     if (router && plain && historyCard(window.history.state)) {
       e.preventDefault();
-      e.stopPropagation();
       void router.navigate({ href: a.pathname + a.search + a.hash, replace: true });
     }
     tuck();
@@ -491,6 +513,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
         ref={root}
         className={cls}
         data-card={card}
+        onPointerDownCapture={onPointerDownCapture}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={(e) => endDrag(e, false)}

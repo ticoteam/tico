@@ -77,21 +77,43 @@ const floor = {
 } as unknown as CompanyFloor;
 
 describe('Company @s248 @s250', () => {
-  it('starts both figure reads while the Floor is still loading', async () => {
+  it('starts the Floor and both figure reads, and waits on none of them', async () => {
     let finishFloor: (reply: Reply) => void = () => {};
     const pendingFloor = new Promise<Reply>((resolve) => (finishFloor = resolve));
     const reads = vi.fn((url: string) => (url === '/api/v2/company/floor' ? pendingFloor : nothing()));
     serve(reads);
 
-    const loaded = loadCompany(queryClient);
-    finishFloor({ status: 200, body: floor });
-
+    expect(loadCompany(queryClient)).toBeUndefined();
     expect(reads.mock.calls.map(([url]) => url)).toEqual([
       '/api/v2/company/floor',
       '/api/v2/finance/metrics/revenue?days=7',
       expect.stringMatching(/^\/api\/v2\/usage\?group=day&/),
     ]);
-    expect(await loaded).toEqual(floor);
+    finishFloor({ status: 200, body: floor });
+    await waitFor(() => expect(queryClient.getQueryData(floorQuery.queryKey)).toEqual(floor));
+  });
+
+  it('draws its head and figures while the Floor is still on its way, then the Floor in its place', async () => {
+    let finishFloor: (reply: Reply) => void = () => {};
+    const pendingFloor = new Promise<Reply>((resolve) => (finishFloor = resolve));
+    serve((url) =>
+      url.includes('/company/floor')
+        ? pendingFloor
+        : url.includes('/finance/metrics/revenue')
+          ? ok({ value: 48210, unit: 'usd' })
+          : url.includes('/api/v2/usage')
+            ? ok({ rows: [], totals: { est_cost_usd: 1284 } })
+            : nothing(),
+    );
+    show(<CompanyPage search={{}} />, '/company');
+    expect(await screen.findByRole('heading', { name: 'Company', level: 1 })).toBeTruthy();
+    const figs = await screen.findByRole('group', { name: 'Company figures' });
+    await waitFor(() => expect(figs.textContent).toContain('$48,210'));
+    expect(await screen.findByRole('status', { name: 'Loading' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Engineering' })).toBeNull();
+    finishFloor({ status: 200, body: floor });
+    expect(await screen.findByRole('region', { name: 'Engineering' })).toBeTruthy();
+    expect(screen.queryByRole('status', { name: 'Loading' })).toBeNull();
   });
 
   it('opens a stage with its owner and its tasks, the ones waiting on you first @s270', async () => {
@@ -181,11 +203,26 @@ describe('Company @s248 @s250', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
-  it('shows the fault with Try again when the Floor fails', async () => {
-    serve((url) => (url.includes('/company/floor') ? { status: 500, body: { detail: 'boom' } } : nothing()));
+  it('shows the Floor’s fault in its own place, with Try again, and keeps the head and figures', async () => {
+    let fail = true;
+    serve((url) =>
+      url.includes('/company/floor')
+        ? fail
+          ? { status: 500, body: { detail: 'boom' } }
+          : ok(floor)
+        : url.includes('/finance/metrics/revenue')
+          ? ok({ value: 48210, unit: 'usd' })
+          : nothing(),
+    );
     show(<CompanyPage search={{}} />, '/company');
-    expect(await screen.findByText('This page did not load')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText('Floor did not load')).toBeTruthy();
+    expect(screen.queryByText('This page did not load')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Company', level: 1 })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Company figures' }).textContent).toContain('$48,210'));
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('region', { name: 'Engineering' })).toBeTruthy();
+    expect(screen.queryByText('Floor did not load')).toBeNull();
   });
 
   it("opens a hall manager's chat beside the Floor, at the address @s291", async () => {
