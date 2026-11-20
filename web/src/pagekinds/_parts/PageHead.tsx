@@ -6,6 +6,7 @@ import { useSheet } from '@/shell';
 import { showPageName } from '@/tico/pageName';
 import type { HeadProps } from '@/pagekinds/types';
 import { EditableTitle } from './EditableTitle';
+import { stepBackIs, watchSteps } from './backTo';
 
 export type PageHeadProps = HeadProps;
 
@@ -39,6 +40,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
   const [renaming, setRenaming] = useState(false);
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
   useEffect(() => showPageName(title), [title]);
+  useEffect(() => watchSteps(router), [router]);
   const trail = crumb && crumb.length > 0 && (
     <nav className={sub ? 'pk-crumb' : 'pk-crumb is-inline'} aria-label="Breadcrumb">
       {crumb.map((c, i) => (
@@ -58,7 +60,18 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
           <Icon name="chevron" className="flip" />
         </button>
       ) : back ? (
-        <Link className="ib back pk-back" to={to(back.to)} aria-label={`Back to ${back.label}`} title={`Back to ${back.label}`}>
+        <Link
+          className="ib back pk-back"
+          to={to(back.to)}
+          aria-label={`Back to ${back.label}`}
+          title={`Back to ${back.label}`}
+          onClick={(e) => {
+            // the page before is this very page: back to it as it was left (its view, filters and place)
+            if (!stepBackIs(router, back.to)) return;
+            e.preventDefault();
+            router.history.back();
+          }}
+        >
           <Icon name="chevron" className="flip" />
         </Link>
       ) : null}

@@ -21,7 +21,9 @@
     "parity": "node scripts/parity.ts",
     "typecheck": "npm run gen:routes && npm run gen:api && tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "lint": "eslint . && stylelint \"src/**/*.css\" && node scripts/check-jade.ts && node scripts/check-copy.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "vite build && playwright test -c e2e/playwright.config.ts",
+    "e2e:repeat": "vite build && playwright test -c e2e/playwright.config.ts --repeat-each=3"
   },
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "4.0.0",

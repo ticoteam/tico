@@ -37,6 +37,10 @@
 @container head-search (width < 72px){
   .pk-head .search input::placeholder{color:transparent}
 }
+/* a picker after the title (Tasks' pipeline) gives way next: the room goes to it before the search, and it shortens to
+   a few letters before the title loses one (the menu shows the pipeline too) */
+.pk-head .scope-pick{flex:1000000 1 0;min-width:calc(var(--ctl) * 2);max-width:max-content}
+.pk-head .scope-pick>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pk .pk-back{display:none}
 
 /* ---------- tabs: one underlined row right under the head, never pills (kit Tabs.css, at the page margin) ---------- */
