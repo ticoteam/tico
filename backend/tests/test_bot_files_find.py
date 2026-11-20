@@ -46,7 +46,7 @@ def test_search_and_kind_narrow_the_newest_first_list_and_page_on(api):
 def test_search_finds_a_word_whole_part_typed_or_plural(api):
     _, attempt = turn(api)
     put(api, attempt, "notes/one.md", "# One\n\nThe test harness runs nightly.")
-    put(api, attempt, "notes/two.md", "# Two\n\nQuarterly reports are due.")
+    put(api, attempt, "notes/two.md", "# Two\n\nQuarterly reports are due. Two boxes.")
     for q in ("harness", "harn", "harnes", "harness+nightly"):
         assert titles(page(api, "q=" + q)) == ["one.md"], q
     for q in ("report", "reports", "repo", "quarterly+reports", "boxes"):
