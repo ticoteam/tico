@@ -1,5 +1,6 @@
 import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { upsertMessage, type TimelineData } from '@/live';
@@ -8,6 +9,7 @@ import { Composer } from './Composer';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
+import type { Session } from './Session';
 import type { ChatMessage } from './types';
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
@@ -348,5 +350,24 @@ describe('the page chip', () => {
     expect((await screen.findByText('Records production')).className).toBe('look-text');
     act(() => showPageName(''));
     await waitFor(() => expect(screen.queryByText('Records production')).toBeNull());
+  });
+});
+
+describe('the head', () => {
+  it('says under the name which chat this is: a task’s own, to the task, or the agent’s main chat', () => {
+    serve(() => ({ status: 200, body: {} }));
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const head = (session: Session) => (
+      <Conversation id={T} variant="side" title="Legal Owner" actor="bot:qa" session={session} />
+    );
+    const { rerender } = render(head({ task: 'k9', title: 'Randazzo: reply letter' }), { wrapper });
+    expect(screen.getByRole('link', { name: 'Randazzo: reply letter' }).getAttribute('href')).toBe('/task/k9');
+    expect(screen.queryByText('Main chat')).toBeNull();
+    // The box still names only the agent.
+    expect(screen.getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
+
+    rerender(head('main'));
+    expect(screen.getByText('Main chat')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Randazzo: reply letter' })).toBeNull();
   });
 });

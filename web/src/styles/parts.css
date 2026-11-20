@@ -171,6 +171,12 @@ h1{font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-
 .side-head{height:var(--bar);display:flex;align-items:center;gap:10px;padding:0 10px 0 16px;border-bottom:1px solid var(--line);flex:none}
 .side-head b{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .side-head .code{color:var(--muted);font-variant-numeric:tabular-nums}
+/* a chat's name with a quiet line under it: which chat this is (a task's, or the main chat) */
+.head-who{min-width:0;display:flex;flex-direction:column;gap:2px}
+.head-sub{display:flex;align-items:center;gap:4px;min-width:0;font-size:var(--t-xs);line-height:16px;color:var(--muted);text-decoration:none}
+.head-sub>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.head-sub .ico{width:12px;height:12px}
+a.head-sub:hover{color:var(--ink-2)}
 .chat-body{flex:1;min-height:0;overflow:auto;scrollbar-width:none;padding:12px 16px;display:flex;flex-direction:column}
 .chat-body>:first-child{margin-top:auto}
 .msg{display:flex;gap:10px;padding-top:14px}

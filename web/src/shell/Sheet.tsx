@@ -55,6 +55,8 @@ export interface SheetHeadProps {
   /* 'page' is a page's head with an h1; 'side' a chat's, panel's or list's; 'tico' Tico's own */
   kind: 'page' | 'side' | 'tico';
   title: ReactNode;
+  /* a quiet line under a side head's title (which chat this is) */
+  sub?: ReactNode;
   /* before the title: a face, the Dot, a back link */
   lead?: ReactNode;
   /* the head's controls, right of the title */
@@ -66,14 +68,23 @@ export interface SheetHeadProps {
 
 /* A sheet's head: lead, title, controls, "⋯", then the fold or close control the frame gives this sheet,
    and a button for each sheet tucked behind this one. */
-export function SheetHead({ kind, title, lead, children, more, className }: SheetHeadProps) {
+export function SheetHead({ kind, title, sub, lead, children, more, className }: SheetHeadProps) {
   const sheet = useSheet();
   const id = sheet.id;
   const cls = `${kind}-head${className ? ` ${className}` : ''}`;
   return (
     <header className={cls}>
       {lead}
-      {kind === 'page' ? <h1>{title}</h1> : <b>{title}</b>}
+      {kind === 'page' ? (
+        <h1>{title}</h1>
+      ) : sub ? (
+        <span className="head-who">
+          <b>{title}</b>
+          {sub}
+        </span>
+      ) : (
+        <b>{title}</b>
+      )}
       <span className="grow" />
       {children}
       {typeof more === 'function' ? <IconButton icon="more" label="More" onClick={more} /> : more}

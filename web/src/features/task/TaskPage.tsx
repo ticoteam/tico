@@ -3,7 +3,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
-import { Conversation, MessageBones } from '@/conversation';
+import { Conversation, MessageBones, SessionLine, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -14,6 +14,7 @@ import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
+import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
@@ -265,8 +266,12 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
   const [asking, setAsking] = useState(false);
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
+  // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.
+  const room = useQuery({ ...threadQuery(t?.conversation_id ?? ''), enabled: !!t?.conversation_id });
   if (!t) return <MessageBones />;
   const name = owner?.name ?? 'Teammate';
+  const session: Session | null = !room.data ? null : room.data.task_id === t.id ? { task: t.id, title: t.title } : 'main';
+  const sub = session && <SessionLine session={session} />;
   return (
     <>
       <header className="side-head">
@@ -276,16 +281,22 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
             <Link className="head-face" href={whoHref(owner)} tabIndex={-1} aria-hidden>
               <Face id={t.owner_id} size={28} decorative />
             </Link>
-            <b>
-              <Link className="head-name" href={whoHref(owner)}>
-                {name}
-              </Link>
-            </b>
+            <span className="head-who">
+              <b>
+                <Link className="head-name" href={whoHref(owner)}>
+                  {name}
+                </Link>
+              </b>
+              {sub}
+            </span>
           </>
         ) : (
           <>
             <Face id={t.owner_id} size={28} decorative />
-            <b>{name}</b>
+            <span className="head-who">
+              <b>{name}</b>
+              {sub}
+            </span>
           </>
         )}
         <span className="grow" />

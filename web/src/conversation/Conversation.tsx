@@ -18,6 +18,7 @@ import { dayKey, dayLabel } from './dates';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
 import { quoteFrom, quoteOf, Replying } from './Quote';
+import { SessionLine, type Session } from './Session';
 import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
@@ -36,6 +37,8 @@ export interface ConversationProps {
   title?: string;
   /** The face in a second chat's head (bot:<id> or human:<id>). */
   actor?: string;
+  /** A second chat's head, under the name: which of the agent's chats this is (a task's, or its main chat). */
+  session?: Session;
   /** The page it sits beside: the look chip, and `refs.page` on what is sent. Defaults to the address and title. */
   page?: (PageRef & { icon?: IconName }) | null;
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
@@ -129,7 +132,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, page, foot, card, canPost = true, extra }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, page, foot, card, canPost = true, extra }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -333,6 +336,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
           kind="side"
           title={mateHref ? <Link className="head-name" href={mateHref}>{name}</Link> : name}
           lead={mateHref ? <Link className="head-face" href={mateHref} tabIndex={-1} aria-hidden>{face}</Link> : face}
+          sub={session && <SessionLine session={session} />}
         />
         {body}
         {footer}
