@@ -527,6 +527,10 @@ jobs:
   # Adds the Electron files to the already published release: new builds, or the previous release's files carried
   # forward (their feeds name files, not URLs, so they move unchanged). The feeds go last, so an installed app never
   # reads a feed whose files are missing; until they arrive it finds no feed and shows no update.
+  # Delta updates: an installed app downloads only the changed blocks of the new zip (Mac) or installer (Windows) when
+  # it finds its own version's blockmap beside them, at releases/latest/download/Tico-<its version>-arm64.zip.blockmap
+  # (or -setup.exe.blockmap). So every release keeps the earlier versions' blockmaps too; without one the app
+  # downloads the whole file.
   electron-assets:
     needs: [release, electron-changes, electron]
     if: >-
@@ -548,6 +552,17 @@ jobs:
           pattern: electron-*
           path: dist/electron
           merge-multiple: true
+      # The previous release already holds the blockmaps of every version before it. Best effort: a release without
+      # them only makes those versions' next update a full download.
+      - name: Keep the earlier versions' blockmaps
+        if: needs.electron-changes.outputs.build == 'true' && needs.electron-changes.outputs.previous != ''
+        env:
+          PREVIOUS: ${{ needs.electron-changes.outputs.previous }}
+        run: |
+          bash scripts/ci/retry.sh --max-attempts 3 --permanent 'no assets match|release not found' -- \
+            gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" --dir dist/electron --skip-existing \
+              --pattern '*.zip.blockmap' --pattern '*.exe.blockmap' \
+            || echo "::warning::No earlier blockmaps from $PREVIOUS: apps on those versions download their next update in full."
       - name: Carry the previous release's Electron files forward
         if: needs.electron-changes.outputs.build != 'true'
         env:

@@ -824,7 +824,9 @@ that workflow changed since the previous release, or the previous release has no
 `desktop` checked to force a rebuild of both apps. The files are `Tico-<version>-arm64.dmg` and `.zip` (the Mac build
 is Apple-chip only; there is no Intel Mac build), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
 `Tico-<version>-x86_64.AppImage` and `Tico-<version>-amd64.deb`, their `.blockmap` files, and the update feeds
-`latest-mac.yml`, `latest.yml` and `latest-linux.yml`, uploaded last. Installed apps read the feeds from
+`latest-mac.yml`, `latest.yml` and `latest-linux.yml`, uploaded last. Each release also keeps the earlier versions'
+`.zip.blockmap` and `.exe.blockmap` files: an installed app looks for its own version's blockmap on the latest release
+and then downloads only the changed parts of the update, or the whole file when it is missing. Installed apps read the feeds from
 `https://github.com/ticoteam/tico/releases/latest/download/`, so a prerelease, or a release not yet marked latest,
 reaches no one; while the latest release has no feed yet, the app shows no update rather than an error. The Mac app is
 signed when `DESKTOP_MAC_CERT` (a base64 `.p12`) and `DESKTOP_MAC_CERT_PASSWORD` are set, and notarized when
