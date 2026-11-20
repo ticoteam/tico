@@ -2338,13 +2338,16 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     parts = {} if summary or not isinstance(stored, dict) else _shown_parts(verdict.get("parts"), stored.get("text"))
     for rid in rule_ids:
         row = c.execute(
-            "SELECT id, kind, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)
+            "SELECT id, kind, text, version, status, if_broken, description FROM org_rules WHERE id=?", (rid,)
         ).fetchone()
         if row:
+            # An opened hold carries each rule's Why (`description`), said beside it on the reviewer's decision.
+            fields = dict(row)
+            why = fields.pop("description") or ""
             rules.append(
-                {**dict(row), "text": row["text"][:SUMMARY_CHARS]}
+                {**fields, "text": row["text"][:SUMMARY_CHARS]}
                 if summary
-                else {**dict(row), "part": parts.get(rid) or None}
+                else {**fields, "description": why or None, "part": parts.get(rid) or None}
             )
     reviewer_name = H.person_name(c, H.actor_id(hold["reviewer"])) if hold["reviewer"] else None
     cut = lambda v: v[:SUMMARY_CHARS] if summary and isinstance(v, str) else v
