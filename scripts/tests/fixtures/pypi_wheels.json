@@ -498,6 +498,9 @@
  "httpx==0.28.1": [
   "py3-none-any"
  ],
+ "icalendar==7.3.0": [
+  "py3-none-any"
+ ],
  "idna==3.20": [
   "py3-none-any"
  ],
@@ -1316,6 +1319,9 @@
  ],
  "typing-inspection==0.4.4": [
   "py3-none-any"
+ ],
+ "tzdata==2026.6": [
+  "py2.py3-none-any"
  ],
  "urllib3==2.8.0": [
   "py3-none-any"

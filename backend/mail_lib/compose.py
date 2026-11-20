@@ -17,57 +17,50 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from typing import Any
 
+from icalendar import Calendar, Component, Event, vCalAddress, vUri
+
 from .calendar import meeting_url
 
 Json = dict[str, Any]
+
+
+def _add(component: Component, name: str, value: object, parameters: dict[str, str] | None = None) -> None:
+    component.add(name, value, parameters=parameters or {})  # pyright: ignore[reportUnknownMemberType] - icalendar leaves `value` untyped
 
 
 def with_invitation(
     raw: str, event: Json, mailbox: str, attendees: Iterable[str], start: datetime, end: datetime, summary: str
 ) -> str:
     """The invitation is part of the same frozen MIME send and approval as its confirmation."""
-
-    def text(value: object) -> str:
-        return (
-            str(value)
-            .replace("\\", "\\\\")
-            .replace("\r", "")
-            .replace("\n", "\\n")
-            .replace(";", "\\;")
-            .replace(",", "\\,")
-        )
-
-    def stamp(value: datetime) -> str:
-        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
     join = meeting_url(event)
     conference_data: Json = event.get("conferenceData") or {}
     points: list[Json] = conference_data.get("entryPoints") or []
     conference = [str(point["uri"]).replace("\r", "").replace("\n", "") for point in points if point.get("uri")]
     description = "\n".join(filter(None, [event.get("description"), "Join: " + join if join else "", *conference]))
-    lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//Tico//Calendar//EN",
-        "METHOD:REQUEST",
-        "BEGIN:VEVENT",
-        "UID:" + text(event.get("iCalUID") or str(event["id"]) + "@google.com"),
-        "SEQUENCE:0",
-        "DTSTAMP:" + stamp(start),
-        "DTSTART:" + stamp(start),
-        "DTEND:" + stamp(end),
-        "SUMMARY:" + text(summary),
-        "ORGANIZER:mailto:" + mailbox,
-    ]
+    calendar = Calendar()
+    _add(calendar, "version", "2.0")
+    _add(calendar, "prodid", "-//Tico//Calendar//EN")
+    _add(calendar, "method", "REQUEST")
+    invite = Event()
+    _add(invite, "uid", event.get("iCalUID") or str(event["id"]) + "@google.com")
+    _add(invite, "sequence", 0)
+    _add(invite, "dtstamp", start.astimezone(timezone.utc))
+    _add(invite, "dtstart", start.astimezone(timezone.utc))
+    _add(invite, "dtend", end.astimezone(timezone.utc))
+    _add(invite, "summary", summary)
+    _add(invite, "organizer", vCalAddress("mailto:" + mailbox))
     if join:
-        lines += ["URL:" + join]
+        _add(invite, "url", vUri(join))
     if event.get("location"):
-        lines += ["LOCATION:" + text(event["location"])]
+        _add(invite, "location", str(event["location"]))
     if description:
-        lines += ["DESCRIPTION:" + text(description)]
-    lines += ["CONFERENCE;VALUE=URI:" + uri for uri in dict.fromkeys([join, *conference]) if uri]
-    lines += ["ATTENDEE;RSVP=TRUE:mailto:" + address for address in attendees]
-    lines += ["END:VEVENT", "END:VCALENDAR", ""]
+        _add(invite, "description", description)
+    for uri in dict.fromkeys([join, *conference]):
+        if uri:
+            _add(invite, "conference", vUri(uri), parameters={"VALUE": "URI"})
+    for address in attendees:
+        _add(invite, "attendee", vCalAddress("mailto:" + address), parameters={"RSVP": "TRUE"})
+    calendar.add_component(invite)
     msg = BytesParser(policy=policy.SMTP).parsebytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
     details = "\n".join(
         filter(
@@ -84,16 +77,8 @@ def with_invitation(
         if body is None:
             raise ValueError("An invitation needs a visible plain-text body")
         body.set_content(body.get_content().rstrip() + "\n\n" + details + "\n")
-    folded: list[str] = []
-    for line in lines:
-        current = ""
-        for character in line:
-            if len((current + character).encode()) > 75:
-                folded.append(current)
-                current = " "
-            current += character
-        folded.append(current)
-    msg.add_attachment("\r\n".join(folded), subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
+    ics = calendar.to_ical(sorted=False).decode()  # in the order added, folded at 75 octets
+    msg.add_attachment(ics, subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
     return base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
 

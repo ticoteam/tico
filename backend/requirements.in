@@ -19,6 +19,7 @@ dnspython>=2.7,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo de
 dkimpy>=1.1.8,<2            # the DKIM check before a one-click unsubscribe (backend/mail_unsubscribe.py); uses dnspython
 pypdf>=7.1,<8
 reportlab>=5.1,<6
+icalendar>=7,<8             # the invitation.ics a booked meeting sends (backend/mail_lib/compose.py)
 beautifulsoup4>=4.13,<5     # HTML to text and Markdown (backend/html_convert.py), with markdownify and lxml
 markdownify>=1.2,<2
 lxml>=6,<7                  # the HTML parser beautifulsoup4 uses there
