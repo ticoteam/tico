@@ -647,6 +647,36 @@ describe('Details: the facts @s58', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1', body: { size: 3 } }));
   });
 
+  it('puts the task under another from Part of, and reads both again', async () => {
+    serve((url, method) => (method === 'POST' && url.endsWith('/parent') ? { status: 200, body: { task: { id: 't1', number: 12 } } } : undefined));
+    details();
+    await facts();
+    fireEvent.click(await screen.findByRole('button', { name: 'Part of' }));
+    const parent = await screen.findByRole('textbox', { name: 'Part of' });
+    fireEvent.change(parent, { target: { value: '40' } });
+    const before = calls.length;
+    fireEvent.keyDown(parent, { key: 'Enter' });
+    await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks/t1/parent', body: { parent: '#40' } }));
+    await waitFor(() => expect(calls.slice(before)).toContain('GET /api/v2/tasks/t1'));
+  });
+
+  it('task.subtask takes an existing task or a new title, one of the two', async () => {
+    serve(base);
+    const bad = (input: object) => run('task.subtask', input, { via: 'click' });
+    expect(await bad({ task: 't1' })).toMatchObject({ ok: false, error: expect.stringMatching(/^bad_input: input: give subtask/) });
+    expect(await bad({ task: 't1', subtask: '40', title: 'Write it' })).toMatchObject({ ok: false, error: expect.stringMatching(/^bad_input: input: give subtask/) });
+    expect(await bad({ task: 't1', subtask: '40', owner: 'bot:a1' })).toMatchObject({ ok: false, error: 'bad_input: owner: is only for a new subtask (title)' });
+    expect(sent).toEqual([]);
+    expect(await run('task.subtask', { task: 't1', title: ' Write it ' }, { via: 'click' })).toMatchObject({ ok: true });
+    expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks', body: { title: 'Write it', parent: 't1' } });
+  });
+
+  it('task.move to reopen needs a why', async () => {
+    serve(base);
+    expect(await run('task.move', { task: 't1', to: 'reopen' }, { via: 'click' })).toMatchObject({ ok: false, error: 'bad_input: why: is needed to reopen a task' });
+    expect(sent).toEqual([]);
+  });
+
   it('follows the task, and puts someone in a role', async () => {
     serve((url, method) => {
       if (method === 'PUT' && url.endsWith('/followers')) return { status: 200, body: { task_id: 't1', following: true, notify: 'live', followers: [{ actor: 'human:me', notify: 'live' }] } };

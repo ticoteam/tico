@@ -24,7 +24,6 @@ import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
-import { DropDialog } from './DropDialog';
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
@@ -415,23 +414,18 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
   );
 }
 
-/** Where a board card lands: a stage's column, or another card (its subtask or a merge). */
+/** Where a board card lands: a stage's column. */
 const COLUMN = '.col[data-target^="stage:"]';
-const CARD = '.tk-item[data-task]';
 
 function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
-  const [dropped, setDropped] = useState<{ task: string; onto: string } | null>(null);
-  // A card let go over a stage moves there; over another card it asks: a subtask or a merge (DropDialog).
+  // Dragging only moves: a card let go over another stage's column moves there.
   const drag = useDrag({
-    zones: `${COLUMN}, ${CARD}`,
+    zones: COLUMN,
     controls: '.tk-more',
-    takes: (zone, card) => zone !== card,
     drop: (zone, card) => {
-      const task = card.getAttribute('data-task') ?? '';
-      const onto = zone.getAttribute('data-task');
-      if (onto) return setDropped({ task, onto });
       if (zone.contains(card)) return;
+      const task = card.getAttribute('data-task') ?? '';
       const to = zone.getAttribute('data-target')?.slice('stage:'.length) ?? '';
       const name = p.stages.find((s) => s.id === to)?.name;
       void move.run({ task, to }).then((r) => r.ok && announce(`${r.did} to ${name}`));
@@ -484,7 +478,6 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
         );
       })}
       <BoardFit shape={shape} />
-      {dropped && <DropDialog task={dropped.task} onto={dropped.onto} onClose={() => setDropped(null)} />}
     </>
   );
 }

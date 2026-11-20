@@ -13,8 +13,6 @@ import type {
   Task,
   TaskList,
   TaskManyResult,
-  TaskMerge,
-  TaskMergeResult,
   TaskMoveResult,
   Tag,
   TagDetail,
@@ -705,81 +703,6 @@ export const tagQuery = (tag: string) =>
     queryKey: ['tags', tag] as const,
     queryFn: ({ signal }) => api.get<TagDetail>(`/api/v2/tags/${encodeURIComponent(tag)}`, { signal }),
   });
-
-/* ---------------------------------------------------------------- one task let go over another's card */
-
-/** Either task, as the drop dialog names it. */
-export interface DropEnd {
-  id: string;
-  number: number | null;
-  title: string;
-  owner_id: string | null;
-  owner: string;
-}
-
-/** What a merge carries over, counted from the real tasks before anyone confirms. */
-export interface DropMoves {
-  comments: number;
-  asks: string[];
-  subtasks: number;
-  files: number;
-  followers: number;
-  requesters: number;
-  labels: number;
-  links: number;
-  description: boolean;
-  due: string | null;
-}
-
-/** Both tasks, why each choice cannot be done (null when it can), and what a merge moves. */
-export interface DropChecks {
-  task: DropEnd;
-  into: DropEnd;
-  same_owner: boolean;
-  subtask: string | null;
-  merge: string | null;
-  moves: DropMoves;
-}
-
-/** GET /api/v2/tasks/{id}/merge?into=: read fresh each time the dialog opens. */
-export const dropChecksQuery = (task: string, into: string) =>
-  queryOptions({
-    queryKey: ['tasks', 'drop', task, into] as const,
-    queryFn: ({ signal }) => api.get<DropChecks>(`/api/v2/tasks/${encodeURIComponent(task)}/merge?into=${encodeURIComponent(into)}`, { signal }),
-    staleTime: 0,
-    gcTime: 0,
-  });
-
-/** Put a task under another as its subtask; both keep their owners and stages. */
-export async function makeSubtask(id: string, parent: string): Promise<TaskItem> {
-  const shown = listsHolding(id);
-  const { task } = await write<{ task: TaskItem }>({
-    key: shown.length ? shown : keys.tasks.detail(id),
-    optimistic: (cur: unknown) => cur,
-    send: (idempotencyKey) => api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/parent`, { parent }, { idempotencyKey }),
-    settle: (cur: TaskPage | undefined, answer) => (cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, ...answer.task })) : cur),
-  });
-  void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(parent) });
-  return task;
-}
-
-/**
- * Merge a task into another: `into` stays and gets its details; the task is closed as a duplicate. It leaves the
- * board at once and comes back if the server refuses. `owner` picks who keeps `into` when the owners differ.
- */
-export async function mergeTask(id: string, into: string, owner?: string | null): Promise<TaskMergeResult> {
-  const shown = listsHolding(id);
-  const out = await write<TaskMergeResult>({
-    key: shown.length ? shown : keys.tasks.detail(id),
-    optimistic: (cur: TaskPage | undefined) => (cur?.tasks ? patchRow(cur, id, () => null) : cur),
-    send: (idempotencyKey) =>
-      api.post<TaskMergeResult>(`/api/v2/tasks/${encodeURIComponent(id)}/merge`, { into, ...(owner && { owner }) } satisfies TaskMerge, { idempotencyKey }),
-    settle: (cur: TaskPage | undefined, answer) =>
-      cur?.tasks ? { ...cur, tasks: cur.tasks.map((t) => (t.id === answer.task.id ? { ...t, ...(answer.task as TaskItem) } : t)) } : cur,
-  });
-  void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(into) });
-  return out;
-}
 
 /* ---------------------------------------------------------------- Roadmap: who asked for a task */
 

@@ -439,7 +439,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         actions={
           <>
             {cancel}
-            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.reopen', { why: why.trim() })}>
+            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.move', { to: 'reopen', why: why.trim() })}>
               Reopen
             </Button>
           </>
