@@ -33,7 +33,6 @@ import type {
   ChangeCall,
   StartCall,
 } from '@/api/schema';
-import { readTicoInfo } from '@/conversation';
 import { queryClient, quietRoot, write } from '@/data';
 
 const enc = encodeURIComponent;
@@ -53,15 +52,6 @@ export const meetKeys = {
   items: (id: string) => ['meetings', id, 'items'] as const,
   live: (id: string) => ['meetings', id, 'live'] as const,
 };
-/** Tico's own agent (the company's assistant bot) as an actor id: on a call it is Tico, with Tico's face. */
-export const ticoBotQuery = queryOptions({
-  queryKey: ['assistant', 'bot'] as const,
-  queryFn: async () => {
-    const bot = (await readTicoInfo()).bot;
-    return bot ? `bot:${bot}` : null;
-  },
-});
-
 export const callKeys = {
   live: ['calls', 'live'] as const,
   one: (id: string) => ['calls', id] as const,

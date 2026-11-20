@@ -129,3 +129,11 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
         token=botops["token"],
         expected=403,
     )
+
+
+def test_the_companys_assistant_is_marked_tico_in_the_org_view(api, monkeypatch):
+    bots = get(api, "org")["bots"]
+    assert bots, "the fixture has bots"
+    monkeypatch.setattr(api.app.state.store.settings, "assistant_bot", bots[0]["id"])
+    marked = {b["id"]: b["tico"] for b in get(api, "org")["bots"]}
+    assert marked[bots[0]["id"]] is True and not any(v for k, v in marked.items() if k != bots[0]["id"])

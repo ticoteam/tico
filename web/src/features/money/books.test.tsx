@@ -413,7 +413,7 @@ describe('Attribution rule @s459', () => {
     const dialog = await screen.findByRole('dialog', { name: 'New rule' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Paper to Sam' } });
     await pick(within(dialog).getByRole('combobox', { name: 'Match' }), /^Paper Co$/);
-    await pick(within(dialog).getByRole('combobox', { name: 'Teammate or team' }), /^Sam$/);
+    await pick(within(dialog).getByRole('combobox', { name: 'Person or team' }), /^Sam$/);
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Share, %' }), { target: { value: '100' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
     await waitFor(() =>
@@ -472,7 +472,7 @@ describe('View as @s456', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'View as' }));
     const dialog = await screen.findByRole('dialog', { name: 'View as' });
-    await pick(within(dialog).getByRole('combobox', { name: 'Teammate' }), /^Sam$/);
+    await pick(within(dialog).getByRole('combobox', { name: 'Who' }), /^Sam$/);
     fireEvent.click(within(dialog).getByRole('button', { name: 'View' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ as: 'human:sam', tab: 'pnl' }));
   });

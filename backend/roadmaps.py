@@ -414,7 +414,7 @@ def install_internal(app, store, auth, mutate, mover):
             if body.actor:
                 actor = H.resolve_actor(c, body.actor)
                 if not actor or not (H.is_human(actor) or H.is_bot(actor)) or not H._actor_exists(c, actor):
-                    raise Problem('identity', 'Teammate not found', 422)
+                    raise Problem('identity', 'No such person or agent', 422)
             if (actor != who.actor or not actor) and who.via == 'botops' and not who.confirmed:
                 # BotOps acting for a person adds a teammate or an outside contact only on that person's own tap.
                 made = getattr(request.app.state, 'botops_propose', None)

@@ -334,7 +334,7 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
       </div>
     );
   if (variant === 'side') {
-    const who = whoOf({ sender_id: actor ?? '' }, variant, myId);
+    const who = whoOf({ sender_id: actor ?? '' }, variant, myId, mate?.name, mate?.tico);
     const face = <Face who={{ ...who, name }} size={28} />;
     // The face and the name go to the teammate's page; one link is read out, the face's is for the pointer.
     return (

@@ -113,7 +113,7 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
             </colgroup>
             <thead>
               <tr>
-                <th scope="col">Teammate</th>
+                <th scope="col">Who</th>
                 <th scope="col">Sees</th>
                 <th scope="col">Approves</th>
               </tr>
@@ -186,7 +186,7 @@ function MatePanel({ mate: t, acc, viewing, onGive }: { mate: Mate; acc: AccessL
       }
     >
       <div className="money pbody">
-        <Facts label="Teammate">
+        <Facts label="Who">
           {path.length > 0 && <LabelValue label="Team">{path.join(' › ')}</LabelValue>}
           <LabelValue label="Kind">{t.kind === 'bot' ? 'Agent' : 'Person'}</LabelValue>
           {t.reports_to && <LabelValue label="Reports to">{boss?.name ?? t.reports_to.slice(t.reports_to.indexOf(':') + 1)}</LabelValue>}
@@ -255,7 +255,7 @@ function GiveDialog({ acc, teammate, onOpenChange }: { acc: AccessList; teammate
     ...(owner ? [{ value: 'company', label: 'Company' }] : []),
   ];
   const submit = () => {
-    if (!who) return setError('Choose a teammate');
+    if (!who) return setError('Choose someone');
     if (LINES.has(what) && !line) return setError('Choose a line');
     const scoped = SCOPED.has(what);
     void go('finance.giveAccess', {
@@ -269,7 +269,7 @@ function GiveDialog({ acc, teammate, onOpenChange }: { acc: AccessList; teammate
   };
   return (
     <Ask title="Give access" submit="Give access" onOpenChange={onOpenChange} onSubmit={submit} busy={busy} error={error}>
-      <Select label="Teammate" options={people} value={who} placeholder="Choose" onValueChange={setWho} />
+      <Select label="Who" options={people} value={who} placeholder="Choose" onValueChange={setWho} />
       <Select
         label="What"
         options={whats}

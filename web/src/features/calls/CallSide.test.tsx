@@ -13,7 +13,6 @@ vi.mock('@/conversation', async () => {
   const { Link } = await import('@tanstack/react-router');
   return {
     ticoRoomQuery: { queryKey: ['assistant', 'room'], queryFn: async () => 'th-tico' },
-    readTicoInfo: async () => ({ bot: 'b1', room_id: 'th-tico' }),
     Conversation: ({ variant, title }: { variant: string; title?: string }) => (
       <div data-variant={variant} data-to={title}>
         <Link to="/tasks">A task</Link>

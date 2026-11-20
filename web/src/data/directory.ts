@@ -23,6 +23,8 @@ export interface Actor {
   hue?: number;
   /** An agent running a turn now: `Avatar`'s `live`. */
   working?: boolean;
+  /** The company's assistant (the org view's `tico`): it is Tico by name and face wherever it is drawn. */
+  tico?: boolean;
 }
 
 /**
@@ -102,10 +104,12 @@ export function buildDirectory(org: GetOrgResponse, lines: StatusLine[]): Direct
   const agents: Actor[] = org.bots.map((b) => {
     const row = b as typeof b & { slug?: string; department?: string };
     const slug = text(row.slug) ?? b.id;
+    // The one place an agent's name is read: the company's assistant is Tico, whatever its stored name ("Assistant").
     return {
       id: `bot:${b.id}`,
       kind: 'agent',
-      name: text(b.display_name) ?? slug,
+      name: b.tico ? 'Tico' : (text(b.display_name) ?? slug),
+      ...(b.tico ? { tico: true } : {}),
       slug,
       avatar: null,
       team: teamName(b.team) ?? text(row.department),

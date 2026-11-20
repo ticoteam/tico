@@ -13,7 +13,7 @@ import './actions';
 import { CallBar } from './CallBar';
 import { CallPage } from './CallPage';
 import { CallSide } from './CallSide';
-import { callQuery, ringingQuery, ticoBotQuery } from './queries';
+import { callQuery, ringingQuery } from './queries';
 import { RingCard } from './RingCard';
 import { callState, resetCall } from './session';
 
@@ -133,9 +133,9 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const gm = { id: 'bot:gm', name: 'Growth Manager', kind: 'bot' };
   const fin = { id: 'bot:fin', name: 'Finance', kind: 'bot' };
-  queryClient.setQueryData(['directory'], { actors: [gm, fin], byId: { 'bot:gm': gm, 'bot:fin': fin } });
+  const tico = { id: 'bot:b1', name: 'Tico', kind: 'agent', tico: true };
+  queryClient.setQueryData(['directory'], { actors: [gm, fin, tico], byId: { 'bot:gm': gm, 'bot:fin': fin, 'bot:b1': tico } });
   queryClient.setQueryData(ticoRoomQuery.queryKey, 'th-tico');
-  queryClient.setQueryData(ticoBotQuery.queryKey, 'bot:b1');
   queryClient.setQueryData(callQuery(ROOM).queryKey, call());
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
@@ -315,8 +315,6 @@ describe('Call window', () => {
   });
 
   it('Tico on a call is Tico: its name in the caption, its face the Dot', async () => {
-    const tico = { id: 'bot:b1', name: 'Assistant', kind: 'bot' };
-    queryClient.setQueryData(['directory'], { actors: [tico], byId: { 'bot:b1': tico } });
     queryClient.setQueryData(
       callQuery(ROOM).queryKey,
       call({ thread_id: 'th-tico', bots: ['b1'], voice: { bots: [{ slug: 'b1', state: 'speaking', caption: 'The ads start Monday.' }], note: null } }),

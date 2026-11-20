@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { ApiError } from '@/api/client';
 import type { Call } from '@/api/schema';
 import { ticoRoomQuery } from '@/conversation';
+import { useDirectory } from '@/data';
 import { desktop } from '@/desktop';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -17,7 +18,7 @@ import { CallBars, Dot, dot } from '@/tico/dot';
 import { BarMore, ShareControl, Shared } from './CallMore';
 import { CallSide, Transcript } from './CallSide';
 import { running } from './model';
-import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, useTicoBot, type InCall } from './parts';
+import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, type InCall } from './parts';
 import { PeoplePick } from './PeoplePick';
 import { callItemsQuery, callQuery, itemKey, notesQuery } from './queries';
 import { callState, forget, isActive, levelOf, useCall, type CallState, type Phase } from './session';
@@ -71,11 +72,11 @@ export function CallPage({ room }: CallPageProps) {
   useJoinInSmallWindow(small, room, call.data, phase);
   const c = call.data;
   const ended = phase === 'ended' || (phase === 'idle' && c?.state === 'ended');
-  const ticoBot = useTicoBot();
   // A call in Tico's own room. Tico's stage (the Dot) shows only while Tico is on it: taken out, the stage is the
   // people actually there; brought back, it is Tico's again.
   const inTicoRoom = !!c && !!ticoRoom && ticoRoom === c.thread_id;
-  const isTico = inTicoRoom && !!ticoBot && c.bots.some((b) => (b.startsWith('bot:') ? b : `bot:${b}`) === ticoBot);
+  const ticoIn = useDirectory((d) => (c?.bots ?? []).some((b) => !!d.byId[b.startsWith('bot:') ? b : `bot:${b}`]?.tico)) ?? false;
+  const isTico = inTicoRoom && ticoIn;
   const kind = small ? 'pane cw cw-small' : cards ? 'pane pc cw' : 'pane cw is-full';
 
   if (call.isError && !c) {

@@ -356,3 +356,13 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(within(dialog).getByText('Cedar')).toBeTruthy();
   });
 });
+
+describe('whoOf: Tico by name and face', () => {
+  it('the company’s assistant speaks as Tico in any chat, over the name its message carries', async () => {
+    const { whoOf } = await import('./Message');
+    const m = { sender_id: 'bot:assistant', sender_name: 'Assistant' };
+    expect(whoOf(m, 'page', 'human:me', undefined, true)).toEqual({ name: 'Tico', kind: 'tico', hue: 0 });
+    expect(whoOf(m, 'page', 'human:me')).toMatchObject({ name: 'Assistant', kind: 'agent' });
+    expect(whoOf({ sender_id: 'human:x' }, 'page', 'human:me')).toMatchObject({ name: 'Person', kind: 'person' });
+  });
+});

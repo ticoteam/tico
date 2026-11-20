@@ -10,7 +10,6 @@ import { Icon } from '@/kit/Icon';
 import { toast } from '@/kit/Toast';
 import { Dot } from '@/tico/dot';
 import { joinOf } from './model';
-import { ticoBotQuery } from './queries';
 import { isActive, levelOf, useCall, type CallState } from './session';
 
 /** The desktop app's control that moves the call out (the shell's `shell.openCallWindow`). */
@@ -59,15 +58,11 @@ const kindOf = (actor: string) => (actor.startsWith('bot:') ? 'agent' : 'person'
 
 const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, a.name]));
 
-/** Tico's own agent as an actor id (`bot:<slug>`), once known: on a call it is Tico. */
-export const useTicoBot = (): string | null => useQuery(ticoBotQuery).data ?? null;
-
-/** A name for any actor id: Tico for Tico's own agent, else the directory's. Only the names are read, so a status
+/** A name for any actor id, from the directory (where Tico's own agent is Tico). Only the names are read, so a status
     line does not redraw it. */
 export function useNameOf(): (actor: string) => string {
   const names = useDirectory(namesOf);
-  const tico = useTicoBot();
-  return (actor) => (actor === tico ? 'Tico' : (names?.[actor] ?? bare(actor)));
+  return (actor) => names?.[actor] ?? bare(actor);
 }
 
 /** On now: the call's level bars (the Dot's `.lvl`), standing still. */
@@ -83,7 +78,7 @@ export const LiveMark = () => (
 /** Someone in a call at any size: a face, a still ring while they speak, a mark when muted (calls.css .face). */
 export function Face({ actor, size, speaking, muted }: { actor: string; size: number; speaking?: boolean; muted?: boolean }) {
   const a = useActor(actor);
-  const tico = useTicoBot() === actor;
+  const tico = !!a?.tico;
   const style = { '--f': `${size}px`, '--x': `${size}px` } as CSSProperties;
   return (
     <span className={speaking ? 'face is-speaking' : 'face'} style={style}>
