@@ -231,3 +231,102 @@ def test_a_pipeline_owner_reads_their_pipeline_and_the_private_tasks_they_read_a
     listed = {n["task_id"] for n in W.needs(c, "human:cy")}
     assert secrets["human:ben"] not in listed and other["id"] not in listed
     _same_for_everyone(c)
+
+
+def test_the_company_persons_ladder_reads_only_what_can_fall_and_keeps_every_task_that_does(c):
+    """The company's person's ladder (`_ladder_tasks`) reads in SQL only the open tasks `_falls` could keep, and keeps
+    each one it keeps reading every open task: brought to a person, owned by nobody or by someone who left, a stage OK
+    naming nobody, any ask on a private task, a visit's own ask. A bot's task whose stage OK names someone who can act
+    stays with the bot."""
+    for slug in ("builder", "reviewer"):
+        X.bot(c, slug)
+    X.pipeline(c, "eng", "Engineering", BUILD)
+    X.pipeline(
+        c,
+        "rev",
+        "Review",
+        ({"name": "Check", "owner": "assignee", "requirements": [{"kind": "ok", "person": ANA, "line": "OK it"}]},),
+    )
+    X.pipeline(
+        c, "any", "Anyone", ({"name": "Check", "owner": "assignee", "requirements": [{"kind": "ok", "line": "OK it"}]},)
+    )
+    kept = {}
+    kept["private"] = X.new_task(c, ANA, "Price the merger", "rev", assignee="bot:builder")["id"]
+    c.execute("UPDATE tasks SET private=1 WHERE id=?", (kept["private"],))
+    kept["nobody named"] = X.new_task(c, ANA, "Pick a logo", "any", assignee="bot:builder")["id"]
+    stuck = X.new_task(c, ANA, "Fix the footer", "eng", assignee="bot:builder")
+    c.execute("UPDATE visits SET level='person' WHERE id=?", (stuck["visit"]["id"],))
+    kept["at a person"] = stuck["id"]
+    kept["no owner"] = X.new_task(c, ANA, "Sort the inbox", "eng", assignee="bot:builder")["id"]
+    c.execute("UPDATE tasks SET owner_id=NULL WHERE id=?", (kept["no owner"],))
+    kept["owner left"] = X.new_task(c, ANA, "Book the venue", "eng", assignee=CARA)["id"]
+    asked = X.new_task(c, ANA, "Write the note", "eng", assignee="bot:builder")
+    X.ok_ask(c, asked["id"], "bot:builder", BEN, "OK the note")
+    c.execute("UPDATE requirements SET person_id=NULL WHERE line='OK the note'")
+    kept["visit ask"] = asked["id"]
+    stays = [
+        X.new_task(c, ANA, "Check the facts", "rev", assignee="bot:builder")["id"],
+        X.new_task(c, ANA, "Draft the FAQ", "eng", assignee="bot:reviewer")["id"],
+    ]
+    X.left(c, CARA)
+    asks = c.execute(W._STAGE_ASKS).fetchall()
+    every = W._dicts(c.execute(W._OPEN_SQL.replace("FROM tasks t", "FROM " + W._OPEN_JOIN) % W._OPEN_ROWS))
+    on_visits = W._asks_by(
+        c.execute(
+            "SELECT r.visit_id, r.kind, r.person_id, r.condition FROM visits v JOIN requirements r "
+            "ON r.visit_id = v.id WHERE v.left_at IS NULL AND r.withdrawn_at IS NULL"
+        ).fetchall()
+    )
+    whole = {str(row["id"]) for row in every if W._falls(c, row, W._asks_by(asks), on_visits)}
+    assert whole == set(kept.values()) and not whole & set(stays)
+    seen = []
+    c.set_trace_callback(seen.append)
+    try:
+        assert W._ladder_tasks(c, ANA, True, set(), asks) == whole
+    finally:
+        c.set_trace_callback(None)
+    [read] = [q for q in seen if "LEFT JOIN visits v" in q]
+    assert "json_each" in read  # the rows that can fall, chosen in SQL
+    _same_for_everyone(c)
+
+
+def test_a_planned_bots_cause_is_the_same_read_with_its_list_or_alone(c):
+    """A page that asks "can this bot run" of many bots reads each planned bot's setup together (task_wakes
+    .prime_bots): its go-live waiting, the tasks it is made on and whether they are open. Each bot's cause is the one
+    its own reads give."""
+    from backend import go_live, task_wakes
+
+    bots = ("setting", "made-on", "closed-on", "going-live", "failed-live", "idle")
+    for slug in bots:
+        X.bot(c, slug)
+    X.pipeline(c, manager=None)
+    setup = X.new_task(c, ANA, "Set up the bot", assignee=ANA)["id"]
+    made = X.new_task(c, ANA, "Add Builder 3", assignee=ANA)["id"]
+    closed = X.new_task(c, ANA, "Add Builder 4", assignee=ANA)["id"]
+    c.execute("UPDATE tasks SET status='closed' WHERE id=?", (closed,))
+    for slug, field, task in (
+        ("setting", "setup_task_id", setup),
+        ("made-on", "made_on_task_id", made),
+        ("closed-on", "made_on_task_id", closed),
+    ):
+        c.execute(
+            "UPDATE bot_settings SET extra=json_set(coalesce(extra,'{}'),?,?) WHERE bot_id=?",
+            ("$." + field, task, slug),
+        )
+    for slug, value in (("going-live", "{}"), ("failed-live", '{"failed": true}')):
+        c.execute("INSERT INTO registry_metadata(key, value) VALUES(?, ?)", (go_live.PREFIX + slug, value))
+    c.execute("UPDATE bots SET state='planned' WHERE id IN (%s)" % ",".join("?" * len(bots)), bots)
+    c.read_cache.clear()
+    alone = {slug: task_wakes.cannot_run(c, f"bot:{slug}") for slug in bots}
+    assert alone["setting"] == alone["made-on"] == alone["going-live"] == task_wakes.BEING_SET_UP
+    assert task_wakes.BEING_SET_UP not in (alone["closed-on"], alone["failed-live"], alone["idle"])
+    seen = []
+    c.set_trace_callback(seen.append)  # a trace callback empties the snapshot's cache too
+    try:
+        task_wakes.prime_bots(c, [f"bot:{slug}" for slug in bots])
+        primed = {slug: task_wakes.cannot_run(c, f"bot:{slug}") for slug in bots}
+    finally:
+        c.set_trace_callback(None)
+    assert primed == alone
+    reads = [q for q in seen if "setup_task_id" in q or "go-live-pending:" in q or ("WHERE id=" in q and "'open'" in q)]
+    assert reads and all(" IN (" in q for q in reads), reads  # the list's reads, never one a bot
