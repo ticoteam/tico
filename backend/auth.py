@@ -8,6 +8,7 @@ import re
 import sqlite3
 import stat
 from dataclasses import dataclass, replace
+from typing import Any
 
 import yaml
 
@@ -858,7 +859,7 @@ class Auth:
             H.TOOLS_OWNER,
         )
 
-    def bot_manager(self, c, who, slug, operator=None, config=False):
+    def bot_manager(self, c, who, slug, operator=None, config: Any = False):
         """Whether this person may manage the bot: the one "can manage this bot" rule (docs/permissions.md).
         The owner, an Admin, one of the bot's owners (its creator and any co-owner, and its operator),
         or a person above it on the org chart. A built-in bot is the owner's alone. `config`: the bot's bot_config

@@ -45,6 +45,7 @@ already read. Without it the admins are read from the database (`access.owner_an
 
 import json
 import sqlite3
+from typing import Any
 
 from . import bot_access as A
 from . import people as P
@@ -393,7 +394,7 @@ def bot_levels(c, viewer, slugs=None, admin=None, auth=None, ctx=None):
     return out
 
 
-def _bot_manage(c, viewer, slug, ctx, config=False):
+def _bot_manage(c, viewer, slug, ctx, config: Any = False):
     """`Auth.bot_manager` (from the database when there is no Auth): who may edit the bot's settings and access.
     `config`: the bot's bot_config row, or None for none, when the caller read every bot's already."""
     if ctx.auth is not None:
