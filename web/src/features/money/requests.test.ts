@@ -116,6 +116,16 @@ describe('Money request shapes', () => {
     expect(RULES['/api/v2/finance/invoices']?.params.status?.('open')).toBe(false);
   });
 
+  it('keeps overview summaries separate from the full unpaid lists', async () => {
+    for (const query of [Q.billsQuery, Q.invoicesQuery]) {
+      const list = query(AS);
+      const summary = query(AS, 1);
+      expect(summary.queryKey).not.toEqual(list.queryKey);
+      expect((await urlOf(summary)).searchParams.get('limit')).toBe('1');
+      expect((await urlOf(list)).searchParams.get('limit')).toBe('200');
+    }
+  });
+
   it('reading as a teammate sends view_as and keeps its own cache', async () => {
     expect((await urlOf(Q.transactionsQuery(AS))).searchParams.get('view_as')).toBe(AS);
     expect((await urlOf(Q.transactionsQuery())).searchParams.has('view_as')).toBe(false);

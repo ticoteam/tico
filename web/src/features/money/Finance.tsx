@@ -1,20 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
+import { lazy, Suspense } from 'react';
 import { fmtDate } from '@/lib';
 import { Button } from '@/kit/Button';
 import { Lines, Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
 import { Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, List, Section } from '@/pagekinds';
-import { AccessPage } from './Access';
-import { BooksPage } from './Books';
 import { useBooksReturn } from './booksReturn';
-import { BudgetsPage } from './Budgets';
 import { useCaps } from './caps';
 import { axis, cash, connected, dayOf, monShort, monthSpan, nowCol, ymOf } from './model';
 import { FIN, FinanceOwner, plural, useFinanceHead } from './head';
 import { ActLink, readState, usePhone, usePress, useViewAs } from './parts';
-import { PnlPage } from './Pnl';
-import { SourcesPage } from './Sources';
 import {
   billsQuery,
   briefQuery,
@@ -25,6 +21,12 @@ import {
   sourcesQuery,
 } from './queries';
 import { FINANCE_TAB_IDS, type FinanceSearch, type FinanceTab } from './search';
+
+const AccessPage = lazy(() => import('./Access').then((m) => ({ default: m.AccessPage })));
+const BooksPage = lazy(() => import('./Books').then((m) => ({ default: m.BooksPage })));
+const BudgetsPage = lazy(() => import('./Budgets').then((m) => ({ default: m.BudgetsPage })));
+const PnlPage = lazy(() => import('./Pnl').then((m) => ({ default: m.PnlPage })));
+const SourcesPage = lazy(() => import('./Sources').then((m) => ({ default: m.SourcesPage })));
 
 /** Finance: its pages under one title, the tab in `?tab=`, each only for a viewer who may open it (finTabShown). The
     overview is a dashboard; the rest are lists. A page outside the viewer's rights says so; the plain address opens
@@ -40,12 +42,13 @@ export function FinancePage({ search }: { search: FinanceSearch }) {
   if (tab === 'overview') {
     return <Overview mayReadSources={shown('sources')} mayReadPayables={shown('payables')} mayReadReceivables={shown('receivables')} />;
   }
-  if (tab === 'pnl') return <PnlPage search={search} />;
-  if (tab === 'budgets') return <BudgetsPage search={search} />;
-  if (tab === 'mine') return <BudgetsPage search={search} mine />;
-  if (tab === 'sources') return <SourcesPage failure={failure} onDismiss={dismiss} search={search} />;
-  if (tab === 'access') return <AccessPage search={search} />;
-  return <BooksPage tab={tab} />;
+  let page;
+  if (tab === 'pnl') page = <PnlPage search={search} />;
+  else if (tab === 'budgets' || tab === 'mine') page = <BudgetsPage search={search} mine={tab === 'mine'} />;
+  else if (tab === 'sources') page = <SourcesPage failure={failure} onDismiss={dismiss} search={search} />;
+  else if (tab === 'access') page = <AccessPage search={search} />;
+  else page = <BooksPage tab={tab} />;
+  return <Suspense fallback={<Waiting />}>{page}</Suspense>;
 }
 
 /** A page this viewer may not open: no access, without Try again. */
@@ -102,8 +105,8 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
   const month = useQuery(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }, as));
   const weekly = useQuery(pnlQuery({ start: dayOf(weeks), end: dayOf(now), period: 'week', basis: 'accrual' }, as));
   const cashNow = useQuery(metricQuery('cash', as));
-  const invoices = useQuery({ ...invoicesQuery(as), enabled: mayReadReceivables, select: (data) => data.open }).data;
-  const bills = useQuery({ ...billsQuery(as), enabled: mayReadPayables, select: (data) => data.open }).data;
+  const invoices = useQuery({ ...invoicesQuery(as, 1), enabled: mayReadReceivables, select: (data) => data.open }).data;
+  const bills = useQuery({ ...billsQuery(as, 1), enabled: mayReadPayables, select: (data) => data.open }).data;
   const inbox = useQuery(inboxQuery(as));
 
   const live = connected(sources.data?.groups);

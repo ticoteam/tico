@@ -143,6 +143,31 @@ afterEach(() => {
 });
 
 describe('task route loading', () => {
+  it('reuses a task read from an older id link when redirecting to its numbered address', async () => {
+    serve(base);
+    expect(await loadTask(queryClient, 't1')).toMatchObject({ task: { id: 't1', number: 12 } });
+    expect(await loadTask(queryClient, '12', 'qa-report')).toMatchObject({ task: { id: 't1' } });
+    expect(calls.filter((call) => /^GET \/api\/v2\/tasks\/(t1|%2312)$/.test(call))).toEqual(['GET /api/v2/tasks/t1']);
+  });
+
+  it('warms an open task’s chat before the file manifest comes back', async () => {
+    const manifest = holdReply();
+    serve((url) => {
+      if (url.endsWith('/tasks/%2312')) return { status: 200, body: detail(task({ conversation_id: 'room', documents: [] })) };
+      if (url.endsWith('/tasks/t1/files?all=1')) return manifest.promise;
+      return base(url);
+    });
+    const loaded = loadTask(queryClient, '12', 'details', true);
+    try {
+      await waitFor(() => expect(calls).toContain('GET /api/v2/threads/room/timeline?flat=1&limit=50'));
+      expect(calls).toContain('GET /api/v2/threads/room');
+      expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.fetchStatus).toBe('fetching');
+    } finally {
+      manifest.resolve({ status: 200, body: { files: [] } });
+      await loaded;
+    }
+  });
+
   it.each([['spec', 'f1'], [undefined, 'f2']] as const)('starts the selected page read while files are pending for tab %s', async (tab, file) => {
     const manifest = holdReply();
     serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : base(url)));

@@ -1,4 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
+import { timelineQuery } from '@/conversation';
+import { threadQuery } from '@/features/threads/routing';
 import { CHAT, decisionOf, defaultTab, isPage, tabsOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { waitSlugs, waitsOnYou } from './waits';
@@ -9,10 +11,14 @@ export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress } from './model';
 
 /** Load the task while the route loads its code. A refused read leaves the page to show the error. */
-export async function loadTask(client: QueryClient, param: string, tab?: string): Promise<{ task: TaskData; tab: string } | null> {
+export async function loadTask(client: QueryClient, param: string, tab?: string, openChat = false): Promise<{ task: TaskData; tab: string } | null> {
   try {
     const id = await client.ensureQueryData(taskRefQuery(param));
     const t = await client.ensureQueryData(taskDetailQuery(id));
+    if (openChat && t.conversation_id) {
+      void client.prefetchQuery(threadQuery(t.conversation_id));
+      void client.prefetchInfiniteQuery(timelineQuery(t.conversation_id));
+    }
     const fileQuery = taskFilesQuery(id);
     const files = client.prefetchQuery(fileQuery);
     const tabs = tabsOf(t);

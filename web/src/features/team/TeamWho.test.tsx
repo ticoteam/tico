@@ -3,7 +3,7 @@ import '@/actions';
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
@@ -222,6 +222,19 @@ describe('Team pages', () => {
     expect(done.get('counts')).toBe('stage');
     expect(done.get('limit')).toBe('1');
     expect(done.get('updated_since')).toBeTruthy();
+  });
+
+  it('skips the team render when only an agent’s focus changes and still updates its working badge', async () => {
+    serve();
+    const rendered = vi.fn();
+    show(<Profiler id="team" onRender={rendered}><TeamWho who="design" /></Profiler>, '/team/design');
+    await waitFor(() => expect(link('Ana')).toBeTruthy());
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    rendered.mockClear();
+    await act(() => queryClient.setQueryData(directoryQuery.queryKey, directory([{ ...ana, status: 'New focus' }, bo, pat])));
+    expect(rendered).not.toHaveBeenCalled();
+    await act(() => queryClient.setQueryData(directoryQuery.queryKey, directory([{ ...ana, status: 'New focus', working: true }, bo, pat])));
+    expect(await within(link('Ana')!).findByRole('img', { name: 'Ana, working now' })).toBeTruthy();
   });
 
   it('starts the team spend read without waiting for the agents roster', async () => {

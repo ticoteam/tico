@@ -10,8 +10,10 @@ import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
+import { TaskChat } from '@/features/task/exports';
 import { filtersOf, flowGroups, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teamSlug, whoHref } from '@/features/team/routing';
+import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -86,7 +88,6 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 /* An open task's chat comes with the task's own code: the first load carries the shell only. So does every part the
    root mounts over a page: each loads the first time it has something to show (Later), never before the first paint. */
-const TaskChat = lazy(() => import('@/features/task/exports').then((m) => ({ default: m.TaskChat })));
 const CallBar = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallBar })));
 const CallSide = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallSide })));
 const RingCard = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.RingCard })));
@@ -94,9 +95,6 @@ const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) 
 const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ default: m.FirstRun })));
 const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
-const ChatSheet = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.ChatSheet })));
-const MenuThreads = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.MenuThreads })));
-const MessagePick = lazy(() => import('@/features/threads/exports').then((m) => ({ default: m.MessagePick })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows

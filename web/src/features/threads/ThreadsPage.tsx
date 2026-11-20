@@ -2,14 +2,13 @@ import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { approvalCard, useApprovalCards } from '@/features/task/exports';
-import { Empty } from '@/kit/Empty';
 import { AgentBox } from './AgentBox';
 import { agentOf, outsideOf, teamOf } from './model';
 import { useMe, useTitle } from './people';
 import { threadQuery } from './queries';
 import { TeamThread } from './TeamThread';
 import { ThreadHead } from './ThreadHead';
-import './threads.css';
+import { ThreadPane, ThreadsIndex } from './ThreadPane';
 
 export interface ThreadsPageProps {
   /** What the page holds: the thread `thread`, or nothing open yet. */
@@ -19,21 +18,12 @@ export interface ThreadsPageProps {
 
 /** Threads: one open conversation. Its list is anchored in the menu's Threads tab (plan/threads-team.html). */
 export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
+  if (pane === 'none' || !thread) return <ThreadsIndex />;
   return (
-    <main className="pane page page-thread pk pk-split is-open" aria-label="Thread">
-      <section className="conv" aria-label="Thread">
-        {pane === 'thread' && thread ? (
-          <>
-            <ThreadHead id={thread} />
-            <ThreadConversation id={thread} />
-          </>
-        ) : (
-          <div className="conv-body">
-            <Empty icon="threads" title="No thread open" />
-          </div>
-        )}
-      </section>
-    </main>
+    <ThreadPane>
+      <ThreadHead id={thread} />
+      <ThreadConversation id={thread} />
+    </ThreadPane>
   );
 }
 

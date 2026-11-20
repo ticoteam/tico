@@ -129,6 +129,24 @@ describe('Finance @s398 @s403 @s399', () => {
     expect(reads.mock.calls.map(([url]) => url)).not.toContain('/api/v2/finance/brief');
   });
 
+  it('shows the complete unpaid totals without asking for the unpaid rows', async () => {
+    const reads = vi.fn((url: string) => {
+      if (url.endsWith('/finance/access')) return ok(OWNER);
+      if (url.endsWith('/finance/sources')) return ok({ groups: [{ group: 'bank', count: 1, rows: [{ kind: 'stripe' }] }] });
+      if (url.startsWith('/api/v2/finance/bills?')) return ok({ open: { count: 25, remaining: 4200 } });
+      if (url.startsWith('/api/v2/finance/invoices?')) return ok({ open: { count: 32, remaining: 6100 } });
+      return { status: 404, body: {} };
+    });
+    serve(reads);
+    show('/company/finance');
+    expect(await screen.findByText('$42')).toBeTruthy();
+    expect(screen.getByText('$61')).toBeTruthy();
+    expect(reads.mock.calls.map(([url]) => url).filter((url) => /\/finance\/(bills|invoices)\?/.test(url)).sort()).toEqual([
+      '/api/v2/finance/bills?status=unpaid&limit=1',
+      '/api/v2/finance/invoices?status=unpaid&limit=1',
+    ]);
+  });
+
   it('shows the permitted overview when viewing as a teammate without sources, payables, or receivables access', async () => {
     const scoped = {
       ...OWNER,

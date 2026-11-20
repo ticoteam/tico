@@ -20,7 +20,7 @@ function serve(books: boolean) {
     reads.push(String(url));
     const body = String(url).includes('/finance/sources')
       ? { groups: [{ group: 'accounting', name: 'Books', count: books ? 1 : 0, rows: books ? [BOOKS_ROW] : [] }] }
-      : {};
+      : String(url).endsWith('/finance/access') ? { teammates: [] } : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   return reads;
