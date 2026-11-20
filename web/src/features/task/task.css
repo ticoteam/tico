@@ -8,6 +8,24 @@
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
 
+/* ---------- the head on a computer (parts.css .tv-head): where it stands, then the title, which wraps, balanced, at
+   most 620 wide; "⋯" keeps the top right corner. An approval's head puts the title first (approvals.html .tv-head). ---------- */
+:where(html:not([data-layout="cards"])) .tv .pk-head{height:auto;align-items:flex-start;padding-top:var(--s-5)}
+:where(html:not([data-layout="cards"])) .tv .pk-head>:is(.ib,.pk-acts){margin-top:calc(var(--s-3) - var(--s-5))}
+:where(html:not([data-layout="cards"])) .tv .pk-title{max-width:620px}
+:where(html:not([data-layout="cards"])) .tv .pk-title h1{margin-top:var(--s-2);overflow:visible;white-space:normal;text-wrap:balance;line-height:1.16}
+:where(html:not([data-layout="cards"])) .tv.is-quiet .pk-title h1{margin-top:0}
+:where(html:not([data-layout="cards"])) .tv .page-tabs{margin-top:var(--s-2h)}
+/* the stage in the where line reads as text (parts-kit.js where); its chevron shows under a pointer or while open */
+/* (it stands past the name, in the gap before the face, so the line does not move when it shows) */
+:where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick:has(>span+.ico){position:relative}
+:where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick>span+.ico{position:absolute;right:calc(var(--s-3) * -1);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+:where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick:is(:hover,:focus-visible,[aria-expanded="true"]) .ico{opacity:1}
+
+/* Flow's list beside an open task names a section "pipeline › stage" (the shell draws it; tasks.css has the same rule
+   for the Flow page, which this route does not load) */
+.li-sec .sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
+
 /* ---------- the head on a phone (parts.css .tv-head, t-task-details-phone-dark.png): the title wraps at 20, then the
    where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
    hold both lines, below the status bar. */
@@ -50,6 +68,9 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* ---------- Details: the sections scroll under the tab row ---------- */
 .dt{position:relative;padding:var(--s-2) var(--s-3) var(--s-10) 0}
+/* the rule between two sections starts on the title axis, as the rows' text does (more.css .dt-sec+.dt-sec::before) */
+:where(html:not([data-layout="cards"])) .dt .stage+.stage{position:relative;border-top:0}
+:where(html:not([data-layout="cards"])) .dt .stage+.stage::before{content:"";position:absolute;top:0;right:var(--s-2);left:var(--page-x);height:1px;background:var(--line)}
 
 /* a line with a mark (a criterion, a requirement); it may wrap */
 .dt-line{display:grid;grid-template-columns:24px minmax(0,1fr) var(--av-sm) 38px;align-items:start;min-height:28px;padding:var(--s-1) var(--s-2);border-radius:var(--r-row)}
@@ -144,6 +165,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   /* in Flow the row over the head holds back and the steps (parts.css .tv-top) */
   .tv.is-flow .pk-head .pk-back,.tv.is-flow .pk-head .pk-acts{display:none}
   .tv-n{display:inline-flex;align-items:center;gap:var(--s-2)}
+  /* the row sits outside the head's padding: back and "⋯" (at its end) stand a control's inset in from the page margin */
+  .tv-top{margin:0 calc(var(--page-x) - var(--s-3))}
 }
 
 /* ---------- Details' facts and meetings (s58; more.css dKv, dMeet) ---------- */
@@ -164,9 +187,12 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .ap-hdr dt{color:var(--muted)}
 .ap-hdr dd{margin:0;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
 .ap-atts{display:flex;gap:var(--s-2);margin-top:var(--s-3h);flex-wrap:wrap}
-.ap-att{display:flex;align-items:center;gap:var(--s-3);min-height:56px;padding:var(--s-2) var(--s-3h) var(--s-2) var(--s-2h);border-radius:var(--r-card);background:var(--well);max-width:100%;transition:background var(--dur-fast) var(--ease)}
+.ap-att{display:flex;align-items:center;gap:calc(var(--s-3) - 1px);min-height:56px;padding:var(--s-2) var(--s-3h) var(--s-2) var(--s-2h);border-radius:var(--r-card);background:var(--well);max-width:100%;transition:background var(--dur-fast) var(--ease)}
 .ap-att:hover{background:var(--hover)}
-.ap-att>.ico{flex:none;width:22px;height:22px;color:var(--muted)}
+/* a file's card leads with a small page and its type (approvals.html .ap-ft), the page's look in both themes */
+.ap-ft{flex:none;position:relative;width:32px;height:40px;overflow:hidden;border-radius:var(--r-key);background:var(--shot-page);box-shadow:var(--lift-ctl)}
+.ap-ft::before{content:"";position:absolute;top:7px;right:6px;left:6px;height:16px;background:repeating-linear-gradient(var(--shot-block-2) 0 2px,transparent 2px 5px)}
+.ap-ft>i{position:absolute;right:0;bottom:0;left:0;height:12px;overflow:hidden;background:var(--shot-ink);color:var(--shot-page);font-size:var(--t-micro);font-style:normal;font-weight:var(--w-strong);line-height:12px;text-align:center}
 .ap-att>span{min-width:0}
 .ap-att b{display:block;font-weight:var(--w-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ap-att small{display:block;font-size:var(--t-xs);color:var(--muted)}

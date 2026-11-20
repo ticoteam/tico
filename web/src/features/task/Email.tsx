@@ -90,7 +90,9 @@ export function Email({ task, send, part, at }: { task: string; send: string; pa
           <div className="ap-atts">
             {files.map((x) => (
               <Go key={x.part} to={at.to} search={{ ...at.search, part: x.part }} className="ap-att" title={`Open ${x.name}`}>
-                <Icon name="file" />
+                <span className="ap-ft" aria-hidden="true">
+                  <i>{extOf(x.name)}</i>
+                </span>
                 <span>
                   <b>{x.name}</b>
                   <small>

@@ -156,6 +156,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
 function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
   const filters: Filters = filtersOf(search);
   const shelves = useShelves(pipeline, filters);
+  const edit = useAction('tasks.editPipeline');
   const empty = !p || (Object.values(shelves).every((x) => !x.tasks.length) && !isFiltered(filters));
   return (
     <List
@@ -164,6 +165,12 @@ function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
       crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
       search={<TaskFind search={search} />}
       actions={<HeadActions pipeline={pipeline} view="archived" search={search} p={p} />}
+      // "⋯" stays last in the head (list.js archived): the pipeline's own verb, for whoever may change it
+      more={
+        <PageMore target="tasks:more">
+          {p?.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
+        </PageMore>
+      }
       state={empty ? 'empty' : 'ready'}
       empty={{ title: p ? `Nothing archived in ${p.name}` : 'No such pipeline' }}
       filter={<Chips search={search} />}

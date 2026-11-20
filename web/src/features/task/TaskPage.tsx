@@ -9,6 +9,7 @@ import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { useCards } from '@/kit/Popover';
 import { Link } from '@/kit/Link';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
@@ -19,7 +20,7 @@ import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
 import { FileTab, FileView, PageBones } from './FileView';
-import { FlowSteps, FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
+import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
 import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, sendTitle, tabAddress, tabsOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
@@ -133,6 +134,9 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
     if (!r.ok) toast(failedToast(r));
   };
 
+  const cards = useCards();
+  const moreMenu = <MoreMenu t={t} flow={flow} details={quiet} />;
+
   const pageTabs: PageTab[] = tabs
     .filter((x) => !(quiet && x.slug === DETAILS))
     .map((x) => {
@@ -176,13 +180,15 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       className={['tv', details && 'is-details', flow && 'is-flow', quiet && 'is-quiet'].filter(Boolean).join(' ')}
       title={quiet ? (sendTitle(t.title)?.subject ?? t.title) : t.title}
       path={address.to}
-      crumb={flow ? [{ label: 'Flow', to: '/flow' }] : [{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
+      // Inside Flow too the trail is the task's pipeline (more.js where): Flow's own way back is its list, and a phone's row
+      // over the head.
+      crumb={[{ label: t.pipeline?.name ?? 'Tasks', to: `/tasks/${encodeURIComponent(t.pipeline_id ?? '')}` }]}
       sub={quiet ? <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine> : <WhereLine t={t} />}
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}
-      actions={flow ? <FlowSteps t={t} /> : undefined}
-      top={flow ? <FlowTop t={t} /> : undefined}
-      more={<MoreMenu t={t} flow={flow} details={quiet} />}
+      // A phone in Flow keeps "⋯" in the row over the head, beside the steps (more.js taskflow).
+      top={flow ? <FlowTop t={t} more={cards ? moreMenu : undefined} /> : undefined}
+      more={flow && cards ? undefined : moreMenu}
       tabs={pageTabs}
       tabsAfter={
         <>
