@@ -1,16 +1,15 @@
 """Files to Markdown for `POST /api/v2/docs/import` (docs/docs.md).
 
 Markdown and text pass through, HTML becomes Markdown through html_convert.py (beautifulsoup4 and
-markdownify), Word (.docx) is walked with the standard library, and a PDF's text comes out through
-pypdf. Nothing here runs code from the file: a Word file is read as XML from its zip (DOCTYPE and
-entities refused, sizes capped) and a PDF is only text-extracted.
+markdownify), Word (.docx) becomes HTML through mammoth and then Markdown the same way, and a PDF's
+text comes out through pypdf. Nothing here runs code from the file: a Word file's XML parts are
+checked first (DOCTYPE and entities refused, sizes capped) and a PDF is only text-extracted.
 Every failure is a ValueError whose message a person can act on.
 """
 
 import io
 import re
 import zipfile
-from xml.etree import ElementTree as ET
 
 if __package__:
     from . import html_convert
@@ -38,185 +37,88 @@ def normalize(text):
 
 
 # ---------------------------------------------------------------------------- HTML
-def from_html(text):
-    markdown, title = html_convert.to_markdown(text)
+def from_html(text, links=()):
+    markdown, title = html_convert.to_markdown(text, links)
     return normalize("\n".join(line.rstrip() for line in markdown.split("\n"))), title
 
 
 # ---------------------------------------------------------------------------- Word
-W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
-REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+# mammoth's own map, plus: the Title style as a heading the import can name the doc from; style ids Word and other
+# writers use for headings, headings 7 to 9 at the deepest level Markdown has; list levels 6 to 9; and page and
+# column breaks as line breaks, so the words on either side stay apart.
+WORD_STYLES = "\n".join(
+    [f"p.{style} => h1.title:fresh" for style in ("Title", "title")]
+    + ["p[style-name='Title'] => h1.title:fresh"]
+    + [f"p.heading{n} => h{min(n, 6)}:fresh" for n in range(1, 10)]
+    + [f"p.Heading{n} => h6:fresh" for n in (7, 8, 9)]
+    + [f"p[style-name='{name} {n}'] => h6:fresh" for name in ("Heading", "heading") for n in (7, 8, 9)]
+    + [
+        f"p:{kind}-list({n}) => " + "ul|ol > li > " * (n - 1) + f"{tag} > li:fresh"
+        for kind, tag in (("unordered", "ul"), ("ordered", "ol"))
+        for n in range(6, 10)
+    ]
+    + ["br[type='page'] => br", "br[type='column'] => br"]
+)
+WORD_TITLE = re.compile(r'<h1 class="title">(.*?)</h1>', re.S)
+WORD_NOTE_BACK = re.compile(r'<a href="#(?:footnote|endnote)-ref-[^"]*">\u2191</a>')  # a note's way back up
+MAX_PARTS = 5_000
+MAX_UNPACKED = 4 * MAX_XML
 
 
-def _xml(archive, name):
+def _check_docx(data):
+    """Refuse a file mammoth should not read: not a zip, too many parts or bytes once unpacked, or an XML DOCTYPE or
+    entity declaration in any part (UTF-8 or UTF-16) outside its pictures."""
     try:
-        info = archive.getinfo(name)
-    except KeyError:
-        return None
-    if info.file_size > MAX_XML:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        parts = archive.infolist()
+    except zipfile.BadZipFile as exc:
+        raise ValueError("That is not a valid .docx file") from exc
+    if (
+        len(parts) > MAX_PARTS
+        or any(p.file_size > MAX_XML for p in parts)
+        or sum(p.file_size for p in parts) > MAX_UNPACKED
+    ):
         raise ValueError("That Word file is too large to read")
-    raw = archive.read(name)
-    if b"<!DOCTYPE" in raw[:2000] or b"<!ENTITY" in raw:
-        raise ValueError("That Word file uses XML features Tico does not read")
-    return ET.fromstring(raw)
-
-
-def _flag(props, tag):
-    node = props.find(W + tag) if props is not None else None
-    return node is not None and node.get(W + "val", "true") not in ("0", "false", "none")
-
-
-def _runs(paragraph, links):
-    out = []
-
-    def walk(node, href=""):
-        for child in node:
-            if child.tag == W + "hyperlink":
-                walk(child, links.get(child.get(R + "id"), ""))
-            elif child.tag == W + "r":
-                text = "".join(
-                    (t.text or "")
-                    if t.tag == W + "t"
-                    else "\t"
-                    if t.tag == W + "tab"
-                    else "\n"
-                    if t.tag == W + "br"
-                    else ""
-                    for t in child
-                )
-                if not text:
-                    continue
-                props = child.find(W + "rPr")
-                lead, core, tail = re.match(r"(\s*)(.*?)(\s*)$", text, re.S).groups()
-                if core and _flag(props, "b"):
-                    core = "**" + core + "**"
-                if core and _flag(props, "i"):
-                    core = "*" + core + "*"
-                piece = lead + core + tail
-                out.append((piece, href))
-            elif child.tag in (W + "ins", W + "smartTag", W + "sdt", W + "sdtContent"):
-                walk(child, href)
-
-    walk(paragraph)
-    merged, last = "", None
-    for piece, href in out:
-        if href != last:
-            merged += ("](" + last + ")" if last else "") + ("[" if href else "")
-            last = href
-        merged += piece
-    if last:
-        merged += "](" + last + ")"
-    return merged.replace("****", "")
+    marks = [mark.encode(codec) for mark in ("<!DOCTYPE", "<!ENTITY") for codec in ("utf-8", "utf-16-le", "utf-16-be")]
+    for part in parts:
+        if part.filename.startswith("word/media/") or part.is_dir():
+            continue
+        try:
+            raw = archive.read(part)
+        except (
+            zipfile.BadZipFile,
+            NotImplementedError,
+            RuntimeError,
+        ) as exc:  # bad CRC, unknown compression, encrypted
+            raise ValueError("That Word file could not be read") from exc
+        if any(mark in raw for mark in marks):
+            raise ValueError("That Word file uses XML features Tico does not read")
 
 
 def from_docx(data):
+    """mammoth reads the Word file as HTML (headings, lists, tables, links, bold and italic, notes; no pictures) with
+    Tico's style map only, and the HTML becomes Markdown as an HTML import does, keeping only web and mail links."""
+    import mammoth
+    from bs4 import BeautifulSoup
+
+    _check_docx(data)
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
-        document = _xml(archive, "word/document.xml")
-        if document is None:
-            raise ValueError("no document")
-        rels, numbering = {}, {}
-        rel_xml = _xml(archive, "word/_rels/document.xml.rels")
-        if rel_xml is not None:
-            rels = {
-                r.get("Id"): r.get("Target", "")
-                for r in rel_xml.iter(REL + "Relationship")
-                if r.get("TargetMode") == "External"
-                and r.get("Target", "").lower().startswith(("http://", "https://", "mailto:"))
-            }
-        num_xml = _xml(archive, "word/numbering.xml")
-        if num_xml is not None:
-            abstract = {
-                a.get(W + "abstractNumId"): (
-                    a.find(W + "lvl/" + W + "numFmt").get(W + "val")
-                    if a.find(W + "lvl/" + W + "numFmt") is not None
-                    else "bullet"
-                )
-                for a in num_xml.iter(W + "abstractNum")
-            }
-            numbering = {
-                n.get(W + "numId"): abstract.get(n.find(W + "abstractNumId").get(W + "val"), "bullet")
-                for n in num_xml.iter(W + "num")
-                if n.find(W + "abstractNumId") is not None
-            }
-    except zipfile.BadZipFile as exc:
-        raise ValueError("That is not a valid .docx file") from exc
-    except ET.ParseError as exc:
+        html = mammoth.convert_to_html(
+            io.BytesIO(data),
+            style_map=WORD_STYLES,
+            include_embedded_style_map=False,
+            convert_image=lambda image: [],
+        ).value
+    except MemoryError:
+        raise
+    except Exception as exc:  # mammoth's own: a missing part or reference, bad XML, a bad number, nesting too deep
         raise ValueError("That Word file could not be read") from exc
-    body = document.find(W + "body")
-    if body is None:
+    html = WORD_NOTE_BACK.sub("", html)
+    text = from_html(html, links=("http://", "https://", "mailto:"))[0]
+    if not text.strip():
         raise ValueError("That Word file has no text")
-    counters, blocks, title = {}, [], ""
-
-    def paragraph(node):
-        nonlocal title
-        props = node.find(W + "pPr")
-        style = (
-            props.find(W + "pStyle").get(W + "val", "")
-            if props is not None and props.find(W + "pStyle") is not None
-            else ""
-        )
-        text = _runs(node, rels).strip()
-        if not text:
-            return ""
-        heading = re.fullmatch(r"(?:Heading|heading)\s?(\d)", style)
-        if style.lower() == "title":
-            title = title or re.sub(r"[*\[\]]|\([^)]*\)$", "", text).strip()
-            return "# " + text
-        if heading:
-            return "#" * min(int(heading.group(1)), 6) + " " + text
-        num = props.find(W + "numPr") if props is not None else None
-        if num is not None or style.lower().startswith("listparagraph"):
-            level = (
-                int(num.find(W + "ilvl").get(W + "val", "0"))
-                if num is not None and num.find(W + "ilvl") is not None
-                else 0
-            )
-            ident = (
-                num.find(W + "numId").get(W + "val", "")
-                if num is not None and num.find(W + "numId") is not None
-                else ""
-            )
-            ordered = numbering.get(ident) not in (None, "bullet", "none")
-            counters[(ident, level)] = counters.get((ident, level), 0) + 1
-            return "  " * level + (f"{counters[(ident, level)]}. " if ordered else "- ") + text
-        counters.clear()
-        return text
-
-    def table(node):
-        rows = []
-        for tr in node.iter(W + "tr"):
-            rows.append(
-                [
-                    " ".join(" ".join(_runs(p, rels) for p in tc.iter(W + "p")).split()).replace("|", "\\|")
-                    for tc in tr.findall(W + "tc")
-                ]
-            )
-        if not rows:
-            return ""
-        width = max(len(r) for r in rows)
-        rows = [r + [""] * (width - len(r)) for r in rows]
-        return "\n".join(
-            ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
-            + ["| " + " | ".join(r) + " |" for r in rows[1:]]
-        )
-
-    previous_list = False
-    for node in body:
-        if node.tag == W + "p":
-            line = paragraph(node)
-            is_list = bool(re.match(r"\s*(?:- |\d+\. )", line))
-            if line:
-                blocks.append(("\n" if previous_list and is_list else "\n\n") + line)
-            previous_list = is_list
-        elif node.tag == W + "tbl":
-            blocks.append("\n\n" + table(node))
-            previous_list = False
-    text = "".join(blocks).strip()
-    if not text:
-        raise ValueError("That Word file has no text")
-    return normalize(text), title
+    titles = (BeautifulSoup(found, "lxml").get_text().strip() for found in WORD_TITLE.findall(html))
+    return text, " ".join(next((title for title in titles if title), "").split())
 
 
 # ---------------------------------------------------------------------------- PDF

@@ -23,6 +23,7 @@ reportlab>=5.1,<6
 beautifulsoup4>=4.13,<5     # HTML to text and Markdown (backend/html_convert.py), with markdownify and lxml
 markdownify>=1.2,<2
 lxml>=6,<7                  # the HTML parser beautifulsoup4 uses there
+mammoth>=1.9,<2             # Word (.docx) to HTML for document import (backend/docs_import.py)
 
 python-multipart>=0.0.22,<1
 Pillow>=13.0,<14

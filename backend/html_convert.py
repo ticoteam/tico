@@ -80,7 +80,9 @@ class _Markdown(MarkdownConverter):
             wrap_width=None,
         )
         # Where a table's cells and rows start and end. Random per conversion, so no text in the page can fake one.
-        self.cell, self.end_cell, self.row, self.end_row = (f"{secrets.token_hex(8)}{n}" for n in "cCrR")
+        self.cell, self.end_cell, self.row, self.end_row, self.span = (
+            f"\ue000{secrets.token_hex(8)}{n}\ue001" for n in "cCrRs"
+        )
 
     def _hidden(self, el: Tag, text: str, parent_tags: set[str]) -> str:
         return ""
@@ -103,7 +105,9 @@ class _Markdown(MarkdownConverter):
         return bullet + text[len(bullet) :] + "\n"
 
     def convert_td(self, el: Tag, text: str, parent_tags: set[str]) -> str:
-        return self.cell + " ".join(text.split()).replace("|", "\\|") + self.end_cell
+        rows = str(el.get("rowspan") or "")
+        span = min(int(rows), 1000) if rows.isascii() and rows.isdigit() and int(rows) > 1 else 1
+        return self.cell + str(span) + self.span + " ".join(text.split()).replace("|", "\\|") + self.end_cell
 
     convert_th = convert_td
 
@@ -111,22 +115,37 @@ class _Markdown(MarkdownConverter):
         return self.row + text + self.end_row
 
     def convert_table(self, el: Tag, text: str, parent_tags: set[str]) -> str:
-        """Every row, its first as the header, padded to the widest row; empty rows are dropped. Words in the table
-        but in no cell go above it."""
+        """Every row, its first as the header, padded to the widest row; empty rows are dropped. A cell spanning rows
+        leaves an empty cell in its column below, so later cells stay under their headings. Words in the table but in
+        no cell go above it."""
         stray: list[str] = []
-        cells: list[list[str]] = []
+        spans: list[list[tuple[int, str]]] = []
         for part in text.split(self.row):
             row, _, after = part.rpartition(self.end_row)
-            found: list[str] = []
+            found: list[tuple[int, str]] = []
             for piece in row.split(self.cell):
                 cell, _, outside = piece.rpartition(self.end_cell)
                 if _:
-                    found.append(cell)
+                    span, _, words = cell.partition(self.span)
+                    found.append((int(span), words))
                 stray.append(outside)
             stray.append(after)
-            cells.append(found)
+            spans.append(found)
         lead = " ".join(" ".join(stray).split())
-        cells = [row for row in cells if row]
+        cells: list[list[str]] = []
+        below: dict[int, int] = {}  # column -> rows a cell above still covers
+        for row in (row for row in spans if row):
+            laid: list[str] = []
+            for span, words in row:
+                while below.get(len(laid)):
+                    below[len(laid)] -= 1
+                    laid.append("")
+                if span > 1:
+                    below[len(laid)] = span - 1
+                laid.append(words)
+            for column in [c for c in below if c >= len(laid) and below[c]]:
+                below[column] -= 1
+            cells.append(laid)
         if not cells:
             return "\n\n" + lead + "\n\n"
         width = max(len(row) for row in cells)
@@ -136,7 +155,7 @@ class _Markdown(MarkdownConverter):
         return "\n\n" + (lead + "\n\n" if lead else "") + "\n".join(lines) + "\n\n"
 
 
-def _prepare(soup: BeautifulSoup) -> None:
+def _prepare(soup: BeautifulSoup, links: tuple[str, ...]) -> None:
     """Shape the tree for markdownify in one pass."""
     gone: set[int] = set()  # tags inside a nested table already turned into words
     for tag in soup.find_all(True):
@@ -152,8 +171,9 @@ def _prepare(soup: BeautifulSoup) -> None:
             tag.name = "div"  # a block of its own, as markdownify writes a div
         elif name == "a":
             tag.attrs.pop("title", None)
-            if str(tag.get("href") or "").strip().lower().startswith("javascript:"):
-                del tag["href"]  # its words stay, as plain text
+            href = str(tag.get("href") or "").strip().lower()
+            if not href or href.startswith("javascript:") or links and not href.startswith(links):
+                tag.name, tag.attrs = "span", {}  # its words stay, as plain text with their spaces
         elif name == "ol":
             start = str(tag.get("start") or "")
             number = int(start) if re.fullmatch(r"[0-9]{1,9}", start) else 1
@@ -164,11 +184,11 @@ def _prepare(soup: BeautifulSoup) -> None:
             tag.name = "span"  # markdownify would call its own convert_soup or convert_fn_cache for these
 
 
-def to_markdown(source: str) -> tuple[str, str]:
-    """(Markdown, title) of an HTML page. A page nested deeper than markdownify can walk comes out as its plain
-    text."""
+def to_markdown(source: str, links: tuple[str, ...] = ()) -> tuple[str, str]:
+    """(Markdown, title) of an HTML page. `links`: keep only links whose address starts with one of these (every link
+    but javascript: when empty). A page nested deeper than markdownify can walk comes out as its plain text."""
     soup, title = _soup(source)
-    _prepare(soup)
+    _prepare(soup, links)
     try:
         return _Markdown().convert_soup(soup), title
     except RecursionError:
