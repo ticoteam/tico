@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { brandQuery, floorQuery, goalsTreeQuery, groupsQuery, marketBriefingQuery, marketSpendQuery, mattersQuery, productsQuery, riskQuery, risksQuery, strategyQuery } from './queries';
+import { brandQuery, floorQuery, goalsTreeQuery, groupsQuery, marketBriefingQuery, marketSpendQuery, mattersQuery, productsQuery, revenueQuery, riskQuery, risksQuery, spendQuery, strategyQuery } from './queries';
 import type { StrategySearch } from './StrategyPage';
 
 // What the routes use before a page's code loads: the address checks and the first reads. No components here: the
@@ -27,7 +27,12 @@ export const strategyTab = (t: unknown): StrategyTab => (STRATEGY_TABS as readon
 
 // What each page needs for its first paint, awaited: a read that fails is the router's fault (PageFault), a refusal
 // its no-access state. Market reads its many parts itself, each with its own state.
-export const loadCompany = (qc: QueryClient) => qc.ensureQueryData(floorQuery);
+export function loadCompany(qc: QueryClient) {
+  const floor = qc.ensureQueryData(floorQuery);
+  void qc.prefetchQuery(revenueQuery);
+  void qc.prefetchQuery(spendQuery);
+  return floor;
+}
 export function loadStrategy(qc: QueryClient, tab: StrategyTab): Promise<unknown> | undefined {
   if (tab === 'goals') return qc.ensureQueryData(goalsTreeQuery);
   if (tab === 'org') return qc.ensureQueryData(groupsQuery);
