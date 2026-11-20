@@ -2,7 +2,7 @@ import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActors } from '@/data';
+import { meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
@@ -19,7 +19,7 @@ import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
 import { Face, isPending, OwnerButton, taskHref, waitsOnMe } from './parts';
-import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, tagsQuery, type Filters, type Pipeline, type TaskItem } from './queries';
+import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
@@ -104,11 +104,9 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
 /** Filter, New feature, the pipeline's owner (their chat opens beside the page). Share is left out: the public roadmap
     pages are off on the server. A phone's head keeps New feature; Filter moves into the "⋯". */
 function HeadActions({ p, search, onNew, none }: { p: Pipeline; search: RoadmapSearch; onNew: () => void; none: boolean }) {
-  const actors = useActors();
-  const tags = useQuery(tagsQuery).data ?? [];
   return (
     <>
-      {!none && <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} />}
+      {!none && <FilterMenu filters={search} />}
       {!none && <IconButton icon="plus" label="New feature" onClick={onNew} data-target="tasks:new" data-phone />}
       {p.owner && <OwnerButton actor={p.owner} />}
     </>
@@ -119,13 +117,11 @@ function MoreMenu({ p, search, none }: { p: Pipeline; search: RoadmapSearch; non
   const openTasks = useAction('tasks.open');
   const edit = useAction('tasks.editPipeline');
   const cards = useCards();
-  const actors = useActors();
-  const tags = useQuery(tagsQuery).data ?? [];
   return (
     <PageMore target="roadmap:more">
       {cards && !none && (
         <MenuSub label="Filter" icon="filter">
-          <FilterItems filters={search} actors={actors} tags={tags.map((t) => t.key)} />
+          <FilterItems filters={search} />
         </MenuSub>
       )}
       <MenuItem icon="tasks" label={`Open ${p.name}`} onSelect={() => void openTasks.run({ pipeline: p.id })} />

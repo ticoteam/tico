@@ -103,6 +103,7 @@ vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref:
 vi.mock('@/features/threads/exports', () => ({
   ChatSheet: () => <p>a teammate chat</p>,
   MenuThreads: () => <p>the threads</p>,
+  MessagePick: () => null,
   TeamThread: () => <p>the team thread</p>,
 }));
 vi.mock('@/features/threads/routing', async () => ({

@@ -2,7 +2,7 @@ import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActor, useActors } from '@/data';
+import { meQuery, useActor } from '@/data';
 import { TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
@@ -36,7 +36,6 @@ import {
   pipelinesQuery,
   pipelineTasksQuery,
   stageCount,
-  tagsQuery,
   type Filters,
   type Pipeline,
   type Stage,
@@ -216,8 +215,6 @@ function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly 
   const edit = useAction('tasks.editPipeline');
   const make = useAction('tasks.newPipeline');
   const owner = useQuery(meQuery).data?.role === 'owner';
-  const actors = useActors();
-  const tags = useQuery(tagsQuery).data ?? [];
   const mayMake = owner || (pipes.length > 0 && pipes.every((x) => x.mayChange));
   return (
     <PageMore target="tasks:more">
@@ -226,7 +223,7 @@ function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly 
           <MenuItem icon="plus" label="New task" onSelect={phone.onNew} />
           <MenuItem icon="search" label="Search" onSelect={phone.onFind} />
           <MenuSub icon="filter" label="Filter">
-            <FilterItems filters={phone.search} actors={actors} tags={tags.map((t) => t.key)} />
+            <FilterItems filters={phone.search} />
           </MenuSub>
           {phone.view === 'list' ? (
             <MenuItem icon="columns" label="Columns" onSelect={() => void setView.run({ pipeline: p.id, view: 'board' })} />
@@ -277,11 +274,9 @@ function HeadActions({
   onNew?: () => void;
 }) {
   const setView = useAction('tasks.setView');
-  const actors = useActors();
-  const tags = useQuery(tagsQuery).data ?? [];
   return (
     <>
-      <FilterMenu filters={search} actors={actors} tags={tags.map((t) => t.key)} phone={view === 'archived'} />
+      <FilterMenu filters={search} phone={view === 'archived'} />
       {view !== 'archived' && (
         <span data-target="tasks:view">
           <Segmented

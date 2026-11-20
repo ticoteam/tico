@@ -3,7 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Avatar, Faces } from '@/kit/Avatar';
 import { useAction } from '@/actions';
-import { directoryQuery, type Actor } from '@/data';
+import { directoryQuery, type Actor, type Directory } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Icon } from '@/kit/Icon';
 import { MenuItem } from '@/kit/Menu';
@@ -39,13 +39,26 @@ export interface TeamPageProps {
 const face = (a: Actor) => ({ kind: a.kind, name: a.name, hue: a.hue, live: a.working });
 const MONTH = new Intl.DateTimeFormat('en-US', { month: 'short' });
 
+/** Team rows show a working badge, but have no use for the actor's focus or for other actors' updates. */
+function teamActors(dir: Directory, members: readonly string[]): Record<string, Actor> {
+  const shown: Record<string, Actor> = {};
+  for (const member of members) {
+    const a = dir.byId[member];
+    if (!a) continue;
+    const { id, kind, name, slug, hue, working } = a;
+    const actor = { id, kind, name, slug, hue, working };
+    for (const key of [member, id, id.slice(id.indexOf(':') + 1), slug, slug && `bot:${slug}`]) {
+      if (key && dir.byId[key] === a) shown[key] = actor;
+    }
+  }
+  return shown;
+}
+
 /** A team (threads-team pass 7, teamPage): its icon, name and faces; its figures; what its teammates are running; its
     people, the lead marked; the teams inside it. Rows carry no mark before the title, as the sketch draws them. The
     team's thread beside it is the shell's. */
 export function TeamPage({ group, path, add }: TeamPageProps) {
   useFollow({ allTasks: true });
-  // Every member's face and status line: the whole directory.
-  const { data: dir } = useSuspenseQuery(directoryQuery);
   const { data: all } = useSuspenseQuery(groupsQuery);
   const roster = useQuery(agentsQuery);
   const { data: peopleRoster } = useQuery(peopleRosterQuery);
@@ -56,11 +69,12 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const reach = useQuery(teammateAccessQuery('team', group.id)).data;
   const [access, setAccess] = useState(false);
 
-  const actorOf = (key: string) => dir.byId[key];
   const lead = managerOf(group, roster.data ?? [], peopleRoster?.people ?? []);
+  const members = memberIds(membersUnder(all, group.id));
+  const { data: actors } = useSuspenseQuery({ ...directoryQuery, select: (d) => teamActors(d, lead ? [...members, lead] : members) });
+  const actorOf = (key: string) => actors[key];
   const manager = lead ? actorOf(lead) : undefined;
-  const under = membersUnder(all, group.id);
-  const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
+  const everyone = new Set(members.map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
   const openReads = useQueries({ queries: teamOpenTasksQueries(everyone) });
   const openRead = openReads.every((r) => r.data);
   const doneCounts = useQueries({ queries: teamDoneCountQueries(everyone, since) });

@@ -6,7 +6,7 @@ import { loadTask, taskSearch } from '@/features/task/routing';
 export const Route = createFileRoute('/flow/$task')({
   validateSearch: taskSearch,
   loaderDeps: ({ search }) => ({ tab: search.tab }),
-  loader: ({ params, deps, context: { queryClient } }) => loadTask(queryClient, params.task, deps.tab),
+  loader: ({ params, deps, location, preload, context: { queryClient } }) => loadTask(queryClient, params.task, deps.tab, !preload && !('chat' in location.search)),
   component: FlowTaskRoute,
 });
 

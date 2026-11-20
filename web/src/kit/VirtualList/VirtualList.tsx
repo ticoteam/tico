@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type ReactNode, type Ref } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './VirtualList.css';
 
@@ -31,6 +31,8 @@ export type VirtualListProps<T> = {
   onScroll?: () => void;
   /** The scroll container's class from the page (`tl-list`, `tasks-body`); it owns overflow and padding. */
   className?: string;
+  /** Use a containing scroller, keeping section heads and neighboring lists in the same scrolling area. */
+  scrollParent?: string;
   label?: string;
   role?: 'list' | 'log' | 'feed';
   ref?: Ref<VirtualListHandle>;
@@ -48,6 +50,7 @@ export function VirtualList<T>({
   onReachEnd,
   onScroll,
   className,
+  scrollParent,
   label,
   role = 'list',
   ref,
@@ -55,11 +58,37 @@ export function VirtualList<T>({
   // The virtualizer mutates itself between renders; the React Compiler must not memoize what it returns.
   'use no memo';
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  const scroller = () => (scrollParent ? scrollRef.current?.closest<HTMLElement>(scrollParent) ?? null : scrollRef.current);
+  useLayoutEffect(() => {
+    const list = scrollRef.current;
+    const parent = scrollParent && list?.closest<HTMLElement>(scrollParent);
+    if (!list || !parent) return;
+    const measureOffset = () =>
+      setScrollMargin(list.getBoundingClientRect().top - parent.getBoundingClientRect().top - parent.clientTop + parent.scrollTop);
+    measureOffset();
+    if (typeof ResizeObserver === 'undefined') return;
+    const resize = new ResizeObserver(measureOffset);
+    const observeChildren = () => {
+      resize.disconnect();
+      resize.observe(parent);
+      for (const child of parent.children) resize.observe(child);
+      measureOffset();
+    };
+    observeChildren();
+    const children = new MutationObserver(observeChildren);
+    children.observe(parent, { childList: true });
+    return () => {
+      resize.disconnect();
+      children.disconnect();
+    };
+  }, [scrollParent]);
   // eslint-disable-next-line react-hooks/incompatible-library -- 'use no memo' above opts this component out
   const v = useVirtualizer({
     count: items.length,
-    getScrollElement: () => scrollRef.current,
+    getScrollElement: scroller,
     estimateSize: () => estimateSize,
+    scrollMargin,
     getItemKey: (i) => getKey(items[i]!),
     overscan: 6,
     anchorTo: anchor,
@@ -71,8 +100,11 @@ export function VirtualList<T>({
   });
   useImperativeHandle(ref, () => ({
     scrollToEnd: () => {
-      const el = scrollRef.current;
-      el?.scrollTo({ top: el.scrollHeight });
+      if (scrollParent) v.scrollToIndex(items.length - 1, { align: 'end' });
+      else {
+        const el = scrollRef.current;
+        el?.scrollTo({ top: el.scrollHeight });
+      }
     },
     scrollToKey: (key) => {
       const i = items.findIndex((it) => getKey(it) === key);
@@ -80,8 +112,8 @@ export function VirtualList<T>({
       return i >= 0;
     },
     fromEnd: () => {
-      const el = scrollRef.current;
-      return el ? el.scrollHeight - el.scrollTop - el.clientHeight : 0;
+      const el = scroller();
+      return el ? (scrollParent ? v.getTotalSize() + scrollMargin : el.scrollHeight) - el.scrollTop - el.clientHeight : 0;
     },
   }));
   const rows = v.getVirtualItems();
@@ -105,7 +137,7 @@ export function VirtualList<T>({
 
   return (
     // A list read from the top keeps its place for Back (router.tsx); a timeline always opens at its end.
-    <div ref={scrollRef} className={className} role={role} aria-label={label} onScroll={onScroll} data-scroll-restoration-id={anchor === 'start' && label ? `vl:${label}` : undefined}>
+    <div ref={scrollRef} className={className} role={role} aria-label={label} onScroll={onScroll} data-scroll-restoration-id={!scrollParent && anchor === 'start' && label ? `vl:${label}` : undefined}>
       <div className="vl-space" ref={v.containerRef}>
         {rows.map((r) => (
           <div key={r.key} className="vl-item" role={role === 'list' ? 'listitem' : undefined} data-index={r.index} ref={v.measureElement}>

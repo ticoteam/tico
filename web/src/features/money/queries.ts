@@ -177,21 +177,17 @@ export const metricQuery = (name: 'cash', as?: string) =>
     queryFn: ({ signal }) => orNull(api.get<FinanceMetric>(viewAs(`/api/v2/finance/metrics/${name}`, as), { signal })),
   });
 
-/* Request shapes follow backend/finance_routes.py: list limits stop at 200, and `unpaid` is the server's word for every
-   status still owed (bills: open, scheduled; invoices: sent, partial). Invoices have no `open` status, so it 422s. */
-export const BILLS_URL = '/api/v2/finance/bills?status=unpaid&limit=200';
-export const INVOICES_URL = '/api/v2/finance/invoices?status=unpaid&limit=200';
-
-export const billsQuery = (as?: string) =>
+/* The open totals cover every visible unpaid document regardless of the row limit. The overview only uses those totals. */
+export const billsQuery = (as?: string, limit = 200) =>
   queryOptions({
-    queryKey: ['finance', 'bills', 'unpaid', ...asKey(as)],
-    queryFn: ({ signal }) => api.get<FinanceBills>(viewAs(BILLS_URL, as), { signal }),
+    queryKey: ['finance', 'bills', 'unpaid', limit, ...asKey(as)],
+    queryFn: ({ signal }) => api.get<FinanceBills>(viewAs(`/api/v2/finance/bills?status=unpaid&limit=${limit}`, as), { signal }),
   });
 
-export const invoicesQuery = (as?: string) =>
+export const invoicesQuery = (as?: string, limit = 200) =>
   queryOptions({
-    queryKey: ['finance', 'invoices', 'unpaid', ...asKey(as)],
-    queryFn: ({ signal }) => api.get<FinanceInvoices>(viewAs(INVOICES_URL, as), { signal }),
+    queryKey: ['finance', 'invoices', 'unpaid', limit, ...asKey(as)],
+    queryFn: ({ signal }) => api.get<FinanceInvoices>(viewAs(`/api/v2/finance/invoices?status=unpaid&limit=${limit}`, as), { signal }),
   });
 
 export const inboxQuery = (as?: string) =>

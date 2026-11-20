@@ -1,9 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
 import { useAction } from '@/actions';
-import type { Actor } from '@/data';
+import { useActors } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem, MenuRule, MenuSub, Menu } from '@/kit/Menu';
-import { isFiltered, type Due, type Filters } from './queries';
+import { isFiltered, tagsQuery, type Due, type Filters } from './queries';
 
 /** Due's choices, as the menu and the chip say them (backend/task_match.py DUE). */
 export const DUE_NAMES: Record<Due, string> = { overdue: 'Overdue', week: 'Due this week', any: 'Has a due date' };
@@ -14,27 +15,23 @@ type Who = 'owner' | 'waiting' | 'asked';
  * Filter: Owner ›, Waiting on ›, Asked by ›, Tag ›, Due ›, then Late (list.js filterMenu). Each choice is `tasks.filter`,
  * so it lands in the address.
  */
-export function FilterMenu({ phone, ...props }: FilterProps & { phone?: boolean }) {
+export function FilterMenu({ phone, filters }: { filters: Filters; phone?: boolean }) {
   return (
     <Menu
       trigger={
-        <IconButton icon="filter" label="Filter" on={isFiltered({ ...props.filters, q: undefined })} data-target="tasks:filter" data-phone={phone || undefined} />
+        <IconButton icon="filter" label="Filter" on={isFiltered({ ...filters, q: undefined })} data-target="tasks:filter" data-phone={phone || undefined} />
       }
     >
-      <FilterItems {...props} />
+      <FilterItems filters={filters} />
     </Menu>
   );
 }
 
-interface FilterProps {
-  filters: Filters;
-  actors: readonly Actor[];
-  tags: readonly string[];
-}
-
 /** The filter's rows, for a menu of their own or, on a phone, a page "⋯"'s Filter ›. */
-export function FilterItems({ filters, actors, tags }: FilterProps) {
+export function FilterItems({ filters }: { filters: Filters }) {
   const filter = useAction('tasks.filter');
+  const actors = useActors();
+  const tags = useQuery(tagsQuery).data ?? [];
   const people = (key: Who, label: string) => (
     <MenuSub label={label}>
       {actors.map((a) => (
@@ -55,8 +52,8 @@ export function FilterItems({ filters, actors, tags }: FilterProps) {
       {people('asked', 'Asked by')}
       {tags.length > 0 && (
         <MenuSub label="Tag">
-          {tags.map((t) => (
-            <MenuItem key={t} label={t} on={filters.tag === t} onSelect={() => void filter.run({ tag: filters.tag === t ? null : t })} />
+          {tags.map(({ key }) => (
+            <MenuItem key={key} label={key} on={filters.tag === key} onSelect={() => void filter.run({ tag: filters.tag === key ? null : key })} />
           ))}
         </MenuSub>
       )}

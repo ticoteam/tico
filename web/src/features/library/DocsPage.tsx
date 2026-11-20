@@ -9,8 +9,10 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
+import { VirtualList } from '@/kit/VirtualList';
 import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
 import { Face, Find, Foot, KindGlyph, More, OwnerButton, press, trimmed, useGo, Who } from './parts';
 import { archivedDocsQuery, docRows, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
@@ -78,8 +80,9 @@ function DocsMore({ archived }: { archived: boolean }) {
 
 function OwnDocs({ search }: { search: DocsSearch }) {
   const archived = !!search.archived;
+  const cards = useCards();
   const list = useSuspenseInfiniteQuery(archived ? archivedDocsQuery : docsListQuery);
-  const live = useInfiniteQuery(docsListQuery);
+  const live = useInfiniteQuery({ ...docsListQuery, enabled: archived });
   const sources = useQuery(sourcesQuery);
   const docs = docRows(list.data);
   const query = search.q?.trim() ?? '';
@@ -94,7 +97,9 @@ function OwnDocs({ search }: { search: DocsSearch }) {
   const groups = new Map<string, DocRow[]>();
   for (const d of rows) {
     const [name] = archived ? ['Archived'] : folder(d.path);
-    groups.set(name, [...(groups.get(name) ?? []), d]);
+    const group = groups.get(name);
+    if (group) group.push(d);
+    else groups.set(name, [d]);
   }
 
   const state: PageState = !docs.length && !hits?.length && !list.hasNextPage ? 'empty' : 'ready';
@@ -104,7 +109,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       title="Docs"
       path="/library/docs"
       className="lib"
-      tabs={tabs(live.data && docRows(live.data).length, sources.data?.sources.length)}
+      tabs={tabs(archived ? live.data && docRows(live.data).length : docs.length, sources.data?.sources.length)}
       search={<Find label="Search docs" value={search.q} onFind={(q) => void press('docs.list', { q, archived: archived || undefined })} />}
       actions={
         <>
@@ -144,9 +149,10 @@ function OwnDocs({ search }: { search: DocsSearch }) {
             )}
             {[...groups].map(([name, list]) => (
               <Section key={name} name={name} count={list.length}>
-                {list.map((d) => (
-                  <DocLine key={d.id} d={d} archived={archived} />
-                ))}
+                {list.length > 50 ? (
+                  <VirtualList items={list} label={name} getKey={(d) => d.id} estimateSize={cards ? 44 : 34}
+                    scrollParent=".pk-body" renderItem={(d) => <DocLine d={d} archived={archived} />} />
+                ) : list.map((d) => <DocLine key={d.id} d={d} archived={archived} />)}
               </Section>
             ))}
             {!full && list.hasNextPage && !list.isFetchingNextPage && (

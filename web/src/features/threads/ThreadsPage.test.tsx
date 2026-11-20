@@ -20,6 +20,7 @@ import { archivedQuery, browseQuery, chatQuery, learnedQuery, membersQuery, rena
 import { loadThreads } from './routing';
 import { TeamThread } from './TeamThread';
 import { ThreadHead } from './ThreadHead';
+import { ThreadsIndex } from './ThreadPane';
 import { ThreadsPage } from './ThreadsPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
@@ -155,8 +156,9 @@ describe('Threads, no thread open @s156', () => {
   it('says no thread is open; its list is the menu\'s', async () => {
     serve();
     seedList();
-    show(<ThreadsPage pane="none" />, '/threads');
+    show(<ThreadsIndex />, '/threads');
     expect(await screen.findByRole('heading', { name: 'No thread open' })).toBeTruthy();
+    expect(asked().some((url) => url.includes('/timeline') || url.includes('/calls'))).toBe(false);
   });
 });
 

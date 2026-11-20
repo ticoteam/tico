@@ -57,14 +57,20 @@ async function readTask(ref: string, signal?: AbortSignal): Promise<TaskData> {
 /** The address's task to its id. Reading it fills the detail too, so the page draws from one read. */
 export const taskRefQuery = (param: string) =>
   queryOptions({
-    queryKey: ['tasks', 'ref', param] as const,
-    queryFn: async ({ signal }) => {
+    queryKey: taskRefKey(param),
+    queryFn: async ({ client, signal }) => {
       const t = await readTask(refOf(param), signal);
-      queryClient.setQueryData(keys.tasks.detail(t.id), t);
+      client.setQueryData(keys.tasks.detail(t.id), t);
+      // The canonical route uses the number. Old links may first resolve by id or include a leading #.
+      const canonical = String(t.number ?? t.id);
+      if (canonical !== param) client.setQueryData(taskRefKey(canonical), t.id);
+      if (t.id !== param && t.id !== canonical) client.setQueryData(taskRefKey(t.id), t.id);
       return t.id;
     },
     retry: (n, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && n < 1,
   });
+
+const taskRefKey = (param: string) => ['tasks', 'ref', param] as const;
 
 export const taskDetailQuery = (id: string | undefined) =>
   queryOptions({

@@ -278,6 +278,19 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Late' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ late: true }));
   });
+
+  it('reads tags when the filter opens', async () => {
+    queryClient.removeQueries({ queryKey: ['tags'] });
+    const get = vi.fn((url: string) => ({ status: 200, body: url.includes('/tags?') ? { tags: [{ key: 'review' }] } : {} }));
+    serve(get);
+    seed([]);
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    const filter = await screen.findByRole('button', { name: 'Filter' });
+    expect(get).not.toHaveBeenCalledWith(expect.stringContaining('/api/v2/tags?'), 'GET');
+    fireEvent.click(filter);
+    expect(await screen.findByRole('menuitem', { name: 'Tag' })).toBeTruthy();
+    expect(get.mock.calls.filter(([url]) => url.includes('/api/v2/tags?'))).toHaveLength(1);
+  });
 });
 
 describe('Tasks: more of the page @s0 @s9 @s10', () => {

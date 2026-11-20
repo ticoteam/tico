@@ -101,6 +101,28 @@ const full = (o: Record<string, unknown> = {}) => ({
 });
 
 describe('docs list', () => {
+  it('windows a long folder in the page scroller', async () => {
+    serve();
+    queryClient.setQueryData(docsListQuery.queryKey, list(Array.from({ length: 80 }, (_, i) => row(`d${i}`, `Doc ${i}`))));
+    const height = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight');
+    const width = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth');
+    Object.defineProperty(Element.prototype, 'clientHeight', { configurable: true, get: () => 340 });
+    Object.defineProperty(Element.prototype, 'clientWidth', { configurable: true, get: () => 400 });
+    try {
+      at('/library/docs', <DocsPage search={{}} />);
+      const group = await screen.findByRole('list', { name: 'Company' });
+      expect(within(group).getByRole('link', { name: /Doc 0/ })).toBeTruthy();
+      expect(within(group).getAllByRole('link').length).toBeLessThan(30);
+      const pageBody = group.closest('.pk-body')!;
+      pageBody.scrollTop = 2300;
+      fireEvent.scroll(pageBody);
+      expect(await within(group).findByRole('link', { name: /Doc 79/ })).toBeTruthy();
+    } finally {
+      if (height) Object.defineProperty(Element.prototype, 'clientHeight', height);
+      if (width) Object.defineProperty(Element.prototype, 'clientWidth', width);
+    }
+  });
+
   it('loads the next page from Load more at the end of the docs list', async () => {
     const sent = serve(() => ({ docs: [row('d2', 'Another doc')], next_cursor: null }));
     queryClient.setQueryData(docsListQuery.queryKey, {

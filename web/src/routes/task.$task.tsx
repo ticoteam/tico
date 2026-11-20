@@ -4,8 +4,8 @@ import { loadTask } from '@/features/task/routing';
 
 /* `/task/<n>`: a task by its number alone. Once its pipeline is known, its own address replaces this one. */
 export const Route = createFileRoute('/task/$task')({
-  loader: async ({ params, location, context: { queryClient } }) => {
-    const loaded = await loadTask(queryClient, params.task);
+  loader: async ({ params, location, preload, context: { queryClient } }) => {
+    const loaded = await loadTask(queryClient, params.task, undefined, !preload && !('chat' in location.search));
     if (!loaded) return;
     const { task, tab } = loaded;
     throw redirect({
