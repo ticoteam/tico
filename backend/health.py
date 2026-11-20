@@ -2370,10 +2370,14 @@ def _fallbacks(c, settings, loads=None):
 
     since, latest, carrying = H.shift(H.now(), hours=-RECENT_HOURS), {}, set()
     for r in c.execute(
-        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS hop,"
-        "json_extract(result,'$.waiting_for_sign_in') AS unsigned,usage_model "
-        "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
-        "ORDER BY bot_id,finished_at DESC",
+        # Read from the index of exactly these fields (migration 20261119231532_recent_runs_fallbacks), never the
+        # turns' result documents; a result that is not JSON has neither field. Two turns that finished at the same
+        # moment are taken newest-written first.
+        "SELECT bot_id,coalesce(started_at,created_at) AS began,"
+        "CASE WHEN json_valid(result) THEN json_extract(result,'$.fallback') END AS hop,"
+        "CASE WHEN json_valid(result) THEN json_extract(result,'$.waiting_for_sign_in') END AS unsigned,usage_model "
+        "FROM attempts INDEXED BY attempts_recent_runs WHERE state IN ('completed','failed','interrupted') "
+        "AND finished_at>? ORDER BY bot_id,finished_at DESC,rowid DESC",
         (since,),
     ):
         if r["unsigned"]:
@@ -2735,7 +2739,9 @@ def _plate_check(c, who, auth, full):
 
     over = []
     visible_sql = auth.task_sql(c, who) if full else None
-    plates = waiting_on.needs_by_person(c)  # one pass over the open tasks for every person's plate
+    # An administrator's: one pass over the open tasks for every person's plate. Anyone else's: their own list, read
+    # from only the tasks that can reach them (waiting_on.needs gives each person what that pass gives them).
+    plates = waiting_on.needs_by_person(c) if full else {who.actor: waiting_on.needs(c, who.actor)}
     people = _plate_people(c, auth) if full else [who]
     # Another person's plate counts only what the reader may read: a private task is not theirs to count. One read for
     # every other person's plate.

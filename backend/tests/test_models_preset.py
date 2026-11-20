@@ -790,6 +790,33 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
     assert text.startswith(ops) and text.endswith(listed[-1]["line"])
 
 
+def test_health_reads_every_recent_turn_whatever_its_result_and_the_newest_written_of_two_at_one_moment(api):
+    """Health's fallback line reads recent turns from an index of their fields (attempts_recent_runs). A turn whose
+    result is not JSON, as an older runner left some, is still written and read, with no fields rather than an error;
+    of two turns that finished at the same moment the one written last is the bot's latest."""
+    from backend import health, hubdb
+
+    stamp, earlier = hubdb.now(), hubdb.shift(hubdb.now(), minutes=-5)
+    turns = [
+        ("ops", earlier, {"fallback": "codex"}),
+        ("ops", stamp, {"fallback": "codex"}),
+        ("ops", stamp, {"model": "claude-opus-5-5"}),  # written last: ops's latest turn ran on what it is set to
+        ("cpo", earlier, {"fallback": "pi"}),
+        ("cpo", stamp, ""),
+        ("pipe", stamp, {"fallback": "pi"}),
+    ]
+    with api.app.state.store.transaction() as c:
+        for n, (bot, at, result) in enumerate(turns):
+            c.execute(
+                "INSERT INTO attempts(id,bot_id,state,created_at,started_at,finished_at,result) "
+                "VALUES(?,?,'completed',?,?,?,?)",
+                (f"turn-{n}", bot, at, at, at, json.dumps(result) if result else result),
+            )
+    with api.app.state.store.read() as c:
+        on, _, carrying = health._fallbacks(c, api.app.state.store.settings)
+    assert [(r["bot"], r["harness"]) for r in on] == [("pipe", "pi")] and carrying == set()
+
+
 def test_the_one_fallback_line_names_its_bots_when_a_healthy_bot_also_ran(api, monkeypatch):
     """Source audit H04: two bots ran on the Gateway for want of a sign-in and a third ran on what it is set to. A
     healthy turn carries no `waiting_for_sign_in`, so the third bot is not counted, and the one line must name the two

@@ -5,6 +5,8 @@ in order (Spec "Needs you per person", I39: AC-5 to AC-8).
 Synthetic rows only (backend/tests/helpers/engine.py).
 """
 
+import json
+
 import pytest
 
 from backend import task_calls
@@ -191,4 +193,41 @@ def test_a_person_reads_only_the_tasks_that_can_reach_them(c, monkeypatch):
     assert reads == [mine]
     reads.clear()
     assert W.needs(c, CARA) == [] and reads == []
+    _same_for_everyone(c)
+
+
+def test_a_pipeline_owner_reads_their_pipeline_and_the_private_tasks_they_read_and_no_others(c):
+    """Someone whose ladder reaches one pipeline reads only its tasks and the private tasks they ask for or read: a
+    private task in a pipeline they do not own, that nobody before them may read, falls to them through the group on
+    its reader list, while one whose list names someone else stays out of their list, and so does every task of a
+    pipeline they do not own."""
+    from backend import access as Access
+    from backend.views import roster
+
+    c.execute("INSERT INTO humans(id,name,email) VALUES('cy','Cy','cy@acme.example')")
+    whole = roster(c)
+    people = [*whole["people"], {"id": "cy", "name": "Cy", "team": "ops"}]
+    Access.save_roster(c, {**whole, "people": people, "org_groups": {"ops": {"name": "Ops"}}})
+    for slug in ("builder", "reviewer"):
+        X.bot(c, slug)
+    X.pipeline(c, "eng", "Engineering", BUILD)
+    X.pipeline(c, "ops", "Operations", ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},))
+    c.execute("UPDATE pipelines SET owner_id='human:cy' WHERE id='eng'")
+    theirs = X.new_task(c, ANA, "Fix the footer", "eng", assignee="bot:builder")
+    c.execute("UPDATE visits SET level='person' WHERE id=?", (theirs["visit"]["id"],))
+    other = X.new_task(c, ANA, "Fix the header", "ops", assignee="bot:builder")
+    c.execute("UPDATE visits SET level='person' WHERE id=?", (other["visit"]["id"],))
+    secrets = {}
+    for readers in (["group:ops"], ["human:ben"]):
+        row = X.new_task(c, "bot:reviewer", f"Draft the review {readers[0]}", "ops", assignee="bot:builder")
+        X.ok_ask(c, row["id"], "bot:builder", "bot:reviewer", "OK the draft")
+        c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps(readers), row["id"]))
+        secrets[readers[0]] = row["id"]
+    company, pipelines = W._ladder_people(c, "human:cy")
+    assert (company, pipelines) == (False, {"eng"})
+    asks = c.execute(W._STAGE_ASKS).fetchall()
+    found = W._ladder_tasks(c, "human:cy", company, pipelines, asks)
+    assert found == {theirs["id"], secrets["group:ops"]}
+    listed = {n["task_id"] for n in W.needs(c, "human:cy")}
+    assert secrets["human:ben"] not in listed and other["id"] not in listed
     _same_for_everyone(c)
