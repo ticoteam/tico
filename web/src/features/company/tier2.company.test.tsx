@@ -488,7 +488,7 @@ describe('Risk as Disputes @n:re:disputes', () => {
         : { status: 200, body: { matters: [matter('t1', 'Refund dispute A')], next_offset: 200 } };
     });
     show(riskPage('disputes'), '/company/risk/disputes');
-    const open = await screen.findByRole('table', { name: 'Open disputes' });
+    const open = await screen.findByRole('rowgroup', { name: 'Open disputes' });
     expect(within(open).getByText('Refund dispute B')).toBeTruthy();
     expect(screen.getByText('$512')).toBeTruthy();
     expect(offsets).toEqual(['0', '200']);
