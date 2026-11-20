@@ -7,6 +7,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FinancePage } from './Finance';
 import { GrowthPage } from './Growth';
+import { loadFinance } from './load';
 import { budgetDay, monthSpan, pnlRange } from './model';
 import { budgetsKey, pnlQuery, type Budget, type GrowthRead, type Pnl } from './queries';
 import { validateFinanceSearch, validateGrowthSearch } from './search';
@@ -87,6 +88,20 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Finance @s398 @s403 @s399', () => {
+  it('warms access and the overview P&L without waiting for either read', async () => {
+    let finishPnl: (reply: Reply) => void = () => {};
+    const pendingPnl = new Promise<Reply>((resolve) => (finishPnl = resolve));
+    const reads = vi.fn((url: string) => (url.includes('/finance/pnl') ? pendingPnl : ok(OWNER)));
+    serve(reads);
+
+    const loaded = loadFinance(queryClient, {});
+    finishPnl(ok(PNL([], [])));
+
+    expect(loaded).toBeUndefined();
+    expect(reads.mock.calls.map(([url]) => url)).toEqual(['/api/v2/finance/access', expect.stringMatching(/^\/api\/v2\/finance\/pnl\?/)]);
+    await pendingPnl;
+  });
+
   it('a P&L line opens beside at its own address, keeping the period', async () => {
     serve((url) => (url.includes('/finance/lines/') ? ok({ account: {}, total: 0, entries: [], paid_by: null }) : ok({})));
     const range = pnlRange('quarter', undefined);
@@ -104,23 +119,29 @@ describe('Finance @s398 @s403 @s399', () => {
   });
 
   it('with no source connected says so, with its one action', async () => {
-    serve((url) => (url.endsWith('/finance/sources') ? ok({ groups: [{ group: 'manual', name: 'Manual', count: 1, rows: [{ id: 'm1', kind: 'manual', name: 'Entered' }] }] }) : { status: 404, body: {} }));
+    const reads = vi.fn((url: string) =>
+      url.endsWith('/finance/sources')
+        ? ok({ groups: [{ group: 'manual', name: 'Manual', count: 1, rows: [{ id: 'm1', kind: 'manual', name: 'Entered' }] }] })
+        : { status: 404, body: {} },
+    );
+    serve(reads);
     show('finance', '/company/finance');
     expect(await screen.findByText('No source connected')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add source' })).toBeTruthy();
+    expect(reads.mock.calls.map(([url]) => url)).not.toContain('/api/v2/finance/brief');
   });
 
-  it('shows the permitted overview when viewing as a teammate without sources access', async () => {
+  it('shows the permitted overview when viewing as a teammate without sources, payables, or receivables access', async () => {
     const scoped = {
       ...OWNER,
       can_view_as: true,
       teammates: [...OWNER.teammates, { teammate: 'human:lee', default: 'own_expenses', rights: [] }],
     };
-    const sourceReads = vi.fn();
+    const deniedReads = vi.fn();
     serve((url) => {
       if (url.endsWith('/finance/access')) return ok(scoped);
-      if (url.includes('/finance/sources')) {
-        sourceReads();
+      if (/\/finance\/(sources|bills|invoices)\b/.test(url)) {
+        deniedReads();
         return { status: 403, body: {} };
       }
       if (url.includes('/finance/pnl')) return ok({ ...PNL([COL('2026-11-01', 'current')], []), net: [12300] });
@@ -129,7 +150,7 @@ describe('Finance @s398 @s403 @s399', () => {
     show('finance', '/company/finance?as=human:lee');
     expect(await screen.findByText('$123')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add source' })).toBeNull();
-    expect(sourceReads).not.toHaveBeenCalled();
+    expect(deniedReads).not.toHaveBeenCalled();
   });
 
   it('a P&L that does not load says so and offers Try again', async () => {

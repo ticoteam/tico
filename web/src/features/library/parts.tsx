@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor, type Directory } from '@/data';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
 import { SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
@@ -74,6 +75,32 @@ export async function press(id: string, input: unknown, failed = 'That did not w
   if (!r.ok) toast(refusal(r, failed));
   return r.ok;
 }
+
+/** Cancel, then the one filled button. */
+export function Foot({ onClose, label, busy, ready, onGo }: { onClose: () => void; label: string; busy: boolean; ready: boolean; onGo: () => void }) {
+  return (
+    <>
+      <Button onClick={onClose}>Cancel</Button>
+      <Button variant="primary" busy={busy} disabled={!ready || busy} onClick={onGo}>
+        {label}
+      </Button>
+    </>
+  );
+}
+
+/** Runs one action; closes on success. */
+export function useGo(onClose: () => void) {
+  const [busy, setBusy] = useState(false);
+  const go = async (id: string, input: unknown, failed = 'Not added') => {
+    setBusy(true);
+    const ok = await press(id, input, failed);
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return [busy, go] as const;
+}
+
+export const trimmed = (v: string) => v.trim() || undefined;
 
 /* The mock's kind glyphs (tools.js G, files.js KIND): one glyph in ink, never letters. */
 const svg = (d: ReactNode) => (

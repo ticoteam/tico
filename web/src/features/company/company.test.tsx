@@ -12,6 +12,7 @@ import { goalLink } from './exports';
 import { ProductsPage } from './ProductsPage';
 import { brandQuery, floorQuery, goalsTreeQuery, kpiQuery, productsQuery, strategyQuery, strategyVersionsQuery, type Brand, type Strategy } from './queries';
 import { RiskPage } from './RiskPage';
+import { loadCompany } from './routing';
 import { StrategyPage } from './StrategyPage';
 
 
@@ -62,6 +63,23 @@ const floor = {
 } as unknown as CompanyFloor;
 
 describe('Company @s248 @s250', () => {
+  it('starts both figure reads while the Floor is still loading', async () => {
+    let finishFloor: (reply: Reply) => void = () => {};
+    const pendingFloor = new Promise<Reply>((resolve) => (finishFloor = resolve));
+    const reads = vi.fn((url: string) => (url === '/api/v2/company/floor' ? pendingFloor : nothing()));
+    serve(reads);
+
+    const loaded = loadCompany(queryClient);
+    finishFloor({ status: 200, body: floor });
+
+    expect(reads.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v2/company/floor',
+      '/api/v2/finance/metrics/revenue?days=7',
+      expect.stringMatching(/^\/api\/v2\/usage\?group=day&/),
+    ]);
+    expect(await loaded).toEqual(floor);
+  });
+
   it('opens a stage with its owner and its tasks, the ones waiting on you first @s270', async () => {
     const tasks = {
       tasks: [

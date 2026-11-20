@@ -68,10 +68,13 @@ beforeEach(() => {
   queryClient.setQueryData(directoryQuery.queryKey, directory([ana, pat, kim]));
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
-  queryClient.setQueryData(peopleQuery.queryKey, [
-    { id: 'p1', name: 'Pat Doe', slack: 'pat' },
-    { id: 'p2', name: 'Kim Roe' },
-  ]);
+  queryClient.setQueryData(peopleQuery.queryKey, {
+    people: [
+      { id: 'p1', name: 'Pat Doe', slack: 'pat' },
+      { id: 'p2', name: 'Kim Roe' },
+    ],
+    seats: [],
+  });
 });
 afterEach(() => vi.unstubAllGlobals());
 

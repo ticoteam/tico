@@ -1,10 +1,11 @@
-import { CancelledError, QueryClientProvider } from '@tanstack/react-query';
+import { CancelledError, notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
+import { agentsQuery } from '@/features/team/routing';
 import { Toasts } from '@/kit/Toast';
 import { Agents } from './Agents';
 import { run } from '@/actions/run';
@@ -92,9 +93,12 @@ const ACCESS: AccessView = {
 };
 
 const FIG = { runs: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, est_cost_usd: 0, subscription_equiv_usd: 0, low_estimate_runs: 0, unpriced_runs: 0 };
+const NO_USAGE_CHOICES = { departments: [], dimensions: {}, labels: {} };
 
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
+  // An observer's queued notification must run before jsdom tears down the React window.
+  notifyManager.setScheduler(queueMicrotask);
 });
 beforeEach(() => {
   sent = [];
@@ -219,12 +223,14 @@ describe('Settings', () => {
 describe('Usage', () => {
   it('an agent row opens that agent in the address @s1066 @s1086', async () => {
     serve(() => ({ status: 200, body: { from: '', to: '', totals: FIG, rows: [] } }));
-    const one = { ...FIG, bot: 'builder', name: 'Builder', runs: 4, est_cost_usd: 2.5 };
-    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [one] });
-    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [] });
+    const one = { ...FIG, bot: '0190-builder', name: 'Builder', runs: 4, est_cost_usd: 2.5 };
+    queryClient.setQueryData(agentsQuery.queryKey, [{ id: '0190-builder', slug: 'builder', display_name: 'Builder', resolved_model_label: 'Example model' }]);
+    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [one] });
+    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [] });
     show(<UsagePage search={{}} />, '/company/usage');
     const row = await screen.findByTitle('Builder');
-    expect(row.getAttribute('href')).toBe('/company/usage?open=builder');
+    expect(row.getAttribute('href')).toBe('/company/usage?open=0190-builder');
+    expect(within(row).getByText('Example model')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 1, name: 'Usage' })).toBeTruthy();
   });
 
@@ -249,7 +255,6 @@ describe('Usage', () => {
       own_weekly_usd: null,
       source: {},
     };
-    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '', to: '', totals: FIG, rows: [] });
     queryClient.setQueryData(limitsQuery.queryKey, {
       bots: { builder: lim },
       default: { ...none, monthly_usd: 50, count_subscription: false },
@@ -371,7 +376,7 @@ describe('Settings › Computers › when idle', () => {
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
     queryClient.setQueryData(computersQuery.queryKey, []);
     queryClient.setQueryData(sleepQuery.queryKey, { hosted: true, managed: false, hours: 2, runners: false });
-    show(<SettingsPage section="computers" />, '/settings/computers');
+    show(<SettingsPage section="computers" />, '/settings/computers', () => loadSection(queryClient, 'computers'));
     const sw = await screen.findByRole('switch', { name: "Agents' computers sleep too" });
     fireEvent.click(sw);
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/sleep', method: 'POST', body: { runners: true } }));
@@ -422,10 +427,15 @@ describe('Settings › Security', () => {
 
 describe('Settings › Models @s1076 @s710', () => {
   it('When a plan runs out has each computer’s Gateway switch, which sends at once', async () => {
-    serve(() => ({ status: 200, body: {} }));
+    const studio = { id: 'r1', label: 'Studio', online: true, gateway_fallback: false };
+    serve((url) => {
+      if (url === '/api/v2/providers') return { status: 200, body: { enabled: [], default: {}, revision: 0 } };
+      if (url === '/api/v2/operations') return { status: 200, body: { machines: [{ ...studio, gateway_fallback: true }] } };
+      return { status: 200, body: {} };
+    });
     queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm1', label: 'Sample Model', provider: 'anthropic' }] } as never);
-    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true, gateway_fallback: false }] as never);
-    show(<SettingsPage section="models" />, '/settings/models');
+    queryClient.setQueryData(computersQuery.queryKey, [studio]);
+    show(<SettingsPage section="models" />, '/settings/models', () => loadSection(queryClient, 'models'));
     const out = await screen.findByRole('region', { name: 'When a plan runs out' });
     fireEvent.click(within(out).getByRole('switch', { name: 'Studio: use Tico Gateway' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/computers/r1/gateway-fallback', body: { on: true } }));
@@ -474,8 +484,8 @@ describe('Usage › an agent, opened', () => {
   it('shows its spend, the share from cache, its tokens by kind and its tasks @s1093', async () => {
     serve(() => ({ status: 200, body: { from: '', to: '', totals: FIG, rows: [] } }));
     const one = { ...FIG, bot: 'builder', name: 'Builder', runs: 4, est_cost_usd: 2.5, input_tokens: 10, cached_tokens: 90 };
-    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [one] });
-    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: one, rows: [] });
+    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [one] });
+    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [] });
     queryClient.setQueryData(agentUsageQuery('7d', 'builder').queryKey, {
       totals: one,
       tasks: [{ ...FIG, value: '12', name: 'Plan the launch', runs: 3, est_cost_usd: 2, share: 0.8 }],
@@ -493,7 +503,6 @@ describe('Usage › Set limit', () => {
     serve(() => ({ status: 200, body: {} }));
     const none = { daily_usd: null, hourly_usd: null, per_30m_usd: null, weekly_usd: null };
     const lim = { ...none, blocked: null, blocked_by: null, monthly_usd: 10, month_spent: 2, day_spent: null, hour_spent: null, week_spent: null, percent: 20, may_edit: true, own_monthly_usd: 10, own_daily_usd: null, own_hourly_usd: null, own_per_30m_usd: null, own_weekly_usd: null, source: {} };
-    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '', to: '', totals: FIG, rows: [] });
     queryClient.setQueryData(limitsQuery.queryKey, { bots: { builder: lim }, default: { ...none, monthly_usd: 50, count_subscription: false }, may_edit_default: true, pools: null });
     show(<UsagePage search={{ view: 'limits', open: 'builder' }} />, '/company/usage?view=limits&open=builder');
     fireEvent.click(await screen.findByRole('button', { name: /^Limit\$/ }));

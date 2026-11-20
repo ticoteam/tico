@@ -225,6 +225,8 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const el = root.current;
     if (!el) return;
     let keys: Keys = { kb: 0, top: 0, up: false };
+    let blur = 0;
+    let frame = 0;
     const update = () => {
       const active = document.activeElement;
       const inside = active instanceof HTMLElement && el.contains(active) && active.matches(EDITABLE);
@@ -235,17 +237,23 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
       else delete el.dataset.typing;
       el.style.setProperty('--kb', `${where ? keys.kb : 0}px`);
       el.style.setProperty('--vv-top', `${where ? keys.top : 0}px`);
-      requestAnimationFrame(() => stuck.forEach((s) => (s.scrollTop = s.scrollHeight)));
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => stuck.forEach((s) => (s.scrollTop = s.scrollHeight)));
     };
     const stop = watchKeyboard((k) => {
       keys = k;
       update();
     });
-    const later = () => setTimeout(update, 50);
+    const later = () => {
+      clearTimeout(blur);
+      blur = window.setTimeout(update, 50);
+    };
     el.addEventListener('focusin', update);
     el.addEventListener('focusout', later);
     return () => {
       stop();
+      clearTimeout(blur);
+      cancelAnimationFrame(frame);
       el.removeEventListener('focusin', update);
       el.removeEventListener('focusout', later);
     };

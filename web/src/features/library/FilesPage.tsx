@@ -1,4 +1,4 @@
-import { useQuery, useSuspenseInfiniteQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -58,13 +58,13 @@ export function FilesPage({ search }: { search: FilesSearch }) {
 
 function FilesList({ search }: { search: FilesSearch }) {
   const kind = search.kind ?? '';
-  const files = useSuspenseInfiniteQuery(filesQuery(kind));
+  const searching = (search.q?.trim().length ?? 0) > 1;
+  const files = useInfiniteQuery({ ...filesQuery(kind), enabled: !searching });
   const found = useQuery(fileSearchQuery(search.q ?? '', kind));
   const [chosen, setChosen] = useState<File[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  const rows = files.data.pages.flatMap((p) => p.files);
-  const searching = !!search.q && search.q.trim().length > 1;
+  const rows = files.data?.pages.flatMap((p) => p.files) ?? [];
   // Grouped against when the page opened, so the groups do not shift while it is read.
   const [now] = useState(() => Date.now());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -135,7 +135,8 @@ function FilesList({ search }: { search: FilesSearch }) {
           </>
         }
         filter={kindName && <FilterRow filters={[{ label: kindName, onClear: () => void press('files.list', { q: search.q }) }]} />}
-        state={!rows.length && !kind && !searching ? 'empty' : 'ready'}
+        state={searching || rows.length ? 'ready' : files.isPending ? 'loading' : files.isError ? 'fault' : kind ? 'ready' : 'empty'}
+        onRetry={() => void files.refetch()}
         empty={{ title: 'No files yet' }}
         sections={
           searching ? (
@@ -152,6 +153,11 @@ function FilesList({ search }: { search: FilesSearch }) {
                 </Row>
               ))}
               {found.data && !found.data.results.length && <Empty title="Nothing matches" />}
+              {found.isLoadingError && (
+                <Empty title="The search did not load" icon="alert">
+                  <Button onClick={() => void found.refetch()}>Try again</Button>
+                </Empty>
+              )}
             </Section>
           ) : rows.length ? (
             <VirtualList

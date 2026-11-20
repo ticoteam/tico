@@ -8,8 +8,9 @@ import './actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
-import { addDays, calendarSearch, parseDay, rangeOf } from './model';
+import { calendarSearch, parseDay, rangeOf } from './model';
 import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery } from './queries';
+import { loadCalendar } from './routing';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -217,17 +218,29 @@ describe('Calendar', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Find a meeting' }), { target: { value: 'sync' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync', review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending&q=sync'))).toBe(true));
-    expect(fetches.some((u) => u.endsWith('/api/v2/calendar/search?q=sync'))).toBe(true);
+    expect(fetches).not.toContain('/api/v2/calendar/search?q=sync');
   });
 
-  it('opens a found event outside the week shown by List', async () => {
-    const start = addDays(new Date(), 14);
-    const event = occ({ start: start.toISOString(), end: new Date(start.getTime() + 3_600_000).toISOString() });
+  it('opens an event found by search outside the default week and restores it if removal is refused', async () => {
+    const future = new Date(Date.now() + 14 * 86_400_000);
+    const o = occ({ start: future.toISOString(), end: new Date(future.getTime() + 3_600_000).toISOString() });
     queryClient.setQueryData(meetingsQuery('live', 'pricing').queryKey, { meetings: [], count: 0, pending_count: 0 });
-    queryClient.setQueryData(findEventsQuery('pricing').queryKey, { errors: [], partial: false, occurrences: [event] });
+    queryClient.setQueryData(findEventsQuery('pricing').queryKey, { occurrences: [o], errors: [], partial: false });
     show('/calendar?view=list&q=pricing');
     fireEvent.click(await screen.findByRole('link', { name: 'Pricing review' }));
+    const panel = await screen.findByRole('complementary', { name: 'Pricing review' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(queryClient.getQueryData(findEventsQuery('pricing').queryKey)?.occurrences).toEqual([]));
+    refuse();
     expect(await screen.findByRole('complementary', { name: 'Pricing review' })).toBeTruthy();
+    expect(fetches.some((u) => u.startsWith('/api/v2/calendar/events?'))).toBe(false);
+  });
+
+  it('preloads only the past-meeting feed for a pending search', async () => {
+    loadCalendar(queryClient, { view: 'list', review: 'pending', q: 'garden' });
+    await waitFor(() => expect(fetches).toEqual(['/api/v2/meetings?review=pending&q=garden']));
   });
 
   it('Shared with me reads review=shared, and says when nothing is shared', async () => {

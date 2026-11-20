@@ -16,8 +16,7 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { FilterRow, PageMore, type FilterChip } from '@/pagekinds';
-import { Foot, useGo } from './AddTool';
-import { Face, Held, idsAndNames, More, press, when } from './parts';
+import { Face, Held, idsAndNames, More, press, when, Foot, useGo } from './parts';
 import {
   allMessagesQuery,
   envsOf,

@@ -102,8 +102,11 @@ describe('Search @s1209', () => {
         act(() => openSearch('QA'));
         const field = await screen.findByRole('combobox', { name: 'Search' });
         const reviewer = await screen.findByRole('option', { name: /QA Reviewer/ });
+        const scroll = vi.fn();
+        Object.defineProperty(reviewer, 'scrollIntoView', { value: scroll });
         fireEvent.keyDown(field, { key: 'ArrowDown' });
         expect(reviewer.getAttribute('aria-selected')).toBe('true');
+        expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
         await act(async () => respond([tasks, people]));
         expect(await screen.findByRole('option', { name: /QA task/ })).toBeTruthy();
         expect(reviewer.getAttribute('aria-selected')).toBe('true');

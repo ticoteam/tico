@@ -3,10 +3,12 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { timelineQuery } from '@/conversation';
 import { queryClient } from '@/data';
 import { ItemHead } from '@/pagekinds';
 import type { Thread, ThreadList } from './model';
-import { renameThread, threadKeys } from './queries';
+import { chatQuery, renameThread, threadKeys, threadQuery } from './queries';
+import { loadThreads } from './routing';
 import { ThreadHead } from './ThreadHead';
 import { MenuThreads } from './MenuThreads';
 import { TeamThread } from './TeamThread';
@@ -103,6 +105,59 @@ describe('The menu\'s Threads list @s156', () => {
     });
     expect(await screen.findByTitle('Hiring')).toBeTruthy();
     expect(screen.queryByTitle('Hiring plan')).toBeNull();
+  });
+});
+
+describe('Opening a thread', () => {
+  it('starts loading messages while the header is in flight and does not wait for the menu list', async () => {
+    let openHeader!: (r: Reply) => void;
+    let openMessages!: (r: Reply) => void;
+    let openList!: (r: Reply) => void;
+    const header = new Promise<Reply>((resolve) => { openHeader = resolve; });
+    const messages = new Promise<Reply>((resolve) => { openMessages = resolve; });
+    const list = new Promise<Reply>((resolve) => { openList = resolve; });
+    const asked: string[] = [];
+    const view = '/api/v2/threads/t1';
+    const timeline = `${view}/timeline?flat=1&limit=50`;
+    serve((url) => {
+      asked.push(url);
+      return url === view ? header : url === timeline ? messages : list;
+    });
+    const loaded = loadThreads(queryClient, { thread: 't1' });
+    await waitFor(() => expect(asked).toEqual(expect.arrayContaining([view, timeline])));
+    openHeader({ status: 200, body: thread('t1', 'Launch plan', 0) });
+    await loaded;
+    expect(queryClient.getQueryState(threadKeys.list)?.fetchStatus).toBe('fetching');
+
+    const read = queryClient.ensureInfiniteQueryData(timelineQuery('t1'));
+    openMessages({ status: 200, body: { messages: [], next_cursor: null } });
+    openList({ status: 200, body: { threads: [], next_cursor: null } });
+    await expect(read).resolves.toMatchObject({ pages: [{ messages: [] }] });
+    expect(asked.filter((u) => u === timeline)).toHaveLength(1);
+  });
+
+  it('preloads the header on intent and waits until navigation to read messages', async () => {
+    const asked: string[] = [];
+    queryClient.setQueryData(threadKeys.list, seeded());
+    serve((url) => {
+      asked.push(url);
+      return { status: 200, body: thread('t1', 'Launch plan', 0) };
+    });
+    await loadThreads(queryClient, { thread: 't1', preload: true });
+    expect(asked).toEqual(['/api/v2/threads/t1']);
+    expect(queryClient.getQueryState(timelineQuery('t1').queryKey)).toBeUndefined();
+  });
+
+  it('uses the cached header when the same thread opens in the side chat', async () => {
+    const asked: string[] = [];
+    const t = thread('t1', 'Launch plan', 0);
+    serve((url) => {
+      asked.push(url);
+      return { status: 200, body: t };
+    });
+    await queryClient.fetchQuery(threadQuery(t.id));
+    await expect(queryClient.fetchQuery(chatQuery(`thread:${t.id}`))).resolves.toEqual(t);
+    expect(asked).toEqual(['/api/v2/threads/t1']);
   });
 });
 

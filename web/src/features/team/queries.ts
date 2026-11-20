@@ -342,11 +342,6 @@ export interface PersonRow {
   github?: string;
 }
 
-export const peopleQuery = queryOptions({
-  queryKey: ['team', 'people'] as const,
-  queryFn: async ({ signal }) => (await api.get<{ people?: PersonRow[] }>('/api/humans', { signal })).people ?? [],
-});
-
 /** An open seat on the chart (GET /api/humans `seats`): a title nobody fills yet, under a team's group id. */
 export interface Seat {
   id: string;
@@ -354,21 +349,35 @@ export interface Seat {
   team?: string;
 }
 
-export const seatsQuery = queryOptions({
-  queryKey: ['team', 'seats'] as const,
-  queryFn: async ({ signal }) => (await api.get<{ seats?: Seat[] }>('/api/humans', { signal })).seats ?? [],
+interface PeopleRoster {
+  people: PersonRow[];
+  seats: Seat[];
+}
+
+export const peopleRosterQuery = queryOptions({
+  queryKey: ['team', 'people'] as const,
+  queryFn: async ({ signal }): Promise<PeopleRoster> => {
+    const { people, seats } = await api.get<Partial<PeopleRoster>>('/api/humans', { signal });
+    return { people: people ?? [], seats: seats ?? [] };
+  },
+});
+
+export const peopleQuery = queryOptions({
+  ...peopleRosterQuery,
+  select: (roster) => roster.people,
 });
 
 /** What these agents (slugs) spent this month, in dollars (GET /api/v2/usage, filtered by bots). */
 export const monthSpendQuery = (slugs: readonly string[]) => {
   const now = new Date();
   const to = now.toISOString().slice(0, 10);
+  const bots = [...slugs].sort().join(',');
   return queryOptions({
-    queryKey: ['team', 'spend', to.slice(0, 7), [...slugs].sort().join(',')] as const,
+    queryKey: ['team', 'spend', to.slice(0, 7), bots] as const,
     queryFn: async ({ signal }) =>
-      (await api.get<{ totals?: { est_cost_usd?: number | null } }>(`/api/v2/usage?${q({ from: `${to.slice(0, 8)}01`, to, bots: [...slugs].sort().join(',') })}`, { signal }))
+      (await api.get<{ totals?: { est_cost_usd?: number | null } }>(`/api/v2/usage?${q({ from: `${to.slice(0, 8)}01`, to, bots, group: 'day' })}`, { signal }))
         .totals?.est_cost_usd ?? 0,
-    enabled: slugs.length > 0,
+    enabled: bots.length > 0,
   });
 };
 
@@ -856,7 +865,8 @@ export function setPersonRole(person: string, role: 'member' | 'admin') {
 export async function setPersonTitle(person: string, title: string) {
   const out = await write({
     key: peopleQuery.queryKey,
-    optimistic: (rows: PersonRow[] | undefined) => rows?.map((p) => (p.id === person ? { ...p, title } : p)),
+    optimistic: (roster: PeopleRoster | undefined) =>
+      roster && { ...roster, people: roster.people.map((p) => (p.id === person ? { ...p, title } : p)) },
     send: (idempotencyKey) => api.post(`/api/v2/humans/${at(person)}`, { title }, { idempotencyKey }),
   });
   directoryAgain();
@@ -867,7 +877,8 @@ export async function setPersonTitle(person: string, title: string) {
 export async function setPersonFields(person: string, fields: Pick<PersonRow, 'reports_to' | 'github'>) {
   const out = await write({
     key: peopleQuery.queryKey,
-    optimistic: (rows: PersonRow[] | undefined) => rows?.map((p) => (p.id === person ? { ...p, ...fields } : p)),
+    optimistic: (roster: PeopleRoster | undefined) =>
+      roster && { ...roster, people: roster.people.map((p) => (p.id === person ? { ...p, ...fields } : p)) },
     send: (idempotencyKey) => api.post(`/api/v2/humans/${at(person)}`, fields, { idempotencyKey }),
   });
   directoryAgain();
@@ -878,7 +889,8 @@ export async function setPersonFields(person: string, fields: Pick<PersonRow, 'r
 export async function renamePerson(person: string, name: string) {
   const out = await write({
     key: peopleQuery.queryKey,
-    optimistic: (rows: PersonRow[] | undefined) => rows?.map((p) => (p.id === person ? { ...p, name } : p)),
+    optimistic: (roster: PeopleRoster | undefined) =>
+      roster && { ...roster, people: roster.people.map((p) => (p.id === person ? { ...p, name } : p)) },
     send: (idempotencyKey) => api.post(`/api/v2/access/humans/${at(person)}`, { name }, { idempotencyKey }),
   });
   directoryAgain();
@@ -889,7 +901,7 @@ export async function renamePerson(person: string, name: string) {
 export async function removePerson(person: string) {
   const out = await write({
     key: peopleQuery.queryKey,
-    optimistic: (rows: PersonRow[] | undefined) => rows?.filter((p) => p.id !== person),
+    optimistic: (roster: PeopleRoster | undefined) => roster && { ...roster, people: roster.people.filter((p) => p.id !== person) },
     send: (idempotencyKey) => api.post(`/api/v2/humans/${at(person)}`, { left: true }, { idempotencyKey }),
   });
   directoryAgain();
@@ -922,7 +934,7 @@ export function moveAgent(slug: string, runner: string) {
 
 /** Who it works for: the people it serves (POST .../owners), at least one. */
 export function setWorksFor(slug: string, people: string[]) {
-  const names = new Map((queryClient.getQueryData(peopleQuery.queryKey) ?? []).map((p) => [p.id, p.name]));
+  const names = new Map((queryClient.getQueryData(peopleQuery.queryKey)?.people ?? []).map((p) => [p.id, p.name]));
   return write({
     key: agentsQuery.queryKey,
     optimistic: patchRows(slug, { users: people.map((id) => ({ id, name: names.get(id) })) }),

@@ -99,6 +99,25 @@ describe('Team pages', () => {
     expect(reads[0]?.get('updated_since')).toBeTruthy();
   });
 
+  it('starts the team spend read without waiting for the agents roster', async () => {
+    queryClient.removeQueries({ queryKey: agentsQuery.queryKey });
+    let finish!: (reply: Reply) => void;
+    const agents = new Promise<Reply>((resolve) => { finish = resolve; });
+    let spendQuery: URLSearchParams | undefined;
+    serve((url) => {
+      if (url === '/api/employees') return agents;
+      if (url.startsWith('/api/v2/usage?')) {
+        spendQuery = new URLSearchParams(url.split('?')[1]);
+        return { status: 200, body: { totals: { est_cost_usd: 42 } } };
+      }
+    });
+    show(<TeamWho who="design" />, '/team/design');
+    expect(await screen.findByText('$42')).toBeTruthy();
+    expect(spendQuery?.get('bots')).toBe('ana,bo');
+    expect(spendQuery?.get('group')).toBe('day');
+    await act(async () => finish({ status: 200, body: roster }));
+  });
+
   it('moves a teammate out at once and puts them back when the server refuses', async () => {
     let refuse!: () => void;
     serve((_url, method) => (method === 'PATCH' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : undefined));

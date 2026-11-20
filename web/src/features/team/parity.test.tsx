@@ -70,10 +70,13 @@ beforeEach(() => {
   queryClient.setQueryData(directoryQuery.queryKey, { actors, byId });
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
-  queryClient.setQueryData(peopleQuery.queryKey, [
-    { id: 'p1', name: 'Pat Doe' },
-    { id: 'p2', name: 'Kim Roe' },
-  ]);
+  queryClient.setQueryData(peopleQuery.queryKey, {
+    people: [
+      { id: 'p1', name: 'Pat Doe' },
+      { id: 'p2', name: 'Kim Roe' },
+    ],
+    seats: [],
+  });
   queryClient.setQueryData(computersQuery.queryKey, [studio, { ...studio, id: 'r2', label: 'Annex', bots: [] }]);
   queryClient.setQueryData(modelsQuery.queryKey, { models: [], harnesses: [{ id: 'claude', name: 'Claude Code', capabilities: { browser_sign_in: true, sign_out: true } }] });
 });

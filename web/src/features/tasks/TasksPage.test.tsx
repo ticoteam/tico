@@ -1,11 +1,12 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
 import { flowQuery, listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
 import { PipelinePage } from './PipelinePage';
@@ -113,6 +114,14 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   stop();
   respond({ status: 200, body: { items: [] } });
   await expect(loaded).resolves.toEqual({ count: 0, items: [] });
+});
+
+it('keeps Flow cached when returning to Tasks, where the live needs topic stays followed', async () => {
+  seed([]);
+  show(<FlowPage />, '/flow');
+  await screen.findByRole('heading', { name: 'Nothing waits on you' });
+  cleanup();
+  expect(queryClient.getQueryState(flowQuery.queryKey)?.isInvalidated).toBe(false);
 });
 
 describe('Tasks board and list @s0 @s9 @s10', () => {
@@ -242,7 +251,9 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
   const rows = () => [task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1')];
 
   it('Archived shows snoozed, done and closed tasks, each naming its stage @s12 @s13 @s14', async () => {
+    const reads: URLSearchParams[] = [];
     serve((url) => {
+      if (url.startsWith('/api/v2/tasks?')) reads.push(new URL(url, 'http://localhost').searchParams);
       if (url.includes('snoozed=only')) return { status: 200, body: { tasks: [task('z1', 3, 'Try the new font', 's1', { snoozed: true })], cursor: 'c' } };
       // Done holds more than one page: its count is the server's total
       if (url.includes('status=done'))
@@ -260,6 +271,30 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(within(done).getByText('340')).toBeTruthy();
     expect(within(screen.getByRole('region', { name: 'Snoozed' })).getByText('Inbox')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Closed' })).toBeNull();
+    expect(reads.map((params) => params.get('brief'))).toEqual(['true', 'true', 'true']);
+  });
+
+  it('positions an expanded phone archive using the measured row heights', async () => {
+    const viewportHeight = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
+      return this.classList.contains('tk-long') ? 528 : 0;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('vl-item')) return this.dataset.index === '0' ? 68 : 44;
+      return 0;
+    });
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      const archived = Array.from({ length: 101 }, (_, i) => task(`d${i}`, i + 1, `Archived task ${i + 1}`, 'sd', { status: 'done' }));
+      const empty = { tasks: [], cursor: 'c' };
+      show(<ArchivedSections p={PIPE} filters={{}} shelves={{ snoozed: empty, done: { ...empty, tasks: archived }, closed: empty }} />, '/tasks/eng');
+      fireEvent.click(await screen.findByRole('button', { name: '91 more' }));
+      const [, second] = screen.getAllByRole('listitem');
+      expect(second?.style.transform).toContain(', 68px,');
+    } finally {
+      delete document.documentElement.dataset.layout;
+      height.mockRestore();
+      viewportHeight.mockRestore();
+    }
   });
 
   it('keeps the Archived filter in the phone header', async () => {
@@ -396,16 +431,19 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
     const inbox = await screen.findByRole('region', { name: 'Inbox' });
     await waitFor(() => expect(within(inbox).getByText('1200')).toBeTruthy());
-    expect(new URLSearchParams(reads[0]?.split('?')[1]).get('counts')).toBe('stage');
+    const params = new URLSearchParams(reads[0]?.split('?')[1]);
+    expect(params.get('counts')).toBe('stage');
+    expect(params.get('brief')).toBe('true');
     expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('0')).toBeTruthy();
   });
 
   it('opens the next server page when no stage has enough rows to virtualize', async () => {
-    serve((url) =>
-      url.includes('after=next')
-        ? { status: 200, body: { tasks: [task('a2', 8, 'Review the export', 's2')], cursor: 'c2' } }
-        : { status: 200, body: {} },
-    );
+    const reads: string[] = [];
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      reads.push(url);
+      return { status: 200, body: { tasks: [task('a2', 8, 'Review the export', 's2')], cursor: 'c2' } };
+    });
     seed([]);
     queryClient.setQueryData(listKey, {
       tasks: [task('a1', 7, 'Fix the export', 's1')],
@@ -419,6 +457,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(within(screen.getByRole('heading', { name: /Doing/ })).getByText('1')).toBeTruthy();
     fireEvent.click(more);
     expect(await screen.findByRole('link', { name: /Review the export/ })).toBeTruthy();
+    expect(reads.map((url) => new URL(url, 'http://localhost').searchParams.get('brief'))).toEqual(['true']);
     expect(screen.queryByRole('button', { name: 'More tasks' })).toBeNull();
   });
 

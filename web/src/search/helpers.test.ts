@@ -6,6 +6,14 @@ import { fetchFor } from './helpers';
 import { pages } from './pages';
 import { loadProviders, providers } from './providers';
 
+// Registration is what this test exercises. The queries run only when a provider searches.
+vi.mock('@/features/calls/queries', () => ({}));
+vi.mock('@/features/company/queries', () => ({}));
+vi.mock('@/features/library/queries', () => ({}));
+vi.mock('@/features/routines/queries', () => ({}));
+vi.mock('@/features/tasks/queries', () => ({}));
+vi.mock('@/features/threads/queries', () => ({}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
   queryClient.clear();

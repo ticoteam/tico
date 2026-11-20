@@ -119,14 +119,19 @@ const facts = async () => fireEvent.click(await screen.findByRole('button', { na
 const more = async () => fireEvent.click((await screen.findAllByRole('button', { name: 'More' }))[0] as HTMLElement);
 
 describe('Details: the facts', () => {
-  it('sets the Human and the size in place @s58', async () => {
+  it('sets the Human in place @s58', async () => {
     serve(() => undefined);
     details();
     await facts();
     fireEvent.click(await screen.findByRole('button', { name: 'Human' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Bo Lee' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1', body: { human: 'human:bo' } }));
+  });
 
+  it('validates and saves the size in place @s58', async () => {
+    serve(() => undefined);
+    details();
+    await facts();
     fireEvent.click(screen.getByRole('button', { name: 'Size' }));
     const size = await screen.findByRole('textbox', { name: 'Size' });
     fireEvent.change(size, { target: { value: 'big' } });

@@ -88,7 +88,9 @@ function Palette({ opened }: { opened: string }) {
     if (!count) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      select((on + (e.key === 'ArrowDown' ? 1 : count - 1)) % count);
+      const next = (on + (e.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      select(next);
+      document.getElementById(`pal-${next}`)?.scrollIntoView?.({ block: 'nearest' });
     } else if (e.key === 'Enter') {
       e.preventDefault();
       choose(on);

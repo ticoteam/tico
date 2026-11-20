@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
-import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
+import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
@@ -323,6 +323,9 @@ function teamsOf(d: Directory, meId: string | undefined, asks: Asks, homeOf: (te
   return [...by.values()];
 }
 
+/** True once the router has resolved its first page. */
+const usePageOpened = () => useRouterState({ select: (state) => state.resolvedLocation !== undefined });
+
 /* Counts are what the server already answers (needs-you, catch-up, updates); the stream keeps them current. */
 const some = (n: number | undefined) => (n ? n : undefined);
 /** A menu row's press: the same action Tico would run. */
@@ -332,7 +335,9 @@ function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
   const self = useActor(me?.id);
-  const { data: catchUp } = useQuery(catchUpQuery);
+  // Catch up and Support read whole feeds. Give the first page's loader the connection before warming those caches.
+  const badgesEnabled = usePageOpened() && !!me;
+  const { data: catchUp } = useQuery({ ...catchUpQuery, enabled: badgesEnabled });
   const { data: list } = useInfiniteQuery(threadListQuery);
   const { data: groups } = useQuery(groupsQuery);
   const asks = asksOf(catchUp, list?.pages.flatMap((p) => p.rows) ?? [], me?.id);
@@ -342,8 +347,8 @@ function AppMenu({ note }: { note: ReactNode }) {
   };
   const teams = useDirectory((d) => teamsOf(d, me?.id, asks, homeOf));
   const { data: pipelines } = useQuery(pipelinesQuery);
-  const { data: flow } = useQuery(flowQuery);
-  const { data: support } = useQuery(supportUnreadQuery);
+  const { data: flow } = useQuery({ ...flowQuery, select: (data) => data.count });
+  const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
   const companies = useCompanies();
   const [calling, setCalling] = useState(false);
   const name = config?.company_name || config?.app_name || '';
@@ -361,7 +366,7 @@ function AppMenu({ note }: { note: ReactNode }) {
           // the Features pipeline read as horizons: only a company that has one gets the line
           ...(roadmapPipeline(pipelines) ? [{ id: 'roadmap', name: 'Roadmap', to: '/roadmap' }] : []),
         ]}
-        counts={{ flow: some(flow?.count), support: some(support) }}
+        counts={{ flow: some(flow), support: some(support) }}
         threads={
           <Suspense fallback={null}>
             <MenuThreads asks={asks.threads} />
@@ -387,7 +392,8 @@ function AppMenu({ note }: { note: ReactNode }) {
    you up, through Tico's own chat. It goes once pressed, until something else comes in. */
 const CATCH_UP = 'Catch me up';
 function CatchUpChip() {
-  const { data } = useQuery(catchUpQuery);
+  // The menu reads the same feed once the first page has opened; the chip waits with it.
+  const { data } = useQuery({ ...catchUpQuery, enabled: usePageOpened() });
   const [asked, setAsked] = useState<number | null>(null);
   if (!data?.count || asked === data.count) return null;
   return (

@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactElement } from 'react';
 import type { WebsiteTool } from '@/api/schema';
 import { meQuery } from '@/data';
-import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
@@ -10,7 +9,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { press, ToolGlyph } from './parts';
+import { Foot, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
 import { probeMcp, type LoginAdd, type McpProbe } from './queries';
 import { useAdmin } from './ToolShell';
@@ -61,32 +60,6 @@ export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => 
   if (adding === 'address') return <MailingAddressDialog onClose={onClose} />;
   return <AddWebsite onClose={onClose} />;
 }
-
-/** Cancel, then the one filled button. */
-export function Foot({ onClose, label, busy, ready, onGo }: { onClose: () => void; label: string; busy: boolean; ready: boolean; onGo: () => void }) {
-  return (
-    <>
-      <Button onClick={onClose}>Cancel</Button>
-      <Button variant="primary" busy={busy} disabled={!ready || busy} onClick={onGo}>
-        {label}
-      </Button>
-    </>
-  );
-}
-
-/** Runs one action; closes on success. */
-export function useGo(onClose: () => void) {
-  const [busy, setBusy] = useState(false);
-  const go = async (id: string, input: unknown, failed = 'Not added') => {
-    setBusy(true);
-    const ok = await press(id, input, failed);
-    setBusy(false);
-    if (ok) onClose();
-  };
-  return [busy, go] as const;
-}
-
-export const trimmed = (v: string) => v.trim() || undefined;
 
 /* ---------------------------------------------------------------- an API */
 

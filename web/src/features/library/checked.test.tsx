@@ -213,6 +213,22 @@ describe('a file', () => {
 });
 
 describe('Files', () => {
+  it('searches a filtered list without fetching its unfiltered rows and lets a failed search retry', async () => {
+    let searches = 0;
+    const sent = serve((url) => {
+      if (url === '/api/v2/files/search?q=notes&limit=50&kind=document') {
+        if (++searches === 1) return new Response(null, { status: 503 });
+        return { results: [{ id: 'f1', title: 'Sample notes' }] };
+      }
+      return {};
+    });
+    at('/library/files?kind=document&q=notes', <FilesPage search={{ kind: 'document', q: 'notes' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('link', { name: 'Sample notes' })).toBeTruthy();
+    expect(searches).toBe(2);
+    expect(sent.some(({ url }) => url.startsWith('/api/v2/files?'))).toBe(false);
+  });
+
   it('lists files newest first by day, each opening in the page, and filters by kind in the address @s779', async () => {
     serve();
     const today = new Date().toISOString();

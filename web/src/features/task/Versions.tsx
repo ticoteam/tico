@@ -42,25 +42,25 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
   const older = useQuery({ ...pageVersionQuery(file, before ?? 0), enabled: !!doc && !!before });
   const newer = useQuery({ ...pageVersionQuery(file, shown), enabled: !!doc && (!!before || !newest) });
   const md = doc?.kind === 'markdown';
-  let marked: { count: number; html: string } | null = null;
+  let count: number | null = null;
+  let html: string | null = null;
   if (older.data != null && newer.data != null) {
     const page = parsePage(newer.data, md);
-    const count = markChanges(parsePage(older.data, md), page);
-    marked = { count, html: frameDoc(page, true) };
+    count = markChanges(parsePage(older.data, md), page);
+    if (named) html = frameDoc(page, true);
   }
-  const plain = newer.data == null || newest ? null : frameDoc(parsePage(newer.data, md));
+  if (!named && !newest && newer.data != null) html = frameDoc(parsePage(newer.data, md));
   if (!doc) return null;
-  const on = named;
   return {
     doc,
     list,
     shown,
     newest,
     before,
-    on,
-    count: marked?.count ?? null,
-    html: on ? (marked?.html ?? null) : plain,
-    failed: older.isError || newer.isError,
+    on: named,
+    count,
+    html,
+    failed: newer.isError || (named && older.isError),
   };
 }
 

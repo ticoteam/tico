@@ -19,6 +19,7 @@ import { MeetingPanel, EventPanel } from './EventPanel';
 import { MeetingMenu } from './MeetingMenu';
 import {
   alsoOf,
+  calendarFeeds,
   calendarSearch,
   clock,
   dayKey,
@@ -79,11 +80,12 @@ export function CalendarPage() {
   const view = search.view ?? 'week';
   const day = parseDay(search.date) ?? today;
   const range = rangeOf(view, view === 'list' ? today : day);
-  const events = useQuery(eventsQuery(range.from, range.to));
-  // List's own read (ListView reads the same): a refusal there is the page's fault, not "No meetings yet".
-  const past = useQuery({ ...meetingsQuery(search.review ?? 'live', search.q ?? ''), enabled: view === 'list' });
-  const finding = view === 'list' && !!search.q;
-  const found = useQuery({ ...findEventsQuery(search.q ?? ''), enabled: finding });
+  const feeds = calendarFeeds(search);
+  const q = search.q ?? '';
+  const events = useQuery({ ...eventsQuery(range.from, range.to), enabled: feeds.range });
+  const past = useQuery({ ...meetingsQuery(search.review ?? 'live', q), enabled: feeds.list });
+  const found = useQuery({ ...findEventsQuery(q), enabled: feeds.found });
+  const live = useQuery({ ...liveCallsQuery, enabled: feeds.live });
   const [adding, setAdding] = useState(false);
   const [calling, setCalling] = useState(false);
   const cards = useCards();
@@ -93,7 +95,8 @@ export function CalendarPage() {
     return next;
   };
   const list = events.data?.occurrences ?? [];
-  const listed = finding ? (found.data?.occurrences ?? []) : list;
+  const listEvents = feeds.found ? (found.data?.occurrences ?? []) : list;
+  const eventsPending = feeds.found ? found.isPending : feeds.range && events.isPending;
   const open = panelOf(search.panel);
   const openEvent = open?.kind === 'event'
     ? list.find((o) => o.occurrence_id === open.id) ?? found.data?.occurrences.find((o) => o.occurrence_id === open.id)
@@ -103,7 +106,7 @@ export function CalendarPage() {
 
   const panel =
     open?.kind === 'event' ? (
-      <EventPanel id={open.id} event={openEvent} pending={events.isPending || (finding && found.isPending)} now={now} onClose={close} />
+      <EventPanel id={open.id} event={openEvent} pending={eventsPending} now={now} onClose={close} />
     ) : open?.kind === 'meeting' ? (
       <MeetingPanel id={open.id} onClose={close} />
     ) : undefined;
@@ -120,11 +123,20 @@ export function CalendarPage() {
       </Link>
     </span>
   );
-  const grid =
-    view === 'month' ? (
+  const showAgenda = cards && (view === 'week' || view === 'month');
+  const grid = showAgenda ? null : view === 'month' ? (
       <MonthGrid days={range.days} weeks={range.weeks} month={day.getMonth()} list={list} now={now} today={today} at={at} />
     ) : view === 'list' ? (
-      <ListView list={listed} now={now} today={today} at={at} search={search} finding={finding && found.isPending} />
+      <ListView
+        list={listEvents}
+        now={now}
+        today={today}
+        at={at}
+        search={search}
+        past={past.data?.meetings ?? []}
+        live={live.data?.calls ?? []}
+        pending={eventsPending || (feeds.live && live.isPending)}
+      />
     ) : (
       <TimeGrid view={view} days={range.days} list={list} now={now} today={today} at={at} open={open?.kind === 'event' ? open.id : null} />
     );
@@ -197,9 +209,9 @@ export function CalendarPage() {
         onRetry={() => void read.refetch()}
         grid={grid}
         agenda={
-          view === 'week' ? (
+          showAgenda && view === 'week' ? (
             <WeekStrip days={range.days} day={day} list={list} now={now} today={today} at={at} />
-          ) : view === 'month' ? (
+          ) : showAgenda ? (
             <Agenda days={range.days} list={list} now={now} today={today} at={at} />
           ) : undefined
         }
@@ -594,14 +606,17 @@ const kept = (m: Meeting, h: (typeof HAS)[number]) =>
 
 const REVIEW_WORDS: Record<Review, string> = { live: 'Past', pending: 'Pending', dismissed: 'Dismissed', shared: 'Shared with me' };
 
-function ListView({ list, now, today, at, search, finding }: GridProps & { search: CalendarSearch; finding: boolean }) {
+function ListView({ list, now, today, at, search, past, live, pending }: GridProps & {
+  search: CalendarSearch;
+  past: readonly Meeting[];
+  live: readonly Call[];
+  pending: boolean;
+}) {
   const q = search.q ?? '';
   const has = hasOf(search.has);
   // Only past meetings are shared, pending or dismissed, and only they keep a summary: those filters show the Past alone.
   const pastOnly = !!search.review || has.length > 0;
   const kinds = new Set<string>(['event', ...alsoOf(search.also)]);
-  const live = useQuery(liveCallsQuery);
-  const past = useQuery(meetingsQuery(search.review ?? 'live', q));
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const fold = (k: string) => {
     const next = new Set(folded);
@@ -615,13 +630,13 @@ function ListView({ list, now, today, at, search, finding }: GridProps & { searc
   const words = q.toLowerCase();
   const calls = pastOnly
     ? []
-    : (live.data?.calls ?? []).filter((c) => c.state === 'live' && !booked.has(c.id) && (c.title || 'Call').toLowerCase().includes(words));
-  const done = (past.data?.meetings ?? []).filter((m) => has.every((h) => kept(m, h)));
+    : live.filter((c) => c.state === 'live' && !booked.has(c.id) && (c.title || 'Call').toLowerCase().includes(words));
+  const done = past.filter((m) => has.every((h) => kept(m, h)));
   const comingDays = groupBy(coming, (o) => dayKey(new Date(o.start)));
   const pastDays = groupBy(done, (m) => dayKey(new Date(m.started ?? m.created ?? 0)));
 
   if (!onNow.length && !calls.length && !coming.length && !done.length)
-    return past.isPending || finding ? null : (
+    return pending ? null : (
       <div className="page-body cl-body is-empty">
         <Empty
           title={search.review === 'shared' && !q && !has.length ? 'Nothing shared with you' : q || pastOnly || kinds.size > 1 ? 'Nothing found' : 'No meetings or calls yet'}

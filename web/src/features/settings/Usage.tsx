@@ -16,7 +16,7 @@ import { Meter, NO_ACCESS, PageOwner, Verb, isForbidden, useFaces, usd } from '.
 import {
   agentUsageWhereQuery,
   limitsQuery,
-  usageChoicesQuery,
+  usageQuery,
   usageWhereQuery,
   USAGE_FILTERS,
   type UsageRange,
@@ -165,7 +165,8 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
   const by = useQuery(usageWhereQuery(where, 'bot'));
   const faces = useFaces();
   const agents = useQuery(agentsQuery);
-  const modelOf = (slug: string) => (Array.isArray(agents.data) ? agents.data.find((a) => a.slug === slug)?.resolved_model_label : '') ?? '';
+  const modelOf = (id: string) =>
+    (Array.isArray(agents.data) ? agents.data.find((a) => a.id === id || a.slug === id)?.resolved_model_label : '') ?? '';
   const rows = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
   const top = Math.max(1e-9, ...rows.map(spent));
   if (rows.length === 0) return <Empty title="No runs in this range" />;
@@ -261,9 +262,19 @@ function ByModel({ where }: { where: UsageWhere }) {
 const FILTER_LABEL: Record<(typeof USAGE_FILTERS)[number], string> = { department: 'Team', model: 'Model' };
 
 /** The filter icon's card: a team or a model (ui/app/usage.ts useFilterMenu, cut down to these two). */
-function UsageFilter({ where, filter, onChange }: { where: UsageWhere; filter: Record<string, string>; onChange: (f: Record<string, string>) => void }) {
+function UsageFilter({
+  range,
+  group,
+  filter,
+  onChange,
+}: {
+  range: UsageRange;
+  group: 'bot' | 'model';
+  filter: Record<string, string>;
+  onChange: (f: Record<string, string>) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const choices = useQuery({ ...usageChoicesQuery(where), enabled: open });
+  const choices = useQuery({ ...usageQuery(range, group), select: (data) => data.choices, enabled: open });
   const on = USAGE_FILTERS.filter((k) => filter[k]).length;
   const c = choices.data;
   const values = (k: (typeof USAGE_FILTERS)[number]) => {
@@ -300,10 +311,11 @@ function UsageFilter({ where, filter, onChange }: { where: UsageWhere; filter: R
 export function UsagePage({ search }: { search: UsageSearch }) {
   const range = search.range ?? '7d';
   const limits = search.view === 'limits';
+  const group = search.by === 'model' ? 'model' : 'bot';
   const [filter, setFilter] = useState<Record<string, string>>({});
   const where: UsageWhere = { range, filter };
-  const main = useQuery(usageWhereQuery(where, 'bot'));
-  const days = useQuery(usageWhereQuery(where, 'day'));
+  const main = useQuery({ ...usageWhereQuery(where, group), enabled: !limits });
+  const days = useQuery({ ...usageWhereQuery(where, 'day'), enabled: !limits });
   const lim = useQuery({ ...limitsQuery, enabled: limits });
   const q = limits ? lim : main;
   const t = main.data?.totals;
@@ -323,7 +335,7 @@ export function UsagePage({ search }: { search: UsageSearch }) {
     <Dashboard
       title="Usage"
       path="/company/usage"
-      className="set-page"
+      className="set-page usage-page"
       after={view}
       actions={
         <>
@@ -340,7 +352,7 @@ export function UsagePage({ search }: { search: UsageSearch }) {
             <div className="u-tools">
               <Segmented label="Range" options={RANGES} value={range} onValueChange={(r) => go({ ...search, range: r, open: undefined })} />
               <span className="grow" />
-              <UsageFilter where={where} filter={filter} onChange={setFilter} />
+              <UsageFilter range={range} group={group} filter={filter} onChange={setFilter} />
             </div>
             {t && (
               <FiguresStrip
