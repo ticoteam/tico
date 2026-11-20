@@ -126,10 +126,11 @@ export function renameThread(id: string, title: string) {
   });
 }
 
-/** Archive a thread: its row leaves the list at once and goes to Archived at its foot. */
+/** Archive a thread: its row leaves the list once the server has taken it, and goes to Archived at its foot. */
 export async function archiveThread(id: string, archived: boolean) {
   const out = await write({
     key: threadKeys.list,
+    wait: archived,
     optimistic: (d: ThreadList | undefined) =>
       d && { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.filter((t) => t.id !== id || !archived) })) },
     send: (idempotencyKey) => api.patch<Thread>(`/api/v2/threads/${enc(id)}`, { archived }, { idempotencyKey }),
@@ -243,11 +244,13 @@ const mailLists = (box: string) => {
 const organize = (box: string, action: string, ids: string[], idempotencyKey: string) =>
   api.post('/api/v2/mail/messages/organize', { mailbox: box, action, ids }, { idempotencyKey });
 
-/** Archive a mail thread (Gmail takes it out of the inbox; nothing is deleted): its row leaves the list at once. */
+/** Archive a mail thread (Gmail takes it out of the inbox; nothing is deleted): its row leaves the list once the server has
+    taken it. */
 export function archiveMail(box: string, thread: string, letters: string[]) {
   return write({
     key: mailLists(box),
     // the mailbox page's lists and the menu's inbox (one page, no `pages`)
+    wait: true,
     optimistic: (d: MailList | { messages: Letter[] } | undefined) => {
       const keep = (list: Letter[]) => list.filter((l) => l.thread_id !== thread);
       if (!d) return d;
@@ -405,6 +408,7 @@ const refreshThread = (id: string) => {
 export async function removeMember(id: string, actor: string) {
   const out = await write({
     key: [memberKeys.list(id), threadKeys.view(id)],
+    wait: true,
     optimistic: (d: MemberList | Thread | undefined) => {
       if (!d) return d;
       if ('pages' in d) return { ...d, pages: d.pages.map((p) => ({ ...p, members: p.members.filter((m) => m.actor !== actor) })) };
@@ -467,6 +471,7 @@ export async function openEarlier(id: string) {
 export function deleteThread(id: string) {
   return write({
     key: threadKeys.list,
+    wait: true,
     optimistic: (d: ThreadList | undefined) =>
       d && { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.filter((t) => t.id !== id) })) },
     send: (idempotencyKey) => api.delete<{ deleted: string }>(`/api/v2/threads/${enc(id)}`, { idempotencyKey }),
@@ -509,6 +514,7 @@ const dropFrom = (id: string) => (d: BrowseList | undefined) =>
 export async function joinThread(id: string) {
   await write({
     key: queryClient.getQueriesData({ queryKey: ['threads', 'browse'] }).map(([k]) => k),
+    wait: true,
     optimistic: dropFrom(id),
     send: (idempotencyKey) => api.put(`/api/v2/threads/${enc(id)}/follow`, { notify: 'live' }, { idempotencyKey }),
   });
@@ -519,6 +525,7 @@ export async function joinThread(id: string) {
 export async function unarchiveThread(id: string) {
   await write({
     key: memberKeys.archived,
+    wait: true,
     optimistic: dropFrom(id),
     send: (idempotencyKey) => api.patch<Thread>(`/api/v2/threads/${enc(id)}`, { archived: false }, { idempotencyKey }),
   });
@@ -595,6 +602,7 @@ export function editLearned(id: string, text: string) {
 export function forgetLearned(id: string) {
   return write({
     key: learnedKeys.all,
+    wait: true,
     optimistic: (d: Learned | undefined) => mapEntries(d, (l) => l.filter((e) => e.id !== id)),
     send: (idempotencyKey) => api.delete(`/api/v2/assistant/learned/${enc(id)}`, { idempotencyKey }),
   });
@@ -612,6 +620,7 @@ export function addViewer(bot: string) {
 export function removeViewer(bot: string) {
   return write({
     key: learnedKeys.viewers,
+    wait: true,
     optimistic: (d: Viewers | undefined) => d && { ...d, bots: d.bots.filter((b) => b.bot !== bot && b.slug !== bot) },
     send: (idempotencyKey) => api.delete<Viewers>(`/api/v2/assistant/viewers/${enc(bot)}`, { idempotencyKey }),
     settle: (_d: Viewers | undefined, answer) => answer,

@@ -873,7 +873,7 @@ export async function updateRequester(task: string, id: string, input: Omit<Requ
   });
 }
 
-/** Remove a requester: gone at once, back if refused. */
+/** Remove a requester: gone once the server has taken it. */
 export async function removeRequester(task: string, id: string): Promise<void> {
   let from = -1;
   let at = -1;
@@ -881,6 +881,7 @@ export async function removeRequester(task: string, id: string): Promise<void> {
   const there = (cur: RequesterPages | undefined) => !!cur?.pages.some((p) => p.requesters.some((r) => r.id === id));
   await write<unknown>({
     key: requestersKey(task),
+    wait: true,
     optimistic: (cur: RequesterPages | undefined) =>
       withRows(cur, (rows, page) => {
         const i = rows.findIndex((r) => r.id === id);

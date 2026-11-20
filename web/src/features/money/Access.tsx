@@ -203,7 +203,7 @@ function MatePanel({ mate: t, acc, viewing, onGive }: { mate: Mate; acc: AccessL
               <div key={g.id} className="row prow" data-target={`grant:${g.id}`}>
                 <span className="row-title">{label}</span>
                 <span className="row-sub">{[g.status && g.status !== 'active' ? 'Paused' : '', g.expires_at ? `Until ${g.expires_at.slice(0, 10)}` : ''].filter(Boolean).join(', ')}</span>
-                {mine && <IconButton icon="close" label={`Take back ${label}`} size="sm" quiet onClick={() => void press('finance.takeAccess', { grant: g.id })} />}
+                {mine && <IconButton icon="close" label={`Take back ${label}`} size="sm" quiet onClick={() => press('finance.takeAccess', { grant: g.id })} />}
               </div>
             );
           })}

@@ -124,7 +124,7 @@ function LetIn({ canFull, onClose }: { canFull: boolean; onClose: () => void }) 
             Cancel
           </Button>
           {ticket ? (
-            <Button variant="primary" busy={busy} onClick={() => void go()}>
+            <Button variant="primary" busy={busy} onClick={() => go()}>
               Let in
             </Button>
           ) : (

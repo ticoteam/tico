@@ -59,7 +59,7 @@ function GatewayDialog({ v, onClose }: { v: GatewayView; onClose: () => void }) 
             <Button variant="quiet" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} onClick={() => void save()}>
+            <Button variant="primary" busy={busy} onClick={() => save()}>
               Save
             </Button>
           </>

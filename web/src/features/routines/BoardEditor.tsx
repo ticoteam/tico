@@ -189,7 +189,7 @@ export function BoardItemEditor({ routine, board, it, onDone, onClose }: { routi
       }
       foot={
         <>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             Save
           </Button>
           <Button variant="quiet" onClick={onDone}>

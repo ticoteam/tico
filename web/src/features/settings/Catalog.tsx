@@ -75,7 +75,7 @@ export function Tasks() {
                 label={`Take ${name(key)} off`}
                 size="sm"
                 quiet
-                onClick={() => void act('settings.roadmapLabels', { labels: r.labels.filter((l) => l !== key) })}
+                onClick={() => act('settings.roadmapLabels', { labels: r.labels.filter((l) => l !== key) })}
               />
             </div>
           ))
@@ -121,7 +121,7 @@ function AddField({ type, typeName }: { type: string; typeName: string }) {
           <Button variant="quiet" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!name.trim() || !about.trim()} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!name.trim() || !about.trim()} onClick={() => save()}>
             Add
           </Button>
         </>

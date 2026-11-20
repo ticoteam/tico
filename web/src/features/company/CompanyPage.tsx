@@ -52,7 +52,7 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
       empty={{
         title: 'Nothing is running yet',
         action: setup.can && (
-          <Button onClick={() => void setup.run()} data-target="company:setup">
+          <Button onClick={() => setup.run()} data-target="company:setup">
             Set up
           </Button>
         ),
@@ -233,7 +233,7 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
         {tasks.isError && (
           <p className="pt-none">
             Tasks did not load{' '}
-            <Button variant="quiet" onClick={() => void tasks.refetch()}>
+            <Button variant="quiet" onClick={() => tasks.refetch()}>
               Try again
             </Button>
           </p>

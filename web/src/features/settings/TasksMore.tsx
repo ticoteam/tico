@@ -40,7 +40,7 @@ function AddLine({ label, title, field, onAdd }: { label: string; title: string;
             <Button variant="quiet" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} disabled={!text.trim()} onClick={() => void add()}>
+            <Button variant="primary" busy={busy} disabled={!text.trim()} onClick={() => add()}>
               Add
             </Button>
           </>

@@ -30,8 +30,16 @@ export interface Write<T> {
   revert?: (current: any, error: unknown) => any;
   /** While offline: hold it and send on return, or refuse it (the default; platforms.md 7 says which is which). */
   offline?: 'hold' | 'refuse';
+  /**
+   * Show the change only once the server has taken it: for a change that takes away what the person pressed (a remove,
+   * a dismiss, a decision that takes its row out of the list). The row and its control stay, busy, until the answer,
+   * and a refusal is said beside them rather than in a row that has gone.
+   */
+  wait?: boolean;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+const conflict = (err: unknown) => typeof err === 'object' && err !== null && (err as { status?: unknown }).status === 409;
 
 const keysOf = (key: QueryKey | QueryKey[]): QueryKey[] =>
   Array.isArray(key[0]) ? (key as QueryKey[]) : [key as QueryKey];
@@ -61,22 +69,23 @@ export function refetchQuiet(): void {
 }
 
 /**
- * Show a change first, send it after, and take it back if the server refuses it. Offline, a held change stays on
- * screen and is sent when the stream is back; a refused one throws NeedsConnection and shows nothing.
- * Resolves with the server's answer; rejects with its refusal, after reverting.
+ * Show a change first, send it after, and take it back if the server refuses it (with `wait`, show it once the server
+ * has taken it). Offline, a held change stays on screen and is sent when the stream is back; a refused one throws
+ * NeedsConnection and shows nothing. Resolves with the server's answer; rejects with its refusal, after reverting.
  */
 export async function write<T>(w: Write<T>): Promise<T> {
   const holdable = w.offline === 'hold';
   if (isOffline() && !holdable) throw new NeedsConnection();
   const keys = keysOf(w.key);
   const idem = newId();
-  const shown = keys.map((queryKey) => {
+  const show = (queryKey: QueryKey) => {
     // A read in flight would land over the change: cancel it (the stream or a later read brings it back).
     void queryClient.cancelQueries({ queryKey });
     const before = queryClient.getQueryData(queryKey);
     const after = queryClient.setQueryData(queryKey, w.optimistic);
     return { queryKey, before, after };
-  });
+  };
+  const shown = w.wait ? [] : keys.map(show);
   const send = () => w.send(idem);
   let answer: T;
   try {
@@ -93,11 +102,14 @@ export async function write<T>(w: Write<T>): Promise<T> {
       else if (queryClient.getQueryData(queryKey) === after) queryClient.setQueryData(queryKey, before);
       else void queryClient.invalidateQueries({ queryKey });
       // Changed meanwhile by someone else (409): read the truth.
-      if (typeof err === 'object' && err !== null && (err as { status?: unknown }).status === 409) void queryClient.invalidateQueries({ queryKey });
+      if (conflict(err)) void queryClient.invalidateQueries({ queryKey });
     }
+    if (w.wait && conflict(err)) for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
     throw err;
   }
-  for (const { queryKey } of shown) {
+  for (const queryKey of keys) {
+    // Only what was read: a change shown after the answer never makes up a list that was not on screen.
+    if (w.wait && queryClient.getQueryData(queryKey) !== undefined) show(queryKey);
     if (w.settle) queryClient.setQueryData(queryKey, (current: unknown) => (w.settle as NonNullable<Write<T>['settle']>)(current, answer));
     // No topic brings this area's echo: read it again (README, areas with no live topic).
     if (isQuiet(queryKey)) void queryClient.invalidateQueries({ queryKey });

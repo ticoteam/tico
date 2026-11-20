@@ -85,7 +85,7 @@ export function CallPage({ room }: CallPageProps) {
           <Empty title="You don't have access to this call" icon="lock" />
         ) : (
           <Empty title="Call did not load" icon="alert">
-            <Button onClick={() => void call.refetch()}>Try again</Button>
+            <Button onClick={() => call.refetch()}>Try again</Button>
           </Empty>
         )}
       </main>
@@ -108,7 +108,7 @@ export function CallPage({ room }: CallPageProps) {
     <Head c={c} live={on && !out} lead={lead}>
       {/* the desktop app moves a call it is in to its own small window */}
       {on && !out && c?.provider !== 'google_meet' && desktop() && (
-        <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => void press('shell.openCallWindow', { id: room })} />
+        <IconButton icon="shrink" label={SMALL_WINDOW} onClick={() => press('shell.openCallWindow', { id: room })} />
       )}
       <IconButton icon="link" label="Copy link" onClick={copyLink} />
       {/* an agent in, and End for whoever started it */}
@@ -190,7 +190,7 @@ function SmallWindowControls() {
         <MenuItem label="Keep on top" on={onTop} onSelect={flip} />
         <MenuItem label="Copy link" onSelect={copyLink} />
       </PageMore>
-      <IconButton icon="expand" label="Back to the app" onClick={() => void press('calls.backToApp', {})} />
+      <IconButton icon="expand" label="Back to the app" onClick={() => press('calls.backToApp', {})} />
     </>
   );
 }
@@ -226,7 +226,7 @@ function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Cal
     return (
       <div className="win-stage">
         <Empty title={trouble.title} text={trouble.text} icon={trouble.icon}>
-          <Button onClick={() => void (phase === 'reconnecting' ? press('calls.leave', {}) : press('calls.join', { id: room }))}>{trouble.act}</Button>
+          <Button onClick={() => (phase === 'reconnecting' ? press('calls.leave', {}) : press('calls.join', { id: room }))}>{trouble.act}</Button>
         </Empty>
       </div>
     );
@@ -372,7 +372,7 @@ function Controls({ room, c, s, phase, isTico, onBack }: { room: string; c: Call
       <footer className="win-ctl">
         <span className="grow" />
         {(phase === 'idle' || phase === 'joining') && (
-          <Button variant="primary" className="cc-leave" icon="call" busy={phase === 'joining'} onClick={() => void press('calls.join', { id: room })}>
+          <Button variant="primary" className="cc-leave" icon="call" busy={phase === 'joining'} onClick={() => press('calls.join', { id: room })}>
             Join
           </Button>
         )}
@@ -422,7 +422,7 @@ function Controls({ room, c, s, phase, isTico, onBack }: { room: string; c: Call
           {isTico ? 'Back to Tico' : 'Back to bar'}
         </Button>
       )}
-      <Button variant="primary" className="cc-leave" onClick={() => void press('calls.leave', {})}>
+      <Button variant="primary" className="cc-leave" onClick={() => press('calls.leave', {})}>
         Leave
       </Button>
     </footer>
@@ -486,10 +486,10 @@ function Ended({ room, small, meeting }: { room: string; small: boolean; meeting
                         </>
                       ) : (
                         <>
-                          <Button className="btn-sm" onClick={() => void press('calls.makeItemTask', input)}>
+                          <Button className="btn-sm" onClick={() => press('calls.makeItemTask', input)}>
                             Create task
                           </Button>
-                          <IconButton icon="close" label="Hide" size="sm" quiet onClick={() => void press('calls.hideItem', input)} />
+                          <IconButton icon="close" label="Hide" size="sm" quiet onClick={() => press('calls.hideItem', input)} />
                         </>
                       )}
                     </li>

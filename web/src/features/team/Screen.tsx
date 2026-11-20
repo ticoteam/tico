@@ -47,7 +47,7 @@ export function ScreenTools({ c, mode, onMode }: { c: Computer; mode: ScreenMode
   return (
     <>
       {allowed === 'control' && <Segmented label="Mode" options={MODES} value={mode} onValueChange={onMode} />}
-      <IconButton icon="expand" size="sm" quiet label="Full screen" onClick={() => void full.run({ computer: c.id })} />
+      <IconButton icon="expand" size="sm" quiet label="Full screen" onClick={() => full.run({ computer: c.id })} />
     </>
   );
 }
@@ -64,7 +64,7 @@ export function Screen({ c, mode }: { c: Computer; mode: ScreenMode }) {
   if (!allowed)
     return (
       <Empty icon="computer" title="The screen is off">
-        <Button variant="primary" busy={setScreen.pending} onClick={() => void setScreen.run({ computer: c.id, mode: 'control' })}>
+        <Button variant="primary" busy={setScreen.pending} onClick={() => setScreen.run({ computer: c.id, mode: 'control' })}>
           Turn on
         </Button>
       </Empty>

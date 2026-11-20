@@ -211,10 +211,10 @@ export function BrowserDialog({ tool, account, title, onClose, onDone }: Browser
       title={title}
       actions={
         <>
-          <Button busy={take.pending || give.pending} onClick={() => void toggle()}>
+          <Button busy={take.pending || give.pending} onClick={() => toggle()}>
             {control ? 'Give back' : 'Take control'}
           </Button>
-          <Button variant="primary" busy={finishing} onClick={() => void done()}>
+          <Button variant="primary" busy={finishing} onClick={() => done()}>
             Done
           </Button>
         </>
@@ -255,7 +255,7 @@ export function BrowserDialog({ tool, account, title, onClose, onDone }: Browser
         >
           <Field label="Type" labelHidden placeholder="Type" value={text} onValueChange={setText} autoComplete="off" autoFocus />
           {KEYS.map((k) => (
-            <Button key={k} onClick={() => void send({ kind: 'key', key: k })}>
+            <Button key={k} onClick={() => send({ kind: 'key', key: k })}>
               {k}
             </Button>
           ))}

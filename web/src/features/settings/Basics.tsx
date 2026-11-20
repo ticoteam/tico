@@ -167,7 +167,7 @@ function OwnerDialog({ p, ownerName, onClose }: { p: AccessPerson; ownerName: st
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => go()}>
             Make owner
           </Button>
         </>
@@ -212,7 +212,7 @@ function EmailDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => go()}>
             Change email
           </Button>
         </>
@@ -483,7 +483,7 @@ function SyncForm({ v }: { v: DirectoryView }) {
               autoComplete="off"
             />
           ))}
-          <Button busy={busy} disabled={!typed} onClick={() => void save(source)}>
+          <Button busy={busy} disabled={!typed} onClick={() => save(source)}>
             Save key
           </Button>
         </div>
@@ -512,7 +512,7 @@ function SyncForm({ v }: { v: DirectoryView }) {
               <Button variant="quiet" onClick={() => setPreview(null)}>
                 Cancel
               </Button>
-              <Button variant="primary" busy={busy} disabled={!any || (needs && !reviewed)} onClick={() => void apply()}>
+              <Button variant="primary" busy={busy} disabled={!any || (needs && !reviewed)} onClick={() => apply()}>
                 Apply
               </Button>
             </>
@@ -581,7 +581,7 @@ function Tokens() {
                 <Button variant="quiet" onClick={() => setMaking(false)}>
                   Cancel
                 </Button>
-                <Button variant="primary" busy={busy} disabled={!label.trim()} onClick={() => void make()}>
+                <Button variant="primary" busy={busy} disabled={!label.trim()} onClick={() => make()}>
                   Make
                 </Button>
               </>
@@ -650,7 +650,7 @@ function Tokens() {
         description="Copy it now. It is not shown again."
         actions={
           <>
-            <Button variant="quiet" onClick={() => void navigator.clipboard?.writeText(line)}>
+            <Button variant="quiet" onClick={() => navigator.clipboard?.writeText(line)}>
               Copy line
             </Button>
             <Button

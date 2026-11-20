@@ -324,10 +324,11 @@ export function linkTask(id: string, url: string, title?: string) {
   });
 }
 
-/** Remove a link: it leaves the task at once, and the server's list replaces the task's. */
+/** Remove a link: it leaves the task once the server has taken it, and the server's list replaces the task's. */
 export function dropLink(id: string, link: string) {
   return write<LinksAnswer>({
     key: keys.tasks.detail(id),
+    wait: true,
     optimistic: (cur: TaskData | undefined) => withLinks(cur, (was) => was.filter((l) => l.id !== link)),
     send: (idem) => api.post<LinksAnswer>(`${taskPath(id)}/links`, { remove: link }, { idempotencyKey: idem }),
     settle: (cur: TaskData | undefined, answer) => withLinks(cur, () => answer.links),

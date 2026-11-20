@@ -291,7 +291,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     <MessageBones />
   ) : timeline.isError && !timeline.data ? (
     <Empty icon="alert" title="This chat did not load">
-      <Button onClick={() => void timeline.refetch()}>Try again</Button>
+      <Button onClick={() => timeline.refetch()}>Try again</Button>
     </Empty>
   ) : (
     list

@@ -134,7 +134,7 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
       empty={{
         title: 'No source connected',
         action: (
-          <Button variant="primary" onClick={() => void press('finance.setTab', { tab: 'sources' })}>
+          <Button variant="primary" onClick={() => press('finance.setTab', { tab: 'sources' })}>
             Add source
           </Button>
         ),

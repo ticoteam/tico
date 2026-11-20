@@ -205,6 +205,7 @@ export function archiveDoc(id: string, version: number, archived: boolean) {
   const from = archived ? docsListQuery.queryKey : archivedDocsQuery.queryKey;
   return write<InternalDocResult>({
     key: from,
+    wait: true,
     optimistic: (cur: DocPages | undefined) => cur && mapDocRows(cur, (docs) => docs.filter((d) => d.id !== id)),
     send: (idempotencyKey) => api.patch<InternalDocResult>(`/api/v2/docs/${enc(id)}`, { version, archived }, { idempotencyKey }),
   }).then(async (r) => {
@@ -256,6 +257,7 @@ export function editSource(id: string, change: SourceEdit) {
   const keep = Object.fromEntries(Object.entries(change).filter(([k, v]) => v != null && k !== 'archived'));
   return write<unknown>({
     key: sourcesQuery.queryKey,
+    wait: !!change.archived,
     optimistic: (cur: DocSourceList | undefined) =>
       cur && {
         ...cur,
@@ -456,6 +458,7 @@ const dropProposal = (id: string) => (cur: Proposal[] | undefined) => cur?.filte
 export function approveProposal(id: string, acknowledged = false) {
   return write<unknown>({
     key: proposalsQuery.queryKey,
+    wait: true,
     optimistic: dropProposal(id),
     send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/approve`, acknowledged ? { acknowledged: true } : {}, { idempotencyKey }),
   });
@@ -520,6 +523,7 @@ export function proposeSkill(input: { name: string; text: string; note?: string;
 export function declineProposal(id: string, reason: string) {
   return write<unknown>({
     key: proposalsQuery.queryKey,
+    wait: true,
     optimistic: dropProposal(id),
     send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/decline`, { reason }, { idempotencyKey }),
   });
@@ -621,6 +625,7 @@ export function replaceKey(tool: string, key: string, value: string) {
 export function removeKey(tool: string, key: string) {
   return write<unknown>({
     key: ['tools', 'api', tool],
+    wait: true,
     optimistic: withKeys((keys) => keys.filter((k) => k.id !== key)),
     send: (idempotencyKey) => api.delete(`/api/v2/api-tools/${enc(tool)}/keys/${enc(key)}`, { idempotencyKey }),
   });
@@ -697,6 +702,7 @@ export const replaceLogin = (tool: string, account: string, change: WebsiteAccou
 export function setAccess(tool: string, subject: string, level: 'read' | 'read_write' | 'none') {
   return write<unknown>({
     key: ['tools', 'api', tool],
+    wait: level === 'none',
     optimistic: (cur: ApiTool | undefined) =>
       cur && {
         ...cur,
@@ -764,6 +770,7 @@ export function saveSetting(tool: string, setting: { id?: string; name: string; 
 export function removeSetting(tool: string, id: string) {
   return write<unknown>({
     key: ['tools', 'api', tool],
+    wait: true,
     optimistic: withSettings((list) => list.filter((s) => s.id !== id)),
     send: (idempotencyKey) => api.delete(`/api/v2/api-tools/${enc(tool)}/settings/${enc(id)}`, { idempotencyKey }),
   });
@@ -948,6 +955,7 @@ export const grantKey = (key: string, subject: string) =>
 export const revokeKey = (key: string, grant: string) =>
   write<unknown>({
     key: vaultQuery.queryKey,
+    wait: true,
     optimistic: onKey(key, (k) => ({ ...k, grants: k.grants.filter((g) => g.id !== grant) })),
     send: (idempotencyKey) => api.post(`/api/v2/credentials/${enc(key)}/grants/${enc(grant)}/revoke`, {}, { idempotencyKey }),
   });
@@ -955,6 +963,7 @@ export const deleteKey = (key: string) =>
   andList(
     write<unknown>({
       key: vaultQuery.queryKey,
+      wait: true,
       optimistic: onKeys((keys) => keys.filter((k) => k.id !== key)),
       send: (idempotencyKey) => api.delete(`/api/v2/credentials/${enc(key)}`, { idempotencyKey }),
     }),
@@ -1699,6 +1708,7 @@ export const skillDetailUsageQuery = (name: string) =>
 export function removeInstall(name: string, install: string) {
   return write<unknown>({
     key: [skillQuery(name).queryKey, skillDetailUsageQuery(name).queryKey],
+    wait: true,
     optimistic: (cur: { installs?: Array<{ id: string }> } | undefined) => cur && { ...cur, installs: cur.installs?.filter((i) => i.id !== install) },
     send: (idempotencyKey) => api.delete(`/api/v2/skills/installs/${enc(install)}`, { idempotencyKey }),
   });
@@ -1708,6 +1718,7 @@ export function removeInstall(name: string, install: string) {
 export function withdrawProposal(id: string) {
   return write<unknown>({
     key: proposalsQuery.queryKey,
+    wait: true,
     optimistic: dropProposal(id),
     send: (idempotencyKey) => api.post(`/api/v2/skills/proposals/${enc(id)}/withdraw`, {}, { idempotencyKey }),
   });

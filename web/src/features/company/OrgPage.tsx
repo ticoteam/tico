@@ -63,7 +63,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
       {...head}
       actions={
         <>
-          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void add.run({})} data-target="org:add">
+          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => add.run({})} data-target="org:add">
             Add teammate
           </Button>
           <PageOwner page="strategy" />
@@ -236,12 +236,12 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
       title={name}
       target={`mate:${who}`}
       lead={<Face id={who} />}
-      actions={agent && <IconButton icon="call" label={`Call ${name}`} quiet onClick={() => void call.run({ with: [who] })} />}
+      actions={agent && <IconButton icon="call" label={`Call ${name}`} quiet onClick={() => call.run({ with: [who] })} />}
       onClose={onClose}
       foot={
         <>
           {targets.length > 0 && (
-            <Button variant="primary" busy={move.pending} disabled={to === home} onClick={() => void move.run({ who, from: home, to })}>
+            <Button variant="primary" busy={move.pending} disabled={to === home} onClick={() => move.run({ who, from: home, to })}>
               Move
             </Button>
           )}
@@ -346,7 +346,7 @@ function NewFactory({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       foot={
         <>
-          <Button variant="primary" busy={make.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={make.pending} onClick={() => save()}>
             Save
           </Button>
           <Button variant="quiet" onClick={onClose}>

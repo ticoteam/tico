@@ -54,7 +54,7 @@ export function ThreadHead({ id }: { id: string }) {
               <ThreadCallHead thread={id} members={people} canPost={t.me?.can_post !== false} />
               {/* The server's archive clears a thread for every member: a manager's call on a team or named thread, never
                   on a DM or group DM (until a per-person archive exists). */}
-              {manage && !isDm(t) && <IconButton icon="archive" label="Archive" onClick={() => void press('threads.archive', { thread: id })} />}
+              {manage && !isDm(t) && <IconButton icon="archive" label="Archive" onClick={() => press('threads.archive', { thread: id })} />}
             </>
           )
         }

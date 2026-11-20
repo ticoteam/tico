@@ -19,7 +19,7 @@ export function AssetRecovery() {
         path="/reload"
         fault="alert"
         actions={
-          <Button variant="primary" onClick={() => void run('notices.reload', {}, { via: 'click' })}>
+          <Button variant="primary" onClick={() => run('notices.reload', {}, { via: 'click' })}>
             Reload
           </Button>
         }

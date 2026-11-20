@@ -264,7 +264,7 @@ async function probe(reconnect: boolean): Promise<boolean> {
   let who: SignedIn | null = null;
   let refused: ApiError | null = null;
   try {
-    who = adaptMe(await api.get<GetMeResponse>('/api/v2/me'));
+    who = adaptMe(await api.get<GetMeResponse>('/api/v2/me', { once: true }));
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) refused = err;
   }

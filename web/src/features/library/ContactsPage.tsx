@@ -189,7 +189,7 @@ function ContactLine({ r, search, selected }: { r: ContactRow; search: ContactsS
 function AddContact({ type, kind, onClose }: { type: string; kind: string; onClose: () => void }) {
   const [name, setName] = useState('');
   const [busy, go] = useGo(onClose);
-  const add = () => void go('contacts.add', { type, name: name.trim() }, 'Not added');
+  const add = () => go('contacts.add', { type, name: name.trim() }, 'Not added');
   return (
     <Dialog
       open

@@ -249,7 +249,7 @@ function Synced({ last, ok }: { last?: string | null; ok?: string | null }) {
 /** An importer, for the owner: on or off, the computer that runs it, and where that computer keeps its credentials. */
 function ImporterRow({ i, computers }: { i: MeetingImporter; computers: MeetingImporterComputer[] }) {
   const options = computers.map((c) => ({ value: c.id, label: c.label, meta: c.online ? undefined : 'Offline' }));
-  const set = (on: boolean, computer?: string) => void press('calls.setImporter', { source: i.source, on, ...(computer ? { computer } : {}) });
+  const set = (on: boolean, computer?: string) => press('calls.setImporter', { source: i.source, on, ...(computer ? { computer } : {}) });
   return (
     <li className="call-src-row" data-target={`importer:${i.source}`}>
       <b>{i.name}</b>
@@ -299,7 +299,7 @@ function GranolaRow({ g, onConnect }: { g: GranolaStatus; onConnect: () => void 
       {(g.connected || g.needs_signin) && g.last_error && <span className="call-src-err">{g.last_error}</span>}
       <span className="call-src-go">
         {g.connected && !g.needs_signin && (
-          <Button className="btn-sm" busy={syncing || g.syncing} onClick={() => void sync()}>
+          <Button className="btn-sm" busy={syncing || g.syncing} onClick={() => sync()}>
             Sync now
           </Button>
         )}
@@ -470,7 +470,7 @@ function GranolaSignIn({ done }: { done: () => void }) {
             className="btn-sm"
             icon="copy"
             onClick={() =>
-              void navigator.clipboard?.writeText(flow.code).then(
+              navigator.clipboard?.writeText(flow.code).then(
                 () => toast({ text: 'Code copied' }),
                 () => toast({ text: "Couldn't copy", kind: 'failed' }),
               )

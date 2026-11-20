@@ -159,6 +159,7 @@ export async function changeEvent(id: string, f: EventFields): Promise<CalendarO
 export async function removeEvent(id: string): Promise<void> {
   await write({
     key: shownRanges(true),
+    wait: true,
     optimistic: (d: CalendarEvents | CalendarFound | undefined) => mapEvents(d, (l) => l.filter((x) => x.occurrence_id !== id)),
     send: (idempotencyKey) => api.delete<void>(`/api/v2/calendar/events/${enc(id)}?scope=this`, { idempotencyKey }),
   });
@@ -346,6 +347,7 @@ const mapSection = (d: MeetingItems | undefined, section: MeetingItem['section']
 export function dismissItem(meeting: string, item: MeetingItem): Promise<MeetingItem> {
   return write({
     key: meetKeys.items(meeting),
+    wait: true,
     optimistic: (d: MeetingItems | undefined) => mapSection(d, item.section, (l) => l.filter((x) => x.id !== item.id)),
     send: (idempotencyKey) =>
       api.post<MeetingItem>(`/api/v2/meetings/${enc(meeting)}/items/${enc(item.id)}`, { status: 'dismissed', version: item.version }, { idempotencyKey }),
@@ -608,6 +610,7 @@ export async function deleteMeeting(id: string): Promise<void> {
   const lists = queryClient.getQueriesData({ queryKey: meetKeys.list }).map(([k]) => k);
   await write({
     key: lists.length ? lists : [meetKeys.list],
+    wait: true,
     optimistic: (d: MeetingList | undefined) => d && { ...d, meetings: d.meetings.filter((m) => m.id !== id), count: Math.max(0, d.count - 1) },
     send: (idempotencyKey) => api.post<{ ok: boolean }>(`/api/v2/meetings/${enc(id)}/delete`, {}, { idempotencyKey }),
   });
@@ -680,6 +683,7 @@ export async function moveCall(id: string, start: Date, minutes: number): Promis
 export async function cancelCall(id: string): Promise<Call> {
   const call = await write({
     key: upcomingKey,
+    wait: true,
     optimistic: (d: CallUpcoming | undefined) => d && { calls: d.calls.filter((c) => c.id !== id) },
     send: (idempotencyKey) => api.post<Call>(`/api/v2/calls/${enc(id)}/end`, {}, { idempotencyKey }),
   });
@@ -707,10 +711,11 @@ export async function clearStage(id: string): Promise<void> {
   if (call) queryClient.setQueryData(callKeys.one(id), call);
 }
 
-/** Take an agent out of a call at once (DELETE /v2/calls/{id}/bots/{bot}); `addToCall` brings it back. */
+/** Take an agent out of a call once the server has (DELETE /v2/calls/{id}/bots/{bot}); `addToCall` brings it back. */
 export async function takeOutAgent(id: string, bot: string): Promise<void> {
   const call = await write({
     key: callKeys.one(id),
+    wait: true,
     optimistic: (c: Call | undefined) => c && { ...c, bots: c.bots.filter((b) => b !== bot) },
     send: (idempotencyKey) => api.delete<Call>(`/api/v2/calls/${enc(id)}/bots/${enc(bot)}`, { idempotencyKey }, {}),
   });

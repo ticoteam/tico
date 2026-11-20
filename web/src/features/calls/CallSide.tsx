@@ -83,7 +83,7 @@ function Person({ actor, inCall, out }: { actor: string; inCall: boolean; out?: 
       <Face actor={actor} size={22} />
       <span>{nameOf(actor)}</span>
       <em>{inCall ? 'In the call' : 'Left'}</em>
-      {out && <IconButton icon="close" label={`Take ${nameOf(actor)} out`} size="sm" quiet onClick={() => void takeOut(out)} />}
+      {out && <IconButton icon="close" label={`Take ${nameOf(actor)} out`} size="sm" quiet onClick={() => takeOut(out)} />}
     </span>
   );
 }

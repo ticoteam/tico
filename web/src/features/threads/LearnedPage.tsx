@@ -177,7 +177,7 @@ function EditLine({ e, onClose }: { e: LearnedEntry; onClose: () => void }) {
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!words || words.length > MAX || words === e.text} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!words || words.length > MAX || words === e.text} onClick={() => save()}>
             Save
           </Button>
         </>
@@ -232,7 +232,7 @@ function AddReader({ have, onClose }: { have: Viewers | undefined; onClose: () =
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!picked} onClick={() => void add()}>
+          <Button variant="primary" disabled={!picked} onClick={() => add()}>
             Add
           </Button>
         </>

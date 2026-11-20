@@ -60,7 +60,7 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
     const r = await run('task.archivePage', { task, page: file, archived }, { via: 'click' });
     if (!r.ok) return void toast(failedToast(r));
     if (!archived) return;
-    toast({ text: 'Archived', name, action: { label: 'Undo', run: () => void run('task.archivePage', { task, page: file, archived: false }, { via: 'click' }) } });
+    toast({ text: 'Archived', name, action: { label: 'Undo', run: () => void run('task.archivePage', { task, page: file, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
     await toDetails();
   };
 
@@ -118,7 +118,7 @@ function DeletePage({ task, page, name, onClose, onDeleted }: { task: string; pa
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={busy} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={busy} onClick={() => go()}>
             Delete
           </Button>
         </>

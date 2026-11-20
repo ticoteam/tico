@@ -281,7 +281,7 @@ function BudgetPanel({
                 Vendor budget
               </Button>
             )}
-            <Button variant="quiet" onClick={() => void press('budget.removeRow', { budget: b.id })}>
+            <Button variant="quiet" onClick={() => press('budget.removeRow', { budget: b.id })}>
               Remove
             </Button>
             {adding && pnlLine && <LineBudgetDialog line={pnlLine} parent={b} onOpenChange={setAdding} />}

@@ -55,7 +55,7 @@ function AddPerson({ v }: { v: AccessFull }) {
           <Button variant="quiet" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void add()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => add()}>
             {invites ? 'Invite' : 'Add'}
           </Button>
         </>

@@ -275,7 +275,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       fill={
         manage &&
         (!t?.keys.length || problem) && (
-          <Button variant="primary" busy={connecting} disabled={connecting} onClick={() => void connect()} data-target={`tool-connect:api:${id}`}>
+          <Button variant="primary" busy={connecting} disabled={connecting} onClick={() => connect()} data-target={`tool-connect:api:${id}`}>
             {t?.keys.length && !oauth ? 'Replace key' : 'Connect'}
           </Button>
         )
@@ -350,7 +350,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       connectsActions={
         manage && (
           <>
-            {!!t?.keys.length && <IconButton icon="refresh" label="Check now" size="sm" onClick={() => void press('tools.check', { tool: id }, 'Not checked')} />}
+            {!!t?.keys.length && <IconButton icon="refresh" label="Check now" size="sm" onClick={() => press('tools.check', { tool: id }, 'Not checked')} />}
             {!oauth && <IconButton icon="plus" label="Add key" size="sm" onClick={() => setKeyFor('new')} />}
           </>
         )
@@ -422,7 +422,7 @@ function KeyDialog({ tool, name, keyRow, onClose }: { tool: string; name: string
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!value.trim() || busy} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!value.trim() || busy} onClick={() => save()}>
             {keyRow ? 'Replace' : 'Connect'}
           </Button>
         </>
@@ -464,7 +464,7 @@ function WebsiteView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const editable = (a: Account) => a.can_manage && a.kind === 'shared';
   const accounts = t?.accounts ?? [];
   const many = accounts.length > 1;
-  const give = (a: Account, subject: string) => void press('tools.setAccountAccess', { tool: id, account: a.id, subject, on: true }, 'Not added');
+  const give = (a: Account, subject: string) => press('tools.setAccountAccess', { tool: id, account: a.id, subject, on: true }, 'Not added');
   const choices = (a: Account) => {
     const has = new Set(a.access.map((p) => p.subject));
     return [
@@ -610,7 +610,7 @@ function PlainView({ row, kind, problem }: { row: ToolIndexRow | undefined; kind
   const returned = problem && (
     <>
       <p className="t-read">{problem}</p>
-      {!github && row?.kind === 'github' && row.status.tone === 'wait' && <Button onClick={() => void press('tools.installGithub', {})}>Install</Button>}
+      {!github && row?.kind === 'github' && row.status.tone === 'wait' && <Button onClick={() => press('tools.installGithub', {})}>Install</Button>}
     </>
   );
   return (

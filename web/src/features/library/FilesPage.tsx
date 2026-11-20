@@ -165,7 +165,7 @@ function FilesList({ search }: { search: FilesSearch }) {
               {found.data && !found.data.results.length && <Empty title="Nothing matches" />}
               {found.isLoadingError && (
                 <Empty title="The search did not load" icon="alert">
-                  <Button onClick={() => void found.refetch()}>Try again</Button>
+                  <Button onClick={() => found.refetch()}>Try again</Button>
                 </Empty>
               )}
             </Section>
@@ -239,7 +239,7 @@ function UploadDialog({ files, onClose }: { files: File[]; onClose: () => void }
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!task.trim() || busy} onClick={() => void go()}>
+          <Button variant="primary" busy={busy} disabled={!task.trim() || busy} onClick={() => go()}>
             Add
           </Button>
         </>

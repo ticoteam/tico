@@ -201,7 +201,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
         <>
           {p?.owner && <OwnerButton actor={p.owner} />}
           {held?.move && keepId && p && (
-            <Button onClick={() => void send({ pipeline: p.id, stage: keepId })} disabled={busy}>
+            <Button onClick={() => send({ pipeline: p.id, stage: keepId })} disabled={busy}>
               Move tasks
             </Button>
           )}
@@ -213,7 +213,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
               </Button>
             </>
           ) : (
-            <Button variant="primary" onClick={() => void send()} disabled={!ready || busy} busy={busy} data-target="pipeline:save">
+            <Button variant="primary" onClick={() => send()} disabled={!ready || busy} busy={busy} data-target="pipeline:save">
               Save
             </Button>
           )}

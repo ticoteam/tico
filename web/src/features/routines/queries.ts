@@ -202,6 +202,7 @@ export function restoreVersion(id: string, n: number) {
 export function discardVersion(id: string, n: number) {
   return write<unknown>({
     key: versionsQuery(id).queryKey,
+    wait: true,
     optimistic: (list: Version[] | undefined) => list?.filter((v) => v.n !== n),
     send: (idempotencyKey) => api.delete(`/api/v2/automations/${enc(id)}/versions/${n}`, { idempotencyKey }),
   });
@@ -405,6 +406,7 @@ export async function rotateHook(id: string): Promise<string> {
 export function removeHook(id: string) {
   return write<unknown>({
     key: hooksQuery.queryKey,
+    wait: true,
     optimistic: (list: Hook[] | undefined) => list?.filter((h) => h.id !== id),
     send: (idempotencyKey) => api.post(`/api/v2/triggers/${enc(id)}/delete`, {}, { idempotencyKey }),
   });
@@ -527,6 +529,7 @@ export function satisfyDue(id: string, dueOn?: string) {
 export function removeDue(id: string) {
   return write<unknown>({
     key: dueQuery.queryKey,
+    wait: true,
     optimistic: (list: DueDate[] | undefined) => list?.filter((d) => d.id !== id),
     send: (idempotencyKey) => api.post(`/api/v2/rule-due/${enc(id)}/remove`, {}, { idempotencyKey }),
   });
@@ -666,6 +669,7 @@ export function decideOrgRule(rule: Pick<OrgRule, 'id' | 'version' | 'status'>, 
   const from = orgRulesQuery(rule.status === 'suggested' ? 'suggested' : 'active').queryKey;
   return write<unknown>({
     key: verb === 'accept' ? [from, orgRulesQuery('active').queryKey] : from,
+    wait: true,
     optimistic: (list: OrgRule[] | undefined) => list?.filter((r) => r.id !== rule.id),
     send: (idempotencyKey) =>
       api.post(`/api/v2/rules/${enc(rule.id)}/${verb}`, { version: rule.version, ...(who?.length ? { who: someone(scopeOf(who)) } : {}) }, { idempotencyKey }),
@@ -721,6 +725,7 @@ export function decideStageRule(rule: Pick<StageRule, 'id' | 'revision' | 'statu
   const from = stageRulesQuery(rule.status === 'suggested' ? 'suggested' : 'active').queryKey;
   return write<unknown>({
     key: verb === 'accept' ? [from, stageRulesQuery('active').queryKey] : from,
+    wait: true,
     optimistic: (cur: StageRules | undefined) => cur && { ...cur, items: cur.items.filter((r) => r.id !== rule.id) },
     send: (idempotencyKey) => api.post(`/api/v2/stage-rules/${enc(rule.id)}/${verb}`, { revision: rule.revision }, { idempotencyKey }),
   });

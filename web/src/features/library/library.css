@@ -209,6 +209,7 @@
 .tools .urow .row-ctx{flex:none;padding-right:0}
 .tools .urow .pill{flex:none}
 .tools button.urow{width:100%;border:0;background:none;text-align:left}.lib .stage-more{display:flex;align-items:center;width:100%;height:var(--row);padding:0 var(--s-2);border:0;background:none;color:var(--muted);font-size:var(--t-sm);border-radius:var(--r-row);text-align:left}
+.lib .stage-more[aria-busy="true"]{animation:rest var(--breathe) ease-in-out infinite;animation-play-state:var(--loop,running)}
 .lib .stage-more:hover{background:var(--hover);color:var(--ink)}
 
 /* a list that can pass a hundred rows: the virtual list scrolls in the page body (Files, Contacts) */

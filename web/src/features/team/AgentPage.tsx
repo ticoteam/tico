@@ -156,7 +156,7 @@ function AgentHead({
         data-phone
         on={settings}
         aria-pressed={settings}
-        onClick={() => void open.run({ who: slug, ...(settings ? {} : { tab: 'settings' }) })}
+        onClick={() => open.run({ who: slug, ...(settings ? {} : { tab: 'settings' }) })}
       />
     ),
     more: (
@@ -421,7 +421,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
           <Section
             name="Rules"
             count={rules.data?.length}
-            actions={<IconButton icon="plus" size="sm" quiet label="New rule" onClick={() => void newRule.run({ slug })} />}
+            actions={<IconButton icon="plus" size="sm" quiet label="New rule" onClick={() => newRule.run({ slug })} />}
           >
             {(rules.data ?? []).map((r) => (
               <div key={r.key} className={r.off ? 'row rule is-off' : 'row rule'} title={r.text}>

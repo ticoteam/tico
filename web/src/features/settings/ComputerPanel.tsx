@@ -104,7 +104,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
                   options={SCREEN}
                   value={(c.screen as Mode | undefined) ?? 'off'}
                   disabled={!manage}
-                  onValueChange={(mode) => void run('computers.setScreen', { computer: c.id, mode }, { via: 'click' })}
+                  onValueChange={(mode) => void act('computers.setScreen', { computer: c.id, mode })}
                 />
               </Line>
             )}
@@ -149,7 +149,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
         actions={
           <>
             {cancel}
-            <Button variant="primary" onClick={() => void restart()}>
+            <Button variant="primary" onClick={() => restart()}>
               Restart
             </Button>
           </>
@@ -186,7 +186,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
         actions={
           <>
             {cancel}
-            <Button variant="primary" onClick={() => void remove()}>
+            <Button variant="primary" onClick={() => remove()}>
               Remove
             </Button>
           </>

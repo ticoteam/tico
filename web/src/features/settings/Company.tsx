@@ -126,11 +126,11 @@ function NewRepo({ onClose }: { onClose: () => void }) {
             Cancel
           </Button>
           {ok ? (
-            <Button variant="primary" busy={busy} onClick={() => void make()}>
+            <Button variant="primary" busy={busy} onClick={() => make()}>
               Create
             </Button>
           ) : (
-            <Button variant="primary" busy={busy} disabled={!name.trim()} onClick={() => void look()}>
+            <Button variant="primary" busy={busy} disabled={!name.trim()} onClick={() => look()}>
               Check name
             </Button>
           )}

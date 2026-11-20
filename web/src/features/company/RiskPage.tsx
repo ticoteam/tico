@@ -112,7 +112,7 @@ function Risks({ search }: { search: RiskSearch }) {
   const open = useDo('company.openPanel');
   const rows = matters.data?.matters ?? [];
   const add = (
-    <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
+    <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => open.run({ panel: 'new' })}>
       Add risk
     </Button>
   );
@@ -226,7 +226,7 @@ function Disputes({ search }: { search: RiskSearch }) {
       actions={
         <>
           <PageOwner page="risk" />
-          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
+          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => open.run({ panel: 'new' })}>
             Add risk
           </Button>
         </>
@@ -607,7 +607,7 @@ function OneRisk({ id, panel }: { id: string; panel?: string }) {
       crumb={[{ label: 'Risk', to: BASE }]}
       className="co"
       actions={
-        <Button variant={panel ? 'plain' : 'primary'} data-phone onClick={() => void open.run({ panel: 'matter-new' })}>
+        <Button variant={panel ? 'plain' : 'primary'} data-phone onClick={() => open.run({ panel: 'matter-new' })}>
           Add matter
         </Button>
       }
@@ -770,10 +770,10 @@ function NewRisk() {
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={create.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={create.pending} onClick={() => save()}>
             Save
           </Button>
-          <Button variant="quiet" onClick={() => void close.run({})}>
+          <Button variant="quiet" onClick={() => close.run({})}>
             Cancel
           </Button>
         </>
@@ -808,10 +808,10 @@ function NewMatter({ risk }: { risk: string }) {
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={add.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={add.pending} onClick={() => save()}>
             Save
           </Button>
-          <Button variant="quiet" onClick={() => void close.run({})}>
+          <Button variant="quiet" onClick={() => close.run({})}>
             Cancel
           </Button>
         </>
@@ -847,10 +847,10 @@ function EditRisk({ d }: { d: RiskDetail }) {
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={edit.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={edit.pending} onClick={() => save()}>
             Save
           </Button>
-          <Button variant="quiet" onClick={() => void close.run({})}>
+          <Button variant="quiet" onClick={() => close.run({})}>
             Cancel
           </Button>
         </>
@@ -902,7 +902,7 @@ function DatePanel({ risk, d }: { risk: string; d: RiskDate }) {
       foot={
         act ? (
           <>
-            <Button variant="primary" busy={mark.pending} disabled={!ready} onClick={() => void save()}>
+            <Button variant="primary" busy={mark.pending} disabled={!ready} onClick={() => save()}>
               {act === 'proof' ? 'Save' : act === 'waived' ? 'Waive' : 'Missed'}
             </Button>
             <Button variant="quiet" onClick={() => setAct(null)}>

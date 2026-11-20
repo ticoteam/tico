@@ -420,6 +420,7 @@ export type Subscription = ModelSubscription & { agents?: SubscriptionAgent[] };
 export const removeSubscription = (id: string) =>
   write({
     key: subscriptionsQuery.queryKey,
+    wait: true,
     optimistic: (v: ModelSubscriptionList | undefined) => v && { ...v, subscriptions: v.subscriptions.filter((x) => x.id !== id) },
     // The person has said yes already, so runs on it stop and start fresh without a second question.
     send: (idempotencyKey) => api.delete(`/api/v2/model-subscriptions/${enc(id)}?confirm=1`, { idempotencyKey }),
@@ -708,6 +709,7 @@ const RECONCILE_NOTE = {
 export const reconcileRun = (bot: string, job: string, run: string, decision: 'resume' | 'dismiss', detail = '') =>
   write({
     key: stoppedRunsQuery(bot).queryKey,
+    wait: true,
     optimistic: (v: StoppedRun[] | undefined) => v?.filter((j) => j.id !== job),
     send: (idempotencyKey) =>
       api.post<{ deferred?: boolean }>(
@@ -1108,6 +1110,7 @@ export const restorePerson = (pid: string) =>
 export const forgetPerson = (pid: string) =>
   write({
     key: accessQuery.queryKey,
+    wait: true,
     optimistic: (v: AccessView | undefined) => v && { ...v, people: v.people.filter((p) => p.id !== pid) },
     send: (idempotencyKey) => api.delete(`/api/v2/humans/${enc(pid)}`, { idempotencyKey }),
   });

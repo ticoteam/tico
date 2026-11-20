@@ -187,7 +187,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
             <Button disabled={request.pending} onClick={() => setAsking(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={request.pending} disabled={!note.trim() || request.pending} onClick={() => void onSend()}>
+            <Button variant="primary" busy={request.pending} disabled={!note.trim() || request.pending} onClick={() => onSend()}>
               Send
             </Button>
           </div>
@@ -201,7 +201,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
             </Button>
           )}
           {may('ok') && (
-            <Button variant="primary" busy={approve.pending} disabled={busy || !ready} onClick={() => void onApprove()}>
+            <Button variant="primary" busy={approve.pending} disabled={busy || !ready} onClick={() => onApprove()}>
               Approve
             </Button>
           )}
@@ -211,7 +211,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
         <p className="an-err" role="alert">
           {error || 'Part of it did not load'}
           {!error && (
-            <Button variant="quiet" onClick={() => void shown.refetch()}>
+            <Button variant="quiet" onClick={() => shown.refetch()}>
               Try again
             </Button>
           )}

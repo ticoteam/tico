@@ -132,7 +132,7 @@ function AddWatch({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boo
           <Button variant="quiet" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!name.trim()} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!name.trim()} onClick={() => save()}>
             Add
           </Button>
         </>
@@ -353,7 +353,7 @@ function AddSource({ watch, open, onOpenChange }: { watch: string; open: boolean
             <Button variant="quiet" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+            <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
               Add
             </Button>
           </>
@@ -440,7 +440,7 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             Save
           </Button>
         </>

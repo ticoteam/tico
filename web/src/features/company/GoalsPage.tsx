@@ -58,7 +58,7 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
   const words = find.trim().toLowerCase();
   const shown = words ? goals.filter((g) => [g.title, ...g.kpis.map((k) => k.name)].some((t) => t.toLowerCase().includes(words))) : goals;
   const add = (
-    <Button variant={panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'goal-new' })}>
+    <Button variant={panel ? 'plain' : 'primary'} onClick={() => open.run({ panel: 'goal-new' })}>
       Add goal
     </Button>
   );
@@ -270,7 +270,7 @@ function GoalPanel({ gid }: { gid: string }) {
       }
       onClose={() => void close.run({})}
       foot={
-        <Button variant="quiet" busy={shut.pending} onClick={() => void done('dropped')}>
+        <Button variant="quiet" busy={shut.pending} onClick={() => done('dropped')}>
           Archive
         </Button>
       }
@@ -541,7 +541,7 @@ function KpiPanel({ kid }: { kid: string }) {
       foot={
         d.may_edit && (
           <>
-            <Button onClick={() => void open.run({ panel: `kpi-edit:${kid}` })}>Edit</Button>
+            <Button onClick={() => open.run({ panel: `kpi-edit:${kid}` })}>Edit</Button>
             <Button
               variant="quiet"
               onClick={async () => {
@@ -693,7 +693,7 @@ function KpiForm({ goal, goals, kpi }: { goal: string; goals: readonly TreeGoal[
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={busy} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} onClick={() => save()}>
             Save
           </Button>
           <Button variant="quiet" onClick={back}>
@@ -794,7 +794,7 @@ function KpiPlace({ kid }: { kid: string }) {
       foot={
         k && (
           <>
-            <Button variant="primary" busy={place.pending} onClick={() => void place.run({ kpi: kid, feeds: shownFeeds || null, role: shownRole || null })}>
+            <Button variant="primary" busy={place.pending} onClick={() => place.run({ kpi: kid, feeds: shownFeeds || null, role: shownRole || null })}>
               Save
             </Button>
             <Button variant="quiet" onClick={back}>
@@ -843,10 +843,10 @@ function GoalForm({ goals }: { goals: readonly TreeGoal[] }) {
       onClose={() => void close.run({})}
       foot={
         <>
-          <Button variant="primary" busy={create.pending} onClick={() => void save()}>
+          <Button variant="primary" busy={create.pending} onClick={() => save()}>
             Save
           </Button>
-          <Button variant="quiet" onClick={() => void close.run({})}>
+          <Button variant="quiet" onClick={() => close.run({})}>
             Cancel
           </Button>
         </>

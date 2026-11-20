@@ -598,7 +598,7 @@ function ProposalPage({ id }: { id: string }) {
             <Button onClick={() => setBack(true)} data-target={`proposal-back:${id}`}>
               Send back
             </Button>
-            <Button variant="primary" busy={busy} disabled={busy} onClick={() => void approve()} data-target={`proposal-approve:${id}`}>
+            <Button variant="primary" busy={busy} disabled={busy} onClick={() => approve()} data-target={`proposal-approve:${id}`}>
               Approve
             </Button>
             {back && <SendBack id={id} onClose={() => setBack(false)} />}
@@ -629,7 +629,7 @@ function SendBack({ id, onClose }: { id: string; onClose: () => void }) {
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!reason.trim() || busy} onClick={() => void send()}>
+          <Button variant="primary" busy={busy} disabled={!reason.trim() || busy} onClick={() => send()}>
             Send back
           </Button>
         </>
@@ -709,10 +709,10 @@ function ApproveDevice({ code, onClose }: { code: string; onClose: () => void })
           <Button onClick={onClose}>Done</Button>
         ) : (
           <>
-            <Button disabled={busy || !d.data} onClick={() => void decide(false)}>
+            <Button disabled={busy || !d.data} onClick={() => decide(false)}>
               Deny
             </Button>
-            <Button variant="primary" busy={busy} disabled={busy || !d.data} onClick={() => void decide(true)}>
+            <Button variant="primary" busy={busy} disabled={busy || !d.data} onClick={() => decide(true)}>
               Approve
             </Button>
           </>

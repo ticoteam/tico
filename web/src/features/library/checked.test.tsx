@@ -217,7 +217,7 @@ describe('Files', () => {
     let searches = 0;
     const sent = serve((url) => {
       if (url === '/api/v2/files/search?q=notes&limit=50&kind=document') {
-        if (++searches === 1) return new Response(null, { status: 503 });
+        if (++searches === 1) return new Response(null, { status: 500 });
         return { results: [{ id: 'f1', title: 'Sample notes' }] };
       }
       return {};

@@ -150,7 +150,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
               </Section>
             ))}
             {!full && list.hasNextPage && !list.isFetchingNextPage && (
-              <More onClick={() => void list.fetchNextPage()}>{list.isFetchNextPageError ? 'Try again' : 'Load more'}</More>
+              <More onClick={() => list.fetchNextPage()}>{list.isFetchNextPageError ? 'Try again' : 'Load more'}</More>
             )}
           </>
         )
@@ -291,7 +291,7 @@ function SourcePanel({ id }: { id: string }) {
             </a>
           )}
           {row && <IconButton icon="edit" label="Edit" onClick={() => setEditing(true)} />}
-          <Button variant="quiet" icon="refresh" onClick={() => void press('docs.refreshSource', { source: id })}>
+          <Button variant="quiet" icon="refresh" onClick={() => press('docs.refreshSource', { source: id })}>
             Read again
           </Button>
           {row && editing && <SourceDialog source={row} onClose={() => setEditing(false)} />}
@@ -312,7 +312,7 @@ function SourcePanel({ id }: { id: string }) {
         </Link>
       ))}
       {src.hasNextPage && !src.isFetchingNextPage && (
-        <More onClick={() => void src.fetchNextPage()}>{src.isFetchNextPageError ? 'Try again' : 'Load more'}</More>
+        <More onClick={() => src.fetchNextPage()}>{src.isFetchNextPageError ? 'Try again' : 'Load more'}</More>
       )}
     </SidePanel>
   );
@@ -340,7 +340,7 @@ function SourceDialog({ source, onClose }: { source: DocSource | null; onClose: 
         <>
           {source && (
             <>
-              <Button variant="quiet" disabled={busy} onClick={() => void go('docs.editSource', { source: source.id, archived: true }, 'Not removed')}>
+              <Button variant="quiet" disabled={busy} onClick={() => go('docs.editSource', { source: source.id, archived: true }, 'Not removed')}>
                 Remove
               </Button>
               <span className="grow" />

@@ -57,7 +57,7 @@ export function PersonPage({ actor, settings, slack }: PersonPageProps) {
         label="Settings"
         on={!!settings}
         aria-pressed={!!settings}
-        onClick={() => void open.run({ who: id, ...(settings ? {} : { tab: 'settings' }) })}
+        onClick={() => open.run({ who: id, ...(settings ? {} : { tab: 'settings' }) })}
         data-phone
       />
     ),

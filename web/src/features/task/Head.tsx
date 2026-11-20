@@ -137,7 +137,7 @@ function MoveAnyway({ t, held, onClose }: { t: TaskData; held: Held; onClose: ()
       actions={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => void press()}>
+          <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press()}>
             Move anyway
           </Button>
         </>
@@ -439,7 +439,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         actions={
           <>
             {cancel}
-            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => void press('task.reopen', { why: why.trim() })}>
+            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.reopen', { why: why.trim() })}>
               Reopen
             </Button>
           </>
@@ -456,7 +456,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         actions={
           <>
             {cancel}
-            <Button variant="primary" busy={busy} disabled={busy} onClick={() => void press('task.delete', {})}>
+            <Button variant="primary" busy={busy} disabled={busy} onClick={() => press('task.delete', {})}>
               Delete
             </Button>
           </>

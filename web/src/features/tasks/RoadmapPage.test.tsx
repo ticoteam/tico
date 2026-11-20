@@ -262,8 +262,8 @@ describe('Requesters @s36', () => {
     expect(screen.queryByText('tok-made-up')).toBeNull();
   });
 
-  it('a removal shows at once and comes back with the reason when the server refuses it', async () => {
-    let refuse!: () => void;
+  it('a removal waits for the server, and the reason shows when it refuses', async () => {
+    let refuse: (() => void) | undefined;
     serve((_url, method) => {
       if (method === 'POST') return new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { error: { code: 'forbidden', detail: 'Only the owner can do that' } } })));
       return { status: 200, body: { requesters: [person('r1', 'Ada Example')], next_offset: null, my_requester_id: null } };
@@ -272,8 +272,9 @@ describe('Requesters @s36', () => {
     show(<RequestersDialog task="t1" title="Bulk orders" onClose={() => {}} />, '/roadmap?requesters=t1');
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Ada Example' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(screen.getByText('No requesters yet')).toBeTruthy());
-    refuse();
+    await waitFor(() => expect(refuse).toBeDefined());
+    expect(screen.getByTitle('Ada Example')).toBeTruthy();
+    refuse?.();
     expect(await screen.findByText('Only the owner can do that')).toBeTruthy();
     expect(await screen.findByTitle('Ada Example')).toBeTruthy();
   });

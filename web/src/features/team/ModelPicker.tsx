@@ -87,7 +87,7 @@ export function ModelPicker({
           <Button
             variant="primary"
             disabled={!model || (!modelChanged && !compactChanged)}
-            onClick={() => void save()}
+            onClick={() => save()}
           >
             Apply
           </Button>

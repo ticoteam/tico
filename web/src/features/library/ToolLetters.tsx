@@ -196,7 +196,7 @@ export function AddressOne({ id }: { id: string }) {
           ))}
         </Facts>
       }
-      connectsActions={a && <IconButton icon="refresh" label="Check connection" size="sm" onClick={() => void check()} />}
+      connectsActions={a && <IconButton icon="refresh" label="Check connection" size="sm" onClick={() => check()} />}
       who={readers.who}
       whoActions={readers.add}
       recent={a && <LettersIn items={(letters.data ?? []).filter((m) => homeOf(m, all) === id)} />}
@@ -241,7 +241,7 @@ function LetterRow({ l, onDetails }: { l: LetterOut; onDetails: (l: LetterOutCon
   const waits = l.status === 'waiting_for_ok' || l.status === 'waiting_approval';
   return (
     <UseRow title={letterTitle(l)} ctx={word(l.status)} at={l.created_at} lead={<Icon name="send" />}>
-      {l.can_cancel && <IconButton icon="close" label="Stop this letter" size="sm" onClick={() => void press('tools.cancelLetter', { letter: l.id }, 'Not stopped')} />}
+      {l.can_cancel && <IconButton icon="close" label="Stop this letter" size="sm" onClick={() => press('tools.cancelLetter', { letter: l.id }, 'Not stopped')} />}
       {full && (
         <Menu trigger={<IconButton icon="more" label={`${letterTitle(l)} options`} size="sm" />}>
           <MenuItem label="Details" onSelect={() => onDetails(full)} />
@@ -275,7 +275,7 @@ function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: Le
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
       {q.isError && <ReadFault name="Older letters" error={q.error} onRetry={() => void q.refetch()} />}
-      {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => void q.fetchNextPage()}>Load more</More>}
+      {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );
 }

@@ -400,10 +400,15 @@ describe('Rules', () => {
     expect(href(within(row).getByRole('link'))).toBe('/company/rules?tab=stages&q=review&panel=stage:sr1');
   });
 
-  it('removes a rule only after asking, and puts it back when refused', async () => {
+  it('removes a rule only after asking, and keeps it while the removal is out and when it is refused', async () => {
     let refuse: (r: Reply) => void = () => {};
+    let sent = false;
     const shown: StageRules = { items: [stage], built_in: [], may_add: true };
-    serve((url, method) => (method === 'POST' ? new Promise<Reply>((ok) => (refuse = ok)) : url.includes('/stage-rules') ? { status: 200, body: shown } : nothing()));
+    const removal = () => {
+      sent = true;
+      return new Promise<Reply>((ok) => (refuse = ok));
+    };
+    serve((url, method) => (method === 'POST' ? removal() : url.includes('/stage-rules') ? { status: 200, body: shown } : nothing()));
     queryClient.setQueryData<StageRules>(stageRulesQuery('active').queryKey, { items: [stage], built_in: [], may_add: true });
     show(<RulesPage search={{ tab: 'stages' }} />, '/company/rules?tab=stages');
     const row = await screen.findByTitle('Enters Review, the decision model decides, Block');
@@ -412,7 +417,8 @@ describe('Rules', () => {
     const ask = await screen.findByRole('alertdialog');
     expect(screen.getByTitle('Enters Review, the decision model decides, Block')).toBeTruthy();
     fireEvent.click(within(ask).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(screen.queryByTitle('Enters Review, the decision model decides, Block')).toBeNull());
+    await waitFor(() => expect(sent).toBe(true));
+    expect(screen.getByTitle('Enters Review, the decision model decides, Block')).toBeTruthy();
     refuse({ status: 409, body: { detail: 'conflict' } });
     expect(await screen.findByTitle('Enters Review, the decision model decides, Block')).toBeTruthy();
   });

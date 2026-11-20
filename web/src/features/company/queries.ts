@@ -521,11 +521,12 @@ export interface ProposalCard {
   changes?: { label: string; now: string; proposed: string }[];
 }
 
-/** The owner's yes or no on a proposal: the card goes at once and comes back if refused. A yes changes the goal or
+/** The owner's yes or no on a proposal: the card goes once the server has taken it. A yes changes the goal or
     its KPIs, so both are read again. */
 export function decideProposal(id: string, decision: 'confirm' | 'reject') {
   return write<{ proposal: Proposal }>({
     key: treeKey,
+    wait: true,
     optimistic: (t: GoalTree | undefined) => t && { ...t, proposals: t.proposals.filter((p) => p.id !== id) },
     send: async (idempotencyKey) => {
       const out = await api.post<{ proposal: Proposal }>(`/api/v2/proposals/${enc(id)}/decide`, { decision }, { idempotencyKey });
@@ -808,11 +809,12 @@ export const goalNeedsQuery = queryOptions({
   queryFn: async ({ signal }) => (await api.get<GetGoalsNeedsYouResponse>('/api/v2/goals/needs-you', { signal })).items,
 });
 
-/** Yes or no on a suggestion that waits on you (a recovery's chosen `option`): it leaves the list at once and comes
-    back if refused. A yes may change goals, KPIs, the strategy or the brand draft, so those are read again. */
+/** Yes or no on a suggestion that waits on you (a recovery's chosen `option`): it leaves the list once the server has
+    taken it. A yes may change goals, KPIs, the strategy or the brand draft, so those are read again. */
 export function decideNeed(proposal: string, decision: 'confirm' | 'reject', option?: number) {
   return write<{ proposal: Proposal }>({
     key: goalNeedsQuery.queryKey,
+    wait: true,
     optimistic: (items: GoalNeed[] | undefined) => items?.filter((i) => (i.proposal as { id?: string } | undefined)?.id !== proposal),
     send: async (idempotencyKey) => {
       const out = await api.post<{ proposal: Proposal }>(`/api/v2/proposals/${enc(proposal)}/decide`, { decision, ...(option != null && { option }) }, { idempotencyKey });
@@ -954,6 +956,7 @@ export const brandProposalsQuery = queryOptions({
 export function decideBrandProposal(id: string, decision: 'confirm' | 'reject') {
   return write<unknown>({
     key: brandProposalsQuery.queryKey,
+    wait: true,
     optimistic: (ps: BrandProposal[] | undefined) => ps?.filter((p) => p.id !== id),
     send: async (idempotencyKey) => {
       const out = await api.post<unknown>(`/api/v2/proposals/${enc(id)}/decide`, { decision }, { idempotencyKey });

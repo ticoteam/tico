@@ -86,7 +86,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('People in a thread @s177', () => {
-  it('opens from the faces under the title, takes someone out at once and puts them back when refused', async () => {
+  it('opens from the faces under the title; someone being taken out stays, busy, until the server answers', async () => {
     let refuse!: () => void;
     serve((_url, method) => (method === 'DELETE' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : ok()));
     queryClient.setQueryData(threadKeys.view('t1'), thread());
@@ -109,12 +109,15 @@ describe('People in a thread @s177', () => {
     expect(within(dialog).getByText('Owner')).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: 'Remove You' })).toBeNull();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove Ana Ruiz' }));
-    await waitFor(() => expect(within(dialog).queryByText('Ana Ruiz')).toBeNull());
+    const remove = within(dialog).getByRole('button', { name: 'Remove Ana Ruiz' });
+    fireEvent.click(remove);
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
     expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/api/v2/threads/t1/members/human%3Aana'))).toBe(true);
+    expect(within(dialog).getByText('Ana Ruiz')).toBeTruthy();
+    expect(remove.getAttribute('aria-busy')).toBe('true');
     await act(async () => refuse());
-    expect(await within(dialog).findByText('Ana Ruiz')).toBeTruthy();
+    expect(within(dialog).getByText('Ana Ruiz')).toBeTruthy();
+    await waitFor(() => expect(remove.getAttribute('aria-busy')).toBeNull());
   });
 });
 

@@ -770,7 +770,7 @@ function LiveCallRow({ call, now }: { call: Call; now: Date }) {
         <Who refs={others} />
       </span>
       <span className="cl-act">
-        <Button className="btn-sm cl-join" onClick={() => void press('calls.join', { id: call.id })}>
+        <Button className="btn-sm cl-join" onClick={() => press('calls.join', { id: call.id })}>
           Join
         </Button>
       </span>

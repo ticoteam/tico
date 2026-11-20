@@ -216,7 +216,7 @@ function MarketFault({ q }: { q: UseQueryResult<unknown> }) {
   return (
     <p className="play-fault">
       <span className="none">Market did not load</span>
-      <Button onClick={() => void q.refetch()}>Try again</Button>
+      <Button onClick={() => q.refetch()}>Try again</Button>
     </p>
   );
 }
@@ -242,7 +242,7 @@ function BrandBook({ b, search }: { b: Brand; search: StrategySearch }) {
   const shown = asked ?? latest;
   const book = asked ? past.data : b.published;
   const editButton = b.may_edit && !asked && (
-    <Button onClick={() => void edit.run({ on: true })} data-target="brand:edit">
+    <Button onClick={() => edit.run({ on: true })} data-target="brand:edit">
       Edit
     </Button>
   );
@@ -417,7 +417,7 @@ function BrandEdit({ brand }: { brand: Brand }) {
       }
       foot={
         <>
-          <Button variant="quiet" onClick={() => void close.run({ on: false })}>
+          <Button variant="quiet" onClick={() => close.run({ on: false })}>
             Cancel
           </Button>
           {dirty.length > 0 ? (
@@ -425,7 +425,7 @@ function BrandEdit({ brand }: { brand: Brand }) {
               variant="primary"
               busy={save.pending}
               disabled={save.pending}
-              onClick={() => void save.run({ sections: Object.fromEntries(dirty.map((k) => [k, tidy(k, body[k])])), revision: brand.draft?.revision })}
+              onClick={() => save.run({ sections: Object.fromEntries(dirty.map((k) => [k, tidy(k, body[k])])), revision: brand.draft?.revision })}
             >
               Save
             </Button>
@@ -433,7 +433,7 @@ function BrandEdit({ brand }: { brand: Brand }) {
             ahead && (
               <>
                 <Field label="What changed" labelHidden placeholder="What changed" value={note} onValueChange={setNote} />
-                <Button variant="primary" busy={publish.pending} disabled={publish.pending} onClick={() => void publish.run({ note: note.trim() })}>
+                <Button variant="primary" busy={publish.pending} disabled={publish.pending} onClick={() => publish.run({ note: note.trim() })}>
                   Publish
                 </Button>
               </>
@@ -515,10 +515,10 @@ function BrandRail({ list }: { list: readonly BrandProposal[] }) {
             <time>{fmtDate(p.proposed_at)}</time>
           </p>
           <div className="an-row">
-            <Button variant="quiet" disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'reject' })}>
+            <Button variant="quiet" disabled={decide.pending} onClick={() => decide.run({ proposal: p.id, decision: 'reject' })}>
               Decline
             </Button>
-            <Button disabled={decide.pending} onClick={() => void decide.run({ proposal: p.id, decision: 'confirm' })}>
+            <Button disabled={decide.pending} onClick={() => decide.run({ proposal: p.id, decision: 'confirm' })}>
               Accept
             </Button>
           </div>

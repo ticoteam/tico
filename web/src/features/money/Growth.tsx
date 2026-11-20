@@ -196,7 +196,7 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
         title: 'No numbers yet',
         // Sources are set up through the Growth Manager; with none, there is nothing to press here.
         action: manager ? (
-          <Button variant="primary" onClick={() => void press('growth.askManager', {})}>
+          <Button variant="primary" onClick={() => press('growth.askManager', {})}>
             Set up
           </Button>
         ) : undefined,
@@ -256,15 +256,21 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
 function Ask() {
   const press = usePress();
   const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
   const send = async (e: FormEvent) => {
     e.preventDefault();
-    if (!text.trim()) return;
-    if (await press('growth.askManager', { text: text.trim() })) setText('');
+    if (!text.trim() || sending) return;
+    setSending(true);
+    try {
+      if (await press('growth.askManager', { text: text.trim() })) setText('');
+    } finally {
+      setSending(false);
+    }
   };
   return (
     <form className="gr-ask" onSubmit={(e) => void send(e)} data-target="growth:ask">
       <Field label="Ask the Growth Manager" labelHidden placeholder="Ask the Growth Manager…" value={text} onValueChange={setText} lead="spark" />
-      <IconButton icon="send" label="Send" type="submit" />
+      <IconButton icon="send" label="Send" type="submit" busy={sending} />
     </form>
   );
 }

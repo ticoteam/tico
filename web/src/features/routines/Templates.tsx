@@ -64,7 +64,7 @@ export function NewInbox({ onClose }: { onClose: () => void }) {
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void create()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => create()}>
             Create
           </Button>
         </>
@@ -132,7 +132,7 @@ export function ApplyTemplate({ routine, onClose }: { routine: Routine; onClose:
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} disabled={!flow || busy} onClick={() => void apply()}>
+          <Button variant="primary" busy={busy} disabled={!flow || busy} onClick={() => apply()}>
             Apply
           </Button>
         </>

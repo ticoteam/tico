@@ -1,4 +1,4 @@
-import { defineAction, refusalFor, s, type Ctx } from '@/actions';
+import { defineAction, refusalFor, s, toldOf, type Ctx } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
@@ -74,7 +74,7 @@ async function said<T>(fallback: string, send: () => Promise<T>): Promise<T> {
     return await send();
   } catch (e) {
     toast(reason(e, fallback));
-    throw e;
+    throw toldOf(e);
   }
 }
 
@@ -266,8 +266,9 @@ export const profile = defineAction({
       return await setProfile(slug, profile, dropRules);
     } catch (e) {
       // Leaving Custom: the page asks, then sends it again with dropRules.
-      if (!(e instanceof ApiError && e.code === 'conflict')) toast(reason(e, "Couldn't change it"));
-      throw e;
+      if (e instanceof ApiError && e.code === 'conflict') throw e;
+      toast(reason(e, "Couldn't change it"));
+      throw toldOf(e);
     }
   },
   did: () => 'Changed its profile',

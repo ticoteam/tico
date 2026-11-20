@@ -91,7 +91,7 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
     ['Other', routines.filter((r) => !known.has(r.trigger.type))],
   ];
   const add = (
-    <Button variant="primary" onClick={() => void press('routines.new', {})}>
+    <Button variant="primary" onClick={() => press('routines.new', {})}>
       Add routine
     </Button>
   );

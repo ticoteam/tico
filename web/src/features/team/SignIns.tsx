@@ -94,7 +94,7 @@ function useSignIn(c: Computer, onStarted: Started) {
 
 function SignInButton({ c, tool, onStarted }: { c: Computer; tool: Tool; onStarted: Started }) {
   const signIn = useSignIn(c, onStarted);
-  return <IconButton icon="keys" size="sm" quiet label={`Sign in to ${tool.name}`} disabled={signIn.pending} onClick={() => void signIn.run(tool)} />;
+  return <IconButton icon="keys" size="sm" quiet label={`Sign in to ${tool.name}`} disabled={signIn.pending} onClick={() => signIn.run(tool)} />;
 }
 
 /** Add a sign-in: which tool, then the provider's sign-in. An API key is set in Tools, not here. */
@@ -174,7 +174,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
       description={status}
       actions={
         live ? (
-          <Button disabled={l?.state === 'finishing'} onClick={() => void stop.run({ computer: c.id, login }).then(onClose)}>
+          <Button disabled={l?.state === 'finishing'} onClick={() => stop.run({ computer: c.id, login }).then(onClose)}>
             Stop sign-in
           </Button>
         ) : (
@@ -261,14 +261,14 @@ function SignOutDialog({ c, tool, onClose }: { c: Computer; tool: Tool; onClose:
           <>
             <Button onClick={onClose}>Cancel</Button>
             {stops.isError ? (
-              <Button onClick={() => void stops.refetch()}>Try again</Button>
+              <Button onClick={() => stops.refetch()}>Try again</Button>
             ) : (
               <Button
                 variant="primary"
                 disabled={!stops.isSuccess}
                 busy={out.pending}
                 onClick={() =>
-                  void out.run({ computer: c.id, runtime: tool.runtime }).then((r) => {
+                  out.run({ computer: c.id, runtime: tool.runtime }).then((r) => {
                     const row = r.out as Login | undefined;
                     if (r.ok && row?.id) setLogin(row.id);
                   })

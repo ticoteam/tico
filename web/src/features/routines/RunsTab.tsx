@@ -68,7 +68,7 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; pane
           ))}
           {q.hasNextPage && (
             <div className="rr-more">
-              <Button busy={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
+              <Button busy={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
                 More
               </Button>
             </div>

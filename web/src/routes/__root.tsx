@@ -463,7 +463,7 @@ function PhoneMenuLip() {
 /* The phone's call lip: mute without opening the call. */
 function CallMute() {
   const { muted } = useCall();
-  return <IconButton icon={muted ? 'micoff' : 'mic'} label={muted ? 'Unmute' : 'Mute'} on={muted} onClick={() => void run(TOGGLE_MUTE, {}, { via: 'click' })} />;
+  return <IconButton icon={muted ? 'micoff' : 'mic'} label={muted ? 'Unmute' : 'Mute'} on={muted} onClick={() => run(TOGGLE_MUTE, {}, { via: 'click' })} />;
 }
 
 /* ---------------------------------------------------------------- the chats */

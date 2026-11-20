@@ -241,7 +241,7 @@ function Limits({ party, reach, name }: { party: string; reach: Reach; name: (p:
     const p = e.from?.[f];
     return p && p !== party ? `From ${name(p)}` : '';
   };
-  const set = (patch: Record<string, unknown>) => void press('rules.setReach', { who: party, ...patch });
+  const set = (patch: Record<string, unknown>) => press('rules.setReach', { who: party, ...patch });
   return (
     <section className="sets" data-target={`reach:${party}`} aria-label="Reach and limits">
       <div className="set">

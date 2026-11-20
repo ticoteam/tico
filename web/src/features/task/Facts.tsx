@@ -115,7 +115,7 @@ export function MoreFacts({ t }: { t: TaskFacts }) {
 
 function HumanFact({ t }: { t: TaskData }) {
   const human = t.human_id ?? null;
-  const set = (to: string | null) => void act('task.setHuman', { task: t.id, human: to });
+  const set = (to: string | null) => act('task.setHuman', { task: t.id, human: to });
   return (
     <PickKv
       k="Human"
@@ -223,7 +223,7 @@ function PeopleFact({ t }: { t: TaskData }) {
         actions={
           <>
             <Button onClick={close}>Cancel</Button>
-            <Button variant="primary" busy={busy} disabled={!who || !roleOf(role) || busy} onClick={() => void add()}>
+            <Button variant="primary" busy={busy} disabled={!who || !roleOf(role) || busy} onClick={() => add()}>
               Add
             </Button>
           </>
@@ -284,7 +284,7 @@ function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: stri
   const nameOf = useNames();
   const me = useQuery(meQuery).data?.id;
   const mine = followers.find((f) => f.actor === me);
-  const follow = (input: object) => void act('task.follow', { task: t.id, ...input });
+  const follow = (input: object) => act('task.follow', { task: t.id, ...input });
   return (
     <div className="dt-kv" data-target={`task-followers:${t.id}`}>
       <span className="dt-k">Followers</span>

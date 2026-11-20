@@ -117,11 +117,11 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
       foot={
         past && (
           <>
-            <Button variant="quiet" onClick={() => void press('docs.open', { doc: id })}>
+            <Button variant="quiet" onClick={() => press('docs.open', { doc: id })}>
               Latest
             </Button>
             {canChange && (
-              <Button variant="primary" onClick={() => void press('docs.restore', { doc: id, version: past.version })}>
+              <Button variant="primary" onClick={() => press('docs.restore', { doc: id, version: past.version })}>
                 Restore
               </Button>
             )}

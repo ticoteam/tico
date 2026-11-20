@@ -25,6 +25,8 @@ export interface Result {
   /** On a refusal: the server's own reason as one short sentence, for a toast's second part. Never JSON, a stack or an
       address; absent when the server gave none. */
   why?: string;
+  /** On a refusal: the action has said it to the person already (its own toast), so a button says nothing more. */
+  told?: boolean;
   /** What the action returned (a token shown once, a sign-in), for the person's own press only: never from Tico, never
       posted to the server. */
   out?: unknown;

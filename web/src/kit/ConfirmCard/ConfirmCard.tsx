@@ -23,8 +23,9 @@ export type ConfirmCardProps = {
   note?: string;
   /** The filled button's words name the act: "Send 3 emails", "Pay $1,200". */
   act: string;
-  onAct: () => void;
-  onNotNow: () => void;
+  /** Return the promise of the work: the button stays busy until it settles, and a refusal is said (kit/Button). */
+  onAct: () => unknown;
+  onNotNow: () => unknown;
   busy?: boolean;
 };
 

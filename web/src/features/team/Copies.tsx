@@ -105,7 +105,7 @@ function MakeCopy({ open, onOpenChange, source, b }: { open: boolean; onOpenChan
             variant="primary"
             busy={make.pending}
             disabled={!planned && !pick}
-            onClick={() => void make.run({ slug: source, ...(planned ? {} : { computer: pick }) }).then((r) => r.ok && onOpenChange(false))}
+            onClick={() => make.run({ slug: source, ...(planned ? {} : { computer: pick }) }).then((r) => r.ok && onOpenChange(false))}
           >
             Make copy
           </Button>

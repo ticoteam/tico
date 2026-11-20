@@ -48,7 +48,8 @@ async function show(arrangement: Arrangement) {
   return screen.findByRole('complementary', { name: 'Tico' });
 }
 
-beforeEach(() => vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline'))));
+// Every read fails at once (a 500: a restart's 503 or a drop the client would send again for a minute).
+beforeEach(() => vi.stubGlobal('fetch', async () => new Response(null, { status: 500 })));
 afterEach(() => {
   queryClient.clear();
   vi.unstubAllGlobals();

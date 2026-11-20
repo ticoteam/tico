@@ -42,7 +42,7 @@ export function ThreadCallHead({ thread, members, canPost }: ThreadCallHeadProps
   const next = data.next_scheduled;
   if (next?.state === 'scheduled')
     return (
-      <Button className="btn-sm" icon="call" title="Join" onClick={() => void press('calls.join', { id: next.id })}>
+      <Button className="btn-sm" icon="call" title="Join" onClick={() => press('calls.join', { id: next.id })}>
         {callWhen(next.scheduled_start, now)}
       </Button>
     );
@@ -56,14 +56,14 @@ function JoinHere({ id }: { id: string }) {
   const here = useInCall(id);
   if (here)
     return (
-      <Button className="btn-sm" icon="call" onClick={() => void press('calls.open', { id })}>
+      <Button className="btn-sm" icon="call" onClick={() => press('calls.open', { id })}>
         In call
       </Button>
     );
   const n = c ? callCount(c) : 0;
   return (
     // Disabled until the call is read: a Google Meet opens its tab in the press, a voice call asks for the microphone.
-    <Button className="btn-sm" aria-label="Join call" disabled={!c} onClick={() => void press('calls.join', { id })}>
+    <Button className="btn-sm" aria-label="Join call" disabled={!c} onClick={() => press('calls.join', { id })}>
       <LiveMark />
       Join
       {n > 0 && <span className="call-card-n">{n}</span>}
@@ -188,11 +188,11 @@ function CardBody({ c, me, inIt, missed }: { c: Call; me: string | undefined; in
             </Menu>
           )}
           {inIt ? (
-            <Button className="btn-sm" onClick={() => void press('calls.open', { id: c.id })}>
+            <Button className="btn-sm" onClick={() => press('calls.open', { id: c.id })}>
               Open
             </Button>
           ) : (
-            <Button className="btn-sm" variant="primary" onClick={() => void press('calls.join', { id: c.id })}>
+            <Button className="btn-sm" variant="primary" onClick={() => press('calls.join', { id: c.id })}>
               Join
             </Button>
           )}
@@ -221,7 +221,7 @@ function Scheduled({ c }: { c: Call }) {
     <>
       <span className="call-card-n">{callWhen(c.scheduled_start, now)}</span>
       <span className="call-card-go">
-        <Button className="btn-sm" onClick={() => void press('calls.join', { id: c.id })}>
+        <Button className="btn-sm" onClick={() => press('calls.join', { id: c.id })}>
           Join
         </Button>
       </span>

@@ -137,7 +137,7 @@ function NewAgent({ team: start }: { team: string }) {
           variant="primary"
           busy={add.pending}
           disabled={!name.trim() || add.pending}
-          onClick={() => void add.run({ name: name.trim(), role: role.trim() || undefined, team: team || undefined, computer: computer || undefined })}
+          onClick={() => add.run({ name: name.trim(), role: role.trim() || undefined, team: team || undefined, computer: computer || undefined })}
         >
           Add agent
         </Button>
@@ -208,7 +208,7 @@ function Invite({ team: start }: { team: string }) {
           variant="primary"
           busy={invite.pending}
           disabled={!ok || invite.pending}
-          onClick={() => void invite.run({ email: email.trim(), name: name.trim() || undefined, team: team || undefined, role })}
+          onClick={() => invite.run({ email: email.trim(), name: name.trim() || undefined, team: team || undefined, role })}
         >
           Send invite
         </Button>
@@ -258,7 +258,7 @@ function CloudAgents({ team: start }: { team: string }) {
                 </span>
                 <span className="cloud-act">
                   {a.supported ? (
-                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => void press(a.id, () => add.run({ agent: a.id, team: into }))}>
+                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => press(a.id, () => add.run({ agent: a.id, team: into }))}>
                       Add
                     </Button>
                   ) : seat ? (
@@ -269,7 +269,7 @@ function CloudAgents({ team: start }: { team: string }) {
                       </Menu>
                     </>
                   ) : (
-                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => void press(a.id, () => request.run({ agent: a.id, team: into }))}>
+                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => press(a.id, () => request.run({ agent: a.id, team: into }))}>
                       Request
                     </Button>
                   )}

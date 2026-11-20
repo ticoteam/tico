@@ -185,7 +185,7 @@ function OrgEditor({ rule, outside, onDone, onClose }: { rule?: OrgRule; outside
       onClose={onClose}
       foot={
         <>
-          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+          <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
             {rule ? 'Save' : 'Add rule'}
           </Button>
           <Button variant="quiet" onClick={onDone}>
@@ -367,7 +367,7 @@ export function useStageRuleForm({ rule, preset, onSaved, onCancel }: { rule?: S
 
   const foot = (
     <>
-      <Button variant="primary" busy={busy} disabled={!ready} onClick={() => void save()}>
+      <Button variant="primary" busy={busy} disabled={!ready} onClick={() => save()}>
         {rule ? 'Save' : 'Add rule'}
       </Button>
       <Button variant="quiet" onClick={onCancel}>

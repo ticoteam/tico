@@ -1,6 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { IconButton } from '@/kit/IconButton';
+import { Toasts } from '@/kit/Toast';
 import { Button, FillContext } from './Button';
+
+/** A promise the test settles. */
+function later<T>() {
+  let settle!: (v: T) => void;
+  let fail!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    settle = res;
+    fail = rej;
+  });
+  return { promise, settle, fail };
+}
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -26,6 +39,66 @@ describe('Button', () => {
     const b = screen.getByRole('button', { name: 'Save' });
     expect(b.getAttribute('aria-busy')).toBe('true');
     expect(b.className).not.toContain('is-busy');
+  });
+
+  it('takes no press while busy', () => {
+    const onClick = vi.fn();
+    render(<Button busy onClick={onClick}>Save</Button>);
+    const b = screen.getByRole('button', { name: 'Save' });
+    expect(b).toHaveProperty('disabled', true);
+    fireEvent.click(b);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Button', (onClick: () => Promise<unknown>) => <Button onClick={onClick}>Approve</Button>],
+    ['IconButton', (onClick: () => Promise<unknown>) => <IconButton icon="close" label="Approve" onClick={onClick} />],
+  ])('%s stays busy from the press until the work it started is answered, and is not pressed twice', async (_kind, draw) => {
+    const work = later<unknown>();
+    const onClick = vi.fn(() => work.promise);
+    render(draw(onClick));
+    const b = screen.getByRole('button', { name: 'Approve' });
+    fireEvent.click(b);
+    expect(b.getAttribute('aria-busy')).toBe('true');
+    expect(b).toHaveProperty('disabled', true);
+    fireEvent.click(b);
+    expect(onClick).toHaveBeenCalledOnce();
+    await act(async () => work.settle({ ok: true }));
+    expect(b.getAttribute('aria-busy')).toBeNull();
+    expect(b).toHaveProperty('disabled', false);
+  });
+
+  it('says a refusal the press hands back, and a thrown failure, never neither', async () => {
+    const refused = later<unknown>();
+    const thrown = later<unknown>();
+    render(
+      <>
+        <Toasts />
+        <Button onClick={() => refused.promise}>Remove</Button>
+        <Button onClick={() => thrown.promise}>Send</Button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await act(async () => refused.settle({ ok: false, error: 'conflict', why: 'It changed meanwhile' }));
+    expect(await screen.findByText('It changed meanwhile')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await act(async () => thrown.fail(new Error('boom')));
+    expect(await screen.findByText('That did not work')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
+  });
+
+  it('says nothing more when the action said it, or the press answered for itself', async () => {
+    render(
+      <>
+        <Toasts />
+        <Button onClick={() => Promise.resolve({ ok: false, error: 'conflict', told: true })}>Remove</Button>
+        <Button onClick={() => Promise.resolve(false)}>Save</Button>
+      </>,
+    );
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Remove' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+    expect(screen.queryByRole('button', { name: 'Remove' })?.getAttribute('aria-busy')).toBeNull();
+    expect(document.querySelector('.kit-toast')).toBeNull();
   });
 
   it('warns once when a sheet holds two filled buttons', () => {

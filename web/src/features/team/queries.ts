@@ -825,6 +825,7 @@ export async function archiveAgent(slug: string, successor?: string) {
   const revision = known ?? (await queryClient.fetchQuery(agentQuery(slug))).revision ?? 1;
   const out = await write({
     key: agentsQuery.queryKey,
+    wait: true,
     optimistic: (rows: AgentRow[] | undefined) => rows?.filter((r) => r.slug !== slug),
     send: (idempotencyKey) =>
       api.post(`/api/v2/bots/${at(slug)}/archive`, { successor: successor || null, expected_revision: revision }, { idempotencyKey }),
@@ -938,6 +939,7 @@ export async function renamePerson(person: string, name: string) {
 export async function removePerson(person: string) {
   const out = await write({
     key: peopleQuery.queryKey,
+    wait: true,
     optimistic: (roster: PeopleRoster | undefined) => roster && { ...roster, people: roster.people.filter((p) => p.id !== person) },
     send: (idempotencyKey) => api.post(`/api/v2/humans/${at(person)}`, { left: true }, { idempotencyKey }),
   });
@@ -1295,6 +1297,7 @@ export async function requestCloudAgent(agent: string, body: CloudAgentRequest):
 export async function cancelCloudRequest(seat: string): Promise<SeatCanceled> {
   const out = await write({
     key: seatsQuery.queryKey,
+    wait: true,
     optimistic: (seats: ChartSeat[] | undefined) => seats?.filter((x) => x.id !== seat),
     send: (idempotencyKey) => api.post<SeatCanceled>(`/api/v2/seats/${at(seat)}/cancel-request`, {}, { idempotencyKey }),
   });

@@ -50,6 +50,22 @@ describe('write', () => {
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
   });
 
+  it('with wait, shows a removal only once the server has taken it, and nothing changes on a refusal', async () => {
+    queryClient.setQueryData<List>(key, { tasks: [{ id: 't1', title: 'Plan' }] });
+    const gone = (d: List) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== 't1') });
+    let answer!: (v: unknown) => void;
+    const taken = write({ key, wait: true, optimistic: gone, send: () => new Promise((res) => (answer = res)) });
+    expect(titles()).toEqual(['Plan']);
+    answer({});
+    await taken;
+    expect(titles()).toEqual([]);
+
+    queryClient.setQueryData<List>(key, { tasks: [{ id: 't1', title: 'Plan' }] });
+    await expect(write({ key, wait: true, optimistic: gone, send: () => Promise.reject(new ApiError(403, 'forbidden', 'No')) })).rejects.toBeInstanceOf(ApiError);
+    expect(titles()).toEqual(['Plan']);
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+  });
+
   it('reads an area with no live topic again after its own write', async () => {
     quietRoot('goals');
     queryClient.setQueryData(['goals', 'list'], { goals: [] });

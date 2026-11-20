@@ -43,7 +43,7 @@ function List({ task, title, onEdit, onClose }: { task: string; title: string; o
   if (list.isError)
     body = (
       <p className="rq-line">
-        Requesters did not load. <Button onClick={() => void list.refetch()}>Try again</Button>
+        Requesters did not load. <Button onClick={() => list.refetch()}>Try again</Button>
       </p>
     );
   else if (!list.data) body = <SkeletonRows rows={3} />;
@@ -55,7 +55,7 @@ function List({ task, title, onEdit, onClose }: { task: string; title: string; o
           <RequesterRow key={r.id} r={r} onEdit={() => onEdit(r)} />
         ))}
         {list.hasNextPage && (
-          <Button variant="quiet" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+          <Button variant="quiet" disabled={list.isFetchingNextPage} onClick={() => list.fetchNextPage()}>
             More requesters
           </Button>
         )}
@@ -163,7 +163,7 @@ function Editor({ task, who, onDone, onClose }: { task: string; who: Requester |
             </Button>
           )}
           <Button onClick={() => onDone()}>Cancel</Button>
-          <Button variant="primary" disabled={!ready || add.pending} onClick={() => void save()}>
+          <Button variant="primary" disabled={!ready || add.pending} onClick={() => save()}>
             Save
           </Button>
         </>
