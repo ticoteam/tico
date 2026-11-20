@@ -43,25 +43,38 @@ class Refusal(Exception):
 
 
 # ---------------------------------------------------------------------------------------------------- schemas
+def json_equal(a, b):
+    """JSON's equality, which Python's == is not: true is not 1, and 1.0 is 1."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(map(json_equal, a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
 def schema_error(schema, value, path="input"):
     """The first way `value` breaks a strict JSON schema (type, properties, required, additionalProperties, enum,
-    items), or None."""
+    items), or None, read as JSON Schema 2020-12 reads them, as the MCP client's check does (clients/commands/_mcp.py):
+    1.0 is an integer and true is not 1. Standard library only, so the engine can be copied as is (__init__.py); a
+    test holds both checks to jsonschema."""
     kinds = schema.get("type")
     kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
     tests = {
         "string": lambda v: isinstance(v, str),
         "boolean": lambda v: isinstance(v, bool),
         "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+        "integer": lambda v: isinstance(v, int) and not isinstance(v, bool) or isinstance(v, float) and v.is_integer(),
         "null": lambda v: v is None,
         "array": lambda v: isinstance(v, list),
         "object": lambda v: isinstance(v, dict),
     }
     if kinds and not any(tests[kind](value) for kind in kinds):
         return "%s must be %s" % (path, " or ".join(kinds))
-    if value is None:
-        return None
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(json_equal(value, option) for option in schema["enum"]):
         return "%s must be one of: %s" % (path, ", ".join(map(str, schema["enum"])))
     if isinstance(value, dict):
         properties = schema.get("properties", {})
