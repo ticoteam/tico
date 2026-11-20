@@ -1,7 +1,7 @@
 """The two standard-library schema checks read JSON Schema as jsonschema does, in 2020-12 (MCP's dialect when a schema
-names none): the hub's company file actions (backend/company_file/actions.py, copied as is to Tico HQ and the install
-bundle, so it takes no dependency) and the MCP tool table's (clients/commands/_mcp.py, run by `tico` on computers that
-have only the standard library and PyYAML). jsonschema is the referee here, a test dependency only."""
+names none): the hub's company file actions (backend/company_file/actions.py, which the install bundle runs on the
+host's python3, so it takes no dependency) and the MCP tool table's (clients/commands/_mcp.py, run by `tico` on
+computers that have only the standard library and PyYAML). jsonschema is the referee here, a test dependency only."""
 
 import itertools
 import json
@@ -17,6 +17,13 @@ from clients.commands._registry import TOOLS
 ROOT = Path(__file__).resolve().parents[2]
 SCREEN = json.loads((ROOT / "contracts/screen-actions.json").read_text())["actions"]
 HUB_KEYWORDS = {"type", "properties", "required", "additionalProperties", "enum", "items", "description"}
+CLIENT_KEYWORDS = HUB_KEYWORDS | {"anyOf", "minItems", "maxItems", "minLength", "maxLength", "pattern", "minimum"}
+CLIENT_KEYWORDS |= {"maximum", "additionalProperties (a schema)", "default", "title", "examples"}
+# Strings that fit the patterns the shipped schemas use, so every schema gets a valid input to break.
+PATTERNED = tuple(
+    "2026-11-19 2026-11 2026-11-19T10:00:00Z human:ana bot:ops agent:ops * https://acme.example/x ana@acme.example "
+    "acme/repo /tasks c1 #abc ab abc never auto timer bearer segment:a API_KEY word".split()
+) + ("0" * 40, "0 9 * * 1")
 
 
 def hub_ok(schema, value):
@@ -50,9 +57,10 @@ def test_integers_enums_and_null_read_as_jsonschema_reads_them(schema, values):
 
 
 def sample(schema):
-    """One instance shaped like `schema`: its first option, enum value or required fields."""
+    """One valid instance of `schema`: its first option that works, its first enum value or its required fields."""
     if "anyOf" in schema:
-        return sample(schema["anyOf"][0])
+        options = [sample(option) for option in schema["anyOf"]]
+        return next((v for v, o in zip(options, schema["anyOf"]) if Draft202012Validator(o).is_valid(v)), options[0])
     if "enum" in schema:
         return schema["enum"][0]
     kind = schema.get("type")
@@ -63,7 +71,8 @@ def sample(schema):
     if kind == "array":
         return [sample(schema["items"])] * max(1, schema.get("minItems", 1)) if schema.get("items") else []
     if kind == "string":
-        return "a" * max(1, schema.get("minLength", 1))
+        fits = Draft202012Validator(schema).is_valid
+        return next((s for s in PATTERNED if fits(s)), "a" * max(1, schema.get("minLength", 1)))
     return {"integer": max(1, schema.get("minimum", 1)), "number": 1.5, "boolean": True}.get(kind, None)
 
 
@@ -90,9 +99,13 @@ def shipped():
 
 
 def test_every_shipped_schema_is_checked_as_jsonschema_checks_it():
-    wrong = []
+    wrong, unseeded = [], []
     for name, schema in shipped():
         referee = Draft202012Validator(schema)
+        if not referee.is_valid(sample(schema)):
+            unseeded.append(
+                name
+            )  # every input would be refused, so the comparison would prove little: add to PATTERNED
         for value in variants(schema, sample(schema)):
             expected = referee.is_valid(value)
             if (
@@ -102,17 +115,29 @@ def test_every_shipped_schema_is_checked_as_jsonschema_checks_it():
             ):
                 wrong.append((name, json.dumps(value)[:80], expected))
     assert not wrong, wrong[:5]
+    assert not unseeded, unseeded
 
 
-def test_the_company_file_actions_use_only_the_keywords_its_check_reads():
-    def keywords(schema):
-        yield from schema
-        if schema.get("additionalProperties") not in (None, False):
-            yield "additionalProperties (a schema)"
-        for sub in schema.get("properties", {}).values():
-            yield from keywords(sub)
-        if "items" in schema:
-            yield from keywords(schema["items"])
+def keywords(schema):
+    """Every keyword a schema uses, with additionalProperties as a schema named apart (the hub reads only false)."""
+    yield from schema
+    if schema.get("additionalProperties") not in (None, False, True):
+        yield "additionalProperties (a schema)"
+        yield from keywords(schema["additionalProperties"])
+    items = [schema["items"]] if "items" in schema else []
+    for sub in [*schema.get("properties", {}).values(), *schema.get("anyOf", []), *items]:
+        yield from keywords(sub)
 
-    used = {key for action in SPEC.values() for key in keywords(action["input_schema"])}
-    assert used <= HUB_KEYWORDS, used - HUB_KEYWORDS
+
+@pytest.mark.parametrize(
+    "source,allowed",
+    [
+        ("actions", HUB_KEYWORDS),
+        ("mcp", CLIENT_KEYWORDS),
+        ("screen", CLIENT_KEYWORDS),
+    ],
+)
+def test_shipped_schemas_use_only_the_keywords_their_check_reads(source, allowed):
+    # A keyword a check does not read would pass anything; a "$schema" naming another dialect would be read as 2020-12.
+    used = {key for name, schema in shipped() if name.startswith(source + ":") for key in keywords(schema)}
+    assert used <= allowed, used - allowed
