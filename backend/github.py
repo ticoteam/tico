@@ -2275,26 +2275,27 @@ def tell_pushed(c, settings, payload):
 
 
 def _configs_of(c, bots):
-    """{bot: its bot_config row with `config` as shared_bots.declared reads it, and `repo`}, for these bots and the bots
-    they are branches of (execution._repository_of's `rows`), in a few set reads."""
+    """{bot: its bot_config row with `config` as shared_bots.declared reads it, and `repo`}, for these bots, and `repo`
+    alone for the bots they are branches of (execution._repository_of's `rows` reads no more of an original), in a few
+    set reads."""
     from . import bot_settings as BS
     from .shared_bots import _json, source_of
 
     found = {}
 
-    def load(slugs):
+    def load(slugs, columns):
         for part in H.chunks(sorted(set(slugs) - set(found))):
             found.update(
                 (r["bot"], r)
                 for r in c.execute(
-                    f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (%s)"
+                    f"SELECT bot,{columns},repo FROM bot_config bc {BS.JOIN} WHERE bot IN (%s)"
                     % ",".join("?" * len(part)),
                     part,
                 )
             )
 
-    load(bots)
-    load({source_of(_json(r["config"])) for r in found.values()} - {""})
+    load(bots, f"{BS.CONFIG} AS config")
+    load({source_of(_json(r["config"])) for r in found.values()} - {""}, "NULL AS config")
     return found
 
 

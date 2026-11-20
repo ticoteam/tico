@@ -1,6 +1,6 @@
 """Measures how long the hourly retention sweeps hold the single SQLite writer per write transaction
-(store.sweep_idempotency, and sweep_deltas and sweep_tokens, which share its batch size), at the old batch (5000 rows)
-and the new one (store.SWEEP_BATCH), on fictional cached request answers past their retry window.
+(store.sweep_idempotency, and sweep_deltas and sweep_tokens, which share its writes), at the old 5000 rows a write and
+the new store.SWEEP_BATCH, on fictional cached request answers past their retry window.
 
     nice -n 10 .venv/bin/python bench/perf-retention-sweeps.py
 
@@ -79,7 +79,9 @@ def main():
     from backend.app import create_app
     from backend.tests.helpers.api import api_settings
 
-    for label, batch in (("old batch 5000", 5000), (f"new batch {S.SWEEP_BATCH}", S.SWEEP_BATCH)):
+    new = S.SWEEP_BATCH
+    for label, write in (("old writes of 5000", 5000), (f"new writes of {new}", new)):
+        S.SWEEP_BATCH = write  # the rows per write transaction; the sweep's own batch (5000) is unchanged
         with tempfile.TemporaryDirectory(prefix=".tmp-retention-", dir=Path(__file__).resolve().parents[1]) as d:
             folder = Path(d)
             app = create_app(dataclasses.replace(api_settings(folder), flight_recorder=True))
@@ -89,7 +91,7 @@ def main():
                     seed(store)
                     meter = Meter(store.recorder)
                     meter.on = True
-                    deleted = S.sweep_idempotency(store, NOW, batch=batch)
+                    deleted = S.sweep_idempotency(store, NOW)
                     meter.on = False
                     ms = [h[0] for h in meter.holds]
                     st = [h[1] for h in meter.holds]
