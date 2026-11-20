@@ -14,6 +14,7 @@ from . import media, models as M, task_references
 from .store import H, Problem
 from .views import human_only
 from .api_contract import api_v2
+from .api_answers.tasks import TaskMeetings
 
 PAGE_BYTES = 64 * 1024
 
@@ -278,7 +279,7 @@ def install(app, store, auth, mutate):
             "Tasks",
             "listTaskMeetings",
             "Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap",
-            "TaskMeetings",
+            TaskMeetings,
         ),
     )
     def meetings(request: Request, tid: str, limit: int = Query(20, ge=1, le=50), cursor: str | None = None):

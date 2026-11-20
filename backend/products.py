@@ -21,6 +21,7 @@ from fastapi import Request
 from pydantic import Field
 
 from backend.api_contract import api_v2
+from backend.api_answers.products import ProductList, ProductResult
 from backend.entities import store as ES
 from backend.models import Contract
 from backend.store import Problem
@@ -320,7 +321,7 @@ def install(
     def one(c: sqlite3.Connection, who: Any, entity_id: str) -> dict[str, Any]:
         return {"product": views(c, who, [entity_id])[0]}
 
-    @app.get("/api/v2/products", **api_v2("Products", "listProducts", "Our products", "ProductList"))
+    @app.get("/api/v2/products", **api_v2("Products", "listProducts", "Our products", ProductList))
     def list_products(request: Request):
         who = caller(request)
         with read() as c:
@@ -332,7 +333,7 @@ def install(
             "Products",
             "getProduct",
             "One product",
-            "ProductResult",
+            ProductResult,
             parameters={"key": "The product's key: its id after product/"},
         ),
     )
@@ -341,7 +342,7 @@ def install(
         with read() as c:
             return one(c, who, product_id(c, str(who.actor), key))
 
-    @app.post("/api/v2/products", **api_v2("Products", "addProduct", "Add a product", "ProductResult"))
+    @app.post("/api/v2/products", **api_v2("Products", "addProduct", "Add a product", ProductResult))
     def add_product(request: Request, body: ProductCreate):
         who = caller(request)
 
@@ -366,7 +367,7 @@ def install(
             "Products",
             "updateProduct",
             "Edit a product",
-            "ProductResult",
+            ProductResult,
             description="A field left out is unchanged. An empty string clears kind, status, tax_kind or owner_teammate. "
             "repositories, agreements and depends_on replace the whole set: [] removes every one.",
             parameters={"key": "The product's key: its id after product/"},

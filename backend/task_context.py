@@ -8,6 +8,7 @@ from . import context_search, page_links
 from .files import visible_rows
 from .store import Problem
 from .api_contract import api_v2
+from .api_answers.tasks import TaskContext
 
 MAX_ITEMS = 10
 
@@ -82,7 +83,7 @@ def install(app, store, auth):
             "Tasks",
             "getTaskContext",
             "Up to 10 pages and 10 meetings, newest first, filtered by your current read access; metadata only",
-            "TaskContext",
+            TaskContext,
         ),
     )
     def context(request: Request, tid: str):

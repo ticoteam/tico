@@ -19,6 +19,7 @@ from . import threads
 from .names import lookup
 from .store import Problem
 from .api_contract import api_v2
+from .api_answers.tasks import TaskResult
 
 BODY_MAX = 60_000
 
@@ -61,7 +62,7 @@ def install(app, store, auth, create_task, public_url=""):
             "Threads",
             "makeTaskFromMessage",
             "A task from a message I read: the server copies its text and a link back, and the task is private unless the thread is company-wide",
-            "TaskResult",
+            TaskResult,
         ),
     )
     def message_task(request: Request, message_id: str, body: MessageTask):

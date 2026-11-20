@@ -26,6 +26,7 @@ from . import models as M
 from . import rooms
 from .store import H, Problem, digest
 from .api_contract import api_v2
+from .api_answers.tasks import InboundTaskResult
 
 PREFIX = "tico_sk_"
 INBOUND_PATH = "/api/v2/inbound/tasks"
@@ -282,7 +283,7 @@ def install_service_keys(app, store, auth, mutate):
             "Tasks",
             "upsertInboundTask",
             "Another system's work as it is now, by its own key: files, updates, closes or reopens one task (service key only; docs/service-keys.md)",
-            "InboundTaskResult",
+            InboundTaskResult,
             security=[{"serviceKey": []}],
             idempotency="Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header is ignored.",
         ),

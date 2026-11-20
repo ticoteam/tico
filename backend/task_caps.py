@@ -22,6 +22,7 @@ from . import audit_log
 from .models import ID, Contract
 from .store import H, Problem
 from .api_contract import api_v2
+from .api_answers.tasks import TaskCapWrite, TaskCaps
 
 MAX = 100_000
 
@@ -403,7 +404,7 @@ def install(app, store, auth, mutate):
             "Tasks",
             "getTaskCaps",
             "Task caps with today's count and the tasks closed before the receiver acted, per pair; for the owner and admins, the changes bots asked for, waiting as approvals",
-            "TaskCaps",
+            TaskCaps,
         ),
     )
     def caps_list(request: Request):
@@ -419,7 +420,7 @@ def install(app, store, auth, mutate):
             "Tasks",
             "setTaskCap",
             "Cap the tasks one teammate sends another a day (0 blocks, null removes). The receiver must be a manager above the sender. A bot's own change comes back as a pending approval a person decides",
-            "TaskCapWrite",
+            TaskCapWrite,
         ),
     )
     def caps_put(request: Request, body: TaskCap):
@@ -439,7 +440,7 @@ def install(app, store, auth, mutate):
             "Tasks",
             "removeTaskCap",
             "Remove the cap between two teammates (?sender=&receiver=); a bot's removal is an approval too",
-            "TaskCapWrite",
+            TaskCapWrite,
         ),
     )
     def caps_delete(request: Request, sender: str, receiver: str):

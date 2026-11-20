@@ -4,12 +4,14 @@ from backend.tests.helpers.api import headers
 
 
 def conforms(value, schema, root, where="$"):
-    """The subset of JSON Schema the contract uses: type, required, properties, items, oneOf, enum, $ref."""
+    """The subset of JSON Schema the contract uses: type, required, properties, items, oneOf/anyOf (one matching
+    option is enough), enum, $ref."""
     if "$ref" in schema:
         return conforms(value, root["components"]["schemas"][schema["$ref"].rsplit("/", 1)[1]], root, where)
-    if "oneOf" in schema:
-        errors = [conforms(value, option, root, where) for option in schema["oneOf"]]
-        return None if any(e is None for e in errors) else "; ".join(errors)
+    for key in ("oneOf", "anyOf"):
+        if key in schema:
+            errors = [conforms(value, option, root, where) for option in schema[key]]
+            return None if any(e is None for e in errors) else "; ".join(e for e in errors if e)
     if "enum" in schema:
         return None if value in schema["enum"] else "%s: %r not in %r" % (where, value, schema["enum"])
     kinds = schema.get("type")

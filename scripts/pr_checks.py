@@ -2015,11 +2015,16 @@ API_CONTRACT = ("backend/openapi_v2.py", "backend/api_contract.py")
 
 
 def shapes_the_api(name, root=ROOT):
-    """True for a file the v2 API document is made from: the generator, the contract, a schema (backend/api_schemas/), a
-    routes module, or any backend module that declares a route (`**api_v2(` on its decorator)."""
+    """True for a file the v2 API document is made from: the generator, the contract, an answer (backend/api_answers/)
+    or a hand-written schema (backend/api_schemas/), a routes module, or any backend module that declares a route
+    (`**api_v2(` on its decorator)."""
     if not (name.startswith("backend/") and name.endswith(".py")) or "/tests/" in name:
         return False
-    if name in API_CONTRACT or name.startswith("backend/api_schemas/") or name.endswith("_routes.py"):
+    if (
+        name in API_CONTRACT
+        or name.startswith(("backend/api_answers/", "backend/api_schemas/"))
+        or name.endswith("_routes.py")
+    ):
         return True
     try:
         return "**api_v2(" in (root / name).read_text()

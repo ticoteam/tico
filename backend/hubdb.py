@@ -67,7 +67,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn, get_args
 
 from .batch_work import isolated
 from . import idempotency_messages
@@ -235,7 +235,9 @@ WORKFLOW_LABELS = ("goal:on", "goal:off")
 # A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
 # retrying a refusal it already had cannot quarantine itself in seconds.
 LABEL_REFUSAL_WINDOW_S = 3600
-LINK_KINDS = ("pr", "issue", "url", "doc", "worktree", "session")
+# A task link's kind; the API's TaskLinkView (backend/api_answers/tasks.py) declares the same type.
+LinkKind = Literal["pr", "issue", "url", "doc", "worktree", "session"]
+LINK_KINDS: tuple[str, ...] = get_args(LinkKind)
 TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")  # warn | refuse | off
 # Rule 7's writing checks on an item for a person and the shape of an update: warned about with
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting

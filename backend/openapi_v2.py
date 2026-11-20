@@ -3,9 +3,10 @@
 FastAPI would describe every route, runner and bot endpoint included. A frontend team needs the
 resources a person's app is built from, so this module keeps only those, named and grouped by resource where each route
 is declared (`**api_v2(...)` on its decorator, backend/api_contract.py), and describes the answers a person gets. A path
-lists its methods in the order the app registers them. Handlers return
-plain dictionaries rather than response models, so the answer shapes are declared in backend/api_schemas/, one module
-per tag; a test (backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
+lists its methods in the order the app registers them. Handlers return plain dictionaries, which orjson encodes; their
+shapes are TypedDicts in backend/api_answers/, one module per tag, whose schemas FastAPI writes. Tags not moved there yet
+keep hand-written JSON Schema in backend/api_schemas/. A test (backend/tests/test_openapi_v2.py) checks both against
+live responses. The document is generated, not committed:
 `python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
 the server serves it at `GET /api/v2/openapi.json`.
 
@@ -18,6 +19,7 @@ import re
 import sys
 from pathlib import Path
 
+from .api_answers._base import HAND_WRITTEN
 from .api_contract import MARK, error, ref
 from .api_schemas import SCHEMAS
 from .legacy_spellings import legacy_of
@@ -172,6 +174,20 @@ def _refs(node, found):
             _refs(value, found)
 
 
+def _closure(components, names):
+    """The components named and every one they refer to, by name; a name with no component is left out."""
+    keep, queue = {}, sorted(names)
+    while queue:
+        name = queue.pop()
+        if name in keep or name not in components:
+            continue
+        keep[name] = components[name]
+        more = set()
+        _refs(components[name], more)
+        queue.extend(sorted(more))
+    return keep
+
+
 def operations(app):
     """Each stable operation as (path, method, tag, operationId, summary, contract): the routes whose decorator
     carries api_v2(...), in the order the app serves them, with what api_v2 says about each (backend/api_contract.py)."""
@@ -245,6 +261,9 @@ def spec(app):
                 responses[code] = response
         if "security" in contract:
             op["security"] = contract["security"]
+        ok = (responses.get("200") or {}).get("content", {}).get("application/json", {}).get("schema")
+        if contract.get("typed") and isinstance(ok, dict):
+            ok.pop("title", None)  # FastAPI titles an inline answer ("Response 200 ..."): a list of answers, say
         op["responses"] = dict(sorted(responses.items()))
         if method in WRITE_METHODS and path.startswith("/api/v2/"):
             optional = contract.get("idempotency")
@@ -263,20 +282,34 @@ def spec(app):
         paths.setdefault(path, {})[method] = op
     used = set()
     _refs(paths, used)
-    request_schemas = full.get("components", {}).get("schemas", {})
-    collisions = SCHEMAS.keys() & request_schemas.keys()
+    # FastAPI's schemas: the request bodies (backend/models.py) and the answers declared in backend/api_answers/.
+    generated = full.get("components", {}).get("schemas", {})
+    # An answer that refers to one still written by hand names a stand-in (api_answers._base.hand_written): the
+    # hand-written schema of that name takes its place.
+    stand_ins = {name for name, schema in generated.items() if schema.get(HAND_WRITTEN)}
+    if stand_ins - SCHEMAS.keys():
+        raise RuntimeError("No hand-written schema for: " + ", ".join(sorted(stand_ins - SCHEMAS.keys())))
+    generated = {name: schema for name, schema in generated.items() if name not in stand_ins}
+    collisions = (SCHEMAS.keys() | {"Problem"}) & generated.keys()
     if collisions:
-        raise RuntimeError("Request and response schema names collide: " + ", ".join(sorted(collisions)))
-    components = {"Problem": PROBLEM, **SCHEMAS, **request_schemas}
-    keep, queue = {}, sorted(used | {"Problem"})
-    while queue:
-        name = queue.pop()
-        if name in keep or name not in components:
-            continue
-        keep[name] = components[name]
-        more = set()
-        _refs(components[name], more)
-        queue.extend(sorted(more))
+        raise RuntimeError("Generated and hand-written schema names collide: " + ", ".join(sorted(collisions)))
+    components = {"Problem": PROBLEM, **SCHEMAS, **generated}
+    keep = _closure(components, used | {"Problem"})
+    published = set()
+    _refs(list(keep.values()), published)
+    if (used | published) - keep.keys():
+        raise RuntimeError(
+            "The document refers to schemas it does not have: " + ", ".join(sorted((used | published) - keep.keys()))
+        )
+    # Two classes of one name (an answer and a request body) make FastAPI rename both ("Name-Input", "Name-Output", or
+    # "backend__module__Name"), which would rename a published answer without a word.
+    answers = set()
+    _refs([op["responses"].get("200") for ops in paths.values() for op in ops.values()], answers)
+    renamed = sorted(name for name in _closure(components, answers) if not re.fullmatch(r"[A-Za-z0-9]+", name))
+    if renamed:
+        raise RuntimeError(
+            "An answer shares its name with another schema, so FastAPI renamed it: " + ", ".join(renamed)
+        )
     return {
         "openapi": full["openapi"],
         "info": {"title": "Tico API (v2)", "version": VERSION, "description": DESCRIPTION},

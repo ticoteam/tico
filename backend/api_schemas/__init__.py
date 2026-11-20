@@ -1,6 +1,7 @@
 # pyright: strict
-"""The answer schemas of the stable v2 contract, one module per tag: a schema lives with the tag whose routes
-answer with it, and one several tags share lives with the tag it is about. backend/openapi_v2.py gathers SCHEMAS.
+"""The answer schemas of the stable v2 contract still written by hand, one module per tag: a schema lives with the tag
+whose routes answer with it, and one several tags share lives with the tag it is about. backend/openapi_v2.py gathers
+SCHEMAS. Tags move to TypedDicts in backend/api_answers/ one at a time; a tag's module here is deleted when they do.
 """
 
 from . import (
@@ -37,7 +38,6 @@ from . import (
     pages,
     physical_mail,
     pipelines,
-    products,
     repositories,
     risk,
     roadmaps,
@@ -48,7 +48,6 @@ from . import (
     subscriptions,
     support,
     tags,
-    tasks,
     team,
     team_chart,
     threads,
@@ -56,7 +55,6 @@ from . import (
     updates,
     usage,
     webhook_relay,
-    webhooks,
 )
 from ._base import SCHEMAS
 
@@ -95,7 +93,6 @@ MODULES = (
     pages,
     physical_mail,
     pipelines,
-    products,
     repositories,
     risk,
     roadmaps,
@@ -106,7 +103,6 @@ MODULES = (
     subscriptions,
     support,
     tags,
-    tasks,
     team,
     team_chart,
     threads,
@@ -114,7 +110,6 @@ MODULES = (
     updates,
     usage,
     webhook_relay,
-    webhooks,
 )
 
 __all__ = ["SCHEMAS"]
