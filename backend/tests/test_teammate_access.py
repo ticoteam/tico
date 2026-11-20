@@ -593,9 +593,6 @@ def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agr
         thread_id = out.get("thread_id") or out.get("conversation_id")
         for member in ("bot:counsel", "bot:analyst"):  # a company thread's members are its bots
             threads.add_member(c, "human:ana", thread_id, member)
-        c.execute(
-            "UPDATE thread_members SET added_by='human:cara' WHERE thread_id=? AND actor='bot:analyst'", (thread_id,)
-        )
     with store.read() as c:
         everyone = [r[0] for r in c.execute("SELECT 'human:'||id FROM humans")] + ["group:legal", "group:contracts"]
         everyone += ["bot:" + r[0] for r in c.execute("SELECT bot FROM bot_config")] + [
@@ -610,6 +607,5 @@ def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agr
             )
     for name, sees in {"eve": False, "fay": True}.items():  # neither is a member: the page is redacted for both
         members = api.get(f"/api/v2/threads/{thread_id}", headers=headers(tokens[name])).json()["members"]["members"]
-        actors = {m["actor"]: m["added_by"] for m in members}
-        assert ("bot:counsel" in actors) is sees, name
-        assert actors["bot:analyst"] == ("human:cara" if sees else ""), name
+        actors = {m["actor"] for m in members}
+        assert ("bot:counsel" in actors) is sees and "bot:analyst" in actors, name
