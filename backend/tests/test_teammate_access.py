@@ -591,10 +591,10 @@ def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agr
     with store.transaction() as c:
         out = threads.post(c, "human:ana", None, "Lease plan", start={"title": "Lease", "audience": "company"})
         thread_id = out.get("thread_id") or out.get("conversation_id")
-        for member in ("human:cara", "human:fay", "bot:counsel", "bot:analyst"):
+        for member in ("bot:counsel", "bot:analyst"):  # a company thread's members are its bots
             threads.add_member(c, "human:ana", thread_id, member)
         c.execute(
-            "UPDATE thread_members SET added_by='human:cara' WHERE thread_id=? AND actor='human:fay'", (thread_id,)
+            "UPDATE thread_members SET added_by='human:cara' WHERE thread_id=? AND actor='bot:analyst'", (thread_id,)
         )
     with store.read() as c:
         everyone = [r[0] for r in c.execute("SELECT 'human:'||id FROM humans")] + ["group:legal", "group:contracts"]
@@ -608,8 +608,8 @@ def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agr
             assert Known(c, viewer, auth).strangers_of(everyone) == Known(c, viewer, auth).strangers & set(everyone), (
                 name
             )
-    for name, sees in {"eve": False, "fay": True}.items():
+    for name, sees in {"eve": False, "fay": True}.items():  # neither is a member: the page is redacted for both
         members = api.get(f"/api/v2/threads/{thread_id}", headers=headers(tokens[name])).json()["members"]["members"]
         actors = {m["actor"]: m["added_by"] for m in members}
-        assert ("human:cara" in actors) is sees and ("bot:counsel" in actors) is sees, name
-        assert actors["human:fay"] == ("human:cara" if sees else ""), name
+        assert ("bot:counsel" in actors) is sees, name
+        assert actors["bot:analyst"] == ("human:cara" if sees else ""), name
