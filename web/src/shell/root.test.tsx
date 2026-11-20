@@ -450,6 +450,25 @@ describe('a task opened from a board', () => {
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
   });
 
+  it('heads its list as a crumb, Tasks › the pipeline ⌄, and × puts the menu back in the list’s place until you leave the tasks', async () => {
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    expect(within(list).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/tasks');
+    expect(within(list).getByRole('button', { name: 'Engineering' })).toBeTruthy();
+    fireEvent.click(within(list).getByRole('button', { name: 'Close the list' }));
+    // the company is one press away again: the menu, open, where the list was; the task stays
+    expect(await screen.findByRole('navigation', { name: 'Main' })).toBeTruthy();
+    expect(screen.queryByRole('navigation', { name: 'Engineering' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'An open task' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/tasks/eng/7');
+    // back on the board, the next task opened from it has its list again
+    act(() => router.history.back());
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    expect(await screen.findByRole('navigation', { name: 'Engineering' })).toBeTruthy();
+  });
+
   it('enters Flow only from its own play mark, and Escape leaves Flow for the task it was entered from', async () => {
     const router = await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
