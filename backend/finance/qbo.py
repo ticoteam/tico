@@ -110,7 +110,9 @@ def _http(method: str, url: str, headers: Mapping[str, str], data: bytes | None)
         reply = outbound_http.send(method, url, headers=headers, content=data, timeout=TIMEOUT)
     except outbound_http.Failed:
         return Reply(0)
-    return _reply(reply.status, reply.content, reply.headers.get("Retry-After"))
+    if not reply.complete:  # a refusal cut short: whether a write landed is unknown
+        return Reply(0)
+    return _reply(reply.status, reply.content, outbound_http.header(reply.headers, "Retry-After"))
 
 
 def _reply(status: int, raw: bytes, retry: str | None) -> Reply:

@@ -9,9 +9,10 @@ import logging
 import urllib.parse
 import uuid
 
+import httpx
 import pytest
 
-from backend import hook_relay
+from backend import hook_relay, outbound_http
 from backend import trigger_presets as P
 from backend.finance import books_link, books_sync
 from backend.finance import qbo as QC
@@ -1173,3 +1174,23 @@ def test_a_429_with_retry_after_waits_that_long_and_no_more_than_the_cap():
     client = QC.QuickBooks("123", lambda force: "tok", base="http://127.0.0.1:9", transport=wire, sleep=waits.append)
     client.find("account.create", {"name": "Checking"}, "account:checking")
     assert waits == [7.0, QC.MAX_WAIT]
+
+
+class _CutShort(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b'{"Fault": '
+        raise httpx.ReadError("connection dropped")
+
+
+def test_a_write_whose_429_is_cut_short_is_unknown_and_sent_once(monkeypatch):
+    posts: list[str] = []
+
+    def cut(request: httpx.Request) -> httpx.Response:
+        posts.append(request.method)
+        return httpx.Response(429, headers={"Retry-After": "1"}, stream=_CutShort())
+
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(cut))
+    waits: list[float] = []
+    client = QC.QuickBooks("123", lambda force: "tok", base="https://qb.example", sleep=waits.append)
+    assert client._call("POST", "invoice", body={"Line": []}).status == 0
+    assert posts == ["POST"] and waits == []
