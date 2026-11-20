@@ -19,6 +19,9 @@
 .shell-place[data-under]>.pane,.shell-place[data-under]>.pk-panel-host>.pane{border-left:var(--under) solid transparent}
 /* tucked: the card stays (its tone, its corners, its shadow), its content does not show; the edge over it opens it */
 .shell-place[data-shut]>.pane>*,.shell-place[data-shut]>.pk-panel-host>.pane>*{visibility:hidden}
+/* and nothing in it shows on its own: a child that sets visibility:visible (the chat's Jump to latest) would else float
+   over the edge */
+.shell-place[data-shut] :is(.pane,.pk-panel-host) *{visibility:hidden}
 .shell-edge{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));width:var(--tuck-edge);
   display:flex;flex-direction:column;align-items:center;gap:var(--s-3);padding:var(--s-3h) 0 0;border:0;border-radius:var(--r-pane);border-top-left-radius:0;border-bottom-left-radius:0;background:none;color:var(--ink-2);cursor:pointer;
   transition:background var(--dur-fast) var(--ease)}
