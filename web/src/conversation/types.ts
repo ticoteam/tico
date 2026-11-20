@@ -32,13 +32,6 @@ export interface Refs {
   [k: string]: unknown;
 }
 
-/** One emoji on a message: how many, and who (the server keeps the first 20 actors). */
-export interface Reaction {
-  emoji: string;
-  count: number;
-  actors: string[];
-}
-
 /** The message a reply answers, as the timeline quotes it (`reply_to`); `hidden` when the reader may not see it. */
 export interface ReplyQuote {
   id: string;
@@ -65,7 +58,6 @@ export interface ChatMessage {
   hidden?: boolean;
   refs?: Refs;
   run?: { run_id?: string; steps?: number; took_s?: number } | null;
-  reactions?: Reaction[];
   /** The message this one answers; `reply_to` is its quote (null: none). The stream sends only `in_reply_to`. */
   in_reply_to?: string | null;
   reply_to?: ReplyQuote | null;

@@ -14,8 +14,7 @@
 /* a name longer than its column (the mock's names all fit one line) wraps to a second line, then ends in an ellipsis;
    it never runs into the rate. The full name is the title. */
 .co .pipe-name{color:var(--ink);font-weight:var(--w-strong);min-width:0;height:auto;white-space:normal;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
-/* display and opacity undo conversation.css's message `.rate` (Good / Not good), which is global and hides it until hover */
-.co .rate{display:block;opacity:1;color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
+.co .rate{color:var(--ink-2);font-variant-numeric:tabular-nums;text-align:right}
 .co .rate-out{text-align:left}
 .co .line{position:relative;align-self:stretch;display:flex;align-items:stretch}
 .co .line::before{content:"";position:absolute;left:0;right:5px;bottom:23px;height:2px;border-radius:var(--r-pill);background:var(--line-strong)}

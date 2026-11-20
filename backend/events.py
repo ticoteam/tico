@@ -2997,6 +2997,80 @@ def needs_baseline(c, auth, who, task_view):
     return {"marks": marks, "version": version}
 
 
+class _Baseline:
+    """One build of a person's Needs-you baseline for every stream of theirs that joined it before its snapshot began."""
+
+    __slots__ = ("begun", "seq", "held")
+
+    def __init__(self):
+        self.begun = False  # set on the lane just before the build's read snapshot begins
+        self.seq = 0
+        self.held = {"marks": {}, "version": ""}
+
+    def copy(self):
+        """A stream's own copy: _needs_list moves it on for that stream alone."""
+        return {"marks": dict(self.held["marks"]), "version": self.held["version"]}
+
+
+class Baselines:
+    """The Needs-you baselines `needs=changes` streams start from (needs_baseline), built once for all of one person's
+    streams that open together: ten tabs waking at once, or every client reconnecting after a release, build one or two
+    lists per person rather than one per stream. Each build takes its turn on Needs you's own lane
+    (backend/needs_lane.py), from one read snapshot that also gives the change number its streams start at.
+
+    A stream joins the person's newest build while that build's snapshot has not begun, so the snapshot holds
+    everything committed before the stream asked, as a build of its own would. Once it has begun, the next stream
+    starts the next build, which the rest join. Nothing is kept after a build: a later stream builds again. Keyed by the
+    whole identity (needs_cache.viewer), so two callers who may see different things never share one, and by event
+    loop. A failed build fails each stream that joined it."""
+
+    def __init__(self, store):
+        self.store = store
+        self._open = {}  # (loop, identity, task view): the newest build streams may still join
+
+    async def start(self, app, auth, who, task_view):
+        """(the change number the stream starts at, its baseline)."""
+        from . import needs_cache, needs_lane
+
+        loop = asyncio.get_running_loop()
+        key = (loop, needs_cache.viewer(who), task_view)
+        entry = self._open.get(key)
+        if entry is None or entry[0].begun:
+            build = _Baseline()
+            task = loop.create_task(needs_lane.run(app, self._build, build, auth, who, task_view))
+            entry = self._open[key] = (build, task)
+            task.add_done_callback(lambda done, entry=entry: self._finished(key, entry, done))
+        build, task = entry
+        # Shielded: one client leaving does not cancel the build the others wait on.
+        await asyncio.shield(task)
+        return build.seq, build.copy()
+
+    def _build(self, build, auth, who, task_view):
+        with self.store.read() as c:
+            c.execute("BEGIN")  # one snapshot: the baseline and the change number it stands at agree
+            try:
+                build.begun = True  # before its first read, when the snapshot begins
+                build.seq = latest(c)
+                build.held = needs_baseline(c, auth, who, task_view)
+            finally:
+                if c.in_transaction:
+                    c.rollback()
+
+    def _finished(self, key, entry, task):
+        if self._open.get(key) is entry:
+            del self._open[key]
+        if not task.cancelled():
+            task.exception()  # retrieved here: each stream that joined raises it itself
+
+
+def baselines(store):
+    """The store's Needs-you baselines for streams that open (one per Store, so per database)."""
+    existing = getattr(store, "event_baselines", None)
+    if existing is None:
+        existing = store.event_baselines = Baselines(store)
+    return existing
+
+
 def _needs_list(view, rows, task_view, held=None):
     from .views import needs_bots, needs_items, needs_kinds, needs_marks, needs_stages
 
@@ -3006,7 +3080,18 @@ def _needs_list(view, rows, task_view, held=None):
     items = built[task_view]  # read only below: each stream's own marks and counts come from it
     if held is None:
         return [(rows[-1], {"count": len(items), "items": items})]
-    marks, version = needs_marks(items)
+    # The marks and whole-list facts of one list are the same for each of this identity's streams of the round.
+    facts = view.mine.setdefault("needs_facts", {})
+    if task_view not in facts:
+        marks, version = needs_marks(items)
+        facts[task_view] = (
+            marks,
+            version,
+            needs_bots(items, view.who.actor),
+            needs_stages(items),
+            needs_kinds(items),
+        )
+    marks, version, bots, stages, by_kind = facts[task_view]
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
     removed = [k for k in before if k not in marks]
@@ -3017,11 +3102,11 @@ def _needs_list(view, rows, task_view, held=None):
         "base": held.get("version"),
         "changed": None if many else changed,
         "removed": None if many else removed,
-        "bots": needs_bots(items, view.who.actor),
-        "stages": needs_stages(items),
-        "by_kind": needs_kinds(items),
+        "bots": dict(bots),
+        "stages": dict(stages),
+        "by_kind": dict(by_kind),
     }  # whole-list facts, even on a page
-    held.update(marks=marks, version=version)
+    held.update(marks=marks, version=version)  # shared, never changed: the next build replaces it whole
     return [(rows[-1], entry)]
 
 
@@ -3584,6 +3669,7 @@ def install(app, store, auth, task_views, task_view):
     doorbell = bell(store)
     shared = hydrated(store)
     served = rounds(store)
+    starting = baselines(store)
     on_screen = screen_actions.screens(store)
 
     @app.get("/api/v2/runs/{run_id}/steps/{seq}")
@@ -3654,12 +3740,6 @@ def install(app, store, auth, task_views, task_view):
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 
-        def start():
-            with store.read() as c:
-                if held is not None:
-                    held.update(needs_baseline(c, auth, who, task_view))
-                return latest(c)
-
         sign_in = SignIn(auth, request.headers, who)
         watch = Watch(store, auth, who, meetings, tasks)
 
@@ -3702,18 +3782,26 @@ def install(app, store, auth, task_views, task_view):
             with store.read() as c:
                 return latest(c)
 
-        now_seq = await asyncio.to_thread(start)
-        doorbell.observe(now_seq)
-        cursor = after if after is not None and after >= 0 else now_seq
+        # Where a stream without a Needs-you baseline starts, read before its response as always. One with a baseline
+        # starts where its baseline's snapshot stands, which begins after it asked (Baselines).
+        opened_at = await asyncio.to_thread(newest) if held is None else 0
 
         async def generate():
-            nonlocal cursor
+            # The stream opens at once: its Needs-you baseline, the one costly part of starting, comes before `ready`,
+            # built once for all of this person's streams that open together (Baselines).
+            yield "retry: 1000\n\n"
+            if held is not None:
+                now_seq, baseline = await starting.start(request.app, auth, who, task_view)
+                held.update(baseline)
+            else:
+                now_seq = opened_at
+            doorbell.observe(now_seq)
+            cursor = after if after is not None and after >= 0 else now_seq
             leave = doorbell.reader(store)
             # The person's app is open while a stream of theirs follows `screen` (backend/screen_actions.py).
             unfollow = on_screen.follow(who.actor) if "screen" in wanted and not agent else None
             every, beat = keepalive_seconds(store), Beat(check)
             try:
-                yield "retry: 1000\n\n"
                 yield _frame(
                     None,
                     "ready",

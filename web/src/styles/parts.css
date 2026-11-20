@@ -192,9 +192,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .file:hover{background:var(--well-2)}
 .file .ico{color:var(--muted)}
 .file em{font-style:normal;font-size:var(--t-xs);color:var(--muted)}
-.reacts{display:flex;gap:4px;margin-top:6px}
-.react{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:12px;background:var(--well);font-size:var(--t-sm);line-height:1}
-.react b{font-weight:var(--w-text);font-size:var(--t-xs);color:var(--muted)}
 .chat-foot{flex:none;padding:4px 12px 12px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .scope{display:inline-flex;align-items:center;gap:2px;height:24px;padding:0 2px 0 8px;border-radius:var(--r-chip);background:var(--well);color:var(--ink-2);font-size:var(--t-xs)}
 .scope button{width:20px;height:20px;border:0;background:none;border-radius:5px;display:grid;place-items:center;color:var(--muted)}

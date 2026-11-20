@@ -759,3 +759,71 @@ def test_a_run_output_naming_a_meeting_inside_its_payload_is_sent_as_the_run_pag
         )
     reads, _ = _drain(api, cursor, topics=("runs",))
     assert _texts(reads) == ["notes"]
+
+
+@pytest.mark.slow
+def test_a_persons_streams_opening_together_start_at_once_and_build_one_needs_baseline(api, live, monkeypatch):
+    """A `needs=changes` stream's response starts before its Needs-you baseline is built, ten of one person's streams
+    opening while the build waits for its turn build it once, and each `ready` names the list's version. A stream
+    opening after that build's snapshot began builds its own, so it misses nothing committed before it asked."""
+    import threading
+
+    built, gate, real = [], threading.Event(), E.needs_baseline
+
+    def counted(c, auth, who, task_view):
+        assert gate.wait(20)
+        built.append(who.actor)
+        return real(c, auth, who, task_view)
+
+    monkeypatch.setattr(E, "needs_baseline", counted)
+    post(api, "tasks", {"owner": "ben", "title": "OK the launch copy", "body": "Please."})
+    holding = threading.Event()
+
+    def lane_busy():  # the build waits for its turn on Needs you's lane, as behind other people's lists
+        holding.wait(20)
+
+    lane = api.app.state.needs_lane
+    busy = [lane.submit(lane_busy) for _ in range(2)] if lane is not None else []
+    streams = [live("ana-test", "?topics=needs&needs=changes") for _ in range(10)]
+    assert [s.status for s in streams] == [200] * 10  # every response began while the build waits
+    holding.set()
+    gate.set()
+    for done in busy:
+        done.result(timeout=20)
+    version = api.get("/api/v2/needs-you", headers=headers()).json()["version"]
+    assert {s.until(topic("ready"))["data"]["needs_version"] for s in streams} == {version}
+    assert built == ["human:ana"]
+    live("ana-test", "?topics=needs&needs=changes").until(topic("ready"))
+    assert built == ["human:ana", "human:ana"]
+
+
+def test_streams_joining_a_baseline_build_before_its_snapshot_share_it_and_a_later_one_builds_again(api, monkeypatch):
+    """Baselines: ten of one person's streams that ask before the build's snapshot begins get one build, each its own
+    copy, at the version the route gives; one that asks after builds again; a failed build fails each that joined."""
+    import asyncio
+    from types import SimpleNamespace
+
+    auth, task_view = api.app.state.auth, api.app.state.task_view
+    ana = auth.authenticate({"authorization": "Bearer ana-test"})
+    built, real = [], E.needs_baseline
+    monkeypatch.setattr(E, "needs_baseline", lambda c, a, who, view: built.append(who.actor) or real(c, a, who, view))
+    baselines, app = E.Baselines(api.app.state.store), SimpleNamespace(state=SimpleNamespace(needs_lane=None))
+
+    async def burst(n):
+        return await asyncio.gather(
+            *[baselines.start(app, auth, ana, task_view) for _ in range(n)], return_exceptions=True
+        )
+
+    got = asyncio.run(burst(10))
+    version = api.get("/api/v2/needs-you", headers=headers()).json()["version"]
+    assert built == ["human:ana"] and {held["version"] for _, held in got} == {version}
+    assert len({seq for seq, _ in got}) == 1 and len({id(held["marks"]) for _, held in got}) == 10
+    asyncio.run(burst(1))
+    assert built == ["human:ana", "human:ana"]
+
+    def refused(*args):
+        raise RuntimeError("the build failed")
+
+    monkeypatch.setattr(E, "needs_baseline", refused)
+    failed = asyncio.run(burst(3))
+    assert [type(result) for result in failed] == [RuntimeError] * 3
