@@ -2250,15 +2250,21 @@ def tell_pushed(c, settings, payload):
         return []
     app, homes = (_github_app(c),), Homes(c)
     told = []
-    for row in c.execute(
-        "SELECT a.bot,a.runner_id,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-        "WHERE r.revoked_at IS NULL ORDER BY a.bot"
-    ).fetchall():
-        if PUSH_HINTS not in capability_set(row["capabilities"]):
-            continue
+    hinted = [
+        row
+        for row in c.execute(
+            "SELECT a.bot,a.runner_id,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+            "WHERE r.revoked_at IS NULL ORDER BY a.bot"
+        ).fetchall()
+        if PUSH_HINTS in capability_set(row["capabilities"])
+    ]
+    # Every hinted bot's configuration and its original's, read together, not two reads a bot under the webhook's
+    # write lock (about 340 for a fleet of 170).
+    configs = _configs_of(c, [row["bot"] for row in hinted])
+    for row in hinted:
         # The repository the computer fetches the bot from: "" when Tico does not use it (another company's, or one
         # the App is not installed on), and then it is told nothing of that repository.
-        if (runner_repository(c, settings, row["bot"], app=app, homes=homes) or "").lower() != repo:
+        if (runner_repository(c, settings, row["bot"], configs.get, app=app, homes=homes) or "").lower() != repo:
             continue
         c.execute(
             "INSERT INTO changes(topic,kind,subject_id,bot,created_at) VALUES('runner','pushed',?,?,?)",
@@ -2266,6 +2272,30 @@ def tell_pushed(c, settings, payload):
         )
         told.append(row["bot"])
     return told
+
+
+def _configs_of(c, bots):
+    """{bot: its bot_config row with `config` as shared_bots.declared reads it, and `repo`}, for these bots and the bots
+    they are branches of (execution._repository_of's `rows`), in a few set reads."""
+    from . import bot_settings as BS
+    from .shared_bots import _json, source_of
+
+    found = {}
+
+    def load(slugs):
+        for part in H.chunks(sorted(set(slugs) - set(found))):
+            found.update(
+                (r["bot"], r)
+                for r in c.execute(
+                    f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (%s)"
+                    % ",".join("?" * len(part)),
+                    part,
+                )
+            )
+
+    load(bots)
+    load({source_of(_json(r["config"])) for r in found.values()} - {""})
+    return found
 
 
 DEPLOY_QUERY = (

@@ -143,11 +143,17 @@ def retire_health_rows(c):
         )
 
 
-def sweep_idempotency(store, now=None, batch=5000):
+# Rows the idempotency, delta and token sweeps delete per write transaction, as EVENT_SWEEP_BATCH (below) does for
+# `events`: 5000 held the one writer for seconds on TIDY, and every request queued behind it. The total deleted is
+# the same, in ten times as many short writes.
+SWEEP_BATCH = 500
+
+
+def sweep_idempotency(store, now=None, batch=SWEEP_BATCH):
     """Delete idempotency rows past the retry window in short transactions; returns the count.
 
     Each batch is its own write transaction so the API's writers only ever wait for a
-    few thousand deletions, never for the whole backlog.
+    few hundred deletions, never for the whole backlog.
     """
     cutoff = H.shift(now or H.now(), hours=-IDEMPOTENCY_RETENTION_HOURS)
     deleted = 0
@@ -167,7 +173,7 @@ DELTA_RETENTION_DAYS = 1
 DELTA_SWEEP_MAX = 200_000  # rows one hourly pass deletes at most, so a first backlog drains over hours
 
 
-def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+def sweep_deltas(store, now=None, batch=SWEEP_BATCH, most=DELTA_SWEEP_MAX):
     """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
     than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
 
@@ -227,7 +233,7 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 TOKEN_RETENTION_DAYS = 7
 
 
-def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+def sweep_tokens(store, now=None, batch=SWEEP_BATCH, most=DELTA_SWEEP_MAX):
     """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
     transactions like `sweep_deltas`; returns the count.
 
