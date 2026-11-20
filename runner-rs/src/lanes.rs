@@ -701,6 +701,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    RELAY_HINTS,
                     VOICE_INPUTS,
                     crate::fetch_fresh::PUSH_HINTS,
                     VOICE_SESSION_RESUME,
@@ -738,13 +739,18 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(VOICE_INPUTS)
+            Some(RELAY_HINTS)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != VOICE_INPUTS)
+            .filter(|c| *c != RELAY_HINTS)
             .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_INPUTS)
+        );
+        let older: Vec<&str> = older.into_iter().filter(|c| *c != VOICE_INPUTS).collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(VOICE_SESSION_RESUME)
