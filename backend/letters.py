@@ -791,6 +791,7 @@ class Letters:
             content=content(row),
             task_id=task_id,
             title="Mail a letter to " + str(json.loads(row["recipient"]).get("name") or "a recipient"),
+            matter=None if task_id else row["task_id"],
         )
         c.execute(
             "UPDATE letters SET approval_id=?,approved_hash=NULL,status='waiting_for_ok',error='',updated_at=? "

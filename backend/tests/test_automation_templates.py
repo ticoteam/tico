@@ -332,6 +332,46 @@ def test_the_turn_task_carries_the_mail_subject_and_body(api):
     assert "Board pack" in words and "Can you send the deck by Friday?" in words
 
 
+def test_a_mail_turn_is_titled_by_the_mail_only_on_a_private_task(api):
+    """An inbox's turns all shared its name ("Ana's inbox"). A mail's turn is titled by its sender and subject where
+    only the task's readers see the title (the assistant's tasks are private, as a general counsel's); a company-visible
+    task keeps the automation's name, since its title is in every teammate's lists and the mail is not."""
+    set_templates(api, STAFF)
+    reply = {
+        "message": {
+            **MAIL["message"],
+            "from_name": '"Winberg Law" <legal@winberg.example>',
+            "subject": "RE: Fwd: Demand letter",
+        }
+    }
+    for bot, private in (("assistant", True), ("cpo", False)):
+        flow = bot_flow(api, bot)
+        turn = run_to_turn(flow, reply)
+        assert turn["about"] == "Winberg Law: Demand letter"
+        with api.app.state.store.transaction() as c:
+            started = AA.start_turn(
+                c,
+                {"id": "auto_" + bot, "flow": flow},
+                "run_" + bot,
+                "draft",
+                f"bot:{bot}",
+                turn["prompt"],
+                None,
+                about=turn["about"],
+            )
+            task = H.task(c, started["ref"])
+        assert bool(task["private"]) is private
+        assert task["title"] == ("Winberg Law: Demand letter" if private else flow["name"])
+
+
+def test_a_mail_turn_title_names_the_sender_when_the_subject_is_empty():
+    about = E._turn_about({"message": {"source": "mail", "from": "jo@acme.example", "from_name": "", "subject": "Re:"}})
+    assert about == "jo@acme.example"
+    assert E._turn_about({"message": {"source": "slack", "text": "hi"}}) is None
+    long = E._turn_about({"message": {"source": "mail", "from_name": "Jo", "subject": "x" * 300}})
+    assert len(long) == E.ABOUT_CHARS and long.endswith("…")
+
+
 def test_a_bot_that_can_run_its_own_turn_keeps_the_draft_choose(api):
     set_templates(api, STAFF)
     draft = by_id(bot_flow(api, "assistant")["steps"])["draft"]

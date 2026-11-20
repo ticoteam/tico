@@ -2634,6 +2634,7 @@ class HubServices:
                 self.hub.settings.assistant_bot,
                 ctx["key"],
                 label=ctx.get("label"),
+                about=ctx.get("about"),
                 run_model=ctx.get("run_model"),
                 occurrence=ctx["values"].get("due"),
             )
