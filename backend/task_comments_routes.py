@@ -12,6 +12,8 @@ from . import delivery
 from . import org_rule_check
 from . import question_marks
 from . import questions
+from . import reach
+from . import threads
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
@@ -118,10 +120,7 @@ def register(
             way, defer_for = "defer", delivery.NEVER
         else:
             way, defer_for = comment_way_for(c, who, row)
-        # The person's reply on their own open question (backend/questions.py) is their answer: it wakes the bot that
-        # asked on the task it asked on, once, and never on the question itself.
-        answering = H.is_human(who.actor) and questions.is_open_for(c, task_id, who.actor)
-        if answers or answering:
+        if answers:
             way, defer_for = "defer", delivery.NEVER
         # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
         # people following are notified as their level says (threads.plan).
@@ -166,8 +165,6 @@ def register(
             to=asker,
         )
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
-        if answering:
-            questions.replied(c, task_id, who.actor, msg, getattr(who, "via", None) or None)
         if answers and asker:
             # The asker's own delivery was deferred with the rest: its run starts now and carries it.
             delivery.now(c, asker, row["conversation_id"])
@@ -339,6 +336,8 @@ def register(
 
             return mutate(request, body, answered)
         text = f"{body.text}\n\n{known.checked_line()}" if known else body.text
+        # The rules read the link as part of what is asked (backend/questions.py keeps it apart on the question).
+        checked = f"{text}\n\n{body.link}" if body.link else text
         if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
             mutate(
                 request,
@@ -348,8 +347,8 @@ def register(
         rc = rule_check(
             who,
             "question",
-            text,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
+            checked,
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), checked, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
@@ -369,7 +368,7 @@ def register(
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
         transaction. Held by a rule, nothing is written and nothing is marked. With the company's questions_as_tasks
         on, the question is a task filed under this one instead (`question_task_write`); `link` goes on it."""
-        if questions.enabled(c):
+        if questions.asks_as_task(c, auth.resolve_task(c, who, tid)):
             return question_task_write(c, who, tid, text, to, rc, link)
         if link:
             text = f"{text}\n\n{link}"  # a ❓ has no link of its own: it is in its words
@@ -386,9 +385,19 @@ def register(
         question's opening message as `comment`, as a ❓'s does, and the question as `question_task`."""
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
-        audience = rule_comment_audience(c, who, row, text, to) if rc is not None else None
+        from .task_reads import comment_rights
+
+        comment_rights(c, auth, who, task_id)  # as the ❓'s comment would be refused
+        # An @name in its words is checked against the bot's reach as the ❓'s comment's would be (reach.check_post).
+        thread = threads.thread_row(c, row["conversation_id"])
+        if thread and who.role == "bot":
+            reach.check_post(c, who, thread, [a for a, _ in threads.mentions(c, thread, text, author=who.actor)], None)
+        checked = f"{text}\n\n{link}" if link else text
+        audience = rule_comment_audience(c, who, row, checked, to) if rc is not None else None
         replay = {"task": task_id, "body": M.TaskComment(text=text).model_dump(mode="json", by_alias=True), "to": to}
-        rule = org_rule_check.apply(c, rc, text, {**replay, **({"link": link} if link else {})}, audience_now=audience)
+        rule = org_rule_check.apply(
+            c, rc, checked, {**replay, **({"link": link} if link else {})}, audience_now=audience
+        )
         if rule and rule.get("moved"):
             raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
         if rule and rule.get("held"):

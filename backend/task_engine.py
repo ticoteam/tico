@@ -1165,6 +1165,9 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    from . import questions
+
+    questions.refuse_move(conn, row, kind, by)  # an open question moves only to Closed (backend/questions.py)
     side = kind == "side" or (kind == "done" and bool(row["stage"].get("side")))
     if kind in ("forward", "done", "closed") and not cascade and not side:
         from . import question_marks
@@ -1403,6 +1406,9 @@ def refile(
     if not row:
         _refuse(conn, by, "not-found", "No such task")
     check_version(conn, by, row, seen_version)
+    from . import questions
+
+    questions.refuse_move(conn, row, "refile", by)  # a question stays in the stage it was filed in
     pipe = pipeline_named(conn, by, to_pipeline, task_id)
     target = _refile_target(conn, by, row, pipe, to)
     _need_why(conn, by, why, "move it to another pipeline", task_id)

@@ -10,10 +10,12 @@ how it ended. Its status, owner, snooze and chat are the task's own.
   task_engine.people_page, validate_gate.check_question) and lets a person into a private parent as a ❓ does. The
   same bot asking the same person again on the same visit reopens its question with the next round: the new words are
   its message there and the old ones stay in its chat. Two bots asking are two questions.
-- One answer (`answer`): the person, at the round they were shown, in one write. It records their message on the
-  question and finishes it, restarts the parent's ladder and Late clock as an answered ❓ does, relays the answer to
-  the parent's chat as their message where the parent's readers may read it (task_privacy.require_destination; else a
-  link), and wakes the bot on the parent once, unless another of its asks there still waits.
+- One answer (`answer`, POST /api/v2/tasks/{id}/question/answer only: a post in the question's chat is a comment):
+  the person who owns it now, at the round they were shown, in one write. It records their words on the question and
+  finishes it (never a push past: the task never leaves the stage it was filed in, `refuse_move`), restarts the
+  parent's ladder and Late clock as an answered ❓ does, relays the words to the parent's chat quietly (Defer never,
+  no @ wakes) where the parent's readers may read them (task_privacy.require_destination; else a link), and wakes
+  at most one bot: whoever has the parent's turn once the answer is in.
 - On the parent an open question is an open ❓ of its bot: the person's turn, never Late, the bot not chased and not
   ending the parent (waiting_on.of, late_rule, question_marks.refuse_ending). It is no filed task: its `links` row is
   removed as it is filed, so the filed-task holds and wakes (task_engine._ended, waiting_on._filed_open) never see it.
@@ -40,9 +42,9 @@ KIND = "question_task"  # its Needs-you item kind (a ❓'s is "question")
 ANSWERED, WITHDRAWN = "answered", "withdrawn"
 PARENT_ENDED, PARENT_MOVED = "parent_ended", "parent_moved"
 ASKER_GONE, PERSON_GONE = "asker_gone", "person_gone"
-RELAY = "question_relay"  # the refs key of an answer relayed onto the parent's chat: it answers that question only
 LOOK_AGAIN = "Look again: this question changed since you opened it"
 NOT_A_PERSON = "A question is for a person: hand it to someone with Give"
+STAYS = "A question stays where it was asked: answer it, or close it"
 STILL_OPEN = (
     'Your question to {name} is still open: "{title}". Finishing, moving on or closing the task would withdraw it '
     "unanswered. Wait for their answer, or withdraw it first: tico task close {question} -m <why>."
@@ -84,6 +86,31 @@ def set_enabled(conn: sqlite3.Connection, on: bool, by: str) -> None:
         (KEY, "true" if on else "false"),
     )
     H.event(conn, by, "questions.switch", KEY, {"on": on})
+
+
+def touches(conn: sqlite3.Connection, task_ids: Iterable[object]) -> bool:
+    """Whether any of these tasks is a question or was asked one: with the switch off, nothing else reads `questions`
+    for them, so a company that never turned it on reads and writes as before."""
+    ids = H._dump(sorted({str(t) for t in task_ids if t}))
+    return (
+        conn.execute(
+            "SELECT 1 FROM questions WHERE task_id IN (SELECT value FROM json_each(?)) "
+            "OR parent_id IN (SELECT value FROM json_each(?)) LIMIT 1",
+            (ids, ids),
+        ).fetchone()
+        is not None
+    )
+
+
+def asks_as_task(conn: sqlite3.Connection, parent_id: object) -> bool:
+    """Whether a bot's question on this task is filed as a question task: the switch is on, and the task is not a dream
+    (backend/dream.py), whose Learnings panel reads and answers its one ❓ on the task's own chat."""
+    if not enabled(conn):
+        return False
+    from . import dream as _dream
+
+    marked = f"SELECT 1 FROM tasks WHERE id=? AND {cast(Any, _dream).MARKED}"
+    return conn.execute(marked, (str(parent_id or ""),)).fetchone() is None
 
 
 def get(conn: sqlite3.Connection, task_id: object) -> Row | None:
@@ -209,6 +236,25 @@ def listed_on(conn: sqlite3.Connection, parent_id: object, visible_sql: str) -> 
     ]
 
 
+def next_snooze_end(conn: sqlite3.Connection, person: str) -> str | None:
+    """When the person's next snoozed open question comes back, or None: Needs you reads again then."""
+    found = conn.execute(
+        "SELECT MIN(z.until_at) FROM snoozes z JOIN questions q ON q.task_id = z.task_id "
+        "WHERE q.person_id=? AND q.ended_reason IS NULL AND z.ended_at IS NULL AND z.until_at > ?",
+        (person, H.now()),
+    ).fetchone()
+    return str(found[0]) if found and found[0] else None
+
+
+def refuse_move(conn: sqlite3.Connection, row: Mapping[str, Any], kind: str, by: str) -> None:
+    """A question task never leaves the stage it was filed in (task_engine.move and refile), so no stage's sign-off can
+    sit in front of its answer: while it is open only a close moves it, and once it has a question row it is never
+    refiled. Its own ends (answered, withdrawn) are written after its row has ended."""
+    q = get(conn, row["id"])
+    if q and (kind == "refile" or (not q.get("ended_reason") and kind != "closed")):
+        H.refuse(conn, by, "task_question", STAYS, task=str(row["id"]))
+
+
 def answered_marks(conn: sqlite3.Connection, visit_id: str) -> str:
     """When a person last answered a question on this visit, for task_engine.progress_mark: one read per snapshot for
     every visit (read_cache), as question_marks.replies is."""
@@ -232,7 +278,7 @@ def items(conn: sqlite3.Connection, only: Any, snoozed: str = "hide") -> dict[st
     ]
     if not rows:
         return {}
-    ids = H._dump(sorted({str(q["task_id"]) for q in rows} | {str(q["parent_id"]) for q in rows}))
+    ids = H._dump(sorted({str(q["task_id"]) for q in rows}))
     tasks = {
         str(r[0]): (r[1], r[2], r[3], r[4])
         for r in conn.execute(
@@ -255,7 +301,6 @@ def items(conn: sqlite3.Connection, only: Any, snoozed: str = "hide") -> dict[st
         until = held.get(str(q["task_id"]))
         if (snoozed == "hide" and until is not None) or (snoozed == "only" and until is None):
             continue
-        parent = tasks.get(str(q["parent_id"]))
         out.setdefault(str(q["person_id"]), []).append(
             {
                 "kind": KIND,
@@ -266,7 +311,6 @@ def items(conn: sqlite3.Connection, only: Any, snoozed: str = "hide") -> dict[st
                 "owner_id": own[3],
                 "line": own[1],
                 "missing": [own[1]],
-                "parent": {"id": q["parent_id"], "number": parent[0], "title": parent[1]} if parent else None,
                 "asker": q["asker_id"],
                 "since": q["updated_at"],
                 "round": q["round"],
@@ -403,33 +447,23 @@ def answer(conn: sqlite3.Connection, task_id: str, by: str, text: str, round_: i
         raise QuestionError("not_found", "No such question", 404)
     if via not in question_marks.REPLY_VIA:
         raise QuestionError("forbidden", "Only the person it is for answers it", 403)
-    if q.get("ended_reason") or q["person_id"] != by or int(q["round"]) != int(round_):
+    own: Row = _engine().task(conn, task_id) or {}
+    current = q["person_id"] == by and own.get("owner_id") == by and own.get("status") == "open"
+    if q.get("ended_reason") or not current or int(q["round"]) != int(round_):
         raise QuestionError("look_again", LOOK_AGAIN, 409)
     words = str(text or "").strip()
     if not words:
         raise QuestionError("validation", "Write the answer", 422)
-    said: Row = H.task_comment(conn, by, task_id, words, wake=False, extra_refs={RELAY: True})
+    from . import threads as _threads
+
+    # Quiet as its relay is: the answer goes to the bot by its one wake, never to an @name in its words.
+    with cast(Any, _threads).relaying():
+        said: Row = H.task_comment(conn, by, task_id, words, wake=False)
     return _answered(conn, q, by, words, str(said["id"]))
 
 
-def replied(conn: sqlite3.Connection, task_id: str, by: str, message: Mapping[str, Any], via: object) -> Row | None:
-    """A person's comment on a question's own chat (POST /api/v2/tasks/{id}/comments): from its person, by their own
-    hand (as `answer`), it is their answer to the round open now. None for any other comment."""
-    q = get(conn, task_id)
-    if not q or q.get("ended_reason") or q["person_id"] != by or via not in question_marks.REPLY_VIA:
-        return None
-    return _answered(conn, q, by, str(message.get("body") or ""), str(message["id"]))
-
-
-def is_open_for(conn: sqlite3.Connection, task_id: str, by: str) -> bool:
-    """Whether a comment by `by` on this task would answer an open question (`replied`)."""
-    q = get(conn, task_id)
-    return bool(q and not q.get("ended_reason") and q["person_id"] == by)
-
-
-def _answered(
-    conn: sqlite3.Connection, q: Row, by: str, words: str, message_id: str | None, *, finish: bool = True
-) -> Row:
+def _answered(conn: sqlite3.Connection, q: Row, by: str, words: str, message_id: str) -> Row:
+    """The answer write's work once its checks passed (`answer`)."""
     E = _engine()
     qid, parent_id, asker = str(q["task_id"]), str(q["parent_id"]), str(q["asker_id"])
     at = H.now()
@@ -439,8 +473,7 @@ def _answered(
         (ANSWERED, at, by, message_id, at, qid),
     )
     H.event(conn, by, "question.answered", qid, {"parent": parent_id, "round": q["round"]})
-    if finish:
-        _finish(conn, qid, by, "Answered", done=True)
+    _finish(conn, qid, by, "Answered", done=True)
     found: Row | None = E.task(conn, parent_id)
     visit: Row = (found or {}).get("visit") or {}
     if not found or found.get("status") != "open" or visit.get("id") != q["visit_id"]:
@@ -450,26 +483,21 @@ def _answered(
     own: Row = E.task(conn, qid) or {}
     title = str(own.get("title") or "")
     relayed = _relay(conn, found, qid, by, asker, title, words)
-    parent: Row = E.task(conn, parent_id) or found
-    if _still_asking(conn, asker, parent):
-        return get(conn, qid) or q  # its reply waits on the parent's chat for the bot's next turn there
-    if relayed:
-        from . import delivery as _delivery
+    # One wake at most, for whoever has the parent's turn now that the answer is in: nobody while another ask there
+    # still waits on a person (waiting_on.turn), and not necessarily the bot that asked.
+    from . import waiting_on as _waiting_on
 
-        # As a person's reply to a ❓ wakes its bot: the bot's deferred delivery of it starts now.
-        cast(Any, _delivery).now(conn, asker, parent["conversation_id"])
-        H.delegate(conn, parent_id, asker, by, relayed)
-        if asker == parent.get("owner_id"):
-            E.person_spoke(conn, parent_id, by)
-    else:
+    parent: Row = E.task(conn, parent_id) or found
+    turn = cast(Any, _waiting_on).turn(conn, parent)
+    if turn:
         name = H.actor_name(conn, by)
-        _wake(
-            conn,
-            parent,
-            asker,
-            f'{name} answered your question "{title}" on its own task ({qid}): read it there.',
-            f"question:{qid}:{q['round']}",
-        )
+        if relayed:
+            lead = f'{name} answered "{title}": {words}'
+        elif turn == asker:
+            lead = f'{name} answered your question "{title}" on its own task ({qid}): read it there.'
+        else:
+            lead = f"{name} answered a question on this task; the answer is on the question ({qid})."
+        _wake(conn, parent, str(turn), lead, f"question:{qid}:{q['round']}")
     return get(conn, qid) or q
 
 
@@ -492,32 +520,14 @@ def _relay(conn: sqlite3.Connection, parent: Row, qid: str, by: str, asker: str,
         if getattr(exc, "status", None) != 403:
             raise
         return None
-    said: Row = H.task_comment(
-        conn,
-        by,
-        parent["id"],
-        f"Re: {title}: {words}",
-        wake=False,
-        extra_refs={"question": qid, RELAY: True},
-        people_notified=True,
-        to=asker,
-    )
+    from . import threads as _threads
+
+    # Quiet: Defer never, and its words address nobody (an @name in them wakes no one) nor answer a ❓ there.
+    with cast(Any, _threads).relaying():
+        said: Row = H.task_comment(
+            conn, by, parent["id"], f"Re: {title}: {words}", wake=False, extra_refs={"question": qid}
+        )
     return str(said["id"])
-
-
-def _still_asking(conn: sqlite3.Connection, asker: str, parent: Row) -> bool:
-    """Whether the bot still waits on a person's answer on the parent: another open question, its open ❓ there, or an
-    OK it added that waits. Its turn comes once the last of them is answered."""
-    from . import task_requirements as _task_requirements
-
-    R = cast(Any, _task_requirements)
-    if open_by(conn, asker, parent) or question_marks.open_of(conn, asker, parent["id"]):
-        return True
-    return any(
-        s.state == R.WAITING and s.requirement.get("visit_id") and s.requirement.get("added_by_id") == asker
-        for s in R.standings(conn, parent)
-        if not s.met
-    )
 
 
 def _wake(conn: sqlite3.Connection, parent: Row, bot: str, lead: str, kind: str) -> None:
@@ -537,23 +547,28 @@ def _wake(conn: sqlite3.Connection, parent: Row, bot: str, lead: str, kind: str)
 
 
 def _finish(conn: sqlite3.Connection, qid: str, by: str, why: str, *, done: bool) -> None:
-    """The question task ends: done when answered (its person said so), else closed."""
-    E = _engine()
+    """The question task ends with its question: answered is its person's own "done" on the stage it was filed in
+    (which it never leaves, `refuse_move`), and Done once nothing else there waits; anything else closes it. Never a
+    push past: a stage's other requirement, if it has one, closes the task rather than being skipped."""
+    from . import task_requirements as _task_requirements
+
+    E, R = _engine(), cast(Any, _task_requirements)
     row: Row | None = E.task(conn, qid)
     if not row or row.get("status") != "open":
         return
-    if done and H.is_human(by):
+    if done and H.is_human(by) and row.get("owner_id") == by:
         from . import answers as _answers
-        from . import task_requirements as _task_requirements
 
-        R = cast(Any, _task_requirements)
         own = next((s for s in R.standings(conn, row) if s.requirement["kind"] == "owner_done" and not s.met), None)
         if own:
             cast(Any, _answers).answer(conn, qid, own.requirement["id"], by, "done", None)
-            row = E.task(conn, qid)
-            if not row or row.get("status") != "open":
-                return
-    E.move(conn, qid, E.DONE if done else E.CLOSED, by, why, cascade=True)
+        row = E.task(conn, qid)
+        if not row or row.get("status") != "open":
+            return
+        if not R.unmet(conn, row):
+            E.move(conn, qid, E.DONE, by, None, cascade=True)
+            return
+    E.move(conn, qid, E.CLOSED, by, why, cascade=True)
 
 
 def _end(conn: sqlite3.Connection, q: Mapping[str, Any], reason: str, by: str) -> None:
@@ -610,7 +625,10 @@ def reassigning(conn: sqlite3.Connection, row: Mapping[str, Any], owner: str | N
     target = question_marks.addressee(conn, str(q["asker_id"]), str(owner), str(q["parent_id"]))
     if row.get("snooze"):
         _engine().unsnooze(conn, str(row["id"]), H.TICO_ACTOR, "Given to someone else")
-    conn.execute("UPDATE questions SET person_id=?, updated_at=? WHERE task_id=?", (target, H.now(), row["id"]))
+    # A new round: what the person it was for saw cannot be answered once it comes back to them.
+    conn.execute(
+        "UPDATE questions SET person_id=?, round=round+1, updated_at=? WHERE task_id=?", (target, H.now(), row["id"])
+    )
     H.event(conn, by, "question.given", row["id"], {"from": q["person_id"], "to": target})
 
 
@@ -625,30 +643,26 @@ def refuse_snooze(conn: sqlite3.Connection, row: Mapping[str, Any], by: str) -> 
 
 
 def moved(conn: sqlite3.Connection, before: Mapping[str, Any], after: Mapping[str, Any], by: str) -> None:
-    """A task moved (task_effects.moved). A question task that ended by any other road than this module's: done by its
-    person is their answer, "Done"; any other end withdraws it, and its bot is told when someone else ended it. A
-    parent that ended or left the visit its questions were asked on ends them."""
+    """A task moved (task_effects.moved). A question task closed by any other road than this module's (only a close
+    gets past `refuse_move`) is withdrawn, and its bot is told when someone else closed it. A parent that ended or left
+    the visit its questions were asked on ends them."""
     status = str(after.get("status") or "")
     q = get(conn, after["id"])
     if q and not q.get("ended_reason") and status != "open":
-        if status == "done" and by == q["person_id"]:
-            _answered(conn, q, by, "Done", None, finish=False)
-        else:
-            conn.execute(
-                "UPDATE questions SET ended_reason=?, updated_at=? WHERE task_id=?", (WITHDRAWN, H.now(), q["task_id"])
+        conn.execute(
+            "UPDATE questions SET ended_reason=?, updated_at=? WHERE task_id=?", (WITHDRAWN, H.now(), q["task_id"])
+        )
+        H.event(conn, by, "question.ended", q["task_id"], {"reason": WITHDRAWN, "parent": q["parent_id"]})
+        parent: Row | None = _engine().task(conn, q["parent_id"]) if by != q["asker_id"] else None
+        if parent and parent.get("status") == "open":
+            name = H.actor_name(conn, by)
+            _wake(
+                conn,
+                parent,
+                str(q["asker_id"]),
+                f'{name} closed your question "{after.get("title")}" without answering it.',
+                f"question:{q['task_id']}:{q['round']}:closed",
             )
-            H.event(conn, by, "question.ended", q["task_id"], {"reason": WITHDRAWN, "parent": q["parent_id"]})
-            if by != q["asker_id"]:
-                parent: Row | None = _engine().task(conn, q["parent_id"])
-                if parent and parent.get("status") == "open":
-                    name = H.actor_name(conn, by)
-                    _wake(
-                        conn,
-                        parent,
-                        str(q["asker_id"]),
-                        f'{name} closed your question "{after.get("title")}" without answering it.',
-                        f"question:{q['task_id']}:{q['round']}:closed",
-                    )
     visit: Mapping[str, Any] = after.get("visit") or {}
     open_here = [
         dict(r)
@@ -673,7 +687,7 @@ def on_delete(conn: sqlite3.Connection, task_ids: Iterable[str], by: str) -> Non
     """Tasks are being deleted (task_engine.on_delete): a deleted parent's open questions end with it, and a deleted
     question ends as withdrawn, so its parent waits on nobody."""
     ids = sorted({str(t) for t in task_ids if t})
-    if not ids:
+    if not ids or not (enabled(conn) or touches(conn, ids)):
         return
     at, listed = H.now(), H._dump(ids)
     conn.execute(
@@ -725,13 +739,18 @@ def end_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
         elif not bot or bot.get("state") == "archived" or not H.task_private_readable(conn, asker, parent):
             _end(conn, q, ASKER_GONE, H.TICO_ACTOR)
             holder = W.holder(conn, parent)
-            if holder and holder != asker:
+            told = (
+                f"{H.actor_name(conn, asker)} can no longer work on this task, so its question to "
+                f"{H.actor_name(conn, q['person_id'])} was withdrawn. Ask again if it still matters."
+            )
+            if H.is_human(holder):
+                H.task_comment(conn, H.TICO_ACTOR, q["parent_id"], told, wake=False, checked=False)
+            elif holder and holder != asker:
                 _wake(
                     conn,
                     E.task(conn, q["parent_id"]) or parent,
                     str(holder),
-                    f"{H.actor_name(conn, asker)} can no longer work on this task, so its question to "
-                    f"{H.actor_name(conn, q['person_id'])} was withdrawn. Ask again if it still matters.",
+                    told,
                     f"question:{q['task_id']}:asker-gone",
                 )
         else:
@@ -741,6 +760,11 @@ def end_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
 
 
 # ---- the backfill ------------------------------------------------------------------------------------------------------
+
+
+# What a plain ❓ comment's message carries in its refs: its task, its delivery, its mark's mirror. Anything more
+# (attachments, files, pages shown, a live browser) is a part the question task would not carry: the backfill skips it.
+PLAIN_REFS = {"comment", "quiet", "send_defer_for", "send_way", "send_people", "task", "question", "via", "job"}
 
 
 def _counts(conn: sqlite3.Connection) -> Row:
@@ -756,8 +780,9 @@ def backfill(conn: sqlite3.Connection) -> Row:
     until its time) and its history (its message stays in the parent's chat; the question's chat opens with the same
     words, dated when it was asked), then filed and cleared in one savepoint, so a mark that fails leaves nothing
     behind and the rest go on. Retryable: a mark already turned (`source_mark_id`) is not turned again. A ❓ in a
-    direct chat, and one showing a live browser to take over, stay ❓. Returns counts before and after, what it turned
-    and what it skipped, with why."""
+    direct chat, one showing a live browser to take over, a dream's (Learnings reads it) and one whose message carries
+    more than its words (attachments, files, pages) stay ❓. Returns counts before and after, what it turned and what it
+    skipped, with why."""
     E = _engine()
     before = _counts(conn)
     turned: list[Row] = []
@@ -786,9 +811,16 @@ def backfill(conn: sqlite3.Connection) -> Row:
         if any(str(r).startswith("browser:") for r in shows):
             skip("it shows a live browser to take over")
             continue
+        carried = sorted(set(cast(Row, refs)) - PLAIN_REFS) if isinstance(refs, dict) else []
+        if carried:
+            skip("its message carries more than words: " + ", ".join(carried))
+            continue
         parent: Row | None = E.task(conn, mark["task_id"])
         if not parent or parent.get("status") != "open" or not parent.get("visit"):
             skip("its task is not open")
+            continue
+        if not asks_as_task(conn, parent["id"]):
+            skip("it is a dream's question, which Learnings reads and answers")
             continue
         room = conn.execute("SELECT root_id, id FROM conversations WHERE id=?", (parent["conversation_id"],)).fetchone()
         if not room or str(room[0] or room[1]) != str(mark["room_id"]):

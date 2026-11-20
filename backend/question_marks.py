@@ -696,8 +696,12 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
         return []
     meta: Any = H._json(refs, {}) or {}
     via: Any = cast(Row, meta).get("via") if refs and isinstance(meta, dict) else None
-    if via not in REPLY_VIA or (isinstance(meta, dict) and cast(Row, meta).get("question_relay")):
-        return []  # a question's answer relayed onto its parent's chat answers that question only (questions.RELAY)
+    if via not in REPLY_VIA:
+        return []
+    from . import threads as _threads
+
+    if cast(Any, _threads).RELAYING.get():
+        return []  # a question's answer the server relays onto its parent's chat answers that question only
     room = room_of(conv)
     found = conn.execute(
         "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",

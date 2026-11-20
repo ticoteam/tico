@@ -132,7 +132,7 @@ def ask_on(
     if not is_bot(asker):
         raise ValueError("only bots write questions")  # Tico never does (`author`)
     line, said = shaped(question, why)
-    if questions.enabled(conn):
+    if questions.asks_as_task(conn, task["id"]):
         filed = questions.ask(conn, asker, str(task["id"]), person, f"{line}\n\n{said}", checked=False)
         return str(filed["task_id"])
     asked: Row = question_marks.ask(conn, asker, str(task["id"]), person, f"{line}\n\n{said}", checked=False)
