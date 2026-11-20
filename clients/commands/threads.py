@@ -626,9 +626,15 @@ def thread_unpin(api, args):
     {
         "cursor": THREAD_CURSOR,
         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Items in this page (default 20)"},
+        "count_only": {
+            "type": "boolean",
+            "description": "Only how many items there are (count, at most 99) and their thread ids, no messages",
+        },
     },
 )
 def thread_catch_up(api, args):
+    if args.get("count_only"):
+        return api.get("threads/catch-up/count")
     return api.get("threads/catch-up", cursor=args.get("cursor"), limit=args.get("limit"))
 
 

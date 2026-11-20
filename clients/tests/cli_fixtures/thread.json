@@ -67,6 +67,7 @@
    [
     "tico_thread_catch_up",
     {
+     "count_only": false,
      "operation_id": null
     }
    ]
@@ -75,6 +76,32 @@
    [
     "GET",
     "threads/catch-up",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catch-up",
+   "--count-only"
+  ],
+  "tools": [
+   [
+    "tico_thread_catch_up",
+    {
+     "count_only": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/catch-up/count",
     null
    ]
   ],
@@ -95,6 +122,7 @@
    [
     "tico_thread_catch_up",
     {
+     "count_only": false,
      "cursor": "cursor-1",
      "limit": 5,
      "operation_id": null

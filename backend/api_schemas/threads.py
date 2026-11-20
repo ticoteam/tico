@@ -157,6 +157,17 @@ SCHEMAS.update(
                 "next_cursor": "n",
             }
         ),
+        "ThreadCatchUpCount": obj(
+            {
+                "count": {"type": "integer", "description": "Every Catch up item, at most 99: its `count`"},
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The root of each item counted, in Catch up's order",
+                },
+            },
+            ["count", "ids"],
+        ),
         "ThreadSearch": obj(
             {
                 "hits": items(

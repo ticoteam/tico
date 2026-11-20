@@ -452,6 +452,15 @@ def _prime_names(c, v, rows):
 
 
 # ----------------------------------------------------------------------------- browse
+def _browse_where(c, v, marks):
+    """(FROM, WHERE terms) for Browse: open company and team roots the reader may read and is not in (`marks`: their
+    member names). Those are open-thread index rows (its audiences hold both), so they are read from it, a few hundred,
+    not every root, and only its finished-task roots have their posts checked, last."""
+    base = [OPEN_THREADS, f"{_audience()} IN ('company','team')"]
+    open_task = task_open(c, v, " AND ".join(base), source=OPEN_THREADS_FROM)
+    return OPEN_THREADS_FROM, [*base, T.readable_sql(c, v, "r"), f"NOT {_in(marks)}", open_task]
+
+
 def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     """Company and team roots the reader may read and is not in, newest activity first; `q` matches the title. Each row
     is the thread view and its `member_count` (its members and followers). Following one puts it in the rail."""
@@ -460,8 +469,7 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
     after = _decode(cursor, 2)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
-    company = f"{_audience()} IN ('company','team')"
-    where = [root_open(c, v, company), company, T.readable_sql(c, v, "r"), f"NOT {_in(marks)}"]
+    source, where = _browse_where(c, v, marks)
     text = str(q or "").strip()
     if text:
         args["q"] = "%" + text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -476,8 +484,8 @@ def browse(c, v, *, q=None, cursor=None, limit=BROWSE_LIMIT):
         found = [
             T.thread_row(c, dict(r))
             for r in c.execute(
-                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)})"
-                f"{cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM {source} WHERE "
+                f"{' AND '.join(where)}){cond} ORDER BY activity DESC, id DESC LIMIT :fetch",
                 {**args, **at, "fetch": fetch},
             )
         ]
@@ -876,8 +884,9 @@ def _count_exact(c, v, items):
 def _walk(c, v, flags, after=None):
     """Catch up's items in order, read a batch at a time: the roots that mention the reader first, then the rest, each
     newest activity first. At most CATCH_UP_SCAN roots are looked at in all: a page's cursor carries how many came
-    before it, so a later page goes on from there and pages, `count` and `catch_up_ids` agree. Each item is {"row",
-    "rank", "activity", "mention", "new_count", "unread", "attention", "scanned"}."""
+    before it, so a later page goes on from there and pages, `count` and `catch_up_ids` agree. Each phase's roots are
+    ordered once, up to what is left of CATCH_UP_SCAN, then read whole and checked a batch at a time. Each item is
+    {"row", "rank", "activity", "mention", "new_count", "unread", "attention", "scanned"}."""
     mentions, held, homes = flags
     history = T._history_only_roots(c, v)
     extra, marks = _names(v, c)
@@ -885,6 +894,8 @@ def _walk(c, v, flags, after=None):
     args = {
         "me": v.actor,
         "flagged": json.dumps(flagged),
+        # The roots the first term below can admit, read by id: a few hundred, where the company has tens of thousands.
+        "maybe_new": json.dumps(sorted(set(flagged) | set(T.maybe_unread_roots(c, v)))),
         "mentions": json.dumps(sorted(mentions)),
         "history": json.dumps(history),
         **extra,
@@ -897,6 +908,7 @@ def _walk(c, v, flags, after=None):
     # seek or two), then readable (each root looked up by id), then the reader being in the root (its members,
     # followers and participants).
     rest = [
+        "r.id IN (SELECT value FROM json_each(:maybe_new))",
         f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
         T.readable_sql(c, v, "r", per_row=True),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
@@ -913,20 +925,22 @@ def _walk(c, v, flags, after=None):
         if after and int(after[0]) > rank:
             continue
         position = [int(after[1]), str(after[2])] if after and int(after[0]) == rank else None
-        while scanned < CATCH_UP_SCAN:
+        if scanned >= CATCH_UP_SCAN:
+            continue
+        cond, at = "", {}
+        if position:
+            cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
+            at = {"at_seq": position[0], "at_id": position[1]}
+        order = c.execute(
+            f"SELECT id, activity FROM (SELECT r.id, {ACTIVITY} AS activity FROM conversations r WHERE "
+            f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :scan",
+            {**args, **at, "scan": CATCH_UP_SCAN - scanned},
+        ).fetchall()
+        for start in range(0, len(order) + 1, CATCH_UP_BATCH):
             batch = min(CATCH_UP_BATCH, CATCH_UP_SCAN - scanned)
-            cond, at = "", {}
-            if position:
-                cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
-                at = {"at_seq": position[0], "at_id": position[1]}
-            found = [
-                T.thread_row(c, dict(r))
-                for r in c.execute(
-                    f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
-                    f"{' AND '.join([*where, phase, open_task])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch",
-                    {**args, **at, "batch": batch},
-                )
-            ]
+            part = order[start : start + batch]
+            whole = _rows_by_id(c, [row[0] for row in part])
+            found = [T.thread_row(c, {**whole[row[0]], "activity": row[1]}) for row in part if row[0] in whole]
             ids = [r["id"] for r in found if r]
             T.prime_members(c, v, ids, roots=ids)
             task_privacy.prime_rooms(c, ids)  # their meeting provenance too, not one room at a time
@@ -959,8 +973,19 @@ def _walk(c, v, flags, after=None):
                     "attention": mentions.get(r["id"]) or [],
                     "scanned": scanned,
                 }
-            if len(found) < batch:
+            if len(part) < batch or scanned >= CATCH_UP_SCAN:
                 break
+
+
+def _rows_by_id(c, ids):
+    """{id: the conversation row} for these ids, read together."""
+    out = {}
+    for part in H.chunks(ids):
+        out.update(
+            (r["id"], dict(r))
+            for r in c.execute(f"SELECT * FROM conversations WHERE id IN ({','.join('?' * len(part))})", part)
+        )
+    return out
 
 
 def _walk_where(c, v, rest, args):
@@ -997,7 +1022,8 @@ def _first(items, n):
 
 def catch_up_count(c, v):
     """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids): the sidebar's badge, and the
-    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN and reads no message text."""
+    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN, and reads a message whole only where the walk's
+    per-message check needs it: no card, thread view or message to show."""
     v = _viewer(v)
     found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN)
     return len(found), [it["row"]["id"] for it in found]

@@ -4047,8 +4047,10 @@ def revival_scope(c, v, within, args=None, *, source="conversations r"):
     roots = [
         row[0]
         for row in c.execute(
-            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND r.task_id IN "
-            f"(SELECT id FROM tasks WHERE status IN ({FINISHED_TASKS})) AND ({within})",
+            # The task's status by its key, per row: a caller's `within` that names its few roots by id is read from
+            # them, never crossed with every finished task's id.
+            f"SELECT r.id FROM {source} WHERE r.parent_id IS NULL AND EXISTS (SELECT 1 FROM tasks ft "
+            f"WHERE ft.id=r.task_id AND ft.status IN ({FINISHED_TASKS})) AND ({within})",
             args or {},
         )
     ]
@@ -5631,14 +5633,42 @@ def unread_terms(c, v):
         f"AND s.last_unread_seq>{mark} AND m.sender_id LIKE 'human:%' AND m.sender_id<>:me "
         "AND m.deleted_at IS NULL)"
     )
-    to_viewer = (
-        "r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-        "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
+    return by_person, f"r.id IN ({_to_viewer_roots(c, v)})"
+
+
+def _to_viewer_roots(c, v):
+    """SQL, with the viewer's actor as `:me`: the roots holding a delivery still open for them past their mark
+    (unread_terms' second half)."""
+    mark = _subtree_mark(c, v)
+    # The reader's open deliveries first, whatever the statistics say: their index is a few rows a reader, where
+    # starting from the threads would scan every delivery once a thread.
+    return (
+        "SELECT s.root_id FROM message_deliveries d INDEXED BY message_deliveries_waiting "
+        "CROSS JOIN messages m ON m.id=d.message_id "
+        "CROSS JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
         "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
         f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-        f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)"
+        f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL"
     )
-    return by_person, to_viewer
+
+
+def maybe_unread_roots(c, v):
+    """The roots unread_terms can hold true for, and some more: a root with a delivery still open for the viewer
+    (its second half, exactly), or with an open thread whose `last_unread_seq` is past the viewer's mark in it (what
+    the first half asks of a thread before it seeks a person's message there). A list that names these ids first reads
+    a few hundred roots by id, not every root, and loses none unread_terms admits. The threads come from the index of
+    those with something unread at all (migration 20261120004800_unread_threads): the mark is never below 0."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    # Two statements, not a UNION: SQLite plans the UNION's deliveries half worse than the same query alone.
+    unread = c.execute(
+        f"SELECT s.root_id FROM conversations s INDEXED BY conversations_unread_threads LEFT JOIN thread_followers f "
+        f"ON f.thread_id=s.id AND f.actor=:me WHERE {_SUBTREE_OPEN} AND s.last_unread_seq>0 "
+        f"AND s.last_unread_seq>{_subtree_mark(c, v)} AND s.root_id IS NOT NULL",
+        {"me": v.actor},
+    )
+    roots = {row[0] for row in unread}
+    roots.update(row[0] for row in c.execute(_to_viewer_roots(c, v), {"me": v.actor}) if row[0] is not None)
+    return sorted(roots)
 
 
 def _sidebar_page(c, v, cursor, limit, sort):
