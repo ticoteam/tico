@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{json, Value};
 
@@ -497,6 +497,13 @@ pub fn server_takes_browser() -> bool {
     SERVER_BROWSER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The server said the config changed and no answer has been kept since: the fallback models are read again at once.
+static CONFIG_STALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn config_stale() {
+    CONFIG_STALE.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Whether a config answer has been kept since start.
 pub fn config_seen() -> bool {
     CHOICES.lock().unwrap().is_some()
@@ -533,6 +540,7 @@ pub fn remember(config: &Value) {
         .map(|r| r.iter().filter(|v| v.is_object()).cloned().collect())
         .unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
+    CONFIG_STALE.store(false, std::sync::atomic::Ordering::SeqCst);
     // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
     // forgotten the limits it met, and still skips a held login in the fallback choice until the hold ends.
     if let Some(holds) = config["login_holds"].as_array() {
@@ -552,13 +560,21 @@ pub fn remember(config: &Value) {
 }
 
 impl Runner {
-    /// The company's fallback models, read at most once a minute (service.py default_fallbacks).
+    /// The company's fallback models, read at most once a minute (service.py default_fallbacks); while the server
+    /// tells this computer of a config change (events.rs relays_pushed), the harness relay's last read stands for
+    /// BACKUP_POLL_S, until the server says the config changed.
     pub async fn default_fallbacks(&self) -> Vec<Value> {
+        let stale = CONFIG_STALE.load(std::sync::atomic::Ordering::SeqCst);
+        let keep = if self.events.relays_pushed() && !stale {
+            crate::events::BACKUP_POLL_S
+        } else {
+            60.0
+        };
         let fresh = CHOICES
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|(at, _)| at.elapsed() < Duration::from_secs(60))
+            .filter(|(at, _)| at.elapsed().as_secs_f64() < keep)
             .map(|(_, rows)| rows.clone());
         if let Some(rows) = fresh {
             return rows;

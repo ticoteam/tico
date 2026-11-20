@@ -1411,3 +1411,35 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
             "chosen": "tico-high-1.0",
         }, (made, plain, own)
         assert stored["model"] == "tico-low-1.0" and stored["gateway"] == {"level": "low"}
+
+
+def test_connecting_or_clearing_the_gateway_tells_every_computer_to_read_its_config_and_a_new_url_does_not(
+    api, monkeypatch
+):
+    from backend import events as E
+
+    setup(api, monkeypatch)
+    computers = runner(api, label="A"), runner(api, label="B")
+
+    def newest():
+        with api.app.state.store.read() as c:
+            return E.latest(c)
+
+    def told(after):
+        with api.app.state.store.read() as c:
+            return [
+                [data["kind"] for _, data in E.runner_read(c, r["runner_id"], "runner:" + r["runner_id"], after)[0]]
+                for r in computers
+            ]
+
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.25)
+        start = newest()
+        save(api, fake)  # the Tico provider turns on (providers.with_gateway)
+        assert told(start) == [["config"], ["config"]]
+        start = newest()
+        put(api, "providers/gateway", {"url": fake.url, "expected_revision": _revision(api)})
+        assert told(start) == [[], []]  # still connected: nothing a computer installs moved
+        start = newest()
+        delete(api, "providers/gateway")
+        assert told(start) == [["config"], ["config"]]

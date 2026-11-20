@@ -932,7 +932,13 @@ RUNNER_KINDS = (
     "voice_inputs",
     "browser_exit",
     "pushed",  # only to a computer that takes it (backend/github.py tell_pushed)
+    "importers",  # only to a computer that takes relay hints (RELAY_HINTS; backend/meeting_importers.py)
 )
+# A computer that advertises this capability is told when its meeting importers change (`importers`), and trusts the
+# `config` rows below to cover the company config its harness relay reads (the Gateway connection too:
+# backend/gateway_connection.py _write). It then reads both every few minutes only, not every minute
+# (runner-rs/src/events.rs relays_pushed).
+RELAY_HINTS = "relay_hints_v1"
 _BOT_RUNNER = "SELECT runner_id AS rid FROM assignments WHERE bot={bot}"
 # Credentials and repositories are rare company-wide changes: every computer re-reads its share.
 _ALL_RUNNERS = "SELECT id AS rid FROM runners WHERE revoked_at IS NULL"
@@ -961,6 +967,22 @@ def _tell(kind, runners, bot="NULL"):
 
 def _bot_runner(kind, bot):
     return _tell(kind, _BOT_RUNNER.format(bot=bot), bot)
+
+
+ALL_RUNNERS = _ALL_RUNNERS
+# The computers among two ids (`?`, `?`) that take relay hints (RELAY_HINTS): an older one would read every endpoint
+# again for a kind it does not know, and polls on its own anyway.
+HINTED_RUNNERS = (
+    "SELECT id AS rid FROM runners_with_state WHERE id IN (?,?) AND revoked_at IS NULL "
+    f"AND '{RELAY_HINTS}' IN (SELECT value FROM json_each(capabilities))"
+)
+
+
+def tell_runners(c, kind, runners, params=()):
+    """A `runner` row of `kind` for each computer `runners` (a SELECT of one column, `rid`, taking `params`) yields:
+    the statement the change-log triggers run (`_tell`), written by the code that made the change, in its transaction.
+    A request's commit rings the computers' streams; a write outside one is found within RUNNER_FALLBACK_SECONDS."""
+    c.execute(_tell(kind, runners), params)
 
 
 # A call's resident attempt while it still holds the bot's voice job: attached to the call, leased, and on the bot's

@@ -23,6 +23,9 @@ const VOICE_SESSIONS: &str = "voice_sessions_v1";
 const VOICE_SESSION_RESUME: &str = "voice_session_resume_v1";
 /// The server pushes `voice_inputs` hints to a resident voice session (events.rs VoiceInputs); without them it polls.
 pub const VOICE_INPUTS: &str = "voice_inputs_v1";
+/// The server tells this computer when its meeting importers or the config its harness relay reads change, so those
+/// reads wait for the stream's word and a 5-minute backstop instead of a minute's clock (events.rs relays_pushed).
+pub const RELAY_HINTS: &str = "relay_hints_v1";
 /// Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py
 /// `request_plan_read`).
 const PLAN_USAGE: &str = "plan_usage_v1";
@@ -63,6 +66,7 @@ pub const CAPABILITIES: &[&str] = &[
     crate::fetch_fresh::PUSH_HINTS,
     VOICE_SESSION_RESUME,
     VOICE_INPUTS,
+    RELAY_HINTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -141,6 +145,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
+    RELAY_HINTS,
     VOICE_INPUTS,
     VOICE_SESSION_RESUME,
     crate::fetch_fresh::PUSH_HINTS,
@@ -696,6 +701,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    RELAY_HINTS,
                     VOICE_INPUTS,
                     crate::fetch_fresh::PUSH_HINTS,
                     VOICE_SESSION_RESUME,
@@ -733,13 +739,18 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(VOICE_INPUTS)
+            Some(RELAY_HINTS)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != VOICE_INPUTS)
+            .filter(|c| *c != RELAY_HINTS)
             .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(VOICE_INPUTS)
+        );
+        let older: Vec<&str> = older.into_iter().filter(|c| *c != VOICE_INPUTS).collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(VOICE_SESSION_RESUME)

@@ -2,7 +2,7 @@
 
 The owner turns an importer on in Settings and picks the enrolled computer that holds its
 credentials. That computer's `python -m runner_support importers` job asks `GET /api/v2/runners/importers`
-what to run and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
+what to run (again at once on an `importers` hint: the runner's side jobs, runner-rs/src/sidejobs.rs) and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
 stored here: they live in `secrets/<file>` on the computer (docs/meetings.md).
 """
 
@@ -12,6 +12,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
+from . import events
 from . import models as M
 from . import runner_online
 from .api_contract import api_v2, error
@@ -177,7 +178,7 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             runner_id = body.runner_id
             if body.enabled and runner_id not in {m["id"] for m in computers(c)}:
                 raise Problem("validation", "Choose an enrolled computer that may run importers", 422)
-            old = c.execute("SELECT runner_id FROM meeting_importers WHERE source=?", (source,)).fetchone()
+            old = c.execute("SELECT enabled,runner_id FROM meeting_importers WHERE source=?", (source,)).fetchone()
             c.execute(
                 "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(source) DO UPDATE SET enabled=excluded.enabled,runner_id=excluded.runner_id,"
@@ -187,6 +188,12 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             if source not in RETIRED_IMPORTERS and (not old or (old["runner_id"] or "") != runner_id):
                 # A different computer starts with a clean bill of health, not the last one's.
                 c.execute("DELETE FROM service_health WHERE service=?", ("recording:" + source,))
+            # The computer it left and the one it runs on now read `runners/importers` again at once; a save that moves
+            # nothing (the same computer, or off either way) tells no one.
+            was = (old["runner_id"] or "") if old and old["enabled"] else ""
+            now = (runner_id or "") if body.enabled else ""
+            if was != now:
+                events.tell_runners(c, "importers", events.HINTED_RUNNERS, (was, now))
             H.event(
                 c, who.actor, "meeting_importer.configured", source, {"enabled": body.enabled, "runner_id": runner_id}
             )

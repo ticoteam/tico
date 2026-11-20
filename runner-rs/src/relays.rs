@@ -21,11 +21,14 @@ struct HarnessRelay {
     relay: Option<crate::harness_tools::Relay>,
     config: Value,
     default_at: Option<Instant>,
+    /// Whether the last config read was answered: a failed one is tried again on HARNESS_CONFIG_S, not the backstop.
+    config_ok: bool,
     /// The run loop's assignments answer the runtimes were last worked out from (Runner::assignments_seen).
     rows: Option<Arc<Vec<Value>>>,
 }
 
-/// How often the harness relay reads the company's config (its default and Gateway runtimes) on its own.
+/// How often the harness relay reads the company's config (its default and Gateway runtimes) on its own; while the
+/// server tells this computer of every change to them (events.rs relays_pushed), every BACKUP_POLL_S and on its word.
 const HARNESS_CONFIG_S: f64 = 60.0;
 
 struct Relays {
@@ -56,6 +59,7 @@ static CONFIG_CHANGED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 
 pub fn config_changed() {
     CONFIG_CHANGED.store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::fallback::config_stale();
 }
 
 /// service.py `wants`: the stream asked for `channel`, it never ran, or its interval passed (`every` while the
@@ -172,10 +176,6 @@ pub fn poll(runner: &Arc<Runner>) {
                 // Install what this computer's bots run on and the optional defaults, including the Gateway
                 // before subscription sign-in. A computer with no bots yet also takes the company default.
                 let changed = CONFIG_CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
-                let due = changed
-                    || harness
-                        .default_at
-                        .is_none_or(|t| t.elapsed().as_secs_f64() >= HARNESS_CONFIG_S);
                 // The bots' runtimes: while the event stream is up, from the run loop's own assignments answer, which
                 // it reads again whenever the server says they changed (and on its backup timer), so this relay asks
                 // for nothing the loop already has; with the stream down, read here every minute as before.
@@ -185,10 +185,23 @@ pub fn poll(runner: &Arc<Runner>) {
                 let loaded = me.events.live() && me.assignments_read();
                 let seen = me.assignments_seen();
                 let shared = loaded && !has_branch(&seen);
+                // The config on the server's word and every BACKUP_POLL_S while it pushes (and the last read was
+                // answered, and no branch keeps the assignments read here on the minute); else every minute.
+                let every = if me.events.relays_pushed() && shared && harness.config_ok {
+                    BACKUP_POLL_S
+                } else {
+                    HARNESS_CONFIG_S
+                };
+                let due = changed
+                    || harness
+                        .default_at
+                        .is_none_or(|t| t.elapsed().as_secs_f64() >= every);
                 if due || (shared && moved(harness.rows.as_ref(), &seen)) {
                     if due {
                         harness.default_at = Some(Instant::now());
-                        if let Ok(c) = me.client.get("config").await {
+                        let answer = me.client.get("config").await;
+                        harness.config_ok = answer.is_ok();
+                        if let Ok(c) = answer {
                             crate::fallback::remember(&c);
                             harness.config = c;
                         }

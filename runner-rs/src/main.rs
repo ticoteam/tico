@@ -616,7 +616,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     ));
     tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers and close-calls.
-    let side = sidejobs::start(&service.config);
+    let side = sidejobs::start(&service.config, service.events.clone());
     screen::start(service.config.path.clone(), client.clone());
     browser_exit::start(client.clone());
     browser::start(service.config.clone());

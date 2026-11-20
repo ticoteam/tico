@@ -3,6 +3,10 @@
 //! key is in this computer's secrets). Mail and calendar run on the server (docs/mail.md), so no computer runs a
 //! mail job. Each is a Python job (`python -m runner_support --config <path> <job>`), a separate child
 //! process, so a crash in one never takes down the bot runner, and each restarts with backoff.
+//!
+//! The jobs are looked after every POLL_SECONDS. The hub is asked which importers run here that often too, unless it
+//! tells this computer of every change to them (relay_hints_v1, with the event stream up: events.rs relays_pushed):
+//! then on its `importers` hint, at once, and every BACKUP_POLL_S.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,6 +17,7 @@ use tokio::sync::Notify;
 
 use crate::client::{ApiError, Client};
 use crate::config::Config;
+use crate::events::{Events, BACKUP_POLL_S};
 use crate::util::log;
 
 pub const POLL_SECONDS: u64 = 60;
@@ -75,7 +80,10 @@ struct Child {
 pub struct SideJobs {
     config: Config,
     client: Client,
+    events: Arc<Events>,
     poll: Duration,
+    /// When the hub was last asked which importers run here, and what it said (kept between hints).
+    asked: Option<(Instant, Vec<String>)>,
     children: HashMap<&'static str, Child>,
     failures: HashMap<&'static str, u32>,
     retry_at: HashMap<&'static str, Instant>,
@@ -91,7 +99,7 @@ fn rows(answer: &Value, key: &str) -> Vec<Value> {
 }
 
 impl SideJobs {
-    pub fn new(config: Config) -> Result<SideJobs, String> {
+    pub fn new(config: Config, events: Arc<Events>) -> Result<SideJobs, String> {
         let client = Client::new(&config.url(), &config.token(), 30, 1)?;
         // TICO_SIDE_JOBS_POLL exists so the container smoke test does not wait a minute per check.
         let poll = std::env::var("TICO_SIDE_JOBS_POLL")
@@ -102,7 +110,9 @@ impl SideJobs {
         Ok(SideJobs {
             config,
             client,
+            events,
             poll: Duration::from_secs(poll),
+            asked: None,
             children: HashMap::new(),
             failures: HashMap::new(),
             retry_at: HashMap::new(),
@@ -111,18 +121,37 @@ impl SideJobs {
     }
 
     /// The sources a job would serve ([] stops it), or Err when the hub cannot be asked (keep what runs).
-    async fn wanted(&self, name: &str) -> Result<Vec<String>, ApiError> {
+    async fn wanted(&mut self, name: &str) -> Result<Vec<String>, ApiError> {
         match name {
-            "importers" => match self.client.get("runners/importers").await {
-                Ok(answer) => Ok(rows(&answer, "importers")
-                    .iter()
-                    .filter_map(|r| r.get("source").and_then(|s| s.as_str()))
-                    .filter(|s| IMPORTERS.contains(s))
-                    .map(String::from)
-                    .collect()),
-                Err(e) if e.status == 403 => Ok(vec![]), // not an import operator
-                Err(e) => Err(e),
-            },
+            "importers" => {
+                // The stream's word (or a catch-up) asks at once; else the last answer stands for its interval.
+                let hinted = self.events.take("importers");
+                let every = if self.events.relays_pushed() {
+                    Duration::from_secs_f64(BACKUP_POLL_S)
+                } else {
+                    self.poll
+                };
+                if let Some((at, sources)) = self.asked.as_ref().filter(|_| !hinted) {
+                    if at.elapsed() < every {
+                        return Ok(sources.clone());
+                    }
+                }
+                let sources = match self.client.get("runners/importers").await {
+                    Ok(answer) => rows(&answer, "importers")
+                        .iter()
+                        .filter_map(|r| r.get("source").and_then(|s| s.as_str()))
+                        .filter(|s| IMPORTERS.contains(s))
+                        .map(String::from)
+                        .collect(),
+                    Err(e) if e.status == 403 => vec![], // not an import operator
+                    Err(e) => {
+                        self.asked = None; // asked again on the next tick
+                        return Err(e);
+                    }
+                };
+                self.asked = Some((Instant::now(), sources.clone()));
+                Ok(sources)
+            }
             "close-calls" => Ok(if close_key(&self.config.projects_dir()).is_empty() {
                 vec![]
             } else {
@@ -257,15 +286,15 @@ impl SideJobs {
         }
     }
 
-    /// Supervise until `stop` is notified, then stop every job.
+    /// Supervise until `stop` is notified, then stop every job. An `importers` hint ends the wait at once.
     pub async fn run(mut self, stop: Arc<Notify>) {
+        let events = self.events.clone();
         loop {
             self.tick().await;
-            if tokio::time::timeout(self.poll, stop.notified())
-                .await
-                .is_ok()
-            {
-                break;
+            tokio::select! {
+                _ = stop.notified() => break,
+                _ = events.side.notified() => {}
+                _ = tokio::time::sleep(self.poll) => {}
             }
         }
         let names: Vec<&'static str> = self.children.keys().copied().collect();
@@ -276,11 +305,14 @@ impl SideJobs {
 }
 
 /// Start the supervisor when TICO_SIDE_JOBS=1: (its task, what stops it).
-pub fn start(config: &Config) -> Option<(tokio::task::JoinHandle<()>, Arc<Notify>)> {
+pub fn start(
+    config: &Config,
+    events: Arc<Events>,
+) -> Option<(tokio::task::JoinHandle<()>, Arc<Notify>)> {
     if std::env::var("TICO_SIDE_JOBS").as_deref() != Ok("1") {
         return None;
     }
-    let jobs = match SideJobs::new(config.clone()) {
+    let jobs = match SideJobs::new(config.clone(), events) {
         Ok(j) => j,
         Err(e) => {
             log(&format!("Tico side jobs: {e}"));
@@ -294,6 +326,63 @@ pub fn start(config: &Config) -> Option<(tokio::task::JoinHandle<()>, Arc<Notify
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn jobs(url: &str, events: Arc<Events>) -> SideJobs {
+        let dir =
+            std::env::temp_dir().join(format!("tico-side-jobs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(
+            &path,
+            json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")})
+                .to_string(),
+        )
+        .unwrap();
+        SideJobs::new(Config::load(&path).unwrap(), events).unwrap()
+    }
+
+    /// The last answer, as if it came `ago`.
+    fn asked_ago(jobs: &mut SideJobs, ago: Duration) {
+        if let Some((at, _)) = jobs.asked.as_mut() {
+            *at = Instant::now().checked_sub(ago).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn importers_are_asked_every_minute_until_the_hub_pushes_them_then_on_its_word_and_every_five_minutes(
+    ) {
+        let granola = r#"{"importers": [{"source": "granola"}]}"#;
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, granola),
+            (200, r#"{"importers": []}"#),
+            (200, granola),
+            (200, granola),
+        ])
+        .await;
+        let events = Events::new();
+        let mut jobs = jobs(&url, events.clone());
+        let asks = || seen.lock().unwrap().len();
+        assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
+        assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
+        assert_eq!(asks(), 1, "the answer stands for the minute");
+        asked_ago(&mut jobs, Duration::from_secs(POLL_SECONDS + 1));
+        assert!(jobs.wanted("importers").await.unwrap().is_empty());
+        assert_eq!(asks(), 2, "no hints from this hub: every minute, as before");
+        // The hub took relay_hints_v1 and the stream is up: the answer stands for BACKUP_POLL_S.
+        events.dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        events.relay_hints(true);
+        asked_ago(&mut jobs, Duration::from_secs(120));
+        assert!(jobs.wanted("importers").await.unwrap().is_empty());
+        assert_eq!(asks(), 2);
+        // Its word asks at once.
+        events.dispatch("runner", None, &json!({"kind": "importers"}), false);
+        assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
+        assert_eq!(asks(), 3);
+        asked_ago(&mut jobs, Duration::from_secs_f64(BACKUP_POLL_S + 1.0));
+        assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
+        assert_eq!(asks(), 4, "the backstop");
+        assert!(seen.lock().unwrap()[3].starts_with("GET /api/v2/runners/importers "));
+    }
 
     #[test]
     fn a_crashing_job_backs_off_and_one_that_ran_a_while_starts_over() {

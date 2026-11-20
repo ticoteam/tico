@@ -35,6 +35,7 @@
     "heartbeat.request.capabilities[]=\"plan_switch_resume_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it a move between Claude plans starts that computer's Claude sessions fresh, as before",
     "heartbeat.request.capabilities[]=\"push_hints_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes; without it no `pushed` event is sent to that computer, and its chat turns trust its own fetch for up to 5 minutes, as before",
     "heartbeat.request.capabilities[]=\"voice_sessions_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422; only an advertising runner can claim a resident voice session",
+    "heartbeat.request.capabilities[]=\"relay_hints_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it no `importers` event is sent to that computer, and it reads its config and meeting importers every minute as before (events.rs relays_pushed)",
     "heartbeat.request.capabilities[]=\"voice_inputs_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it no voice input hint is pushed to that computer and the runner keeps polling voice inputs every 400 ms (events.rs)",
     "heartbeat.request.capabilities[]=\"voice_session_resume_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it a harness that requires it (Codex, voice_session_runner) gets no resident call session on that computer",
     "heartbeat.request.capabilities[]=\"fork_session_v1\"": "runner-rs/src/lanes.rs refused_field drops it after an older server's 422 for ten minutes; without it that computer is handed no fork_thread, so such a job runs as an ordinary turn (backend/execution.py FORK_SESSION)",
@@ -242,7 +243,8 @@
         "seq": {"type": "integer"},
         "kind": {"type": "string", "x-open-enum": true, "enum": [
           "work", "assignments", "repositories", "credentials", "config", "worktrees", "restart", "performance",
-          "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open", "pushed", "voice_inputs"],
+          "capacity", "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open", "pushed", "voice_inputs",
+          "importers"],
           "x-note": "A runner re-reads everything for a kind it does not know (runner-rs/src/events.rs channels)."},
         "bots": {"type": "array", "items": {"type": "string"}},
         "session_id": {"type": "string"},
