@@ -1,8 +1,20 @@
-# Packaging (electron-builder). macOS first, unsigned for now: set `identity` and notarize before shipping updates,
-# since an unsigned Mac app cannot install its own updates.
+# Packaging (electron-builder). The Release workflow builds it on every tag that changed desktop/ (.github/workflows/
+# desktop.yml) and adds the files to the GitHub release; electron-builder itself never publishes (`--publish never`).
+# Files: Tico-<version>-universal.dmg and .zip (one Mac download for both chips; the updater installs from the zip),
+# Tico-<version>-setup.exe (one NSIS installer for x64 and arm64), Tico-<version>-x86_64.AppImage and
+# Tico-<version>-amd64.deb, each with a .blockmap where the updater uses one, and the feeds latest-mac.yml, latest.yml
+# and latest-linux.yml. The Tauri app (app/) names its files Tico_<version>_..., so the two never collide.
+# Updates: `publish` only writes app-update.yml into the app's resources, pointing at the latest GitHub release; a
+# prerelease is never GitHub's latest, so it never reaches installed apps. detectUpdateChannel is off so a prerelease
+# version still writes and reads latest*.yml (otherwise v1.2.0-rc.1 would look for rc-mac.yml forever).
+# Signing follows the environment: CSC_LINK signs, and CI passes -c.mac.identity=null for an unsigned build when there
+# is no certificate (an unsigned Mac app cannot install its own updates). Notarization stays off unless CI passes
+# -c.mac.notarize=true with APPLE_API_KEY (path to the .p8), APPLE_API_KEY_ID and APPLE_API_ISSUER set.
 appId: team.tico.desktop
 productName: Tico
 copyright: Tico
+artifactName: Tico-${version}-${arch}.${ext}
+detectUpdateChannel: false
 directories:
   output: release
   buildResources: build
@@ -23,14 +35,14 @@ electronFuses:
 mac:
   target:
     - target: dmg
-      arch: [arm64, x64]
+      arch: [universal]
     - target: zip
-      arch: [arm64, x64]
+      arch: [universal]
   category: public.app-category.productivity
   minimumSystemVersion: "14.0"
   icon: ../app/icons/icon.icns
-  identity: null
   hardenedRuntime: true
+  notarize: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -43,10 +55,19 @@ win:
     - target: nsis
       arch: [x64, arm64]
   icon: ../app/icons/icon.ico
+  # Windows signing (Azure Trusted Signing) goes here later as win.azureSignOptions; until then the installer is
+  # unsigned and SmartScreen warns on first run.
+nsis:
+  # No ${arch} in the name: with one, electron-builder writes a per-arch installer beside the combined one.
+  artifactName: Tico-${version}-setup.${ext}
 linux:
-  target: [AppImage, deb]
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
   category: Office
+  maintainer: Tico   # the .deb needs one; package.json's author has no email
 publish:
-  provider: github
-  owner: ticoteam
-  repo: tico
+  provider: generic
+  url: https://github.com/ticoteam/tico/releases/latest/download
