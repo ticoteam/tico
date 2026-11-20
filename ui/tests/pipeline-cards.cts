@@ -65,19 +65,22 @@ async function serve(page: Page, errors: string[]): Promise<void> {
   });
 }
 
-/** Each card of a stage as drawn: where it is, its title's lines, the asker's name, the age and the owner's face. */
+/** Each card of a stage as drawn: where it is, its title's lines, the asker's name, the age and the owner's face.
+ * Found and measured in one page task: a locator's evaluateAll finds the cards, then measures them in a second call, and
+ * a board drawn again in between leaves it measuring detached cards, whose title has no line height (lines read NaN). */
 async function cards(page: Page, col: string) {
-  await page.locator(`${col} .tk-card[data-task]`).first().waitFor();
-  return page.locator(`${col} .tk-card[data-task]`).evaluateAll(els => els.map(el => {
+  const selector = `${col} .tk-card[data-task]`;
+  await page.locator(selector).first().waitFor();
+  return page.evaluate(sel => [...document.querySelectorAll<HTMLElement>(sel)].map(el => {
     const box = el.getBoundingClientRect(), title = el.querySelector<HTMLElement>('.tk-title')!;
     const lh = parseFloat(getComputedStyle(title).lineHeight);
-    return {id: (el as HTMLElement).dataset['task'], top: box.top, bottom: box.bottom, tip: el.getAttribute('title'),
+    return {id: el.dataset['task'], top: box.top, bottom: box.bottom, tip: el.getAttribute('title'),
       lines: Math.round(title.getBoundingClientRect().height / lh), cut: title.scrollHeight > title.clientHeight + 1,
       asker: el.querySelector<HTMLElement>('.tk-asker .tk-name')?.innerText ?? null, askerFace: !!el.querySelector('.tk-asker .av'),
       age: el.querySelector<HTMLElement>('.tk-meta .tk-age')?.innerText ?? null,
       owner: el.querySelector('.tk-owner')?.getAttribute('title') ?? null, ownerFace: !!el.querySelector('.tk-owner .av'),
       late: !!el.querySelector('.tk-meta .tk-late'), mark: !!el.querySelector('.tk-meta .tk-mark-person')};
-  }));
+  }), selector);
 }
 
 async function opened(browser: Browser, viewport: {width: number; height: number}, phone: boolean, errors: string[]) {
