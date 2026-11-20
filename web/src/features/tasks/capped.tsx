@@ -9,6 +9,7 @@ export const COL_CAP = 10;
 export const COL_SHOW = 8;
 const LONG = 100;
 export const ROW_H = 34;
+export const PHONE_ROW_H = 44;
 export const CARD_H = 96;
 
 /** The first `show` rows, or all of them once opened; past LONG, only what is on screen is drawn. */
@@ -20,7 +21,7 @@ export function Capped<T extends { id: string }>({
   draw,
   moreRow,
   height,
-  cards,
+  measure,
 }: {
   list: readonly T[];
   cap: number;
@@ -30,17 +31,18 @@ export function Capped<T extends { id: string }>({
   draw: (t: T) => ReactNode;
   moreRow: (n: number, open: () => void) => ReactNode;
   height: number;
-  cards?: boolean;
+  measure?: boolean;
 }) {
   const [all, setAll] = useState(false);
   if (all && list.length > LONG)
     return (
       <VirtualList
+        key={height}
         className="tk-long"
         items={list}
         getKey={(t) => t.id}
         estimateSize={height}
-        measure={cards}
+        measure={measure}
         renderItem={(t) => draw(t)}
         onReachEnd={more}
       />
