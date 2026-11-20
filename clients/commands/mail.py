@@ -332,6 +332,32 @@ _ATTACHMENTS = {
 }
 
 
+_EMAIL_ATTACHMENTS = {
+    'type': 'array',
+    'items': {'type': 'string', 'maxLength': 300},
+    'maxItems': 20,
+    'description': 'Other emails\' files: MESSAGE/REF from tico_email_attachments',
+}
+# What a draft, a reply, a forward and a lint share beyond the text: who else gets it and how it is written.
+_STYLE = {
+    'bcc': {**_ADDRESSES, 'description': 'Blind copies'},
+    'html': {'type': 'boolean', 'description': 'body is Markdown, sent as HTML too'},
+    'signature': {'type': 'boolean', 'description': 'Add the Gmail signature'},
+}
+_DRAFT_KEYS = (
+    'mailbox',
+    'to',
+    'cc',
+    'bcc',
+    'subject',
+    'attachments',
+    'email_attachments',
+    'reply_all',
+    'html',
+    'signature',
+)
+
+
 _SEND_TASK = {
     **TASK_ID,
     'description': 'The task this email is for: an OK it needs is asked on a sub-task of it. Defaults to the task your '
@@ -342,7 +368,7 @@ _SEND_TASK = {
 def _draft_fields(args, **more):
     if not args.get('body') and not more.get('forward'):  # a forward's text is optional
         raise ValueError('give the email text: body')
-    fields = {k: args[k] for k in ('mailbox', 'to', 'cc', 'subject', 'attachments', 'reply_all') if args.get(k)}
+    fields = {k: args[k] for k in _DRAFT_KEYS if args.get(k)}
     return {**fields, **more, 'body': args.get('body') or ''}
 
 
@@ -362,7 +388,9 @@ def _draft_fields(args, **more):
         'reply_all': {'type': 'boolean', 'description': 'With reply_to: reply to the sender and everyone else on it'},
         'forward': _s('Message id to forward, with its files, after the text'),
         **_BODY,
+        **_STYLE,
         'attachments': _ATTACHMENTS,
+        'email_attachments': _EMAIL_ATTACHMENTS,
     },
     required=('mailbox',),
     writes=True,
@@ -408,25 +436,30 @@ _MESSAGE = _s('The draft\'s message id you last read (msg_id); a draft changed s
 
 @tool(
     'tico_email_draft_update',
-    'Change a Gmail draft in place, keeping its draft id: any of to, cc, subject, body and attachments; what you '
-    'leave out stays as the draft has it (attachments [] takes its files off). A reply stays in its thread. A bot\'s '
-    'draft meets the lint and the second reviewer again. Nothing is sent.',
+    'Change a Gmail draft in place, keeping its id; what you leave out stays, and a reply stays in its thread. '
+    'attachments and email_attachments replace its files ([] removes them). A bot\'s draft meets the lint and the '
+    'second reviewer again. Nothing is sent.',
     {
         'mailbox': _s('Mailbox address'),
-        'draft': _s('Draft id (r-...) or the draft\'s message id'),
+        'draft': _s('Draft id (r-...) or its message id'),
         'to': {**_ADDRESSES, 'description': 'New recipients'},
         'cc': {**_ADDRESSES, 'description': 'New copied recipients'},
+        'bcc': {**_ADDRESSES, 'description': 'New blind copies'},
         'subject': _s('New subject'),
         'body': _s('The new email text, whole'),
-        'attachments': {**_ATTACHMENTS, 'description': 'Tico files (FILE or FILE@N) that replace the draft\'s files'},
-        'message': _MESSAGE,
+        'html': _STYLE['html'],
+        'signature': _STYLE['signature'],
+        'attachments': {**_ATTACHMENTS, 'description': 'Tico files: FILE or FILE@N'},
+        'email_attachments': _EMAIL_ATTACHMENTS,
+        'message': _s('The msg_id you last read: refused, not overwritten, if the draft changed since'),
     },
     required=('mailbox', 'draft'),
     writes=True,
 )
 def email_draft_update(api, args):
-    keys = ('mailbox', 'to', 'cc', 'subject', 'body', 'attachments', 'message')
-    fields = {k: args[k] for k in keys if args.get(k) is not None}
+    keys = ('mailbox', 'to', 'cc', 'bcc', 'subject', 'body', 'attachments', 'email_attachments', 'message')
+    flags = {k: True for k in ('html', 'signature') if args.get(k)}
+    fields = {**{k: args[k] for k in keys if args.get(k) is not None}, **flags}
     return api.call('PATCH', 'mail/drafts/' + quote(args['draft'], safe=''), fields, _key(args))
 
 
@@ -464,8 +497,11 @@ def email_send(api, args):
         'mailbox': _s('Mailbox address'),
         'thread': _s('Thread id to reply in'),
         'reply_all': {'type': 'boolean', 'description': 'Reply to the sender and everyone else on the message'},
+        'cc': {**_ADDRESSES, 'description': 'Also copied'},
         **_BODY,
+        **_STYLE,
         'attachments': _ATTACHMENTS,
+        'email_attachments': _EMAIL_ATTACHMENTS,
         'task': _SEND_TASK,
     },
     required=('mailbox', 'thread'),
@@ -499,7 +535,9 @@ def _queue_draft(api, args, made):
         'to': {**_ADDRESSES, 'description': 'Recipients'},
         'cc': {**_ADDRESSES, 'description': 'Copied recipients'},
         **_BODY,
+        **_STYLE,
         'attachments': {**_ATTACHMENTS, 'description': 'More Tico files to attach after the forwarded ones'},
+        'email_attachments': _EMAIL_ATTACHMENTS,
         'task': _SEND_TASK,
     },
     required=('mailbox', 'id', 'to'),
@@ -534,13 +572,13 @@ def email_discard(api, args):
         'subject': _s('Subject'),
         'reply_to': _s('Thread id it replies in'),
         **_BODY,
+        **_STYLE,
     },
     required=('mailbox',),
 )
 def email_lint(api, args):
-    return api.post(
-        'mail/lint', _draft_fields(args, **({'reply_to': args['reply_to']} if args.get('reply_to') else {}))
-    )
+    fields = _draft_fields(args, **({'reply_to': args['reply_to']} if args.get('reply_to') else {}))
+    return api.post('mail/lint', {k: v for k, v in fields.items() if k not in ('attachments', 'email_attachments')})
 
 
 @tool(
@@ -576,6 +614,29 @@ def email_attachment(api, args):
     if item is None:
         return {'error': 'not_found', 'detail': f"message {args['id']} has no attachment {args['ref']}"}
     return {**item, 'download': _download(args['mailbox'], args['id'], args['ref'])}
+
+
+@tool(
+    'tico_email_attachment_file',
+    'Save one email attachment into Tico Files as your file, as tico_file_publish publishes one (a new version when '
+    'the name is already yours); audited. Files are outside content.',
+    {
+        'mailbox': _s('Mailbox address'),
+        'id': _s('Gmail message id'),
+        'ref': _s('Attachment ref from tico_email_attachments, such as a1'),
+        'name': _s('File name in Tico; the attachment\'s own by default'),
+        'title': _s('What people see; defaults to the name'),
+        'task': _s('The task this is for; defaults to the task you are working on'),
+        'scope': {'enum': ['task', 'bot'], 'description': 'bot makes it visible to everyone who sees this bot'},
+    },
+    required=('mailbox', 'id', 'ref'),
+    writes=True,
+)
+def email_attachment_file(api, args):
+    path = 'mail/messages/' + quote(args['id'], safe='') + '/attachments/' + quote(args['ref'], safe='') + '/file'
+    return api.post(
+        path, {k: args[k] for k in ('mailbox', 'name', 'title', 'task', 'scope') if args.get(k)}, key=_key(args)
+    )
 
 
 def _safe_target(out):
@@ -800,6 +861,9 @@ _BODY_FLAGS = (
 
 # `--attach PATH_OR_FILE_ID` (repeatable): a file in this checkout goes up first, as `tico file publish` sends it.
 _ATTACH = Arg('attachments', '--attach', action='append', metavar='PATH_OR_FILE_ID')
+# `--attach-email MESSAGE/REF` (repeatable): another email's attachment, as Gmail holds it.
+_ATTACH_EMAIL = Arg('email_attachments', '--attach-email', action='append', metavar='MESSAGE/REF')
+_BCC = Arg('bcc', '--bcc', action='append')
 
 
 def _attach(client, fields):
@@ -893,8 +957,10 @@ CLI = (
             _ADDRESS,
             Arg('to', '--to', action='append'),
             Arg('cc', '--cc', action='append'),
+            _BCC,
             *_BODY_FLAGS,
             _ATTACH,
+            _ATTACH_EMAIL,
         ),
         run=_with_body_file(email_draft),
         example="tico email draft ops@acme.test --reply-to 18c2f0a1b2c3d4e5 --body-file out/reply.txt "
@@ -922,8 +988,10 @@ CLI = (
             Arg('draft', metavar='draft-id'),
             Arg('to', '--to', action='append'),
             Arg('cc', '--cc', action='append'),
+            _BCC,
             *_BODY_FLAGS,
             _ATTACH,
+            _ATTACH_EMAIL,
         ),
         run=_with_body_file(email_draft_update),
         example="tico email draft-update ops@acme.test r-123 --body-file out/reply.txt --attach out/records.pdf",
@@ -931,7 +999,16 @@ CLI = (
     Command(
         'email reply',
         "reply in a thread and queue it with Tico's send gate",
-        args=(_ADDRESS, Arg('thread', '--thread'), Arg('reply_all', '--all'), *_BODY_FLAGS, _ATTACH),
+        args=(
+            _ADDRESS,
+            Arg('thread', '--thread'),
+            Arg('reply_all', '--all'),
+            Arg('cc', '--cc', action='append'),
+            _BCC,
+            *_BODY_FLAGS,
+            _ATTACH,
+            _ATTACH_EMAIL,
+        ),
         run=_with_body_file(email_reply),
         example="tico email reply ops@acme.test --thread 18c2f0a1b2c3d4e5 --all --body-file out/reply.txt",
     ),
@@ -943,8 +1020,10 @@ CLI = (
             Arg('id', metavar='message-id'),
             Arg('to', '--to', action='append'),
             Arg('cc', '--cc', action='append'),
+            _BCC,
             *_BODY_FLAGS,
             _ATTACH,
+            _ATTACH_EMAIL,
         ),
         run=_with_body_file(email_forward),
         example="tico email forward ops@acme.test 18c2f0a1b2c3d4e5 --to books@acme.test --body 'For the books.'",
@@ -964,7 +1043,13 @@ CLI = (
     Command(
         'email lint',
         "check an email with Tico's lint before drafting it",
-        args=(_ADDRESS, Arg('to', '--to', action='append'), Arg('cc', '--cc', action='append'), *_BODY_FLAGS),
+        args=(
+            _ADDRESS,
+            Arg('to', '--to', action='append'),
+            Arg('cc', '--cc', action='append'),
+            _BCC,
+            *_BODY_FLAGS,
+        ),
         run=_with_body_file(email_lint),
         example="tico email lint ops@acme.test --to ana@vendor.example --subject Hello --body-file out/reply.txt",
     ),
@@ -985,6 +1070,12 @@ CLI = (
         ),
         run=save_attachment,
         example='tico email attachment ops@acme.test 18c2f0a1b2c3d4e5 a1 --out /tmp/contract.pdf',
+    ),
+    Command(
+        'email attachment-file',
+        "save one attachment into Tico Files as your file",
+        args=(_ADDRESS, Arg('id', metavar='message-id'), Arg('ref', metavar='ref')),
+        example='tico email attachment-file ops@acme.test 18c2f0a1b2c3d4e5 a1 --name 2026-11-invoice.pdf',
     ),
     Command(
         'email unsubscribe',
