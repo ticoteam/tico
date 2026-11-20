@@ -617,6 +617,10 @@ def readers(auth):
         value["request"] = H.task_request(c, row["id"])
         if filed := SRC.filers(c, [row["id"]]).get(row["id"]):
             value["filer"] = filed
+        from . import email_sending
+
+        if sent := email_sending.for_tasks(c, [row["id"]]).get(row["id"]):
+            value["email_send"] = sent
         if who is not None and visible_sql != "1":
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
         from . import task_reads
@@ -755,6 +759,9 @@ def readers(auth):
             origins[event["target"]] = origin if H.is_bot(origin) else None
 
         filed = SRC.filers(c, ids)
+        from . import email_sending
+
+        email_sends = email_sending.for_tasks(c, ids)
         summaries = H.children_summaries(c, ids, visible_sql)
         # The rows each row's from_person reads, read for the whole page first; each row is still decided one at a
         # time by the same code below.
@@ -785,6 +792,8 @@ def readers(auth):
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in filed:
                 value["filer"] = filed[row["id"]]
+            if row["id"] in email_sends:
+                value["email_send"] = email_sends[row["id"]]
             result.append(value)
         from .files import readable_page_refs
 
