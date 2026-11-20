@@ -13,7 +13,9 @@ def conforms(value, schema, root, where="$"):
             errors = [conforms(value, option, root, where) for option in schema[key]]
             return None if any(e is None for e in errors) else "; ".join(e for e in errors if e)
     if "enum" in schema:
-        return None if value in schema["enum"] else "%s: %r not in %r" % (where, value, schema["enum"])
+        # By type as well as value: in Python True == 1, which JSON tells apart.
+        listed = any(value == v and type(value) is type(v) for v in schema["enum"])
+        return None if listed else "%s: %r not in %r" % (where, value, schema["enum"])
     kinds = schema.get("type")
     kinds = [kinds] if isinstance(kinds, str) else kinds
     names = {

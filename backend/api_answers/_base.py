@@ -30,7 +30,7 @@ def _tidy(node: JsonSchema) -> None:
     generated types and tests/helpers/openapi_v2.conforms read): no generated titles, a nullable scalar as a type list,
     a nullable object or reference as oneOf with null. Does not follow $ref: each answer tidies its own."""
     node.pop("title", None)
-    if "const" in node:
+    if "const" in node and "enum" not in node:
         node["enum"] = [node.pop("const")]  # Literal["risk"]: one value, spelled as the contract spells several
     if node.get("type") == "object" and node.get("additionalProperties") is True and "properties" not in node:
         del node["additionalProperties"]  # dict[str, Any]: any object, as {"type": "object"} says already
@@ -40,6 +40,8 @@ def _tidy(node: JsonSchema) -> None:
         sub = node.get(key)
         if isinstance(sub, dict):
             _tidy(sub)  # pyright: ignore[reportUnknownArgumentType]
+    for option in node.get("oneOf", ()):  # Annotated[..., ONE_OF]: its options are spelled the same way
+        _tidy(option)
     options: list[JsonSchema] | None = node.get("anyOf")
     if options is None:
         return
@@ -56,8 +58,8 @@ def _tidy(node: JsonSchema) -> None:
         node["type"] = kinds
         if formats:
             node["format"] = formats[0]
-    elif len(options) == 2 and {"type": "null"} in options:
-        node["oneOf"] = node.pop("anyOf")  # one value or null: they never overlap, so oneOf says the same
+    elif len(options) == 2 and {"type": "null"} in options and {} not in options:
+        node["oneOf"] = node.pop("anyOf")  # one value or null: they never overlap, so oneOf says the same (Any would)
 
 
 def _docstrings(cls: type) -> dict[str, str]:

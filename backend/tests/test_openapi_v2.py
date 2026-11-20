@@ -280,11 +280,19 @@ def test_the_contracts_spelling_never_narrows_or_breaks_a_schema():
             {"anyOf": [{"const": "risk", "type": "string"}, {"type": "null"}]},
             {"oneOf": [{"enum": ["risk"], "type": "string"}, {"type": "null"}]},
         ),
+        ({"const": "risk", "enum": ["other"]}, {"const": "risk", "enum": ["other"]}),  # never widened
+        ({"anyOf": [{}, {"type": "null"}]}, {"anyOf": [{}, {"type": "null"}]}),  # Any | None: null matches both
+        (
+            {"oneOf": [{"const": "risk", "type": "string"}, {"type": "integer"}]},  # ONE_OF's options too
+            {"oneOf": [{"enum": ["risk"], "type": "string"}, {"type": "integer"}]},
+        ),
     ]
     for given, spelled in cases:
         _tidy(given)
         assert given == spelled
         Draft202012Validator.check_schema(given)
+    # Literal[True] is enum [true]: the live check tells JSON's true from 1, which Python counts as equal.
+    assert conforms(True, {"enum": [True]}, {}) is None and conforms(1, {"enum": [True]}, {}) is not None
 
 
 def test_a_typeddict_answer_never_touches_the_wire(api):
