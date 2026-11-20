@@ -3,7 +3,9 @@
 .md-img{display:block;max-width:100%;height:auto;margin:var(--s-3) 0 0;border-radius:var(--r-paper);box-shadow:var(--lift-paper)}
 .md-rule{height:1px;margin:var(--s-5) 0;border:0;background:var(--line)}
 .md-table{max-width:100%;overflow-x:auto;scrollbar-width:none;margin:var(--s-3) 0 0}
-.md-table .table th,.md-table .table td{height:auto;padding:var(--s-2) var(--s-3) var(--s-2) 0;white-space:normal;vertical-align:top;line-height:1.45}
+.md-table .table th,.md-table .table td{height:auto;padding:var(--s-2) var(--s-3) var(--s-2) 0;white-space:normal;vertical-align:top;line-height:1.45;
+  overflow-wrap:normal;word-break:normal} /* a chat message breaks anywhere (.msg-main); a cell breaks only between words, so a
+  narrow chat scrolls the table sideways instead of squeezing each column to a letter */
 .md-table .table td{color:var(--ink-2)}
 .md-table .table td:first-child{color:var(--ink)}
 /* A chat's code and tables carry their one tool at the top corner, under the pointer (always there on a phone):
