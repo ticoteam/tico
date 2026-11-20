@@ -863,9 +863,6 @@ def _readable_rows(
 # tasks together by `prime_views`), so a list of tasks' views costs what one task's does.
 _FILED_ON_VISIT = "SELECT visit_id, to_task_id FROM links WHERE visit_id IN (%s) ORDER BY rowid"
 _FILED_BY = "SELECT to_task_id, from_task_id FROM links WHERE to_task_id IN (%s) ORDER BY rowid"
-# The questions asked on a task (backend/questions.py): not filed work, but its sub-tasks all the same, so another wait
-# that names one (a dependency on it) names it only to a reader of it.
-_ASKED_ON = "SELECT parent_id, task_id FROM questions WHERE parent_id IN (%s) ORDER BY created_at"
 _FILED = "SELECT from_task_id, to_task_id, kind FROM links WHERE from_task_id IN (%s) ORDER BY created_at, id"
 _DECIDED = (
     "SELECT r.visit_id, r.id FROM requirements r WHERE r.visit_id IN (%s) AND r.by_bot=1 "
@@ -942,7 +939,11 @@ def hidden_filed(
     if row.get("status") != "open" or not visit:
         return []
     filed = [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
-    filed += [str(found[0]) for found in _cached(conn, _ASKED_ON, str(row["id"]))]
+    # And its open questions (backend/questions.py): not filed work, but its sub-tasks all the same, so another wait
+    # that names one names it only to a reader of it. One read of every open question per snapshot, however many tasks.
+    from . import questions
+
+    filed += [str(q["task_id"]) for q in questions.open_on(conn, row["id"])]
     if viewer is None or not filed:
         return []
     readable = _readable_rows(conn, viewer, filed, visible_sql)

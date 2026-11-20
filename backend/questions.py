@@ -179,6 +179,11 @@ def _answerable(conn: sqlite3.Connection, row: Mapping[str, Any]) -> bool:
     return bool(cast(Any, _task_requirements).active_person(conn, row["person_id"]))
 
 
+def open_on(conn: sqlite3.Connection, parent_id: object) -> list[Row]:
+    """The parent's open questions, whatever their visit (`_open_by_parent`: one read per snapshot). Shared."""
+    return _open_by_parent(conn).get(str(parent_id or ""), [])
+
+
 def on_parent(conn: sqlite3.Connection, parent: Mapping[str, Any]) -> list[Row]:
     """The parent's open questions on its open visit whose person can still answer them, oldest first."""
     visit: Row = parent.get("visit") or {}
