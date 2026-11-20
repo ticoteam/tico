@@ -38,6 +38,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Link previews (backend/link_preview.py): a day's cache of outside pages; the copy reads them again.
+    "link_previews",
     # Customer facts a team loaded into Growth (backend/growth_customers.py): its customers' keys never leave the install.
     "growth_customers",
     "growth_customer_loads",

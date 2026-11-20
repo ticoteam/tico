@@ -76,6 +76,9 @@ TAGS = {
     # Page history (backend/page_history.py): a person's own, kept 30 days; Tico reads it as the person.
     'Page history': "The pages the signed-in person opened in the app in the last 30 days, newest first, kept so Tico "
     "knows where they have been. Nobody else reads them; clearing removes the list.",
+    # Link previews (backend/link_preview.py): read by the server so the browser never calls the outside site.
+    'Link previews': "The title, site, description and picture of an outside web page for a link in a message, read by "
+    "the server, kept a day and shared by everyone; the picture is served from this server.",
     # Company › Products (backend/products.py): Contacts Product records our company owns.
     'Products': "Our products: kind, status, tax kind, owner, code, the agreement each is sold under and the vendors it "
     "depends on. Each is a Contacts Product record company/self owns.",
