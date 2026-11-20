@@ -29,4 +29,4 @@ export {
   type FiguresStripProps,
   type PageMoreProps,
 } from './_parts';
-export type { Crumb, PageTab, HeadProps, PageState, StateProps, PageBaseProps, Figure } from './types';
+export type { PageTab, HeadProps, PageState, StateProps, PageBaseProps, Figure } from './types';

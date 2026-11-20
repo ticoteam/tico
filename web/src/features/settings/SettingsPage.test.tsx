@@ -152,19 +152,6 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Settings', () => {
-  it('links from a phone section back to the settings list', async () => {
-    document.documentElement.dataset.layout = 'cards';
-    try {
-      serve(() => ({ status: 200, body: ACCESS }));
-      queryClient.setQueryData(accessQuery.queryKey, ACCESS);
-      const router = show(<SettingsPage section="people" />, '/settings/people');
-      fireEvent.click(await screen.findByRole('link', { name: 'Back to Settings' }));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    } finally {
-      delete document.documentElement.dataset.layout;
-    }
-  });
-
   it('ignores results for the previous search while new words settle', async () => {
     serve(() => ({ status: 200, body: ACCESS }));
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);

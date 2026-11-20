@@ -9,22 +9,10 @@
 
 .pk{container:page / inline-size}
 
-/* ---------- head: one height; the trail before the title at its size, muted (every mock's .crumb); the title holds
-   only the name. The trail gives way before the title does. ---------- */
+/* ---------- head: one height; the title holds only the name (where it sits is the frame's trail) ---------- */
 .pk .pk-head{height:var(--head-h)}
 .pk-title{min-width:0;display:flex;flex-direction:column;justify-content:center}
 .pk-title h1{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.pk-title.has-crumb{flex-direction:row;align-items:center;gap:var(--s-2)}
-.pk-crumb a{white-space:nowrap}
-.pk-crumb a:hover{color:var(--ink)}
-.pk-crumb.is-inline{flex:0 100 auto;min-width:0;display:flex;align-items:center;gap:var(--s-2);overflow:hidden;
-  font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-title);line-height:1;font-feature-settings:var(--feat-text);letter-spacing:var(--track-title);color:var(--muted)}
-.pk-crumb.is-inline a{min-width:0;overflow:hidden;text-overflow:ellipsis;border-radius:var(--r-chip);transition:color var(--dur-fast) var(--ease)}
-.pk-crumb.is-inline a:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
-.pk-crumb.is-inline>.ico{flex:none;width:18px;height:18px;margin:var(--s-0) calc(var(--s-1) * -1 + 1px) 0;stroke-width:2;color:var(--faint)}
-/* the trail inside a where line (`sub`): its steps sit in the line's own row */
-.pk-where>.pk-crumb{display:contents}
-.pk-where>.pk-crumb>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .pk-acts{display:contents}
 /* the head's search gives way first: it takes only the room the head has left (up to its own 208, parts.css .search),
    down to its magnifier in a control-sized well, so the title loses no letter until the search is an icon. Its
@@ -257,7 +245,6 @@ html[data-layout="cards"] .pk-head{padding-right:var(--page-x);padding-left:var(
 :where(html[data-layout="cards"]) :is(.pk-body>.table,.pk-sec .table:not(.md-table *)) :is(th,td):last-child{padding-right:var(--page-x)}
 html[data-layout="cards"] .pk .read-body{padding-right:var(--s-4);padding-left:var(--s-4)}
 :where(html[data-layout="cards"]) .filter-row{padding:0 var(--s-2) var(--s-2) var(--page-x)}
-html[data-layout="cards"] .pk-crumb{display:none}
 html[data-layout="cards"] .pk .pk-back{display:inline-grid;margin:0 calc(var(--s-0) * -1) 0 calc(var(--s-3) * -1)}
 html[data-layout="cards"] .pk .pk-close{display:none}
 html[data-layout="cards"] .pk-acts>:not([data-phone]):not(.btn-fill){display:none}

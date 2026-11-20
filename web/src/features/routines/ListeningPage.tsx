@@ -161,7 +161,6 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const head = {
     title: w?.name || 'Watch',
     path: LISTENING,
-    crumb: [{ label: 'Listening', to: LISTENING }],
     className: 'rr',
     tabs,
   };

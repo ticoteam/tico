@@ -6,7 +6,6 @@ import { AddAgentButton } from '@/features/team/exports';
 import { Empty } from '@/kit/Empty';
 import { Search } from '@/kit/Field';
 import { Link as To } from '@/kit/Link';
-import { useCards } from '@/kit/Popover';
 import { Section, Settings } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
 import { Billing, Changelog, CheckNow, Health } from './Records';
@@ -204,7 +203,6 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
   // section list. The union of each section's options, typed loosely because only its error is used.
   const forbidden = isForbidden(useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>).error);
   const Body = BODY[section];
-  const cards = useCards();
   const [q, setQ] = useState('');
   const term = q.trim();
   const asked = useSettled(term);
@@ -234,7 +232,6 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
     <Settings
       title="Settings"
       path={`/settings/${section}`}
-      crumb={cards && !list ? [{ label: 'Settings', to: '/settings' }] : undefined}
       className="set-page"
       open={!list || searching}
       nav={<Nav current={section} />}

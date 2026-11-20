@@ -431,6 +431,25 @@ describe('a task opened from a board', () => {
     expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
   });
 
+  it('draws the trail over it: the company, Tasks, its pipeline, the task; the pipeline is its board again, as it was', async () => {
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
+    expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('task');
+    const trail = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    await waitFor(() => expect([...trail.querySelectorAll('a,span')].map((p) => p.textContent)).toEqual(['Fernhill', 'Tasks', 'Engineering', 'An open task']));
+    expect(within(trail).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
+    expect(within(trail).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/tasks');
+    expect(within(trail).queryByRole('link', { name: 'An open task' })).toBeNull();
+    // the step before is that board: back to it, its filters kept, the menu in its place again
+    fireEvent.click(within(trail).getByRole('link', { name: 'Engineering' }));
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/tasks/eng');
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+    expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('page');
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
+  });
+
   it('enters Flow only from its own play mark, and Escape leaves Flow for the task it was entered from', async () => {
     const router = await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));

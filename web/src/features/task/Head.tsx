@@ -34,11 +34,10 @@ function useStages(t: TaskData) {
   return stages.data ?? retired.data ?? [];
 }
 
-/** The rest of the where line after the pipeline (parts-kit.js where): the stage, who has it, how long, Late. */
+/** The where line (parts-kit.js where): the stage, who has it, how long, Late. Where the task sits is the trail. */
 export function WhereLine({ t }: { t: TaskData }) {
   return (
     <>
-      <Icon name="chevron" />
       <StagePick t={t} />
       <OwnerPick t={t} />
       {t.stage_since && <Ago at={t.stage_since} className="row-age" />}

@@ -262,31 +262,3 @@ export async function tellDesktopSigningOut(): Promise<void> {
   if (!t?.signingOut) return;
   await Promise.race([t.signingOut().catch(() => undefined), new Promise((done) => setTimeout(done, 1000))]);
 }
-
-/* ---------------------------------------------------------------- the window buttons' corner */
-
-export interface DesktopInset {
-  left: number;
-  top: number;
-}
-const NO_INSET = '0,0';
-const readInset = (): string => {
-  if (typeof document === 'undefined') return NO_INSET;
-  const root = document.documentElement;
-  if (!root.dataset.desktop) return NO_INSET;
-  const css = getComputedStyle(root);
-  const px = (name: string) => Math.max(0, Number.parseFloat(css.getPropertyValue(name)) || 0);
-  return `${px('--desktop-inset-left')},${px('--desktop-inset-top')}`;
-};
-const watchInset = (cb: () => void) => {
-  const watch = new MutationObserver(cb);
-  watch.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-desktop', 'data-desktop-fullscreen'] });
-  return () => watch.disconnect();
-};
-
-/** The room to keep clear of the macOS window buttons at the window's top left (0, 0 in a browser and in full screen). */
-export function useDesktopInset(): DesktopInset {
-  const v = useSyncExternalStore(watchInset, readInset, () => NO_INSET);
-  const [left = 0, top = 0] = v.split(',').map(Number);
-  return { left, top };
-}

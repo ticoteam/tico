@@ -203,7 +203,6 @@ export function TagPage({ tag }: { tag: string }) {
       <List
         title={name}
         path={`/tags/${tag}`}
-        crumb={[{ label: 'Tags', to: '/tags' }]}
         state={tasks.length ? 'ready' : 'empty'}
         empty={{ title: narrowed ? 'No tasks match' : `Nothing tagged ${name}` }}
         className="tasks-page"

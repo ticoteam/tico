@@ -21,7 +21,7 @@ const time = (d: Date) => fmtDate(d);
 const pct = (n: number | undefined) => (n === undefined || !Number.isFinite(n) ? '' : `${Math.round(n)}%`);
 
 export interface ComputerPageProps {
-  /** The agent whose computer this is; its page is the crumb back. */
+  /** The agent whose computer this is; its page is the step up the trail. */
   agent: AgentRow | undefined;
   actor: Actor;
   /** The agent's address: the tabs are `?tab=computer` and `?tab=screen` on it. */
@@ -42,7 +42,6 @@ export function ComputerPage({ agent, actor, base, tab }: ComputerPageProps) {
     <RecordPage
       title={title}
       path={`${base}?tab=${tab}`}
-      crumb={[{ label: actor.name, to: base }]}
       className="rec"
       lead={
         <span className="comp-av" style={{ '--a': '36px' } as CSSProperties} aria-hidden="true">

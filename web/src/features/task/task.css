@@ -23,16 +23,14 @@
 :where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick:is(:hover,:focus-visible,[aria-expanded="true"]) .ico{opacity:1}
 
 /* ---------- the head on a phone (parts.css .tv-head, t-task-details-phone-dark.png): the title wraps at 20, then the
-   where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
-   hold both lines, below the status bar. */
+   where line under it (the stage, who has it). The head grows to hold both lines, below the trail. */
 html[data-layout="cards"] .tv .pk-head{height:auto;min-height:var(--head-h);align-items:flex-start;padding-top:calc(var(--page-top) + var(--s-3));padding-bottom:calc((var(--ctl) - 22px) / 2)}
-html[data-layout="cards"] .tv:not(.is-quiet) .pk-where>.pk-crumb{display:contents}
 html[data-layout="cards"] .tv .pk-title h1{white-space:normal;font-size:var(--t-fig);line-height:var(--lh-tight);text-wrap:balance;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3}
 html[data-layout="cards"] .tv .pk-where{margin-top:var(--s-2)}
 /* back and "⋯" sit on the title's first line */
 html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(--lh-tight) - var(--ctl)) / 2)}
-/* the trail's steps, the stage and who has it look 22 high (.tv-where) but take a press a control's height (--ctl, 44
+/* the stage and who has it look 22 high (.tv-where) but take a press a control's height (--ctl, 44
    on a phone), centered on them. The head's bottom padding is that press's lower half past the line, so the tab row
    under the head does not cover it (it starts where the press ends). */
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick){position:relative}
@@ -261,7 +259,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 
 /* ---------- an approval's head: the title, then one quiet line (pipeline · stage · how long) ---------- */
 .tv.is-quiet .pk-where{order:1;margin-top:var(--s-1h)}
-.tv.is-quiet .pk-where>.pk-crumb{display:none}
 .tv-quiet{display:inline-flex;align-items:center;gap:var(--s-1);white-space:nowrap}
 .tv-quiet .pill{margin-left:var(--s-1h)}
 .tv-quiet{min-width:0;max-width:100%}

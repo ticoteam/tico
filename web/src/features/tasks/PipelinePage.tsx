@@ -191,7 +191,6 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
     <RecordPage
       title={p?.name ?? 'New pipeline'}
       path={`/tasks/${encodeURIComponent(pipeline)}/edit`}
-      crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
       className="pe-page"
       state={state}
       empty={{ title: 'No such pipeline' }}

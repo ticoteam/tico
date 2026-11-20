@@ -230,7 +230,8 @@ describe('one open task', () => {
     // An approval's view keeps Details under ⋯, not in the tab row.
     expect(within(tabs).queryByRole('link', { name: 'Details' })).toBeNull();
     expect(await screen.findByTitle('QA report')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Back to Product' }).getAttribute('href')).toBe('/tasks/p1');
+    // where it sits is the frame's trail (shell/Trail.tsx): the where line names no pipeline
+    expect(screen.queryByRole('link', { name: 'Product' })).toBeNull();
     expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ task: 't1' });
   });
 
@@ -278,9 +279,7 @@ describe('one open task', () => {
     show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
     const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
     expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/flow/12?tab=spec');
-    // The trail is the task's pipeline, as outside Flow (more.js where); Flow's way back is the phone's row over the head.
     expect(screen.queryByRole('link', { name: 'Flow' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Back to Flow' }).getAttribute('href')).toBe('/flow');
     expect(calls.filter((url) => url === 'GET /api/v2/needs-you?limit=200')).toHaveLength(1);
   });
 

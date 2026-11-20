@@ -168,7 +168,6 @@ function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
     <List
       {...head}
       title="Archived"
-      crumb={[{ label: 'Tasks', to: `/tasks/${encodeURIComponent(pipeline)}` }]}
       search={<TaskFind search={search} />}
       actions={<HeadActions pipeline={pipeline} view="archived" search={search} p={p} />}
       // "⋯" stays last in the head (list.js archived): the pipeline's own verb, for whoever may change it

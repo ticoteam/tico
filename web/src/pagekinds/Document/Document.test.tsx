@@ -2,7 +2,16 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { expectHeadAndTabs, showPage, stateTests, TABS } from '@/pagekinds/_parts/test-page';
+import { TrailContext } from '@/shell';
 import { Document } from './Document';
+
+/* the trail the frame would draw over the case: its pipeline's board is the step up */
+const TRAIL = [{ label: 'Fernhill', to: '/' }, { label: 'Tasks', to: '/tasks' }, { label: 'Support', to: '/tasks/p1' }, { label: 'Case' }];
+const Case = () => (
+  <TrailContext value={TRAIL}>
+    <Document title="Case" path="/tasks/p1/12" body={null} />
+  </TrailContext>
+);
 
 describe('Document', () => {
   it('reads the body as an article, with the outline beside it and the decision under it', async () => {
@@ -63,7 +72,7 @@ describe('Document', () => {
     });
     const CASE = '/tasks/p1/12/email?chat=agent%3Agm&via=thread';
     const open = async (entries: string[]) => {
-      const root = createRootRoute({ component: () => <Document title="Case" path="/tasks/p1/12" crumb={[{ label: 'Support', to: '/tasks/p1' }]} body={null} /> });
+      const root = createRootRoute({ component: Case });
       const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: entries, initialIndex: entries.length - 1 }) });
       render(<RouterProvider router={router} />);
       return { router, main: await screen.findByRole('main') };
@@ -93,7 +102,7 @@ describe('Document', () => {
     });
 
     it('opened any other way, has no ✕ and its back arrow goes up the trail', async () => {
-      const main = await showPage(<Document title="Case" path="/tasks/p1/12" crumb={[{ label: 'Support', to: '/tasks/p1' }]} body={null} />, '/tasks/p1/12');
+      const main = await showPage(<Case />, '/tasks/p1/12');
       expect(within(main).queryByRole('button', { name: 'Close' })).toBeNull();
       expect(within(main).getByRole('link', { name: 'Back to Support' }).getAttribute('href')).toBe('/tasks/p1');
     });

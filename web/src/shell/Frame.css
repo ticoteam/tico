@@ -1,12 +1,16 @@
 /* The sheets placed by layout(): the mock draws them in a grid, the app places each at the x and width the sizing
    function gives (from the design's tico/sheets-live.css). Only tokens; no new values. */
-.app-tico.shell-frame{display:block;position:relative;padding:0;overflow:hidden;background:var(--ground)}
+.app-tico.shell-frame{display:block;position:relative;padding:0;overflow:hidden;background:var(--ground);--frame-top:var(--gap-pane)}
+/* the trail: one thin row on the ground over the sheets (the desktop Mac app: beside the window's buttons, desktop.css) */
+.shell-frame.has-trail{--frame-top:var(--ctl)}
+/* its row is a control high, at the foot of the room above the sheets */
+.shell-frame>.shell-trail{position:absolute;top:calc(var(--frame-top) - var(--ctl));right:0;left:0;height:var(--ctl);padding:0 var(--s-4)}
 /* the window: a call's bar on top while a call is on (and not on its page), the frame takes the rest */
 .shell-col{display:flex;flex-direction:column;height:100dvh;background:var(--ground)}
 .shell-col>.shell-frame{flex:1;min-height:0;height:auto}
 /* Layers (plan/layers.html): the order never changes, so each place's z-index is its place in the row (Frame sets it).
    A card under its left neighbour sits --tuck-step shorter, top and bottom, for each step under. */
-.shell-place{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));display:flex}
+.shell-place{position:absolute;top:calc(var(--frame-top) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));display:flex}
 .shell-place>.pane{flex:1;min-width:0}
 /* the page's side panel is drawn into a host the frame holds (pagekinds PanelHost): the host and its pane fill the place */
 .shell-place>.pk-panel-host{flex:1;min-width:0;display:flex}
@@ -22,7 +26,7 @@
 /* and nothing in it shows on its own: a child that sets visibility:visible (the chat's Jump to latest) would else float
    over the edge */
 .shell-place[data-shut] :is(.pane,.pk-panel-host) *{visibility:hidden}
-.shell-edge{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));width:var(--tuck-edge);
+.shell-edge{position:absolute;top:calc(var(--frame-top) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));width:var(--tuck-edge);
   display:flex;flex-direction:column;align-items:center;gap:var(--s-3);padding:var(--s-3h) 0 0;border:0;border-radius:var(--r-pane);border-top-left-radius:0;border-bottom-left-radius:0;background:none;color:var(--ink-2);cursor:pointer;
   transition:background var(--dur-fast) var(--ease)}
 .shell-edge[data-first]{border-radius:var(--r-pane)}
@@ -33,7 +37,7 @@
 .shell-edge-name{writing-mode:vertical-rl;transform:rotate(180deg);font-size:var(--t-xs);font-weight:var(--w-strong);white-space:nowrap}
 /* a control on an edge that is not its tap target: search on Tico's, right under the Dot; the name moves down for it */
 .shell-edge[data-act] .shell-edge-mark{margin-bottom:calc(var(--ctl) + var(--s-1))}
-.shell-edge-act{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step) + var(--s-3h) + 24px + var(--s-2));width:var(--tuck-edge);display:flex;justify-content:center}
+.shell-edge-act{position:absolute;top:calc(var(--frame-top) + var(--depth,0) * var(--tuck-step) + var(--s-3h) + 24px + var(--s-2));width:var(--tuck-edge);display:flex;justify-content:center}
 /* the menu's edge: the company's mark from its phone lip, and the Flow mark when something waits on you */
 .shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:var(--s-2h)}
 .shell-edge-lip>:not(.co-mark,.lip-end){display:none}
@@ -51,7 +55,7 @@
 .nav.is-rail button.co-mark{border:0;padding:0;font:inherit;cursor:pointer}
 
 /* the handle: the gap itself, 16 wide to the pointer; a line shows on hover, darker while dragging */
-.shell-handle{position:absolute;top:calc(var(--gap-pane) + var(--r-pane));bottom:calc(var(--gap-pane) + var(--r-pane));width:16px;z-index:var(--z-stick);cursor:col-resize;touch-action:none}
+.shell-handle{position:absolute;top:calc(var(--frame-top) + var(--r-pane));bottom:calc(var(--gap-pane) + var(--r-pane));width:16px;z-index:var(--z-stick);cursor:col-resize;touch-action:none}
 .shell-handle::after{content:"";position:absolute;left:7px;top:0;bottom:0;width:2px;background:var(--line-strong);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .shell-handle:hover::after,.shell-handle:focus-visible::after{opacity:1;transition-delay:var(--dur-fast)}
 .shell-handle:focus-visible::after{transition-delay:0s}
@@ -59,3 +63,18 @@
 .shell-handle:focus-visible{outline:var(--focus-ring);outline-offset:-5px}
 body.is-dragging{cursor:col-resize;user-select:none;-webkit-user-select:none}
 body.is-dragging .shell-place{pointer-events:none}
+
+/* The trail's look: muted, small, one line, a chevron between. The middle parts give way first, down to "…"; then
+   the company and the open page share what is left. */
+.shell-trail{display:flex;align-items:center;gap:var(--s-1);min-width:0;font-size:var(--t-sm);line-height:1;color:var(--muted);white-space:nowrap}
+.shell-trail>:is(a,span){flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;border-radius:var(--r-chip);transition:color var(--dur-fast) var(--ease)}
+.shell-trail>:is(a,span):not(:first-child,:last-child){flex-shrink:100;min-width:var(--s-4)}
+.shell-trail>a:hover{color:var(--ink)}
+.shell-trail>a:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.shell-trail>[aria-current]{color:var(--ink-2)}
+.shell-trail>.ico{flex:none;width:12px;height:12px;stroke-width:2;color:var(--faint)}
+/* on a phone it heads the page, under the status bar; the page's own head no longer keeps the notch's room */
+.phone>.pg>.shell-trail{flex:none;height:calc(env(safe-area-inset-top,0px) + var(--ctl));padding:calc(env(safe-area-inset-top,0px)) var(--s-4) 0}
+.phone>.pg:has(>.shell-trail){--page-top:0px;--sat:0px}
+.phone>.pg>.shell-trail+*{flex:1;min-height:0;height:auto}
+.phone:has(>.pg>.shell-trail){--top:calc(var(--sat) + 57px + var(--ctl))}

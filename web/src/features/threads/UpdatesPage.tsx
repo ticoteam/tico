@@ -38,7 +38,6 @@ export function UpdatesPage({ tab = 'all', open }: UpdatesPageProps) {
   return open ? <UpdateOpen id={open} tab={tab} /> : <UpdatesList tab={tab} />;
 }
 
-const ARCHIVE_CRUMB = [{ label: 'Updates', to: '/updates' }] as const;
 
 const pathOf = (tab: UpdateTab) => (tab === 'all' ? '/updates' : `/updates/${tab}`);
 /** The tab an update opens from, for the action's input (All has none). */
@@ -82,7 +81,6 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
     <List
       title={archive ? 'Archive' : 'Updates'}
       path={pathOf(tab)}
-      crumb={archive ? ARCHIVE_CRUMB : undefined}
       tabs={archive ? undefined : TABS}
       search={<Search label="Find an update" placeholder="Search" value={words} onValueChange={setWords} />}
       actions={
@@ -192,7 +190,6 @@ function UpdateOpen({ id, tab }: { id: string; tab: UpdateTab }) {
     <Document
       title={title}
       path={`${pathOf(tab)}?open=${id}`}
-      crumb={tab === 'archive' ? [...ARCHIVE_CRUMB, { label: 'Archive', to: pathOf(tab) }] : [{ label: 'Updates', to: pathOf(tab) }]}
       actions={
         <>
           <ChatWith actor={actorOf(u)} />

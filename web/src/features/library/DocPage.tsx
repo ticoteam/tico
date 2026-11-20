@@ -18,7 +18,6 @@ import './library.css';
    no edit mode: the title renames in place, and pressing the text types in it; leaving it saves. `/library/new` is a
    new doc, and `/library/ext:<id>` a doc read from an outside source. */
 
-const CRUMB = [{ label: 'Docs', to: '/library/docs' }];
 
 export function DocPage({ doc, search }: { doc: string; search: DocSearch }) {
   if (doc === 'new') return <NewDoc />;
@@ -82,7 +81,6 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
     <Document
       title={past?.title ?? doc.title}
       path={`/library/${id}`}
-      crumb={CRUMB}
       className="lib"
       state={requested && !past ? (old.isError ? 'fault' : 'loading') : 'ready'}
       onRetry={requested ? () => void old.refetch() : undefined}
@@ -180,7 +178,6 @@ function NewDoc() {
     <Document
       title="Title"
       path="/library/new"
-      crumb={CRUMB}
       className="lib"
       onRename={(title) => void press('docs.create', { title, body }, 'Not made')}
       actions={<OwnerButton page="docs" />}
@@ -211,7 +208,6 @@ function OutsideDoc({ id, revision }: { id: string; revision: string | undefined
     <Document
       title={doc.title}
       path={`/library/ext:${id}`}
-      crumb={CRUMB}
       className="lib"
       actions={
         doc.citation_url && (
