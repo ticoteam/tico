@@ -136,6 +136,11 @@ export function taskMatches(t: TaskRow, params: Record<string, unknown> | undefi
     } else if (k === 'owner' || k === 'requester') {
       if (!isActor(v)) unsure = true;
       else if ((k === 'owner' ? t.owner_id : t.requester_id) !== s) return false;
+    } else if (k === 'owners') {
+      // any of them (backend/task_match.py), as a team's list reads its members' tasks
+      const ids = s.split(',');
+      if (!ids.every(isActor)) unsure = true;
+      else if (!ids.includes(String(t.owner_id))) return false;
     } else unsure = true;
   }
   const snoozed = p.snoozed ?? (p.status === 'all' ? 'all' : 'hide');

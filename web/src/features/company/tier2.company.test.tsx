@@ -437,6 +437,19 @@ describe('One matter @n:re:matter', () => {
 });
 
 describe('One risk @n:re:risk-one', () => {
+  it("reads the rest of a risk's matters past the detail's first page", async () => {
+    const asked: string[] = [];
+    serve((url) => {
+      asked.push(url);
+      if (url.startsWith('/api/v2/risks/r1?')) return { status: 200, body: { risk: risk('r1', 'Chargebacks', 'live'), matters: [matter('t1', 'Refund dispute A')], next_offset: 200 } };
+      if (url.startsWith('/api/v2/matters?')) return { status: 200, body: { matters: [matter('t2', 'Refund dispute B')], next_offset: null } };
+      return nothing();
+    });
+    const d = await queryClient.fetchQuery(riskQuery('r1'));
+    expect(d.matters.map((m) => m.task.id)).toEqual(['t1', 't2']);
+    expect(asked).toEqual(['/api/v2/risks/r1?limit=200', '/api/v2/matters?risk=r1&limit=200&offset=200']);
+  });
+
   it('opens a risk as its own page: figures, matters, dates, rules, sources and its text', async () => {
     serve(nothing);
     const detail = {
@@ -464,6 +477,23 @@ describe('One risk @n:re:risk-one', () => {
 });
 
 describe('Risk as Disputes @n:re:disputes', () => {
+  it('reads every page of disputes, and the Open total counts them all', async () => {
+    const offsets: (string | null)[] = [];
+    serve((url) => {
+      if (!url.startsWith('/api/v2/matters?')) return nothing();
+      const offset = new URLSearchParams(url.split('?')[1]).get('offset');
+      offsets.push(offset);
+      return offset === '200'
+        ? { status: 200, body: { matters: [matter('t2', 'Refund dispute B', { amount: 10000 })], next_offset: null } }
+        : { status: 200, body: { matters: [matter('t1', 'Refund dispute A')], next_offset: 200 } };
+    });
+    show(riskPage('disputes'), '/company/risk/disputes');
+    const open = await screen.findByRole('table', { name: 'Open disputes' });
+    expect(within(open).getByText('Refund dispute B')).toBeTruthy();
+    expect(screen.getByText('$512')).toBeTruthy();
+    expect(offsets).toEqual(['0', '200']);
+  });
+
   it('tables every dispute, open ones first, each opening its matter', async () => {
     serve(nothing);
     queryClient.setQueryData(mattersQuery('disputes').queryKey, {

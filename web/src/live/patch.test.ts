@@ -70,6 +70,10 @@ describe('tasks', () => {
     expect(taskMatches(task('t1', { snoozed: true }), { status: 'open' })).toBe(false);
     expect(taskMatches(task('t1', { snoozed: true }), { status: 'all' })).toBe(true);
     expect(taskMatches(task('t1'), { search: 'plan' })).toBeNull();
+    // a team's list: any of its members
+    expect(taskMatches(task('t1'), { status: 'open', owners: 'human:p1,bot:b1' })).toBe(true);
+    expect(taskMatches(task('t1'), { status: 'open', owners: 'human:p1,human:p2' })).toBe(false);
+    expect(taskMatches(task('t1'), { status: 'open', owners: 'b1' })).toBeNull();
     const { list, unsure } = patchTaskList({ tasks: [], cursor: '900.x' }, [{ seq: 901, id: 't9', task: task('t9') }], { search: 'plan' });
     expect(list.tasks).toEqual([]);
     expect(unsure).toBe(true);
