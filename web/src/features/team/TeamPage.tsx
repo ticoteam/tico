@@ -15,13 +15,15 @@ import { FiguresStrip, List, PageMore, Section } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
-import { managerOf, memberIds, membersUnder, startOfMonth, subTeams, teamSlug, whoHref } from './model';
+import { managerOf, memberIds, membersUnder, seatHref, startOfMonth, subTeams, teamSlug, whoHref } from './model';
 import { LONG_LIST, taskHref } from './parts';
 import {
   agentsQuery,
   groupsQuery,
+  isOpenRequest,
   monthSpendQuery,
   peopleRosterQuery,
+  seatsQuery,
   teamDoneCountQueries,
   teamOpenTasksQueries,
   teammateAccessQuery,
@@ -74,6 +76,8 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const slugs = [...everyone].map((id) => actorOf(id)?.slug).filter((slug): slug is string => !!slug);
   const spend = useQuery(monthSpendQuery(slugs)).data;
   const seats = (peopleRoster?.seats ?? []).filter((x) => x.team === group.id);
+  // The roster's seats carry no request state: the seats read does, read only when this team has a seat.
+  const { data: requests } = useQuery({ ...seatsQuery, enabled: seats.length > 0 });
 
   const people = [
     ...(manager ? [manager] : []),
@@ -157,15 +161,19 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
                     <span className="tm-role">{a.id === manager?.id ? 'Lead' : ''}</span>
                   </Row>
                 ))}
-                {/* An open seat: a dashed face and its title; nobody sits there, so nothing opens (mates.js mateRow seat). */}
-                {seats.map((x) => (
-                  <Row key={x.id} className="tm-mate is-seat" title={x.title}>
-                    <Avatar kind="agent" name={x.title} initials="" size={22} className="is-seat" />
-                    <span className="row-title">{x.title}</span>
-                    <span className="row-pills" />
-                    <span className="tm-role">Open seat</span>
-                  </Row>
-                ))}
+                {/* An open seat: a dashed face and its title (mates.js mateRow seat). Nobody sits there, so it opens only
+                    when a cloud agent is requested for it: its Connecting page. */}
+                {seats.map((x) => {
+                  const asked = requests?.find((r) => r.id === x.id && isOpenRequest(r));
+                  return (
+                    <Row key={x.id} className="tm-mate is-seat" title={x.title} href={asked && seatHref(x.id)} target={`seat:${x.id}`}>
+                      <Avatar kind="agent" name={x.title} initials="" size={22} className="is-seat" />
+                      <span className="row-title">{x.title}</span>
+                      <span className="row-pills" />
+                      <span className="tm-role">{asked ? 'Requested' : 'Open seat'}</span>
+                    </Row>
+                  );
+                })}
               </Section>
             )}
             {inner.length > 0 && (

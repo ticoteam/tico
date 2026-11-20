@@ -20,6 +20,7 @@ import type {
   ScreenSession,
   ScreenSessionStart,
   Seat as ChartSeat,
+  SeatAgent,
   SeatCanceled,
   SeatList,
   Task,
@@ -1272,6 +1273,15 @@ export const seatsQuery = queryOptions({
   queryKey: ['team', 'seats'] as const,
   queryFn: async ({ signal }): Promise<ChartSeat[]> => (await api.get<SeatList>('/api/v2/seats', { signal })).seats,
 });
+
+/** A requested seat's Connecting page (GET /api/v2/seats/{id}/request): the agent, where the request stands, and the
+    first task waiting for it. A seat with no request, or one closed, is a 404. */
+export const seatAgentQuery = (seat: string) =>
+  queryOptions({
+    queryKey: ['team', 'seat-agent', seat] as const,
+    queryFn: ({ signal }): Promise<SeatAgent> => api.get<SeatAgent>(`/api/v2/seats/${at(seat)}/request`, { signal }),
+    retry: (n, e) => !(e instanceof ApiError && e.status === 404) && n < 2,
+  });
 
 /** A request still with Tico support: filed, being filed, or being canceled. Building and ready are on their way too. */
 export const isOpenRequest = (seat: Pick<ChartSeat, 'agent' | 'request_state'>) =>

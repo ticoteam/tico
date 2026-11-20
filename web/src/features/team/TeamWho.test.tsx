@@ -862,20 +862,40 @@ describe('Cloud agents @s629 @s733 @s734 @s735', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/team/claude-code'));
   });
 
-  it('requests one Tico does not connect, then marks it Requested', async () => {
-    let seats: unknown[] = [];
-    cloud([], (url, method) => {
-      if (url.endsWith('/api/v2/seats')) return ok({ seats });
-      if (method === 'POST' && url.includes('/cloud-agents/devin/request')) {
-        seats = [seat];
-        return ok(seat);
-      }
-      return undefined;
-    });
+  it('requests one Tico does not connect with its first task, then opens its Connecting page', async () => {
+    const router = cloud([], (url, method) => (method === 'POST' && url.includes('/cloud-agents/devin/request') ? ok(seat) : undefined));
     fireEvent.click(within(await row('Devin')).getByRole('button', { name: 'Request' }));
-    await waitFor(() => expect(posted('/cloud-agents/devin/request')?.body).toEqual({ team: 'g1', reports_to: 'human:p1' }));
-    expect(await within(await row('Devin')).findByText('Requested')).toBeTruthy();
-    expect(within(await row('Devin')).queryByRole('button', { name: 'Request' })).toBeNull();
+    const ask = await screen.findByRole('dialog', { name: 'Request Devin' });
+    fireEvent.change(within(ask).getByRole('textbox', { name: 'First task' }), { target: { value: '  Port the checkout tests  ' } });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Request' }));
+    await waitFor(() =>
+      expect(posted('/cloud-agents/devin/request')?.body).toEqual({ team: 'g1', reports_to: 'human:p1', first_task: 'Port the checkout tests' }),
+    );
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/seat%3As9'));
+  });
+
+  it('requests another agent by the name typed, and Back returns to the list', async () => {
+    cloud([], (url, method) => (method === 'POST' && url.includes('/cloud-agents/other/request') ? ok({ ...seat, agent: 'other', title: 'Factory' }) : undefined));
+    fireEvent.click(within(await row('Another agent')).getByRole('button', { name: 'Request' }));
+    let ask = await screen.findByRole('dialog', { name: 'Another agent' });
+    expect(within(ask).getByRole('button', { name: 'Request' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('dialog', { name: 'Cloud agents' })).toBeTruthy();
+    fireEvent.click(within(await row('Another agent')).getByRole('button', { name: 'Request' }));
+    ask = await screen.findByRole('dialog', { name: 'Another agent' });
+    fireEvent.change(within(ask).getByRole('textbox', { name: 'Name' }), { target: { value: 'Factory' } });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Request' }));
+    await waitFor(() => expect(posted('/cloud-agents/other/request')?.body).toEqual({ team: 'g1', reports_to: 'human:p1', first_task: '', name: 'Factory' }));
+  });
+
+  it('marks a pending request Requested, and its ⋯ opens the Connecting page', async () => {
+    const router = cloud([seat]);
+    const devin = await row('Devin');
+    expect(await within(devin).findByText('Requested')).toBeTruthy();
+    expect(within(devin).queryByRole('button', { name: 'Request' })).toBeNull();
+    fireEvent.click(within(devin).getByRole('button', { name: 'More on Devin' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/seat%3As9'));
   });
 
   it('cancels a pending request from its ⋯', async () => {
@@ -885,6 +905,56 @@ describe('Cloud agents @s629 @s733 @s734 @s735', () => {
     fireEvent.click(within(devin).getByRole('button', { name: 'More on Devin' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel request' }));
     await waitFor(() => expect(posted('/seats/s9/cancel-request')?.method).toBe('POST'));
+  });
+
+  it('draws a requested seat’s Connecting page: its steps, its facts and the task waiting @s736', async () => {
+    serve((url) =>
+      url.endsWith('/api/v2/seats/s9/request')
+        ? ok({ seat: { ...seat, request_state: 'building', created_at: '2026-11-11T19:58:00Z' }, agent: agents[1], steps: ['requested', 'building', 'ready'], tasks: [{ id: 't7', title: 'Port the checkout tests', status: 'open' }] })
+        : undefined,
+    );
+    show(<TeamWho who="seat:s9" />, '/team/seat%3As9');
+    expect(await screen.findByRole('heading', { name: 'Devin' })).toBeTruthy();
+    const steps = screen.getByRole('list', { name: 'Connecting' });
+    expect(within(steps).getByText('Building').closest('li')?.getAttribute('aria-current')).toBe('step');
+    expect(within(steps).getByText('Requested').closest('li')?.className).toBe('is-done');
+    expect(screen.getByRole('link', { name: 'devin.ai' }).getAttribute('href')).toBe('https://devin.ai');
+    expect(await screen.findByText('Pat Doe')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Waiting for Devin' }).contains(link('Port the checkout tests')!)).toBe(true);
+    expect(link('Port the checkout tests')?.getAttribute('href')).toBe('/task/t7');
+  });
+
+  it('cancels from the Connecting page and goes back to the team', async () => {
+    serve((url, method) => {
+      if (url.endsWith('/api/v2/seats/s9/request')) return ok({ seat, agent: agents[1], steps: ['requested', 'building', 'ready'], tasks: [] });
+      if (url.endsWith('/api/v2/seats')) return ok({ seats: [seat] });
+      if (method === 'POST' && url.includes('/seats/s9/cancel-request')) return ok({ id: 's9', closed: true, request_state: 'canceled' });
+    });
+    const router = show(<TeamWho who="seat:s9" />, '/team/seat%3As9');
+    expect(await screen.findByRole('heading', { name: 'Devin' })).toBeTruthy();
+    fireEvent.click(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel request' }));
+    await waitFor(() => expect(posted('/seats/s9/cancel-request')?.method).toBe('POST'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/team%3ADesign'));
+  });
+
+  it('says so for a request that is gone', async () => {
+    serve((url) => (url.endsWith('/api/v2/seats/s0/request') ? { status: 404, body: { code: 'not_found', detail: 'No cloud agent is requested for this seat' } } : undefined));
+    show(<TeamWho who="seat:s0" />, '/team/seat%3As0');
+    expect(await screen.findByRole('heading', { name: 'No such request' })).toBeTruthy();
+  });
+
+  it('shows a requested seat on its team as Requested, opening its Connecting page', async () => {
+    queryClient.removeQueries({ queryKey: peopleQuery.queryKey });
+    serve((url) => {
+      if (url === '/api/humans') return ok({ seats: [{ id: 's9', title: 'Devin', team: 'g1' }, { id: 's1', title: 'Security Owner', team: 'g1' }] });
+      if (url.endsWith('/api/v2/seats')) return ok({ seats: [seat, { ...seat, id: 's1', agent: '', request_state: '' }] });
+    });
+    show(<TeamWho who="design" />, '/team/design');
+    await waitFor(() => expect(link('Devin')?.getAttribute('href')).toBe('/team/seat%3As9'));
+    expect(within(link('Devin')!).getByText('Requested')).toBeTruthy();
+    expect(link('Security Owner')).toBeUndefined();
+    expect(screen.getByText('Open seat')).toBeTruthy();
   });
 });
 

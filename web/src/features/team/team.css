@@ -113,6 +113,15 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .cloud-act{display:flex;align-items:center;justify-content:flex-end;gap:var(--s-1)}
 .cloud-mark{padding:0 var(--s-1);font-size:var(--t-sm);color:var(--muted)}
 
+/* ---------- a requested seat's Connecting page: where the request stands, as three steps on its Status line ---------- */
+.seat-steps{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-3);margin:0;padding:0;list-style:none;color:var(--muted)}
+.seat-steps li{display:inline-flex;align-items:center;gap:var(--s-1h)}
+.seat-steps li>i{width:8px;height:8px;margin:0 var(--s-0);border-radius:50%;border:1.5px solid var(--faint)}
+.seat-steps .is-now{color:var(--ink)}
+.seat-steps .is-now>i{border:0;background:var(--ink)}
+.seat-steps .is-done{color:var(--ink-2)}
+.seat-who{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0}
+
 /* ---------- a copy of an agent: the pick beside its name (mates.css .copy-pick) ---------- */
 .copy-pick{margin:var(--s-1) 0 0 calc(var(--s-0) * -1);flex:none}
 .copy-pick .ico{width:14px;height:14px;stroke-width:1.8}
