@@ -5577,9 +5577,10 @@ def read_threads(c, who, ids):
         rows[cid] = thread_row(c, dict(r))
     members.update(_member_rows(c, who, list(rows)))
     prime_members(c, who, list(rows), roots={r.get("root_id") or r["id"] for r in rows.values()})
-    from .live_privacy import sources
+    if read_cache.cache(c) is not None:  # a snapshot's own reads: nothing here opens one
+        from .live_privacy import sources
 
-    sources(c).prime_conversations(list(rows))  # each check's meeting provenance (denial), for all of them at once
+        sources(c).prime_conversations(list(rows))  # each check's meeting provenance (denial), for all at once
     return rows, members
 
 
