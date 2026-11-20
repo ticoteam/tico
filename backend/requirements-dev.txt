@@ -106,6 +106,10 @@ httpx==0.28.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
+icalendar==7.3.0
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
 idna==3.20
     # via
     #   -c requirements.txt
@@ -219,6 +223,7 @@ python-dateutil==2.9.0.post0
     #   -c requirements.txt
     #   botocore
     #   croniter
+    #   icalendar
     #   time-machine
 python-multipart==0.0.34
     # via
@@ -292,6 +297,10 @@ typing-inspection==0.4.4
     #   -c requirements.txt
     #   fastapi
     #   pydantic
+tzdata==2026.6
+    # via
+    #   -c requirements.txt
+    #   icalendar
 urllib3==2.8.0
     # via
     #   -c requirements.txt
