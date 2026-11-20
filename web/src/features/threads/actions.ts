@@ -1,5 +1,7 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { defineAction, s } from '@/actions';
+import { directoryQuery, queryClient } from '@/data';
+import { whoHref } from '@/features/team/routing';
 import { toast } from '@/kit/Toast';
 import {
   addPeople,
@@ -21,13 +23,15 @@ import {
   removeViewer,
   renameThread,
   replyMail,
-  startNew,
+  groupDm,
   summarizeThread,
+  teamThreadQuery,
   unarchiveThread,
 } from './queries';
 
 const id = (what: string) => s.string({ min: 1, max: 200, what });
 const thread = id('a thread id');
+const bareId = (actor: string) => actor.slice(actor.indexOf(':') + 1);
 const actor = s.string({ min: 3, max: 200, pattern: /^(human|bot|group):[^\s]+$/, what: 'human:<id>, bot:<slug> or group:<id>' });
 
 /* ---------------------------------------------------------------- threads */
@@ -43,32 +47,38 @@ export const openThread = defineAction({
   target: ({ thread }) => ({ kind: 'thread', id: thread }),
 });
 
-export const composeThread = defineAction({
-  id: 'threads.compose',
-  title: 'New message',
+/**
+ * Message: it only goes somewhere, it makes no thread of its own (plan/threads-team.html "Message and Call"). One
+ * teammate is your DM with them, on their page; a team (`group:<id>`) its thread; several teammates the one group DM
+ * for exactly that set, the open one or a new one.
+ */
+export const messageAction = defineAction({
+  id: 'threads.message',
+  title: 'Message a teammate, a team or a few teammates',
   kind: 'view',
-  input: s.object({}),
-  run: ({ router }) => router.navigate({ to: '/threads/new' }),
-  did: () => 'Opened New message',
-  target: () => ({ kind: 'page', id: '/threads/new' }),
-});
-
-export const newThread = defineAction({
-  id: 'threads.new',
-  title: 'Send a new message',
-  kind: 'change',
-  input: s.object({
-    members: s.array(actor, { max: 50 }),
-    body: s.string({ min: 1, max: 20000 }),
-    title: s.optional(s.string({ max: 200 })),
-  }),
-  run: async ({ router }, { members, body, title }) => {
-    const t = await startNew(members, body, title);
+  input: s.object({ with: s.array(actor, { max: 50 }) }),
+  can: (_ctx, input) => input.with.length > 0 && (input.with.length === 1 || !input.with.some((a) => a.startsWith('group:'))),
+  run: async ({ router }, input) => {
+    const [one, ...more] = input.with;
+    if (!one) return;
+    if (one.startsWith('group:') && !more.length) {
+      const t = await queryClient.fetchQuery(teamThreadQuery(one.slice('group:'.length)));
+      await router.navigate({ to: '/threads/$thread', params: { thread: t.id } });
+      return t.id;
+    }
+    const dir = await queryClient.ensureQueryData(directoryQuery);
+    if (!more.length) {
+      const a = dir.byId[one];
+      await router.navigate({ to: a ? whoHref(a) : `/team/${encodeURIComponent(bareId(one))}` });
+      return;
+    }
+    const names = input.with.map((x) => dir.byId[x]?.name.split(/\s+/)[0] || bareId(x));
+    const t = await groupDm(input.with, names.join(', '));
     if (t?.id) await router.navigate({ to: '/threads/$thread', params: { thread: t.id } });
-    return t;
+    return t?.id;
   },
-  did: () => 'Sent',
-  target: (_input, out) => (out?.id ? { kind: 'thread', id: out.id } : null),
+  did: (input) => (input.with.length > 1 ? 'Opened the group DM' : input.with[0]?.startsWith('group:') ? "Opened the team's thread" : 'Opened the DM'),
+  target: (_input, out) => (out ? { kind: 'thread', id: out } : null),
 });
 
 export const renameThreadAction = defineAction({

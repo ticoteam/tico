@@ -136,25 +136,35 @@ describe('Menu', () => {
     expect(nav.queryByRole('link', { name: 'QA Owner' })).toBeNull();
   });
 
-  it('Team | Threads: no counts; the last tab stays; a Dot on the other tab and on what asks you; Message and Call', async () => {
+  it('Team | Threads: no counts; the last tab stays; the Dot only on a row, never a tab or a folded team; Message and Call', async () => {
     localStorage.clear();
     const message = vi.fn();
     const call = vi.fn();
+    const automations = vi.fn();
     const asking = { ...PROPS.teams[0]!, members: [{ ...PROPS.teams[0]!.members[0]!, needs: true }, PROPS.teams[0]!.members[1]!] };
     let nav = within(
-      await show({ teams: [asking], threads: <a href="/threads/t1">Refund policy</a>, asks: { team: true, threads: true }, onMessage: message, onCall: call }),
+      await show({ teams: [asking], threads: <a href="/threads/t1">Refund policy</a>, onMessage: message, onCall: call, onAutomations: automations }),
     );
-    // shut, the team carries its teammate's Dot; the Threads tab carries one too
-    expect(nav.getByRole('link', { name: /Engineering/ }).querySelector('.dot')?.getAttribute('aria-label')).toBe('Asks you');
-    expect(nav.getByRole('tab', { name: /Threads/ }).querySelector('.dot')).toBeTruthy();
-    expect(nav.getByRole('tab', { name: /Team/ }).querySelector('.dot')).toBeNull();
+    // shut, the team shows no Dot; neither tab does; Team has no ⋯
+    expect(nav.getByRole('link', { name: /Engineering/ }).querySelector('.dot')).toBeNull();
+    expect(document.querySelector('.cat .dot')).toBeNull();
+    expect(nav.queryByRole('button', { name: 'More' })).toBeNull();
+    // open, the teammate who asks carries it on their row
+    fireEvent.click(nav.getByRole('link', { name: /Engineering/ }).querySelector('.tree-chev')!);
+    expect(nav.getByRole('link', { name: /QA Owner/ }).querySelector('.dot')).toBeTruthy();
     fireEvent.click(nav.getByRole('tab', { name: /Threads/ }));
     expect(nav.getByRole('link', { name: 'Refund policy' })).toBeTruthy();
-    expect(nav.getByRole('tab', { name: /Team/ }).querySelector('.dot')).toBeTruthy();
+    expect(document.querySelector('.cat .dot')).toBeNull();
     fireEvent.click(nav.getByRole('button', { name: 'Message' }));
     fireEvent.click(nav.getByRole('button', { name: 'Call' }));
     expect(message).toHaveBeenCalledOnce();
     expect(call).toHaveBeenCalledOnce();
+    // Threads' ⋯ has one item, Automations
+    fireEvent.click(nav.getByRole('button', { name: 'More' }));
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((i) => i.textContent)).toEqual(['Automations']);
+    fireEvent.click(items[0]!);
+    expect(automations).toHaveBeenCalledOnce();
     expect(document.querySelector('.ca .count, .ca .slot-n')).toBeNull();
     document.body.innerHTML = '';
     nav = within(await show({ threads: <a href="/threads/t1">Refund policy</a> }));

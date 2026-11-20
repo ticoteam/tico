@@ -46,12 +46,12 @@ export function teamCard(m: ChatMessage) {
 }
 
 export interface TeamThreadProps {
-  /** The team's address key, `team:<name>` (features/team teamSlug). */
+  /** The team: its group id, or its address key `team:<name>` (features/team teamSlug). */
   who: string;
 }
 
 /**
- * A team's thread (plan/threads-team.html): its own conversation, with its teammates' updates and its meetings as
+ * A team's thread (plan/threads-team.html), a row in Threads: its own conversation, with its teammates' updates and its meetings as
  * cards in the timeline. The meetings are the thread's own call messages; the updates are read from Updates and set
  * among them by time.
  */

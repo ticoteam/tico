@@ -49,7 +49,6 @@
 .cu-msgs>.msg:first-child{padding-top:var(--s-2)}
 
 /* ---------- New message: a line of people, then what is being typed ---------- */
-.conv:has(.to) .conv-col{max-width:none;padding-top:var(--s-5)}
 .to{min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:calc(var(--s-1) + var(--s-0));padding:calc(var(--s-1) + var(--s-0)) var(--s-2) calc(var(--s-1) + var(--s-0)) calc(var(--s-3) + var(--s-0));border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line)}
 .to:focus-within{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--focus)}
 .to+.to{margin-top:var(--s-2)}
@@ -174,3 +173,7 @@ a.lr-row{color:inherit}
 .kcard .kh .ico{width:15px;height:15px;color:var(--muted)}
 .kcard p{color:var(--ink-2);line-height:var(--lh-read)}
 .kcard .kf{font-size:var(--t-xs);color:var(--muted)}
+
+/* Message: the picker over the menu, "To", then teams, people and agents, or the one set the chips name */
+.msg-pick .to>.ico{width:15px;height:15px;color:var(--muted);flex:none}
+.msg-pick .to-label{width:auto}

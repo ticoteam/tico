@@ -4,7 +4,7 @@ import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { FlowMark } from '@/kit/FlowMark';
-import { Menu as Drop } from '@/kit/Menu';
+import { Menu as Drop, MenuItem } from '@/kit/Menu';
 import { usePref } from '@/prefs';
 import { usePhoneCards } from './phone';
 import { useSheet } from './Sheet';
@@ -13,7 +13,8 @@ import './Menu.css';
 /* The menu: a port of PK.menu and its rail in the design's system/shell.js, with the mock's classes.
    Calendar holds Meetings, so there is no Meetings row. Pages a person cannot open are not drawn. Under the places,
    the conversation area (plan/threads-team.html): two small tabs, Team | Threads, with Message and Call beside them.
-   No counts there: bold is new, and the Dot marks a conversation that asks you. */
+   Team is the org chart and your DMs; Threads every other conversation. No counts there: bold is new, and the Dot on
+   a row marks a conversation that asks you (never on a tab or a folded team). */
 
 export type MenuRowId = 'tasks' | 'calendar' | 'company' | 'library';
 export type MenuTalk = 'team' | 'threads';
@@ -41,9 +42,8 @@ export interface MenuMate {
 export interface MenuTeam {
   id: string;
   name: string;
+  /* the team's page (its thread is a row in Threads) */
   to: string;
-  /* its own thread asks you something (a teammate's ask rises to the team while it is shut) */
-  needs?: boolean;
   members: MenuMate[];
 }
 export interface MenuCompany {
@@ -75,12 +75,12 @@ export interface MenuProps {
   accountMenu?: ReactNode;
   onPickCompany?: () => void;
   onHelp?: () => void;
-  /* the Threads tab's list: every conversation you are in, newest first, and the sources at its foot */
+  /* the Threads tab's list: every conversation but your DMs, newest first, Archived folded at its foot */
   threads?: ReactNode;
-  /* a Dot on a tab: something in that list asks you */
-  asks?: Partial<Record<MenuTalk, boolean>>;
   onMessage?: () => void;
   onCall?: () => void;
+  /* the Threads tab's ⋯: its one item, Automations (filters are automations, in Routines) */
+  onAutomations?: () => void;
 }
 
 const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
@@ -104,7 +104,7 @@ const FACES = 5;
 function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
   return <Avatar decorative kind={m.kind} name={m.name} initials={m.short} hue={m.hue} size={size} live={m.live} />;
 }
-const Asks = ({ size }: { size?: number }) => <FlowMark size={size} label="Asks you" />;
+const Asks = () => <FlowMark label="Asks you" />;
 const TALK: { id: MenuTalk; label: string }[] = [
   { id: 'team', label: 'Team' },
   { id: 'threads', label: 'Threads' },
@@ -284,17 +284,21 @@ export function Menu(p: MenuProps) {
       {TALK.map(x => (
         <button key={x.id} type="button" role="tab" aria-selected={talk === x.id} className={talk === x.id ? 'is-on' : undefined} onClick={() => setTalk(x.id)}>
           {x.label}
-          {p.asks?.[x.id] && talk !== x.id ? <Asks size={8} /> : null}
         </button>
       ))}
       <span className="acts">
         <IconButton icon="message" label="Message" size="sm" quiet onClick={p.onMessage} />
         <IconButton icon="call" label="Call" size="sm" quiet onClick={p.onCall} />
+        {talk === 'threads' && p.onAutomations && can('company/routines') ? (
+          <Drop trigger={<IconButton icon="more" label="More" size="sm" quiet />} side="bottom" align="end">
+            <MenuItem label="Automations" icon="refresh" onSelect={p.onAutomations} />
+          </Drop>
+        ) : null}
       </span>
     </div>
   );
-  /* Team: the teams, each folding to its faces; open, its teammates. A team opens its thread, a teammate your chat
-     with them. The chevron always folds or opens it, wherever you are. */
+  /* Team: the org chart, the teams each folding to its faces; open, its teammates. A team opens its page, a teammate
+     your DM with them. The chevron always folds or opens it, wherever you are. */
   const team = (
     <div className="ca-list" role="tabpanel" aria-label="Team">
       {p.teams.map(t => {
@@ -317,7 +321,6 @@ export function Menu(p: MenuProps) {
               <Icon name="chevron" />
             </span>
             <span className="tree-name">{t.name}</span>
-            {(t.needs || (!open && t.members.some(m => m.needs))) ? <Asks /> : null}
             {open ? null : (
               <span className="faces">
                 {t.members.slice(0, FACES).map(m => (
