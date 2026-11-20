@@ -181,8 +181,8 @@ def app_build_decision(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
 
     def decide(kind, paths=(), *, force=False, assets=None):
-        # Each app's previous release counts only with its updater manifest: Tauri's latest.json, Electron's Mac feed.
-        assets = assets or {"desktop": "latest.json", "electron": "latest-mac.yml"}[kind]
+        # A previous release counts only with its updater manifests: Tauri's latest.json, Electron's three feeds.
+        assets = assets or {"desktop": "latest.json", "electron": "latest-mac.yml\nlatest.yml\nlatest-linux.yml"}[kind]
         git("checkout", "-qf", "--detach", "v1.0.0")
         for name in paths:
             path = repo / name
