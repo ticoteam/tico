@@ -308,6 +308,31 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
       await share.locator('[data-close]').first().click();
 
+      // Opened before boot has the roster, Who can read gains A team when it lands, with the saved choice still checked.
+      // pageAs returns at the page's load, while boot still waits for its roster read; an address change then routes at
+      // once. That read is held here until the panel is open.
+      if (!isPhone) {
+        const early = await pageAs(browser, hub, 'dana');
+        let reads = 0, release = () => {}, holding = () => {};
+        const held = new Promise<void>(go => { release = go; }), waiting = new Promise<void>(go => { holding = go; });
+        await early.route(u => new URL(u).pathname === '/api/humans', async route => {
+          if (++reads === 1) { holding(); await held; }
+          await route.continue();
+        });
+        await early.reload();
+        await waiting;
+        await early.goto(hub.url + '/#/thread/' + secret.id);
+        await early.locator('.thv-title', {hasText: 'Pricing war room'}).waitFor({timeout: t(5000)});
+        await early.locator('[data-thv-menu]').click();
+        const box = early.locator('#thread-settings[open] .thd-aud');
+        await box.waitFor({timeout: t(5000)});
+        assert.equal(await box.locator('[value=team]').count(), 0, 'no team row while boot waits for the roster');
+        release();
+        await box.locator('.thd-aud-word').waitFor({timeout: t(15000)});
+        assert.ok(await box.locator('[name=audience][value=members]').isChecked(), 'the saved choice stays checked');
+        await early.context().close();
+      }
+
       // A group's Home sits in the same gutters as its cards.
       await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));
       await page.locator('#dash-home').waitFor({timeout: t(15000)});
