@@ -21,7 +21,11 @@ class Replay:
     def __init__(self, root=checks.ROOT, graph=None):
         self.root = root
         self.graph = graph or checks.DependencyMap(root)
-        self.core = checks.browser_scripts([], root)
+        try:
+            self.core = checks.browser_scripts([], root)
+        except (OSError, subprocess.CalledProcessError, RuntimeError):
+            # The browser runner went with the old web app (ui/): selection falls back as it does without one.
+            self.core = None
         self.timings = checks.committed_timings(root)
         self.counts = Counter()
         self.definitions = defaultdict(set)
