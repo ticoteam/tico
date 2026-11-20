@@ -1451,8 +1451,8 @@ AppState = Literal[
 APP_STATES = AppState.__args__
 
 
-# The retired desktop-app driver's readiness: today's runner never sends it, but the kept 0.6.21 contract
-# (contracts/runner/releases/0.6.21) still lists it, so it is accepted and ignored until that copy leaves the window.
+# The retired desktop-app driver's readiness: today's runner never sends it, but a 0.6.x runner may
+# (contracts/runner/releases/0.6.0), so it is accepted and ignored until 0.6.0 leaves the supported window.
 class AppDriverApp(Contract):
     """One desktop app the computer's app driver could operate for a synced bot."""
 
@@ -1640,9 +1640,9 @@ class Heartbeat(Contract):
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 and
-    # memory_tidy_keep_v1 the retired Nightly memory tidy pilot. No runner since 0.6.21 (the floor) sends them, but the
-    # kept 0.6.21 contract (contracts/runner/releases/0.6.21) still lists them, so they are accepted and ignored until
-    # that copy leaves the window (docs/runner-wire-contract.md). Enum values cost nothing against max_length.
+    # memory_tidy_keep_v1 the retired Nightly memory tidy pilot: today's runner sends neither, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so they are accepted and ignored until 0.6.0 leaves the supported window
+    # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
             "assignment_instances_v1",

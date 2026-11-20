@@ -1,7 +1,7 @@
 {
  "answer": {
   "attempt": null,
-  "paused": "This computer runs Tico 0.0.9, which this server (dev) cannot work with; it needs 0.6.0-rc.1 or later. Its bots are paused until it updates."
+  "paused": "This computer runs Tico 0.0.9, which this server (dev) cannot work with; it needs 0.4.0 or later. Its bots are paused until it updates."
  },
  "endpoint": "claim",
  "request": {

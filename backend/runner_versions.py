@@ -17,7 +17,7 @@ from . import releases
 from .store import H
 from . import sources as SRC
 
-MIN_RUNNER_RELEASE = "0.6.21"
+MIN_RUNNER_RELEASE = "0.6.0-rc.1"
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {
