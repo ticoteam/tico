@@ -837,3 +837,18 @@ def test_streams_joining_a_baseline_build_before_its_snapshot_share_it_and_a_lat
     monkeypatch.setattr(E, "needs_baseline", refused)
     failed = asyncio.run(burst(3))
     assert [type(result) for result in failed] == [RuntimeError] * 3
+
+
+def test_a_read_sizes_run_steps_the_same_whether_or_not_another_stream_of_its_round_sized_some_first():
+    """The round's sizes are shared (_Snapshot.step_sizes): a step another stream sized is charged as it was for that
+    one, and the next unsized step is still read and charged, so every stream keeps what its own read would."""
+    big = {str(n): 10 for n in range(16)} | {"16": E.READ_BYTES}
+    rows = [{"topic": "runs", "kind": "output", "ref": str(n), "seq": n} for n in range(17)]
+
+    class Steps:
+        def execute(self, statement, args):
+            return [(ref, big[ref]) for ref in args]
+
+    cold = E._within_budget(Steps(), rows)
+    warm = E._within_budget(Steps(), rows, {str(n): 10 for n in range(16)})
+    assert len(cold) == len(warm) == 16
