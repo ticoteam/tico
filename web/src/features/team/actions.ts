@@ -59,7 +59,7 @@ import {
   TICO_TEXT_MAX,
   type TaskTab,
 } from './queries';
-import { instructionsChange, LIST_FIELDS, managerOf, resolveWho, rowOf, seatHref, teamSlug, type ListLine } from './model';
+import { instructionsChange, LIST_FIELDS, managerOf, rowOf, seatHref, type ListLine } from './model';
 
 const slug = z.string().check(z.minLength(1), z.maxLength(100), z.describe("an agent's slug"));
 const person = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a person's id"));
@@ -102,26 +102,15 @@ export const openTeammate = defineAction({
 export const ADD_STEPS = ['pick', 'new', 'template', 'person', 'cloud'] as const;
 export type AddStep = (typeof ADD_STEPS)[number];
 
-/** Add teammate: the dialog over the team page on screen (`?add=`). */
+/** Add teammate: the dialog over any page (`?add=`), onto the team the address names (`?team=`, which the menu shows)
+    or the one given. */
 export const openAdd = defineAction({
   id: 'team.addTeammate',
   title: 'Add a teammate',
   kind: 'view',
-  input: z.strictObject({ step: z.optional(z.enum(ADD_STEPS)) }),
-  // Its dialog is drawn on a team's page only, not on an agent's or a person's.
-  can: ({ router, queryClient }) => {
-    const at = /^\/team\/([^/]+)\/?$/.exec(router.state.location.pathname);
-    if (!at) return false;
-    let who = at[1]!;
-    try {
-      who = decodeURIComponent(who);
-    } catch {
-      // keep it as written
-    }
-    return resolveWho(who, queryClient.getQueryData(directoryQuery.queryKey), queryClient.getQueryData(groupsQuery.queryKey))?.kind === 'team';
-  },
-  run: ({ router }, { step }) =>
-    router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: step ?? 'pick' }) }),
+  input: z.strictObject({ step: z.optional(z.enum(ADD_STEPS)), team: z.optional(team) }),
+  run: ({ router }, { step, team: to }) =>
+    router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: step ?? 'pick', ...(to ? { team: to } : {}) }) }),
   did: () => 'Opened Add teammate',
   target: () => ({ kind: 'team', id: 'add' }),
 });
@@ -445,10 +434,10 @@ export const cancelCloud = defineAction({
   run: async ({ router, queryClient }, { seat }) => {
     const known = queryClient.getQueryData(seatsQuery.queryKey)?.find((x) => x.id === seat) ?? queryClient.getQueryData(seatAgentQuery(seat).queryKey)?.seat;
     const out = await said("Couldn't cancel the request", async () => ({ ...(await cancelCloudRequest(seat)), agent: known?.agent ?? '' }));
-    // On the seat's own page, which is gone now: back to its team.
+    // On the seat's own page, which is gone now: back home, its team shown in the menu.
     const group = queryClient.getQueryData(groupsQuery.queryKey)?.find((g) => g.id === known?.team);
     if (decodeURIComponent(router.state.location.pathname) === decodeURIComponent(seatHref(seat))) {
-      if (group) await router.navigate({ to: page(teamSlug(group.name)) });
+      if (group) await router.navigate({ to: '/', search: { team: group.id } as never });
       else router.history.back();
     }
     return out;
@@ -569,7 +558,7 @@ export const invite = defineAction({
   run: ({ router }, input) =>
     said("Couldn't send the invite", async () => {
       const out = await invitePerson(input);
-      await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined }) });
+      await router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined, team: undefined }) });
       return out;
     }),
   did: ({ email }) => `Invited ${email}`,

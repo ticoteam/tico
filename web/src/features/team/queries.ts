@@ -376,20 +376,6 @@ export const peopleQuery = queryOptions({
   select: (roster) => roster.people,
 });
 
-/** What these agents (slugs) spent this month, in dollars (GET /api/v2/usage, filtered by bots). */
-export const monthSpendQuery = (slugs: readonly string[]) => {
-  const now = new Date();
-  const to = now.toISOString().slice(0, 10);
-  const bots = [...slugs].sort().join(',');
-  return queryOptions({
-    queryKey: ['team', 'spend', to.slice(0, 7), bots] as const,
-    queryFn: async ({ signal }) =>
-      (await api.get<{ totals?: { est_cost_usd?: number | null } }>(`/api/v2/usage?${q({ from: `${to.slice(0, 8)}01`, to, bots, group: 'day' })}`, { signal }))
-        .totals?.est_cost_usd ?? 0,
-    enabled: bots.length > 0,
-  });
-};
-
 /** A team (GET /api/v2/groups): its members, the team it sits in, and its lead when one is set. */
 export interface Group {
   id: string;
@@ -405,7 +391,7 @@ export interface Group {
 
 export const groupsQuery = queryOptions({
   queryKey: keys.team.groups(),
-  // The team page's loader shares this request with the menu and a team's thread, even while they unmount: no signal.
+  // A teammate's page loader shares this request with a team's thread and Add teammate, even while they unmount: no signal.
   queryFn: () => api.get<Group[]>('/api/v2/groups'),
 });
 
@@ -559,36 +545,6 @@ export const doneTasksQuery = (actor: string, since: string) => {
     queryKey: keys.tasks.list(params),
     queryFn: ({ signal }) => allPages(params, signal),
   });
-};
-
-/** A team's open tasks, every page, its owners a hundred at a time (the API's value limit): the page counts them by owner. */
-export const teamOpenTasksQueries = (owners: ReadonlySet<string>) => {
-  const ids = [...owners].sort();
-  const batches = [];
-  for (let start = 0; start < ids.length; start += 100) {
-    const params = { status: 'open', brief: 'true', limit: 500, owners: ids.slice(start, start + 100).join(',') };
-    batches.push(
-      queryOptions({
-        queryKey: keys.tasks.list(params),
-        queryFn: ({ signal }) => allPages(params, signal),
-      }),
-    );
-  }
-  return batches;
-};
-
-/** The server counts across all pages. Bound the owner filter so large teams fit within the API's value limit. */
-export const teamDoneCountQueries = (owners: ReadonlySet<string>, since: string) => {
-  const ids = [...owners].sort();
-  const batches = [];
-  for (let start = 0; start < ids.length; start += 100) {
-    const params = { status: 'done', brief: 'true', updated_since: since, limit: 1, counts: 'stage', owners: ids.slice(start, start + 100).join(',') };
-    batches.push(queryOptions({
-      queryKey: keys.tasks.list(params),
-      queryFn: ({ signal }) => api.get<OwnTasks & { counts: { total: number } }>(`/api/v2/tasks?${q(params)}`, { signal }),
-    }));
-  }
-  return batches;
 };
 
 /* ---------------------------------------------------------------- its own lists (task tabs) */

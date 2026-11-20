@@ -1,7 +1,6 @@
 import * as z from 'zod/mini';
 import { defineAction, run } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
-import { teamSlug } from '@/features/team/routing';
 import { companiesBridge } from './companies';
 import { desktop, openCallWindow } from '@/desktop';
 
@@ -11,23 +10,16 @@ import { desktop, openCallWindow } from '@/desktop';
 
 const here = (path: string) => path.replace(/^\/next(?=\/|$)/, '') || '/';
 
-/** Add teammate opens over a team's page: this one when a team's page is open, else my team's, else the first. */
+/** Add teammate opens over the page on screen, onto my team (the dialog lets the person pick another). */
 export const addTeammate = defineAction({
   id: 'shell.addTeammate',
   title: 'Add a teammate',
   kind: 'view',
   input: z.strictObject({}),
-  run: async ({ router, queryClient, via }) => {
-    const dir = queryClient.getQueryData(directoryQuery.queryKey);
+  run: async ({ queryClient, via }) => {
     const me = queryClient.getQueryData(meQuery.queryKey);
-    const [, top, who] = here(router.state.location.pathname).split('/');
-    const onTeam = top === 'team' && !!who && !!dir && !dir.byId[decodeURIComponent(who)] && !dir.byId[`human:${decodeURIComponent(who)}`];
-    if (!onTeam) {
-      const team = (me && dir?.byId[me.id]?.team) || dir?.actors.find((a) => a.team)?.team;
-      if (!team) throw new Error('no team to add to yet');
-      await router.navigate({ to: `/team/${encodeURIComponent(teamSlug(team))}` });
-    }
-    const r = await run('team.addTeammate', {}, { via });
+    const team = me ? queryClient.getQueryData(directoryQuery.queryKey)?.byId[me.id]?.teamId : undefined;
+    const r = await run('team.addTeammate', team ? { team } : {}, { via });
     if (!r.ok) throw new Error(r.error);
   },
   did: () => 'Opened Add teammate',

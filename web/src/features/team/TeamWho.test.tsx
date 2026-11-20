@@ -3,7 +3,7 @@ import '@/actions';
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Profiler, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
@@ -175,113 +175,29 @@ function teams() {
 describe('Team pages', () => {
   beforeEach(teams);
 
-  it('lists a team, the teams inside it, and each row opens that teammate’s page @s249', async () => {
+  it('has no page for a team: its old address goes home, the team shown in the menu, Add teammate kept @s249', async () => {
     serve();
-    show(<TeamWho who="design" />, '/team/design');
-    await screen.findByRole('heading', { name: 'Design' });
-    await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
-    expect(link('Pat Doe')?.getAttribute('href')).toBe('/team/p1');
-    // a team inside is one row that opens its own page; its people are on that page
-    expect(link('Brand')?.getAttribute('href')).toBe('/team/team%3ABrand');
-    expect(link('Bo')).toBeUndefined();
-  });
-
-  it('marks the lead, faces the team in its head, and runs every open task its teammates hold, the latest first, with no mark before a title', async () => {
-    queryClient.setQueryData(groupsQuery.queryKey, groups.map((g) => (g.id === 'g1' ? { ...g, lead: 'person:p1' } : g)));
-    serve((url) => {
-      if (!url.startsWith('/api/v2/tasks?') || new URLSearchParams(url.split('?')[1]).get('status') !== 'open') return;
-      return ok({
-        tasks: [
-          { id: 't1', number: 1, pipeline_id: 'eng', title: 'Older copy pass', owner_id: ana.id, late: true, updated_at: '2026-11-10T10:00:00Z' },
-          { id: 't2', number: 2, pipeline_id: 'eng', title: 'Brand refresh', owner_id: bo.id, turn: { state: 'person', who: pat.id }, updated_at: '2026-11-18T10:00:00Z' },
-          { id: 't3', number: 3, pipeline_id: 'eng', title: 'Someone else', owner_id: 'bot:zed', updated_at: '2026-11-19T10:00:00Z' },
-        ],
-      });
-    });
-    show(<TeamWho who="design" />, '/team/design');
-    const running = await screen.findByRole('region', { name: 'Running' });
-    await waitFor(() => expect(within(running).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['Brand refresh', 'Older copy pass']));
-    expect(within(running).getByRole('img', { name: 'Bo' })).toBeTruthy();
-    expect(within(running).getByText('Late')).toBeTruthy();
-    // the sketch draws nothing before a row's title: no Flow mark, even on a task that waits on you
-    expect(within(running).queryByRole('img', { name: 'Waits on you' })).toBeNull();
-    const people = screen.getByRole('region', { name: 'People' });
-    expect(within(people).queryByRole('img', { name: 'Waits on you' })).toBeNull();
-    expect(within(people).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['Pat Doe', 'Ana']);
-    expect(within(link('Pat Doe')!).getByText('Lead')).toBeTruthy();
-    expect(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('img', { name: 'Ana' })).toBeTruthy();
-    expect(screen.queryByRole('tab')).toBeNull();
-  });
-
-  it('counts completed work across every page for the team and its subteams', async () => {
-    serve((url) => (url.startsWith('/api/v2/tasks?') && new URLSearchParams(url.split('?')[1]).get('status') === 'done' ? ok({ tasks: [{ id: 't1', owner_id: ana.id }], counts: { total: 612 } }) : undefined));
-    show(<TeamWho who="design" />, '/team/design');
-    expect(await screen.findByText('612')).toBeTruthy();
-    const done = new URLSearchParams(reads.find((u) => u.startsWith('/api/v2/tasks?') && u.includes('status=done'))!.split('?')[1]);
-    expect(done.get('owners')?.split(',')).toEqual([ana.id, bo.id, pat.id]);
-    expect(done.get('counts')).toBe('stage');
-    expect(done.get('limit')).toBe('1');
-    expect(done.get('updated_since')).toBeTruthy();
-  });
-
-  it('skips the team render when only an agent’s focus changes and still updates its working badge', async () => {
-    serve();
-    const rendered = vi.fn();
-    show(<Profiler id="team" onRender={rendered}><TeamWho who="design" /></Profiler>, '/team/design');
-    await waitFor(() => expect(link('Ana')).toBeTruthy());
-    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    rendered.mockClear();
-    await act(() => queryClient.setQueryData(directoryQuery.queryKey, directory([{ ...ana, status: 'New focus' }, bo, pat])));
-    expect(rendered).not.toHaveBeenCalled();
-    await act(() => queryClient.setQueryData(directoryQuery.queryKey, directory([{ ...ana, status: 'New focus', working: true }, bo, pat])));
-    expect(await within(link('Ana')!).findByRole('img', { name: 'Ana, working now' })).toBeTruthy();
-  });
-
-  it('starts the team spend read without waiting for the agents roster', async () => {
-    queryClient.removeQueries({ queryKey: agentsQuery.queryKey });
-    let finish!: (reply: Reply) => void;
-    const agents = new Promise<Reply>((resolve) => { finish = resolve; });
-    serve((url) => (url === '/api/employees' ? agents : url.startsWith('/api/v2/usage?') ? ok({ totals: { est_cost_usd: 42 } }) : undefined));
-    show(<TeamWho who="design" />, '/team/design');
-    expect(await screen.findByText('$42')).toBeTruthy();
-    const spend = new URLSearchParams(reads.find((u) => u.startsWith('/api/v2/usage?'))!.split('?')[1]);
-    expect(spend.get('bots')).toBe('ana,bo');
-    expect(spend.get('group')).toBe('day');
-    await act(async () => finish(ok(roster)));
-  });
-
-  it("runs every page of the members' open tasks", async () => {
-    const open = (id: string, updated_at: string) => ({ id, number: null, title: id, status: 'open', owner_id: ana.id, updated_at });
-    serve((url) => {
-      if (!url.startsWith('/api/v2/tasks?') || new URLSearchParams(url.split('?')[1]).get('status') !== 'open') return;
-      return url.includes('after=k1')
-        ? ok({ tasks: [open('t2', '2026-11-18T10:00:00Z'), open('t3', '2026-11-17T10:00:00Z')], next_after: null })
-        : ok({ tasks: [open('t1', '2026-11-19T10:00:00Z')], next_after: 'k1' });
-    });
-    show(<TeamWho who="design" />, '/team/design');
-    const running = await screen.findByRole('region', { name: 'Running' });
-    await waitFor(() => expect(within(running).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['t1', 't2', 't3']));
-    const opened = reads.filter((u) => u.startsWith('/api/v2/tasks?') && u.includes('status=open')).map((u) => new URLSearchParams(u.split('?')[1]));
-    expect(opened.map((p) => p.get('after'))).toEqual([null, 'k1']);
-    expect(opened[0]?.get('owners')?.split(',')).toEqual([ana.id, bo.id, pat.id]);
+    const router = show(<TeamWho who="design" add="pick" />, '/team/design?add=pick');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(router.state.location.search).toEqual({ team: 'g1', add: 'pick' });
+    expect(screen.queryByRole('heading', { name: 'Design' })).toBeNull();
   });
 
   it('moves a teammate out at once and puts them back when the server refuses', async () => {
     let refuse!: () => void;
     serve((_url, method) => (method === 'PATCH' ? new Promise<Reply>((r) => (refuse = () => r({ status: 403, body: { detail: 'no' } }))) : undefined));
-    show(<TeamWho who="design" />, '/team/design');
-    await waitFor(() => expect(link('Ana')).toBeTruthy());
+    const teamOf = (bot: string) => queryClient.getQueryData<Group[]>(groupsQuery.queryKey)?.find((g) => g.bots.includes(bot))?.id;
     let done!: Promise<unknown>;
     act(() => {
       done = moveToTeam('agent', '0190-ana', 'g3').catch(() => 'refused');
     });
-    await waitFor(() => expect(link('Ana')).toBeUndefined());
+    await waitFor(() => expect(teamOf('0190-ana')).toBe('g3'));
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
     await act(async () => {
       refuse();
       expect(await done).toBe('refused');
     });
-    await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
+    await waitFor(() => expect(teamOf('0190-ana')).toBe('g1'));
   });
 
   it('shows an agent’s new role at once and takes it back when the server refuses @s615', async () => {
@@ -340,19 +256,6 @@ describe('Team pages', () => {
     expect(link('Ship kits')).toBeUndefined();
   });
 
-  it('says so for a team with nobody in it', async () => {
-    serve();
-    show(<TeamWho who="sales" />, '/team/sales');
-    expect(await screen.findByRole('heading', { name: 'No teammates yet' })).toBeTruthy();
-  });
-
-  it('shows open seats even when a team has no teammates yet', async () => {
-    serve((url) => (url === '/api/humans' ? ok({ seats: [{ id: 's1', title: 'Account manager', team: 'g3' }] }) : undefined));
-    show(<TeamWho who="sales" />, '/team/sales');
-    expect(await screen.findByText('Account manager')).toBeTruthy();
-    expect(screen.getByText('Open seat')).toBeTruthy();
-  });
-
   it('says so for an address that names no one', async () => {
     serve();
     show(<TeamWho who="nobody" />, '/team/nobody');
@@ -373,7 +276,10 @@ describe('Loading a teammate', () => {
     expect(await read('ana')).toEqual([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open')]);
     expect(await read('ana', 'settings')).toEqual(['/api/employees']);
     expect(await read('p1', 'slack')).toEqual([expect.stringContaining('/humans/p1/slack')]);
-    expect(await read('design')).toEqual([]);
+    // a team's address reads nothing more: it goes home, the team shown in the menu
+    serve();
+    await expect(loadWho(queryClient, 'design', undefined)).rejects.toMatchObject({ options: { to: '/', search: { team: 'g1' } } });
+    expect(reads).toEqual([]);
   });
 
   it('throws a failed read to the router, which draws the fault', async () => {
@@ -381,7 +287,7 @@ describe('Loading a teammate', () => {
     await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();
   });
 
-  it('opens a team when the shell detaches from the in-flight directory read: the one read carries on', async () => {
+  it('sends a team home when the shell detaches from the in-flight directory read: the one read carries on', async () => {
     queryClient.removeQueries({ queryKey: directoryQuery.queryKey });
     const org = ok({ org_groups: [], people: [], bots: [] });
     let finish: (reply: Reply) => void = () => {};
@@ -394,30 +300,8 @@ describe('Loading a teammate', () => {
     const page = loadWho(queryClient, 'design', undefined);
     unsubscribe();
     finish(org);
-    await expect(page).resolves.toBeUndefined();
+    await expect(page).rejects.toMatchObject({ options: { to: '/', search: { team: 'g1' } } });
     expect(reads.filter((u) => u === '/api/v2/org')).toHaveLength(1);
-  });
-});
-
-describe('A team', () => {
-  it('keeps Add teammate and Rules in More, the month’s spend, the mock’s pills and its open seats', async () => {
-    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, status: 'paused' } as AgentRow]);
-    queryClient.removeQueries({ queryKey: peopleQuery.queryKey });
-    serve((url) => {
-      if (url === '/api/humans') return ok({ seats: [{ id: 's1', title: 'Security Owner', team: 'g1' }, { id: 's2', title: 'Elsewhere', team: 'g9' }] });
-      if (url.includes('/api/v2/usage')) return ok({ totals: { est_cost_usd: 782 } });
-    });
-    const router = show(<TeamWho who="design" />, '/team/design');
-    expect(await screen.findByText('$782')).toBeTruthy();
-    expect(screen.queryByRole('tab')).toBeNull();
-    expect(await screen.findByText('Security Owner')).toBeTruthy();
-    expect(screen.queryByText('Elsewhere')).toBeNull();
-    expect(screen.getByText('Stopped')).toBeTruthy();
-    expect(reads.filter((u) => u === '/api/humans')).toHaveLength(1);
-    fireEvent.click(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'Add teammate' })).toBeTruthy();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rules' }));
-    await waitFor(() => expect(router.state.location.href).toBe('/company/rules?who=group%3Ag1'));
   });
 });
 
@@ -490,14 +374,12 @@ describe("An agent's column", () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'settings' }));
   });
 
-  it('offers Add teammate only on a team page, where its dialog is', async () => {
+  it('opens Add teammate over any page, onto the team given', async () => {
     serve(tasksOf('open', [task('t1', 'Pick a font')]));
     const router = show(<TeamWho who="ana" />, '/team/ana');
     await screen.findByRole('region', { name: /Tasks/ });
-    expect(await run('team.addTeammate', {}, { via: 'click' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    router.history.push('/team/design');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/team/design'));
-    expect(await run('team.addTeammate', {}, { via: 'click' })).toMatchObject({ ok: true });
+    expect(await run('team.addTeammate', { team: 'g1' }, { via: 'click' })).toMatchObject({ ok: true });
+    await waitFor(() => expect(router.state.location.search).toEqual({ add: 'pick', team: 'g1' }));
   });
 });
 
@@ -937,7 +819,7 @@ describe('Cloud agents @s629 @s733 @s734 @s735', () => {
     expect(link('Port the checkout tests')?.getAttribute('href')).toBe('/task/t7');
   });
 
-  it('cancels from the Connecting page and goes back to the team', async () => {
+  it('cancels from the Connecting page and goes home, its team shown in the menu', async () => {
     serve((url, method) => {
       if (url.endsWith('/api/v2/seats/s9/request')) return ok({ seat, agent: agents[1], steps: ['requested', 'building', 'ready'], tasks: [] });
       if (url.endsWith('/api/v2/seats')) return ok({ seats: [seat] });
@@ -948,7 +830,8 @@ describe('Cloud agents @s629 @s733 @s734 @s735', () => {
     fireEvent.click(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel request' }));
     await waitFor(() => expect(posted('/seats/s9/cancel-request')?.method).toBe('POST'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/team/team%3ADesign'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(router.state.location.search).toEqual({ team: 'g1' });
   });
 
   it('says so for a request that is gone', async () => {
@@ -957,18 +840,6 @@ describe('Cloud agents @s629 @s733 @s734 @s735', () => {
     expect(await screen.findByRole('heading', { name: 'No such request' })).toBeTruthy();
   });
 
-  it('shows a requested seat on its team as Requested, opening its Connecting page', async () => {
-    queryClient.removeQueries({ queryKey: peopleQuery.queryKey });
-    serve((url) => {
-      if (url === '/api/humans') return ok({ seats: [{ id: 's9', title: 'Devin', team: 'g1' }, { id: 's1', title: 'Security Owner', team: 'g1' }] });
-      if (url.endsWith('/api/v2/seats')) return ok({ seats: [seat, { ...seat, id: 's1', agent: '', request_state: '' }] });
-    });
-    show(<TeamWho who="design" />, '/team/design');
-    await waitFor(() => expect(link('Devin')?.getAttribute('href')).toBe('/team/seat%3As9'));
-    expect(within(link('Devin')!).getByText('Requested')).toBeTruthy();
-    expect(link('Security Owner')).toBeUndefined();
-    expect(screen.getByText('Open seat')).toBeTruthy();
-  });
 });
 
 describe('A computer', () => {

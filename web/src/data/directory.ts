@@ -17,6 +17,12 @@ export interface Actor {
   title?: string;
   /** The team's name. */
   team?: string;
+  /** The team's id (its group). */
+  teamId?: string;
+  /** Who they report to, by actor id ('human:<id>' or 'bot:<id>'), when that one is in the directory. */
+  reportsTo?: string;
+  /** The Assistant (Tico itself), which is no teammate on the chart. */
+  assistant?: boolean;
   /** An agent's status line (what it is on now). */
   status?: string;
   /** For `Avatar`'s `hue`: the old app's colour per person (from the name) and per agent (from the slug). */
@@ -33,6 +39,19 @@ export interface Actor {
 export interface Directory {
   actors: Actor[];
   byId: Record<string, Actor>;
+  /** The teams, nested by `parent`, in the org's own order. */
+  teams?: Team[];
+}
+
+/** A team (a group on the org chart). */
+export interface Team {
+  id: string;
+  name: string;
+  /** The team it sits in; "" at the top. */
+  parent: string;
+  order: number;
+  /** Its lead's actor id while the lead is one of its teammates; "" when none is set. */
+  lead: string;
 }
 
 /** A row of GET /api/v2/status, as the `bots` live topic also carries it (backend/events.py status_line). */
@@ -45,6 +64,10 @@ export interface StatusLine {
 interface OrgGroup {
   id: string;
   name?: string;
+  parent?: string;
+  order?: number;
+  /** `bot:<id>` or `person:<id>`. */
+  lead?: string;
 }
 
 // The old app's hues (ui/app/avatars.ts personHue and avHue), so a face keeps its colour across both apps.
@@ -84,36 +107,61 @@ function index(actors: Actor[]): Directory {
 
 /** The directory from GET /api/v2/org and GET /api/v2/status. */
 export function buildDirectory(org: GetOrgResponse, lines: StatusLine[]): Directory {
-  const teams = new Map((org.org_groups as OrgGroup[]).map((g) => [g.id, text(g.name) ?? g.id]));
+  const groups = org.org_groups as OrgGroup[];
+  const teams = new Map(groups.map((g) => [g.id, text(g.name) ?? g.id]));
   const teamName = (id: unknown) => (text(id) ? teams.get(id as string) : undefined);
+  const teamId = (id: unknown) => (text(id) && teams.has(id as string) ? (id as string) : undefined);
   const statuses = new Map(lines.map((l) => [l.bot, l]));
+  // Who each one reports to, as written (a bare person id, a bot's id or slug, or 'human:<id>'): read once all are known.
+  const boss = new Map<Actor, string>();
   const people: Actor[] = org.people.map((p) => {
     const name = text(p.name) ?? p.id;
-    return {
+    const a: Actor = {
       id: `human:${p.id}`,
       kind: 'person',
       name,
       avatar: null,
       title: text(p.title),
       team: teamName(p.team),
+      teamId: teamId(p.team),
       hue: personHue(name),
     };
+    if (text(p.reports_to)) boss.set(a, p.reports_to!);
+    return a;
   });
   const agents: Actor[] = org.bots.map((b) => {
-    const row = b as typeof b & { slug?: string; department?: string };
+    const row = b as typeof b & { slug?: string; department?: string; template?: string };
     const slug = text(row.slug) ?? b.id;
-    return {
+    const a: Actor = {
       id: `bot:${b.id}`,
       kind: 'agent',
       name: text(b.display_name) ?? slug,
       slug,
       avatar: null,
       team: teamName(b.team) ?? text(row.department),
+      teamId: teamId(b.team),
       hue: agentHue(slug),
+      ...(row.template === 'assistant' ? { assistant: true } : {}),
       ...statusOf(statuses.get(b.id)),
     };
+    if (text(b.reports_to)) boss.set(a, b.reports_to!);
+    return a;
   });
-  return index([...people, ...agents]);
+  const dir = index([...people, ...agents]);
+  // A bare id names a person or an agent: a person's manager is read as a person first, an agent's as an agent first.
+  const actorOf = (ref: string, first: 'person' | 'agent') => {
+    if (/^(human|person):/.test(ref)) return dir.byId[`human:${ref.slice(ref.indexOf(':') + 1)}`];
+    if (ref.startsWith('bot:')) return dir.byId[ref];
+    const [one, two] = first === 'person' ? [`human:${ref}`, `bot:${ref}`] : [`bot:${ref}`, `human:${ref}`];
+    return dir.byId[one] ?? dir.byId[two];
+  };
+  for (const [a, ref] of boss) {
+    const up = actorOf(ref, a.kind);
+    if (up && up !== a) a.reportsTo = up.id;
+  }
+  const lead = (ref: string | undefined) => (ref && actorOf(ref, 'agent')?.id) || '';
+  dir.teams = groups.map((g, i) => ({ id: g.id, name: teams.get(g.id) ?? g.id, parent: g.parent ?? '', order: g.order ?? i, lead: lead(g.lead) }));
+  return dir;
 }
 
 /**

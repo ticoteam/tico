@@ -9,6 +9,10 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .menu a.is-on>.co-mark{background:var(--ink);color:var(--raised)}
 
 .menu:has(>.acct-me){width:264px}
+/* a team's menu opened from the row that heads it: the team's name over its rows */
+.menu-team{height:28px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2);color:var(--muted);font-size:var(--t-sm)}
+.menu-team .ico{width:16px;height:16px;flex:none}
+.menu-team span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .acct-me{display:flex;align-items:center;gap:var(--s-2h);padding:var(--s-1h) var(--s-2) var(--s-2)}
 .acct-me>span{display:grid;gap:var(--s-0);min-width:0;line-height:1.15}
 .acct-me b,.acct-me em{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
@@ -41,11 +45,43 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .ca .tree-ic{width:22px;display:grid;place-items:center;color:var(--muted);flex:none}
 .ca .tree-ic .ico{width:16px;height:16px}
 .ca-more{border:0;background:none;font:inherit;color:var(--muted);text-align:left;cursor:pointer}
-/* a team's teammates hang from it on a thin line */
+/* The Team tab (plan/teams-menu.html): one tree by reporting line. A row is a line: the name (a link to your DM), a
+   quiet team label, then ⋯ on hover and the fold (a person mark and the count while folded, then the chevron). The
+   reports under a row hang from it on a thin line, each on its elbow; the line stops at the last one's row. */
+.tree-org{gap:0}
+.tree-node{display:grid;gap:calc(var(--s-0) / 2)}
+.tree-line{position:relative;display:flex;align-items:center;min-width:0;border-radius:var(--r-row);transition:background var(--dur-fast) var(--ease)}
+.tree-line>:is(.tree-row,.tree-team){flex:1;min-width:0}
+.tree-line>.tree-row:hover,.tree-line>.tree-team:hover{background:none}
+@media (hover:hover){
+  .tree-line:hover{background:var(--well-2)}
+}
+.tree-line:has(>.tree-row.is-active){background:var(--selected)}
+.tree-line>.tree-row.is-active{background:none}
+.tree-line.is-hl{background:var(--well-2)}
+.tree-line:has(>.tree-fold) .tree-row{padding-right:var(--s-1)}
+.tree-team{width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer;padding-right:var(--s-1)}
+.tree-line .tree-row>.tree-name:has(+.tree-label){flex:0 1 auto}
+/* short of room, the label gives way faster than the name */
+.tree-label{margin-left:auto;padding-left:var(--s-2);flex:0 3 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-xs)}
+.tree-n{display:inline-flex;align-items:center;gap:var(--s-0);flex:none;color:var(--muted);font-size:var(--t-xs);font-weight:var(--w-text);font-variant-numeric:tabular-nums}
+.tree-n .ico{width:12px;height:12px;color:var(--faint)}
+.tree-fold{height:30px;flex:none;display:flex;align-items:center;gap:var(--s-0);padding:0 var(--s-1) 0 var(--s-1h);border:0;border-radius:var(--r-row);background:none;font:inherit;color:inherit;cursor:pointer}
+.tree-fold .tree-chev{width:16px}
+.tree-team .tree-chev{width:16px;margin-left:var(--s-0)}
+.tree-fold:hover .tree-chev,.tree-team:hover .tree-chev{color:var(--ink-2)}
+.tree-fold.is-open .tree-chev .ico{transform:rotate(90deg)}
+.tree-fold:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.tree-line>.tree-more{display:none;flex:none}
+@media (hover:hover){
+  .tree-line:is(:hover,:focus-within)>.tree-more,.tree-line>.tree-more[data-popup-open]{display:inline-grid}
+}
 .org{position:relative;margin-left:var(--s-5);padding-left:var(--s-2);display:grid;gap:calc(var(--s-0) / 2)}
-.org::before{content:"";position:absolute;left:0;top:0;bottom:15px;border-left:1px solid var(--line-strong)}
-.org>.tree-row{position:relative}
-.org>.tree-row::before{content:"";position:absolute;left:-8px;top:15px;width:7px;border-top:1px solid var(--line-strong)}
+.org>.tree-node{position:relative}
+.org>.tree-node::before{content:"";position:absolute;left:-8px;top:-2px;bottom:0;border-left:1px solid var(--line-strong)}
+.org>.tree-node:first-child::before{top:0}
+.org>.tree-node:last-child::before{bottom:auto;height:15px}
+.org>.tree-node>.tree-line::before{content:"";position:absolute;left:-8px;top:15px;width:7px;border-top:1px solid var(--line-strong)}
 .ca-src{flex:none;border-top:1px solid var(--line);padding:var(--s-1) 0 var(--s-1h);display:grid;gap:calc(var(--s-0) / 2)}
 /* a Threads row (pass 7): face, title, one quiet mark, then its age or the Dot; Archive on hover, or a swipe */
 .cr{position:relative;overflow:hidden;touch-action:pan-y}
@@ -84,6 +120,12 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .qchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
 :root[data-layout="cards"] .qchip{height:var(--ctl-sm);padding:0 var(--s-4);font-size:var(--t-md)}
 .phone .cat [role="tab"]{font-size:var(--t-md)}
+.phone .tree-fold{height:44px;min-width:44px;justify-content:flex-end;padding-right:var(--s-2)}
+.phone .tree-n{font-size:var(--t-sm)}
+.phone .tree-n .ico{width:14px;height:14px}
+.phone .tree-label{font-size:var(--t-sm)}
+.phone .org>.tree-node:last-child::before{height:22px}
+.phone .org>.tree-node>.tree-line::before{top:22px}
 /* on a phone the whole card scrolls: the list is not a scroller of its own */
 .m-scroll .ca{flex:none}
 .m-scroll .ca-list{overflow:visible;-webkit-mask-image:none;mask-image:none}

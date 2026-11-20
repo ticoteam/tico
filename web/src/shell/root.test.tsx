@@ -97,9 +97,18 @@ vi.mock('@/features/tasks/routing', async () => {
   firstPipeline: (p: { id: string }[]) => p[0]?.id ?? null,
   };
 });
-vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null }));
+vi.mock('@/features/team/exports', () => ({
+  TeammateChat: () => null,
+  AddTeammate: ({ team }: { team: string }) => <p>add teammate onto {team}</p>,
+  TeamAccess: () => null,
+}));
 vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }));
-vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/', groupsQuery: q('groups', []) }));
+vi.mock('@/features/team/routing', () => ({
+  whoHref: () => '/',
+  groupsQuery: q('groups', []),
+  teammateAccessQuery: () => q('team-access', null),
+  validateTeamSearch: (s: { add?: unknown }) => (s.add === 'pick' ? { add: 'pick' } : {}),
+}));
 vi.mock('@/features/threads/exports', () => ({
   ChatSheet: () => <p>a teammate chat</p>,
   MenuThreads: () => <p>the threads</p>,
@@ -250,6 +259,27 @@ describe('the root', () => {
     expect(await within(sheet).findByText('a teammate chat')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Home' })).toBeTruthy();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('chat');
+  });
+
+  it('builds the Team tab from who reports to whom, opens it to the team ?team= names, and Add teammate onto it from ?add=', async () => {
+    localStorage.clear();
+    const em = { id: 'bot:em', kind: 'agent', name: 'Engineering Manager', slug: 'em', teamId: 'eng', reportsTo: 'human:maya' };
+    const qa = { ...QA, teamId: 'eng', reportsTo: 'bot:em' };
+    const tool = { id: 'bot:tico', kind: 'agent', name: 'Assistant', slug: 'assistant', assistant: true, reportsTo: 'human:maya' };
+    const actors = [MAYA, em, qa, tool];
+    queryClient.setQueryData(['directory'], {
+      actors,
+      byId: Object.fromEntries(actors.map((a) => [a.id, a])),
+      teams: [{ id: 'eng', name: 'Engineering', parent: '', order: 0, lead: '' }],
+    });
+    show('/?team=eng&add=pick');
+    expect(await screen.findByText('add teammate onto eng')).toBeTruthy();
+    const nav = within(await screen.findByRole('navigation', { name: 'Main' }));
+    // your direct report, opened down to the team the address names; you and the Assistant are no rows
+    expect(nav.getByRole('link', { name: 'Engineering Manager' }).getAttribute('href')).toBe('/');
+    expect(await nav.findByRole('link', { name: 'QA Owner' })).toBeTruthy();
+    expect(nav.queryByRole('link', { name: 'Assistant' })).toBeNull();
+    localStorage.clear();
   });
 
   it('your name at the menu’s foot opens the account menu: you, My page, Settings, the theme, Sign out @s1189 @s1206', async () => {

@@ -1,4 +1,4 @@
-// Pure rules for the team pages: which teammate an address names, who manages a team, the model line, the figures.
+// Pure rules for the teammate pages: which teammate an address names, who manages a team, the model line, the figures.
 import type { Actor, Directory } from '@/data';
 import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, PersonRow, Run, SlackThread } from './queries';
 
@@ -69,26 +69,6 @@ export function managerOf(group: Group, agents: readonly AgentRow[], people: rea
   let most = 0;
   for (const [k, n] of votes) if (members.has(k) && n > most) [best, most] = [k, n];
   return best;
-}
-
-/** The teams directly inside `parent`, in their order. */
-export const subTeams = (groups: readonly Group[], parent: string) =>
-  groups.filter((g) => g.parent === parent && g.id !== parent).sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
-
-/** Every teammate in a team and the teams inside it. */
-export function membersUnder(groups: readonly Group[], id: string): { bots: string[]; people: string[] } {
-  const bots = new Set<string>();
-  const people = new Set<string>();
-  const walk = (gid: string, seen: Set<string>) => {
-    if (seen.has(gid)) return;
-    seen.add(gid);
-    const g = groups.find((x) => x.id === gid);
-    g?.bots.forEach((b) => bots.add(b));
-    g?.people.forEach((p) => people.add(p));
-    for (const s of subTeams(groups, gid)) walk(s.id, seen);
-  };
-  walk(id, new Set());
-  return { bots: [...bots], people: [...people] };
 }
 
 /** The team a teammate is in: its group. `id` is a bot id or a person id. */

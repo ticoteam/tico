@@ -375,7 +375,8 @@ def register(app, auth, settings, settings_admin, store):
         """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,
         each with `access`, its `reports_to`, its `team` (its group's id), its `department` (its group's name)
-        and its `template`; the groups come with their `parent`; `?can=read` or `?can=write` keeps those they hold that level on."""
+        and its `template`; the groups come with their `parent`, `order` and `lead`; `?can=read` or `?can=write`
+        keeps those they hold that level on."""
         who = request.state.identity
         auth.domain(who)
         if can not in (None, "", "read", "write"):
@@ -491,6 +492,14 @@ def register(app, auth, settings, settings_admin, store):
                 )
             for row in bots:
                 row["stage"] = lifecycle.stage(row["onboarding_state"])
+            # Each group's lead (`bot:<id>` or `person:<id>`) while it is a teammate of the group (CONTRACT §3); a bot
+            # lead the caller may not see on the chart leads nothing on theirs.
+            from . import groups as G
+
+            on_chart = {row["id"] for row in bots}
+            for group in view["org_groups"]:
+                lead = G.lead_of(group["id"], roster, configs)
+                group["lead"] = "" if lead.startswith("bot:") and lead[4:] not in on_chart else lead
             # People and groups the caller may not see are left out, and what hung under them moves up.
             people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
             return teammate_access.redact_chart(

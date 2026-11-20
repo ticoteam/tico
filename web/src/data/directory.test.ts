@@ -45,6 +45,44 @@ describe('directory', () => {
     expect(d.actors).toHaveLength(3);
   });
 
+  it('reads who each one reports to, the teams in their order with their leads, and the Assistant', () => {
+    const d = buildDirectory(
+      {
+        people: [
+          { id: 'p1', name: 'Dana Whit', team: 'g1', reports_to: '' },
+          { id: 'p2', name: 'Lee Park', team: 'g2', reports_to: 'p1' },
+        ],
+        bots: [
+          { id: '0190-em', slug: 'em', display_name: 'Engineering Manager', team: 'g1', reports_to: 'human:p1', access },
+          { id: '0191-qa', slug: 'qa', display_name: 'QA Owner', team: 'g1', reports_to: 'em', access },
+          { id: '0192-ops', slug: 'ops', display_name: 'Ops', team: '', reports_to: 'p1', access },
+          { id: 'assistant', slug: 'assistant', display_name: 'Assistant', template: 'assistant', reports_to: 'human:p1', access },
+          { id: '0193-lost', slug: 'lost', display_name: 'Lost', team: 'g9', reports_to: 'nobody', access },
+        ],
+        org_groups: [
+          { id: 'g1', name: 'Engineering', parent: '', order: 1, lead: 'bot:0190-em' },
+          { id: 'g2', name: 'Platform', parent: 'g1', order: 2, lead: 'person:p2' },
+        ],
+        seats: [],
+        teams: {},
+      } as unknown as GetOrgResponse,
+      [],
+    );
+    expect(d.byId['human:p2']).toMatchObject({ teamId: 'g2', reportsTo: 'human:p1' });
+    expect(d.byId['bot:0190-em']).toMatchObject({ teamId: 'g1', reportsTo: 'human:p1' });
+    // a slug, and a bare person id, read as who they name
+    expect(d.byId['bot:0191-qa']?.reportsTo).toBe('bot:0190-em');
+    expect(d.byId['bot:0192-ops']?.reportsTo).toBe('human:p1');
+    expect(d.byId['bot:0192-ops']?.teamId).toBeUndefined();
+    expect(d.byId['bot:assistant']?.assistant).toBe(true);
+    // no one there, no team there: neither is kept
+    expect([d.byId['bot:0193-lost']?.reportsTo, d.byId['bot:0193-lost']?.teamId]).toEqual([undefined, undefined]);
+    expect(d.teams).toEqual([
+      { id: 'g1', name: 'Engineering', parent: '', order: 1, lead: 'bot:0190-em' },
+      { id: 'g2', name: 'Platform', parent: 'g1', order: 2, lead: 'human:p2' },
+    ]);
+  });
+
   it('changes only the one agent whose status moved', () => {
     const d = dir();
     expect(withStatus(d, 'builder', { bot: 'builder', state: 'running', focus: 'Fixing the login page' })).toBe(d);

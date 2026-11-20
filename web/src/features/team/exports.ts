@@ -4,11 +4,12 @@ export { validateTeamSearch, type TeamSearch } from './routing';
 export { TeammateChat, AgentChat } from './TeammateChat';
 export { AgentPage } from './AgentPage';
 export { PersonPage } from './PersonPage';
-export { TeamPage } from './TeamPage';
 export { ComputerPage, type ComputerPageProps } from './ComputerPage';
 export { BrowserDialog, type BrowserDialogProps } from './BrowserView';
 export { agentsQuery, groupsQuery, computersQuery, type AgentRow } from './queries';
-// The model picker for one agent, and Add agent for pages outside the team pages (Settings' fleet).
+// The model picker for one agent, and Add agent for Settings' fleet.
 export { ModelPicker } from './ModelPicker';
-export { AddAgentButton } from './AddTeammate';
+export { AddAgentButton, AddTeammate } from './AddTeammate';
+// A team's Access, from the menu's ⋯ on the team (the root holds it open).
+export { TeamAccess } from './dialogs';
 export { teamSlug, whoHref } from './model';

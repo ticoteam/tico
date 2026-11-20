@@ -193,3 +193,15 @@ def test_deleting_a_group_moves_what_it_owns_and_what_outsiders_tagged_with_it(a
     with api.app.state.store.read() as c:
         owner, grp = c.execute("SELECT owner_id, group_id FROM automations WHERE id=?", (owned,)).fetchone()
     assert owner.startswith("person:") and grp is None
+
+
+def test_the_org_chart_carries_each_groups_lead_while_it_is_a_teammate_of_the_group(api):
+    gid = make_engineering(api)
+    other = send(api, "POST", "groups", {"name": "Sales"})["id"]
+    chart = {row["id"]: row for row in get(api, "org")["org_groups"]}
+    assert chart[gid]["lead"] == "bot:engineering-manager"
+    assert chart[other]["lead"] == ""
+    # A lead moved out of its group leads nothing there, on the chart as on the group.
+    send(api, "PATCH", f"groups/{other}", {"add": {"bots": ["engineering-manager"]}})
+    chart = {row["id"]: row for row in get(api, "org")["org_groups"]}
+    assert chart[gid]["lead"] == ""

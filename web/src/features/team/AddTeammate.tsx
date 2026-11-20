@@ -41,7 +41,7 @@ export function AddTeammate({
 }: {
   step: AddStep;
   team: string;
-  /** Off a team page the step is held by the caller instead of the address. */
+  /** Held by the caller instead of the address (Settings' fleet). */
   onStep?: (step: AddStep) => void;
   onClose?: () => void;
 }) {
@@ -57,7 +57,7 @@ export function AddTeammate({
   };
   const requesting = step === 'cloud' ? asking : null;
   const close =
-    onClose ?? (() => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined }) } as never));
+    onClose ?? (() => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined, team: undefined }) } as never));
   return (
     <Dialog
       open
@@ -107,7 +107,7 @@ export function AddTeammate({
   );
 }
 
-/** Add agent from outside the team pages (Settings' fleet): the same dialog, its step held here. */
+/** Add agent in Settings' fleet: the same dialog, its step held here. */
 export function AddAgentButton({ team = '' }: { team?: string }) {
   const [step, setStep] = useState<AddStep | null>(null);
   return (

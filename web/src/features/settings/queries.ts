@@ -495,7 +495,7 @@ export const computersQuery = queryOptions({
 
 const patchComputer = (rid: string, change: Partial<Computer>) => <C extends { id: string }>(v: C[] | undefined) =>
   v?.map((c) => (c.id === rid ? { ...c, ...change } : c));
-/** Settings and the team pages read the computers apart: a change shows in both at once. The team key is written out:
+/** Settings and the teammate pages read the computers apart: a change shows in both at once. The team key is written out:
     importing the team's queries here would load the action registry before this file is done. */
 const computerKeys = [computersQuery.queryKey, ['team', 'computers']];
 

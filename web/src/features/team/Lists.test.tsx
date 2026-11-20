@@ -365,17 +365,6 @@ describe('Last run @s639', () => {
 });
 
 describe('Phone heads', () => {
-  it('keeps the team’s faces and its More, which holds Add teammate, on a phone', async () => {
-    serve(() => undefined);
-    show(<TeamWho who="design" />, '/team/design');
-    await screen.findByRole('heading', { name: 'Design' });
-    const head = document.querySelector<HTMLElement>('.pk-head')!;
-    const face = await waitFor(() => within(head).getByRole('img', { name: 'Pat Doe' }));
-    expect(face.closest('[data-phone]')).toBeTruthy();
-    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'Add teammate' })).toBeTruthy();
-  });
-
   it('keeps an agent’s Settings on a phone', async () => {
     serve(() => undefined);
     show(<TeamWho who="ana" />, '/team/ana');

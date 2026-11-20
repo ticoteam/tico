@@ -2,11 +2,12 @@ import { createFileRoute } from '@tanstack/react-router';
 import { TeamWho } from '@/features/team/exports';
 import { loadWho, validateTeamSearch } from '@/features/team/routing';
 
-/* `/team/<who>`: an agent (slug), a person (id) or a team (its name, slugified). Tabs are `?tab=`, Add teammate `?add=`. */
+/* `/team/<who>`: an agent (slug) or a person (id); tabs are `?tab=`. A team's old address (its name, slugified) goes home
+   with the team shown in the menu (`?team=`), Add teammate (`?add=`) kept. */
 export const Route = createFileRoute('/team/$who')({
   validateSearch: validateTeamSearch,
-  loaderDeps: ({ search }) => ({ tab: search.tab }),
-  loader: ({ params: { who }, deps: { tab }, context: { queryClient } }) => loadWho(queryClient, who, tab),
+  loaderDeps: ({ search }) => ({ tab: search.tab, add: search.add }),
+  loader: ({ params: { who }, deps: { tab, add }, context: { queryClient } }) => loadWho(queryClient, who, tab, add),
   component: TeamWhoRoute,
 });
 

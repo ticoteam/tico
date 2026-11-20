@@ -2,14 +2,30 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MenuItem } from '@/kit/Menu';
-import { Menu, type MenuProps } from './Menu';
+import { Menu, type MenuNode, type MenuProps } from './Menu';
 import { PhoneCards } from './phone';
 
 const mate = (id: string, name: string, kind: 'person' | 'agent' = 'agent') => ({ id, name, short: name.slice(0, 2), hue: 200, kind, to: `/team/${id}` });
+const row = (id: string, name: string, kids: MenuNode[] = [], more: Partial<Extract<MenuNode, { kind: 'mate' }>> = {}): MenuNode => ({
+  kind: 'mate',
+  key: `bot:${id}`,
+  mate: mate(id, name),
+  kids,
+  size: kids.reduce((n, k) => n + 1 + k.size, 0),
+  ...more,
+});
+const ENG = { id: 'engineering', name: 'Engineering' };
+/* You: the Engineering Manager reports to you, with QA Owner (and E2E Runner under it) and Release Owner under it; Ops
+   reports to you with no team; Platform has no head, so it is a row of its own holding Iris. */
+const ORG: MenuNode[] = [
+  row('em', 'Engineering Manager', [row('qa', 'QA Owner', [row('e2e', 'E2E Runner')]), row('rel', 'Release Owner')], { team: ENG }),
+  row('ops', 'Ops'),
+  { kind: 'team', key: 'team:platform', team: { id: 'platform', name: 'Platform' }, kids: [row('iris', 'Iris')], size: 1 },
+];
 const PROPS: MenuProps = {
   company: { mark: 'F', name: 'Fernhill' },
   me: mate('me', 'Maya', 'person'),
-  teams: [{ id: 'engineering', name: 'Engineering', to: '/tasks/engineering', members: [mate('qa', 'QA Owner'), mate('rel', 'Release Owner')] }],
+  org: ORG,
   counts: { flow: 8 },
 };
 
@@ -31,7 +47,7 @@ describe('Menu', () => {
     expect(within(nav).getByRole('link', { name: 'Settings' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
-    expect(within(nav).getByRole('link', { name: /Engineering/ })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: 'Engineering Manager' })).toBeTruthy();
   });
 
   it('leaves out pages the person cannot open', async () => {
@@ -43,7 +59,9 @@ describe('Menu', () => {
 
   it('folded, keeps every row as an icon with its name, and the company, search and settings reachable', async () => {
     const nav = await show({ folded: true }, '/team/qa');
-    for (const name of ['Tasks', 'Calendar', 'Company', 'Library', 'QA Owner', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    // the faces are the rows showing: your direct reports, each folded
+    for (const name of ['Tasks', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
     expect(within(nav).getByRole('button', { name: 'Search' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count
@@ -124,7 +142,7 @@ describe('Menu', () => {
       const nav = () => within(screen.getByRole('navigation', { name: 'Main' }));
       // what the person sees: every row, which are open, which is marked, and each team's fold
       const shape = () =>
-        [...document.querySelectorAll('.nav-items > *, .tree-team, .org > *')].map(
+        [...document.querySelectorAll('.nav-items > *, .tree-line > :is(a, button)')].map(
           (e) => `${e.className}|${e.getAttribute('aria-expanded')}|${e.getAttribute('aria-current')}|${e.textContent}`,
         );
       await screen.findByRole('navigation', { name: 'Main' });
@@ -159,7 +177,7 @@ describe('Menu', () => {
       expect(m.nav().queryByRole('link', { name: 'Docs' })).toBeNull();
       expect(m.nav().getByRole('link', { name: 'Finance' })).toBeTruthy();
       await m.go('/team/qa');
-      expect(m.nav().getByRole('link', { name: /Engineering/ }).getAttribute('aria-expanded')).toBe('false');
+      expect(m.nav().getByRole('button', { name: '3 under Engineering Manager', expanded: false })).toBeTruthy();
       expect(m.nav().queryByRole('link', { name: 'QA Owner' })).toBeNull();
       fireEvent.click(m.nav().getByRole('link', { name: /^Library/ }));
       expect(await m.nav().findByRole('link', { name: 'Docs' })).toBeTruthy();
@@ -176,26 +194,86 @@ describe('Menu', () => {
     });
   });
 
-  it('the Team tab: each team; a shut team shows faces, opening it lists its teammates @s1200', async () => {
-    const nav = await show({}, '/calendar');
-    expect(within(nav).getByRole('tab', { name: 'Team' }).getAttribute('aria-selected')).toBe('true');
-    const team = within(nav).getByRole('link', { name: /Engineering/ });
-    expect(team.getAttribute('aria-expanded')).toBe('false');
-    expect(team.querySelectorAll('.faces > *')).toHaveLength(2);
-    expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
-    fireEvent.click(team);
-    const open = await within(nav).findByRole('link', { name: /Engineering/, expanded: true });
-    expect(open.getAttribute('href')).toBe('/tasks/engineering');
-    expect(within(nav).getByRole('link', { name: 'QA Owner' }).getAttribute('href')).toBe('/team/qa');
-    expect(within(nav).getByRole('link', { name: 'Release Owner' })).toBeTruthy();
+  it('the Team tab: your direct reports, each folded with how many are under it; a name opens your DM @s1200', async () => {
+    localStorage.clear();
+    const nav = within(await show({}, '/calendar'));
+    expect(nav.getByRole('tab', { name: 'Team' }).getAttribute('aria-selected')).toBe('true');
+    const em = nav.getByRole('link', { name: 'Engineering Manager' });
+    expect(em.getAttribute('href')).toBe('/team/em');
+    // folded: a person mark and the count of everyone underneath, on the chevron that opens it
+    const fold = nav.getByRole('button', { name: '3 under Engineering Manager', expanded: false });
+    expect(fold.textContent).toBe('3');
+    expect(fold.querySelector('.tree-n svg')).toBeTruthy();
+    expect(nav.queryByRole('link', { name: 'QA Owner' })).toBeNull();
+    // a row with nobody under it has no chevron; a team with no head is a row of its own
+    expect(nav.getByRole('link', { name: 'Ops' }).parentElement?.querySelector('.tree-fold')).toBeNull();
+    expect(nav.getByRole('button', { name: /Platform/, expanded: false })).toBeTruthy();
+    // the chevron opens the reports, each folded in turn, and folds them again
+    fireEvent.click(fold);
+    expect(nav.getByRole('link', { name: 'QA Owner' }).getAttribute('href')).toBe('/team/qa');
+    expect(nav.getByRole('link', { name: 'Release Owner' })).toBeTruthy();
+    expect(nav.queryByRole('link', { name: 'E2E Runner' })).toBeNull();
+    fireEvent.click(nav.getByRole('button', { name: '1 under QA Owner' }));
+    expect(nav.getByRole('link', { name: 'E2E Runner' })).toBeTruthy();
+    fireEvent.click(nav.getByRole('button', { name: "Fold Engineering Manager's reports", expanded: true }));
+    expect(nav.queryByRole('link', { name: 'QA Owner' })).toBeNull();
+    localStorage.clear();
   });
 
-  it('the chevron folds an open team wherever you are, and its name opens the team', async () => {
-    const nav = within(await show({}, '/team/qa'));
-    const team = nav.getByRole('link', { name: /Engineering/, expanded: true });
-    fireEvent.click(team.querySelector('.tree-chev')!);
-    expect(nav.getByRole('link', { name: /Engineering/, expanded: false })).toBeTruthy();
+  it('a team row opens and folds wherever it is pressed, and never leaves the page', async () => {
+    localStorage.clear();
+    const root = createRootRoute({ component: () => <Menu {...PROPS} /> });
+    const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/calendar'] }) });
+    render(<RouterProvider router={router} />);
+    const nav = within(await screen.findByRole('navigation', { name: 'Main' }));
+    const platform = nav.getByRole('button', { name: /Platform/ });
+    fireEvent.click(platform.querySelector('.tree-name')!);
+    expect(platform.getAttribute('aria-expanded')).toBe('true');
+    expect(nav.getByRole('link', { name: 'Iris' })).toBeTruthy();
+    fireEvent.click(platform);
+    expect(platform.getAttribute('aria-expanded')).toBe('false');
+    expect(router.state.location.pathname).toBe('/calendar');
+    localStorage.clear();
+  });
+
+  it("keeps the person's folds when the menu is drawn again", async () => {
+    localStorage.clear();
+    let nav = within(await show({}, '/calendar'));
+    fireEvent.click(nav.getByRole('button', { name: '3 under Engineering Manager' }));
+    document.body.innerHTML = '';
+    nav = within(await show({}, '/tasks'));
+    expect(nav.getByRole('link', { name: 'QA Owner' })).toBeTruthy();
+    localStorage.clear();
+  });
+
+  it("a row that heads a team carries the team's rows on its ⋯ and its right click, named; a team row its own", async () => {
+    localStorage.clear();
+    const teamMenu = vi.fn((t: { name: string }) => <MenuItem label={`Add to ${t.name}`} onSelect={() => undefined} />);
+    const nav = within(await show({ teamMenu }, '/calendar'));
+    // Ops heads no team: nothing to offer
+    expect(nav.queryByRole('button', { name: 'More for Ops' })).toBeNull();
+    fireEvent.click(nav.getByRole('button', { name: 'More for Engineering' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('Engineering')).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Add to Engineering' })).toBeTruthy();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    fireEvent.contextMenu(nav.getByRole('button', { name: /^Platform/ }));
+    expect(await screen.findByRole('menuitem', { name: 'Add to Platform' })).toBeTruthy();
+    localStorage.clear();
+  });
+
+  it('a team the address names (an old team link) opens down to the rows that head it, on the Team tab', async () => {
+    localStorage.clear();
+    localStorage.setItem('tico-next:menu.talk.v1', JSON.stringify('threads'));
+    const deep: MenuNode[] = [row('gm', 'Growth Manager', [row('sm', 'Sales Manager', [row('rep', 'Sales Rep')], { team: { id: 'sales', name: 'Sales' } })]), ...ORG];
+    const nav = within(await show({ org: deep, reveal: 'sales', threads: <p>threads</p> }, '/calendar'));
+    await waitFor(() => expect(nav.getByRole('tab', { name: 'Team' }).getAttribute('aria-selected')).toBe('true'));
+    expect(await nav.findByRole('link', { name: 'Sales Rep' })).toBeTruthy();
+    expect(nav.getByRole('link', { name: 'Sales Manager' }).closest('.tree-line')?.className).toContain('is-hl');
+    // the rest stays as the person left it
     expect(nav.queryByRole('link', { name: 'QA Owner' })).toBeNull();
+    localStorage.clear();
   });
 
   it('Team | Threads: no counts; the last tab stays; the Dot only on a row, never a tab or a folded team; Message and Call', async () => {
@@ -203,16 +281,16 @@ describe('Menu', () => {
     const message = vi.fn();
     const call = vi.fn();
     const automations = vi.fn();
-    const asking = { ...PROPS.teams[0]!, members: [{ ...PROPS.teams[0]!.members[0]!, needs: true }, PROPS.teams[0]!.members[1]!] };
+    const asking: MenuNode[] = [row('em', 'Engineering Manager', [row('qa', 'QA Owner', [], { mate: { ...mate('qa', 'QA Owner'), needs: true } })], { team: ENG })];
     let nav = within(
-      await show({ teams: [asking], threads: <a href="/threads/t1">Refund policy</a>, onMessage: message, onCall: call, onAutomations: automations }),
+      await show({ org: asking, threads: <a href="/threads/t1">Refund policy</a>, onMessage: message, onCall: call, onAutomations: automations }),
     );
-    // shut, the team shows no Dot; neither tab does; Team has no ⋯
-    expect(nav.getByRole('link', { name: /Engineering/ }).querySelector('.dot')).toBeNull();
+    // folded, the row above shows no Dot; neither tab does; the tabs have no ⋯
+    expect(nav.getByRole('link', { name: 'Engineering Manager' }).closest('.tree-line')?.querySelector('.dot')).toBeNull();
     expect(document.querySelector('.cat .dot')).toBeNull();
     expect(nav.queryByRole('button', { name: 'More' })).toBeNull();
     // open, the teammate who asks carries it on their row
-    fireEvent.click(nav.getByRole('link', { name: /Engineering/ }).querySelector('.tree-chev')!);
+    fireEvent.click(nav.getByRole('button', { name: '1 under Engineering Manager' }));
     expect(nav.getByRole('link', { name: /QA Owner/ }).querySelector('.dot')).toBeTruthy();
     fireEvent.click(nav.getByRole('tab', { name: /Threads/ }));
     expect(nav.getByRole('link', { name: 'Refund policy' })).toBeTruthy();
