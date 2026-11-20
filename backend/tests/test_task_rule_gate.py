@@ -245,12 +245,7 @@ def asks_on(api, task):
     )
 
 
-@pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
-def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, monkeypatch, cause):
-    api, judge = ruled
-    color_rule(api, if_broken="warn")
-    task = task_for_ops(api)
-    before = asks_on(api, task)
+def cannot_judge(monkeypatch, cause):
     if cause == "day_cap":
         no_calls_left(monkeypatch)
     elif cause == "busy":
@@ -259,11 +254,46 @@ def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, m
         from clients import judge as J
 
         monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
+
+
+@pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
+def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, monkeypatch, cause):
+    api, judge = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    before = asks_on(api, task)
+    cannot_judge(monkeypatch, cause)
     got = bots_ask(api, task, "OK the launch day plan for Monday or Tuesday or later this month?", 503)
     assert problem(got) == ("task_rule_unchecked", True), got
     assert asks_on(api, task) == before and row(api, task["id"])["version"] == task["version"]
     assert sql(api, "SELECT state FROM bots WHERE slug='ops'")[0]["state"] == "active"
     assert judge.calls == []
+
+
+@pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
+def test_a_bots_ask_only_warn_rules_meet_is_asked_when_the_check_cannot_judge(ruled, monkeypatch, cause):
+    """A Warn rule never stops a question reaching its person, checked or not."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    before = asks_on(api, task)
+    cannot_judge(monkeypatch, cause)
+    got = bots_ask(api, task, "OK the launch day plan for Monday or Tuesday or later this month?")
+    assert got["requirement_id"] and len(asks_on(api, task)) == len(before) + 1
+    if cause != "busy":
+        assert "could not be checked" in got["rule_warning"]["text"] or "too long" in got["rule_warning"]["text"]
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
+
+
+def test_a_bots_ask_a_warn_rule_finds_broken_is_asked_with_the_warning(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    got = bots_ask(api, task)
+    assert got["requirement_id"] and got["rule_warning"]["rules"][0]["text"] == COLOR
+    assert "delivered with a warning" in got["rule_warning"]["text"]
+    assert row(api, task["id"])["note"].startswith("Warning: ")
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
 def test_a_bot_spending_the_days_calls_cannot_then_ask_unchecked(ruled, monkeypatch):

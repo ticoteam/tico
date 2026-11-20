@@ -230,7 +230,7 @@ def test_every_path_that_asks_a_person_checks_the_shape_whatever_the_bot_was_tol
 
 def test_asks_to_a_person_is_on_once_and_a_team_that_turns_it_off_keeps_it_off(api):
     [found] = builtin(api)
-    assert found["status"] == "active" and found["kind"] == "internal" and found["if_broken"] == "block"
+    assert found["status"] == "active" and found["kind"] == "internal" and found["if_broken"] == "warn"
     assert found["where_terms"] == OR.ASKS_ONLY
     with api.app.state.store.transaction() as c:
         assert OR.ensure_builtin(c) is None, "added once"
@@ -245,7 +245,8 @@ def test_asks_to_a_person_is_on_once_and_a_team_that_turns_it_off_keeps_it_off(a
 
 def test_the_stored_built_in_rule_stops_requiring_choices_unless_the_team_edited_it(api):
     migration = importlib.import_module("backend.migrations.20261116234252_asks_to_a_person_choices_optional")
-    assert migration.NOW == OR.ASKS_TO_A_PERSON, "a team set up now gets the words the migration writes"
+    warns = importlib.import_module("backend.migrations.20261120223442_asks_to_a_person_warns")
+    assert (warns.FIRST, warns.EARLIER) == (migration.EARLIER, migration.NOW)
     [found] = builtin(api)
     store = api.app.state.store
     with store.transaction() as c:
@@ -258,9 +259,33 @@ def test_the_stored_built_in_rule_stops_requiring_choices_unless_the_team_edited
         migration.up(c)
         migration.up(c)  # again: nothing more changes
     [now] = sql(api, "SELECT text, version FROM org_rules WHERE id=?", (found["id"],))
-    assert now == {"text": OR.ASKS_TO_A_PERSON, "version": found["version"] + 1}
+    assert now == {"text": migration.NOW, "version": found["version"] + 1}
     [kept] = sql(api, "SELECT text, version FROM org_rules WHERE id=?", (edited["id"],))
     assert kept == {"text": edited["text"], "version": found["version"]}
+
+
+@pytest.mark.parametrize("held_as", ["block", "escalate"])
+@pytest.mark.parametrize("words", ["FIRST", "EARLIER"])
+def test_the_stored_built_in_rule_only_warns_unless_the_team_edited_its_words(api, held_as, words):
+    migration = importlib.import_module("backend.migrations.20261120223442_asks_to_a_person_warns")
+    assert migration.NOW == OR.ASKS_TO_A_PERSON, "a team set up now gets the words the migration writes"
+    [found] = builtin(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE org_rules SET text=?, if_broken=? WHERE id=?", (getattr(migration, words), held_as, found["id"])
+        )
+        edited = dict(found, id=H.new_id(), text=migration.EARLIER + " Name the customer.", if_broken=held_as)
+        c.execute(
+            f"INSERT INTO org_rules ({', '.join(edited)}) VALUES ({', '.join('?' * len(edited))})",
+            tuple(edited.values()),
+        )
+        migration.up(c)
+        migration.up(c)  # again: nothing more changes
+    [now] = sql(api, "SELECT text, if_broken, version FROM org_rules WHERE id=?", (found["id"],))
+    assert now == {"text": OR.ASKS_TO_A_PERSON, "if_broken": "warn", "version": found["version"] + 1}
+    [kept] = sql(api, "SELECT text, if_broken, version FROM org_rules WHERE id=?", (edited["id"],))
+    assert kept == {"text": edited["text"], "if_broken": held_as, "version": found["version"]}
 
 
 def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_lines_in_one_call(ruled):
@@ -277,9 +302,12 @@ def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_lines_in_one_c
 
     task = task_for_ops(api, "Write the second launch note")
     r = question(api, task, "Which tone should it take? It goes out **Friday** under our name.")
-    assert r.status_code == 200 and r.json()["held"]["state"] == "held", r.text  # AC-8: held by the rule, not asked
-    assert "question" not in r.json()
-    assert sql(api, "SELECT count(*) AS n FROM question_marks WHERE task_id=?", (task["id"],))[0]["n"] == 0
+    # A style rule never stops a question: it is asked, and the bot is told the rule it may break.
+    assert r.status_code == 200 and "held" not in r.json(), r.text
+    assert r.json()["rule_warning"]["rules"][0]["text"] == OR.ASKS_TO_A_PERSON
+    [mark] = sql(api, "SELECT person_id FROM question_marks WHERE task_id=?", (task["id"],))
+    assert mark["person_id"] == "human:ana"
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
 def test_the_rule_is_not_read_for_any_other_write(ruled):

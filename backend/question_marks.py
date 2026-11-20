@@ -579,8 +579,13 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
     if not conv:
         H.refuse(conn, bot, "identity", "That message has no chat")
     task_id = _message_task(conn, message, conv)
-    target = _check(conn, bot, task_id, person, str(message.get("body") or ""), message, checked=checked)
-    line = first_line(message.get("body"))
+    # A Warn rule's line the rule check put before the bot's words (org_rule_check.apply) is not the question: the ❓
+    # is checked and listed by the bot's own words, so a rule that only warns never stops the question.
+    from . import org_rule_check as _org_rule_check
+
+    body = str(cast(Any, _org_rule_check).unwarned(str(message.get("body") or "")))
+    target = _check(conn, bot, task_id, person, body, message, checked=checked)
+    line = first_line(body)
     room = room_of(conv)
     at = H.now()
     before = conn.execute(
