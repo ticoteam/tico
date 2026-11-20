@@ -28,6 +28,12 @@ SELF_SETUP = "self_setup_given_at"
 # The task BotOps registered a bot from when it is not the bot's own setup task (settings_admin.register): an ordinary
 # task such as "Add Builder 3". The bot page names it, and any ask on it, while the bot is planned (org_routes.cant_run).
 MADE_ON = "made_on_task_id"
+# The tasks a planned bot is made on (`making_task`): its setup task, then the task BotOps registered it from.
+MAKING_SQL = (
+    "SELECT json_extract(extra,'$.setup_task_id'), json_extract(extra,'$." + MADE_ON + "') FROM bot_settings "
+    "WHERE bot_id=?"
+)
+OPEN_TASK_SQL = "SELECT 1 FROM tasks WHERE id=? AND status='open'"
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -50,7 +56,10 @@ def bot_of(c: sqlite3.Connection, task_id: str) -> tuple[str | None, dict[str, A
 
 def pending(c: sqlite3.Connection, bot: str) -> dict[str, Any] | None:
     """The go-live waiting for this bot's repository (backend/go_live.py), or None."""
-    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (pending_go_lives.PREFIX + bot,)).fetchone()
+    from . import read_cache
+
+    RC: Any = read_cache
+    found: Any = RC.metadata(c, pending_go_lives.PREFIX + bot)  # kept for the snapshot (task_wakes.prime_bots)
     return _object(found["value"]) if found else None
 
 
@@ -128,13 +137,11 @@ def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
 def making_task(c: sqlite3.Connection, bot: str) -> str | None:
     """The open task a planned bot is being made on: its setup task, or the task BotOps registered it from (`MADE_ON`,
     an ordinary task such as "Add Builder 3"), or None."""
-    found = c.execute(
-        "SELECT json_extract(extra,'$.setup_task_id'), json_extract(extra,'$." + MADE_ON + "') FROM bot_settings "
-        "WHERE bot_id=?",
-        (bot,),
-    ).fetchone()
-    for task in found or ():
-        if task and c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (task,)).fetchone():
+    from . import read_cache
+
+    # Both kept for the snapshot: a page that asks it of many bots primes them together (task_wakes.prime_bots).
+    for task in read_cache.one(c, MAKING_SQL, (bot,)) or ():
+        if task and read_cache.one(c, OPEN_TASK_SQL, (task,)):
             return str(task)
     return None
 

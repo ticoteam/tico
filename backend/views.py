@@ -1993,7 +1993,15 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
-    briefs = {} if count_only else _briefs(c, readable, visible)
+    # The brief of each task an item shows: its own, and a Paused cause's first it may read. A cause can hold up most
+    # of the company's tasks (a dev copy's bots have no computer): the rest are named by id only, never briefed.
+    shown = {i["task_id"] for i in [*raw, *mentions] if i.get("task_id") in readable}
+    shown |= {
+        next(t for t in i["tasks"] if t in readable)
+        for i in raw
+        if i["kind"] == "paused" and readable & set(i["tasks"])
+    }
+    briefs = {} if count_only else _briefs(c, shown, visible)
     items = []
     questions = [it for it in raw if it["kind"] == "question"]
     raw = [it for it in raw if it["kind"] != "question"]

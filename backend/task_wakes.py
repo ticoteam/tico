@@ -634,6 +634,40 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     from . import cloud_machines
 
     cast("Any", cloud_machines).prime_rows(conn, [b for b in bots if placed.get(b) is None])
+    _prime_planned(conn, [b for b in bots if b in states and states[b][1] == "planned"])
+
+
+def _prime_planned(conn: "sqlite3.Connection", bots: list[str]) -> None:
+    """What `cannot_run` asks of each planned bot (setup_live.being_set_up): its pending go-live, the tasks it is made
+    on and whether each is open, in three statements for all of them."""
+    from . import go_live, read_cache, setup_live
+
+    if not bots:
+        return
+    RC: Any = read_cache
+    SL: Any = setup_live
+    RC.prime_metadata(conn, [cast("Any", go_live).PREFIX + b for b in bots])
+    listed = (json.dumps(bots),)
+    making = {
+        str(r[0]): (r[1], r[2])
+        for r in conn.execute(
+            SL.MAKING_SQL.replace("SELECT ", "SELECT bot_id, ", 1).replace(
+                "bot_id=?", "bot_id IN (SELECT value FROM json_each(?))"
+            ),
+            listed,
+        )
+    }
+    RC.prime(conn, SL.MAKING_SQL, {(b,): making.get(b) for b in bots})
+    tasks = sorted({str(t) for found in making.values() for t in found if t})
+    if tasks:
+        open_ = {
+            str(r[0])
+            for r in conn.execute(
+                "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status='open'",
+                (json.dumps(tasks),),
+            )
+        }
+        RC.prime(conn, SL.OPEN_TASK_SQL, {(t,): (1,) if t in open_ else None for t in tasks})
 
 
 # A bot that can run may still be held on one task: its turn asked for a worktree it has no room for (D12). The wait

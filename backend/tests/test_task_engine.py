@@ -405,6 +405,42 @@ def test_a_review_gate_reads_the_commit_from_the_filers_request(c, general, monk
     assert R.standings(c, E.task(c, parent["id"]))[1].state == R.MET
 
 
+def test_a_review_gate_primed_with_its_list_stands_as_its_own_reads_give_it(c, general, monkeypatch):
+    # A list's prime (task_requirements.prime) reads every second review's check model, its filer's request and its
+    # room's messages together. The gate it gives is the one the reviews' own reads give: a message about another
+    # task in the same room still names nothing, a builder's task filed beside them is still no review, and none of
+    # those per-review reads runs again.
+    reviewer = X.bot(c, "reviewer-2")
+    parent = _review_stage(c)
+    head = "1" * 40
+    monkeypatch.setattr(F, "heads", lambda conn, task_id: {"acme/app#7": head})
+    said = X.new_task(c, ANA, "Second review", assignee=reviewer, parent=parent["id"])
+    check_models.record(c, reviewer, said["id"], REVIEW_CHECK)
+    _says(c, said, ANA, head, about=parent["id"])
+    asked = X.new_task(c, ANA, "Second review again", assignee=reviewer, parent=parent["id"])
+    check_models.record(c, reviewer, asked["id"], REVIEW_CHECK, parent["id"], f"Review acme/app#7 at {head[:7]}")
+    X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    for step in ("open", "said", "done"):
+        if step == "said":
+            _says(c, said, ANA, head)
+        if step == "done":
+            X.say_done(c, asked)
+            E.advance(c, asked["id"])
+        c.read_cache.clear()
+        alone = R.standings(c, E.task(c, parent["id"]))[1]
+        seen = []
+        c.set_trace_callback(seen.append)  # a trace callback empties the snapshot's cache too
+        try:
+            task = E.task(c, parent["id"])
+            R.prime(c, [task])
+            primed = R.standings(c, task)[1]
+        finally:
+            c.set_trace_callback(None)
+        assert (primed.state, primed.on, primed.line) == (alone.state, alone.on, alone.line), step
+        reads = [q for q in seen if "history_events" in q or "task_check_models" in q or "FROM messages m" in q]
+        assert reads and all("json_each" in q for q in reads), reads  # the list's reads, never one a review
+
+
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
     stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
     X.pipeline(c, "product", "Product", stages)

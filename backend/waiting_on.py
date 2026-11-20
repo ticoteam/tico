@@ -883,13 +883,9 @@ _OPEN_ROWS = (
     "v.id AS visit_id, v.level, v.person_id"
 )
 _OPEN_JOIN = "tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL"
-# Of the requirements of every stage and of every open visit, what says whether a task may fall to its ladder.
+# Of the requirements of every stage, what says whether a task may fall to its ladder.
 _STAGE_ASKS = (
     "SELECT stage_id, kind, person_id, condition FROM requirements WHERE stage_id IS NOT NULL AND withdrawn_at IS NULL"
-)
-_VISIT_ASKS = (
-    "SELECT r.visit_id, r.kind, r.person_id, r.condition FROM visits v JOIN requirements r ON r.visit_id = v.id "
-    "WHERE v.left_at IS NULL AND r.withdrawn_at IS NULL"
 )
 # GitHub conditions whose standing names the task's owner, GitHub or nobody's turn, never a person by the ladder.
 _NAMED_CONDITIONS = ("pr_open", "checks_pass", "pr_merged")
@@ -1166,10 +1162,41 @@ def _ladder_tasks(
 ) -> set[str]:
     """The open tasks that may fall to `person` by the ladder (`_falls`), reading a few columns of each open task of
     the pipelines whose ladder reaches them (every pipeline, for the company's person), and of private tasks they ask
-    for or read. Anyone but the company's person reads only those rows and the requirements of their visits: a manager
-    of one small pipeline does not read every open task and visit to keep a few."""
+    for or read. Only the rows that can fall to them are read, with the requirements of their visits: a manager of one
+    small pipeline does not read every open task and visit to keep a few, and the company's person reads only the
+    tasks `_falls` could keep, not every open task a bot has with nothing asked of a person."""
     sql, args = _OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN), ()
-    if not company:
+    if company:
+        # What `_falls` keeps, and a little more: the ladder brought it to a person or a manager; nobody owns it, or a
+        # person who left; its stage has a requirement that waits on nobody it names (`_ladder_ask`), or any ask while
+        # the task is private; or its open visit has an ask or an item of its own. Every other task stays with its owner.
+        always: set[str] = set()
+        private: set[str] = set()
+        for found in stage_asks:
+            requirement = {"kind": found[1], "person_id": found[2], "condition": found[3]}
+            if _ladder_ask(conn, requirement):
+                always.add(str(found[0]))
+            elif _ladder_ask(conn, requirement, True):
+                private.add(str(found[0]))
+        owners = [
+            str(found[0])
+            for found in conn.execute(
+                "SELECT DISTINCT owner_id FROM tasks WHERE pipeline_id IS NOT NULL AND status='open' "
+                "AND owner_id IS NOT NULL"
+            ).fetchall()
+            if is_human(found[0]) and not R.active_person(conn, found[0])
+        ]
+        sql = sql.replace(
+            "WHERE ",
+            "WHERE (v.level IN ('person', 'manager') OR coalesce(t.owner_id, '') = '' "
+            "OR t.owner_id IN (SELECT value FROM json_each(?)) OR t.stage_id IN (SELECT value FROM json_each(?)) "
+            "OR (t.private IS NOT 0 AND t.stage_id IN (SELECT value FROM json_each(?))) "
+            "OR EXISTS (SELECT 1 FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NULL "
+            "AND r.kind IN ('ok', 'page', 'item'))) AND ",
+            1,
+        )
+        args = (json.dumps(owners), json.dumps(sorted(always)), json.dumps(sorted(private - always)))
+    else:
         # Their pipelines' tasks, and the private tasks they ask for or whose reader list may name them (`_reads`:
         # a group is read by its members now, so any list may).
         mine = "(t.private IS NOT 0 AND (t.requester_id=? OR t.readers IS NOT NULL))"
@@ -1186,16 +1213,13 @@ def _ladder_tasks(
     if not rows:
         return set()
     asks = _asks_by(stage_asks)
-    if company:
-        visit_asks = _asks_by(conn.execute(_VISIT_ASKS).fetchall())
-    else:
-        visit_asks = _asks_by(
-            conn.execute(
-                "SELECT visit_id, kind, person_id, condition FROM requirements WHERE withdrawn_at IS NULL "
-                "AND visit_id IN (SELECT value FROM json_each(?))",
-                _listed(str(row["visit_id"]) for row in rows if row["visit_id"]),
-            ).fetchall()
-        )
+    visit_asks = _asks_by(
+        conn.execute(
+            "SELECT visit_id, kind, person_id, condition FROM requirements WHERE withdrawn_at IS NULL "
+            "AND visit_id IN (SELECT value FROM json_each(?))",
+            _listed(str(row["visit_id"]) for row in rows if row["visit_id"]),
+        ).fetchall()
+    )
     return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
