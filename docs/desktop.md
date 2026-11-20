@@ -6,10 +6,10 @@ Download **Tico** from the [latest GitHub release](https://github.com/ticoteam/t
 A company with its own app offers it in its Tico menu ([below](#your-companys-app)).
 The same app connects to any Tico server.
 
-On macOS, open the universal `.dmg` and drag Tico to Applications. On Windows, run the
-`-setup.exe` installer. On Linux, make the `.AppImage` executable and open it, or install the
-`.deb` package. A Mac build without Apple signing and notarization may need **Open Anyway**
-in System Settings > Privacy & Security on its first launch.
+On macOS, open `Tico-<version>-arm64.dmg` and drag Tico to Applications. The Mac build is
+Apple-chip only. On Windows, run the `-setup.exe` installer. On Linux, make the `.AppImage`
+executable and open it, or install the `.deb` package. A Mac build without Apple signing and
+notarization may need **Open Anyway** in System Settings > Privacy & Security on its first launch.
 
 In the Mac app, the first launch shows **Sign in to Tico**. Click it, and a window opens at
 [app.tico.dev](https://app.tico.dev/), the account page. Sign in there. The list shows each Tico

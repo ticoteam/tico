@@ -1,9 +1,11 @@
 # Packaging (electron-builder). The Release workflow builds it on every tag that changed desktop/ (.github/workflows/
 # desktop.yml) and adds the files to the GitHub release; electron-builder itself never publishes (`--publish never`).
-# Files: Tico-<version>-universal.dmg and .zip (one Mac download for both chips; the updater installs from the zip),
+# Files: Tico-<version>-arm64.dmg and .zip (Apple chip only, no Intel build; the updater installs from the zip),
 # Tico-<version>-setup.exe (one NSIS installer for x64 and arm64), Tico-<version>-x86_64.AppImage and
 # Tico-<version>-amd64.deb, each with a .blockmap where the updater uses one, and the feeds latest-mac.yml, latest.yml
 # and latest-linux.yml. The Tauri app (app/) names its files Tico_<version>_..., so the two never collide.
+# Earlier Mac builds were universal; on an Apple-chip Mac they update to the arm64 zip (electron-updater's MacUpdater
+# picks the files with arm64 in their name there). On an Intel Mac the updater finds no file it can use and stops.
 # Updates: `publish` only writes app-update.yml into the app's resources, pointing at the latest GitHub release; a
 # prerelease is never GitHub's latest, so it never reaches installed apps. detectUpdateChannel is off so a prerelease
 # version still writes and reads latest*.yml (otherwise v1.2.0-rc.1 would look for rc-mac.yml forever).
@@ -35,9 +37,9 @@ electronFuses:
 mac:
   target:
     - target: dmg
-      arch: [universal]
+      arch: [arm64]
     - target: zip
-      arch: [universal]
+      arch: [arm64]
   category: public.app-category.productivity
   minimumSystemVersion: "14.0"
   icon: ../app/icons/icon.icns

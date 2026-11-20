@@ -89,7 +89,7 @@ jobs:
       - name: Check the Mac signature and notarization
         if: runner.os == 'macOS' && env.MAC_SIGNED == 'true'
         run: |
-          app=release/mac-universal/Tico.app
+          app=release/mac-arm64/Tico.app
           codesign --verify --deep --strict "$app" >/dev/null 2>&1 || { echo '::error::Tico.app does not verify (codesign --verify --deep --strict).'; exit 1; }
           echo "codesign: Tico.app verifies"
           if [ "${MAC_NOTARIZED:-}" = true ]; then

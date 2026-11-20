@@ -142,7 +142,7 @@ def test_github_release_offers_the_manifests_installers_not_the_electron_apps():
     # The same release carries the Electron app's Tico-<version>-... files, with the same suffixes, listed after.
     base, release, value = github_fixture()
     electron = [
-        "Tico-0.3.7-universal.dmg",
+        "Tico-0.3.7-arm64.dmg",
         "Tico-0.3.7-setup.exe",
         "Tico-0.3.7-x86_64.AppImage",
         "Tico-0.3.7-amd64.deb",

@@ -821,8 +821,8 @@ that file only, never the Electron app's file with the same suffix.
 `electron-changes` job builds it with `.github/workflows/desktop.yml` when `desktop/` (tests and Markdown aside) or
 that workflow changed since the previous release, or the previous release has no `latest-mac.yml`; otherwise
 `electron-assets` carries the previous release's Electron files forward unchanged. Run the workflow from the tag with
-`desktop` checked to force a rebuild of both apps. The files are `Tico-<version>-universal.dmg` and `.zip` (one Mac
-download for both chips), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
+`desktop` checked to force a rebuild of both apps. The files are `Tico-<version>-arm64.dmg` and `.zip` (the Mac build
+is Apple-chip only; there is no Intel Mac build), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
 `Tico-<version>-x86_64.AppImage` and `Tico-<version>-amd64.deb`, their `.blockmap` files, and the update feeds
 `latest-mac.yml`, `latest.yml` and `latest-linux.yml`, uploaded last. Installed apps read the feeds from
 `https://github.com/ticoteam/tico/releases/latest/download/`, so a prerelease, or a release not yet marked latest,
