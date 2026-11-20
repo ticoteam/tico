@@ -1,3 +1,4 @@
+# pyright: strict
 """Tico's library skills in each company's directory (Library › Skills, docs/skills.md).
 
 The library is `templates/catalog/_shared/.claude/skills/<name>`: the skills a role's card names in `shared_files`, which
@@ -26,16 +27,19 @@ it follow the directory's rules for a deleted skill: they no longer resolve.
 import hashlib
 import json
 import logging
+import sqlite3
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from clients import catalog as _catalog
 from clients import skills as _bundles
 
-from . import hubdb as H
+from . import hubdb as _hubdb
 
+# The clients and the hub's helpers are plain, untyped code.
+H: Any = _hubdb
 catalog: Any = _catalog
 bundles: Any = _bundles
 
@@ -52,11 +56,11 @@ _FILLED: dict[
 _LOCK = threading.Lock()
 
 
-def folder(directory=None) -> Path:
+def folder(directory: Any = None) -> Path:
     return Path(catalog.catalog_dir(directory)) / catalog.SHARED / ".claude" / "skills"
 
 
-def packed(directory=None) -> dict[str, list[dict[str, str]]]:
+def packed(directory: Any = None) -> dict[str, list[dict[str, str]]]:
     """{name: bundle} of every library skill the bundle rules accept, read once. A folder they refuse is logged and left
     out: the library is checked by its own tests, so this is a release that broke one."""
     root = folder(directory)
@@ -81,11 +85,11 @@ def forget() -> None:
         _FILLED.clear()
 
 
-def library(names: dict[str, str], directory=None) -> dict[str, list[dict[str, str]]]:
+def library(names: dict[str, str], directory: Any = None) -> dict[str, list[dict[str, str]]]:
     """{name: bundle} with the company's names in place of the placeholders, as a bot's copy has them."""
-    out = {}
+    out: dict[str, list[dict[str, str]]] = {}
     for name, files in packed(directory).items():
-        filled = []
+        filled: list[dict[str, str]] = []
         for item in files:
             text = item["content"]
             for key in NAMES:
@@ -95,7 +99,7 @@ def library(names: dict[str, str], directory=None) -> dict[str, list[dict[str, s
     return out
 
 
-def filled(names: dict[str, str], directory=None) -> tuple[dict[str, list[dict[str, str]]], str]:
+def filled(names: dict[str, str], directory: Any = None) -> tuple[dict[str, list[dict[str, str]]], str]:
     """(library, digest) for these names, made once per process: a start whose sha matches does no more than this."""
     key = (str(folder(directory)), tuple(names.get(k, "") for k in NAMES))
     if key not in _FILLED:
@@ -112,24 +116,24 @@ def digest(bundles_by_name: dict[str, list[dict[str, str]]]) -> str:
     return hashlib.sha256(json.dumps({"rules": RULES, "skills": shas}, sort_keys=True).encode()).hexdigest()
 
 
-def _stored(c) -> dict[str, Any]:
+def _stored(c: sqlite3.Connection) -> dict[str, Any]:
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
-        value = json.loads(row[0]) if row else {}
+        value: Any = json.loads(row[0]) if row else {}
     except ValueError:
         value = {}
-    return value if isinstance(value, dict) else {}
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def _id(prefix: str) -> str:
     return prefix + uuid.uuid4().hex[:24]
 
 
-def _version(c, skill_id: str, files: list[dict[str, str]], sha: str, now: str) -> str:
+def _version(c: sqlite3.Connection, skill_id: str, files: list[dict[str, str]], sha: str, now: str) -> str:
     """The version of this bundle: the one the skill already has (a bundle it had before), else its next one."""
     found = c.execute("SELECT id FROM skill_versions WHERE skill_id=? AND sha256=?", (skill_id, sha)).fetchone()
     if found:
-        return found[0]
+        return str(found[0])
     number = c.execute(
         "SELECT COALESCE(MAX(number), 0) + 1 FROM skill_versions WHERE skill_id=?", (skill_id,)
     ).fetchone()[0]
@@ -151,14 +155,14 @@ def _version(c, skill_id: str, files: list[dict[str, str]], sha: str, now: str) 
     return version_id
 
 
-def seed(c, names: dict[str, str], directory=None) -> dict[str, Any]:
+def seed(c: sqlite3.Connection, names: dict[str, str], directory: Any = None) -> dict[str, Any]:
     """Bring the directory's Tico skills in line with the library. Returns what it did: {unchanged} when the stored sha
     matches, else {added, updated, retired, skipped} (names)."""
     wanted, sha = filled(names, directory)
     stored = _stored(c)
     if stored.get("sha") == sha:
         return {"unchanged": True}
-    rows = {
+    rows: dict[str, sqlite3.Row] = {
         r["name"]: r
         for r in c.execute(
             "SELECT s.id, s.name, s.created_by_type, s.deleted_at, v.sha256, v.approved_by_id IS NULL AS tico_latest "
@@ -166,9 +170,12 @@ def seed(c, names: dict[str, str], directory=None) -> dict[str, Any]:
         )
     }
     now = H.now()
-    added, updated, retired, skipped = [], [], [], []
-    for name, files in wanted.items():
-        files = bundles.normalize(files)
+    added: list[str] = []
+    updated: list[str] = []
+    retired: list[str] = []
+    skipped: list[str] = []
+    for name, bundle in wanted.items():
+        files: list[dict[str, str]] = bundles.normalize(bundle)
         bundle_sha = bundles.bundle_sha(files)
         description, function = bundles.description_of(files), bundles.function_of(files)
         row = rows.get(name)
@@ -210,8 +217,9 @@ def seed(c, names: dict[str, str], directory=None) -> dict[str, Any]:
     return done
 
 
-def seed_company(c, settings) -> dict[str, Any]:
+def seed_company(c: sqlite3.Connection, settings: Any) -> dict[str, Any]:
     """The start job (backend/start_jobs.py): the library as this company gets it, with the names onboarding saved."""
-    from . import onboarding as O
+    from . import onboarding
 
+    O: Any = onboarding
     return seed(c, O.display_names(settings, O.load(c)), settings.catalog_dir)
