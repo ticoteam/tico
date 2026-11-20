@@ -223,6 +223,7 @@ def index(c, rowid, title, path, body):
 
 
 def unindex(c, rowid):
+    c.execute("UPDATE docs SET search_parse=NULL WHERE rowid=?", (rowid,))  # an archived doc's is made on restore
     if has_fts(c):
         c.execute("DELETE FROM docs_fts WHERE rowid=?", (rowid,))
 
@@ -234,10 +235,11 @@ def ensure_schema(c, settings=None):
 
     done = begin(c)
     try:
-        for rowid, title, path, body in c.execute(
-            "SELECT rowid,title,path,body FROM docs WHERE archived=0 AND search_parse IS NULL"
+        while rows := c.execute(
+            "SELECT rowid,title,path,body FROM docs WHERE archived=0 AND search_parse IS NULL LIMIT 100"
         ).fetchall():
-            parse_for_search(c, rowid, title, path, body)
+            for rowid, title, path, body in rows:
+                parse_for_search(c, rowid, title, path, body)
         if has_fts(c):
             live = c.execute("SELECT COUNT(*) FROM docs WHERE archived=0").fetchone()[0]
             if live != c.execute("SELECT COUNT(*) FROM docs_fts").fetchone()[0]:
@@ -680,7 +682,9 @@ class Docs:
             args += [path, path, doc_id]
         with self.store.read() as c:
             rows = c.execute(
-                "SELECT * FROM docs WHERE " + " AND ".join(marks) + " ORDER BY path COLLATE NOCASE, id LIMIT ?",
+                "SELECT id,path,title,updated_at,updated_by_id,locked,version FROM docs WHERE "
+                + " AND ".join(marks)
+                + " ORDER BY path COLLATE NOCASE, id LIMIT ?",
                 (*args, limit + 1),
             ).fetchall()
             page = rows[:limit]
@@ -1015,7 +1019,7 @@ class Docs:
     # -------------------------------------------------------------- search
     def search(self, who, q, limit, source_id=""):
         self.reader(who)
-        with self.store.read() as c:
+        with self.store.read_transaction() as c:  # one snapshot: internal, external and linked results
             return {"results": self.find(c, q, limit, source_id)}
 
     def find(self, c, q, limit=20, source_id=""):
