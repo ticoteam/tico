@@ -425,7 +425,8 @@ describe('what the person needs beside the email', () => {
     reply = withMail({}, { attachments: files });
     show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
     const letter = await screen.findByRole('group', { name: 'letter.pdf' });
-    await waitFor(() => expect(letter.querySelector('iframe')?.getAttribute('src')).toBe('blob:letter#toolbar=0&navpanes=0&view=FitH'));
+    // PDF.js draws the letter (library/PdfView): its place is under the message, before any press
+    await waitFor(() => expect(letter.querySelector('.fv-pdf, .fv-none')).toBeTruthy());
     expect(screen.queryByRole('group', { name: 'exhibit.pdf' })).toBeNull();
     for (const name of ['photo.jpg', 'letter.pdf', 'exhibit.pdf']) expect(screen.getByRole('link', { name: new RegExp(name.replace('.', '\\.')) })).toBeTruthy();
   });
