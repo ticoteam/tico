@@ -52,6 +52,8 @@ export interface SkillsSearch {
   q?: string;
   /** Only the changes that wait for an OK. */
   waiting?: 1;
+  /** One job function (`legal`...), `other` for the rest; lower case, as the API takes it. */
+  function?: string;
   skill?: string;
   proposal?: string;
   connect?: string;
@@ -59,7 +61,14 @@ export interface SkillsSearch {
 /** `setup`, or a code in the helper's shape (eight letters and digits, maybe split by a dash); nothing else. */
 const connectWord = (v: unknown) => (v === 'setup' || (typeof v === 'string' && /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/.test(v)) ? v : undefined);
 export const skillsSearch = (raw: Record<string, unknown>): SkillsSearch =>
-  clean({ q: str(raw.q), waiting: flag(raw.waiting), skill: str(raw.skill), proposal: str(raw.proposal), connect: connectWord(raw.connect) });
+  clean({
+    q: str(raw.q),
+    waiting: flag(raw.waiting),
+    function: str(raw.function)?.trim().toLowerCase() || undefined,
+    skill: str(raw.skill),
+    proposal: str(raw.proposal),
+    connect: connectWord(raw.connect),
+  });
 
 /** The words GitHub's install and sign-in returns carry (backend/github_app.py). */
 export const GITHUB_RETURNS = ['connected', 'installed', 'authorized', 'pending', 'declined', 'finish', 'again', 'expired'] as const;
