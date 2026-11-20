@@ -20,7 +20,6 @@
   due within 14 days, makes the risk live; the next date is the soonest one still due.
 """
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
@@ -37,6 +36,7 @@ from . import waiting_on as _waiting_on
 from .api_contract import api_v2, error
 from .entities import store as ES
 from .models import ID, Contract
+from .slugs import slugify
 from .store import H as _H, Problem
 
 # The untyped modules this one calls, as Any (their rows are dicts and sqlite3 rows).
@@ -125,7 +125,7 @@ def slug(text: object) -> str:
     text = str(text or "").strip().lower()
     if text.startswith(PREFIX):
         text = text[len(PREFIX) :]
-    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:SLUG_MAX].strip("-")
+    return slugify(text, limit=SLUG_MAX)
 
 
 def _since(days: int) -> str:

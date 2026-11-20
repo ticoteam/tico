@@ -32,6 +32,7 @@ from . import pipeline_seats as S
 from . import task_requirements as R
 from .item_sources import github_release as GR
 from .hubdb_core import TICO_ACTOR as SYSTEM
+from .slugs import slugify
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1226,10 +1227,6 @@ def _may_change(conn: "sqlite3.Connection", by: str, row: Row | None, seen_versi
 
 
 # ----------------------------------------------------------------------------- save
-def _slug(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "stage"
-
-
 def _free_stage_id(conn: "sqlite3.Connection", base: str, taken: set[str]) -> str:
     """`base`, or `base-2`, `base-3`... the first that no stage has."""
     n, candidate = 1, base
@@ -1377,7 +1374,7 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             if (was and (not limit or limit > was)) or (old.get("by_hand") and not stage["by_hand"]):
                 loosened = True
         else:
-            sid = sid or _free_stage_id(conn, f"{pid}-{_slug(stage['name'])}", taken)
+            sid = sid or _free_stage_id(conn, f"{pid}-{slugify(stage['name'], fallback='stage')}", taken)
             conn.execute(
                 "INSERT INTO stages (position, name, purpose, owner, side, by_hand, requests_move_on, task_limit, "
                 "expected_minutes, expected_bots_only, on_enter, pick, id, pipeline_id, kind, created_at, updated_at) "

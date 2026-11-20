@@ -53,6 +53,7 @@ from . import models as M
 from . import tico_notices
 from . import trigger_presets as P
 from .models import Contract
+from .slugs import slugify
 from .store import Problem
 from .api_contract import api_v2
 
@@ -128,10 +129,6 @@ class TriggerUpdate(Contract):
 
 def digest(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
-
-
-def slug_of(name):
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40].strip("-") or "hook"
 
 
 def sealed_as(trigger_id):
@@ -298,7 +295,7 @@ def listing(c, settings):
 
 def create(c, who, settings, body):
     may_manage(c, who)
-    trigger_id = body.id.strip().lower() if body.id else slug_of(body.name)
+    trigger_id = body.id.strip().lower() if body.id else slugify(body.name, limit=40, fallback="hook")
     if not ID.fullmatch(trigger_id):
         raise Problem("trigger", "A trigger id uses lowercase letters, digits and dashes (up to 40)", 422)
     found = c.execute("SELECT deleted_at FROM triggers WHERE id=?", (trigger_id,)).fetchone()

@@ -18,6 +18,7 @@ from . import hubdb as H, repositories as R, runner_wire, worktree_waits as wait
 from .auth import validate_identity
 from .live_privacy import ROOM_PREFIX
 from .models import Contract
+from .slugs import slugify
 from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed')
@@ -1288,7 +1289,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 if k in detail
             },
         }
-    slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
+    slug = slugify(task['title'])[:50] or 'task'
     branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
     if branch is not None and (
         not re.fullmatch(r'[A-Za-z0-9_./-]+', branch)

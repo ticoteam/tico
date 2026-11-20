@@ -26,6 +26,7 @@ from typing import Any, NoReturn, cast
 
 from backend import hubdb as H
 from backend.entities import visible as V
+from backend.slugs import slugify
 
 SELF_ID = "company/self"  # Market's id for our company (OWN_COMPANY_ID in backend/market.py); the self row keeps it
 VALUE_TYPES = (
@@ -183,12 +184,8 @@ def _live(c: sqlite3.Connection, actor: str, entity_id: str) -> Row:
     return row
 
 
-def _slug(name: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-") or "entity"
-
-
 def _new_entity_id(c: sqlite3.Connection, type_key: str, name: str) -> str:
-    base = f"{type_key}/{_slug(name)}"
+    base = f"{type_key}/{slugify(str(name), fallback='entity')}"
     candidate, n = base, 2
     while c.execute("SELECT 1 FROM entities WHERE id = ?", (candidate,)).fetchone():
         candidate, n = f"{base}-{n}", n + 1

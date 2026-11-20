@@ -23,6 +23,7 @@ from fastapi import Query, Request
 from . import hubdb as H
 from . import models as M
 from .store import Problem
+from .slugs import slugify
 
 # The Librarian builds the first map from what the owner gave (playbooks/market-setup.md) and keeps it
 # current from the insights everyone else reports (playbooks/curate-the-market.md).
@@ -148,9 +149,7 @@ PAGES = (
 
 # ----------------------------------------------------------------------------- small helpers
 def slug(text):
-    raw = str(text or "").strip().lower().replace("&", " and ")
-    raw = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
-    return raw or "untitled"
+    return slugify(str(text or "").replace("&", " and "), fallback="untitled")
 
 
 def dumps(value):

@@ -27,6 +27,7 @@ from . import docs_import_run
 from . import manual
 from . import models as M
 from .names import lookup
+from .slugs import slugify
 from .store import H, Problem, encode
 from .api_contract import api_v2
 
@@ -65,10 +66,6 @@ def after_cursor(cursor):
 
 
 # ------------------------------------------------------------------ paths, addresses, kinds
-def slugify(text, fallback="untitled"):
-    return re.sub(r"[^a-z0-9]+", "-", str(text).casefold()).strip("-")[:80].strip("-") or fallback
-
-
 def clean_path(raw):
     """A folder path ending in .md: `sales/pricing.md`. Never absolute, never with `..`."""
     path = re.sub(r"/{2,}", "/", str(raw or "").strip().replace("\\", "/")).strip("/")
@@ -722,7 +719,11 @@ class Docs:
 
     def insert(self, c, actor, title, body, path=None, note="", event="docs.created", detail=None):
         """One new doc at version 1: the row, its first version, its index entry and the audit event."""
-        path = self.free_path(c, clean_path(path)) if path else self.free_path(c, slugify(title) + ".md", unique=True)
+        path = (
+            self.free_path(c, clean_path(path))
+            if path
+            else self.free_path(c, slugify(str(title).casefold(), limit=80, fallback="untitled") + ".md", unique=True)
+        )
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
