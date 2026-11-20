@@ -60,9 +60,7 @@ function NumberLine({ label, unit, value, min, max, onSave }: { label: string; u
   const save = () => !bad && n !== value && onSave(n);
   return (
     <Line label={label}>
-      <span onBlur={save} onKeyDown={(e) => e.key === 'Enter' && save()}>
-        <Field label={label} labelHidden type="number" wide={false} value={text} onValueChange={setText} error={bad ? `${min} to ${max}` : undefined} />
-      </span>
+      <Field label={label} labelHidden type="number" wide={false} value={text} onValueChange={setText} onCommit={save} error={bad ? `${min} to ${max}` : undefined} />
       <span className="fact-dim">{unit}</span>
     </Line>
   );

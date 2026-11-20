@@ -23,6 +23,19 @@ describe('Field', () => {
     expect(box.tagName).toBe('TEXTAREA');
     expect((box as HTMLTextAreaElement).disabled).toBe(true);
   });
+
+  it('saves its words on Enter and when it is left', () => {
+    const onCommit = vi.fn();
+    render(<Field label="Limit" defaultValue="4" onCommit={onCommit} />);
+    const box = screen.getByRole('textbox', { name: 'Limit' });
+    fireEvent.change(box, { target: { value: '6' } });
+    fireEvent.keyDown(box, { key: 'a' });
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onCommit).toHaveBeenLastCalledWith('6');
+    fireEvent.blur(box);
+    expect(onCommit).toHaveBeenCalledTimes(2);
+  });
 });
 
 function SearchHarness() {

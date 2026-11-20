@@ -7,7 +7,7 @@ import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
-import { Search } from '@/kit/Field';
+import { SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -244,26 +244,20 @@ function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly 
   );
 }
 
-/** The head's search (the page kind's `search` slot): a button until pressed, then the field; on a phone, where it has its
-    own line under the head, the field. Typing narrows the board after a short pause, not on every key. */
+/** The head's search (the page kind's `search` slot): the field, as the kit draws it; on a phone it has its own line
+    under the head, opened from "⋯". Typing narrows the board after a short pause, not on every key. */
 function TaskFind({ search }: { search: TasksSearch }) {
   const filter = useAction('tasks.filter');
   const cards = useCards();
-  const [open, setOpen] = useState(!!search.q);
-  const [words, setWords] = useState(search.q ?? '');
-  // Cleared or set from elsewhere (Clear, Tico): the field follows the address.
-  const [seen, setSeen] = useState(search.q);
-  if (seen !== search.q) {
-    setSeen(search.q);
-    setWords(search.q ?? '');
-  }
-  useEffect(() => {
-    if (words.trim() === (search.q ?? '')) return;
-    const t = setTimeout(() => void filter.run({ q: words.trim() || null }), 250);
-    return () => clearTimeout(t);
-  }, [words, search.q, filter]);
-  if (!open && !cards) return <IconButton icon="search" label="Search" onClick={() => setOpen(true)} />;
-  return <Search label="Search tasks" value={words} onValueChange={setWords} placeholder="Search" autoFocus={!search.q} />;
+  return (
+    <SettledSearch
+      label="Search tasks"
+      placeholder="Search"
+      value={search.q ?? ''}
+      onSettle={(q) => void filter.run({ q: q || null })}
+      autoFocus={cards && !search.q}
+    />
+  );
 }
 
 /** Filter, the view switch, New task, Flow, the owner (list.js head). A phone keeps only Flow; the rest is under "⋯".

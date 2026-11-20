@@ -14,4 +14,9 @@
 .sec-fold[aria-expanded="false"]>.ico{transform:rotate(-90deg)}
 .sec-name.is-2 .sec-fold{gap:var(--s-1h)}
 .stage.is-folded .stage-head{position:static}
+/* a name that crosses pipelines, "pipeline › stage": the chevron between (pages/1-tasks/list.css) */
+.sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
+/* a phone names its sections small and quiet, with no fold chevron while open (phone-list-dark: "On deck 3") */
+html[data-layout="cards"] :is(.stage-head,.col-head) .sec-name{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}
+html[data-layout="cards"] :is(.stage-head,.col-head) .sec-fold[aria-expanded="true"]>.ico{display:none}
 .stage-head>.sec-sum{min-width:0;flex:0 100 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);font-variant-numeric:tabular-nums}

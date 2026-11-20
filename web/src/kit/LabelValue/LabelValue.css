@@ -19,3 +19,12 @@ button.fact{width:100%;border:0;background:none;font-family:inherit;font-size:in
    cannot sit inside it) */
 .fact-more{display:flex;align-items:center;gap:var(--s-1)}
 .fact-more>.fact{flex:1;min-width:0}
+/* a pick on a line reads as its value: ink at the body size, its chevron as the picker's (settings-general-dark) */
+.facts .fact-v>.dd{font-size:var(--t-base)}
+.facts .fact-v>.dd:not(.is-same){color:var(--ink)}
+.facts .fact-v>.dd>.ico{width:var(--ico-sm);height:var(--ico-sm);stroke-width:1.8}
+/* in a narrow side column (a side panel, a record's side) the value stands at the right edge, as the panels draw it
+   (t-rules-rule-dark); the label and the value give way together. A line that holds a field keeps the columns. */
+:is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field)){display:flex;justify-content:space-between;gap:var(--s-3)}
+:is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field))>span:first-child{flex:0 1 auto;min-width:0;padding-right:0}
+:is(.pnl,.pk-rec-side) .facts .fact:not(:has(.field))>.fact-v{flex:0 1 auto;justify-content:flex-end;text-align:right}

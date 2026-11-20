@@ -379,7 +379,7 @@ describe('Fix wave: the plan and the checklist', () => {
     expect(await screen.findByText('No routines yet')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Add routine' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Filter' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Search routines' })).toBeNull();
   });
 
   it('a routine that did not load says so in its panel, with Try again @s510', async () => {

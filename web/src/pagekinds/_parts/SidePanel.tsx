@@ -36,6 +36,7 @@ export function SidePanel({ title, target, count, lead, actions, foot, onClose, 
       onClose={onClose}
       foot={foot}
       className={className}
+      actions={actions}
       head={
         <>
           {cards && (
@@ -46,8 +47,6 @@ export function SidePanel({ title, target, count, lead, actions, foot, onClose, 
           {lead}
           <b data-target={target}>{title}</b>
           {count !== undefined && <Count n={count} />}
-          {actions && <span className="grow" />}
-          {actions}
         </>
       }
     >

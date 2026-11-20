@@ -9,12 +9,19 @@
 
 .pk{container:page / inline-size}
 
-/* ---------- head: one height; a small trail above the title; the title holds only the name ---------- */
+/* ---------- head: one height; the trail before the title at its size, muted (every mock's .crumb); the title holds
+   only the name. The trail gives way before the title does. ---------- */
 .pk .pk-head{height:var(--head-h)}
 .pk-title{min-width:0;display:flex;flex-direction:column;justify-content:center}
 .pk-title h1{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pk-title.has-crumb{flex-direction:row;align-items:center;gap:var(--s-2)}
 .pk-crumb a{white-space:nowrap}
 .pk-crumb a:hover{color:var(--ink)}
+.pk-crumb.is-inline{flex:0 100 auto;min-width:0;display:flex;align-items:center;gap:var(--s-2);overflow:hidden;
+  font-family:var(--font-display);font-size:var(--t-title);font-weight:var(--w-title);line-height:1;font-feature-settings:var(--feat-text);letter-spacing:var(--track-title);color:var(--muted)}
+.pk-crumb.is-inline a{min-width:0;overflow:hidden;text-overflow:ellipsis;border-radius:var(--r-chip);transition:color var(--dur-fast) var(--ease)}
+.pk-crumb.is-inline a:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.pk-crumb.is-inline>.ico{flex:none;width:18px;height:18px;margin:var(--s-0) calc(var(--s-1) * -1 + 1px) 0;stroke-width:2;color:var(--faint)}
 /* the trail inside a where line (`sub`): its steps sit in the line's own row */
 .pk-where>.pk-crumb{display:contents}
 .pk-where>.pk-crumb>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
@@ -72,10 +79,14 @@
 .pk-panel-host{display:contents}
 
 /* ---------- figures: one strip across the width, a rule between (pages/3-company/finance.css) ---------- */
-.pk .widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:calc(var(--s-1) + var(--s-0)) calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x)}
+.pk .widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:var(--s-4) calc(var(--page-x) - var(--s-3)) var(--s-4) var(--page-x)}
 /* every tile draws its three lines from the top, whatever is missing (an empty line keeps its height), so the words
    share baselines across the strip; the sparkline keeps to the bottom right and never moves them */
-.widget{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s-2);padding:0 var(--s-4);border-left:1px solid var(--line)}
+.widget{container:figure / inline-size;display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s-2);padding:0 var(--s-4);border-left:1px solid var(--line)}
+/* a tile too narrow for its words and its line (a page beside an open thread) keeps the words */
+@container figure (max-width:170px){
+  .widget .spark{display:none}
+}
 .widget:first-child{padding-left:0;border-left:0}
 .widget:last-child{padding-right:0}
 .widget-main{display:grid;gap:calc(var(--s-0) + 1px);min-width:0}

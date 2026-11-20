@@ -12,9 +12,10 @@ export type PageHeadProps = HeadProps;
 const to = (path: string) => path as LinkProps['to'];
 
 /**
- * The page's head, one height on every page (`--head-h`). The trail sits small above the title and the title holds only
- * the name (aaa-audit-a, Breadcrumb). Then the controls, "⋯" last, then a button for each sheet the frame tucked
- * behind the page.
+ * The page's head, one height on every page (`--head-h`). The trail stands before the title at the title's size, muted,
+ * a chevron between ("Docs › Returns and refunds", every mock's `.crumb`); the title holds only the name. A task's
+ * trail (`sub`) stays in its small where line. Then the controls, "⋯" last, then a button for each sheet the frame
+ * tucked behind the page.
  */
 export function PageHead({ title, path, crumb, lead, after, actions, search, more, onRename, sub, size, top }: PageHeadProps) {
   const sheet = useSheet();
@@ -24,13 +25,14 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and Tico's chip
   useEffect(() => showPageName(title), [title]);
   const trail = crumb && crumb.length > 0 && (
-    <nav className={sub ? 'pk-crumb' : 'tv-where pk-crumb'} aria-label="Breadcrumb">
+    <nav className={sub ? 'pk-crumb' : 'pk-crumb is-inline'} aria-label="Breadcrumb">
       {crumb.map((c, i) => (
         <Fragment key={c.to}>
           {i > 0 && <Icon name="chevron" />}
           <Link to={to(c.to)}>{c.label}</Link>
         </Fragment>
       ))}
+      {!sub && <Icon name="chevron" />}
     </nav>
   );
   const head = (
@@ -41,7 +43,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
         </Link>
       )}
       {lead}
-      <div className="pk-title">
+      <div className={trail && !sub ? 'pk-title has-crumb' : 'pk-title'}>
         {sub ? (
           <div className="tv-where pk-where">
             {trail}

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Skeleton } from '@/kit/Skeleton';
+import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { Page, PageBody, PanelSlot, SidePanel, SkRows, type SidePanelProps } from '@/pagekinds/_parts';
 import type { PageBaseProps, PageTab } from '@/pagekinds/types';
 
@@ -47,14 +47,7 @@ export function RecordSkeleton() {
   return (
     <PageBody>
       <div className="pk-rec">
-        <div className="pk-rec-facts pk-sk-facts" aria-hidden="true">
-          {FACT_W.map((w, i) => (
-            <div key={i} className="pk-sk-fact">
-              <Skeleton width={60} />
-              <Skeleton width={w} />
-            </div>
-          ))}
-        </div>
+        <SkFacts />
         <div className="pk-rec-secs" aria-hidden="true">
           <SkRows rows={4} />
         </div>
@@ -63,21 +56,57 @@ export function RecordSkeleton() {
   );
 }
 
+function SkFacts() {
+  return (
+    <div className="pk-rec-facts pk-sk-facts" aria-hidden="true">
+      {FACT_W.map((w, i) => (
+        <div key={i} className="pk-sk-fact">
+          <Skeleton width={60} />
+          <Skeleton width={w} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A panel's bars in its own shape: label-and-value lines, then a few rows. A read faster than 150 ms shows none. */
+function RecordPanelSkeleton() {
+  const shown = useDelayed(150);
+  return (
+    <div className="pk-rec is-panel is-loading" role="status" aria-busy="true" aria-label="Loading">
+      {shown && (
+        <>
+          <SkFacts />
+          <div className="pk-rec-secs" aria-hidden="true">
+            <SkRows rows={3} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export interface RecordPanelProps extends Omit<SidePanelProps, 'children'> {
   facts?: ReactNode;
   figures?: ReactNode;
   sections?: ReactNode;
+  /** Its read is on the way: grey bars in the panel's shape stand for the slots. */
+  loading?: boolean;
 }
 
 /** A record opened from its list as a side panel (Products, Risk): the same slots in one column. */
-export function RecordPanel({ facts, figures, sections, ...panel }: RecordPanelProps) {
+export function RecordPanel({ facts, figures, sections, loading, ...panel }: RecordPanelProps) {
   return (
     <SidePanel {...panel}>
-      <div className="pk-rec is-panel">
-        {facts && <div className="pk-rec-facts">{facts}</div>}
-        {figures && <div className="pk-rec-figs">{figures}</div>}
-        {sections && <div className="pk-rec-secs">{sections}</div>}
-      </div>
+      {loading ? (
+        <RecordPanelSkeleton />
+      ) : (
+        <div className="pk-rec is-panel">
+          {facts && <div className="pk-rec-facts">{facts}</div>}
+          {figures && <div className="pk-rec-figs">{figures}</div>}
+          {sections && <div className="pk-rec-secs">{sections}</div>}
+        </div>
+      )}
     </SidePanel>
   );
 }

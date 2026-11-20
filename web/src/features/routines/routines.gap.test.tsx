@@ -155,7 +155,7 @@ describe('Search and filter the routines @s509', () => {
     ]);
     const router = show('/company/routines');
     expect(await screen.findByText('Morning numbers')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Search routines' })).toBeTruthy();
 
     const r = await run('routines.list', { q: 'invoice' }, { via: 'click' });
     expect(r.ok).toBe(true);

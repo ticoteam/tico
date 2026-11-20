@@ -1,7 +1,7 @@
-import { within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { expectHeadAndTabs, showPage, stateTests, TABS } from '@/pagekinds/_parts/test-page';
-import { Record } from './Record';
+import { Record, RecordPanel } from './Record';
 
 describe('Record', () => {
   it('draws the crumb back to its list, facts, the side column and sections', async () => {
@@ -24,4 +24,19 @@ describe('Record', () => {
   });
 
   stateTests('Atlas', (s) => <Record title="Atlas" path="/records/products/atlas" {...s} />);
+
+  it('a panel still reading draws bars in its own shape, after a beat, and none of its slots', () => {
+    vi.useFakeTimers();
+    try {
+      render(<RecordPanel title="Atlas" onClose={() => undefined} loading facts={<p>Kind</p>} />);
+      const panel = screen.getByRole('complementary', { name: 'Atlas' });
+      const bars = within(panel).getByRole('status', { name: 'Loading' });
+      expect(bars.querySelector('.pk-sk-fact')).toBeNull();
+      act(() => void vi.advanceTimersByTime(200));
+      expect(bars.querySelectorAll('.pk-sk-fact').length).toBeGreaterThan(0);
+      expect(within(panel).queryByText('Kind')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

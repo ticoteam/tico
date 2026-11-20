@@ -15,6 +15,17 @@ function TaskMenu({ onRename = () => {}, onDelete = () => {} }) {
 }
 
 describe('Menu', () => {
+  it('with nothing in it draws no button at all', () => {
+    const none = false as boolean;
+    render(
+      <Menu trigger={<IconButton icon="more" label="More" />}>
+        {none && <MenuItem label="Rename" onSelect={() => {}} />}
+        <>{none && <MenuItem label="Archive" onSelect={() => {}} />}</>
+      </Menu>,
+    );
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
   it('opens from its button and picks an item, then closes', async () => {
     const onRename = vi.fn();
     render(<TaskMenu onRename={onRename} />);

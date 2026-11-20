@@ -295,9 +295,6 @@ html[data-layout="cards"] .set-sw .opt{grid-template-columns:minmax(0,1fr) auto}
 .facts .set-defaults:hover{background:var(--hover)}
 .facts .set-defaults>span:first-child{color:var(--ink);font-weight:var(--w-strong)}
 .set-defaults .fact-v{color:var(--muted)}
-/* a pick on a facts line reads as its value: ink, the body size, its chevron 14px (settings.css .fact.is-edit) */
-.pk-settings .facts .fact-v>.dd,.usage-page .facts .fact-v>.dd{font-size:var(--t-base);color:var(--ink)}
-.pk-settings .facts .fact-v>.dd>.ico,.usage-page .facts .fact-v>.dd>.ico{width:14px;height:14px;stroke-width:1.8}
 /* a verb first on its line keeps the value column's edge */
 .fact-v>.verb:first-child{margin-left:calc(var(--s-2) * -1)}
 html[data-layout="cards"] .g-lim.is-pool .row-title{grid-area:av / av / name / name}

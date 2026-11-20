@@ -54,14 +54,16 @@ export function BoardColumn({ name, count, waits, folded = false, onToggle, targ
   return (
     <section className={folded ? 'col is-fold' : 'col'} aria-label={name} data-target={target}>
       <header className="col-head">
-        {onToggle ? (
-          <FoldButton name={name} count={count} open={!folded} onToggle={onToggle} controls={id} />
-        ) : (
-          <h2 className="sec-name">
-            {name}
-            {count !== undefined && <span className="stage-n">{count}</span>}
-          </h2>
-        )}
+        <h2 className="sec-name">
+          {onToggle ? (
+            <FoldButton name={name} count={count} open={!folded} onToggle={onToggle} controls={id} />
+          ) : (
+            <>
+              {name}
+              {count !== undefined && <span className="stage-n">{count}</span>}
+            </>
+          )}
+        </h2>
         {waits}
       </header>
       {!folded && (

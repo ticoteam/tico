@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactElement, ReactNode } from 'react';
+import { Children, Fragment, isValidElement, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import { ContextMenu as BaseContextMenu } from '@base-ui/react/context-menu';
 import { Menu as BaseMenu } from '@base-ui/react/menu';
 import { Icon } from '@/kit/Icon';
@@ -18,9 +18,16 @@ export type MenuProps = {
   onOpenChange?: (open: boolean) => void;
 };
 
-/** The "⋯" menu: a short list that opens from a button. On a phone it is a sheet from the bottom edge, over a scrim. */
+/** Whether a menu has anything to show: items left out with `cond && <MenuItem />` (in fragments too) leave nothing. */
+function hasItems(children: ReactNode): boolean {
+  return Children.toArray(children).some((c) => !(isValidElement<{ children?: ReactNode }>(c) && c.type === Fragment) || hasItems(c.props.children));
+}
+
+/** The "⋯" menu: a short list that opens from a button. On a phone it is a sheet from the bottom edge, over a scrim.
+    With no items it draws nothing, not even its button. */
 export function Menu({ trigger, children, side = 'bottom', align = 'end', open, onOpenChange }: MenuProps) {
   const at = usePlacement();
+  if (!hasItems(children)) return null;
   return (
     <BaseMenu.Root open={open} onOpenChange={onOpenChange ? (next) => onOpenChange(next) : undefined}>
       <BaseMenu.Trigger render={trigger} />

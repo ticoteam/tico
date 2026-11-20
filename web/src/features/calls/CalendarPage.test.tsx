@@ -214,7 +214,6 @@ describe('Calendar', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Pending' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending'))).toBe(true));
-    fireEvent.click(screen.getByRole('button', { name: 'Find a meeting' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Find a meeting' }), { target: { value: 'sync' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync', review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending&q=sync'))).toBe(true));
