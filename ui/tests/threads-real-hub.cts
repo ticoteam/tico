@@ -295,6 +295,9 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
 
       // Who can read in Thread settings: its row label is its only title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);
+      // The thread draws before boot's roster lands, and Thread settings draws its team row once, from the roster it
+      // has: wait for the roster (boot.ts marks it) so this checks the row's layout, not that race (Engineering task).
+      await page.waitForFunction(() => performance.getEntriesByName('tico:roster').length > 0, null, {timeout: t(15000)});
       await page.locator('[data-thv-menu]').click();
       const share = page.locator('#thread-settings[open]');
       await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
