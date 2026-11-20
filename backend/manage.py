@@ -211,12 +211,7 @@ def main(argv=None):
 
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         with store.transaction() as c:
-            if args.action in ("on", "off"):
-                questions.set_enabled(c, args.action == "on", H.TICO_ACTOR)
-            if args.action == "backfill" and not questions.enabled(c):
-                raise SystemExit("Turn questions on first: python -m backend.manage questions DATABASE on")
-            report = questions.backfill(c) if args.action == "backfill" else {}
-            report["on"] = questions.enabled(c)
+            report = questions.command(c, args.action, H.TICO_ACTOR)
     elif args.command == "hosting-enrollment":
         from .hosting_enrollment import enrollment
 
