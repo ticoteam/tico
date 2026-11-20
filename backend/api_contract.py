@@ -78,6 +78,7 @@ def api_v2(
             ("responses", responses),
             ("security", security),
             ("idempotency", idempotency),
+            ("typed", True if model is not None else None),  # the answer is FastAPI's 200 model
         )
         if value is not None
     }

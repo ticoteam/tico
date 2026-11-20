@@ -261,6 +261,9 @@ def spec(app):
                 responses[code] = response
         if "security" in contract:
             op["security"] = contract["security"]
+        ok = (responses.get("200") or {}).get("content", {}).get("application/json", {}).get("schema")
+        if contract.get("typed") and isinstance(ok, dict):
+            ok.pop("title", None)  # FastAPI titles an inline answer ("Response 200 ..."): a list of answers, say
         op["responses"] = dict(sorted(responses.items()))
         if method in WRITE_METHODS and path.startswith("/api/v2/"):
             optional = contract.get("idempotency")
