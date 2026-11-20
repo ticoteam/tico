@@ -1207,7 +1207,7 @@ def sizing(conn, auth, who):
     it: its id and `version`, whose turn it is (`turn`: `person` while it waits on a person, else `working`), and `ask`,
     what it waits on the reader for (requirement id, kind, line): a ❓ (kind `question`, its `mark_id`) is answered by a
     comment on the task; any other ask (an OK) on the task itself."""
-    from . import question_marks
+    from . import question_marks, questions
     from . import waiting_on as W
 
     task_id = _open_task(conn)
@@ -1230,6 +1230,14 @@ def sizing(conn, auth, who):
         out["ask"] = {
             "requirement_id": None,
             "mark_id": question_marks.mark_id(mine.requirement_id),
+            "kind": "question",
+            "line": mine.line or "",
+        }
+    elif mine and questions.is_wait(mine.requirement_id):
+        # A question filed as a task (backend/questions.py): answered on that task.
+        out["ask"] = {
+            "requirement_id": None,
+            "task_id": str(mine.requirement_id).removeprefix(questions.PREFIX),
             "kind": "question",
             "line": mine.line or "",
         }
