@@ -20,6 +20,8 @@ detectUpdateChannel: false
 directories:
   output: release
   buildResources: build
+# dist/ is one bundled file per entry (scripts/build.mjs): electron-updater is inside main.js, package.json lists no
+# dependencies, so no node_modules enters the asar.
 files:
   - dist/**
   - package.json
