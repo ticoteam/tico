@@ -1,11 +1,13 @@
 // Updates (platforms.md 4.8): GitHub Releases through electron-updater. Checked at launch and every 6 hours,
 // downloaded quietly, installed on quit; "Restart to update" never restarts during a call. Off in development, when
 // TICO_NO_UPDATES is set, and in a build with no feed (no app-update.yml: a local `--dir` build, or any build made
-// without a `publish` setting); then nothing is ever fetched and the state stays 'none'. An unsigned macOS build
-// cannot install updates; its state reads 'error'.
+// without a `publish` setting); then nothing is ever fetched and the state stays 'none'. The feed is the latest GitHub
+// release's latest-*.yml (electron-builder.yml); a release without one yet is no update, not an error (updateErrors.ts).
+// An unsigned macOS build cannot install updates; its state reads 'error'.
 import { autoUpdater } from 'electron-updater';
 import type { UpdateState } from '../bridge';
 import { log } from './log';
+import { feedMissing, stateAfterError } from './updateErrors';
 
 const EVERY = 6 * 60 * 60 * 1000;
 
@@ -26,8 +28,10 @@ export class Updater {
     autoUpdater.on('update-available', (info) => this.set({ state: 'downloading', version: info.version }));
     autoUpdater.on('update-downloaded', (info) => this.set({ state: 'ready', version: info.version }));
     autoUpdater.on('error', (error) => {
-      log('warn', `update failed: ${error.message}`);
-      if (this.state.state !== 'ready') this.set({ state: 'error' });
+      if (feedMissing(error)) log('info', 'no update feed on the latest release yet');
+      else log('warn', `update failed: ${error.message}`);
+      const next = stateAfterError(this.state, error);
+      if (next !== this.state) this.set(next);
     });
     void this.check();
     setInterval(() => void this.check(), EVERY).unref();
@@ -38,7 +42,8 @@ export class Updater {
     try {
       await autoUpdater.checkForUpdates();
     } catch (error) {
-      log('warn', `update check failed: ${(error as Error).message}`);
+      // The 'error' event has already logged it and set the state.
+      if (!feedMissing(error)) log('warn', `update check failed: ${(error as Error).message}`);
     }
   }
 
