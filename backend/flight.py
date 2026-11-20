@@ -1614,8 +1614,9 @@ def speed_windows(history, base=None):
         return None
     since = int(stamps[-1].timestamp())
     for i in range(len(history) - 2, -1, -1):
-        if (base is None or history[i].get("version") == base) and stamps[i + 1] is not None:
-            return since, int(stamps[i + 1].timestamp()), history[i].get("version")
+        ended = stamps[i + 1]
+        if (base is None or history[i].get("version") == base) and ended is not None:
+            return since, int(ended.timestamp()), history[i].get("version")
     return None
 
 
