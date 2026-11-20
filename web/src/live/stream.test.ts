@@ -205,20 +205,34 @@ describe('who is signed in', () => {
 });
 
 describe('the first connection', () => {
-  it('reads what is on screen once more, since a change may have come between the read and the stream', () => {
+  it('reads nothing again; a reconnect replays from its number instead', () => {
     const key = ['tasks', 'list', { status: 'open' }];
     const read = vi.fn(async () => ({ tasks: [], cursor: '900.a' }));
     queryClient.setQueryData(key, { tasks: [], cursor: '900.a' });
-    queryClient.setQueryData(['me'], { id: 'human:a' });
     offs.push(new QueryObserver(queryClient, { queryKey: key, queryFn: read }).subscribe(() => {}));
     startLive();
     FakeEventSource.last.feed(opening(905));
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(queryClient.getQueryState(['me'])?.isInvalidated).toBe(false);
+    expect(liveStatus()).toBe('live');
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
     FakeEventSource.last.fail();
     vi.advanceTimersByTime(250);
-    FakeEventSource.last.feed(opening(910, 905)); // a resumed one replays instead
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.last.params.get('after')).toBe('905');
+    FakeEventSource.last.feed(opening(910, 905));
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('follows that change while it opens reconnect once it says where it starts, from that number', () => {
+    startLive();
+    const release = follow({ thread: 'th1' });
+    vi.advanceTimersByTime(30);
+    expect(FakeEventSource.all).toHaveLength(1); // not closed and opened again before it is ready
+    FakeEventSource.last.feed(opening(900));
+    vi.advanceTimersByTime(30);
+    expect(FakeEventSource.all).toHaveLength(2);
+    expect(FakeEventSource.last.params.get('thread')).toBe('th1');
+    expect(FakeEventSource.last.params.get('after')).toBe('900');
+    release();
+    vi.advanceTimersByTime(30);
   });
 });
 

@@ -8,5 +8,5 @@ export { MessageBones } from './Bones';
 export { clock, dayKey, dayLabel, stamp } from './dates';
 export { DidLine, type DidLineProps } from '@/kit/DidLine';
 export { Outline, jumpTo, type OutlineProps } from './Outline';
-export { timelineQuery, ticoRoomQuery, sendMessage, markRead } from './queries';
+export { timelineQuery, ticoRoomQuery, readTicoInfo, sendMessage, markRead, type TicoInfo } from './queries';
 export type { Variant, ChatMessage, PageRef, LiveRun } from './types';

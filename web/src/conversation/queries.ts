@@ -3,7 +3,7 @@
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { SlackMessage, SlackThread } from '@/api/schema';
+import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
@@ -16,10 +16,29 @@ export const timelineKey = (id: string) => ['thread', id, 'timeline'] as const;
 export const liveKey = (id: string) => ['thread', id, 'live'] as const;
 export const proposalKey = (aid: string) => ['assistant', 'action', aid] as const;
 
+export type TicoInfo = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'> & { room_id: string | null };
+
+/**
+ * GET /api/v2/assistant, kept to the few fields this app uses: whether Tico is on and its room. The answer also carries
+ * the chat's recent messages (about 100 KB), which the chat reads from its timeline instead, so Tico's power and its
+ * room share one read: asked for together (the first load, a `bots` change), they cost one.
+ */
+const ticoInfoQuery = queryOptions({
+  queryKey: ['assistant', 'info'] as const,
+  staleTime: 0,
+  queryFn: async (): Promise<TicoInfo> => {
+    const a = await api.get<Assistant>('/api/v2/assistant');
+    return { available: a.available, bot: a.bot, can_turn_on: a.can_turn_on, state: a.state, room_id: a.room_id ?? null };
+  },
+});
+
+/** Reads Tico's info, sharing a read already on its way (a read that ended is not reused: each ask is fresh). */
+export const readTicoInfo = () => queryClient.fetchQuery(ticoInfoQuery);
+
 /** Tico's chat with the signed-in person: the conversation id Tico's sheet shows. */
 export const ticoRoomQuery = queryOptions({
   queryKey: ['assistant', 'room'] as const,
-  queryFn: async ({ signal }) => (await api.get<{ room_id?: string | null }>('/api/v2/assistant', { signal })).room_id ?? null,
+  queryFn: async () => (await readTicoInfo()).room_id,
 });
 
 export type Timeline = InfiniteData<TimelinePage, unknown>;
