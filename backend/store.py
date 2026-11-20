@@ -706,6 +706,7 @@ class Problem(Exception):
 # The 40 request threads (anyio's default): a burst reuses warm connections instead of opening ones that parse the whole
 # schema first. Each keeps up to 16 MB of page cache (cache_size below), so this also bounds that memory.
 POOL_IDLE = 40  # read connections kept open between reads
+POOL_WARM = 16  # of those, the ones that keep their page cache
 
 
 def _pooled(base):
@@ -1194,6 +1195,13 @@ class Store:
                 and c.pool_file == self.pool_file
                 and len(self.pool) < POOL_IDLE
             ):
+                if len(self.pool) >= POOL_WARM:
+                    # Past the first POOL_WARM, an idle connection keeps its parsed schema (the costly part of opening
+                    # one) but hands back its page cache, so a burst does not leave POOL_IDLE x 16 MB held.
+                    try:
+                        c.execute("PRAGMA shrink_memory")
+                    except sqlite3.Error:
+                        pass
                 self.pool.append(c)
                 return
         c.close()

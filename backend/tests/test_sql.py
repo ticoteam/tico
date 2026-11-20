@@ -1147,6 +1147,10 @@ def test_json_table_functions_are_read_only_and_keep_source_visibility(api, worl
         assert "prohibited" in error(api, "SELECT j.value FROM main.messages m, json_each(m.refs) j", token)
         assert "prohibited" in error(api, "SELECT j.value FROM credentials c, json_each(c.id) j", token)
         assert "not authorized" in error(api, "SELECT load_extension('missing')", token)
+        # A pooled connection's counters would report an earlier caller's visibility sets.
+        for counter in ("changes()", "total_changes()", "last_insert_rowid()"):
+            assert "not authorized" in error(api, f"SELECT {counter}", token)
+        assert query(api, "SELECT count(*) FROM 'tasks'", token)["rows"][0][0] >= 0
     assert (
         query(api, "SELECT count(*) FROM messages m, json_tree(m.refs) j", world["attempt"]["token"])["rows"][0][0] >= 1
     )

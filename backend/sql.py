@@ -74,7 +74,9 @@ MASKED = {
         "ELSE '' END"
     }
 }
-DENIED_FUNCTIONS = {"load_extension"}
+# changes()/total_changes()/last_insert_rowid() report a pooled connection's earlier work: another caller's visibility
+# sets, whose sizes count rows this caller may not see.
+DENIED_FUNCTIONS = {"load_extension", "changes", "total_changes", "last_insert_rowid"}
 
 
 def teammate_masks(unseen, me, inner=None, names=None, bots=()):
@@ -547,7 +549,13 @@ def referenced_names(statement: str, known: frozenset[str] = _ALL_EXPOSED) -> se
     for match in _SQL_TOKEN.finditer(statement):
         tok = match.group(0)
         head = tok[0]
-        if head in ("-", "/", "'"):
+        if head in ("-", "/"):
+            continue
+        if head == "'":
+            # SQLite also takes a single-quoted string as a table name; building a view it never reads is harmless.
+            name = tok[1:-1].replace("''", "'").lower()
+            if name in known:
+                found.add(name)
             continue
         if head == '"':
             name = tok[1:-1].replace('""', '"').lower()
@@ -591,8 +599,8 @@ class TokenBucket:
     def take(self, actor: str) -> None:
         if self.burst <= 0 or self.refill <= 0:
             return
-        now = time.monotonic()
         with self.lock:
+            now = time.monotonic()
             tokens, last = self.buckets.get(actor, (self.burst, now))
             tokens = min(self.burst, tokens + max(0.0, now - last) * self.refill)
             if tokens < 1.0:

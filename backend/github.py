@@ -720,11 +720,10 @@ def refresh_finished_task_prs(service: Any) -> int:
     for stale in [k for k, due in _finished_retry.items() if due <= now]:
         _finished_retry.pop(stale, None)
     due = [(key, links) for key, links in gone.items() if key not in _finished_retry]
-    # Rate-limit each repo's open-PR listing to FINISHED_LIST_INTERVAL_S once its backlog fits in one pass.
-    overflow = {repo for (repo, _), _ in due[FINISHED_READS_PER_PASS:]}
+    # Each repo's open PRs are listed at most every FINISHED_LIST_INTERVAL_S. Every gone link leaves Health in this
+    # pass (below); reading what happened to more than FINISHED_READS_PER_PASS of them waits for the next listing.
     for repo in listed:
-        if repo not in overflow:
-            _finished_list_due[(id(service), repo)] = now + FINISHED_LIST_INTERVAL_S
+        _finished_list_due[(id(service), repo)] = now + FINISHED_LIST_INTERVAL_S
     if not gone:
         return 0
     with service.store.transaction() as c:

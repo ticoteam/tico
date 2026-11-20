@@ -145,6 +145,8 @@ def test_past_the_read_cap_each_gone_pr_still_leaves_health_now(api, monkeypatch
     assert _named(api) == []  # all three left Health in this pass
     states = [_link(api, x)["state"] for x in t]
     assert states in (["closed", "open", "open"], ["open", "closed", "closed"])  # one PR read, the other waits
+    assert _refresh(service, monkeypatch) == 0  # the repo is listed again only after FINISHED_LIST_INTERVAL_S
+    G._finished_list_due.clear()  # the next listing
     assert _refresh(service, monkeypatch) == 1
     assert [_link(api, x)["state"] for x in t] == ["closed", "closed", "closed"]
     assert seen.count(LIST + "/2") == 1
