@@ -25,6 +25,7 @@ how it ended. Its status, owner, snooze and chat are the task's own.
 - Only new asks follow the switch. Questions already filed stay readable and answerable with it off.
 """
 
+import re
 import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
@@ -246,6 +247,17 @@ def next_snooze_end(conn: sqlite3.Connection, person: str) -> str | None:
         (person, H.now()),
     ).fetchone()
     return str(found[0]) if found and found[0] else None
+
+
+def rule_text(conn: sqlite3.Connection, stored: Mapping[str, Any], text: str) -> str:
+    """The text a held question is checked again on (org_rule_check.recheck): its words and its link while it is still
+    asked as a question task, its words alone once the switch is off (a ❓ carries no link)."""
+    replay: Any = stored.get("replay") or {}
+    link = str(cast(Row, replay).get("link") or "") if isinstance(replay, dict) else ""
+    task_id = cast(Row, replay).get("task") if isinstance(replay, dict) else None
+    if link and text.endswith(f"\n\n{link}") and not asks_as_task(conn, task_id):
+        return text[: -len(f"\n\n{link}")]
+    return text
 
 
 def refuse_move(conn: sqlite3.Connection, row: Mapping[str, Any], kind: str, by: str) -> None:
@@ -790,6 +802,9 @@ def _not_plain(refs: object, mark: Mapping[str, Any]) -> str:
     """Why a ❓'s message refs are not exactly a plain comment's on the mark's own task, or "" when they are."""
     if not isinstance(refs, dict):
         return "no refs"
+    from . import delivery as _delivery
+
+    defer_for = str(cast(Any, _delivery).DEFER_FOR)  # a Defer's deadline as delivery takes it: never, or how long
     said = cast(Row, refs)
     extra = sorted(set(said) - PLAIN_REFS)
     if extra:
@@ -801,11 +816,23 @@ def _not_plain(refs: object, mark: Mapping[str, Any]) -> str:
         (isinstance(question, dict) and cast(Row, question).get("id") == mark["id"], "question"),
         (said.get("quiet") in (None, True), "quiet"),
         (said.get("send_way") in WAYS, "send_way"),
-        (said.get("send_defer_for") in (None, "never") or said.get("send_way") == "defer", "send_defer_for"),
+        (
+            said.get("send_defer_for") is None or bool(re.match(defer_for, str(said["send_defer_for"]))),
+            "send_defer_for",
+        ),
         (said.get("send_people") in (None, True), "send_people"),
     )
     bad = [name for ok, name in checks if not ok]
     return ("unexpected " + ", ".join(bad)) if bad else ""
+
+
+def _names_another(conn: sqlite3.Connection, refs: object, task_id: str) -> bool:
+    """Whether any value in the refs names a task other than the mark's own (task_privacy.references, which finds a
+    task id anywhere in them): its readers would not come with it."""
+    from . import task_privacy as _task_privacy
+
+    named: set[str] = {str(t) for t in cast(Any, _task_privacy).references(conn, refs)}
+    return bool(named - {str(task_id)})
 
 
 def command(conn: Any, action: str, by: str) -> Row:
@@ -865,6 +892,9 @@ def backfill(conn: sqlite3.Connection) -> Row:
         odd = _not_plain(cast(object, refs), mark)
         if odd:
             skip("its message is not a plain ❓ comment on its task: " + odd)
+            continue
+        if _names_another(conn, cast(object, refs), str(mark["task_id"])):
+            skip("its message names another task, whose readers it keeps")
             continue
         if message.get("in_reply_to"):
             skip("its message replies to another, whose readers it keeps")

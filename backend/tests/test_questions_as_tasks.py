@@ -485,3 +485,37 @@ def test_with_the_switch_off_a_link_is_left_out_and_the_mark_is_as_before(ruled)
     assert r.status_code == 200, r.text
     assert r.json()["comment"]["body"] == "Which tone?" and "question_task" not in r.json()
     assert sql(api, "SELECT COUNT(*) AS n FROM question_marks WHERE cleared_at IS NULL") == [{"n": 1}]
+
+
+def test_a_reader_of_the_parent_who_cannot_read_the_question_sees_only_that_one_waits(c, general):
+    from backend import task_calls as TC
+
+    made = H.task_create(c, BUILDER, "Renew the lease", "", BUILDER, private=True, readers=["cara"], lint=False)
+    X.ran(c, made["id"], BUILDER)
+    asked = _ask(c, E.task(c, made["id"]), checked=False)  # Ana is let in; the question is hers and the bot's
+    seen = TC.task_view(c, made["id"], CARA)
+    [wait] = [w for w in seen["waits"] if w["state"] == W.PERSON]
+    assert (wait["who"], wait["line"], wait["requirement_id"]) == (ANA, W.QUESTION_UNNAMED, None)
+    assert asked["task_id"] not in str(seen["waits"]) and "Friday" not in str(seen["waits"])
+    [own] = [w for w in TC.task_view(c, made["id"], ANA)["waits"] if w["state"] == W.PERSON]
+    assert own["line"] == ASKED.splitlines()[0] and own["requirement_id"] == Q.wait_id(asked)
+
+
+def test_the_backfill_skips_a_mark_whose_refs_name_another_task(c, general):
+    secret = H.task_create(c, BUILDER, "Secret", "", BUILDER, private=True, lint=False)
+    parent = _parent(c)
+    mark = QM.ask(c, BUILDER, parent["id"], ANA, "Which venue?")
+    c.execute(
+        "UPDATE messages SET refs=json_set(refs, '$.send_defer_for', ?) WHERE id=?", (secret["id"], mark["message_id"])
+    )
+    other = _parent(c, "Pick a date")
+    named = QM.ask(c, BUILDER, other["id"], ANA, "Which date?")
+    c.execute(
+        "UPDATE messages SET refs=json_set(refs, '$.question.note', ?) WHERE id=?", (secret["id"], named["message_id"])
+    )
+    done = Q.backfill(c)
+    assert done["turned"] == []
+    assert sorted(s["why"] for s in done["skipped"]) == [
+        "its message is not a plain ❓ comment on its task: unexpected send_defer_for",
+        "its message names another task, whose readers it keeps",
+    ]

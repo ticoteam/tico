@@ -2777,6 +2777,12 @@ def recheck(store, primary, hold, audience=None, auth=None):
         return sorted(now), None
     stored = json.loads(hold["payload"] or "{}")
     shown, prov = hold_input(hold), hold_provenance(hold)
+    text = shown.get("text") or stored.get("text") or ""
+    if hold["operation"] == "question":
+        from . import questions
+
+        with store.read() as c:
+            text = questions.rule_text(c, stored, text)  # a question held with its link, rechecked as a ❓: words alone
     verdict = check_as(
         store,
         primary,
@@ -2784,7 +2790,7 @@ def recheck(store, primary, hold, audience=None, auth=None):
         prov.get("authenticated") or hold["author"],
         prov.get("via") or "",
         hold["operation"],
-        shown.get("text") or stored.get("text") or "",
+        text,
         people,
         context=shown.get("context") or None,
         obj=shown.get("obj") or "",

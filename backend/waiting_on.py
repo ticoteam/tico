@@ -101,6 +101,7 @@ class Wait:
 SUB_TASK = "A sub-task"
 SUB_TASK_OPEN = "A sub-task is not finished"
 SUB_TASK_CLOSED = "A sub-task was closed"
+QUESTION_UNNAMED = "A question"
 
 Said = TypeVar("Said", Wait, R.Standing)
 
@@ -114,6 +115,9 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
     if not said.about or shown(said.about):
         return said
     if isinstance(said, Wait):
+        if said.state == PERSON and questions.is_wait(said.requirement_id):
+            # A question to a person (backend/questions.py): who it waits on, never its words or its task.
+            return replace(said, line=QUESTION_UNNAMED, requirement_id=None, about=None)
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS and task_depends.is_wait(said.requirement_id):
@@ -583,7 +587,12 @@ def of(
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
     for q in asking_questions:
-        out.append(Wait(PERSON, q["person_id"], q["title"], questions.wait_id(q), q["updated_at"], ask=True))
+        # `about` its task: a reader who may not open the question is told only that one waits (`unnamed`).
+        out.append(
+            Wait(
+                PERSON, q["person_id"], q["title"], questions.wait_id(q), q["updated_at"], ask=True, about=q["task_id"]
+            )
+        )
     blockers = task_depends.blockers(conn, str(row["id"]))
     if blockers:
         # It depends on a task still open: that is all it waits on, nobody's turn, until the task ends (task_depends).
