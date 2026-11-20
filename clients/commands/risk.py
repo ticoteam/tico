@@ -133,11 +133,18 @@ def risk_update(api, args):
     return api.post(f"risks/{_path(args['risk'])}", body, key=_key(args))
 
 
+# The fields a key date takes, by the flag each is given as.
+DATE_FIELDS = {"not_before": "starts_at", "due_by": "due_at", "dates_label": "label"}
+DATE_OPS = ("add_date", "date_id", "remove_date")
+
+
 @tool(
     "tico_risk_matter",
-    "Set a task's matter facts (it must carry a risk); only the facts given change. Amount is in cents. not_before is "
-    "the earliest the step may be done ('no earlier than Nov 19, 10 AM'), never a deadline; due_by is the deadline. "
-    "Both show on the calendar.",
+    "Set a task's matter facts (it must carry a risk); only the facts given change. Amount is in cents. A matter has "
+    "key dates (a hearing, discovery due), each with a label, not_before (the earliest its step may be done, never a "
+    "deadline) and due_by (the deadline); open ones show on the calendar. add_date adds one; date_id changes one "
+    "(not_before, due_by, dates_label as its label, done); remove_date removes one. Without those, not_before, due_by "
+    "and dates_label edit its first date.",
     {
         "task": TASK_ID,
         "kind": _s("What it is", enum=MATTER_KINDS),
@@ -154,7 +161,14 @@ def risk_update(api, args):
             "company's time zone unless it has an offset)"
         ),
         "due_by": _s("The deadline: a day (2026-11-26) or a time, as not_before"),
-        "dates_label": _s("What the dates are for, such as Produce records"),
+        "dates_label": _s("What the date is for, such as Produce records"),
+        "add_date": _s("Add a key date with this label, such as Hearing; give not_before or due_by"),
+        "date_id": _s("The key date to change (its id, from the matter's dates)"),
+        "done": {
+            "type": "boolean",
+            "description": "With add_date or date_id: true marks the date done, false reopens it",
+        },
+        "remove_date": _s("Remove this key date (its id)"),
         "unset": {"type": "array", "items": {"type": "string", "enum": list(FACTS)}, "description": "Facts to clear"},
         "clear": {"type": "boolean", "description": "Remove all its facts"},
         "version": {"type": "integer", "minimum": 1, "description": "The matter's version as you read it"},
@@ -163,15 +177,43 @@ def risk_update(api, args):
     writes=True,
 )
 def risk_matter(api, args):
-    body = _present({"kind": args.get("kind"), "version": args.get("version")})
-    body.update(_present({FACTS[k]: args.get(k) for k in FACTS}))
+    task = quote(str(args["task"]), safe="")
+    ops = [k for k in DATE_OPS if args.get(k) is not None]
+    if len(ops) > 1:
+        raise APIError("validation", "Give one of add_date, date_id or remove_date")
+    unset = list(args.get("unset") or ())
+    on_date = set(DATE_FIELDS) if ops else set()
+    body = _present({"kind": args.get("kind"), "version": None if ops else args.get("version")})
+    body.update(_present({FACTS[k]: args.get(k) for k in FACTS if k not in on_date}))
     if body.get("product_id") and "/" not in body["product_id"]:
         body["product_id"] = "product/" + body["product_id"]  # a product's key, as `tico products list` shows it
-    for name in args.get("unset") or ():
-        body[FACTS[name]] = None
+    for name in unset:
+        if name not in on_date:
+            body[FACTS[name]] = None
     if args.get("clear"):
         body["clear"] = True
-    return api.post(f"tasks/{quote(str(args['task']), safe='')}/matter", body, key=_key(args))
+    if not ops:
+        return api.post(f"tasks/{task}/matter", body, key=_key(args))
+    if body:
+        if args.get("version") is not None:
+            body["version"] = args["version"]
+        api.post(f"tasks/{task}/matter", body, key=_key(args))
+    date = _present({DATE_FIELDS[k]: args.get(k) for k in DATE_FIELDS})
+    for name in unset:
+        if name in on_date:
+            date[DATE_FIELDS[name]] = None
+    if args.get("done") is not None:
+        date["done"] = args["done"]
+    if not body and args.get("version") is not None:
+        date["version"] = args["version"]
+    if args.get("remove_date") is not None:
+        return api.call(
+            "DELETE", f"tasks/{task}/matter/dates/{quote(str(args['remove_date']), safe='')}", None, _key(args, ":date")
+        )
+    if args.get("add_date") is not None:
+        date["label"] = args["add_date"]
+        return api.post(f"tasks/{task}/matter/dates", date, key=_key(args, ":date"))
+    return api.post(f"tasks/{task}/matter/dates/{quote(str(args['date_id']), safe='')}", date, key=_key(args, ":date"))
 
 
 LINK = {
@@ -220,9 +262,13 @@ CLI = (
     ),
     Command(
         "risk matter",
-        "set a tagged task's matter facts",
-        example="tico risk matter D18450 --kind request --not-before 2026-11-19T10:00 --due-by 2026-11-26 "
-        "--dates-label 'Produce records'",
+        "set a tagged task's matter facts and key dates",
+        args=(
+            Arg("done", "--done", action="store_const", const=True, default=None),
+            Arg("done", "--not-done", action="store_const", const=False, default=None),
+        ),
+        exclusive=(("add_date", "date_id", "remove_date"),),
+        example="tico risk matter D18450 --add-date Hearing --due-by 2026-12-15T09:00",
     ),
     Command(
         "risk matters",

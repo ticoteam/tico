@@ -8,9 +8,9 @@ import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
 // eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
 import { PageFault } from '@/shell/PageFault';
-import type { MatterRow, ProductList, RiskDetail, RiskList } from '@/api/schema';
+import type { MatterDate, MatterRow, ProductList, RiskDetail, RiskList } from '@/api/schema';
 import { matterDatesQuery, matterFilesQuery, mattersQuery, productsQuery, riskQuery, risksQuery, waitingTasksQuery } from './queries';
-import { matterDatesLine, RiskPage, typedWhen, type RiskView } from './RiskPage';
+import { dateLine, isLate, nextDate, RiskPage, typedWhen, type RiskView } from './RiskPage';
 
 /* Risk: the risk list, one risk, one matter and Disputes. Sample rows only. */
 
@@ -63,7 +63,7 @@ const href = (el: HTMLElement) => decodeURIComponent(el.closest('a')?.getAttribu
 const recent = new Date(Date.now() - 3_600_000).toISOString();
 const tico = () => bind({ router: createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/company/risk'] }) }) });
 
-const matter = (id: string, title: string, over: { status?: string; amount?: number; forum?: string; created?: string; due?: string } = {}): MatterRow => ({
+const matter = (id: string, title: string, over: { status?: string; amount?: number; forum?: string; created?: string; due?: string; dates?: MatterDate[] } = {}): MatterRow => ({
   task: { id, title, status: over.status ?? 'open', stage: 'Evidence', owner_id: null, created_at: over.created ?? '2026-10-01T10:00:00Z', due_at: over.due ?? null, pipeline_id: 'p1', number: 7 },
   risks: [{ id: 'r1', key: 'risk:chargebacks', label: 'Chargebacks' }],
   matter: {
@@ -76,6 +76,7 @@ const matter = (id: string, title: string, over: { status?: string; amount?: num
     party: { id: 'person/c9', name: 'Pat Doe' },
     product: { id: 'product/garden-kit', name: 'Garden kit' },
     created_at: over.created ?? '2026-10-01T10:00:00Z',
+    dates: over.dates ?? [],
     version: 2,
   } as unknown as MatterRow['matter'],
 });
@@ -328,30 +329,94 @@ describe('One matter @n:re:matter', () => {
     expect(href(within(panel).getByText('Garden kit'))).toBe('/company/products?panel=garden-kit');
   });
 
-  it('shows not before and due in one line, and changes them with what they are for', async () => {
-    const sent = serve((_url, method) => (method === 'POST' ? ok({ task_id: 't1', matter: null }) : nothing()));
-    const panel = await open();
-    expect(within(panel).getByText('Dates')).toBeTruthy();
-    fireEvent.click(within(panel).getByRole('button', { name: 'Change dates' }));
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'For' }), { target: { value: 'Produce records' } });
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Not before' }), { target: { value: '2026-11-19 10am' } });
-    const due = within(panel).getByRole('textbox', { name: 'Due by' });
-    fireEvent.change(due, { target: { value: '2026-11-26' } });
-    fireEvent.submit(due.closest('form')!);
-    const starts = new Date(2026, 10, 19, 10).toISOString();
-    await waitFor(() => expect(posted(sent)).toEqual([{ dates_label: 'Produce records', starts_at: starts, due_at: '2026-11-26', version: 2 }]));
-    const line = matterDatesLine({ task: matter('t1', 'x').task, matter: { starts_at: starts, due_at: '2026-11-26' } as MatterRow['matter'] });
-    expect(await within(panel).findByText(line)).toBeTruthy();
-    expect(within(panel).getByText('Produce records')).toBeTruthy();
+  const keyDate = (id: string, over: Partial<MatterDate> = {}): MatterDate => ({
+    id,
+    label: '',
+    starts_at: null,
+    due_at: null,
+    done_at: null,
+    primary: false,
+    created_by_id: 'human:me',
+    created_at: '2026-11-01T10:00:00Z',
+    updated_by_id: 'human:me',
+    updated_at: '2026-11-01T10:00:00Z',
+    ...over,
+  });
+  const days = (n: number, hour = 15) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    d.setHours(hour, 0, 0, 0);
+    return d.toISOString();
+  };
+  function withDates(dates: MatterDate[]) {
+    risks();
+    queryClient.setQueryData(mattersQuery('open').queryKey, { matters: [matter('t1', 'Refund dispute A', { dates })], next_offset: null });
+    show('/company/risk?panel=matter:t1');
+    return screen.findByRole('complementary', { name: 'Refund dispute A' });
+  }
+  const line = (region: HTMLElement, label: string) => within(region).getByText(label).closest('.kd') as HTMLElement;
+
+  it('lists each key date on one line: what it is for, muted and cut first, then its dates, strong once past due', async () => {
+    serve(() => nothing());
+    const produce = keyDate('k1', { label: 'Produce records (derived: 24h from service)', due_at: days(-2) });
+    const hearing = keyDate('k2', { label: 'Hearing', starts_at: days(5, 0).slice(0, 10), due_at: days(6, 9) });
+    const filed = keyDate('k3', { label: 'Answer filed', due_at: days(-9), done_at: days(-10) });
+    const dates = within(await withDates([filed, produce, hearing])).getByRole('region', { name: 'Dates' });
+    const late = line(dates, 'Produce records (derived: 24h from service)');
+    expect(late.querySelector('.kd-label')?.textContent).toBe('Produce records (derived: 24h from service)');
+    const when = late.querySelector('.kd-when') as HTMLElement;
+    expect(when.textContent).toBe(dateLine(produce));
+    expect(when.textContent).toMatch(/^Due /);
+    expect(when.classList.contains('is-late')).toBe(true);
+    const next = line(dates, 'Hearing').querySelector('.kd-when') as HTMLElement;
+    expect(next.textContent).toBe(dateLine(hearing));
+    expect(next.textContent).toMatch(/^Not before .+ · Due .+/);
+    expect(next.classList.contains('is-late')).toBe(false);
+    const done = line(dates, 'Answer filed');
+    expect(done.classList.contains('is-done')).toBe(true);
+    expect(done.querySelector('.kd-when')?.classList.contains('is-late')).toBe(false);
+    expect(within(done).getByRole('button', { name: 'Mark not done' })).toBeTruthy();
   });
 
-  it('words its dates quietly and reads typed ones', () => {
+  it('adds, changes, marks done and removes a key date in place', async () => {
+    const sent = serve((_url, method) => (method === 'POST' || method === 'DELETE' ? ok({ task_id: 't1', date_id: 'k9', matter: null }) : nothing()));
+    const panel = await withDates([keyDate('k1', { label: 'Discovery', due_at: '2026-12-01', primary: true }), keyDate('k2', { label: 'Hearing', due_at: '2026-12-15' })]);
+    const dates = within(panel).getByRole('region', { name: 'Dates' });
+    fireEvent.click(within(dates).getByRole('button', { name: 'Add a date' }));
+    fireEvent.change(within(dates).getByRole('textbox', { name: 'For' }), { target: { value: 'Written discovery' } });
+    const due = within(dates).getByRole('textbox', { name: 'Due by' });
+    fireEvent.change(due, { target: { value: '2026-12-08 9am' } });
+    fireEvent.submit(due.closest('form')!);
+    const nine = new Date(2026, 11, 8, 9).toISOString();
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tasks/t1/matter/dates', method: 'POST', body: { label: 'Written discovery', due_at: nine } }]));
+    expect(await within(dates).findByText('Written discovery')).toBeTruthy();
+    fireEvent.click(within(line(dates, 'Hearing')).getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(sent[1]).toEqual({ url: '/api/v2/tasks/t1/matter/dates/k2', method: 'POST', body: { done: true } }));
+    expect(await within(line(dates, 'Hearing')).findByRole('button', { name: 'Mark not done' })).toBeTruthy();
+    fireEvent.click(within(line(dates, 'Discovery')).getByRole('button', { name: 'Change date' }));
+    const moved = within(dates).getByRole('textbox', { name: 'Due by' });
+    fireEvent.change(moved, { target: { value: '2026-12-02' } });
+    fireEvent.submit(moved.closest('form')!);
+    await waitFor(() => expect(sent[2]).toEqual({ url: '/api/v2/tasks/t1/matter/dates/k1', method: 'POST', body: { due_at: '2026-12-02' } }));
+    fireEvent.click(within(line(dates, 'Discovery')).getByRole('button', { name: 'Remove date' }));
+    await waitFor(() => expect(sent[3]).toEqual({ url: '/api/v2/tasks/t1/matter/dates/k1', method: 'DELETE', body: null }));
+    await waitFor(() => expect(within(dates).queryByText('Discovery')).toBeNull());
+  });
+
+  it('words its dates quietly, finds the next open one, and reads typed ones', () => {
     const now = new Date(2026, 10, 10, 9);
-    const row = (m: Record<string, unknown>, due: string | null = null) => ({ task: { ...matter('t1', 'x').task, due_at: due }, matter: m as MatterRow['matter'] });
-    expect(matterDatesLine(row({ starts_at: new Date(2026, 10, 19, 10).toISOString(), due_at: '2026-11-26' }), now)).toBe('Not before Nov 19, 10 AM · Due Nov 26');
-    expect(matterDatesLine(row({ starts_at: '2026-11-19', due_at: new Date(2026, 10, 26, 17, 30).toISOString() }), now)).toBe('Not before Nov 19 · Due Nov 26, 5:30 PM');
-    expect(matterDatesLine(row({ starts_at: null, due_at: null }, '2026-11-24'), now)).toBe('Due Nov 24');
-    expect(matterDatesLine(row({ starts_at: null, due_at: null }), now)).toBe('');
+    expect(dateLine({ starts_at: new Date(2026, 10, 19, 10).toISOString(), due_at: '2026-11-26' }, now)).toBe('Not before Nov 19, 10 AM · Due Nov 26');
+    expect(dateLine({ starts_at: '2026-11-19', due_at: new Date(2026, 10, 26, 17, 30).toISOString() }, now)).toBe('Not before Nov 19 · Due Nov 26, 5:30 PM');
+    expect(dateLine({ starts_at: null, due_at: new Date(2026, 10, 18, 15).toISOString() }, now)).toBe('Due Nov 18, 3 PM');
+    // A day is due to its end; a time to the minute; a done date is never late.
+    expect(isLate({ due_at: '2026-11-10', done_at: null }, now)).toBe(false);
+    expect(isLate({ due_at: '2026-11-09', done_at: null }, now)).toBe(true);
+    expect(isLate({ due_at: new Date(2026, 10, 10, 8).toISOString(), done_at: null }, now)).toBe(true);
+    expect(isLate({ due_at: '2026-11-09', done_at: '2026-11-08T10:00:00Z' }, now)).toBe(false);
+    const task = matter('t1', 'x', { due: '2026-11-30' }).task;
+    const dated = (dates: MatterDate[]) => ({ task, matter: { ...matter('t1', 'x').matter, dates } as MatterRow['matter'] });
+    expect(nextDate(dated([keyDate('a', { due_at: '2026-12-01', done_at: '2026-11-30T10:00:00Z' }), keyDate('b', { starts_at: '2026-12-08' }), keyDate('c', { due_at: '2026-12-15' })]))?.due_at).toBe('2026-12-08');
+    expect(nextDate(dated([]))?.due_at).toBe('2026-11-30');
     expect(typedWhen('')).toBeNull();
     expect(typedWhen('2026-11-19')).toBe('2026-11-19');
     expect(typedWhen('2026-11-19 14:05')).toBe(new Date(2026, 10, 19, 14, 5).toISOString());
@@ -365,6 +430,18 @@ describe('One matter @n:re:matter', () => {
     tico();
     expect(await run('risk.setMatter', { task: 't1', version: 2, forum: 'PayPal' }, { via: 'tico' })).toMatchObject({ ok: true });
     expect(posted(sent)).toEqual([{ forum: 'PayPal', version: 2 }]);
+  });
+
+  it('adds and marks key dates for Tico too', async () => {
+    const sent = serve((_url, method) => (method === 'POST' ? ok({ task_id: 't1', date_id: 'k1', matter: null }) : nothing()));
+    tico();
+    expect(await run('risk.addDate', { task: 't1', label: 'Hearing', due_at: '2026-12-15T17:00:00Z' }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(await run('risk.changeDate', { task: 't1', date: 'k1', done: true }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(await run('risk.addDate', { task: 't1', label: 'No date' }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(sent.map((x) => [x.url, x.body])).toEqual([
+      ['/api/v2/tasks/t1/matter/dates', { label: 'Hearing', due_at: '2026-12-15T17:00:00Z' }],
+      ['/api/v2/tasks/t1/matter/dates/k1', { done: true }],
+    ]);
   });
 });
 

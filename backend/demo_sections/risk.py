@@ -7,8 +7,8 @@ forum). Everything goes through the API as Ana, the way the Legal page owner's `
 the Contacts section's organizations (backend/demo_sections/directory.py runs first), and a rule and a document link to
 the risks they guard. Dates (rule_due_dates with a basis) sit under standing rules on three risks: a fire board's
 order tomorrow, a court's dates on Cedar Venues (one theirs to meet), a privacy reply met with a link, and an insurance
-premium that passed with no proof, so Product safety reads Unconfirmed and is live. Nothing names a real company or
-person.
+premium that passed with no proof, so Product safety reads Unconfirmed and is live. Bright Homes' dispute carries key
+dates of its own (`matter_dates`), which show on the owner's calendar. Nothing names a real company or person.
 """
 
 from datetime import timedelta
@@ -71,6 +71,13 @@ MATTERS = (
         {"kind": "request"},
         True,
     ),
+)
+KEY_DATES_MATTER = "Bright Homes disputes the October invoice"
+KEY_DATES = (
+    # (days from today, what it is for, not before or due by, a time in the company's zone or the whole day)
+    (5, "Their delivery records", "due_at", ""),
+    (12, "Our photos of the kits", "due_at", ""),
+    (19, "Mediation call", "due_at", "T10:00"),
 )
 RULE = "A fire board letter gets Ana's OK before any reply."
 SOURCE = "Customer terms"
@@ -148,6 +155,10 @@ def seed(b: Any) -> None:  # backend.demo_seed.Builder
     b.call("POST", f"risks/{_key('Customer disputes')}/links", {"linkable_type": "entity", "linkable_id": document})
     # Dates count from the server's today, so they stay where they are put however late the demo is built.
     today = b.now.date()
+    # Bright Homes' dispute has key dates of its own: their documents, ours, then a call with the mediator.
+    for offset, label, field, at in KEY_DATES:
+        on = (today + timedelta(days=offset)).isoformat() + at
+        b.call("POST", f"tasks/{b.tasks['risk:' + KEY_DATES_MATTER]}/matter/dates", {"label": label, field: on})
     for text, risk, dates in DATES:
         b.at(days=30)
         standing = b.call("POST", "rules", {"kind": "internal", "text": text, "who": {"everyone": True}})["id"]

@@ -45,7 +45,7 @@ SCHEMAS.update(
                 bound={
                     "type": "string",
                     "enum": ["not_before", "due_by"],
-                    "description": "A matter's date (due:matter:<task id>:<bound>): not_before is the earliest its step may "
+                    "description": "A matter's key date (due:matter:<task id>:<date id>:<bound>): not_before is the earliest its step may "
                     "be done, never a deadline; due_by is the deadline",
                 },
             ),

@@ -24,7 +24,7 @@ occurrence_id   string, stable per instance:
                   google:<google calendar id>:<google event id>    (Google instance ids already carry the start)
                   run:<attempt id> | runs:<bot id>:<start ISO>      (a grouped block, see dense runs)
                   auto:<automation id>:<start ISO> | due:task:<id> | due:kpi:<id> | away:<absence id>
-                  due:matter:<task id>:not_before | due:matter:<task id>:due_by
+                  due:matter:<task id>:<date id>:not_before | due:matter:<task id>:<date id>:due_by
 event_id        the series or single event id (tico id, google event id or recurringEventId); null for derived
 calendar        {ref, type: human|bot|shared|google, id, name}
 home            google | tico | derived
@@ -143,9 +143,10 @@ version is news. A listing saves its page each write and goes on from it in the 
   more than hourly collapses to one all-day pill per day; bots that are away are skipped.
 - `due(c, owners: list[tuple[str,str]], start_utc, end_utc) -> list[dict]`: open tasks' `due_at` owned by those
   teammates and `goal_kpis.deadline`, all-day.
-- `matter_dates(c, owners, start_utc, end_utc) -> list[dict]`: open matters' `starts_at` ("Not before: <label>") and
-  `due_at` ("Due: <label>") on the calendar of the task's owner, else its requester; a day is all-day, a time an instant
-  (start = end). A change to them is a `calendar` row of kind `due`.
+- `matter_dates(c, owners, start_utc, end_utc) -> list[dict]`: each open key date (`matter_dates`, not done) of an
+  open matter: its `starts_at` ("Not before: <label>") and `due_at` ("Due: <label>") on the calendar of the task's
+  owner, else its requester; a day is all-day, a time an instant (start = end). A change to them is a `calendar` row of
+  kind `due`.
 - `group_runs(occurrences, min_minutes=10) -> list[dict]`: runs ≥ min stay; shorter ones that touch or overlap
   become one `runs:` block with `count` and `children`.
 - `month_counts(c, bot_ids, start_utc, end_utc) -> list[{bot_id, date, count}]`.

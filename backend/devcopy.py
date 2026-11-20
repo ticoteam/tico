@@ -559,6 +559,7 @@ KEEP = (
             "recording_transcripts",
             "org_rules",
             "matters",  # a risk's facts on a task, kept with its task (backend/risk.py)
+            "matter_dates",  # a matter's key dates, kept with its task (backend/risk.py)
             "risk_links",  # the rules and documents linked to a risk (a tag)
             "redesign_migrated",
             "refusals",

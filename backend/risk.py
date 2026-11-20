@@ -6,11 +6,15 @@
   Making one adds the Risk page's owner bot to the tag's bot_writers, so it may tag any task it can read. A tag's kind
   never changes after it is made.
 - A matter is a task tagged with a risk. Its facts are one `matters` row: kind, party, amount claimed (whole minor units,
-  like Finance), currency, claim, side, forum, place, product, and its own dates: not before (`starts_at`, the earliest
-  its step may be done, never a deadline), due by (`due_at`) and what they are for (`dates_label`). Each date is a day
-  or a time; a time given without an offset is the company's (updates.ZONE). Whoever may update the task sets them, and
-  so does a bot the risk lets tag tasks (bot_writers) on a task it reads. The dates show on the calendar of the task's
-  owner and requester (backend/calendar_derived.py `matter_dates`); a change to them is a row on the `calendar` topic.
+  like Finance), currency, claim, side, forum, place, product. Whoever may update the task sets them, and so does a bot
+  the risk lets tag tasks (bot_writers) on a task it reads.
+- A matter's key dates are `matter_dates` rows (a hearing, discovery due, records produced): each says what it is for
+  (`label`), not before (`starts_at`, the earliest its step may be done, never a deadline), due by (`due_at`), at least
+  one of the two, and when it was done (`done_at`). Each date is a day or a time; a time given without an offset is the
+  company's (updates.ZONE). The same people set them as the facts, and each write bumps the matter's version. The
+  matter's own `starts_at`, `due_at` and `dates_label` mirror its first date (the oldest row), which is what they edit.
+  Open dates of open matters show on the calendar of the task's owner, else its requester (backend/calendar_derived.py
+  `matter_dates`); a change to them is a row on the `calendar` topic.
 - `risk_links` ties a risk to org rules (role `rule`) and Directory documents (role `source`, or `covers` for a policy).
 - Who sees what: every teammate lists every risk (backend/task_privacy.py `_listed_alone`); the counts, sums, dates and
   matters come only from the tasks the viewer reads (auth.task_sql), so they differ by viewer. Every rule is read by every
@@ -27,7 +31,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal, cast
 
 from fastapi import Request
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from . import audit_log as _audit_log
 from . import org_rules as _org_rules
@@ -38,6 +42,8 @@ from . import teammate_access as _teammate_access
 from . import waiting_on as _waiting_on
 from .api_contract import api_v2, error
 from .api_answers.risk import (
+    MatterDateList,
+    MatterDateResult,
     MatterList,
     MatterResult,
     RiskDetail,
@@ -81,6 +87,7 @@ CLAIM_MAX = 2_000
 FORUM_MAX = 200
 DATES_LABEL_MAX = 120
 DATE_FIELDS = ("starts_at", "due_at")
+DATES_MAX = 50  # key dates on one matter
 GROUPS = ("unconfirmed", "next", "later", "past")  # the Obligations tab, in its order
 DAYS_DEFAULT = 90
 DAYS_MAX = 366
@@ -136,6 +143,24 @@ class MatterWrite(Contract):
     dates_label: str | None = Field(
         default=None, max_length=DATES_LABEL_MAX, description="What the dates are for, such as Produce records"
     )
+
+
+class MatterDateWrite(Contract):
+    """A matter's key date. Adding one takes at least one of starts_at and due_at; a change sets only the fields given,
+    and null clears one. The version, when sent, is the matter's as it was read."""
+
+    label: str | None = Field(default=None, max_length=DATES_LABEL_MAX, description="What it is for, such as Hearing")
+    starts_at: str | None = Field(
+        default=None,
+        max_length=40,
+        description="Not before: the earliest its step may be done, never a deadline. A day (2026-12-08) or a time "
+        "(2026-12-15T09:00; without an offset it is the company's time zone)",
+    )
+    due_at: str | None = Field(
+        default=None, max_length=40, description="Due by: the deadline. A day (2026-12-01) or a time, as starts_at"
+    )
+    done: bool | None = Field(default=None, description="true marks it done (it leaves the calendar); false reopens it")
+    version: int | None = None
 
 
 def _via(who: Any) -> str:
@@ -548,11 +573,8 @@ def date_bound(value: str, *, end: bool) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _calendar_moved(c: Any, who: Any, task_id: str, before: Row | None, after: Row | None) -> None:
-    """A change to a matter's dates is a row on the `calendar` topic: the calendars that show it read again."""
-    keys = (*DATE_FIELDS, "dates_label")
-    if {k: (before or {}).get(k) for k in keys} == {k: (after or {}).get(k) for k in keys}:
-        return
+def _calendar_changed(c: Any, who: Any, task_id: str) -> None:
+    """A change to a matter's key dates is a row on the `calendar` topic: the calendars that show it read again."""
     owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
     c.execute(
         "INSERT INTO changes(topic, kind, subject_id, ref, actor, created_at) VALUES('calendar','due',?,?,?,?)",
@@ -560,12 +582,53 @@ def _calendar_moved(c: Any, who: Any, task_id: str, before: Row | None, after: R
     )
 
 
-def matter_view(c: Any, actor: str | None, row: Any) -> Row | None:
+def _when(row: Row) -> datetime:
+    """Where a key date sits in time: its due by, else its not before."""
+    return date_bound(row["due_at"] or row["starts_at"], end=False)
+
+
+def date_view(row: Any, first: str | None) -> Row:
+    return {
+        "id": row["id"],
+        "label": row["label"],
+        "starts_at": row["starts_at"],
+        "due_at": row["due_at"],
+        "done_at": row["done_at"],
+        "primary": row["id"] == first,
+        "created_by_id": row["created_by_id"],
+        "created_at": row["created_at"],
+        "updated_by_id": row["updated_by_id"],
+        "updated_at": row["updated_at"],
+    }
+
+
+DATES_SQL_OF = "SELECT *, rowid AS _at FROM matter_dates WHERE task_id IN ({marks}) ORDER BY created_at, _at"
+
+
+def date_rows_of(c: Any, task_ids: list[str]) -> dict[str, list[Row]]:
+    """{task id: its key date rows, oldest first}."""
+    out: dict[str, list[Row]] = {}
+    for part in H.chunks(sorted(set(task_ids))):
+        for r in c.execute(DATES_SQL_OF.format(marks=",".join("?" * len(part))), part):
+            out.setdefault(r["task_id"], []).append(dict(r))
+    return out
+
+
+def dates_view(rows: list[Row]) -> list[Row]:
+    """A matter's key dates by date (rows oldest first: the first is the primary one)."""
+    first = rows[0]["id"] if rows else None
+    ordered = sorted(rows, key=lambda r: (_when(r), r["created_at"], r["_at"]))
+    return [date_view(r, first) for r in ordered]
+
+
+def matter_view(c: Any, actor: str | None, row: Any, dates: list[Row] | None = None) -> Row | None:
     """A matters row as JSON. A Directory record shows only to a reader the Directory lets see it: anyone else gets
-    null for it."""
+    null for it. `dates` are its key date rows when the caller read them for a page, oldest first."""
     if not row:
         return None
     row = dict(row)
+    if dates is None:
+        dates = date_rows_of(c, [row["task_id"]]).get(row["task_id"], [])
     now = _current(c, [row[COLUMNS[f]] for f in COLUMNS if row.get(COLUMNS[f])])
     seen: set[str] = ES.visible_ids(c, actor or "", set(now.values())) if now else set()
     names = ES.entity_names(c, seen) if seen else {}
@@ -580,6 +643,7 @@ def matter_view(c: Any, actor: str | None, row: Any) -> Row | None:
         "starts_at": row.get("starts_at"),
         "due_at": row.get("due_at"),
         "dates_label": row.get("dates_label") or "",
+        "dates": dates_view(dates),
         "version": row["version"],
         "created_by_id": row["created_by_id"],
         "created_at": row["created_at"],
@@ -648,9 +712,11 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
         if given:
             raise Problem("validation", "Clear takes no facts: send clear alone", 422)
         if found:
+            had_dates = c.execute("DELETE FROM matter_dates WHERE task_id=?", (task_id,)).rowcount
             c.execute("DELETE FROM matters WHERE task_id=?", (task_id,))
             audit_log.write(c, who.actor, "matter:" + task_id, before, None, _via(who))
-            _calendar_moved(c, who, task_id, before, None)
+            if had_dates:
+                _calendar_changed(c, who, task_id)
         return {"task_id": task_id, "matter": None}
     given = {k: getattr(body, k) for k in body.model_fields_set - {"clear", "version"}}
     if not given:
@@ -710,10 +776,182 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
         c.execute(
             f"INSERT INTO matters({','.join(fields)}) VALUES({','.join('?' * len(fields))})", list(fields.values())
         )
+    if _first_date_set(c, who, task_id, merged, given):
+        _mirror(c, task_id)
+        _calendar_changed(c, who, task_id)
     after = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
     audit_log.write(c, who.actor, "matter:" + task_id, before, dict(after), _via(who))
-    _calendar_moved(c, who, task_id, before, dict(after))
     return {"task_id": task_id, "matter": matter_view(c, who.actor, after)}
+
+
+def _first_date_set(c: Any, who: Any, task_id: str, merged: Row, given: Row) -> bool:
+    """The matter's starts_at, due_at and dates_label, as older clients send them, edit its first key date: made when
+    it has none, removed when both dates are cleared. True when a key date changed."""
+    if not any(k in given for k in (*DATE_FIELDS, "dates_label")):
+        return False
+    first = c.execute(
+        "SELECT * FROM matter_dates WHERE task_id=? ORDER BY created_at, rowid LIMIT 1", (task_id,)
+    ).fetchone()
+    starts, due, label = merged.get("starts_at"), merged.get("due_at"), merged.get("dates_label") or ""
+    ts = H.now()
+    if starts or due:
+        if first:
+            if (first["label"], first["starts_at"], first["due_at"]) == (label, starts, due):
+                return False
+            c.execute(
+                "UPDATE matter_dates SET label=?, starts_at=?, due_at=?, updated_by_id=?, updated_at=? WHERE id=?",
+                (label, starts, due, who.actor, ts, first["id"]),
+            )
+        else:
+            _insert_date(c, who, task_id, {"label": label, "starts_at": starts, "due_at": due, "done_at": None}, ts)
+        return True
+    if first:
+        c.execute("DELETE FROM matter_dates WHERE id=?", (first["id"],))
+        return True
+    return False
+
+
+def _insert_date(c: Any, who: Any, task_id: str, fields: Row, ts: str) -> str:
+    ident = H.new_id()
+    row = {
+        "id": ident,
+        "task_id": task_id,
+        **fields,
+        "created_by_id": who.actor,
+        "created_at": ts,
+        "updated_by_id": who.actor,
+        "updated_at": ts,
+    }
+    c.execute(f"INSERT INTO matter_dates({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    return ident
+
+
+MIRROR_SQL = (
+    "UPDATE matters SET starts_at=(SELECT starts_at FROM matter_dates d WHERE d.task_id=matters.task_id "
+    "ORDER BY created_at, rowid LIMIT 1), due_at=(SELECT due_at FROM matter_dates d WHERE d.task_id=matters.task_id "
+    "ORDER BY created_at, rowid LIMIT 1), dates_label=coalesce((SELECT label FROM matter_dates d "
+    "WHERE d.task_id=matters.task_id ORDER BY created_at, rowid LIMIT 1), ''){bump} WHERE task_id=?"
+)
+
+
+def _mirror(c: Any, task_id: str, bump: tuple[str, str] | None = None) -> None:
+    """The matter's starts_at, due_at and dates_label read as its first key date; `bump` (who, when) also moves its
+    version, as a change to any of its facts does."""
+    if bump is None:
+        c.execute(MIRROR_SQL.format(bump=""), (task_id,))
+    else:
+        c.execute(MIRROR_SQL.format(bump=", version=version+1, updated_by_id=?, updated_at=?"), (*bump, task_id))
+
+
+def _matter_for_dates(auth: Any, c: Any, who: Any, tid: str, version: int | None) -> tuple[str, Row]:
+    """The task id and matters row whose key dates `who` changes, as set_matter checks a change to its facts."""
+    auth.domain(who)
+    task_id = auth.resolve_task(c, who, tid)
+    row = auth.task(c, who, task_id)
+    found = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
+    risks = _task_risks(c, task_id)
+    if not risks:
+        raise Problem("validation", f"Tag the task with a risk first: tico task label {task_id} --add risk:<slug>", 422)
+    if not may_set_matter(c, who, row, risks):
+        raise Problem(
+            "forbidden",
+            "A matter's dates are set by whoever may change the task, or by a bot the risk lets tag tasks",
+            403,
+        )
+    if not found:
+        raise Problem(
+            "validation", f"Say what kind of matter it is first: tico risk matter {task_id} --kind dispute", 422
+        )
+    if version is not None and version != found["version"]:
+        raise Problem("version_conflict", "The matter changed; read the task and retry", 409)
+    return task_id, dict(found)
+
+
+def _date_fields(body: MatterDateWrite) -> Row:
+    """The fields a key date write sets, as stored."""
+    given: Row = {}
+    sent = body.model_fields_set
+    if "label" in sent:
+        given["label"] = " ".join(str(body.label or "").split())
+    for name in DATE_FIELDS:
+        if name in sent:
+            given[name] = matter_date(getattr(body, name), name)
+    if "done" in sent and body.done is not None:
+        given["done_at"] = H.now() if body.done else None
+    return given
+
+
+def _check_date(row: Row) -> None:
+    if not row.get("starts_at") and not row.get("due_at"):
+        raise Problem("validation", "A date needs not before (starts_at) or due by (due_at)", 422)
+    if row.get("starts_at") and row.get("due_at"):
+        if date_bound(row["starts_at"], end=False) > date_bound(row["due_at"], end=True):
+            raise Problem("validation", "Not before (starts_at) comes after due by (due_at)", 422)
+
+
+def _date_written(c: Any, who: Any, task_id: str, before: Row | None, after: Row | None) -> Row:
+    """After a key date changed: the matter mirrors its first date and moves its version, the audit log and the
+    calendar hear, and the answer is the matter as it is now."""
+    ts = H.now()
+    _mirror(c, task_id, (who.actor, ts))
+    audit_log.write(c, who.actor, "matter:" + task_id, before, after, _via(who))
+    _calendar_changed(c, who, task_id)
+    matter = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
+    return {"task_id": task_id, "matter": matter_view(c, who.actor, matter)}
+
+
+def _date_row(c: Any, task_id: str, date_id: str) -> Row:
+    row = c.execute("SELECT * FROM matter_dates WHERE id=? AND task_id=?", (date_id, task_id)).fetchone()
+    if not row:
+        raise Problem("not_found", f"The matter has no date {date_id}", 404)
+    return dict(row)
+
+
+def add_date(auth: Any, c: Any, who: Any, tid: str, body: MatterDateWrite) -> Row:
+    task_id, _ = _matter_for_dates(auth, c, who, tid, body.version)
+    fields = {"label": "", "starts_at": None, "due_at": None, "done_at": None, **_date_fields(body)}
+    _check_date(fields)
+    if c.execute("SELECT count(*) FROM matter_dates WHERE task_id=?", (task_id,)).fetchone()[0] >= DATES_MAX:
+        raise Problem("validation", f"A matter holds at most {DATES_MAX} dates: remove a past one first", 422)
+    ident = _insert_date(c, who, task_id, fields, H.now())
+    after = _date_row(c, task_id, ident)
+    return {"date_id": ident, **_date_written(c, who, task_id, None, after)}
+
+
+def update_date(auth: Any, c: Any, who: Any, tid: str, date_id: str, body: MatterDateWrite) -> Row:
+    task_id, _ = _matter_for_dates(auth, c, who, tid, body.version)
+    before = _date_row(c, task_id, date_id)
+    given = _date_fields(body)
+    if not given:
+        raise Problem("validation", "Give a label, a date or done to change", 422)
+    if "done_at" in given and bool(before["done_at"]) == bool(given["done_at"]):
+        given["done_at"] = before["done_at"]  # marked done again: it keeps when it was first done
+    merged = {**before, **given}
+    _check_date(merged)
+    if all(before[k] == v for k, v in given.items()):
+        matter = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
+        return {"date_id": date_id, "task_id": task_id, "matter": matter_view(c, who.actor, matter)}
+    sets = ", ".join(f"{k}=?" for k in given)
+    c.execute(
+        f"UPDATE matter_dates SET {sets}, updated_by_id=?, updated_at=? WHERE id=?",
+        [*given.values(), who.actor, H.now(), date_id],
+    )
+    return {"date_id": date_id, **_date_written(c, who, task_id, before, _date_row(c, task_id, date_id))}
+
+
+def remove_date(auth: Any, c: Any, who: Any, tid: str, date_id: str) -> Row:
+    task_id, _ = _matter_for_dates(auth, c, who, tid, None)
+    before = _date_row(c, task_id, date_id)
+    c.execute("DELETE FROM matter_dates WHERE id=?", (date_id,))
+    return {"date_id": date_id, **_date_written(c, who, task_id, before, None)}
+
+
+def list_dates(auth: Any, c: Any, who: Any, tid: str) -> Row:
+    """A matter's key dates by date: [] for a task with no matter."""
+    auth.domain(who)
+    task_id = auth.resolve_task(c, who, tid)
+    auth.task(c, who, task_id)
+    return {"task_id": task_id, "dates": dates_view(date_rows_of(c, [task_id]).get(task_id, []))}
 
 
 # The tasks a viewer reads that carry a risk, newest first, with their facts and stage.
@@ -817,6 +1055,7 @@ def matters(
             tags.setdefault(r["on_task"], []).append(H._tag_view(r))
     shown = {g["id"] for g in privacy.tags_readable(c, who, [g for found in tags.values() for g in found])}
     known = teammate_access.Known(c, who, auth)  # an owner the reader may not see reads "", as on the task itself
+    key_dates = date_rows_of(c, [r["id"] for r in page if r["m_task_id"]])
     out: list[Row] = []
     for r in page:
         task = {k: r[k] for k in TASK_FIELDS}
@@ -826,7 +1065,7 @@ def matters(
         out.append(
             {
                 "task": task,
-                "matter": matter_view(c, who.actor, {k: r["m_" + k] for k in MATTER_FIELDS})
+                "matter": matter_view(c, who.actor, {k: r["m_" + k] for k in MATTER_FIELDS}, key_dates.get(r["id"], []))
                 if r["m_task_id"]
                 else None,
                 "risks": [{k: g[k] for k in ("id", "key", "label")} for g in tags.get(r["id"], []) if g["id"] in shown],
@@ -1029,6 +1268,10 @@ def detail(auth: Any, c: Any, who: Any, row: Row, limit: Any = LIMIT_DEFAULT, of
     }
 
 
+class _Nothing(BaseModel):
+    pass
+
+
 def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def reader(request: Request) -> Any:
         who = request.state.identity
@@ -1118,6 +1361,36 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     )
     def matter_route(request: Request, tid: str, body: MatterWrite) -> Any:  # pyright: ignore[reportUnusedFunction]
         return mutate(request, body, lambda c: set_matter(auth, c, request.state.identity, tid, body))  # pyright: ignore[reportUnknownLambdaType]
+
+    @app.get(
+        "/api/v2/tasks/{tid}/matter/dates",
+        **api_v2("Risk", "listMatterDates", "A matter's key dates, by date", MatterDateList),
+    )
+    def dates_route(request: Request, tid: str) -> Any:  # pyright: ignore[reportUnusedFunction]
+        who = reader(request)
+        with store.read() as c:
+            return list_dates(auth, c, who, tid)
+
+    @app.post(
+        "/api/v2/tasks/{tid}/matter/dates",
+        **api_v2("Risk", "addMatterDate", "Add a key date to a matter", MatterDateResult),
+    )
+    def add_date_route(request: Request, tid: str, body: MatterDateWrite) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return mutate(request, body, lambda c: add_date(auth, c, request.state.identity, tid, body))  # pyright: ignore[reportUnknownLambdaType]
+
+    @app.post(
+        "/api/v2/tasks/{tid}/matter/dates/{date_id}",
+        **api_v2("Risk", "updateMatterDate", "Change a matter's key date, or mark it done", MatterDateResult),
+    )
+    def update_date_route(request: Request, tid: str, date_id: str, body: MatterDateWrite) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return mutate(request, body, lambda c: update_date(auth, c, request.state.identity, tid, date_id, body))  # pyright: ignore[reportUnknownLambdaType]
+
+    @app.delete(
+        "/api/v2/tasks/{tid}/matter/dates/{date_id}",
+        **api_v2("Risk", "removeMatterDate", "Remove a matter's key date", MatterDateResult),
+    )
+    def remove_date_route(request: Request, tid: str, date_id: str) -> Any:  # pyright: ignore[reportUnusedFunction]
+        return mutate(request, _Nothing(), lambda c: remove_date(auth, c, request.state.identity, tid, date_id))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.get(
         "/api/v2/risks/{risk_id}", **api_v2("Risk", "getRisk", "A risk, its matters, rules and sources", RiskDetail)

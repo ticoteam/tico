@@ -16,10 +16,10 @@ import { Table, Tr } from '@/kit/Table';
 import { toast } from '@/kit/Toast';
 import { fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel } from '@/pagekinds';
-import type { Risk, RiskDetail } from '@/api/schema';
+import type { MatterDate, Risk, RiskDetail } from '@/api/schema';
 import { Markdown } from '@/kit/Markdown';
 import { Face, Go, NameOf, PageOwner, PanelLink, PanelSection, useDo } from './parts';
-import { fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
+import { dateInstant, fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
 import './company.css';
 
 /* Risk (pages/10-records/records.js riskPage): a List of risks by level, a live one with its open matters under it.
@@ -290,7 +290,9 @@ function Disputes({ search }: { search: RiskSearch }) {
                         <td className="num">{money(m.matter?.amount, m.matter?.currency)}</td>
                         <td className="t-words c-forum">{m.matter?.forum}</td>
                         <td className="t-words">{m.task.stage}</td>
-                        <td className="t-words c-next">{m.task.status === 'open' && (m.matter?.due_at || m.task.due_at) ? fmtDate(m.matter?.due_at || m.task.due_at || '') : ''}</td>
+                        <td className="t-words c-next">
+                          <NextDate m={m} />
+                        </td>
                         <td className="num t-who">
                           <Face id={m.task.owner_id} />
                         </td>
@@ -327,12 +329,11 @@ function MatterPanel({ row }: { row: MatterRow }) {
       facts={
         <div className="rec-flds">
           <MatterFacts row={row} />
-          <MatterWhen row={row} />
         </div>
       }
       sections={
         <>
-          {row.risks[0] && <MatterDates task={row.task.id} risk={row.risks[0].id} />}
+          <MatterDates row={row} />
           {row.risks.length > 0 && (
             <PanelSection name="Risks" count={row.risks.length}>
               {row.risks.map((r) => (
@@ -426,11 +427,26 @@ export function matterWhen(value: string, now: Date = new Date()): string {
   return `${fmtDate(d, now)}, ${h}${d.getMinutes() ? `:${pad(d.getMinutes())}` : ''} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
 }
 
-/** The one quiet line of a matter's dates: "Not before Nov 19, 10 AM · Due Nov 26". The task's own due date stands in
-    while the matter has none. */
-export function matterDatesLine(row: Pick<MatterRow, 'task' | 'matter'>, now: Date = new Date()): string {
-  const due = row.matter?.due_at || row.task.due_at;
-  return [row.matter?.starts_at && `Not before ${matterWhen(row.matter.starts_at, now)}`, due && `Due ${matterWhen(due, now)}`].filter(Boolean).join(' · ');
+/** "Not before Nov 19, 10 AM · Due Nov 26": a key date's dates, never cut short. */
+export function dateLine(d: Pick<MatterDate, 'starts_at' | 'due_at'>, now: Date = new Date()): string {
+  return [d.starts_at && `Not before ${matterWhen(d.starts_at, now)}`, d.due_at && `Due ${matterWhen(d.due_at, now)}`].filter(Boolean).join(' · ');
+}
+
+/** Open and past its due by (a day is due to its end). */
+export const isLate = (d: Pick<MatterDate, 'due_at' | 'done_at'>, now: Date = new Date()) => !d.done_at && !!d.due_at && dateInstant(d.due_at, true) < now.getTime();
+
+/** The matter's next open key date (they come by date), else the task's own due date. */
+export function nextDate(row: Pick<MatterRow, 'task' | 'matter'>): Pick<MatterDate, 'due_at' | 'done_at'> | null {
+  const d = row.matter?.dates?.find((x) => !x.done_at);
+  if (d) return { due_at: d.due_at || d.starts_at, done_at: null };
+  return row.task.due_at ? { due_at: row.task.due_at, done_at: null } : null;
+}
+
+/** Disputes' Next: the next open date of an open matter, strong once it has passed. */
+function NextDate({ m }: { m: MatterRow }) {
+  const next = m.task.status === 'open' ? nextDate(m) : null;
+  if (!next?.due_at) return null;
+  return isLate(next) ? <span className="is-late" title="Overdue">{fmtDate(next.due_at)}</span> : <>{fmtDate(next.due_at)}</>;
 }
 
 /** A typed date as the server takes it: "2026-11-19" stays a day; "2026-11-19 10:00" or "2026-11-19 10am" is that time
@@ -457,53 +473,80 @@ const typedOf = (value: string | null | undefined) => {
   return `${localDay(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-/** A matter's dates in one quiet line, named by what they are for; the pencil opens For, Not before and Due by. */
-function MatterWhen({ row }: { row: MatterRow }) {
-  const save = useDo('risk.setMatter');
-  const m = row.matter;
-  const [draft, setDraft] = useState<{ label: string; starts: string; due: string } | null>(null);
-  const line = matterDatesLine(row);
+interface DateDraft {
+  label: string;
+  starts: string;
+  due: string;
+}
+
+/** For, Not before and Due by: Enter saves what changed, Escape puts it back. */
+function DateForm({ start, onSave, onClose }: { start: DateDraft; onSave: (facts: { label?: string; starts_at?: string | null; due_at?: string | null }) => void; onClose: () => void }) {
+  const [draft, setDraft] = useState(start);
   const submit = () => {
-    if (!draft) return;
     const starts = typedWhen(draft.starts);
     const due = typedWhen(draft.due);
     if (starts === undefined || due === undefined) return void toast({ text: 'Check the fields', name: 'A day, or a day and time', kind: 'failed' });
-    const facts: Record<string, unknown> = {};
-    if (draft.label.trim() !== (m?.dates_label ?? '')) facts.dates_label = draft.label.trim() || null;
-    if (draft.starts.trim() !== typedOf(m?.starts_at)) facts.starts_at = starts;
-    if (draft.due.trim() !== typedOf(m?.due_at)) facts.due_at = due;
-    setDraft(null);
-    if (Object.keys(facts).length) void save.run({ task: row.task.id, ...(m && { version: m.version }), ...facts });
+    if (!starts && !due) return void toast({ text: 'Check the fields', name: 'Not before or due by', kind: 'failed' });
+    const facts: { label?: string; starts_at?: string | null; due_at?: string | null } = {};
+    if (draft.label.trim() !== start.label.trim()) facts.label = draft.label.trim();
+    if (draft.starts.trim() !== start.starts) facts.starts_at = starts;
+    if (draft.due.trim() !== start.due) facts.due_at = due;
+    onClose();
+    if (Object.keys(facts).length) onSave(facts);
   };
   return (
+    <form
+      className="mkt-ask"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <Field label="For" placeholder="Hearing" value={draft.label} onValueChange={(label) => setDraft({ ...draft, label })} autoFocus />
+      <Field label="Not before" placeholder="2026-12-08" value={draft.starts} onValueChange={(starts) => setDraft({ ...draft, starts })} />
+      <Field label="Due by" placeholder="2026-12-15 9:00" value={draft.due} onValueChange={(due) => setDraft({ ...draft, due })} />
+      <Button type="submit">Save</Button>
+    </form>
+  );
+}
+
+/** One key date as one quiet line: its mark (pressed, done or open again), what it is for (muted, cut short first),
+    then its dates; past due and open, the dates are strong. Change and Remove beside it. */
+function KeyDate({ task, d }: { task: string; d: MatterDate }) {
+  const change = useDo('risk.changeDate');
+  const remove = useDo('risk.removeDate');
+  const [editing, setEditing] = useState(false);
+  const late = isLate(d);
+  return (
     <>
-      <div className="fact fld">
-        <span>{m?.dates_label || 'Dates'}</span>
-        <span className="fact-v">
-          <span className={line ? undefined : 'none'}>{line || 'None'}</span>
-          {m && <IconButton icon="edit" label="Change dates" size="sm" quiet on={!!draft} onClick={() => setDraft(draft ? null : { label: m.dates_label ?? '', starts: typedOf(m.starts_at), due: typedOf(m.due_at) })} />}
+      <div className={d.done_at ? 'dt kd is-done' : 'dt kd'} data-target={`date:${d.id}`}>
+        <span className="dt-mark">
+          <button type="button" className="kd-tick" aria-label={d.done_at ? 'Mark not done' : 'Mark done'} aria-pressed={!!d.done_at} onClick={() => void change.run({ task, date: d.id, done: !d.done_at })}>
+            {d.done_at ? <Icon name="check" /> : <i className="hollow" />}
+          </button>
+        </span>
+        <span className="kd-line">
+          {d.label && (
+            <span className="kd-label" title={d.label}>
+              {d.label}
+            </span>
+          )}
+          <span className={late ? 'kd-when is-late' : 'kd-when'} title={late ? 'Overdue' : undefined}>
+            {dateLine(d)}
+          </span>
+        </span>
+        <span className="kd-acts">
+          <IconButton icon="edit" label="Change date" size="sm" quiet on={editing} onClick={() => setEditing(!editing)} />
+          <IconButton icon="close" label="Remove date" size="sm" quiet busy={remove.pending} onClick={() => void remove.run({ task, date: d.id })} />
         </span>
       </div>
-      {draft && (
-        <form
-          className="mkt-ask"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.stopPropagation();
-              setDraft(null);
-            }
-          }}
-        >
-          <Field label="For" placeholder="Produce records" value={draft.label} onValueChange={(label) => setDraft({ ...draft, label })} autoFocus />
-          <Field label="Not before" placeholder="2026-11-19 10:00" value={draft.starts} onValueChange={(starts) => setDraft({ ...draft, starts })} />
-          <Field label="Due by" placeholder="2026-11-26" value={draft.due} onValueChange={(due) => setDraft({ ...draft, due })} />
-          <Button type="submit">Save</Button>
-        </form>
-      )}
+      {editing && <DateForm start={{ label: d.label, starts: typedOf(d.starts_at), due: typedOf(d.due_at) }} onClose={() => setEditing(false)} onSave={(facts) => void change.run({ task, date: d.id, ...facts })} />}
     </>
   );
 }
@@ -604,13 +647,23 @@ const soon = (on: string) => {
 };
 const proofWords = (p: NonNullable<RiskDate['mark']>['proof']) => (!p ? '' : p.kind === 'email' ? 'Sent mail' : p.kind === 'file' ? p.name || 'File' : p.ref || 'Link');
 
-/** The matter's own dates, from its risk's (records.js matterRec Dates): each opens on its risk's page. */
-function MatterDates({ task, risk }: { task: string; risk: string }) {
-  const q = useQuery(matterDatesQuery(risk));
+/** The matter's dates: its own key dates by date, added and changed here, then its risk's dates that belong to its task,
+    each opening on its risk's page (records.js matterRec Dates). */
+function MatterDates({ row }: { row: MatterRow }) {
+  const risk = row.risks[0]?.id ?? '';
+  const q = useQuery({ ...matterDatesQuery(risk), enabled: !!risk });
+  const add = useDo('risk.addDate');
+  const [adding, setAdding] = useState(false);
+  const task = row.task.id;
+  const own = row.matter?.dates ?? [];
   const dates = (q.data ?? []).filter((d) => d.task?.id === task);
-  if (!dates.length) return null;
+  if (!row.matter && !dates.length) return null;
   return (
-    <PanelSection name="Dates" count={dates.length}>
+    <PanelSection name="Dates" count={own.length + dates.length} actions={row.matter && <IconButton icon="plus" label="Add a date" size="sm" quiet on={adding} onClick={() => setAdding(!adding)} />}>
+      {adding && <DateForm start={{ label: '', starts: '', due: '' }} onClose={() => setAdding(false)} onSave={(facts) => void add.run({ task, ...facts })} />}
+      {own.map((d) => (
+        <KeyDate key={d.id} task={task} d={d} />
+      ))}
       {dates.map((d) => (
         <div key={`${d.id}:${d.due_on}`} className={d.mark ? 'dt is-done' : 'dt'}>
           <span className="dt-mark">
