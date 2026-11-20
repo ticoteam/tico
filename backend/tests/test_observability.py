@@ -141,17 +141,23 @@ def events(transport):
     return [item.payload.json for env in transport.envelopes for item in env.items if item.type == "event"]
 
 
+def transactions(transport):
+    return [item.payload.json for env in transport.envelopes for item in env.items if item.type == "transaction"]
+
+
 @pytest.fixture
 def reporting_api(request, monkeypatch, recording):
-    """The api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99."""
+    """The api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99, plus the settings
+    an indirect parameter gives."""
     from backend.tests.helpers import api_app  # the api fixture reads api_settings here
 
     plain = api_app.api_settings
+    extra = getattr(request, "param", {})
     monkeypatch.setattr(
         api_app,
         "api_settings",
         lambda tmp: replace(
-            plain(tmp), observability_environment="test", sentry_server_dsn=DSN, instance_name="Acme Co"
+            plain(tmp), observability_environment="test", sentry_server_dsn=DSN, instance_name="Acme Co", **extra
         ),
     )
     monkeypatch.setenv("TICO_VERSION", "v0.3.99")
@@ -184,6 +190,7 @@ def test_route_and_runner_failures_each_send_one_tagged_event(reporting_api, rec
     )
     assert sent.status_code == 200, sent.text
     route, panic = events(recording)
+    assert transactions(recording) == []  # a self-hosted install traces nothing
     for event in (route, panic):
         assert event["release"] == "0.3.99" and event["tags"]["instance"] == "acme-co"
     assert route["tags"]["route"] == "GET /api/v2/tasks/{tid}/explode" and route["tags"]["status"] == "500"
@@ -268,10 +275,6 @@ def test_scrubber_drops_email_token_and_customer_text(settings):
     }
 
 
-def transactions(transport):
-    return [item.payload.json for env in transport.envelopes for item in env.items if item.type == "transaction"]
-
-
 @pytest.mark.parametrize(
     "hosted, given, rate",
     [
@@ -332,13 +335,16 @@ def test_transaction_wire_allowlist(settings, recording):
         "extra": {"task": TEXT},
     }
     telemetry.client.capture_event(dirty)
+    telemetry.client.capture_event({**dirty, "contexts": {"trace": {**dirty["contexts"]["trace"], "status": SECRET}}})
     telemetry.trace("GET /api/v2/tasks/{tid}", 403, 12.0, 1.5, [4.0, 0.5, 3, {"SELECT ?": [1, 4.0]}], "human")
     telemetry.trace("GET unmatched", 404, 1.0)  # no route template, so not sent
-    first, second = transactions(recording)
-    wire = json.dumps([first, second])
+    assert [item.type for env in recording.envelopes for item in env.items] == ["transaction"] * 3
+    first, odd, second = transactions(recording)
+    assert odd["contexts"]["trace"]["status"] == "unknown_error"
+    wire = json.dumps([first, odd, second])
     for secret in (SECRET, EMAIL, TOKEN, TEXT, "t-secret-1", "human:ana", "SELECT"):
         assert secret not in wire
-    for sent in (first, second):
+    for sent in (first, odd, second):
         assert set(sent) <= {
             "event_id", "type", "platform", "transaction", "transaction_info", "start_timestamp", "timestamp",
             "contexts", "tags", "environment", "release", "measurements",
@@ -366,13 +372,11 @@ def test_transaction_wire_allowlist(settings, recording):
     telemetry.close()
 
 
+@pytest.mark.parametrize("reporting_api", [{"hosted": "own", "sentry_traces_sample_rate": "1"}], indirect=True)
 def test_hosted_requests_are_traced_by_route_template(reporting_api, recording):
     from backend.tests.helpers.api import headers
 
     client = TestClient(reporting_api.app, raise_server_exceptions=False)
-    assert client.get("/api/v2/tasks/t-secret-1/explode", headers=headers()).status_code == 500
-    assert transactions(recording) == []  # this install is self-hosted
-    reporting_api.app.state.observability.trace_rate = 1.0  # as a hosted one tracing every request
     assert client.get("/api/v2/tasks/t-secret-1/explode", headers=headers()).status_code == 500
     (sent,) = [t for t in transactions(recording) if t["transaction"] == "GET /api/v2/tasks/{tid}/explode"]
     assert sent["tags"]["status"] == "500" and sent["tags"]["caller"] == "human"

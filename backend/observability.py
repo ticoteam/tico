@@ -178,6 +178,24 @@ def sanitize_event(event, hint=None):
 # hour while keeping Sentry's volume, and its bill, small.
 TRACE_RATE = 0.01
 CALLERS = frozenset({"human", "bot", "runner", "service", "anonymous"})
+# The span statuses sentry_sdk.tracing.get_span_status_from_http_code gives.
+SPAN_STATUSES = frozenset(
+    {
+        "ok",
+        "invalid_argument",
+        "unauthenticated",
+        "permission_denied",
+        "not_found",
+        "already_exists",
+        "failed_precondition",
+        "resource_exhausted",
+        "internal_error",
+        "unimplemented",
+        "unavailable",
+        "deadline_exceeded",
+        "unknown_error",
+    }
+)
 # A transaction's timings beside its duration, each in milliseconds: sign-in, SQL and the write-lock wait.
 MEASUREMENTS = ("auth", "sql", "lock_wait")
 
@@ -228,7 +246,7 @@ def sanitize_transaction(event, hint=None) -> "Event | None":
                 "trace_id": trace["trace_id"],
                 "span_id": trace["span_id"],
                 "op": "http.server",
-                "status": status if isinstance(status, str) and SOURCE.fullmatch(status) else "unknown",
+                "status": status if status in SPAN_STATUSES else "unknown_error",
             }
         },
         "tags": {"app": "tico", "source": "request"},
@@ -289,7 +307,7 @@ class Observability:
             self.client = Client(
                 dsn=dsn,
                 environment=self.settings.observability_environment,
-                release=self.release or None,
+                release=self.release,  # empty is no release: None would let the SDK read SENTRY_RELEASE
                 default_integrations=False,
                 auto_enabling_integrations=False,
                 data_collection={

@@ -168,9 +168,10 @@ event is rebuilt from those fields before the SDK sees it and again in its last 
 A hosted install (`TICO_HOSTED` `own` or `invited`) with server reporting on also sends one request in a hundred as a
 transaction (`TICO_SENTRY_TRACES_SAMPLE_RATE` sets the share, `0` turns it off); a self-hosted install sends none. Each
 holds only the route's template, the status, the caller's kind (`human`, `bot`, `runner`, `service` or `anonymous`),
-the duration, the sign-in, SQL and write-lock milliseconds, `release`, `instance` and environment. It has no spans, so
-no SQL, addresses, query strings, headers or people; requests without a route template (static files, unmatched
-addresses) are not sent. Like an error, each transaction is rebuilt before the SDK sees it and again in its last hook.
+the duration as the flight recorder counts it (to the response's start, less a long poll's deliberate wait), the
+sign-in milliseconds and, with the recorder on, the SQL and write-lock milliseconds, `release`, `instance` and
+environment. It has no spans, so no SQL, addresses, query strings, headers or people. Requests no route matched
+(mounted static files, unknown addresses, refusals before routing) are not sent. Like an error, each transaction is rebuilt before the SDK sees it and again in its last hook.
 
 PostHog autocapture, replay, heatmaps, dead/rage clicks, error capture, surveys, performance,
 remote flags and external dependency loading are disabled. The last-mile hook allows only
