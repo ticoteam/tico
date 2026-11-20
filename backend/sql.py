@@ -11,6 +11,7 @@ denied outright. Nothing here depends on prompt text.
 
 import base64
 from collections import OrderedDict
+from collections.abc import Callable
 from contextvars import copy_context
 import hashlib
 from pathlib import Path
@@ -397,7 +398,18 @@ class Audit:
 
 
 class ReadConnection(sqlite3.Connection):
-    pass
+    # Empties the request's provenance caches (ReadIndex.release) when the connection closes.
+    release: Callable[[], None] | None = None
+    read_cache: dict
+
+    def close(self):
+        release, self.release = self.release, None
+        try:
+            if release is not None:
+                release()
+                self.read_cache.clear()
+        finally:
+            super().close()
 
 
 class Query(Contract):
@@ -406,13 +418,14 @@ class Query(Contract):
     max_rows: int | None = Field(default=None, ge=1, le=5000)
 
 
-def guarded(c, auth, who, inner, function, columns=None, unseen=None):
+def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=None):
     """Every table a caller may read through a view: name -> (row predicate, hidden columns).
 
     The predicates say in SQL what `auth.bot_access`, `auth.conversation`, `auth.task` and
     `auth.approval` say in Python. A bot is in the SQL layer for a caller who may read it (a bot
     they may only see or write to is not; the API shows it); `inner(table)` names the connection's unfiltered view of a
-    base table, and a plain table name inside a predicate is the filtered view of it.
+    base table, and a plain table name inside a predicate is the filtered view of it. `private(name)`, when given, names
+    this request's sets (materialize): the room checks then ask Python only about the few rooms with meeting provenance.
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
     # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, and not named as authors
@@ -428,14 +441,23 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     from . import threads
 
     viewer = threads.Viewer(auth, who)
+    if private is None:
+        meeting = lambda cid: function("meeting_room") + f"({cid})"
+        conversation = lambda cid: function("conversation") + f"({cid})"
+    else:
+        # ReadIndex.meeting_room is no for a room outside `bound_rooms`, and ReadIndex.conversation yes for one outside
+        # `meeting_rooms` (rooms=True): only those few rooms reach Python, not one callback per room of the company.
+        # CASE, not AND/OR: SQLite may evaluate both sides of a boolean operator, the Python callback included.
+        meeting = lambda cid: (
+            f'(CASE WHEN {cid} IN (SELECT id FROM "{private("bound_rooms")}") '
+            f'THEN {function("meeting_room")}({cid}) ELSE 0 END)'
+        )
+        conversation = lambda cid: (
+            f'(CASE WHEN {cid} IN (SELECT id FROM "{private("meeting_rooms")}") '
+            f'THEN {function("conversation")}({cid}) ELSE 1 END)'
+        )
     conversations = threads.readable_sql(
-        c,
-        viewer,
-        "",
-        inner=inner,
-        tasks="SELECT id FROM tasks",
-        meeting=lambda cid: function("meeting_room") + f"({cid})",
-        conversation=lambda cid: function("conversation") + f"({cid})",
+        c, viewer, "", inner=inner, tasks="SELECT id FROM tasks", meeting=meeting, conversation=conversation
     )
     # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
     legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
@@ -752,8 +774,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
 # Per-request sets, each an indexed temp table only this request's views may read.
 SETS = (
     "visible_tasks",
-    "known_tasks",
-    "plain_refs",
+    "bound_rooms",
+    "meeting_rooms",
     "readable_conversations",
     "denied_tasks",
     "unreadable_rooms",
@@ -786,11 +808,17 @@ class Gates:
 
     def __init__(self, inner, private, denied, page):
         self.inner, self.denied, self.page = inner, bool(denied), page
-        self.tasks, self.messages = '"' + private("known_tasks") + '"', inner("messages")
+        self.all_tasks = inner("tasks")
+        self.messages = inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
         self.carriers = '"' + private("run_carriers") + '"'
-        self.plain_refs = '"' + private("plain_refs") + '"'
+
+    def known(self, value):
+        """A task with this id exists: one primary-key lookup in the unfiltered tasks view. Not a per-request copy of
+        every task id, and not `IN (SELECT id ...)`, which through a view builds a list of all of them per statement.
+        Only ever asked about a text value, so it reads as `IN` did."""
+        return f"EXISTS (SELECT 1 FROM {self.all_tasks} known_task WHERE known_task.id={value})"
 
     def strings(self, value):
         """No string in this JSON names a denied task the way ReadIndex.references finds one."""
@@ -803,6 +831,34 @@ class Gates:
             f"AND substr(s.value,6) IN (SELECT id FROM {self.denied_tasks}))))"
         )
 
+    def plain(self, refs):
+        """`refs` is exactly a task-only object as json_object writes it, or with a space after the colon: {"task":"<id>"}
+        or {"task_id":"<id>"}, naming a task that exists and is not denied, with no backslash, no `live_meeting` and no
+        string `strings` would refuse. Such refs pass every check of `refs` below, so this is only a shortcut to the same
+        yes, read from the text and one primary-key lookup instead of parsing JSON. It replaces a per-request table of
+        every task's four spellings (74,400 rows at 18,600 tasks, built before even `SELECT 1`)."""
+        spelled = " ".join(
+            f"WHEN substr({refs},1,{len(head)})='{head}' THEN substr({refs},{len(head) + 1},length({refs})-{len(head) + 2})"
+            for head in ('{"task":"', '{"task": "', '{"task_id":"', '{"task_id": "')
+        )
+        tid = "plain.id"
+        denied = (
+            f" AND {tid} NOT IN (SELECT id FROM {self.denied_tasks}) AND instr({tid},'/task')=0 "
+            f"AND substr({tid},1,1) NOT IN ('{{','[') AND NOT (substr({tid},1,5)='task:' "
+            f"AND substr({tid},6) IN (SELECT id FROM {self.denied_tasks}))"
+            if self.denied
+            else ""
+        )
+        # The ids "task", "answers" and "inputs" are left to the full check: in this shape `refs` (top=False) reads the
+        # first as a repeated key and the others as inherited keys, so the old table of spellings never held them.
+        return (
+            f"EXISTS (SELECT 1 FROM (SELECT CASE {spelled} END AS id) plain WHERE {tid} IS NOT NULL "
+            f"AND {refs} IN (json_object('task',{tid}),'{{\"task\": '||json_quote({tid})||'}}',"
+            f"json_object('task_id',{tid}),'{{\"task_id\": '||json_quote({tid})||'}}') "
+            f"AND instr({refs},'\\')=0 AND instr({refs},'live_meeting')=0 "
+            f"AND {tid} NOT IN ('task','answers','inputs') AND {self.known(tid)}{denied})"
+        )
+
     def task(self, refs, key):
         """`refs.<key>` is absent, one string naming a task that exists and is not denied, or a non-empty array in which
         every element is such a string. ReadIndex.listed_tasks_known reads a list the same way: any other element, an
@@ -810,16 +866,16 @@ class Gates:
         path = f"'$.{key}'"
         listed = (
             f"SELECT 1 FROM json_each({refs},{path}) element WHERE element.type<>'text' OR "
-            f"element.value NOT IN (SELECT id FROM {self.tasks}) OR element.value IN (SELECT id FROM {self.denied_tasks})"
+            f"NOT {self.known('element.value')} OR element.value IN (SELECT id FROM {self.denied_tasks})"
         )
         return (
             f"(json_type({refs},{path}) IS NULL OR (json_type({refs},{path})='text' AND "
-            f"json_extract({refs},{path}) IN (SELECT id FROM {self.tasks}) AND "
+            f"{self.known(f'json_extract({refs},{path})')} AND "
             f"json_extract({refs},{path}) NOT IN (SELECT id FROM {self.denied_tasks})) OR "
             f"(json_type({refs},{path})='array' AND json_array_length({refs},{path})>0 AND NOT EXISTS ({listed})))"
         )
 
-    def refs(self, refs, top, cached=True):
+    def refs(self, refs, top):
         """The row's own refs: an object naming no meeting, no denied string and only known readable tasks.
 
         Only the message being read (`top`) may name ancestors, a bounded few, and a run, which must itself pass."""
@@ -834,7 +890,7 @@ class Gates:
         )
         # Sibling WHENs short-circuit validation before inherited checks without nesting another CASE around
         # the run and its roots. Plain refs need no JSON walk; malformed or undecided refs keep Python's gate.
-        plain = f"WHEN {refs} IN (SELECT id FROM {self.plain_refs}) THEN 1 " if cached else ""
+        plain = f"WHEN {self.plain(refs)} THEN 1 "
         checked = (
             f"CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 {plain}"
             f"WHEN NOT json_valid({refs}) THEN 0 WHEN NOT coalesce({checks},0) THEN 0 "
@@ -925,13 +981,16 @@ def materialize(conn, index, tables, inner, function, private):
         for table, (predicate, hidden) in tables.items()
     }
     tables["tasks"] = ("id " + visible, tables["tasks"][1])
+    # The few rooms with meeting provenance (ReadIndex rooms=True): the room predicate asks Python about these alone.
+    # Unsorted: a set may hold a NULL room id (create drops it), which sorted() cannot order against text.
+    create("bound_rooms", index.bound_rooms)
+    create("meeting_rooms", index.meeting_rooms)
     rooms = create("readable_conversations", "SELECT id FROM main.conversations WHERE " + tables["conversations"][0])
     tables = {
         table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)
         for table, (predicate, hidden) in tables.items()
     }
     tables["conversations"] = ("id " + rooms, tables["conversations"][1])
-    create("known_tasks", "SELECT id FROM main.tasks")
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     # A run on a denied task (its `attempts.task_id`) is never a fast yes.
@@ -963,16 +1022,6 @@ def materialize(conn, index, tables, inner, function, private):
         )
 
     gates = Gates(inner, private, index.denied, page_gate)
-    # Task-only refs repeat across a room's history. Validate the compact and spaced object encodings once per
-    # task, without reading message history; every other encoding or shape keeps the ordinary refs gate.
-    task_refs = gates.refs("json_object('task',id)", top=False, cached=False)
-    allowed = f"WITH allowed AS MATERIALIZED (SELECT id FROM main.tasks WHERE {task_refs}) "
-    objects = " UNION ALL ".join(
-        f"SELECT {value} AS refs FROM allowed"
-        for key in ("task", "task_id")
-        for value in (f"json_object('{key}',id)", f"'{{\"{key}\": '||json_quote(id)||'}}'")
-    )
-    create("plain_refs", allowed + objects)
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
 
@@ -998,21 +1047,20 @@ def materialize(conn, index, tables, inner, function, private):
 
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
-    return {
-        table: (
-            predicate.replace(
-                message,
-                f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
-            )
-            .replace(
-                attempt,
-                f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)",
-            )
-            .replace(page, page_gate("refs")),
-            hidden,
-        )
-        for table, (predicate, hidden) in tables.items()
+    # Each gate is rendered once: rendered per table, the gates' SQL text alone took tens of ms a request.
+    gated = {
+        message: f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
+        attempt: f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)",
+        page: page_gate("refs"),
     }
+
+    def gate(predicate):
+        for placeholder, sql in gated.items():
+            if placeholder in predicate:
+                predicate = predicate.replace(placeholder, sql)
+        return predicate
+
+    return {table: (gate(predicate), hidden) for table, (predicate, hidden) in tables.items()}
 
 
 # Tables built in Python for one request, only when its statement names them.
@@ -1082,7 +1130,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         in_time()
-        tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen, private=private)
         in_time()
         readable = tables.pop(READABLE_MESSAGES)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
@@ -1155,6 +1203,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                     trusted[0] = False
 
         index = ReadIndex(Source(), who, rooms=True)
+        conn.release = index.release
         from .files import (
             page_audience_visible,
             page_blob_visible,

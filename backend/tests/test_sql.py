@@ -649,6 +649,64 @@ def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, wo
     assert called
 
 
+def test_task_only_refs_read_as_the_full_check_and_rooms_ask_python_only_about_meetings(api, world, monkeypatch):
+    """A task-only refs object, in each spelling, reads as ReadIndex.message decides it, with no per-request table of
+    every task's spellings; and the room predicate calls Python only for rooms with meeting provenance."""
+    from backend import sql as S
+    from backend.auth import Identity
+    from backend.privacy_index import ReadIndex
+
+    store, room, public = api.app.state.store, world['coo_task']['conversation_id'], world['coo_task']['id']
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden plain source', '', 'bot:finance', private=True, lint=False)
+        cited = {}
+        for tid in (public, hidden['id'], 'unknown-fixture-task', 'task:' + hidden['id'], 'a/task' + public):
+            for raw in (
+                '{"task":%s}',
+                '{"task": %s}',
+                '{"task_id":%s}',
+                '{"task_id": %s}',
+                '{"task":  %s}',
+                '{"task":[%s]}',
+            ):
+                mid = H.say(c, 'human:ben', 'human:ana', 'Plain', conversation_id=room)['id']
+                c.execute('UPDATE messages SET refs=? WHERE id=?', (raw % json.dumps(tid), mid))
+                cited[mid] = tid
+    asked, register = [], S.ReadConnection.create_function
+
+    def counted(conn, name, arity, fn, **kwargs):
+        if name.endswith('_privacy_conversation'):
+
+            def check(cid):
+                asked.append(cid)
+                return fn(cid)
+
+            return register(conn, name, arity, check, **kwargs)
+        return register(conn, name, arity, fn, **kwargs)
+
+    monkeypatch.setattr(S.ReadConnection, 'create_function', counted)
+    ids = sorted(cited)
+    marks = ','.join('?' for _ in ids)
+    for token, who in (('cara-test', Identity('human:cara', 'human')), ('ana-test', Identity('human:ana', 'owner'))):
+        found = {r[0] for r in query(api, f'SELECT id FROM messages WHERE id IN ({marks})', token, params=ids)['rows']}
+        with store.read() as c:
+            index = ReadIndex(c, who, rooms=True)
+            expected = {
+                r['id']
+                for r in c.execute(
+                    f'SELECT id,conversation_id,refs,in_reply_to FROM messages WHERE id IN ({marks})', ids
+                )
+                if index.message(r['id'], r['conversation_id'], r['refs'], r['in_reply_to'])
+            }
+            meetings = set(index.meeting_rooms)
+        assert found == expected
+        assert set(asked) <= meetings
+        if token == 'cara-test':
+            # Each spelling of the public task reads; none naming the private task, an unknown one or a URL does.
+            assert {cited[mid] for mid in found} == {public}
+            assert len(found) == 6
+
+
 def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, world, monkeypatch):
     from collections import Counter
     from backend.auth import Identity
@@ -1160,7 +1218,7 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
                 found = S.run(conn, 'SELECT * FROM tasks ORDER BY id', [], 5000, 20)
                 actual = json.dumps([dict(zip(found['columns'], row)) for row in found['rows']], sort_keys=True)
                 assert actual == expected
-                for name in ('visible_tasks', 'known_tasks', 'plain_refs'):
+                for name in ('visible_tasks', 'meeting_rooms', 'denied_tasks'):
                     with pytest.raises(__import__("sqlite3").DatabaseError):
                         conn.execute('SELECT * FROM "' + conn.private_prefix + name + '"').fetchall()
             finally:
