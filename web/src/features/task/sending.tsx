@@ -1,17 +1,19 @@
 import { QueryObserver, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { run } from '@/actions';
-import type { EmailSend } from '@/api/schema';
+import type { EmailSend, TaskEmailSend } from '@/api/schema';
 import { clock, dayKey, stamp } from '@/conversation';
 import { queryClient } from '@/data';
 import { closeToast, toast, updateToast } from '@/kit/Toast';
-import { readPref, usePref, writePref } from '@/prefs';
+import { follow } from '@/live/follow';
 import { failedToast } from './model';
 import { sendStateQuery } from './queries';
 
 /* An email the person approved, until it has gone. The toast says who it goes to and counts down the undo window, with
    Undo, then says Sent (or Not sent, which stays). The email's tab and the card of the task it was asked on carry one
-   quiet line: "Sending · 1:40", then "Sent 5:23 AM". */
+   quiet line: "Sending · 1:40", then "Sent 5:23 AM". Each move of the send comes on the live stream, on its tasks'
+   rows (`email_send`, features/task/queries.ts): the card reads it from its row, so every device and every person who
+   reads the task sees it; the toast and the tab from the send's state, which those rows keep current. */
 
 type Send = Pick<EmailSend, 'state' | 'send_after' | 'finished_at' | 'detail'>;
 
@@ -80,42 +82,8 @@ export function markLine(w: SendWhere, now: number): string {
   return left ? ['Sending', left].join(' · ') : 'Sending';
 }
 
-/* ---------------------------------------------------------------- which tasks an approved send belongs to */
-
-/** The tasks a send was approved on, a day at most, on this device: its card shows the line even after a reload. */
-const KEY = 'approved-sends.v1';
-const KEEP_MS = 24 * 3600_000;
-type Kept = Record<string, { send: string; at: number }>;
-
-const fresh = (all: Kept, now = Date.now()): Kept => Object.fromEntries(Object.entries(all).filter(([, v]) => !!v?.send && now - v.at < KEEP_MS));
-
-/** Remember that these tasks' send is `send` (the task it was asked on, its matter, the send's own task). */
-export function keepSend(send: string, tasks: readonly (string | null | undefined)[]) {
-  const all = fresh(readPref<Kept>(KEY, {}));
-  const at = Date.now();
-  const add = tasks.filter((t): t is string => !!t && all[t]?.send !== send);
-  if (!add.length) return;
-  for (const t of add) all[t] = { send, at };
-  writePref(KEY, all);
-}
-
-/** Forget a send: its approval was taken back. */
-export function forgetSend(send: string) {
-  const all = fresh(readPref<Kept>(KEY, {}));
-  writePref(KEY, Object.fromEntries(Object.entries(all).filter(([, v]) => v.send !== send)));
-}
-
-/** The approved send of the first of these tasks that has one. */
-export function useSendOf(...tasks: (string | null | undefined)[]): string | null {
-  const [all] = usePref<Kept>(KEY, {});
-  // Kept a day at most: an older one is dropped at the next write.
-  const [since] = useState(() => Date.now() - KEEP_MS);
-  for (const t of tasks) {
-    const v = t ? all[t] : undefined;
-    if (v?.send && v.at > since) return v.send;
-  }
-  return null;
-}
+/** How long a card keeps saying how a send ended: a day. */
+const RECENT_MS = 24 * 3600_000;
 
 /** The time now, read again every second while `on`. */
 function useTick(on: boolean): number {
@@ -128,10 +96,8 @@ function useTick(on: boolean): number {
   return now;
 }
 
-/** One quiet line for a send the person approved, or that has left its OK behind: nothing while it waits on an OK. */
-export function SendMark({ send, approved = false, className = 'send-mark' }: { send: string; approved?: boolean; className?: string }) {
-  const q = useQuery(sendStateQuery(send, approved));
-  const w = q.data ? whereOf(q.data, approved) : null;
+/** The quiet line for a send at `w`. */
+function SendLine({ w, className }: { w: SendWhere | null; className: string }) {
   const now = useTick(w?.kind === 'sending' && w.until !== null);
   if (!w) return null;
   return (
@@ -141,13 +107,23 @@ export function SendMark({ send, approved = false, className = 'send-mark' }: { 
   );
 }
 
-/** The send a task's card shows: the email approved on it, or on the task its turn waits on (a matter's Send task). */
-export function useTaskSend(t: { id: string; turn?: { state: string; who: string | null } | null }): string | null {
-  return useSendOf(t.id, t.turn?.state === 'tasks' ? t.turn.who : null);
+/** One quiet line for a send the person approved, or that has left its OK behind: nothing while it waits on an OK. */
+export function SendMark({ send, approved = false, className = 'send-mark' }: { send: string; approved?: boolean; className?: string }) {
+  const q = useQuery(sendStateQuery(send, approved));
+  return <SendLine w={q.data ? whereOf(q.data, approved) : null} className={className} />;
 }
 
-/** A card's or a row's quiet line for its approved email. */
-export const TaskSend = ({ send }: { send: string | null }) => (send ? <SendMark send={send} approved /> : null);
+/** Where a task row's send is (`email_send`: the newest send that belongs to the task or whose OK sits on it), for its
+    card: nothing while it waits on an OK, nor a day after it ended. */
+export function rowWhere(s: TaskEmailSend | null | undefined, now = Date.now()): SendWhere | null {
+  if (!s) return null;
+  const w = whereOf(s, false);
+  const ended = s.finished_at ? Date.parse(s.finished_at) : NaN;
+  return w && w.kind !== 'sending' && Number.isFinite(ended) && now - ended > RECENT_MS ? null : w;
+}
+
+/** A card's or a row's quiet line for its task's email, from the task's own row. */
+export const TaskSend = ({ send }: { send?: TaskEmailSend | null }) => <SendLine w={rowWhere(send)} className="send-mark" />;
 
 /* ---------------------------------------------------------------- the toast after Approve */
 
@@ -157,7 +133,8 @@ const FOLLOW_MS = 15 * 60_000;
 /** After Approve on an email: "Sending to dana@… in 1:58" with Undo while the window lasts, then "Sent to dana@…", or
     "Not sent: <why>", which stays until dismissed. `answer` takes the OK back (the send waits on an OK again). */
 export function followSend({ send, to, task, answer }: { send: string; to: readonly string[]; task: string; answer?: string | null }) {
-  keepSend(send, [task]);
+  // The stream sends this task's rows, each with the send's state: no reading the send again and again.
+  const unfollow = follow({ task });
   const who = toLine(to);
   let w: SendWhere = { kind: 'sending', until: null };
   let done = false;
@@ -166,7 +143,6 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
         label: 'Undo',
         run: () => {
           stop();
-          forgetSend(send);
           void run('task.undoAnswer', { task, answer }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u))));
         },
       }
@@ -193,7 +169,6 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
   const off = observer.subscribe((r) => {
     if (done || !r.data) return;
     last = r.data;
-    keepSend(send, [r.data.task_id, r.data.approval_task_id]);
     const next = whereOf(r.data, true);
     if (!next) return;
     w = next;
@@ -205,6 +180,7 @@ export function followSend({ send, to, task, answer }: { send: string; to: reado
   function stop() {
     done = true;
     off();
+    unfollow();
     clearInterval(tick);
     clearTimeout(limit);
   }

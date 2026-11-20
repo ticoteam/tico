@@ -7,6 +7,8 @@ export const keys = {
     list: (params: unknown) => ['tasks', 'list', params] as const,
     detail: (id: string) => ['tasks', 'detail', id] as const,
   },
+  /** Where one email send is (its state, `send_after`, `finished_at`, `detail`): its tasks' rows on the stream carry it. */
+  emailSend: (id: string) => ['email-send-state', id] as const,
   thread: {
     timeline: (id: string) => ['thread', id, 'timeline'] as const,
   },

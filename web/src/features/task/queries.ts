@@ -559,22 +559,22 @@ export const emailSendQuery = (task: string, send: string) =>
 /** A send's states on its way out once its OK is given: in its undo window, being handed to the mail provider. */
 const OUTGOING: readonly string[] = ['pending', 'dispatching'];
 
-/** How often a send is read again while it may still go. */
-export const SEND_POLL_MS = 3000;
+/** The backstop read of a send on its way: the stream carries each move, this only catches one it missed. */
+export const SEND_BACKSTOP_MS = 5 * 60_000;
 
 /** Where a send is (GET /api/v2/email/sends/{sid}): `pending` until `send_after` (the undo window), then `sent` at
-    `finished_at`, or `failed`, `canceled`, `blocked` with `detail`. Read again every few seconds while it is on its way,
-    one read per send however many places show it; `approved` (its OK was just given here) reads it while it still
-    waits on the OK too, which the server takes into the send within seconds. The email's preview fills it. */
+    `finished_at`, or `failed`, `canceled`, `blocked` with `detail`. Read once; each move after that comes on the live
+    stream, on its tasks' rows (`email_send`, live/patch.ts), with a slow backstop read while it is on its way (`approved`: its
+    OK was just given here, so a send still waiting on it counts as on its way). The email's preview fills it too. */
 export const sendStateQuery = (send: string, approved = false) =>
   queryOptions({
-    queryKey: ['email-send-state', send] as const,
+    queryKey: keys.emailSend(send),
     queryFn: async ({ signal }): Promise<MailSend> => (await api.get<EmailPreview>(`/api/v2/email/sends/${enc(send)}`, { signal })).send,
     refetchInterval: (q) => {
       const state = q.state.data?.state ?? '';
-      return OUTGOING.includes(state) || (approved && state === 'waiting_approval') ? SEND_POLL_MS : false;
+      return OUTGOING.includes(state) || (approved && state === 'waiting_approval') ? SEND_BACKSTOP_MS : false;
     },
-    staleTime: SEND_POLL_MS,
+    staleTime: SEND_BACKSTOP_MS,
     enabled: !!send,
   });
 

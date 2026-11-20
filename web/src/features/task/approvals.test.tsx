@@ -17,7 +17,7 @@ import { TaskChat, TaskPage } from './TaskPage';
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
    what was shown, Request changes is a message to the agent. Made-up rows only; every answer is stubbed. */
 
-vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 // The conversation is tested in its own folder: here a stand-in with its foot and, while it may post, its message box.
 vi.mock('@/conversation', async (orig) => ({

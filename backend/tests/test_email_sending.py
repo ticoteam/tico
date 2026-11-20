@@ -478,6 +478,72 @@ def test_a_send_for_a_task_asks_its_ok_under_that_task_titled_with_the_email(inb
         assert task_asks.standing(c, named["approval_id"]) == task_asks.WAITING
 
 
+def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbox, monkeypatch):
+    """After Approve the case's card and the email's toast say "Sending · 1:40", then "Sent 5:23 AM", on every device
+    and for everyone who reads the case, without reading the send again and again: each move of the send logs the case
+    and its OK's task (a `tasks` change, kind email_send, on GET /api/v2/events), and each task's row, in a list and in
+    its own read, carries the send's newest state (`email_send`)."""
+    from backend import events as E
+    from backend import task_list_routes
+    from backend.auth import Identity
+
+    policy(inbox, undo_seconds=90, pacing_seconds=0)
+    monkeypatch.setattr(S, "classify", lambda *a, **k: {"legal_or_money": False, "status": "classified"})
+    r = runner(inbox, "ana")
+    assign(inbox, r, "ops")
+    ready(inbox, r, ["ops"])
+    case = post(inbox, "tasks", {"owner": "ops", "title": "Winberg: reply letter", "body": "Answer the letter."})
+    case = case.get("task", case)["id"]
+    token = claim(inbox, r)["token"]
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    task_views = task_list_routes.readers(auth)[2]
+    ana = Identity("human:ana", "owner", "ana@acme.example")
+
+    def latest():
+        with store.read() as c:
+            return E.latest(c)
+
+    def streamed(after):
+        """The send's state on each task the stream sends after `after` for a send's move."""
+        with store.read() as c:
+            events = E.read(c, auth, ana, after, topics=("tasks",), task_views=task_views)[0]
+        return {d["id"]: d["task"].get("email_send") for _, _, d in events if "email_send" in d["kinds"]}
+
+    def listed():
+        rows = inbox.get("/api/v2/tasks?status=all", headers=headers()).json()["tasks"]
+        return {row["id"]: row.get("email_send") for row in rows}
+
+    before = latest()
+    queued = post(inbox, "email/sends", {"mailbox": BOX, "raw": mime(subject="Reply")}, token=token)["send"]
+    sub = queued["approval_task_id"]
+    moved = streamed(before)
+    assert set(moved) == {case, sub}
+    assert moved[case] == moved[sub] and moved[case]["id"] == queued["id"]
+    assert moved[case]["state"] == "waiting_approval"
+
+    approved(inbox, queued)
+    before = latest()
+    assert dispatch(inbox) == []  # the pass that takes the OK: in its undo window
+    moved = streamed(before)
+    assert moved[case]["state"] == "pending" and moved[case]["send_after"] > H.now()
+    assert listed()[case] == moved[case]
+
+    with store.transaction() as c:  # the undo window is over
+        c.execute(
+            "UPDATE email_sends SET created_at=?,send_after=? WHERE id=?",
+            (H.shift(H.now(), minutes=-5), H.shift(H.now(), minutes=-3), queued["id"]),
+        )
+    before = latest()
+    assert len(dispatch(inbox)) == 1
+    moved = streamed(before)
+    assert moved[case]["state"] == "sent" and moved[case]["finished_at"]
+    assert moved[sub] == moved[case]
+    assert listed()[case] == moved[case]
+    detail = inbox.get(f"/api/v2/tasks/{case}", headers=headers()).json()
+    assert detail.get("task", detail)["email_send"] == moved[case]
+    assert set(moved[case]) == {"id", "state", "send_after", "finished_at", "detail"}  # never the email itself
+
+
 def test_never_refuses_and_names_the_setting(inbox):
     autonomous(inbox)
     with inbox.app.state.store.transaction() as c:

@@ -100,7 +100,7 @@ export type TaskItem = Pick<
   Task,
   'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'stage_id' | 'owner_id' | 'labels' | 'late' | 'turn' | 'updated_at' | 'version'
 > &
-  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks'>>;
+  Partial<Pick<Task, 'stuck' | 'stage_since' | 'snoozed' | 'created_at' | 'due_at' | 'visibility' | 'blocks' | 'email_send'>>;
 
 /** The cache's shape for a list: the server's page, kept as is so the stream's patches apply (live/patch.ts). */
 export interface TaskPage {

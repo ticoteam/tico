@@ -239,6 +239,29 @@ function patchTasks(batch: TaskEvent[]): void {
   }
 }
 
+/** A task row's email send (GET /api/v2/tasks `email_send`): the newest send that belongs to it or whose OK sits on it. */
+interface RowSend {
+  id: string;
+  state: string;
+  send_after: string;
+  finished_at: string | null;
+  detail: string;
+}
+
+/** A send moved (backend/email_sending.py `moved` sends its tasks again): wherever the send itself is shown (the toast
+    after Approve, the email's tab), its state is taken from the row, not read again. Only a send something holds. */
+function patchSends(batch: TaskEvent<TaskRow & { email_send?: RowSend | null }>[]): void {
+  for (const e of batch) {
+    const s = e.task?.email_send;
+    if (!s) continue;
+    const key = keys.emailSend(s.id);
+    if (!queryClient.getQueryCache().find({ queryKey: key, exact: true })) continue;
+    const held = queryClient.getQueryData<Partial<RowSend>>(key);
+    if (held && same({ ...held, ...s }, held)) continue;
+    queryClient.setQueryData(key, { ...held, ...s });
+  }
+}
+
 // ---------------------------------------------------------------- messages
 
 /** A timeline row (GET /api/v2/threads/{id}/timeline `messages`), and a message as a `messages` event carries it. */
@@ -506,6 +529,7 @@ export function installPatchers(): void {
   if (installed) return;
   installed = true;
   onTopic<TaskEvent>('tasks', patchTasks);
+  onTopic<TaskEvent>('tasks', patchSends);
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
   onRefetch('setup', () => [['setup']]);
