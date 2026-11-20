@@ -8,6 +8,13 @@ from .store import H, Problem
 from . import read_cache
 
 ROOM_PREFIX = "live-meeting:"
+# A run's job message and its inputs, each once, in id order. The ids are deduplicated before the rows are read: a
+# UNION of whole rows compared every column of every row, bodies included. The id is the key, so a message is one row
+# either way, and a UNION of rows came out in id order too. task_privacy reads it from here.
+ATTEMPT_MESSAGES_SQL = (
+    "SELECT m.* FROM messages m WHERE m.id IN (SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+    "WHERE a.id=? UNION SELECT i.message_id FROM attempt_inputs i WHERE i.attempt_id=?) ORDER BY m.id"
+)
 
 
 def sources(c):
@@ -245,10 +252,7 @@ class Sources:
 
     def _attempt_uncached(self, aid):
         rows = self.c.execute(
-            "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-            "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
-            "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-            "WHERE i.attempt_id=?",
+            ATTEMPT_MESSAGES_SQL,
             (aid, aid),
         ).fetchall()
         moved = [

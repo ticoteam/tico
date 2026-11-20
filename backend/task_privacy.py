@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from .store import H, Problem
 from . import read_cache
+from .live_privacy import ATTEMPT_MESSAGES_SQL
 from .live_privacy import sources as meeting_sources
 
 if TYPE_CHECKING:
@@ -247,10 +248,7 @@ def attempt_tasks(c, aid, memo=None):
 def _attempt_tasks(c, aid):
     ids = set()
     rows = c.execute(
-        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-        "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
-        "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-        "WHERE i.attempt_id=?",
+        ATTEMPT_MESSAGES_SQL,
         (aid, aid),
     ).fetchall()
     _prime_inputs(c, rows)
@@ -264,6 +262,17 @@ def _attempt_tasks(c, aid):
     return ids
 
 
+def attempts_messages_sql(marks):
+    """ATTEMPT_MESSAGES_SQL (backend/live_privacy.py) for many runs (`marks`, one placeholder each, the ids given twice): each row is
+    `primed_attempt` and the message, ordered by run, then message id."""
+    return (
+        "SELECT p.attempt AS primed_attempt,m.* FROM (SELECT a.id AS attempt,j.message_id AS mid FROM attempts a "
+        f"JOIN jobs j ON j.id=a.job_id WHERE a.id IN ({marks}) UNION SELECT i.attempt_id,i.message_id "
+        f"FROM attempt_inputs i WHERE i.attempt_id IN ({marks})) p JOIN messages m ON m.id=p.mid "
+        "ORDER BY p.attempt,m.id"
+    )
+
+
 # The task a run works on (attempts.task_id): its run carries that task's text, as a carried task did before.
 RUN_TASK_SQL = "SELECT task_id FROM attempts WHERE id=? AND task_id IS NOT NULL"
 
@@ -274,10 +283,7 @@ def carried_tasks(c, aid):
     snapshot(c)
     ids = set()
     rows = c.execute(
-        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-        "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
-        "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-        "WHERE i.attempt_id=?",
+        ATTEMPT_MESSAGES_SQL,
         (aid, aid),
     ).fetchall()
     for row in rows:
@@ -315,10 +321,7 @@ def prime_attempts(c, aids):
         marks = ",".join("?" * len(chunk))
         inputs = {aid: [] for aid in chunk}
         for row in c.execute(
-            "SELECT a.id AS primed_attempt,m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-            f"JOIN messages m ON m.id=j.message_id WHERE a.id IN ({marks}) UNION "
-            "SELECT i.attempt_id AS primed_attempt,m.* FROM attempt_inputs i "
-            f"JOIN messages m ON m.id=i.message_id WHERE i.attempt_id IN ({marks})",
+            attempts_messages_sql(marks),
             chunk * 2,
         ):
             row = dict(row)
@@ -1096,10 +1099,7 @@ def prime_attempt_messages(c, aids):
         marks = ",".join("?" * len(chunk))
         found = {aid: [] for aid in chunk}
         for row in c.execute(
-            "SELECT a.id AS primed_attempt,m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-            f"JOIN messages m ON m.id=j.message_id WHERE a.id IN ({marks}) UNION "
-            "SELECT i.attempt_id AS primed_attempt,m.* FROM attempt_inputs i "
-            f"JOIN messages m ON m.id=i.message_id WHERE i.attempt_id IN ({marks})",
+            attempts_messages_sql(marks),
             chunk * 2,
         ):
             row = dict(row)
@@ -1118,8 +1118,7 @@ def attempt_pages_readable(c, actor, aid):
         messages = [
             dict(row)
             for row in c.execute(
-                "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
-                "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+                ATTEMPT_MESSAGES_SQL,
                 (aid, aid),
             ).fetchall()
         ]
