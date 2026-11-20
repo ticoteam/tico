@@ -4,7 +4,7 @@ import { useSyncExternalStore } from 'react';
 // (platforms.md 7; architecture.md 4 keeps them out of storage). What may be held is the caller's call through
 // write()'s `offline` option:
 //   held:    a chat message, task field edits (title, description, assignee, stage, due date), comments,
-//            reactions, marking read, files of 10MB or less;
+//            marking read, files of 10MB or less;
 //   refused: approvals and anything that spends money or acts outside Tico (approve, deny, run an agent, send
 //            email, payments, invites, rights), deletes, sign-in changes, calls, files over 10MB.
 // A reload while something is held asks first (the browser's leave prompt); nothing survives it.

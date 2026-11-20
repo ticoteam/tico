@@ -98,11 +98,12 @@ numbered message, then save the answers there with the date. Work on the default
 9. **Read it as the recipient's lawyer.** Look for: a fact that is wrong or unproven, a right described more broadly
    than the register shows, a demand larger than the claim supports, a sentence that could be quoted on social media,
    anything that sounds like a threat outside the dispute, and any hint about how the company would settle. Fix each.
-10. **Pass the gate and ask for the OK.** Build the matter page (see Output) and ask the approver:
-    `tico task ask <id> --to <approver> --kind ok "Send this cease-and-desist to <recipient>" --show page:<id> --version N`.
-    The OK covers that exact letter and those exact recipients. Any change needs a new OK.
+10. **Pass the gate.** Build the matter page (see Output). Do not ask for a separate OK: the approver OKs the letter
+    once, on the email in step 11, which shows it inline. That OK covers that exact letter and those exact recipients.
+    Any change needs a new OK.
 11. **Send and prove delivery.** Send as the signer by email from the company's address (`tico email draft`, then
-    `tico email send`) and by a tracked postal method to the notice address; a contract's notice clause decides the
+    `tico email send <mailbox> --draft <draft-id> --task <matter task id>`, so the OK is asked on the matter) and by a
+    tracked postal method to the notice address; a contract's notice clause decides the
     method when there is one. If the team has no letter Tool, file a sub-task for a person to post it. Save the sent
     copy and the proof of delivery in the matter folder. Add the deadline to the calendar with
     `tico calendar add --title "<matter>: their deadline" --start <YYYY-MM-DD> --end <the next day, YYYY-MM-DD> --all-day`.
@@ -121,7 +122,7 @@ Nothing is sent unless every line is true. Write the answers on the matter page.
 3. **The demand is proportionate.** Each demand follows from the claim. Nothing is demanded that a court could not
    order.
 4. **The other side was checked.** Diligence note written; sue-first and publicity risk rated.
-5. **A named person approved this exact letter.** The OK is on the task.
+5. **A named person approved this exact letter.** The OK is on the email, asked on the matter task.
 
 Hard stops. Any one of these means no letter from the bot; write the counsel brief and tell the approver:
 
@@ -190,7 +191,7 @@ An OK is not needed to decide against sending. Record the reason on the matter a
 - The consequence matches the owner's answer to question 4.
 - No threat outside the dispute, no admission, no settlement hint, no adjectives about the recipient's character.
 - The letter has no internal label ("draft", "not legal advice", "privileged").
-- The OK on the task is for the same version that was sent, and proof of delivery is saved.
+- The OK on the email is for the same letter that was sent, and proof of delivery is saved.
 
 ## Example
 
@@ -208,5 +209,5 @@ Task: "A shop called Brightloom Home is selling 'Lumora' candles. That's our nam
 - Demands: (1) stop using LUMORA or any similar name on candles; (2) remove the listing and the two social posts in
   exhibit 3; (3) confirm both in writing. Deadline: 2026-12-03. Consequence: "Lumora Goods LLC reserves all rights
   and remedies" (the owner has not decided to sue).
-- Gate: all five true. The approver OKs version 2 of the page. The letter goes by email and tracked mail on
+- Gate: all five true. The approver OKs the letter on its email. The letter goes by email and tracked mail on
   2026-11-19, and 2026-12-03 is on the calendar.

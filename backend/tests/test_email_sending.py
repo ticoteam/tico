@@ -92,6 +92,16 @@ def test_known_correspondent_and_verified_reply_can_send(inbox):
     assert queued["decision"]["outcome"] == "allow"
 
 
+def test_a_send_reads_back_the_email_it_answers(inbox):
+    """The approval shows the email being answered from send.reply_to_id; a new email reads null, not ""."""
+    reply = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    fresh = queue(inbox, raw=mime(body="A new email"))
+    got = inbox.get("/api/v2/email/sends/" + reply["id"], headers=headers("ana-test")).json()["send"]
+    assert (got["reply_to_id"], got["thread_id"]) == ("inbound", "thread")
+    got = inbox.get("/api/v2/email/sends/" + fresh["id"], headers=headers("ana-test")).json()["send"]
+    assert (got["reply_to_id"], got["thread_id"]) == (None, None)
+
+
 def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(inbox, fake_gmail):
     from backend import mail_facts
     from backend.store import Problem

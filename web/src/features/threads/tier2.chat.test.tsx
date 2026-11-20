@@ -86,24 +86,6 @@ function seedThread(messages: ReturnType<typeof msg>[], next: string | null = nu
   queryClient.setQueryData(threadKeys.view('t1'), thread());
   queryClient.setQueryData(timelineQuery('t1').queryKey, { pages: [{ messages, next_cursor: next, read_marks: {} }], pageParams: [null] } as never);
 }
-const feedback = (extra: Record<string, unknown> = {}) => ({
-  id: 'f1',
-  bot_id: 'bot:qa',
-  person_id: 'human:me',
-  created_at: ago(1),
-  updated_at: ago(1),
-  subject_type: 'message',
-  subject_id: 'm2',
-  rating: 'down',
-  reason: '',
-  outcome: 'none',
-  note_id: null,
-  note_status: null,
-  org_rule_id: null,
-  rule_status: null,
-  ...extra,
-});
-
 beforeEach(() => {
   queryClient.clear();
   calls.length = 0;
@@ -193,96 +175,6 @@ describe('Chat outline @s219', () => {
     fireEvent.click(await within(dialog).findByRole('button', { name: /First ask/ }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Outline' })).toBeNull());
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/v2/threads/t1/timeline') && c.url.includes('cursor=c1'))).toBe(true));
-  });
-});
-
-describe('Thumbs-down reasons @s221', () => {
-  it("on a teammate's message Not good asks only what was wrong, and Save keeps the reason with it", async () => {
-    serve((url, method, body) => {
-      if (method === 'POST' && url.endsWith('/api/v2/feedback')) return ok(feedback({ bot_id: 'human:ana', reason: body?.reason ?? '' }));
-      if (url.includes('recent-reasons')) return ok({ reasons: [{ text: 'Too long', count: 1 }] });
-      return undefined;
-    });
-    seedThread([msg('m2', 'human:ana', 'My take')]);
-    show(<Conversation id="t1" variant="page" />, '/threads/t1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Not good' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Not good' });
-    expect(within(dialog).queryByRole('button', { name: 'Tell agent' })).toBeNull();
-    expect(within(dialog).queryByRole('button', { name: 'Make rule' })).toBeNull();
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Too long' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/feedback').some((c) => c.body?.reason === 'Too long' && c.body.rating === 'down')).toBe(true));
-  });
-
-  it("on an agent's message a reason said twice before is noted, and Make rule becomes the filled button", async () => {
-    serve((url, method) => {
-      if (method === 'POST' && url.endsWith('/api/v2/feedback')) return ok(feedback());
-      if (url.includes('recent-reasons')) return ok({ reasons: [{ text: 'Wrong file', count: 2 }] });
-      return undefined;
-    });
-    seedThread([msg('m2', 'bot:qa', 'Done')]);
-    show(<Conversation id="t1" variant="page" />, '/threads/t1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Not good' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Not good' });
-    expect(within(dialog).getByRole('button', { name: 'Tell agent' })).toBeTruthy();
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Wrong file' }));
-    expect(within(dialog).getByText("You've said this before.")).toBeTruthy();
-    expect(within(dialog).queryByRole('button', { name: 'Save' })).toBeNull();
-  });
-});
-
-describe('Rule made from feedback @s222', () => {
-  it('drafts the rule from the reason, lets it be changed for every agent, and saves it', async () => {
-    let held: ReturnType<typeof feedback> | null = null;
-    serve((url, method, body) => {
-      if (method === 'POST' && url.endsWith('/api/v2/feedback')) return ok((held = feedback({ reason: body?.reason ?? '' })));
-      if (method === 'GET' && url.includes('/api/v2/feedback?')) return ok({ items: held ? [held] : [] });
-      if (url.includes('recent-reasons')) return ok({ reasons: [] });
-      if (url.endsWith('/api/v2/feedback/f1/rule-draft')) return ok({ text: 'Always link the file you changed.', drafted: true });
-      if (url.endsWith('/api/v2/feedback/f1/rule'))
-        return ok({ feedback: feedback({ outcome: 'rule', org_rule_id: 'r1', rule_status: 'active' }), rule: { id: 'r1', status: 'active' } });
-      return undefined;
-    });
-    seedThread([msg('m2', 'bot:qa', 'Done')]);
-    show(<Conversation id="t1" variant="page" />, '/threads/t1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Not good' }));
-    const reasons = await screen.findByRole('dialog', { name: 'Not good' });
-    fireEvent.change(within(reasons).getByRole('textbox', { name: 'What was wrong?' }), { target: { value: 'No link' } });
-    fireEvent.click(within(reasons).getByRole('button', { name: 'Make rule' }));
-
-    const dialog = await screen.findByRole('dialog', { name: 'Make a rule' });
-    const box = within(dialog).getByRole('textbox', { name: 'Rule' });
-    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe('Always link the file you changed.'));
-    fireEvent.change(box, { target: { value: 'Link every file you changed.' } });
-    fireEvent.click(within(dialog).getByRole('switch', { name: 'All agents' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save rule' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/feedback/f1/rule').at(-1)?.body).toEqual({ text: 'Link every file you changed.', all_bots: true }));
-    expect(sent('POST', '/api/v2/feedback').some((c) => c.body?.reason === 'No link')).toBe(true);
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Make a rule' })).toBeNull());
-  });
-});
-
-describe('"Not good" sheet @s223', () => {
-  it('pressing a chosen Not good shows what was said and the rule it became; Remove takes the rating back', async () => {
-    let held: ReturnType<typeof feedback> | null = feedback({ reason: 'Wrong file', outcome: 'rule', org_rule_id: 'r1', rule_status: 'active' });
-    serve((url, method) => {
-      if (method === 'GET' && url.includes('/api/v2/feedback?')) return ok({ items: held ? [held] : [] });
-      if (method === 'DELETE') {
-        held = null;
-        return ok({});
-      }
-      return undefined;
-    });
-    seedThread([msg('m2', 'bot:qa', 'Done')]);
-    show(<Conversation id="t1" variant="page" />, '/threads/t1');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Not good' }).getAttribute('aria-pressed')).toBe('true'));
-    fireEvent.click(screen.getByRole('button', { name: 'Not good' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Not good' });
-    expect(within(dialog).getByText('Wrong file')).toBeTruthy();
-    expect(within(dialog).getByRole('link', { name: 'Rule' }).getAttribute('href')).toBe('/company/rules?panel=org:r1');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(sent('DELETE', '/api/v2/feedback/f1')).toHaveLength(1));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Not good' }).getAttribute('aria-pressed')).toBe('false'));
   });
 });
 

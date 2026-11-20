@@ -79,6 +79,9 @@ pub const ALL: &[&str] = &[
     "claude_logins",
 ];
 
+/// What a gap's catch-up asks for at once: queued work, and the heartbeat whose answer says how many may run.
+const AT_ONCE: &[&str] = &["claim", "heartbeat"];
+
 /// A channel's index in `CHANNELS`, or None for a name the runner does not read.
 pub fn index(channel: &str) -> Option<usize> {
     CHANNELS.iter().position(|c| *c == channel)
@@ -182,6 +185,8 @@ pub struct Events {
     resume: Mutex<Option<i64>>,
     /// A release's catch-up pass (`ready`), due at this instant (CATCH_UP_SPREAD_S).
     catch_up_at: Mutex<Option<Instant>>,
+    /// Whether the waiting pass tells running turns too (a release's); a gap's pass already told them.
+    catch_up_notices: AtomicBool,
     /// When each channel (by `bit`) was last taken: read again on a resumed stream (REASK_BEFORE_DROP_S).
     taken: Mutex<HashMap<u16, Instant>>,
     /// When the stream was last said to be lost or unavailable, until it is said to be back.
@@ -209,6 +214,7 @@ impl Events {
             last_id: Mutex::new(None),
             resume: Mutex::new(None),
             catch_up_at: Mutex::new(None),
+            catch_up_notices: AtomicBool::new(false),
             taken: Mutex::new(HashMap::new()),
             down_since: Mutex::new(None),
             release: Mutex::new(None),
@@ -327,6 +333,7 @@ impl Events {
     /// Everything asked for now, every running turn notified: a release's pass still waiting is not needed any more.
     fn catch_up_now(&self) {
         *self.catch_up_at.lock().unwrap() = None;
+        self.catch_up_notices.store(false, Ordering::SeqCst);
         self.ask(ALL);
         self.notice(&[]);
     }
@@ -356,18 +363,35 @@ impl Events {
             at.is_some_and(|t| Instant::now() >= t) && at.take().is_some()
         };
         if due {
-            self.catch_up_now();
+            if self.catch_up_notices.swap(false, Ordering::SeqCst) {
+                self.catch_up_now();
+            } else {
+                self.ask(ALL);
+            }
         }
     }
 
-    /// Everything read again within CATCH_UP_SPREAD_S, at a moment of this computer's own.
-    fn catch_up_soon(&self) {
-        let spread = (uuid::Uuid::new_v4().as_u128() % 10_001) as f64 / 10_000.0;
-        let at = Instant::now() + Duration::from_secs_f64(CATCH_UP_SPREAD_S * spread);
+    /// Back after a gap the stream cannot replay (a reconnect the server did not resume, or its `reset`): queued
+    /// work and every running turn's inputs are asked for at once, everything else within CATCH_UP_SPREAD_S, so the
+    /// computers that come back together do not all read everything in the same second.
+    fn catch_up_after_gap(&self) {
+        // The heartbeat too: its answer carries the turn limit a queued chat may be waiting on.
+        self.ask(AT_ONCE);
+        self.notice(&[]);
+        self.catch_up_soon(false);
+    }
+
+    /// Everything read again within CATCH_UP_SPREAD_S, at a moment of this computer's own; `notices`: running turns
+    /// are told then as well.
+    fn catch_up_soon(&self, notices: bool) {
+        let at = Instant::now() + Duration::from_secs_f64(CATCH_UP_SPREAD_S * unit());
         let mut due = self.catch_up_at.lock().unwrap();
         // One already waiting keeps its moment: a second release within the spread asks for the same pass.
         if due.is_none() {
             *due = Some(at);
+        }
+        if notices {
+            self.catch_up_notices.store(true, Ordering::SeqCst);
         }
     }
 
@@ -430,7 +454,11 @@ impl Events {
                 }
             }
             self.fall_back(Stream::Down);
-            let wait = retry_after(delay, unreachable, dropped_at.map(|at| at.elapsed()));
+            let wait = jittered(retry_after(
+                delay,
+                unreachable,
+                dropped_at.map(|at| at.elapsed()),
+            ));
             tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             delay = (delay * 2.0).min(RECONNECT_MAX_S);
         }
@@ -556,8 +584,13 @@ impl Events {
                 let resumed = self.resume.lock().unwrap().is_some_and(|after| {
                     frame.after == Some(after) && frame.seq.is_some_and(|seq| seq >= after)
                 });
-                if recovering && !resumed {
+                // A process's first connection has no cursor and reads everything as it starts anyway: at once, as
+                // before, so the start's own reads and this pass coincide.
+                let first = self.resume.lock().unwrap().is_none();
+                if recovering && !resumed && first {
                     self.catch_up_now();
+                } else if recovering && !resumed {
+                    self.catch_up_after_gap();
                 } else {
                     if recovering {
                         // A read taken just before the drop may have failed; its hint is not sent again.
@@ -566,7 +599,7 @@ impl Events {
                         }
                     }
                     if changed {
-                        self.catch_up_soon();
+                        self.catch_up_soon(true);
                     }
                 }
                 if changed {
@@ -617,7 +650,7 @@ impl Events {
                 }
             }
             "reset" => {
-                self.catch_up_now();
+                self.catch_up_after_gap();
                 let _ = self.voice.send(VoiceWake::CatchUp);
             }
             "screen_open" => crate::screen::heard(),
@@ -650,6 +683,17 @@ fn retry_after(delay: f64, unreachable: bool, since_drop: Option<Duration>) -> f
     } else {
         delay
     }
+}
+
+/// A reconnect wait of this computer's own, between half of `wait` and all of it: the computers a server restart
+/// dropped together do not all try it again in the same instant, and keep apart on later tries.
+fn jittered(wait: f64) -> f64 {
+    wait * (0.5 + 0.5 * unit())
+}
+
+/// A random number in 0..=1.
+fn unit() -> f64 {
+    (uuid::Uuid::new_v4().as_u128() % 10_001) as f64 / 10_000.0
 }
 
 /// Why a stream's body ended early, in words: a read timeout is the server going quiet past READ_TIMEOUT_S
@@ -975,8 +1019,8 @@ mod tests {
             &serde_json::json!({"seq": 5, "after": 5, "release": "v1"}),
             true,
         );
-        // A fresh start (no resume) reads everything at once, as before.
-        assert!(e.take("logins") && e.take("sync"));
+        // A fresh start (no resume): everything at once, as before.
+        assert!(e.take("logins") && e.take("sync") && e.catch_up_in().is_none());
         e.pending.store(0, Ordering::SeqCst);
         let before = e.heard("acme");
         // The stream drops and comes back on the same release; the server took the resume: it sends what changed.
@@ -988,14 +1032,20 @@ mod tests {
             true,
         );
         assert!(ALL.iter().all(|c| !e.take(c)) && e.heard("acme") == before);
-        // A server that did not take it (it answers another `after`): everything, as before.
+        // A server that did not take it (it answers another `after`): queued work, the heartbeat and running turns
+        // at once, then everything else within the spread, without telling the turns twice.
         e.dispatch(
             "ready",
             None,
             &serde_json::json!({"seq": 9, "after": 9, "release": "v1"}),
             true,
         );
-        assert!(e.take("logins") && e.heard("acme") > before);
+        hold(&e);
+        assert!(e.take("claim") && e.take("heartbeat") && !e.take("logins"));
+        let told = e.heard("acme");
+        assert!(told > before);
+        due_now(&e);
+        assert!(e.take("logins") && e.heard("acme") == told);
         // A new release, resumed: nothing yet, then everything once its moment within the spread comes.
         let before = e.heard("acme");
         e.dispatch(
@@ -1042,18 +1092,51 @@ mod tests {
             &serde_json::json!({"seq": 3, "after": 5, "release": "v1"}),
             true,
         );
+        hold(&e);
+        assert!(e.take("claim") && !e.take("logins"));
+        due_now(&e);
         assert!(e.take("logins") && e.take("sync"));
         e.pending.store(0, Ordering::SeqCst);
-        // A new release schedules its pass; a `reset` then reads everything at once and the pass is not needed.
+        // A new release schedules its pass; a `reset` then asks for queued work at once and keeps that one pass.
         e.dispatch(
             "ready",
             None,
             &serde_json::json!({"seq": 12, "after": 5, "release": "v2"}),
             false,
         );
-        assert!(e.catch_up_in().is_some());
+        hold(&e);
+        let at = e.catch_up_at.lock().unwrap().expect("a catch-up is due");
+        let before = e.heard("acme");
         e.dispatch("reset", None, &serde_json::json!({}), false);
-        assert!(e.catch_up_in().is_none() && e.take("logins"));
+        assert_eq!(*e.catch_up_at.lock().unwrap(), Some(at));
+        assert!(e.take("claim") && !e.take("logins") && e.heard("acme") > before);
+        // The release's pass still tells running turns: theirs may need the new release's settings.
+        let told = e.heard("acme");
+        due_now(&e);
+        assert!(e.take("logins") && e.heard("acme") > told);
+    }
+
+    /// The spread catch-up pass, held off while a test reads what was asked at once.
+    fn hold(e: &Events) {
+        assert!(e.catch_up_in().is_some(), "a catch-up pass waits");
+        *e.catch_up_at.lock().unwrap() = Some(Instant::now() + Duration::from_secs(3600));
+    }
+
+    /// The spread catch-up pass, due now.
+    fn due_now(e: &Events) {
+        assert!(e.catch_up_in().is_some(), "a catch-up pass waits");
+        *e.catch_up_at.lock().unwrap() = Some(Instant::now());
+    }
+
+    #[test]
+    fn reconnects_wait_between_half_and_all_of_their_delay() {
+        let waits: Vec<f64> = (0..200).map(|_| jittered(2.0)).collect();
+        assert!(waits.iter().all(|w| (1.0..=2.0).contains(w)), "{waits:?}");
+        // Spread, not one shared instant.
+        let (low, high) = waits
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), w| (l.min(*w), h.max(*w)));
+        assert!(high - low > 0.5, "{low}..{high}");
     }
 
     #[test]

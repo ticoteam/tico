@@ -35,7 +35,7 @@ afterAll(() => {
 type Reply = { status: number; body: unknown };
 const calls: { url: string; method: string; body: unknown }[] = [];
 const ok = (body: unknown): Reply => ({ status: 200, body });
-/** `reply` answers what the test is about; anything else (calls, feedback, ...) gets an empty list. */
+/** `reply` answers what the test is about; anything else (calls, ...) gets an empty list. */
 function serve(reply: (url: string, method: string) => Reply | undefined = () => undefined) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';

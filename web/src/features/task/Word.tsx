@@ -16,32 +16,39 @@ function Runs({ runs }: { runs: WordRun[] }) {
   });
 }
 
-/** A Word file read from `url`, drawn as one sheet of paper. */
+/** A Word file read from `url`, drawn as one sheet of paper, on the desk it lies on. */
 export function WordPages({ url, name }: { url: string; name: string }) {
+  return (
+    <div className="ap-scroll">
+      <div className="ap-desk">
+        <WordSheet url={url} name={name} />
+      </div>
+    </div>
+  );
+}
+
+/** The sheet alone, for a desk that holds more (an email's letter, under its message). */
+export function WordSheet({ url, name }: { url: string; name: string }) {
   const q = useQuery(wordQuery(url));
   if (q.isError) return <Empty icon="alert" title={`${name} did not load`} />;
   if (!q.data) return <div className="tv-bones" role="status" aria-busy="true" aria-label="Loading the page" />;
   return (
-    <div className="ap-scroll">
-      <div className="ap-desk">
-        <article className="ap-paper ap-sheet" aria-label={name}>
-          {q.data.map((p, n) =>
-            p.kind === 'h' ? (
-              <h3 key={n}>
-                <Runs runs={p.runs} />
-              </h3>
-            ) : p.kind === 'li' ? (
-              <p key={n} className="li">
-                <Runs runs={p.runs} />
-              </p>
-            ) : (
-              <p key={n}>
-                <Runs runs={p.runs} />
-              </p>
-            ),
-          )}
-        </article>
-      </div>
-    </div>
+    <article className="ap-paper ap-sheet" aria-label={name}>
+      {q.data.map((p, n) =>
+        p.kind === 'h' ? (
+          <h3 key={n}>
+            <Runs runs={p.runs} />
+          </h3>
+        ) : p.kind === 'li' ? (
+          <p key={n} className="li">
+            <Runs runs={p.runs} />
+          </p>
+        ) : (
+          <p key={n}>
+            <Runs runs={p.runs} />
+          </p>
+        ),
+      )}
+    </article>
   );
 }

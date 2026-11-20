@@ -14,11 +14,10 @@ import { dot, type DotState } from '@/tico/dot';
 import { MessageBones } from './Bones';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
-import { canRate } from './Feedback';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
-import { quoteFrom, quoteOf, Replying } from './Reactions';
-import { feedbackQuery, installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
+import { quoteFrom, quoteOf, Replying } from './Quote';
+import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read. */
@@ -202,10 +201,6 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
     [id, fetchNextPage],
   );
 
-  /* ---- the person's Good and Not good on what others said */
-  const rateable = own.filter((m) => canRate(m, myId, variant === 'tico')).map((m) => m.id);
-  const { data: ratings = [] } = useQuery(feedbackQuery(id, rateable));
-
   /* ---- read up to the last message shown, while it is in view */
   const readAtEnd = () => {
     if ((scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
@@ -270,7 +265,6 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
           );
         if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
         if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-        const rate = rateable.includes(it.m.id);
         return (
           <Message
             m={it.m}
@@ -278,10 +272,7 @@ export function Conversation({ id, variant, title, actor, page, foot, card, canP
             me={myId}
             cont={it.cont}
             onRetry={(m) => send(m.body ?? '', m.files ?? [], m)}
-            rateIn={rate ? id : undefined}
-            feedback={rate ? (ratings.find((f) => f.subject_id === it.m.id) ?? null) : null}
             card={card}
-            reactIn={variant === 'tico' || extraIds.has(it.m.id) ? undefined : id}
             onReply={canReply && !extraIds.has(it.m.id) ? startReply : undefined}
             quote={quoteOf(it.m, byId)}
             onQuote={toQuoted}

@@ -5,6 +5,8 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,6 +38,26 @@ const STREAMED: [&str; 8] = [
 /// An event as the outbox keeps it: borrowed when no string in it holds a secret, scrubbed when one does.
 fn scrubbed<'a>(redactor: Option<&Arc<Redactor>>, v: &'a Value) -> Cow<'a, Value> {
     redactor.map_or(Cow::Borrowed(v), |r| r.scrub_json(v))
+}
+
+/// What one drive step heard from the hub beyond the upload. The step only talks to the hub; what it heard is acted
+/// on in the drive loop, as it was when the step ran inline.
+#[derive(Default)]
+struct Asked {
+    /// The chat goal is no longer the one this run started with: a person changed or cleared it.
+    controlled: bool,
+    /// This attempt's inputs, to be steered into the turn.
+    messages: Vec<Value>,
+}
+
+type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<Asked, Fail>> + Send + 'a>>;
+
+/// The drive step in flight; never ready when there is none.
+async fn step_done(step: &mut Option<StepFuture<'_>>) -> Result<Asked, Fail> {
+    match step {
+        Some(step) => step.as_mut().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Goal continuations per (bot, session key) thread, for the runner's life (service.py goal_tries).
@@ -114,6 +136,8 @@ impl Runner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // `settle!` applies a step the same way wherever it ends; before the last `break` some of what it sets is not read.
+    #[allow(unused_assignments)]
     pub(crate) async fn drive(
         &self,
         d: &Drive<'_>,
@@ -183,6 +207,11 @@ impl Runner {
         // count at the last ask, None before the first.
         let mut asked: Option<u64> = None;
         let mut recovery_at = Instant::now();
+        // The 1-second step (upload, then the goal and inputs reads) runs beside the harness output, so a slow hub never
+        // holds back the turn's text or its end. `step_asks`: it reads more than the upload. A step that read is
+        // always heard out before the drive ends: the hub hands an input to this attempt when it is read.
+        let mut step: Option<StepFuture<'_>> = None;
+        let mut step_asks = false;
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -207,6 +236,83 @@ impl Runner {
             }};
         }
 
+        // Act on a finished step, as the loop once did inline: its inputs are steered into the turn now running (one
+        // the turn refuses as it ends is carried), and a person's goal control ends the run.
+        macro_rules! settle {
+            ($done:expr) => {{
+                let done: Result<Asked, Fail> = $done;
+                let done = match done {
+                    Ok(heard) if !heard.messages.is_empty() => self
+                        .steer_inputs(aid, host, thread, &turn, carried, &heard.messages)
+                        .await
+                        .map(|()| heard),
+                    done => done,
+                };
+                last_flush = Some(Instant::now());
+                match done {
+                    Ok(heard) => {
+                        if heard.messages.iter().any(from_person) {
+                            tries().take(&goal.tries_key);
+                        }
+                        // Not once the run's own goal row ended the goal: then the change is this run's.
+                        if heard.controlled && goal_running {
+                            goal.controlled = true;
+                            let _ = host.interrupt(thread, &turn).await;
+                            // An explicit goal control settles this run so its queued successor can claim.
+                            goal_running = false;
+                            complete = true;
+                            outcome = "completed".into();
+                        }
+                    }
+                    Err(e) => {
+                        recovery_at = Instant::now(); // an ask that failed is tried again at the next step
+                        if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
+                            // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
+                            // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
+                            d.flags.lost.store(true, Ordering::SeqCst);
+                            salvage.get_or_insert_with(|| Instant::now() + SALVAGE);
+                        } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
+                            return Err(e);
+                        }
+                    }
+                }
+            }};
+        }
+        // A step still out when the drive is about to end. One that only uploads is dropped: the attempt's final flush
+        // sends its rows again, and the hub skips what it has. One that read is heard out and acted on first.
+        macro_rules! settle_step {
+            () => {
+                if let Some(s) = step.take() {
+                    if step_asks {
+                        settle!(s.await);
+                    }
+                }
+            };
+        }
+        // The same before an early end, whose own reason stands: an error the step met is not the drive's.
+        macro_rules! end_step {
+            () => {
+                if let Some(s) = step.take() {
+                    if step_asks {
+                        if let Ok(heard) = s.await {
+                            if !heard.messages.is_empty() {
+                                let _ = self
+                                    .steer_inputs(
+                                        aid,
+                                        host,
+                                        thread,
+                                        &turn,
+                                        carried,
+                                        &heard.messages,
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            };
+        }
+
         while !complete {
             if d.flags.stopped.load(Ordering::SeqCst) {
                 // A quarantine's Stop says why (Dev 573): the turn ends with that reason, never read as a lost computer.
@@ -217,6 +323,7 @@ impl Runner {
                         .append(aid, "diagnostic", &json!({"end_reason": why}));
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove {
                     outcome: "interrupted".into(),
@@ -233,6 +340,7 @@ impl Runner {
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove {
                     outcome: "interrupted".into(),
@@ -267,6 +375,7 @@ impl Runner {
                     }
                     .into(),
                 );
+                end_step!();
                 let _ = host.interrupt(thread, &turn).await;
                 let why = if late {
                     format!("Timeout: {}", d.limit_name)
@@ -535,11 +644,21 @@ impl Runner {
                     }
                 }
             }
+            if complete {
+                // An input the step read is steered, or carried into the next turn as it would have been a step
+                // earlier.
+                settle_step!();
+            }
             if complete
                 && outcome == "completed"
                 && !carried.is_empty()
                 && !goal.controlled
                 && salvage.is_none()
+                // Nothing new is started once the run was stopped or its lease, time or computer ran out meanwhile.
+                && !d.flags.stopped.load(Ordering::SeqCst)
+                && !d.flags.lost.load(Ordering::SeqCst)
+                && Instant::now() < d.limit
+                && !self.stopping()
             {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
                 turn = self
@@ -556,80 +675,80 @@ impl Runner {
             // A notice is acted on at the next 1-second step, never sooner: a burst of notices for one bot costs at
             // most one ask a second, as the old poll did.
             let heard = self.events.heard(d.bot);
-            if last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            if step.is_none() && last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
                 let noticed = asked != Some(heard);
                 let ask = noticed || !self.events.live() || Instant::now() >= recovery_at;
-                if ask {
-                    asked = Some(heard);
-                    recovery_at = Instant::now() + self.events.turn_recovery();
-                }
-                let step: Result<(), Fail> = async {
+                // Once the lease is lost the hub refuses this attempt's goal and inputs; its events and result it keeps.
+                let check_goal = goal_running && ask && salvage.is_none();
+                let steer = !complete && ask && host.supports_steer() && salvage.is_none();
+                // A turn that has ended is uploaded by the attempt's final flush; only a goal read is still asked.
+                if !complete || check_goal {
+                    if ask {
+                        asked = Some(heard);
+                        recovery_at = Instant::now() + self.events.turn_recovery();
+                    }
                     host.poll_goal(thread);
-                    self.flush(aid).await?;
-                    if salvage.is_some() {
-                        return Ok(()); // the hub refuses this attempt's goal and inputs now; its events and result it keeps
-                    }
-                    if goal_running && ask {
-                        let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
-                        let latest = &latest["goal"];
-                        if !latest.is_object()
-                            || latest["id"] != goal_id
-                            || latest["updated_at"] != revision
-                        {
-                            goal.controlled = true;
-                            let _ = host.interrupt(thread, &turn).await;
-                            // An explicit goal control settles this run so its queued successor can claim.
-                            goal_running = false;
-                            complete = true;
-                            outcome = "completed".into();
+                    let (goal_id, revision) = (goal_id.clone(), revision.clone());
+                    step_asks = check_goal || steer;
+                    step = Some(Box::pin(async move {
+                        self.flush(aid).await?;
+                        let mut asked = Asked::default();
+                        if check_goal {
+                            let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
+                            let latest = &latest["goal"];
+                            if !latest.is_object()
+                                || latest["id"] != goal_id
+                                || latest["updated_at"] != revision
+                            {
+                                asked.controlled = true;
+                                return Ok(asked);
+                            }
                         }
-                    }
-                    if !complete && ask && host.supports_steer() {
-                        let messages = self
-                            .receive_inputs(aid, host, thread, &turn, carried)
-                            .await?;
-                        if messages.iter().any(from_person) {
-                            tries().take(&goal.tries_key);
+                        if steer {
+                            asked.messages = self.fetch_inputs(aid).await?;
                         }
-                    }
-                    Ok(())
-                }
-                .await;
-                if let Err(e) = step {
-                    recovery_at = Instant::now(); // an ask that failed is tried again at the next step
-                    if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
-                        // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
-                        // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
-                        d.flags.lost.store(true, Ordering::SeqCst);
-                        salvage.get_or_insert_with(|| Instant::now() + SALVAGE);
-                    } else if e.api.as_ref().is_none_or(|a| !a.retryable) {
-                        return Err(e);
+                        Ok(asked)
+                    }));
+                    if complete {
+                        let s = step.take().unwrap();
+                        settle!(s.await);
                     }
                 }
-                last_flush = Some(Instant::now());
             }
             if !goal_running && pausing.is_none() && outcome == "completed" {
                 complete = true;
             }
             if complete {
+                // What the step read is acted on before the run's result is: the hub counts it handed over.
+                settle_step!();
                 break;
             }
             if !host.alive() {
+                // A step that read is heard out first: a lease it found lost turns this into a salvage read.
+                settle_step!();
                 // Whatever it said before it went is read first.
                 while let Ok(ev) = rx.try_recv() {
                     queue.push(ev);
                 }
-                if !queue.is_empty() {
+                if complete || !queue.is_empty() {
                     continue;
                 }
                 if salvage.is_none() {
                     return Err(Fail::runtime("Local runtime exited unexpectedly"));
                 }
             }
-            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
-                Ok(Some(ev)) => queue.push(ev),
-                Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await, // no sender left; the window ends it
-                Err(_) => {}
+            // The step first, so a stream that never pauses still moves it on (and the upload lock it may hold).
+            tokio::select! {
+                biased;
+                done = step_done(&mut step) => {
+                    step = None;
+                    settle!(done);
+                }
+                got = tokio::time::timeout(Duration::from_millis(100), rx.recv()) => match got {
+                    Ok(Some(ev)) => queue.push(ev),
+                    Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await, // no sender left; the window ends it
+                    Err(_) => {}
+                },
             }
         }
         let mut text = answer(&earlier, &reply);
@@ -709,15 +828,23 @@ mod tests {
     async fn hub_answering(
         answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_answering_after(|_| Duration::ZERO, answer).await
+    }
+
+    /// `hub_answering`, each answer sent `delay(path)` after its request is read (a hub busy with its write lock).
+    async fn hub_answering_after(
+        delay: impl Fn(&str) -> Duration + Send + Sync + 'static,
+        answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let answer = Arc::new(answer);
+        let (answer, delay) = (Arc::new(answer), Arc::new(delay));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(vec![]));
         let kept = seen.clone();
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
-                let (kept, answer) = (kept.clone(), answer.clone());
+                let (kept, answer, delay) = (kept.clone(), answer.clone(), delay.clone());
                 tokio::spawn(async move {
                     let (mut request, mut buffer) = (Vec::new(), [0u8; 8192]);
                     let head = loop {
@@ -758,6 +885,7 @@ mod tests {
                         serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
                     let (status, answer) = answer(&path, &body);
+                    tokio::time::sleep(delay(&path)).await;
                     let answer = answer.to_string();
                     let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -941,6 +1069,8 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(drove.outcome, status);
+            // The attempt's final flush, before its result: a turn that has ended leaves its last rows to it.
+            runner.flush("acme-late").await.unwrap();
             let events: Vec<Value> = sent
                 .lock()
                 .unwrap()
@@ -1258,6 +1388,75 @@ mod tests {
         );
         assert!(
             !seen.lock().unwrap().iter().any(|p| p.contains("/inputs")),
+            "nothing acknowledged"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_input_read_while_the_turn_ends_is_kept_and_starts_nothing_after_a_stop() {
+        // The turn's first inputs read takes a second; the turn ends meanwhile, and a person presses Stop. The input
+        // the hub handed over is not dropped with the read, and no new turn is started for it after the Stop.
+        let (url, seen) = hub_answering_after(
+            |path| {
+                if path.ends_with("/inputs") {
+                    Duration::from_secs(1)
+                } else {
+                    Duration::ZERO
+                }
+            },
+            |path, body| {
+                if path.ends_with("/inputs") {
+                    (
+                        "200 OK",
+                        json!({"messages": [{"id": "m-7", "body": "Also add Q3.", "from_actor": "human:ana"}]}),
+                    )
+                } else {
+                    events_taken(body)
+                }
+            },
+        )
+        .await;
+        let (runner, dir) = runner_at(&url);
+        runner
+            .events
+            .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        assert!(host.supports_steer());
+        let f = Arc::new(flags(false));
+        let stopper = f.clone();
+        let feed = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            for ev in answer_events("th-7", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            stopper.stopped.store(true, Ordering::SeqCst);
+        });
+        let (drove, left, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-7",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        feed.await.unwrap();
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(drove.reply, "Acme's renewal summary is ready.");
+        assert_eq!(
+            left.keys().collect::<Vec<_>>(),
+            ["m-7"],
+            "still carried, so the result reports it undelivered"
+        );
+        assert!(
+            !seen.lock().unwrap().iter().any(|p| p.contains("/ack")),
             "nothing acknowledged"
         );
         std::fs::remove_dir_all(dir).ok();
@@ -1903,5 +2102,171 @@ mod tests {
         commits.sort_unstable();
         eprintln!("3,000 queued deltas through drive: wall time median {:.1} ms (min {:.1}, max {:.1}); event-write transactions median {} (min {}, max {})",
             micros[25] / 1e3, micros[0] / 1e3, micros[49] / 1e3, commits[25], commits[0], commits[49]);
+    }
+
+    /// A chat turn on a hub whose events uploads take `uploads` to answer and whose inputs reads take `asks` (a write on
+    /// the hub, behind its write lock), with the outbox uploader running as in a real attempt: a status line goes up
+    /// as the harness starts, the model's first text comes `first` later, and the turn ends `end` after that. Returns
+    /// how long after the first text the hub was sent it, and how long after the turn's end the drive returned.
+    async fn slow_hub_turn(
+        uploads: Duration,
+        asks: Duration,
+        first: Duration,
+        end: Duration,
+    ) -> (Duration, Duration) {
+        let sent_at: Arc<Mutex<Vec<(Instant, String)>>> = Arc::new(Mutex::new(vec![]));
+        let log = sent_at.clone();
+        let delay = move |path: &str| {
+            if path.ends_with("/inputs") {
+                asks
+            } else {
+                uploads
+            }
+        };
+        let (url, _seen) = hub_answering_after(delay, move |path, body| {
+            log.lock()
+                .unwrap()
+                .push((Instant::now(), format!("{path} {body}")));
+            if path.ends_with("/inputs") {
+                ("200 OK", json!({"attempt_id": "acme-slow", "messages": []}))
+            } else {
+                events_taken(body)
+            }
+        })
+        .await;
+        let (runner, dir) = runner_at(&url);
+        let runner = Arc::new(runner);
+        runner
+            .events
+            .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        runner.state.record(&json!({"id": "acme-slow"})).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        assert!(host.supports_steer());
+        let f = Arc::new(flags(false));
+        let wake = Arc::new(Notify::new());
+        let streamer = tokio::spawn(runner.clone().stream_loop(
+            "acme-slow".into(),
+            wake.clone(),
+            f.clone(),
+        ));
+        let started = Instant::now();
+        tx.send(json!({"kind": "status", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Starting"}))
+            .unwrap();
+        let feed = tokio::spawn(async move {
+            tokio::time::sleep(first).await;
+            let token = Instant::now();
+            tx.send(json!({"kind": "delta", "thread_id": "th-slow", "turn_id": "turn-1", "text": "Acme's"}))
+                .unwrap();
+            tokio::time::sleep(end).await;
+            let ended = Instant::now();
+            for ev in answer_events("th-slow", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+            (token, ended)
+        });
+        let d = Drive {
+            limit_name: "max_run_minutes (60 minutes)",
+            aid: "acme-slow",
+            host: &host,
+            thread: "th-slow",
+            effort: None,
+            limit: started + Duration::from_secs(60),
+            flags: &f,
+            wake: &wake,
+            redactor: None,
+            runtime: "claude",
+            bot: "acme",
+            session: "th-slow",
+            fresh: None,
+        };
+        let mut segment = Segment {
+            meter: Meter::default(),
+            config: json!({}),
+            profile: None,
+            billing: "api",
+            subscription: None,
+        };
+        let mut goal = GoalRun {
+            chat_goal: None,
+            controlled: false,
+            failure: None,
+            paused: None,
+            tries_key: ("acme".into(), "th-slow".into()),
+        };
+        let drove = runner
+            .drive(
+                &d,
+                &mut rx,
+                "turn-1".into(),
+                &mut segment,
+                &mut BTreeMap::new(),
+                &mut None,
+                &mut goal,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
+        let returned = Instant::now();
+        assert_eq!(drove.outcome, "completed");
+        let (token, ended) = feed.await.unwrap();
+        // Everything still in the outbox goes up, as the attempt's final flush sends it.
+        runner.flush("acme-slow").await.unwrap();
+        f.done.store(true, Ordering::SeqCst);
+        wake.notify_one();
+        streamer.await.unwrap();
+        let first_sent = sent_at
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, r)| r.contains("/events") && r.contains("\"delta\""))
+            .map(|(at, _)| *at)
+            .expect("the first text went up");
+        std::fs::remove_dir_all(dir).ok();
+        (
+            first_sent.saturating_duration_since(token),
+            returned.saturating_duration_since(ended),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_slow_inputs_read_does_not_hold_back_the_first_text() {
+        // The turn's first step reads its inputs at once, and that read waits 2 s for the hub's write lock. The model's
+        // first text, 300 ms in, goes up as soon as it is said, not once the read is answered.
+        let (first, _) = slow_hub_turn(
+            Duration::from_millis(50),
+            Duration::from_secs(2),
+            Duration::from_millis(300),
+            Duration::from_millis(500),
+        )
+        .await;
+        assert!(
+            first < Duration::from_secs(1),
+            "first text sent {first:?} after the model said it"
+        );
+    }
+
+    /// Bench, not run by CI: model-first-text to the hub, and turn end to the drive's return, on hubs slow to answer
+    /// uploads, inputs reads or both. `cargo test --release bench_slow_hub -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn bench_slow_hub_first_text_and_turn_end() {
+        for (uploads, asks) in [(0u64, 0u64), (50, 2000), (1000, 50), (2000, 2000)] {
+            let (first, end) = slow_hub_turn(
+                Duration::from_millis(uploads),
+                Duration::from_millis(asks),
+                Duration::from_millis(300),
+                Duration::from_millis(2900),
+            )
+            .await;
+            // first_delta_posted is marked when the hub answers that upload: `uploads` after it was sent.
+            println!(
+                "uploads {uploads} ms, inputs reads {asks} ms: first text sent +{} ms, first_delta_posted +{} ms, turn end seen +{} ms",
+                first.as_millis(),
+                first.as_millis() + u128::from(uploads),
+                end.as_millis()
+            );
+        }
     }
 }

@@ -3,19 +3,11 @@
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type {
-  Feedback as FeedbackRow,
-  FeedbackMarkers,
-  FeedbackReasons,
-  FeedbackRuleDraft,
-  FeedbackRuleMade,
-  SlackMessage,
-  SlackThread,
-} from '@/api/schema';
+import type { SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
-import type { ChatMessage, LiveRun, PageRef, Reaction, ReplyQuote, TimelinePage, Variant } from './types';
+import type { ChatMessage, LiveRun, PageRef, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -328,77 +320,10 @@ export function installConversationLive(): void {
       }
     }
   });
-  onTopic<ReactionEvent>('threads', patchReactions);
   onTopic('reset', () => {
     for (const [key, runs] of queryClient.getQueriesData<LiveRun[]>({ queryKey: ['thread'] }))
       if (key[2] === 'live' && runs?.length) queryClient.setQueryData(key, []);
   });
-}
-
-/* ---------------------------------------------------------------- reactions */
-
-/** Change one message wherever a timeline holds it. Returns the same data when it is not there. */
-function withMessage(d: Timeline | undefined, id: string, fn: (m: ChatMessage) => ChatMessage): Timeline | undefined {
-  if (!d) return d;
-  const p = d.pages.findIndex((page) => page.messages.some((m) => m.id === id));
-  if (p < 0) return d;
-  const page = d.pages[p] as TimelinePage;
-  return { ...d, pages: d.pages.with(p, { ...page, messages: page.messages.map((m) => (m.id === id ? fn(m) : m)) }) };
-}
-
-const mineIn = (r: Reaction | undefined, me: string) => !!r?.actors?.includes(me);
-
-/** A message's reactions with my `emoji` added (`on`) or taken off; the same list when nothing changes. */
-export function toggled(list: Reaction[] | undefined, emoji: string, me: string, on: boolean): Reaction[] {
-  const was = list ?? [];
-  const r = was.find((x) => x.emoji === emoji);
-  if (mineIn(r, me) === on) return was;
-  if (!r) return [...was, { emoji, count: 1, actors: [me] }];
-  return was
-    .map((x) =>
-      x.emoji !== emoji
-        ? x
-        : { ...x, count: Math.max(0, x.count + (on ? 1 : -1)), actors: on ? [...(x.actors ?? []), me] : (x.actors ?? []).filter((a) => a !== me) },
-    )
-    .filter((x) => x.count > 0);
-}
-
-/** Whether `me` reacted with `emoji` on a message the chat holds. */
-export function reacted(chat: string, message: string, emoji: string, me: string): boolean {
-  const m = rowsOf(queryClient.getQueryData<Timeline>(timelineKey(chat))).find((x) => x.id === message);
-  return mineIn(m?.reactions?.find((r) => r.emoji === emoji), me);
-}
-
-/** Add or take off my reaction: shown at once, replaced by the message's reactions as the server answers them. */
-export function reactMessage(chat: string, message: string, emoji: string, on: boolean, me: string) {
-  const path = `/api/v2/messages/${enc(message)}/reactions/${enc(emoji)}` as const;
-  return write<Reaction[]>({
-    key: timelineKey(chat),
-    optimistic: (d: Timeline | undefined) => withMessage(d, message, (m) => ({ ...m, reactions: toggled(m.reactions, emoji, me, on) })),
-    send: (idempotencyKey) => (on ? api.put<Reaction[]>(path, {}, { idempotencyKey }) : api.delete<Reaction[]>(path, { idempotencyKey })),
-    settle: (d: Timeline | undefined, answer) => (Array.isArray(answer) ? withMessage(d, message, (m) => ({ ...m, reactions: answer })) : d),
-    revert: (d: Timeline | undefined) => withMessage(d, message, (m) => ({ ...m, reactions: toggled(m.reactions, emoji, me, !on) })),
-  });
-}
-
-/** The `threads` topic's `reactions` kind (backend/events.py _threads): one message's reactions as they stand now. */
-export interface ReactionEvent {
-  kind?: string;
-  thread_id?: string;
-  message_id?: string;
-  reactions?: Reaction[];
-}
-
-/** Put each message's new reactions in every timeline that holds it (a root's flat timeline holds its sub-threads'). */
-export function patchReactions(batch: ReactionEvent[]): void {
-  const moved = batch.filter((e) => e.kind === 'reactions' && e.message_id && Array.isArray(e.reactions));
-  if (!moved.length) return;
-  for (const [key, data] of queryClient.getQueriesData<Timeline>({ queryKey: ['thread'] })) {
-    if (key[2] !== 'timeline' || !data?.pages) continue;
-    let next: Timeline | undefined = data;
-    for (const e of moved) next = withMessage(next, e.message_id as string, (m) => ({ ...m, reactions: e.reactions }));
-    if (next !== data) queryClient.setQueryData(key, next);
-  }
 }
 
 /* ---------------------------------------------------------------- outline */
@@ -464,91 +389,3 @@ export const slackThreadQuery = ({ bot, channel, thread }: SlackPlace) =>
         )
       ).messages ?? [],
   });
-
-/* ---------------------------------------------------------------- feedback on a message */
-
-quietRoot('feedback');
-
-export type Feedback = FeedbackRow;
-export type Rating = 'up' | 'down';
-export const feedbackKey = (id: string) => ['feedback', 'chat', id] as const;
-const reasonsKey = ['feedback', 'reasons'] as const;
-
-/** The person's own feedback on the messages of one chat (the newest 200 that can be rated). */
-export const feedbackQuery = (id: string, messages: string[]) =>
-  queryOptions({
-    queryKey: feedbackKey(id),
-    queryFn: async ({ signal }) =>
-      messages.length
-        ? (await api.get<FeedbackMarkers>(`/api/v2/feedback?subject_type=message&subject_ids=${messages.slice(-200).map(enc).join(',')}`, { signal })).items
-        : [],
-    enabled: messages.length > 0,
-  });
-
-/** The reasons the person gave lately, most recent first, with how often each. */
-export const reasonsQuery = queryOptions({
-  queryKey: reasonsKey,
-  queryFn: async ({ signal }) => (await api.get<FeedbackReasons>('/api/v2/feedback/recent-reasons', { signal })).reasons,
-  staleTime: 60_000,
-});
-
-const swap = (list: Feedback[] | undefined, message: string, next: Feedback | null) => [
-  ...(list ?? []).filter((f) => f.subject_id !== message),
-  ...(next ? [next] : []),
-];
-
-/** Rate a message: shown at once, replaced by what the server keeps. Rating again replaces it. */
-export function rateMessage(chat: string, message: string, rating: Rating, reason = '', tellAgent = false) {
-  const now = new Date().toISOString();
-  const draft = (old?: Feedback): Feedback => ({
-    id: old?.id ?? `tmp-${newId()}`,
-    bot_id: old?.bot_id ?? '',
-    person_id: old?.person_id ?? '',
-    created_at: old?.created_at ?? now,
-    updated_at: now,
-    subject_type: 'message',
-    subject_id: message,
-    rating,
-    reason,
-    outcome: old?.outcome ?? 'none',
-    note_id: old?.note_id ?? null,
-    note_status: old?.note_status ?? null,
-    org_rule_id: old?.org_rule_id ?? null,
-    rule_status: old?.rule_status ?? null,
-  });
-  return write({
-    key: feedbackKey(chat),
-    optimistic: (d: Feedback[] | undefined) => swap(d, message, draft(d?.find((f) => f.subject_id === message))),
-    send: (idempotencyKey) =>
-      api.post<Feedback>(
-        '/api/v2/feedback',
-        { subject_type: 'message', subject_id: message, rating, ...(reason && { reason }), ...(tellAgent && { tell_bot: true }) },
-        { idempotencyKey },
-      ),
-    settle: (d: Feedback[] | undefined, f) => (f?.id ? swap(d, message, f) : d),
-  });
-}
-
-/** Take a rating back. */
-export function unrateMessage(chat: string, feedback: string) {
-  return write({
-    key: feedbackKey(chat),
-    optimistic: (d: Feedback[] | undefined) => (d ?? []).filter((f) => f.id !== feedback),
-    send: (idempotencyKey) => api.delete(`/api/v2/feedback/${enc(feedback)}`, { idempotencyKey }),
-  });
-}
-
-/** One sentence drafted from a "Not good" and the rated work; stores nothing, so it is read like a query. */
-export const ruleDraftQuery = (feedback: string) =>
-  queryOptions({
-    queryKey: ['ruleDraft', feedback] as const, // outside the quiet 'feedback' root: a draft is a model call, read once
-    queryFn: () => api.post<FeedbackRuleDraft>(`/api/v2/feedback/${enc(feedback)}/rule-draft`, {}),
-    staleTime: Infinity,
-  });
-
-/** Make a "Not good" a rule for the agent, or for every agent: active when the person manages it, else suggested. */
-export async function makeRule(chat: string, feedback: string, text: string, allAgents: boolean) {
-  const out = await api.post<FeedbackRuleMade>(`/api/v2/feedback/${enc(feedback)}/rule`, { text, all_bots: allAgents });
-  queryClient.setQueryData(feedbackKey(chat), (d: Feedback[] | undefined) => (d ?? []).map((f) => (f.id === feedback ? out.feedback : f)));
-  return out;
-}
