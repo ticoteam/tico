@@ -765,8 +765,8 @@ def _pooled(base):
             self.read_cache.clear()
 
     def execute(self, statement, *args, **kwargs):
-        # Explicit transaction control starts a new snapshot even without row changes.
-        if (statement.lstrip().split(None, 1) or [""])[0].upper() in (
+        # Explicit transaction control starts a new snapshot even without row changes (`ROLLBACK;` too).
+        if (statement.lstrip().split(None, 1) or [""])[0].rstrip(";").upper() in (
             "BEGIN",
             "COMMIT",
             "END",

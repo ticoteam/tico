@@ -46,6 +46,15 @@ def test_reads_reuse_a_connection_left_clean(tmp_path):
         assert second.read_cache == {}
 
 
+def test_transaction_control_with_a_semicolon_clears_the_reads(tmp_path):
+    s = store(tmp_path)
+    with s.read() as c:
+        c.execute("BEGIN;")
+        assert read_cache.rows(c, "SELECT x FROM t")[0][0] == 1
+        c.execute("ROLLBACK;")
+        assert c.read_cache == {}
+
+
 def test_a_connection_a_caller_changed_is_not_reused(tmp_path):
     s = store(tmp_path)
     with s.read() as first:
