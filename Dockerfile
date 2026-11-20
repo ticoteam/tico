@@ -57,7 +57,7 @@ COPY scripts/build-ui.cjs scripts/
 COPY ui ui
 RUN node scripts/build-ui.cjs
 
-# The new web app at /next (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web.
+# The web app at / (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web.
 FROM node AS web-build
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /src/web

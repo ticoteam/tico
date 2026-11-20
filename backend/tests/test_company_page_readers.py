@@ -238,7 +238,7 @@ def test_no_route_of_the_app_answers_on_the_reader_host(site, transparency):
     assert sum(path.startswith("/api/") for _, path in routes) > 100
     assert get(site.api, "readers")["readers"] == []  # the same credential works on the app's own host
     for method, path in routes:
-        if path in answered or path == "/assets/x":
+        if path in answered or path in ("/assets/x", "/assets"):  # the reader's own files (its /assets/ route)
             continue
         answer = client.request(
             method,

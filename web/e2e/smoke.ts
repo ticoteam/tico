@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright';
 
 const HUB = 'http://127.0.0.1:8765';
-const APP = 'http://127.0.0.1:5173/next';
+const APP = 'http://127.0.0.1:5173';
 const TOKEN_FILE = process.env.HUB_TOKEN_FILE ?? '';
 const [out = '.', ...wanted] = process.argv.slice(2);
 const want = (s: string) => !wanted.length || wanted.includes(s);
@@ -74,7 +74,7 @@ async function desktop(browser: Browser) {
     ] as const) {
       await page.locator('[data-sheet="menu"] .nav-item', { hasText: label }).first().click();
       await settle(page, 500);
-      const at = new URL(page.url()).pathname.replace(/^\/next/, '');
+      const at = new URL(page.url()).pathname;
       check(at.startsWith(path), `${label} → ${at}`, `${label} went to ${at}`);
     }
     await shot(page, 'desktop-tasks');

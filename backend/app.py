@@ -2692,8 +2692,9 @@ def _install_features(
 
     install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
 
-    web_routes.register(app, settings)  # before the UI's mount at /, which would answer /next (backend/web_routes.py)
+    web_routes.register(app, settings)  # /next before anything else could answer it (backend/web_routes.py)
     ui_bundle_routes.register(app, auth, settings)
+    web_routes.register_page(app, settings)  # last: every address nothing above answered is the web app's page
     from . import cors
 
     cors.install(app, settings)  # last, so it is outermost: a preflight is answered before sign-in

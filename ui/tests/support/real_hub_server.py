@@ -30,6 +30,10 @@ import uvicorn  # noqa: E402
 from evals.redesign.harness import Org  # noqa: E402
 from evals.redesign.seeds import SEEDS  # noqa: E402
 
+# The old page stays at / for the browser scripts that open it there; the web app's build is what / serves otherwise
+# (backend/web_routes.py).
+CLASSIC_PAGE = Path(__file__).resolve().parents[3] / "build" / "ui"
+
 
 def bound_socket():
     """A loopback socket already bound to a free port and handed to uvicorn as is, so no other process can take the
@@ -65,6 +69,7 @@ def main(argv=None):
         sock = bound_socket()
         port = sock.getsockname()[1]
         settings.public_url = f"http://127.0.0.1:{port}"
+        settings.web_dir = CLASSIC_PAGE
         skipped = [name for name in names if SEEDS[name](world) is False]
         # The lifespan already ran under the test client, so uvicorn must not run it again. A page a test left open
         # keeps its live stream: on SIGTERM wait a second for it, not the 10 s join below.

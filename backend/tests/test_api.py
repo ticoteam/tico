@@ -68,7 +68,8 @@ def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
     assert keyed.status_code == 200 and keyed.json()["code"], keyed.text
 
 
-def test_no_local_owner_or_header_spoofing(api):
+def test_no_local_owner_or_header_spoofing(api, tmp_path):
+    api.app.state.store.settings.web_dir = tmp_path / "web"  # no web app build: the page itself is a 404 here
     assert api.get("/healthz").status_code == 200
     assert api.get("/api/v2/tasks").status_code == 401
     assert api.get("/", headers={"Cf-Access-Authenticated-User-Email": "ana@acme.example"}).status_code == 401

@@ -4,14 +4,14 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { queryClient } from '@/data/query-client';
 import { setLinkComponent, type LinkProps } from '@/kit/Link';
-import { router } from '@/router';
+import { appHref, router } from '@/router';
 import { markDesktop } from '@/shell';
 import '@/styles/index.css';
 
-/* The kit's links move through the router (no page load). An address is app-relative ("/tasks/engineering?view=list");
-   the router adds its base path and reads the search the way its routes do. */
+/* The kit's links move through the router (no page load). An address is app-relative ("/tasks/engineering?view=list"),
+   or an old app address (`/#/task/12`) that opens its new page; the router reads the search the way its routes do. */
 function AppLink({ href, ...rest }: LinkProps) {
-  const u = new URL(href, location.origin);
+  const u = new URL(appHref(href), location.origin);
   return (
     <RouterLink
       {...rest}

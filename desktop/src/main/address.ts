@@ -1,7 +1,8 @@
 // Server addresses. A company is an origin (platforms.md 5): whatever path, query or fragment a pasted link has is
 // dropped. HTTPS everywhere; plain HTTP only for this computer (loopback), as today's app (app/src/config.rs).
 
-export const APP_PATH = '/next/';
+/** The app is at the root of a company's server (an older link under /next/ is sent on there by the server). */
+export const APP_PATH = '/';
 const CLOUD_DOMAIN = 'tico.team';
 
 export type AddressResult = { ok: true; origin: string } | { ok: false; error: string };
@@ -48,14 +49,9 @@ export function originOf(raw: string): string | null {
   }
 }
 
-/** A URL inside the new app on this origin: the only kind kept as a company's last place. */
+/** A page of the app on this origin: the only kind kept as a company's last place. */
 export function isAppUrl(raw: string, origin: string): boolean {
-  try {
-    const url = new URL(raw);
-    return url.origin === origin && (url.pathname === '/next' || url.pathname.startsWith(APP_PATH));
-  } catch {
-    return false;
-  }
+  return isPageUrl(raw, origin);
 }
 
 /**

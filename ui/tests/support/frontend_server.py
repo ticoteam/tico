@@ -36,6 +36,10 @@ from backend import question_marks  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 
+# The old page stays at / for the browser scripts that open it there; the web app's build is what / serves otherwise
+# (backend/web_routes.py).
+CLASSIC_PAGE = Path(__file__).resolve().parents[3] / "build" / "ui"
+
 LOCAL_TOKEN = "local-owner-token-for-the-browser-test-0123456789"
 REPLY = "Hello from ops. The reply is streaming to your own frontend, one word at a time."
 CLIENT, SECRET = "example-client", "example-secret"
@@ -210,6 +214,7 @@ def main():
     else:
         issuer = ""
         settings = Settings(**common, local_owner_email="ana@acme.example", local_owner_token=LOCAL_TOKEN)
+    settings.web_dir = CLASSIC_PAGE
     app = create_app(settings)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()

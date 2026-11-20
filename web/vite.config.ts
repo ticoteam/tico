@@ -42,9 +42,10 @@ const preloads: Plugin = {
   },
 };
 
-export default defineConfig({
-  // Assets stay under /next/ even after the switch; only the router's basepath changes (transition.md 1.3).
-  base: '/next/',
+export default defineConfig(({ command }) => ({
+  /* The app is at / (backend/web_routes.py); its built files stay under /next/, apart from the server's own /assets/.
+     The dev server serves everything at /, so a reload of any app address finds the page. */
+  base: command === 'build' ? '/next/' : '/',
   plugins: [
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),
@@ -91,4 +92,4 @@ export default defineConfig({
     pool: 'threads',
     maxWorkers: 1,
   },
-});
+}));
