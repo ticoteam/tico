@@ -7,7 +7,6 @@ the index is rebuilt when the running version (or a file) changes, with no netwo
 `collection: "manual"` and the label "Tico manual", the file (`docs/<name>.md`) and a link to that page.
 """
 
-import bisect
 import functools
 import math
 import re
@@ -45,53 +44,65 @@ def _words(text):
     return re.findall(r"\w+", str(text).casefold())
 
 
+def _vocabulary(text):
+    """The distinct words of `text`, sorted, each after a space: `_has` finds a word by its start in one string."""
+    return "".join(" " + w for w in sorted(set(_words(text))))
+
+
 def page_text(name, text, title=None):
+    """A page's sections, each its heading, anchor, span of `text` (`section_text`) and word vocabularies."""
     provided_title = title
-    title, sections, current, in_code = (
+    title, sections, current, in_code, at = (
         title or name.replace("-", " ").title(),
         [],
-        {"heading": "", "anchor": "", "lines": []},
+        {"heading": "", "anchor": "", "start": 0, "filled": False},
         False,
+        0,
     )
-    for line in text.splitlines():
+    for raw in text.splitlines(keepends=True):
+        line, at = raw.splitlines()[0], at + len(raw)
         if line.lstrip().startswith("```"):
             in_code = not in_code
         m = None if in_code else HEADING.match(line)
         if m:
-            if m.group(1) == "#" and not sections and not any(current["lines"]):
+            if m.group(1) == "#" and not sections and not current["filled"]:
                 title, current["heading"] = provided_title or m.group(2), m.group(2)
-                current["anchor"] = slug(m.group(2))
+                current.update(anchor=slug(m.group(2)), start=at)  # only empty lines came before
                 continue
-            sections.append(current)
-            current = {"heading": m.group(2), "anchor": slug(m.group(2)), "lines": []}
+            sections.append({**current, "end": at - len(raw)})
+            current = {"heading": m.group(2), "anchor": slug(m.group(2)), "start": at, "filled": False}
         else:
-            current["lines"].append(line)
-    sections.append(current)
+            current["filled"] = current["filled"] or bool(line)
+    sections.append({**current, "end": at})
     out = []
     for s in sections:
-        body = " ".join(" ".join(s["lines"]).split())
+        body = " ".join(text[s["start"] : s["end"]].split())
         if s["heading"] or body:
-            words = set(_words(s["heading"] + " " + body))
             out.append(
                 {
                     "heading": s["heading"],
                     "anchor": s["anchor"],
-                    "body": body,
-                    "words": words,
-                    "head_words": set(_words(s["heading"])),
-                    "sorted_words": sorted(words),  # for _prefixed: a word lookup that does not walk the section
-                    "folded": body.casefold(),
+                    "start": s["start"],
+                    "end": s["end"],
+                    "words": _vocabulary(s["heading"] + " " + body),
+                    "head_words": _vocabulary(s["heading"]),
                 }
             )
-    title_words = set(_words(title + " " + name))
+    title_words = _vocabulary(title + " " + name)
     return {
         "name": name,
         "title": title,
         "body": text,
+        "folded": text.casefold(),
         "sections": out,
         "title_words": title_words,
-        "sorted_title_words": sorted(title_words),
+        "words": _vocabulary(title_words + "".join(s["words"] for s in out)),  # the page's, for query_weights
     }
+
+
+def section_text(page, section):
+    """A section's text from its page's body, each run of whitespace one space."""
+    return " ".join(page["body"][section["start"] : section["end"]].split())
 
 
 def pages():
@@ -107,23 +118,6 @@ def pages():
         return _cache["pages"]
 
 
-def _corpus():
-    """Each manual page's whole vocabulary (title and every section), sorted, built once per `pages()` build: kept with
-    the pages it was built from, so a reload in between is never read as this build's."""
-    found = pages()
-    with _lock:
-        built = _cache.get("corpus")
-        if built is None or built[0] is not found:
-            built = _cache["corpus"] = (
-                found,
-                [
-                    sorted(page["title_words"].union(*(section["words"] for section in page["sections"])))
-                    for page in found.values()
-                ],
-            )
-        return built[1]
-
-
 def _stem(token):
     return token[:-1] if len(token) > 4 and token.endswith("s") else token
 
@@ -133,12 +127,9 @@ def _hits(words, token):
     return token in words or any(w.startswith(stem) for w in words)
 
 
-def _prefixed(ordered, token):
-    """`_hits` on a sorted word list, by bisection: the words starting with the stem sit together, from the first word
-    not below it (the token itself starts with its stem, so `token in words` needs no check of its own)."""
-    stem = _stem(token)
-    at = bisect.bisect_left(ordered, stem)
-    return at < len(ordered) and ordered[at].startswith(stem)
+def _has(vocabulary, token):
+    """`_hits` on a `_vocabulary` string: some word starts with the stem (the token itself starts with it)."""
+    return " " + _stem(token) in vocabulary
 
 
 @functools.lru_cache(maxsize=8)
@@ -168,25 +159,29 @@ def query_words(q, glossary=None):
 
 
 def query_weights(wanted):
-    corpus = _corpus()
-    return {
-        term: 1 + math.log((len(corpus) + 1) / (1 + sum(_prefixed(words, term) for words in corpus))) for term in wanted
-    }
+    corpus = [page["words"] for page in pages().values()]
+    return {term: 1 + math.log((len(corpus) + 1) / (1 + sum(_has(words, term) for words in corpus))) for term in wanted}
 
 
 def best_section(page, wanted, weights=None):
     weights = weights or query_weights(wanted)
-    need = 1
     best = None
-    titled = {t: _prefixed(page["sorted_title_words"], t) for t in wanted}
+    terms = [(t, " " + _stem(t), _stem(t)) for t in wanted]  # `_has` of each term is `key in` a vocabulary
+    terms = [term for term in terms if term[1] in page["words"]]  # one no word of the page has can match no section
+    titled = {t: key in page["title_words"] for t, key, _ in terms}
+    folded = page["folded"]
+    spans = len(folded) == len(page["body"])  # casefold kept each character one character, so the spans fit it
     for section in page["sections"]:
-        have = [t for t in wanted if titled[t] or _prefixed(section["sorted_words"], t)]
-        if len(have) < need:
+        words, head = section["words"], section["head_words"]
+        have = [term for term in terms if titled[term[0]] or term[1] in words]
+        if not have:
             continue
-        body = section["folded"]
+        at, to = section["start"], section["end"]
+        if not spans:
+            folded, at, to = page["body"][at:to].casefold(), 0, None
         score = sum(
-            weights[t] * (10 + 5 * titled[t] + 15 * _hits(section["head_words"], t) + min(body.count(_stem(t)), 5))
-            for t in have
+            weights[t] * (10 + 5 * titled[t] + 15 * (key in head) + min(folded.count(stem, at, to), 5))
+            for t, key, stem in have
         )
         if best is None or score > best[0]:
             best = (score, section)
@@ -233,10 +228,11 @@ def search(q, limit=20):
         best = best_section(page, wanted, weights)
         if best:
             row = result(page, best[1], version, best[0])
-            row["section"] = best[1]["heading"]
-            row["excerpt"] = _excerpt(best[1]["body"], wanted)
+            row["section"], row["excerpt"] = best[1]["heading"], (page, best[1])  # made an excerpt once kept, below
             found.append(row)
     found.sort(key=lambda r: (-r["score"], r["path"]))
+    for row in found[:limit]:
+        row["excerpt"] = _excerpt(section_text(*row["excerpt"]), wanted)
     return found[:limit]
 
 

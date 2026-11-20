@@ -200,92 +200,46 @@ def label_names(c, actors):
     return lookup(c, {a for a in actors if a})
 
 
-# ------------------------------------------------------------------ parsed docs for search
-# Search reads every doc that matches any query word, and parsing them all again on each call took about a second at
-# 595 docs (8.5 MB). A doc's parse (manual.page_text, less what search does not read) is kept per version, up to
-# PARSED_CHARS of body text, the oldest used dropped first. It takes about seven times its body in memory.
-PARSED_CHARS = 16_000_000
-PARSED_ENTRY = 1024  # what each kept doc counts beyond its body, so many tiny docs are bounded too
-PARSED_CHUNK = 100  # candidates read and handed on at a time, so a broad search holds a chunk's bodies, not all
-
-
-def _search_page(path, body, title):
-    """manual.page_text of a doc as search reads it: its sections and title words (not the whole body again, nor each
-    section's word set, which `sorted_words` holds too)."""
-    page = manual.page_text(path, body, title)
-    del page["body"]
-    for section in page["sections"]:
-        del section["words"]
-    return page
-
-
-class ParsedDocs:
-    """One store's docs as search parses them, kept per version. A key is the database file and the doc's (id,
-    version, updated_at, path, title): every write of a body moves its version and updated_at, and a restored or
-    replaced database file is another file."""
-
-    def __init__(self, store):
-        self.store, self.lock, self.kept, self.size = store, threading.Lock(), {}, 0
-
-    def pages(self, c, rows):
-        """(row, page) for docs rows of `id, path, title, version, updated_at`, in their order, a chunk at a time. The
-        bodies of docs not kept yet are read by id; a doc archived in between is left out, and one written in between
-        reads as its newer row."""
-        place = getattr(self.store, "pool_file", None)
-        key = lambda r: (place, r["id"], r["version"], r["updated_at"], r["path"], r["title"])
-        for start in range(0, len(rows), PARSED_CHUNK):
-            part, found = rows[start : start + PARSED_CHUNK], {}
-            with self.lock:
-                for r in part:
-                    kept = self.kept.pop(key(r), None)
-                    if kept is not None:
-                        self.kept[key(r)] = kept  # back at the newest end
-                        found[r["id"]] = (r, kept[0])
-            missing = [r["id"] for r in part if r["id"] not in found]
-            if missing:
-                for r in c.execute(
-                    "SELECT id,path,title,version,updated_at,body FROM docs WHERE archived=0 AND id IN (%s)"
-                    % ",".join("?" * len(missing)),
-                    missing,
-                ):
-                    page = _search_page(r["path"], r["body"], r["title"])
-                    found[r["id"]] = (r, page)
-                    self._keep(key(r), page, len(r["body"]) + PARSED_ENTRY)
-            yield from (found[r["id"]] for r in part if r["id"] in found)
-
-    def _keep(self, key, page, cost):
-        with self.lock:
-            if key in self.kept:
-                return
-            self.kept[key] = (page, cost)
-            self.size += cost
-            while self.size > PARSED_CHARS and self.kept:
-                self.size -= self.kept.pop(next(iter(self.kept)))[1]
-
-
 # ------------------------------------------------------------------ the store
 def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='docs_fts'").fetchone() is not None
 
 
+def parse_for_search(c, rowid, title, path, body):
+    """Stores what search ranks a doc by: its manual.page_text words, title words and sections (each a span of the
+    body and its words). A change to what it stores needs a migration that sets docs.search_parse to NULL: the next start parses
+    every live doc again."""
+    page = manual.page_text(path, body, title)
+    parse = json.dumps({k: page[k] for k in ("title_words", "words", "sections")}, ensure_ascii=False)
+    c.execute("UPDATE docs SET search_parse=? WHERE rowid=?", (parse, rowid))
+
+
 def index(c, rowid, title, path, body):
+    """A doc's search forms after a write of its title, path or body: its stored parse and its full-text row."""
+    parse_for_search(c, rowid, title, path, body)
     if has_fts(c):
         c.execute("DELETE FROM docs_fts WHERE rowid=?", (rowid,))
         c.execute("INSERT INTO docs_fts(rowid,title,path,body) VALUES(?,?,?,?)", (rowid, title, path, body))
 
 
 def unindex(c, rowid):
+    c.execute("UPDATE docs SET search_parse=NULL WHERE rowid=?", (rowid,))  # an archived doc's is made on restore
     if has_fts(c):
         c.execute("DELETE FROM docs_fts WHERE rowid=?", (rowid,))
 
 
 def ensure_schema(c, settings=None):
-    """The full-text index (rebuilt when it is behind the rows) and the one-time move of the old linked sources and
-    approved repositories into linked docs. Safe to run at every start."""
+    """Each live doc's stored parse where it has none, the full-text index (rebuilt when it is behind the rows) and the
+    one-time move of the old linked sources and approved repositories into linked docs. Safe to run at every start."""
     from .flight import begin
 
     done = begin(c)
     try:
+        while rows := c.execute(
+            "SELECT rowid,title,path,body FROM docs WHERE archived=0 AND search_parse IS NULL LIMIT 100"
+        ).fetchall():
+            for rowid, title, path, body in rows:
+                parse_for_search(c, rowid, title, path, body)
         if has_fts(c):
             live = c.execute("SELECT COUNT(*) FROM docs WHERE archived=0").fetchone()[0]
             if live != c.execute("SELECT COUNT(*) FROM docs_fts").fetchone()[0]:
@@ -676,7 +630,6 @@ def merge_ranked(groups, limit, tokens):
 class Docs:
     def __init__(self, app, store, auth, mutate):
         self.app, self.store, self.auth, self.mutate = app, store, auth, mutate
-        self.parsed = ParsedDocs(store)
 
     # -------------------------------------------------------------- who
     def reader(self, who):
@@ -729,7 +682,9 @@ class Docs:
             args += [path, path, doc_id]
         with self.store.read() as c:
             rows = c.execute(
-                "SELECT * FROM docs WHERE " + " AND ".join(marks) + " ORDER BY path COLLATE NOCASE, id LIMIT ?",
+                "SELECT id,path,title,updated_at,updated_by_id,locked,version FROM docs WHERE "
+                + " AND ".join(marks)
+                + " ORDER BY path COLLATE NOCASE, id LIMIT ?",
                 (*args, limit + 1),
             ).fetchall()
             page = rows[:limit]
@@ -1064,7 +1019,7 @@ class Docs:
     # -------------------------------------------------------------- search
     def search(self, who, q, limit, source_id=""):
         self.reader(who)
-        with self.store.read_transaction() as c:  # one snapshot: the candidates, then the bodies not parsed yet
+        with self.store.read_transaction() as c:  # one snapshot: internal, external and linked results
             return {"results": self.find(c, q, limit, source_id)}
 
     def find(self, c, q, limit=20, source_id=""):
@@ -1091,12 +1046,16 @@ class Docs:
         weights = manual.query_weights(tokens)
         # All candidate titles use one glossary snapshot, rather than restatting every manual file per row.
         glossary = manual.pages().get('glossary', {}).get('body', '')
-        sql, params = "SELECT id,path,title,version,updated_at FROM docs WHERE archived=0", ()
+        sql, params = (
+            "SELECT id,path,title,body,search_parse FROM docs WHERE archived=0 AND search_parse IS NOT NULL",
+            (),
+        )
         if has_fts(c):
             expression = " OR ".join('"' + manual._stem(token) + '"*' for token in tokens)
             sql += " AND rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"
             params = (expression,)
-        for row, page in self.parsed.pages(c, c.execute(sql, params).fetchall()):
+        for row in c.execute(sql, params):
+            page = {**json.loads(row["search_parse"]), "body": row["body"], "folded": row["body"].casefold()}
             best = manual.best_section(page, tokens, weights)
             if not best:
                 continue
@@ -1105,7 +1064,7 @@ class Docs:
             named = bool(title_tokens) and all(t in tokens for t in title_tokens)
             named = named or all(t in tokens for t in manual._words(row["path"]))
             if named:
-                score += 100 * sum(weights[t] for t in tokens if manual._hits(page["title_words"], t))
+                score += 100 * sum(weights[t] for t in tokens if manual._has(page["title_words"], t))
             elif row["path"].startswith("_librarian/"):
                 score *= 0.2
             out.append(
@@ -1116,11 +1075,12 @@ class Docs:
                     "title": row["title"],
                     "section": section["heading"],
                     "anchor": section["anchor"],
-                    "excerpt": manual._excerpt(section["body"], tokens),
+                    "excerpt": row["body"][section["start"] : section["end"]],  # made an excerpt once kept, below
                     "score": round(score, 3),
                 }
             )
-        return sorted(out, key=lambda r: -r["score"])[:limit]
+        out = sorted(out, key=lambda r: -r["score"])[:limit]
+        return [{**r, "excerpt": manual._excerpt(" ".join(r["excerpt"].split()), tokens)} for r in out]
 
     @staticmethod
     def expressions(tokens):
