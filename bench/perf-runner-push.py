@@ -153,7 +153,9 @@ def measure(label, binary):
             if values:
                 print(
                     f"  {name:45s} median {statistics.median(values) * 1000:8.0f} ms"
-                    f"  max {max(values) * 1000:8.0f} ms  (n={len(values)})"
+                    f"  max {max(values) * 1000:8.0f} ms  (n={len(values)}: "
+                    + ", ".join(f"{v * 1000:.0f}" for v in values)
+                    + ")"
                 )
         if late:
             print("  no read within 70 s:", collections.Counter(late))
