@@ -14,12 +14,14 @@ from collections import OrderedDict
 from collections.abc import Callable
 from contextvars import copy_context
 import hashlib
+import math
 from pathlib import Path
 import re
 import secrets
 import sqlite3
 import threading
 import time
+import weakref
 
 from fastapi import Request
 from pydantic import Field
@@ -328,6 +330,287 @@ GRANTED_SOURCES = {"assistant_actions": ("created_at", "proposer", "proposed_via
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
+_SQL_TOKEN = re.compile(
+    r"""
+      --[^\n]*
+    | /\*.*?\*/
+    | '(?:''|[^'])*'
+    | "(?:""|[^"])*"
+    | `(?:``|[^`])*`
+    | \[[^\]]*\]
+    | [A-Za-z_][A-Za-z0-9_]*
+    """,
+    re.S | re.X,
+)
+
+# Per-person burst-tolerant rate limit for POST /api/v2/sql (120 burst, 2/s refill -> 72-query burst passes freely).
+SQL_RATE_BURST = 120.0
+SQL_RATE_REFILL = 2.0
+SQL_POOL_IDLE = 16  # read-only connections kept open between POST /api/v2/sql calls
+
+# Guarded tables whose row predicates or masks read other guarded views (transitive closure built per query).
+_TABLE_DEPS: dict[str, tuple[str, ...]] = {
+    "conversations": ("tasks",),
+    READABLE_MESSAGES: ("conversations",),
+    "messages": (READABLE_MESSAGES,),
+    "thread_members": ("conversations",),
+    "thread_followers": ("conversations",),
+    "message_mentions": (READABLE_MESSAGES,),
+    "task_tags": ("tasks",),
+    "task_delegations": ("tasks",),
+    "task_requesters": ("tasks",),
+    "task_reminders": ("tasks",),
+    "task_assets": ("tasks",),
+    "task_documents": ("tasks", "bot_files"),
+    "task_links": ("tasks",),
+    "task_roles": ("tasks",),
+    "task_relations": ("tasks",),
+    "goal_asks": ("tasks",),
+    "message_assets": (READABLE_MESSAGES,),
+    "bot_control": ("tasks",),
+    "bot_status": ("tasks",),
+    "bot_status_history": ("tasks",),
+    "schedule_config": ("schedules",),
+    "schedule_occurrences": ("schedules", "tasks"),
+    "deltas": ("attempts",),
+    "jobs": (READABLE_MESSAGES,),
+    "attempts": (READABLE_MESSAGES, "jobs", "tasks"),
+    "job_recovery": ("jobs", "attempts"),
+    "attempt_events": ("attempts",),
+    "attempt_inputs": ("attempts",),
+    "attempt_conversations": ("attempts",),
+    "bot_transition_checkpoints": ("conversations",),
+    "kpi_readings": ("kpis",),
+    "kpi_definitions": ("kpis",),
+    "goal_kpis": ("goals",),
+    "goal_checkins": ("goals",),
+    "goal_proposals": ("goals",),
+    "history_events": ("tasks", "goals"),
+    "events": ("tasks", "conversations", "bots"),
+    "meeting_versions": ("meetings",),
+    "meeting_deliveries": ("meetings",),
+    "media_assets": ("meetings",),
+    "media_control": ("meetings",),
+    "meeting_items": ("meetings",),
+    "meeting_brain": ("meetings",),
+    "meeting_comments": ("meetings",),
+    "import_refs": ("meetings",),
+    "doc_versions": ("docs",),
+    "bot_files": ("tasks", "conversations"),
+    "bot_file_versions": ("bot_files", "attempts"),
+    "bot_file_activity": ("bot_files", "tasks", "attempts"),
+    "blobs": ("message_assets", "task_assets", "media_assets"),
+    "task_file_reviews": ("bot_files", "blobs"),
+    "slack_posts": (READABLE_MESSAGES,),
+}
+
+# Every guarded table name exposed as a temp view (kept in sync with `guarded`).
+GUARDED_TABLES = frozenset(
+    {
+        "conversations",
+        "messages",
+        "thread_members",
+        "thread_followers",
+        "message_mentions",
+        "tasks",
+        "tags",
+        "task_tags",
+        "task_delegations",
+        "task_requesters",
+        "task_reminders",
+        "task_assets",
+        "task_documents",
+        "task_links",
+        "task_roles",
+        "task_relations",
+        "message_assets",
+        "bots",
+        "bot_status",
+        "bot_status_history",
+        "schedules",
+        "bot_config",
+        "bot_settings",
+        "bot_control",
+        "bot_transitions",
+        "assignments",
+        "schedule_config",
+        "schedule_occurrences",
+        "deltas",
+        "jobs",
+        "attempts",
+        "job_recovery",
+        "attempt_events",
+        "attempt_inputs",
+        "attempt_conversations",
+        "bot_transition_checkpoints",
+        "humans",
+        "seats",
+        "goals",
+        "kpis",
+        "kpi_readings",
+        "kpi_definitions",
+        "goal_kpis",
+        "goal_checkins",
+        "goal_proposals",
+        "goal_asks",
+        "company_profile",
+        "strategy_versions",
+        "strategy_bets",
+        "lens_runs",
+        "entities",
+        "entity_links",
+        "market_evidence",
+        "market_citations",
+        "market_insights",
+        "entity_watches",
+        "market_briefings",
+        "history_events",
+        "market_sizes",
+        "market_figures",
+        "market_sources",
+        "listening_sources",
+        "listening_items",
+        "registry_metadata",
+        "events",
+        "refusals",
+        "meetings",
+        "meeting_versions",
+        "meeting_deliveries",
+        "media_assets",
+        "media_control",
+        "meeting_items",
+        "meeting_brain",
+        "meeting_comments",
+        "import_refs",
+        "market_pages",
+        "docs",
+        "doc_versions",
+        "linked_docs",
+        "bot_files",
+        "bot_file_versions",
+        "bot_file_activity",
+        "blobs",
+        "archives",
+        "service_jobs",
+        "slack_posts",
+        "read_index",
+        "task_file_reviews",
+        *COMPANY_PAGE_OWNER_TABLES,
+    }
+)
+# Tables whose predicates or teammate masks consult TA.hidden(..., ("human", "group")).
+_UNSEEN_TABLES = frozenset(
+    {
+        "humans",
+        "thread_members",
+        "thread_followers",
+        "tasks",
+        "history_events",
+        "events",
+        "messages",
+        "message_mentions",
+        "bot_config",
+        "bot_settings",
+        "conversations",
+    }
+)
+# Tables whose predicates consult auth.unreadable_bots.
+_BOT_VISIBILITY_TABLES = frozenset(
+    {
+        "tasks",
+        "bots",
+        "bot_status",
+        "bot_status_history",
+        "schedules",
+        "bot_config",
+        "bot_settings",
+        "bot_control",
+        "bot_transitions",
+        "assignments",
+        "jobs",
+        "attempts",
+        "goals",
+        "kpis",
+        "bot_files",
+    }
+)
+# Privacy UDFs backed by ReadIndex (others only read `source`).
+_INDEX_FUNCTIONS = frozenset(
+    {"message", "attempt", "conversation", "meeting_room", "event", "tag", "blob", "task", "content"}
+)
+_ALL_EXPOSED = GUARDED_TABLES | set(DERIVED) | set(GRANTED) | {"task_waits"}
+
+
+def referenced_names(statement: str, known: frozenset[str] = _ALL_EXPOSED) -> set[str]:
+    """Identifiers in `statement` matching `known` table/view names; skips SQL comments and string literals."""
+    found = set()
+    for match in _SQL_TOKEN.finditer(statement):
+        tok = match.group(0)
+        head = tok[0]
+        if head in ("-", "/", "'"):
+            continue
+        if head == '"':
+            name = tok[1:-1].replace('""', '"').lower()
+        elif head == "`":
+            name = tok[1:-1].replace("``", "`").lower()
+        elif head == "[":
+            name = tok[1:-1].lower()
+        else:
+            name = tok.lower()
+        if name in known:
+            found.add(name)
+    return found
+
+
+def _expand_tables(seeds: set[str], role: str) -> set[str]:
+    """Transitive closure of guarded tables needed to serve `seeds`."""
+    needed = set(seeds)
+    stack = list(seeds)
+    while stack:
+        table = stack.pop()
+        if table == "events" and role in ("owner", "bot"):
+            deps: tuple[str, ...] = ("tasks",)
+        else:
+            deps = _TABLE_DEPS.get(table, ())
+        for dep in deps:
+            if dep not in needed:
+                needed.add(dep)
+                stack.append(dep)
+    return needed
+
+
+class TokenBucket:
+    """Per-actor burst-tolerant token bucket for POST /api/v2/sql."""
+
+    def __init__(self, burst: float = SQL_RATE_BURST, refill: float = SQL_RATE_REFILL):
+        self.burst = float(burst)
+        self.refill = float(refill)
+        self.lock = threading.Lock()
+        self.buckets: dict[str, tuple[float, float]] = {}
+
+    def take(self, actor: str) -> None:
+        if self.burst <= 0 or self.refill <= 0:
+            return
+        now = time.monotonic()
+        with self.lock:
+            tokens, last = self.buckets.get(actor, (self.burst, now))
+            tokens = min(self.burst, tokens + max(0.0, now - last) * self.refill)
+            if tokens < 1.0:
+                wait = max(1, math.ceil((1.0 - tokens) / self.refill))
+                self.buckets[actor] = (tokens, now)
+                raise Problem(
+                    "rate_limited",
+                    f"Too many SQL queries; retry in {wait} s.",
+                    429,
+                    retryable=True,
+                    extra={"retry_after": wait},
+                )
+            self.buckets[actor] = (tokens - 1.0, now)
+            if len(self.buckets) > 256:
+                full_after = self.burst / self.refill
+                for key in [k for k, (_, ts) in self.buckets.items() if now - ts >= full_after]:
+                    del self.buckets[key]
+
 
 _SCHEMAS = OrderedDict()
 _SCHEMA_LOCK = threading.Lock()
@@ -340,10 +623,11 @@ def schema_columns(conn, path):
     version = conn.execute("PRAGMA main.schema_version").fetchone()[0]
     key = (str(path), info.st_dev, info.st_ino, version)
     with _SCHEMA_LOCK:
-        columns = _SCHEMAS.setdefault(key, {})
+        entry = _SCHEMAS.setdefault(key, {"columns": {}, "objects": None})
         _SCHEMAS.move_to_end(key)
         if len(_SCHEMAS) > 16:
             _SCHEMAS.popitem(last=False)
+    columns = entry["columns"]
 
     class Columns:
         def get(self, table, default=()):
@@ -354,6 +638,12 @@ def schema_columns(conn, path):
                         row[1] for row in conn.execute('PRAGMA main.table_info("' + table.replace('"', '""') + '")')
                     )
                 return columns[table] or default
+
+        def objects(self):
+            with _SCHEMA_LOCK:
+                if entry["objects"] is None:
+                    entry["objects"] = frozenset(row[0] for row in conn.execute("SELECT name FROM sqlite_master"))
+                return entry["objects"]
 
     return Columns()
 
@@ -398,18 +688,149 @@ class Audit:
 
 
 class ReadConnection(sqlite3.Connection):
-    # Empties the request's provenance caches (ReadIndex.release) when the connection closes.
+    # Empties the request's provenance caches (ReadIndex.release) when the connection closes or returns to its pool.
     release: Callable[[], None] | None = None
     read_cache: dict
+    private_prefix: str = ""
+    _fn_prefix: str = ""
+    _pool: "SqlPool | None" = None
+    _pool_identity: tuple | None = None
+    _tainted: bool = False
+    _registered_functions: list
+
+    def _real_close(self):
+        super().close()
 
     def close(self):
         release, self.release = self.release, None
         try:
             if release is not None:
                 release()
+            if hasattr(self, "read_cache"):
                 self.read_cache.clear()
         finally:
-            super().close()
+            pool = self._pool
+            if pool is not None:
+                pool.give(self)
+            else:
+                super().close()
+
+
+class SqlPool:
+    """Small pool of read-only SQLite connections for POST /api/v2/sql so repeated queries reuse the parsed schema."""
+
+    def __init__(self, max_idle: int = SQL_POOL_IDLE):
+        self.max_idle = max_idle
+        self.lock = threading.Lock()
+        self.idle: list[ReadConnection] = []
+        self.identity: tuple | None = None
+        self.closed = False
+
+    def take(self, path, pool_age: int = 0) -> ReadConnection:
+        resolved = Path(path).resolve()
+        info = resolved.stat()
+        identity = (str(resolved), info.st_dev, info.st_ino, pool_age)
+        with self.lock:
+            if identity != self.identity:
+                stale = list(self.idle)
+                self.idle.clear()
+                self.identity = identity
+            else:
+                stale = []
+            conn = self.idle.pop() if self.idle and not self.closed else None
+        for old in stale:
+            try:
+                old._real_close()
+            except sqlite3.Error:
+                pass
+        if conn is None:
+            conn = _open_ro(path)
+            conn._pool = self
+            conn._pool_identity = identity
+        conn.read_cache = {}
+        conn.private_prefix = ""
+        conn.release = None
+        conn._tainted = False
+        conn._registered_functions = []
+        return conn
+
+    def give(self, conn: ReadConnection) -> None:
+        if conn._tainted or self.closed:
+            try:
+                conn._real_close()
+            except sqlite3.Error:
+                pass
+            return
+        try:
+            conn.set_authorizer(None)
+            conn.set_progress_handler(None, 0)
+            conn.set_trace_callback(None)
+            conn.execute("PRAGMA query_only=0")
+            if conn.in_transaction:
+                # Commit temp-only DDL so SQLite keeps main's parsed schema (ROLLBACK after temp DDL resets all
+                # schemas on the connection). The file is opened mode=ro, so main can never be modified.
+                conn.execute("COMMIT")
+            for typ, name in conn.execute(
+                "SELECT type, name FROM sqlite_temp_master WHERE type IN ('view', 'table')"
+            ).fetchall():
+                conn.execute(f'DROP {typ.upper()} temp."{name.replace(chr(34), chr(34) * 2)}"')
+            for fn_name, arity in conn._registered_functions:
+                conn.create_function(fn_name, arity, None, deterministic=True)
+            conn._registered_functions.clear()
+            conn.row_factory = sqlite3.Row
+            conn.private_prefix = ""
+        except sqlite3.Error:
+            try:
+                conn._real_close()
+            except sqlite3.Error:
+                pass
+            return
+        with self.lock:
+            if not self.closed and conn._pool_identity == self.identity and len(self.idle) < self.max_idle:
+                self.idle.append(conn)
+                return
+        try:
+            conn._real_close()
+        except sqlite3.Error:
+            pass
+
+    def close(self) -> None:
+        with self.lock:
+            self.closed = True
+            stale = list(self.idle)
+            self.idle.clear()
+        for conn in stale:
+            try:
+                conn._real_close()
+            except sqlite3.Error:
+                pass
+
+
+def _open_ro(path) -> ReadConnection:
+    # Internal provenance SELECTs cannot leave authorized prepared statements for callers.
+    conn = sqlite3.connect(
+        f"file:{path}?mode=ro",
+        uri=True,
+        timeout=5,
+        isolation_level=None,
+        cached_statements=0,
+        check_same_thread=False,
+        factory=ReadConnection,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.read_cache = {}
+    conn.private_prefix = ""
+    # Fixed per-connection secret prefix for UDF names so SQLite's function hash table stays bounded across reuses.
+    conn._fn_prefix = "f" + secrets.token_hex(12) + "_"
+    conn._registered_functions = []
+    conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 10_000_000)  # no randomblob(1e9) memory bombs
+    conn.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+    conn.execute("PRAGMA busy_timeout=5000")
+    # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
+    # Initialize only these built-ins once before any read-only authorizer runs.
+    for fn in sorted(TABLE_FUNCTIONS):
+        conn.execute(f"SELECT value FROM {fn}('[]')").fetchall()
+    return conn
 
 
 class Query(Contract):
@@ -418,7 +839,7 @@ class Query(Contract):
     max_rows: int | None = Field(default=None, ge=1, le=5000)
 
 
-def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=None):
+def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=None, only=None):
     """Every table a caller may read through a view: name -> (row predicate, hidden columns).
 
     The predicates say in SQL what `auth.bot_access`, `auth.conversation`, `auth.task` and
@@ -426,52 +847,61 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
     they may only see or write to is not; the API shows it); `inner(table)` names the connection's unfiltered view of a
     base table, and a plain table name inside a predicate is the filtered view of it. `private(name)`, when given, names
     this request's sets (materialize): the room checks then ask Python only about the few rooms with meeting provenance.
+    When `only` is given (a set of table names), only predicates for those tables are built and unused lookups are skipped.
     """
+    want = lambda name: only is None or name in only
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
     # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, and not named as authors
     # or recipients of messages outside the conversations they are in, nor in a participant or group list
     # (teammate_masks).
-    unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
-    hidden = sorted(auth.unreadable_bots(c, who))
+    if only is None or "humans" in only:
+        unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
+    hidden = sorted(auth.unreadable_bots(c, who)) if only is None or (only & _BOT_VISIBILITY_TABLES) else []
 
     def bots_visible(column):
         return f"{column} NOT IN {qlist(hidden)}" if hidden else "1"
 
     # Who reads a thread is C1 (backend/threads.py), the same rule Auth.conversation asks in Python.
-    from . import threads
+    conversations = "0"
+    legacy_messages = "1"
+    if want("conversations") or want(READABLE_MESSAGES):
+        from . import threads
 
-    viewer = threads.Viewer(auth, who)
-    if private is None:
-        meeting = lambda cid: function("meeting_room") + f"({cid})"
-        conversation = lambda cid: function("conversation") + f"({cid})"
-    else:
-        # ReadIndex.meeting_room is no for a room outside `bound_rooms`, and ReadIndex.conversation yes for one outside
-        # `meeting_rooms` (rooms=True): only those few rooms reach Python, not one callback per room of the company.
-        # CASE, not AND/OR: SQLite may evaluate both sides of a boolean operator, the Python callback included.
-        meeting = lambda cid: (
-            f'(CASE WHEN {cid} IN (SELECT id FROM "{private("bound_rooms")}") '
-            f'THEN {function("meeting_room")}({cid}) ELSE 0 END)'
-        )
-        conversation = lambda cid: (
-            f'(CASE WHEN {cid} IN (SELECT id FROM "{private("meeting_rooms")}") '
-            f'THEN {function("conversation")}({cid}) ELSE 1 END)'
-        )
-    conversations = threads.readable_sql(
-        c, viewer, "", inner=inner, tasks="SELECT id FROM tasks", meeting=meeting, conversation=conversation
-    )
-    # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
-    legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
-    tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
+        viewer = threads.Viewer(auth, who)
+        if want("conversations"):
+            if private is None:
+                meeting = lambda cid: function("meeting_room") + f"({cid})"
+                conversation = lambda cid: function("conversation") + f"({cid})"
+            else:
+                # ReadIndex.meeting_room is no for a room outside `bound_rooms`, and ReadIndex.conversation yes for one outside
+                # `meeting_rooms` (rooms=True): only those few rooms reach Python, not one callback per room of the company.
+                # CASE, not AND/OR: SQLite may evaluate both sides of a boolean operator, the Python callback included.
+                meeting = lambda cid: (
+                    f'(CASE WHEN {cid} IN (SELECT id FROM "{private("bound_rooms")}") '
+                    f'THEN {function("meeting_room")}({cid}) ELSE 0 END)'
+                )
+                conversation = lambda cid: (
+                    f'(CASE WHEN {cid} IN (SELECT id FROM "{private("meeting_rooms")}") '
+                    f'THEN {function("conversation")}({cid}) ELSE 1 END)'
+                )
+            conversations = threads.readable_sql(
+                c, viewer, "", inner=inner, tasks="SELECT id FROM tasks", meeting=meeting, conversation=conversation
+            )
+        if want(READABLE_MESSAGES):
+            # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
+            legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
+    tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden) if want("tasks") else "0"
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs,in_reply_to)"
-    message_columns = (
-        set(columns.get("messages", ()))
-        if columns is not None
-        else {r[1] for r in c.execute("PRAGMA table_info(messages)")}
-    )
-    for deleted in ("deleted_at", "deleted"):
-        if deleted in message_columns:
-            msg_gate += f" AND coalesce({deleted},0)=0"
+    if want(READABLE_MESSAGES):
+        message_columns = (
+            set(columns.get("messages", ()))
+            if columns is not None
+            else {r[1] for r in c.execute("PRAGMA table_info(messages)")}
+        )
+        for deleted in ("deleted_at", "deleted"):
+            if deleted in message_columns:
+                msg_gate += f" AND coalesce({deleted},0)=0"
     attempt_gate = function("attempt") + "(id)"
     event_gate = function("event") + "(target,actor,created_at,detail)"
     content_gate = lambda cols: function("content") + "(" + ",".join(cols) + ")"
@@ -518,7 +948,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
     by_meeting = "meeting_id IN (SELECT id FROM meetings)"
     # A live run of a bot org rules apply to keeps its reply text out until it is checked and delivered (live_masks
     # hides its reply columns): its tool steps stay readable.
-    unsettled = unsettled_watched(c, inner)
+    unsettled = unsettled_watched(c, inner) if (want("deltas") or want("attempt_events")) else ""
     mine = f"actor={me}" if bot else "1"
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
@@ -624,7 +1054,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         "attempt_inputs": by_attempt,
         "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
-        "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
+        "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen) if want("humans") else "0",
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
         # job descriptions and reporting lines. Never a bare "1" (the same reason as listening_items below).
         "seats": "id IS NOT NULL",
@@ -752,6 +1182,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
             "AND (t.private IS NULL OR t.private<>0) AND NOT " + function("task") + "(t.id))"
         )
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
+        if not want(table):
+            continue
         cols = (
             columns.get(table, ())
             if columns is not None
@@ -765,8 +1197,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
     )
     rules["bot_file_versions"] += " AND (attempt_id IS NULL OR " + by_attempt + ")"
+    if only is not None:
+        rules = {table: rule for table, rule in rules.items() if table in only}
     hidden = {table: set(HIDDEN.get(table, ())) for table in rules}
-    if bot:
+    if bot and "humans" in hidden:
         hidden["humans"].add("email")
     return {table: (rules[table], hidden[table]) for table in rules}
 
@@ -958,7 +1392,8 @@ class Gates:
 
 
 def materialize(conn, index, tables, inner, function, private):
-    """Build this request's small sets once, then point every predicate at them instead of re-deriving them per row.
+    """Build only the per-request small sets that `tables` actually need, then point predicates at them instead of
+    re-deriving them per row.
 
     Visible tasks and readable rooms are what a LIMIT 1 would otherwise rebuild for every query: the room predicate
     asks Python about each room. Hidden things are the few denied tasks, unreadable rooms and runs that carry one."""
@@ -973,24 +1408,30 @@ def materialize(conn, index, tables, inner, function, private):
             )
         return f'IN (SELECT id FROM "{private(name)}")'
 
-    visible = create("visible_tasks", "SELECT id FROM main.tasks WHERE " + tables["tasks"][0])
-    # Reuse the task-id set directly. Going through the tasks view rebuilds
-    # the same task list for every nested room lookup inside a privacy UDF.
-    tables = {
-        table: (predicate.replace("IN (SELECT id FROM tasks)", visible), hidden)
-        for table, (predicate, hidden) in tables.items()
-    }
-    tables["tasks"] = ("id " + visible, tables["tasks"][1])
-    # The few rooms with meeting provenance (ReadIndex rooms=True): the room predicate asks Python about these alone.
-    # Unsorted: a set may hold a NULL room id (create drops it), which sorted() cannot order against text.
-    create("bound_rooms", index.bound_rooms)
-    create("meeting_rooms", index.meeting_rooms)
-    rooms = create("readable_conversations", "SELECT id FROM main.conversations WHERE " + tables["conversations"][0])
-    tables = {
-        table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)
-        for table, (predicate, hidden) in tables.items()
-    }
-    tables["conversations"] = ("id " + rooms, tables["conversations"][1])
+    if "tasks" in tables:
+        visible = create("visible_tasks", "SELECT id FROM main.tasks WHERE " + tables["tasks"][0])
+        # Reuse the task-id set directly. Going through the tasks view rebuilds
+        # the same task list for every nested room lookup inside a privacy UDF.
+        tables = {
+            table: (predicate.replace("IN (SELECT id FROM tasks)", visible), hidden)
+            for table, (predicate, hidden) in tables.items()
+        }
+        tables["tasks"] = ("id " + visible, tables["tasks"][1])
+    if "conversations" in tables:
+        # The few rooms with meeting provenance (ReadIndex rooms=True): the room predicate asks Python about these alone.
+        # Unsorted: a set may hold a NULL room id (create drops it), which sorted() cannot order against text.
+        create("bound_rooms", index.bound_rooms)
+        create("meeting_rooms", index.meeting_rooms)
+        rooms = create(
+            "readable_conversations", "SELECT id FROM main.conversations WHERE " + tables["conversations"][0]
+        )
+        tables = {
+            table: (predicate.replace("IN (SELECT id FROM conversations)", rooms), hidden)
+            for table, (predicate, hidden) in tables.items()
+        }
+        tables["conversations"] = ("id " + rooms, tables["conversations"][1])
+    if READABLE_MESSAGES not in tables and "attempts" not in tables:
+        return tables
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
     # A run on a denied task (its `attempts.task_id`) is never a fast yes.
@@ -1006,7 +1447,7 @@ def materialize(conn, index, tables, inner, function, private):
     # rows those tasks reach, a busy private room included: about 35 ms per 100,000 rows here, once per request.
     create(
         "denied_reads",
-        f"SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM \"{private("denied_tasks")}\")",
+        f"SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM \"{private('denied_tasks')}\")",
     )
     page = function("page_message") + "(refs)"
 
@@ -1094,22 +1535,21 @@ def task_waits(conn, c, private, hidden):
     conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)
 
 
-def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
+def connect(path, c, auth, who, trace=None, seconds=None, statement="", pool=None, pool_age=0):
     """A read-only connection whose temp views and authorizer carry this caller's visibility.
 
-    `seconds` bounds building this request's visibility sets as `run` bounds the query itself. A table in WORKED_OUT
-    is built only when `statement` names it."""
+    `seconds` bounds building this request's visibility sets as `run` bounds the query itself. When `statement` is
+    non-empty, only the guarded views, inner views, materialized sets and UDFs that `statement` (and its transitive
+    dependencies) reference are built. When `pool` is given, connections are reused across calls.
+    """
     deadline = None if seconds is None else time.monotonic() + seconds
     prefix = "v" + secrets.token_hex(12) + "_"
+    conn = pool.take(path, pool_age) if pool is not None else _open_ro(path)
+    fn_prefix = conn._fn_prefix
     inner = lambda table: f'"{prefix}{table}"'
-    function = lambda name: f'"{prefix}privacy_{name}"'
+    function = lambda name: f'"{fn_prefix}privacy_{name}"'
     private = lambda name: prefix + name
     private_views = {"pages", "read_deps"}
-    # Internal provenance SELECTs cannot leave authorized prepared statements for callers.
-    conn = sqlite3.connect(
-        f"file:{path}?mode=ro", uri=True, timeout=5, isolation_level=None, cached_statements=0, factory=ReadConnection
-    )
-    conn.row_factory = sqlite3.Row
     conn.read_cache, conn.private_prefix = {}, prefix
     if trace:
         conn.set_trace_callback(trace)
@@ -1128,13 +1568,89 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         # Predicates, provenance and result rows use one read snapshot.
         conn.execute("BEGIN")
         columns = schema_columns(conn, path)
-        unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
+        wanted = referenced_names(statement) if statement else None
+        worked_out = {name for name in WORKED_OUT if wanted is not None and name in wanted}
+        want_derived = {name: view for name, view in DERIVED.items() if wanted is None or name in wanted}
+        want_granted_names = set(GRANTED) if wanted is None else (set(GRANTED) & wanted)
+        # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
+        granted = (
+            {
+                name: GRANTED[name]
+                for name in want_granted_names
+                if outcome_stats.may_read(c, who)
+                and all(set(GRANTED_SOURCES.get(base, ())) <= set(columns.get(base, ())) for base in GRANTED[name][0])
+            }
+            if want_granted_names
+            else {}
+        )
+        views = {**want_derived, **granted}
+        if wanted is None:
+            needed_tables = None
+        else:
+            seed_tables = set(wanted & GUARDED_TABLES)
+            for bases, select in views.values():
+                for base in bases:
+                    if f"{{{base}}}" in select and base in GUARDED_TABLES:
+                        seed_tables.add(base)
+            if "task_waits" in worked_out:
+                seed_tables.add("tasks")
+            needed_tables = _expand_tables(seed_tables, who.role)
+        need_unseen = needed_tables is None or bool(needed_tables & _UNSEEN_TABLES) or "task_waits" in worked_out
+        unseen = TA.hidden(conn, who, "see", ("human", "group"), auth) if need_unseen else set()
         in_time()
-        tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen, private=private)
+        if needed_tables is None or needed_tables:
+            tables = guarded(
+                conn, auth, who, inner, function, columns, unseen=unseen, private=private, only=needed_tables
+            )
+        else:
+            tables = {}
         in_time()
-        readable = tables.pop(READABLE_MESSAGES)
+        readable = tables.pop(READABLE_MESSAGES, None)
+        masks = {table: dict(MASKED[table]) for table in tables if table in MASKED}
+        if "attempts" in tables:
+            for table, cols_masked in live_masks(unsettled_watched(conn, inner)).items():
+                if table in tables:
+                    masks[table] = {**masks.get(table, {}), **cols_masked}
+        if "messages" in tables:
+            masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
+        need_bots = "thread_members" in tables or "task_waits" in worked_out
+        bots = TA.hidden(conn, who, "see", ("bot",), auth) if need_bots else set()
+        if (unseen or bots) and (set(tables) & _UNSEEN_TABLES):
+            from . import threads
+
+            names = qlist(threads.Viewer(auth, who).member_names(conn))
+            for table, cols_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
+                if table in tables:
+                    masks[table] = {**masks.get(table, {}), **cols_masked}
+        # Discover every inner view and privacy UDF referenced by the selected predicates and masks.
+        sql_fragments = [pred for pred, _ in tables.values()]
+        if readable is not None:
+            sql_fragments.append(readable[0])
+        for cols_masked in masks.values():
+            sql_fragments.extend(cols_masked.values())
+        joined = "\n".join(sql_fragments)
+        fn_refs = set(re.findall(re.escape(fn_prefix) + r"privacy_([a-z_]+)", joined))
+        inner_refs = set(re.findall(re.escape(prefix) + r"([A-Za-z_][A-Za-z0-9_]*)", joined))
+        inner_refs -= set(SETS) | {READABLE_MESSAGES}
+        if readable is not None or "attempts" in tables:
+            inner_refs |= {
+                "read_index",
+                "read_deps",
+                "messages",
+                "tasks",
+                "jobs",
+                "attempts",
+                "attempt_inputs",
+                "events",
+            }
+            fn_refs |= {"message", "attempt", "page_message"}
+        sources = {table for bases, _ in views.values() for table in bases} & set(GRANTED_SOURCES)
+        for bases, select in views.values():
+            for base in bases:
+                if f"{{all_{base}}}" in select and base not in GRANTED_SOURCES:
+                    inner_refs.add(base)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
-        source_tables = set(tables) | {
+        source_tables = GUARDED_TABLES | {
             "pages",
             "page_identities",
             "mail_items",
@@ -1156,145 +1672,175 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             "letter_outbox_grants",
             "agents",
             "ok_grants",  # an event about a bound OK reads only to its parties (task_asks.event_hidden)
+            "row_clock",
+            "provenance_clock",
+            "roster_clock",
         }
-
-        class Source:
-            def __init__(self):
-                self.statements = {}
-
-            # Provenance helpers share this request's snapshot cache through the restricted source wrapper.
-            @property
-            def read_cache(self):
-                return conn.read_cache
-
-            # The store's shared row cache (row_clock.parties and access rows). This connection only reads and never
-            # publishes, so it shares rows at the clock its own snapshot reads, like a pooled read connection does.
-            row_cache = getattr(c, "row_cache", None)
-            write_transaction = False
-
-            @property
-            def provenance_changes(self):
-                return conn.total_changes
-
-            @property
-            def in_transaction(self):
-                return conn.in_transaction
-
-            @property
-            def total_changes(self):
-                return conn.total_changes
-
-            def execute(self, statement, args=()):
-                source = self.statements.get(statement)
-                if source is None:
-                    source = re.sub(
-                        r'\b(FROM|JOIN)\s+(\w+)',
-                        lambda m: m[1] + ' main."' + m[2] + '"' if m[2] in source_tables else m[0],
-                        statement,
-                        flags=re.I,
-                    )
-                    if len(self.statements) < 128:
-                        self.statements[statement] = source
-                statement = source
-                trusted[0] = True
-                try:
-                    return conn.execute(statement, args)
-                finally:
-                    trusted[0] = False
-
-        index = ReadIndex(Source(), who, rooms=True)
-        conn.release = index.release
-        from .files import (
-            page_audience_visible,
-            page_blob_visible,
-            page_event_readable,
-            page_graph,
-            restricted_pages,
-            readable_page_refs,
+        need_index = (
+            bool(fn_refs & _INDEX_FUNCTIONS)
+            or "conversations" in tables
+            or readable is not None
+            or "attempts" in tables
         )
-        from .pages import may_manage as page_manager
+        index = None
+        if fn_refs or need_index:
 
-        source = index.c
-        audience_cache = {}
-        from .api_tools import hidden_ids
+            class Source:
+                def __init__(self):
+                    self.statements = {}
 
-        # A tool `who` may not see leaves no event: not its own, not its keys', live or deleted (api_tools `visible`).
-        # Its rules need no credential administrators: an Only listed tool ignores them.
-        unseen_targets = hidden_ids(c, who, (), auth)
+                # Provenance helpers share this request's snapshot cache through the restricted source wrapper.
+                @property
+                def read_cache(self):
+                    return conn.read_cache
 
-        def visible_file(fid):
-            row = restricted_pages(source).get(fid)
-            # SQL already enforces inherited scope/provenance below; only add the common narrowing.
-            return not row or page_audience_visible(source, auth, who, row, audience_cache)
+                # The store's shared row cache (row_clock.parties and access rows). This connection only reads and never
+                # publishes, so it shares rows at the clock its own snapshot reads, like a pooled read connection does.
+                row_cache = getattr(c, "row_cache", None)
+                write_transaction = False
 
-        def manages_page(fid):
-            row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            return bool(row) and page_manager(source, auth, who, row)
+                @property
+                def provenance_changes(self):
+                    return conn.total_changes
 
-        functions = {
-            "page_message": (
-                1,
-                lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {}),
-            ),
-            # These run once per row of the whole query: read every page once rather than look up each row's.
-            "page_refs": (1, lambda refs: page_graph(source) or readable_page_refs(source, auth, who, refs)),
-            "file": (1, visible_file),
-            "page_manager": (1, manages_page),
-            "message": (4, index.message),
-            "attempt": (1, index.attempt),
-            "conversation": (1, index.conversation),
-            "meeting_room": (1, index.meeting_room),
-            "event": (
-                4,
-                lambda target, actor, ts, detail: (
-                    target not in unseen_targets
-                    and not page_graph(source)
-                    and page_event_readable(source, auth, who, target, detail)
-                    and index.event(target, actor, ts, detail)
-                ),
-            ),
-            "tag": (2, index.tag),
-            "blob": (
-                1,
-                lambda bid: index.blob(bid) and not page_graph(source) and page_blob_visible(source, auth, who, bid),
-            ),
-            "task": (1, lambda tid: tid not in index.denied),
-            "content": (-1, lambda *parts: index.content(list(parts))),
-        }
-        for name, (arity, fn) in functions.items():
-            conn.create_function(prefix + "privacy_" + name, arity, fn, deterministic=True)
-        conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 10_000_000)  # no randomblob(1e9) memory bombs
-        conn.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
-        conn.execute("PRAGMA busy_timeout=5000")
+                @property
+                def in_transaction(self):
+                    return conn.in_transaction
+
+                @property
+                def total_changes(self):
+                    return conn.total_changes
+
+                def execute(self, stmt, args=()):
+                    src = self.statements.get(stmt)
+                    if src is None:
+                        src = re.sub(
+                            r"\b(FROM|JOIN)\s+(\w+)",
+                            lambda m: m[1] + ' main."' + m[2] + '"' if m[2] in source_tables else m[0],
+                            stmt,
+                            flags=re.I,
+                        )
+                        if len(self.statements) < 128:
+                            self.statements[stmt] = src
+                    stmt = src
+                    trusted[0] = True
+                    try:
+                        return conn.execute(stmt, args)
+                    finally:
+                        trusted[0] = False
+
+            source = Source()
+            if need_index:
+                index = ReadIndex(source, who, rooms=("conversations" in tables))
+                conn.release = index.release
+            if fn_refs:
+                functions = {}
+                if "page_message" in fn_refs:
+                    functions["page_message"] = (
+                        1,
+                        lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {}),
+                    )
+                if index is not None:
+                    idx = index
+                    functions.update(
+                        {
+                            "message": (4, idx.message),
+                            "attempt": (1, idx.attempt),
+                            "conversation": (1, idx.conversation),
+                            "meeting_room": (1, idx.meeting_room),
+                            "tag": (2, idx.tag),
+                            "task": (1, lambda tid: tid not in idx.denied),
+                            "content": (-1, lambda *parts: idx.content(list(parts))),
+                        }
+                    )
+                if fn_refs & {"page_refs", "file", "page_manager", "event", "blob"}:
+                    from .files import (
+                        page_audience_visible,
+                        page_blob_visible,
+                        page_event_readable,
+                        page_graph,
+                        readable_page_refs,
+                        restricted_pages,
+                    )
+                    from .pages import may_manage as page_manager
+
+                    audience_cache = {}
+
+                    def visible_file(fid):
+                        row = restricted_pages(source).get(fid)
+                        # SQL already enforces inherited scope/provenance below; only add the common narrowing.
+                        return not row or page_audience_visible(source, auth, who, row, audience_cache)
+
+                    def manages_page(fid):
+                        row = source.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+                        return bool(row) and page_manager(source, auth, who, row)
+
+                    # These run once per row of the whole query: read every page once rather than look up each row's.
+                    functions["page_refs"] = (
+                        1,
+                        lambda refs: page_graph(source) or readable_page_refs(source, auth, who, refs),
+                    )
+                    functions["file"] = (1, visible_file)
+                    functions["page_manager"] = (1, manages_page)
+                    if index is not None:
+                        idx = index
+                        if "event" in fn_refs:
+                            from .api_tools import hidden_ids
+
+                            # A tool `who` may not see leaves no event: not its own, not its keys', live or deleted.
+                            # Its rules need no credential administrators: an Only listed tool ignores them.
+                            unseen_targets = hidden_ids(c, who, (), auth)
+                            functions["event"] = (
+                                4,
+                                lambda target, actor, ts, detail: (
+                                    target not in unseen_targets
+                                    and not page_graph(source)
+                                    and page_event_readable(source, auth, who, target, detail)
+                                    and idx.event(target, actor, ts, detail)
+                                ),
+                            )
+                        functions["blob"] = (
+                            1,
+                            lambda bid: (
+                                idx.blob(bid) and not page_graph(source) and page_blob_visible(source, auth, who, bid)
+                            ),
+                        )
+                for name in fn_refs:
+                    arity, fn = functions[name]
+                    fn_name = fn_prefix + "privacy_" + name
+                    conn.create_function(fn_name, arity, fn, deterministic=True)
+                    conn._registered_functions.append((fn_name, arity))
         exposed = {}
-        for table, (_, hidden) in tables.items():
+        inner_tables = (set(tables) | inner_refs) - private_views
+        for table in inner_tables:
+            table_hidden = tables[table][1] if table in tables else set(HIDDEN.get(table, ()))
+            if who.role == "bot" and table == "humans":
+                table_hidden = table_hidden | {"email"}
             exposed[table] = [
                 name
                 for name in columns.get(table, ())
-                if name not in hidden and (table not in SAFE_COLUMNS or name in SAFE_COLUMNS[table])
+                if name not in table_hidden and (table not in SAFE_COLUMNS or name in SAFE_COLUMNS[table])
             ]
             if not exposed[table]:
                 raise Problem("schema", f"Table {table} is missing from this database", 500)
-            names = ",".join(f'"{column}"' for column in exposed[table])
-            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
-        conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
-        conn.execute(f'CREATE TEMP VIEW {inner("read_deps")} AS SELECT dep,key FROM main.read_deps')
+            names_sql = ",".join(f'"{column}"' for column in exposed[table])
+            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names_sql} FROM main."{table}"')
+        built_private_views = inner_refs & private_views
+        if "pages" in built_private_views:
+            conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
+        if "read_deps" in built_private_views:
+            conn.execute(f'CREATE TEMP VIEW {inner("read_deps")} AS SELECT dep,key FROM main.read_deps')
         in_time()
-        tables = materialize(conn, index, {**tables, READABLE_MESSAGES: readable}, inner, function, private)
-        readable = tables.pop(READABLE_MESSAGES)
-        # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
-        conn.execute(
-            f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
-        )
+        if "tasks" in tables or "conversations" in tables or readable is not None or "attempts" in tables:
+            mat_input = {**tables, READABLE_MESSAGES: readable} if readable is not None else dict(tables)
+            tables = materialize(conn, index, mat_input, inner, function, private)
+            readable = tables.pop(READABLE_MESSAGES, None)
+        if readable is not None:
+            # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
+            conn.execute(
+                f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
+            )
         in_time()
-        masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
-        masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
-        from . import threads
-
-        names = qlist(threads.Viewer(auth, who).member_names(conn))
-        bots = TA.hidden(conn, who, "see", ("bot",), auth)
-        for table, columns_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
-            masks[table] = {**masks.get(table, {}), **columns_masked}
         for table, (predicate, _) in tables.items():
             masked = masks.get(table, {})
             projection = (
@@ -1307,18 +1853,9 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             conn.execute(
                 f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} AS source WHERE {predicate}'
             )
-        # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
-        granted = {
-            name: view
-            for name, view in GRANTED.items()
-            if outcome_stats.may_read(c, who)
-            and all(set(GRANTED_SOURCES.get(base, ())) <= set(columns.get(base, ())) for base in view[0])
-        }
-        views = {**DERIVED, **granted}
-        sources = {table for bases, _ in views.values() for table in bases} & set(GRANTED_SOURCES)
         for table in sources:
-            names = ",".join(f'"{column}"' for column in GRANTED_SOURCES[table])
-            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+            names_sql = ",".join(f'"{column}"' for column in GRANTED_SOURCES[table])
+            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names_sql} FROM main."{table}"')
         for name, (bases, select) in views.items():
             conn.execute(
                 f'CREATE TEMP VIEW "{name}" AS '
@@ -1328,28 +1865,27 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                     tool_names=qlist(sorted(outcome_stats.TOOL_NAMES)),
                 )
             )
-        worked_out = {name for name in WORKED_OUT if re.search(rf"\b{name}\b", statement or "", re.I)}
         if "task_waits" in worked_out:
             task_waits(conn, c, private, set(unseen) | set(bots))
         in_time()
         conn.set_progress_handler(None, 0)
-        # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
-        # Initialize only these built-ins before installing the read-only authorizer.
-        for function in sorted(TABLE_FUNCTIONS):
-            conn.execute(f"SELECT value FROM {function}('[]')").fetchall()
         conn.execute("PRAGMA query_only=1")
         # Every other object in the file is off limits, even as a bare `count(*)`.
-        denied = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")} | {"sqlite_temp_master"}
-        denied -= set(tables) | OPEN
+        denied = (columns.objects() | {"sqlite_temp_master"}) - (set(tables) | OPEN)
     except sqlite3.OperationalError as exc:
+        conn._tainted = True
         conn.close()
         if deadline is not None and (time.monotonic() > deadline or "interrupted" in str(exc)):
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise
     except BaseException:
+        conn._tainted = True
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources | private_views | {READABLE_MESSAGES}}
+    inner_base = inner_tables | sources | built_private_views
+    inner_names = {prefix + table for table in inner_base} | (
+        {prefix + READABLE_MESSAGES} if readable is not None else set()
+    )
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -1367,7 +1903,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_FUNCTION:
-            if column and column.startswith(prefix + "privacy_"):
+            if column and column.startswith(fn_prefix + "privacy_"):
                 return sqlite3.SQLITE_OK if reads(context) else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_DENY if column in DENIED_FUNCTIONS else sqlite3.SQLITE_OK
         # FTS5 checks main.data_version before reading; nothing else may PRAGMA.
@@ -1404,7 +1940,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             }:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if (table in tables or table in sources or table in private_views) and context == prefix + table:
+            if table in inner_base and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner.
@@ -1453,10 +1989,12 @@ def run(conn, sql, params, cap, seconds):
         # SQLite wraps an interrupt from a nested SELECT inside a Python UDF
         # as "user-defined function raised exception". Preserve its cause.
         if interrupted or "interrupted" in str(exc):
+            conn._tainted = True
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise Problem("sql", str(exc), 422) from exc
     except (sqlite3.Error, sqlite3.Warning) as exc:
         if interrupted:
+            conn._tainted = True
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise Problem("sql", str(exc), 422) from exc
     finally:
@@ -1469,7 +2007,7 @@ def run(conn, sql, params, cap, seconds):
         "columns": [d[0] for d in cursor.description or ()],
         "rows": [
             [
-                json_value(value).replace(conn.private_prefix, "")
+                json_value(value).replace(conn.private_prefix, "").replace(conn._fn_prefix, "")
                 if isinstance(value, str) and explain
                 else json_value(value)
                 for value in row
@@ -1487,12 +2025,20 @@ def run(conn, sql, params, cap, seconds):
 
 def install_sql(app, store, auth):
     audit = Audit(store)
+    pool = SqlPool()
+    limiter = TokenBucket()
+    store._sql_pool = pool
+    weakref.finalize(store, pool.close)
+    app.state.sql_pool = pool
+    app.state.sql_rate_limiter = limiter
 
     @app.post("/api/v2/sql")
     def query(request: Request, body: Query):
         who = request.state.identity
         if not STATEMENT.match(body.sql):
             raise Problem("sql", "Send one SELECT, WITH or EXPLAIN QUERY PLAN statement", 422)
+        if who.role != "runner":
+            limiter.take(who.actor)
         # Audit metadata cannot copy literals or SQL error excerpts from private work.
         detail = {
             "query_hash": hashlib.sha256(body.sql.encode()).hexdigest(),
@@ -1501,6 +2047,7 @@ def install_sql(app, store, auth):
             "ms": 0,
             "error": None,
         }
+        audited = True
         try:
             with store.read() as c:
                 principal = who
@@ -1514,11 +2061,25 @@ def install_sql(app, store, auth):
                             403,
                         )
                     principal = auth.identity_for_actor(c, "human:" + row["owner_id"])
+                    try:
+                        limiter.take(principal.actor)
+                    except Problem:
+                        audited = False
+                        raise
                     detail["as"] = principal.actor
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:
                     cap = min(cap, body.max_rows)
-                conn = connect(store.settings.db_path, c, auth, principal, seconds=seconds, statement=body.sql)
+                conn = connect(
+                    store.settings.db_path,
+                    c,
+                    auth,
+                    principal,
+                    seconds=seconds,
+                    statement=body.sql,
+                    pool=pool,
+                    pool_age=store.pool_age,
+                )
                 try:
                     result = run(conn, body.sql, body.params, cap, seconds)
                     detail.update(rows=result["row_count"], ms=result["ms"])
@@ -1529,4 +2090,5 @@ def install_sql(app, store, auth):
             detail["error"] = exc.code
             raise
         finally:
-            audit.record(who.actor, detail)
+            if audited:
+                audit.record(who.actor, detail)

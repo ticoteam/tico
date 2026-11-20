@@ -1669,3 +1669,98 @@ def test_a_visibility_build_past_the_time_limit_is_stopped_as_a_timeout(api, mon
     assert refused['error']['code'] == 'timeout'
     monkeypatch.setattr(S, 'guarded', built)
     assert query(api, 'SELECT count(*) FROM tasks')['rows']
+
+
+def test_sql_pool_reuses_connections_and_isolates_callers(api, world):
+    """POST /api/v2/sql reuses read-only connections across callers, leaves no temp objects or growing UDF entries,
+    and never leaks an earlier owner query's visibility to a member or bot."""
+    as_member(api, "ben@acme.example")
+    pool = api.app.state.sql_pool
+    assert query(api, "SELECT id FROM tasks")["rows"]
+    assert len(pool.idle) == 1
+    first = pool.idle[0]
+    assert first.execute("SELECT count(*) FROM sqlite_temp_master").fetchone()[0] == 0
+    fn_count = first.execute("SELECT count(*) FROM pragma_function_list").fetchone()[0]
+
+    # A member and a bot reuse the same warm connection and never see the owner's private task.
+    ben_tasks = column(api, "SELECT id FROM tasks", "ben-test")
+    assert world["private"]["id"] not in ben_tasks
+    assert len(pool.idle) == 1 and pool.idle[0] is first
+    assert first.execute("SELECT count(*) FROM sqlite_temp_master").fetchone()[0] == 0
+
+    bot_tasks = column(api, "SELECT id FROM tasks", world["attempt"]["token"])
+    assert world["private"]["id"] not in bot_tasks
+    assert len(pool.idle) == 1 and pool.idle[0] is first
+
+    # Repeated queries using privacy UDFs do not leak function table entries.
+    for _ in range(5):
+        assert query(api, "SELECT count(*) FROM messages", "ben-test")["rows"]
+    assert len(pool.idle) == 1 and pool.idle[0] is first
+    fn_after = first.execute("SELECT count(*) FROM pragma_function_list").fetchone()[0]
+    assert fn_after <= fn_count + 13
+
+
+def test_lazy_views_serve_every_guarded_table_and_build_only_what_is_referenced(api, world):
+    """Every guarded table is covered by GUARDED_TABLES and serves queries cleanly when only referenced views are built,
+    while simple queries skip unrelated temp views and materialized sets."""
+    from backend import sql as S
+    from backend.auth import Identity
+
+    store, auth = api.app.state.store, api.app.state.auth
+    owner = Identity("human:ana", "owner", email="ana@acme.example")
+    with store.read() as c:
+        full = S.guarded(c, auth, owner, lambda t: f'"{t}"', lambda f: f'"{f}"')
+    assert S.GUARDED_TABLES == set(full) - {S.READABLE_MESSAGES}
+
+    # Every guarded table works on its own for owner, member, and bot under lazy view construction.
+    for token in ("ana-test", "ben-test", world["attempt"]["token"]):
+        for table in sorted(S.GUARDED_TABLES):
+            res = query(api, f'SELECT * FROM "{table}" LIMIT 1', token)
+            assert isinstance(res["columns"], list), (token, table)
+
+    # Trivial and single-table queries only create the views they actually need.
+    for statement, must_have, must_skip in (
+        ("SELECT 1", set(), {"tasks", "conversations", "messages", "bots"}),
+        ("SELECT id FROM bots", {"bots"}, {"tasks", "conversations", "messages"}),
+        ("SELECT id FROM tasks", {"tasks"}, {"conversations", "messages", "events"}),
+    ):
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, owner, statement=statement)
+            try:
+                conn.set_authorizer(None)
+                views = {r[0] for r in conn.execute("SELECT name FROM sqlite_temp_master WHERE type='view'")}
+            finally:
+                conn.close()
+        assert must_have <= views, (statement, views)
+        assert not (must_skip & views), (statement, views)
+
+
+def test_sql_rate_limit_allows_burst_and_returns_429_with_retry_after(api, monkeypatch):
+    """Per-person token bucket tolerates a 72-query script burst, refuses past 120 with 429 and Retry-After without
+    writing an audit row, isolates other callers, and refills at 2/s."""
+    from backend import sql as S
+
+    clock = [1000.0]
+    monkeypatch.setattr(S, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    api.app.state.sql_rate_limiter.buckets.clear()
+    # 72-query burst passes comfortably.
+    for _ in range(72):
+        assert query(api, "SELECT 1")["rows"] == [[1]]
+    # Remaining 48 tokens pass up to the 120-query burst cap.
+    for _ in range(48):
+        assert query(api, "SELECT 1")["rows"] == [[1]]
+    with api.app.state.store.read() as c:
+        audits_before = c.execute("SELECT count(*) FROM events WHERE action='sql.query'").fetchone()[0]
+    # 121st query is rate-limited with Retry-After and writes no audit row.
+    refused = api.post("/api/v2/sql", json={"sql": "SELECT 1"}, headers=headers("ana-test"))
+    assert refused.status_code == 429, refused.text
+    assert refused.json()["error"]["code"] == "rate_limited"
+    assert int(refused.headers["Retry-After"]) >= 1
+    with api.app.state.store.read() as c:
+        audits_after = c.execute("SELECT count(*) FROM events WHERE action='sql.query'").fetchone()[0]
+    assert audits_after == audits_before
+    # Another person has their own bucket and is unaffected.
+    assert query(api, "SELECT 1", "ben-test")["rows"] == [[1]]
+    # Advancing 0.5 s refills 1 token (2/s), so the caller can query again.
+    clock[0] += 0.5
+    assert query(api, "SELECT 1")["rows"] == [[1]]

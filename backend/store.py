@@ -1099,6 +1099,9 @@ class Store:
         still in use is closed when _give receives it, since the finalizer is no longer alive."""
         with self.pool_lock:
             self._pool_finalizer()
+        sql_pool = getattr(self, "_sql_pool", None)
+        if sql_pool is not None:
+            sql_pool.close()
 
     @contextmanager
     def read(self):
