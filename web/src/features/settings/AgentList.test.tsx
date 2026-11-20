@@ -9,7 +9,19 @@ import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { dragTo } from '@/test/drag';
-import { botAccessQuery, botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
+import { AddComputer, Computers } from './Agents';
+import {
+  botAccessQuery,
+  botMailQuery,
+  botsQuery,
+  computersQuery,
+  hostedQuery,
+  limitsQuery,
+  modelsQuery,
+  providersQuery,
+  stoppedRunsQuery,
+  subscriptionsQuery,
+} from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
@@ -17,14 +29,17 @@ vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}
 
 type Reply = { status: number; body: unknown };
 let sent: { url: string; method: string; body: unknown }[] = [];
-function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
+/** Anything `reply` leaves (undefined) answers 200 with {}. */
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply> | undefined = () => undefined) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ url: String(url), method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
-    const r = await reply(String(url), method);
+    const r = (await reply(String(url), method)) ?? ok({});
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
+
+const ok = (body: unknown): Reply => ({ status: 200, body });
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
@@ -214,12 +229,24 @@ describe('Settings › Agents', () => {
     expect(screen.queryByText('2 keys')).toBeNull();
   });
 
-  it('a retired agent can be brought back by its owner', async () => {
+  it('a retired agent can be brought back by its owner @s693', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
     fireEvent.click(await screen.findByRole('button', { name: /Retired/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/c3/restore', method: 'POST' }));
+  });
+
+  it('groups the agents by team, and by computer when asked @n:se:settings-fleet', async () => {
+    serve();
+    queryClient.setQueryData(teamComputers.queryKey, [{ id: 'r1', label: 'Shared One', online: true }] as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...ROWS[0], machine: { runner_id: 'r1', label: 'Shared One', generation: 1 } }, ROWS[1]] as never);
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    expect(await screen.findByRole('region', { name: /Product/ })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /Growth/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Computer' }));
+    expect(await screen.findByRole('region', { name: /Shared One/ })).toBeTruthy();
+    expect(screen.getByRole('region', { name: /No computer/ })).toBeTruthy();
   });
 });
 
@@ -299,6 +326,50 @@ describe('Settings › Agents › a computer', () => {
     show(<SettingsPage section="computers" open="r1" />, '/settings/computers?open=r1');
     const panel = await screen.findByRole('complementary', { name: 'Shared One' });
     expect(within(panel).getByRole('switch', { name: 'Fall back to Tico Gateway' })).toBeTruthy();
+  });
+});
+
+describe('Settings › Computers', () => {
+  it('external agents are one dimmed Coming soon line with nothing to press @s703', async () => {
+    serve();
+    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true }] as never);
+    show(<Computers />, '/settings/computers');
+    const section = await screen.findByRole('region', { name: 'External agents' });
+    expect(within(section).getByText('Coming soon')).toBeTruthy();
+    expect(within(section).getByText('Agents made and run outside Tico').closest('.row')?.getAttribute('aria-disabled')).toBe('true');
+    expect(within(section).queryByRole('button', { name: /pair|add|connect/i })).toBeNull();
+    expect(within(section).queryByRole('link')).toBeNull();
+  });
+
+  it('a stopped hosted server starts for an owner, says why when held with a link to Tico support, and Tico cannot start it @s704', async () => {
+    serve((url) =>
+      url === '/api/v2/hosted-servers/h1/start' ? ok({ state: 'paused', message: 'Out of credit', credit_url: 'https://help.example.test/credit' }) : undefined,
+    );
+    queryClient.setQueryData(computersQuery.queryKey, [] as never);
+    queryClient.setQueryData(hostedQuery.queryKey, { state: 'ok', servers: [{ server_id: 'h1', kind: 'tico', power: 'stopped' }] });
+    show(<Computers />, '/settings/computers');
+    const line = (await screen.findByText('Tico server')).closest('.row') as HTMLElement;
+    expect(within(line).getByText('Stopped')).toBeTruthy();
+    fireEvent.click(within(line).getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/hosted-servers/h1/start', method: 'POST' }));
+    expect(await within(line).findByText('Out of credit')).toBeTruthy();
+    expect(within(line).getByRole('link', { name: 'Tico support' }).getAttribute('href')).toBe('https://help.example.test/credit');
+    sent = [];
+    expect(await run('settings.startServer', { server: 'h1' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('Add computer makes a one-time code in the dialog; Tico cannot @s728', async () => {
+    queryClient.setQueryData(computersQuery.queryKey, []);
+    serve((url, method) => (url === '/api/v2/enrollments' && method === 'POST' ? ok({ code: 'JOIN-4821' }) : undefined));
+    show(<AddComputer />, '/settings/computers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add computer' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Add a computer' });
+    fireEvent.change(within(dlg).getByRole('textbox', { name: 'Name' }), { target: { value: 'Studio' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Get code' }));
+    expect((await within(dlg).findAllByText(/JOIN-4821/)).length).toBeGreaterThan(0);
+    expect(sent).toContainEqual({ url: '/api/v2/enrollments', method: 'POST', body: { operator: 'p1' } });
+    expect(await run('settings.addComputer', {}, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
   });
 });
 
@@ -406,7 +477,7 @@ describe('Settings search', () => {
     expect(hitHref('#/settings/inboxes/x')).toBeNull();
   });
 
-  it('offers only the settings the reader may change', async () => {
+  it('offers only the settings the reader may change @s1130', async () => {
     queryClient.setQueryData(['me'], { id: 'human:p2', email: 'ben@example.test', role: 'person', slug: null });
     serve((url) => {
       if (url.startsWith('/api/v2/settings/catalog'))
@@ -435,10 +506,14 @@ describe('Settings search', () => {
 describe('Settings › Agents › an opened agent', () => {
   const EVERY = { everyone: true, people: [], teams: [], bots: [] };
   const PEOPLE = [...ACTORS, { id: 'human:p2', kind: 'person', name: 'Ben Sample', hue: 4 }];
-  const open = () => {
+  const agent = (id: string, slug: string, name: string) => ({ id, slug, display_name: name, state: 'active', owner_id: 'human:p1', bot_owners: [] });
+  /** Alpha opened; `teams` are the groups its access may name, `stopped` its stopped runs. */
+  const open = ({ teams, stopped = [] }: { teams?: { id: string; name: string }[]; stopped?: unknown[] } = {}) => {
     queryClient.setQueryData(['directory'], { actors: PEOPLE, byId: Object.fromEntries(PEOPLE.map((a) => [a.id, a])) });
-    queryClient.setQueryData(botsQuery.queryKey, [{ id: 'a1', slug: 'alpha', display_name: 'Alpha Agent', state: 'active', owner_id: 'human:p1', bot_owners: [] }]);
-    queryClient.setQueryData(botAccessQuery('a1').queryKey, { bot: 'a1', see: EVERY, read: EVERY, write: EVERY, revision: 2 });
+    queryClient.setQueryData(botsQuery.queryKey, [agent('a1', 'alpha', 'Alpha Agent'), agent('b2', 'beta', 'Beta Agent')]);
+    queryClient.setQueryData(botAccessQuery('a1').queryKey, { bot: 'a1', see: EVERY, read: EVERY, write: EVERY, revision: 2, ...(teams ? { teams } : {}) });
+    queryClient.setQueryData(botMailQuery('a1').queryKey, { outbound_send: false, company_send: true } as never);
+    queryClient.setQueryData(stoppedRunsQuery('a1').queryKey, stopped as never);
     serve((_url, method) => (method === 'GET' ? { status: 404, body: { detail: 'not_found' } } : { status: 200, body: {} }));
     show(<SettingsPage section="agents" open="alpha" />, '/settings/agents?open=alpha');
   };
@@ -465,5 +540,57 @@ describe('Settings › Agents › an opened agent', () => {
     fireEvent.click(within(dlg).getByRole('checkbox', { name: 'Ben Sample' }));
     fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/bots/a1/co-owners', method: 'POST', body: { add: ['p2'], remove: [] } }));
+  });
+
+  it('Access: Private can name a group and another agent, not only people @s1112', async () => {
+    open({ teams: [{ id: 'product', name: 'Product' }] });
+    const line = (await screen.findByText('Open')).closest('.fact') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Edit' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Who can use Alpha Agent' });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Private' }));
+    expect(within(dlg).queryByRole('checkbox', { name: 'Alpha Agent' })).toBeNull();
+    fireEvent.click(within(dlg).getByRole('checkbox', { name: 'Product' }));
+    fireEvent.click(within(dlg).getByRole('checkbox', { name: 'Beta Agent' }));
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Save' }));
+    const only = { everyone: false, people: [], teams: ['product'], bots: ['b2'] };
+    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/bots/a1/access', method: 'PUT', body: { see: only, read: only, write: only } }));
+  });
+
+  it('mail: the switch lets it send without asking; Tico may stop it mailing on its own, but not start it @s1111', async () => {
+    open();
+    fireEvent.click(await screen.findByRole('switch', { name: 'Send mail without asking' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/a1/mail-settings', method: 'POST', body: { outbound_send: true } }));
+    sent = [];
+    expect(await run('settings.agentMail', { agent: 'a1', on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent).toHaveLength(0);
+    expect(await run('settings.agentMail', { agent: 'a1', on: false }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/a1/mail-settings', body: { outbound_send: false } });
+  });
+
+  it('stopped runs: Review opens them, Try again reconciles with the note; Tico cannot @s1110', async () => {
+    open({ stopped: [{ id: 'j1', run_id: 'r9', stopped: 'changed', reason: 'The computer restarted', task: { title: 'Send the weekly note' } }] });
+    const line = (await screen.findByText('Stopped runs')).closest('.fact') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Review' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Stopped runs' });
+    expect(within(dlg).getByText('Send the weekly note')).toBeTruthy();
+    expect(within(dlg).getByText('Trying again could repeat work that already finished.')).toBeTruthy();
+    fireEvent.change(within(dlg).getByLabelText('Note for the agent'), { target: { value: 'Nothing was sent' } });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/jobs/j1/reconcile', method: 'POST', body: { run_id: 'r9', decision: 'resume' } }));
+    expect((sent.at(-1)?.body as { note: string }).note).toContain('Details: Nothing was sent');
+    sent = [];
+    expect(await run('settings.stoppedRun', { agent: 'a1', job: 'j1', run: 'r9', decision: 'dismiss' }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('stopped runs: a decision already saved keeps its buttons off and says Saved @s1110', async () => {
+    open({ stopped: [{ id: 'j1', run_id: 'r1', stopped: 'read', task: { title: 'Sum up the week' }, pending_decision: { decision: 'resume' } }] });
+    const line = (await screen.findByText('Stopped runs')).closest('.fact') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Review' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Stopped runs' });
+    expect(within(dlg).getByText('Sum up the week')).toBeTruthy();
+    expect((within(dlg).getByRole('button', { name: 'Try again' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(dlg).getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(dlg).getByText('Saved')).toBeTruthy();
   });
 });

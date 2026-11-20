@@ -1,7 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRoute, createRouter, Link, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Link, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data/query-client';
 import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
@@ -10,6 +12,9 @@ import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
 import { pipelineTasksQuery } from '@/features/tasks/routing';
 import { forgetPlaces } from '@/lib';
+import { router as appRouter } from '@/router';
+import { showPageName } from '@/tico/pageName';
+import { tabTitle, useTabTitle } from './title';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
@@ -22,6 +27,8 @@ const { gate, q, catchUpRead, lists } = vi.hoisted(() => ({
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
 }));
 
+// the router module only: the app's pages are not needed to know what it draws for a page that breaks
+vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
 vi.mock('@/tico', async (orig) => ({
@@ -70,7 +77,7 @@ vi.mock('@/features/calls/routing', () => ({
   useCall: () => ({ muted: false, phase: call.phase }),
   isCallActive: (c: { phase: string }) => c.phase === 'live',
 }));
-vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false }));
+vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false, takeHelperCode: (at: string) => at }));
 vi.mock('@/features/tasks/routing', async () => {
   const real = await vi.importActual<typeof TasksRouting>('@/features/tasks/routing');
   return {
@@ -515,5 +522,91 @@ describe('the desktop app', () => {
   it('in a browser, nothing is reported and nothing breaks', async () => {
     show('/');
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeTruthy();
+  });
+});
+
+describe('a page that fails', () => {
+  let quiet: MockInstance[] = [];
+  beforeEach(() => {
+    quiet = [vi.spyOn(console, 'error').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {})];
+  });
+  afterEach(() => quiet.forEach((q) => q.mockRestore()));
+  /** One page under a menu, drawn by a router with the app's own fault for a page. */
+  function draw(component: () => ReactNode, loader?: () => void) {
+    const top = createRootRoute({
+      component: () => (
+        <>
+          <nav aria-label="Main">menu</nav>
+          <Outlet />
+        </>
+      ),
+    });
+    const page = createRoute({ getParentRoute: () => top, path: '/', component, loader });
+    const router = createRouter({
+      routeTree: top.addChildren([page]),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+      defaultErrorComponent: appRouter.options.defaultErrorComponent,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return screen.findByRole('main', { name: 'This page' });
+  }
+
+  it('shows its fault in the page’s place when it breaks while drawing; the menu stays, and Try again draws it again', async () => {
+    let broken = true;
+    const main = await draw(() => {
+      if (broken) throw new TypeError('d.toISOString is not a function');
+      return <h1>Routines</h1>;
+    });
+    expect(within(main).getByText('This page did not load')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
+    broken = false;
+    fireEvent.click(within(main).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: 'Routines' })).toBeTruthy();
+    expect(screen.queryByText('This page did not load')).toBeNull();
+  });
+
+  it('shows no access, without Try again, when the server refuses it', async () => {
+    const main = await draw(
+      () => <h1>Finance</h1>,
+      () => {
+        throw new ApiError(403, 'forbidden', 'Not yours');
+      },
+    );
+    expect(within(main).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(within(main).queryByText('This page did not load')).toBeNull();
+  });
+});
+
+describe('the browser tab’s title', () => {
+  it('names the open page when its route draws, and when its head renames it; streamed words do not re-read it', async () => {
+    function Shell() {
+      useTabTitle();
+      return <Outlet />;
+    }
+    const top = createRootRoute({ component: Shell });
+    const routes = ['Finance', 'Strategy'].map((name) =>
+      createRoute({ getParentRoute: () => top, path: `/${name.toLowerCase()}`, component: () => <main className="pane page"><h1>{name}</h1></main> }),
+    );
+    const router = createRouter({ routeTree: top.addChildren(routes), history: createMemoryHistory({ initialEntries: ['/finance'] }) });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(document.title).toBe('Finance - Tico'));
+    await act(() => router.navigate({ to: '/strategy' as never }));
+    await waitFor(() => expect(document.title).toBe('Strategy - Tico'));
+    // a word streamed into the page changes nothing; a rename in the head says so
+    const h1 = screen.getByRole('heading', { name: 'Strategy' });
+    act(() => void (h1.textContent = 'Plan'));
+    expect(document.title).toBe('Strategy - Tico');
+    act(() => showPageName('Plan'));
+    expect(document.title).toBe('Plan - Tico');
+  });
+
+  it('is plain Tico with no page name, and never uses a middle dot', () => {
+    expect(tabTitle('')).toBe('Tico');
+    expect(tabTitle('Tasks')).toBe('Tasks - Tico');
+    expect(tabTitle('Tasks')).not.toContain('·');
   });
 });

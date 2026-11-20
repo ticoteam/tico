@@ -11,7 +11,7 @@ const held = () =>
     name: 'Sample hook',
     old: { address: 'https://old.example.test' },
     new: { address: 'https://new.example.test' },
-    credentials: ['Signing secret'],
+    credentials: ['Signing secret', 'Token'],
     revision: 2,
   });
 
@@ -41,16 +41,16 @@ function Editor({ answers }: { answers: (DestinationChoice | undefined)[] }) {
   );
 }
 
-describe('A held change of address', () => {
-  it('asks what happens to the saved credentials and sends again with the answer', async () => {
+describe('A held change of address @s1106', () => {
+  it.each([['Keep', 'keep'], ['Clear', 'clear']] as const)('names both addresses and every credential, and %s sends again with the answer', async (button, answer) => {
     const answers: (DestinationChoice | undefined)[] = [];
     render(<Editor answers={answers} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText('Change where Sample hook sends?')).toBeTruthy();
-    expect(screen.getByText(/Signing secret was saved for https:\/\/old.example.test/)).toBeTruthy();
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Keep' })));
-    expect(await screen.findByText('saved keep')).toBeTruthy();
-    expect(answers).toEqual([undefined, 'keep']);
+    expect(screen.getByText(/Signing secret, Token were saved for https:\/\/old\.example\.test\. This change sends to https:\/\/new\.example\.test/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: button })));
+    expect(await screen.findByText(`saved ${answer}`)).toBeTruthy();
+    expect(answers).toEqual([undefined, answer]);
   });
 
   it('saves nothing on Cancel', async () => {

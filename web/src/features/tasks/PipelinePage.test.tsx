@@ -231,4 +231,48 @@ describe('Pipeline editor @s138', () => {
     });
     expect(posts[0]!.body).toMatchObject({ goal: 'Faster', settings_version: 5 });
   });
+
+  it('Edit pipeline saves the stages whole; a removed stage that holds tasks asks where they go @s138', async () => {
+    let saves = 0;
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/ops' && method === 'GET') return { status: 200, body: { pipeline: REC } };
+      if (url === '/api/v2/pipelines') return { status: 200, body: { pipelines: [REC] } };
+      if (url === '/api/v2/pipelines/ops' && method === 'POST') {
+        saves += 1;
+        if (saves === 1) return { status: 409, body: { error: { code: 'stage_has_tasks', detail: 'Packing holds tasks' } } };
+        return { status: 200, body: { pipeline: { ...REC, settings_version: 6, stages: [REC.stages[0]] } } };
+      }
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Packing' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove stage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(posts[0]?.body).toMatchObject({ settings_version: 5, stages: [{ id: 'o1', name: 'Inbox', side: false }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Move tasks' }));
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[1]?.body).toMatchObject({ move_tasks_to: { pipeline: 'ops', stage: 'o1' } });
+  });
+
+  it('Edit pipeline opens a stage to show its rules @s115 @s142', async () => {
+    const rec = { ...REC, stages: [REC.stages[0], { ...REC.stages[1], by_hand: false, requirements: [{ kind: 'checks_pass' }] }] };
+    const rule = { id: 'sr1', name: '', pipeline_id: 'ops', pipeline_name: 'Orders', stages: ['o2'], stage_names: ['Packing'], scope: 'stage', event: 'enters' };
+    const full = { ...rule, timer: null, cond: {}, jev: '', then: 'block', status: 'active', revision: 1, can_edit: true };
+    serve((url) => {
+      if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: rec } };
+      if (url.startsWith('/api/v2/stage-rules')) return { status: 200, body: { items: [full], built_in: [], may_add: true } };
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    const open = await screen.findByRole('button', { name: 'Rules, Packing' });
+    expect(open.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(open);
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+    const enter = await screen.findByRole('region', { name: 'On entering' });
+    expect(await within(enter).findByTitle('Enters Packing, Block')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'To leave' })).getByTitle('Checks pass')).toBeTruthy();
+    fireEvent.click(within(enter).getByRole('button', { name: 'Add rule' }));
+    expect(within(enter).getByRole('textbox', { name: 'Name' })).toBeTruthy();
+  });
 });

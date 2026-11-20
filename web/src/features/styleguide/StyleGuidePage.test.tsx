@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { StyleGuidePage } from './exports';
 
@@ -17,7 +17,7 @@ async function show(at = '/settings/style-guide') {
   return screen.findByRole('main');
 }
 
-describe('Style guide', () => {
+describe('Style guide @s1071', () => {
   it('is a list page whose tabs are links, Color first', async () => {
     const main = await show();
     expect(within(main).getByRole('heading', { level: 1, name: 'Style guide' })).toBeTruthy();
@@ -30,6 +30,7 @@ describe('Style guide', () => {
     const main = await show('/settings/style-guide?at=controls');
     const tabs = within(main).getByRole('navigation', { name: 'Style guide pages' });
     expect(within(tabs).getByRole('link', { name: 'Controls' }).getAttribute('aria-current')).toBe('page');
+    expect(within(tabs).getByRole('link', { name: 'Sheets' }).getAttribute('href')).toBe('/settings/style-guide?at=sheets');
     // the row draws one tab on (TanStack's own active check also marks the search-less Color tab current; see report)
     expect([...tabs.querySelectorAll('.doc-tab.is-on')].map((el) => el.textContent)).toEqual(['Controls']);
   });
@@ -66,5 +67,22 @@ describe('Style guide', () => {
   it('says agents, never bots', async () => {
     const main = await show();
     expect(main.textContent).not.toMatch(/\bbots?\b/i);
+  });
+});
+
+// The one dialog stands in for the old app's Finance and Growth dialog shells; the guide shows it in Sheets.
+describe('The one dialog, in place of the Finance and Growth shells @s448 @s477', () => {
+  it('opens named by its title, holds Cancel and one filled act, and closes from either', async () => {
+    const main = await show('/settings/style-guide?at=sheets');
+    const sheets = main.querySelector('#sg-sheets') as HTMLElement;
+    fireEvent.click(within(sheets).getByRole('button', { name: 'Delete task' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Delete this task?' });
+    expect(within(dialog).getByText('Gift cards: send on a chosen date')).toBeTruthy();
+    const buttons = within(dialog).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Cancel', 'Delete task']);
+    expect(buttons.filter((b) => b.classList.contains('btn-fill'))).toHaveLength(1);
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
   });
 });

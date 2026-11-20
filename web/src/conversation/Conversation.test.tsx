@@ -2,7 +2,7 @@ import { notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { queryClient } from '@/data';
+import { queryClient, type Actor } from '@/data';
 import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
 import { Composer } from './Composer';
@@ -369,5 +369,32 @@ describe('the head', () => {
     rerender(head('main'));
     expect(screen.getByText('Main chat')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Randazzo: reply letter' })).toBeNull();
+  });
+});
+
+describe('a chat head', () => {
+  const scout: Actor = { id: 'bot:0190-sc', kind: 'agent', name: 'Scout', slug: 'scout' };
+  const head = (actor: string | undefined, title: string) => {
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(['directory'], { actors: [scout], byId: { [scout.id]: scout } });
+    render(<Conversation id={T} variant="side" title={title} actor={actor} page={null} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+  };
+
+  it("links an agent's name to its page, by slug", () => {
+    head(scout.id, 'Scout');
+    expect(screen.getByRole('link', { name: 'Scout' }).getAttribute('href')).toBe('/team/scout');
+  });
+
+  it("links a person's name to their page, by id", () => {
+    head('human:p7', 'Kim Roe');
+    expect(screen.getByRole('link', { name: 'Kim Roe' }).getAttribute('href')).toBe('/team/p7');
+  });
+
+  it('draws a plain name when the chat names no teammate', () => {
+    head(undefined, 'Launch');
+    expect(screen.getByText('Launch')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Launch' })).toBeNull();
   });
 });

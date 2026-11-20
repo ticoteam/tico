@@ -6,11 +6,10 @@ import { run } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { FinancePage } from './Finance';
-import { GrowthPage } from './Growth';
 import { loadFinance } from './load';
-import { budgetDay, monthSpan, pnlRange } from './model';
-import { budgetsKey, pnlQuery, type Budget, type GrowthRead, type Pnl } from './queries';
-import { validateFinanceSearch, validateGrowthSearch } from './search';
+import { pnlRange } from './model';
+import { pnlQuery, type Pnl } from './queries';
+import { validateFinanceSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -25,10 +24,9 @@ function serve(reply: (url: string, method: string, body: Record<string, unknown
 const ok = (body: unknown): Reply => ({ status: 200, body });
 
 /** The page under a router whose address drives it, as the route does. */
-function show(page: 'finance' | 'growth', at: string) {
+function show(at: string) {
   const Finance = () => <FinancePage search={validateFinanceSearch(useSearch({ strict: false }))} />;
-  const Growth = () => <GrowthPage search={validateGrowthSearch(useSearch({ strict: false }))} />;
-  const root = createRootRoute({ component: page === 'finance' ? Finance : Growth });
+  const root = createRootRoute({ component: Finance });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -109,7 +107,7 @@ describe('Finance @s398 @s403 @s399', () => {
       pnlQuery({ start: range.start, end: range.end, period: 'quarter', basis: 'accrual' }).queryKey,
       PNL([COL('2026-07-01', 'past'), COL('2026-10-01', 'current')], [ROW('acc_soft', 'Software', 'expense', 'operating', '6100', [120000, 80000])]),
     );
-    const router = show('finance', '/company/finance?tab=pnl&period=quarter');
+    const router = show('/company/finance?tab=pnl&period=quarter');
     const link = await screen.findByRole('link', { name: 'Software' });
     expect(searchOf(link.getAttribute('href'))).toEqual({ tab: 'pnl', period: 'quarter', panel: 'line:acc_soft' });
     expect(within(link.closest('tr')!).getByText('$800')).toBeTruthy();
@@ -125,7 +123,7 @@ describe('Finance @s398 @s403 @s399', () => {
         : { status: 404, body: {} },
     );
     serve(reads);
-    show('finance', '/company/finance');
+    show('/company/finance');
     expect(await screen.findByText('No source connected')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add source' })).toBeTruthy();
     expect(reads.mock.calls.map(([url]) => url)).not.toContain('/api/v2/finance/brief');
@@ -147,7 +145,7 @@ describe('Finance @s398 @s403 @s399', () => {
       if (url.includes('/finance/pnl')) return ok({ ...PNL([COL('2026-11-01', 'current')], []), net: [12300] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?as=human:lee');
+    show('/company/finance?as=human:lee');
     expect(await screen.findByText('$123')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add source' })).toBeNull();
     expect(deniedReads).not.toHaveBeenCalled();
@@ -155,162 +153,16 @@ describe('Finance @s398 @s403 @s399', () => {
 
   it('a P&L that does not load says so and offers Try again', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'internal' } } }));
-    show('finance', '/company/finance?tab=pnl');
+    show('/company/finance?tab=pnl');
     expect(await screen.findByRole('heading', { name: 'Finance did not load' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('a tab outside your view says you have no access, without Try again', async () => {
     serve(() => ({ status: 403, body: { error: { code: 'forbidden' } } }));
-    show('finance', '/company/finance?tab=balance');
+    show('/company/finance?tab=balance');
     expect(await screen.findByText("You don't have access to this page")).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
-  });
-});
-
-describe('Budgets @s404 @s463', () => {
-  const budget: Budget = { id: 'b1', name: 'Tools', account_id: 'acc_soft', parent_id: null, period: 'month', active: true, state: { amount: 50000, actual: 20000 } };
-  const ym = budgetDay().slice(0, 7);
-  const seed = (rows: Pnl['rows'] = []) => {
-    queryClient.setQueryData(budgetsKey(budgetDay()), { budgets: [budget] });
-    queryClient.setQueryData(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }).queryKey, PNL([], rows));
-  };
-
-  it('a new amount shows at once and is taken back when refused', async () => {
-    let refuse!: () => void;
-    serve((url, method) => {
-      if (method === 'POST') return new Promise<Reply>((r) => (refuse = () => r(ok({ status: 'refused', code: 'over_limit', reason: 'Over the limit' }))));
-      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
-      if (url.endsWith('/finance/access')) return ok(OWNER);
-      return ok({});
-    });
-    seed();
-    show('finance', '/company/finance?tab=budgets&panel=budget:b1');
-
-    const row = (await screen.findByRole('link', { name: 'Tools' })).closest('tr')!;
-    expect(searchOf(row.querySelector('a')!.getAttribute('href'))).toEqual({ tab: 'budgets', panel: 'budget:b1' });
-    const field = await screen.findByRole('textbox', { name: /^Budget for / });
-    fireEvent.change(field, { target: { value: '900' } });
-    fireEvent.submit(field.closest('form')!);
-
-    await waitFor(() => expect(within(row).getByText('$900')).toBeTruthy());
-    expect(within(screen.getByRole('complementary', { name: 'Tools' })).getByText('$700')).toBeTruthy();
-    refuse();
-    await waitFor(() => expect(within(row).getByText('$500')).toBeTruthy());
-    expect(within(row).queryByText('$900')).toBeNull();
-    expect(await screen.findByText("Couldn't save")).toBeTruthy();
-    expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500');
-  });
-
-  it('a change pressed again after a lost answer sends the same key; after a refusal, a new one', async () => {
-    const sent: (string | null)[] = [];
-    const answers: ('lost' | 'refused')[] = ['lost', 'refused', 'lost'];
-    let release = () => {};
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
-      if (init?.method === 'POST') {
-        sent.push(new Headers(init.headers).get('Idempotency-Key'));
-        // Each answer waits for the test, so the change shows first.
-        await new Promise<void>((r) => (release = r));
-        // A gateway's 502: the answer is lost, and the client does not send it again on its own (only a 503 or a drop).
-        if (answers[sent.length - 1] === 'lost') return new Response('Bad gateway', { status: 502 });
-        return json({ kind: 'budget_update', status: 'refused', code: 'over_limit', reason: 'Over the limit' });
-      }
-      if (String(url).includes('budget_vs_actual')) return json({ columns: [], budgets: [] });
-      if (String(url).endsWith('/finance/access')) return json(OWNER);
-      return json({});
-    });
-    seed();
-    show('finance', '/company/finance?tab=budgets&panel=budget:b1');
-    const press = async (n: number) => {
-      const field = await screen.findByRole('textbox', { name: /^Budget for / });
-      await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
-      fireEvent.change(field, { target: { value: '900' } });
-      fireEvent.submit(field.closest('form')!);
-      await waitFor(() => expect(sent).toHaveLength(n));
-      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('900'));
-      release();
-      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500'));
-    };
-    await press(1);
-    await press(2);
-    expect(sent[1]).toBe(sent[0]);
-    await press(3);
-    expect(sent[2]).not.toBe(sent[1]);
-  });
-
-  it('read as a teammate, a budget is read only', async () => {
-    serve((url) => {
-      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
-      if (url.includes('/finance/budgets')) return ok({ budgets: [budget] });
-      if (url.endsWith('/finance/access'))
-        return ok({
-          can_view_as: true,
-          teammates: [
-            { teammate: 'human:me', kind: 'human', default: 'everything', rights: [] },
-            { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: ['finance.budgets'] },
-          ],
-        });
-      return ok({});
-    });
-    seed();
-    show('finance', '/company/finance?tab=budgets&panel=budget:b1&as=human:lee');
-    expect(await screen.findByRole('complementary', { name: 'Tools' })).toBeTruthy();
-    await waitFor(() => expect(queryClient.getQueryData(['finance', 'access'])).toBeTruthy());
-    expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).disabled).toBe(true);
-    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'New budget' })).toBeNull();
-  });
-});
-
-describe('Growth @s400 @s444', () => {
-  const f = (value: number | null) => ({ value });
-  const read: GrowthRead = {
-    scope: 'segment:alpha',
-    period: '2026-10',
-    as_of: '2026-11-02',
-    segment: { slug: 'alpha', name: 'Alpha', rule: null, value_kind: 'revenue' },
-    headline: {
-      signups: f(400),
-      activated_rate: f(0.4),
-      paid_rate: f(0.1),
-      new_customers: f(40),
-      cost: f(2000),
-      cac: f(50),
-      kept: f(null),
-      ltv_cac: f(null),
-    },
-    channels: [{ slug: 'search', name: 'Search ads', signups: 400, new_customers: 40, new_share: 1, cost: 2000, cac: 50, cost_share: 1 }],
-    health: { basis: 'customers', unknown_share: 0, stale_sources: [], reconciled: 'not_reconciled' },
-    metrics: [],
-    more: [],
-  };
-
-  it('a segment is its own tab and a channel opens at its address, keeping the segment', async () => {
-    serve((url) => {
-      if (url.endsWith('/growth/segments')) return ok({ segments: [{ slug: 'alpha', name: 'Alpha', channels: ['search'] }] });
-      return ok(read);
-    });
-    show('growth', '/company/growth?segment=alpha');
-    const tab = await screen.findByRole('link', { name: 'Alpha' });
-    expect(tab.getAttribute('aria-current')).toBe('page');
-    expect(searchOf(screen.getByRole('link', { name: 'All' }).getAttribute('href'))).toEqual({});
-    const channel = await screen.findByRole('link', { name: 'Search ads' });
-    expect(searchOf(channel.getAttribute('href'))).toEqual({ segment: 'alpha', panel: 'channel:search' });
-    expect(within(screen.getByRole('group', { name: 'Headline' })).getByText('CAC')).toBeTruthy();
-  });
-
-  it('with nothing read yet says there are no numbers yet', async () => {
-    const none: GrowthRead = {
-      ...read,
-      headline: { ...read.headline, signups: f(0), new_customers: f(0), cost: { value: null, status: 'no_spend' }, cac: { value: null, status: 'no_spend' } },
-      channels: [],
-    };
-    serve((url) => (url.endsWith('/growth/segments') ? ok({ segments: [] }) : ok(none)));
-    show('growth', '/company/growth');
-    expect(await screen.findByText('No numbers yet')).toBeTruthy();
-    // Sources are set up through the Growth Manager (the Sources tab is gone): with none, nothing to press.
-    expect(screen.queryByRole('button', { name: 'Set up' })).toBeNull();
   });
 });
 
@@ -332,7 +184,7 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       if (url.endsWith('/finance/pay-from')) return ok({ accounts: [{ id: 'a1', name: 'Checking', last4: '0001' }, { id: 'a2', name: 'Reserve', last4: '0002' }], currency: 'usd', view_version: 1 });
       return ok({ rows: [] });
     });
-    show('finance', '/company/finance?tab=transactions');
+    show('/company/finance?tab=transactions');
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'New transfer' }));
     const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
@@ -365,7 +217,7 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       if (String(url).endsWith('/finance/pay-from')) return json({ accounts: [{ id: 'a1', name: 'Checking' }, { id: 'a2', name: 'Reserve' }], currency: 'usd', view_version: 1 });
       return json({ rows: [] });
     });
-    show('finance', '/company/finance?tab=transactions');
+    show('/company/finance?tab=transactions');
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'New transfer' }));
     const dialog = await screen.findByRole('dialog', { name: 'Transfer' });
@@ -397,7 +249,7 @@ describe('Finance dialogs @s449 @s461 @s453 @s454', () => {
       if (url.endsWith('/triggers')) return ok(method === 'POST' ? { trigger: { id: 't1', url: 'https://hooks.example.test/t1' } } : { triggers: [] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=sources');
+    show('/company/finance?tab=sources');
     fireEvent.click(await screen.findByRole('button', { name: 'More for Stripe' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Add webhook' }));
     const dialog = await screen.findByRole('dialog', { name: 'Stripe webhook' });
@@ -424,7 +276,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
         return ok(url.includes('cursor=') ? { rows: [tx('t2', 'Paper Co', -2000)], next: null } : { rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=transactions');
+    show('/company/finance?tab=transactions');
     expect(await screen.findByText('Paper Co')).toBeTruthy();
     expect(screen.getByText('Ink Co')).toBeTruthy();
     expect(cursors(urls)).toEqual(['page 2']);
@@ -440,7 +292,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       pages.push(params);
       return params.has('cursor') ? ok({ rows: [tx('t2', 'Paper Co', -2000)], next: null }) : ok({ rows: [tx('t1', 'Ink Co', -1000)], next: 'page 2' });
     });
-    show('finance', '/company/finance?tab=transactions&src=feed&status=posted&line=acc_soft&as=human:sam');
+    show('/company/finance?tab=transactions&src=feed&status=posted&line=acc_soft&as=human:sam');
     expect(await screen.findByText('Paper Co')).toBeTruthy();
     expect(screen.getByText('Ink Co')).toBeTruthy();
     expect(pages.map((p) => Object.fromEntries(p))).toEqual([
@@ -458,7 +310,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (++attempts === 1) return { status: 500, body: {} };
       return ok({ rows: [tx('t2', 'Paper Co', -2000)], next: null });
     });
-    show('finance', '/company/finance?tab=transactions');
+    show('/company/finance?tab=transactions');
     const retry = await screen.findByRole('button', { name: 'Try again' });
     expect(screen.getByText('Ink Co')).toBeTruthy();
     fireEvent.click(retry);
@@ -479,7 +331,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (url.includes('/finance/transactions')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: null });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=transactions');
+    show('/company/finance?tab=transactions');
     fireEvent.click(await screen.findByRole('button', { name: 'More for Ink Co' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Attributed to' }));
     const dialog = await screen.findByRole('dialog', { name: 'Attributed to' });
@@ -499,7 +351,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (url.includes('/finance/bills')) return ok({ bills: [], bills_email: null });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=payables');
+    show('/company/finance?tab=payables');
     fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /^Bills address/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Bills address' });
@@ -521,7 +373,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
         return ok({ can_change: true, rules: [{ id: 'r1', name: 'Paper to Lee', enabled: true, match: { kind: 'vendor', id: 'v1', label: 'Paper Co' }, splits: [{ teammate: 'human:lee', share_bps: 10000 }] }] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=attribution');
+    show('/company/finance?tab=attribution');
     expect(await screen.findByRole('button', { name: 'Add rule' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'More for Paper to Lee' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
@@ -549,7 +401,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (url.endsWith('/finance/sources')) return ok({ groups: [{ group: 'banks', name: 'Banks', count: 1, rows: [{ id: 'ma1', kind: 'bank', name: 'Checking', last4: '0001' }] }] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=sources');
+    show('/company/finance?tab=sources');
     fireEvent.click(await screen.findByRole('button', { name: 'More for Checking' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Upload statement' }));
     const dialog = await screen.findByRole('dialog', { name: 'Upload statement' });
@@ -571,7 +423,7 @@ describe('Finance books @s420 @s455 @s456 @s458 @s459 @s464 @s465', () => {
       if (url.includes('/finance/transactions')) return ok({ rows: [tx('t1', 'Ink Co', -1000)], next: null });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=transactions&as=human:sam');
+    show('/company/finance?tab=transactions&as=human:sam');
     expect(await screen.findByText('Ink Co')).toBeTruthy();
     const read = urls.find((u) => u.includes('/finance/transactions'))!;
     expect(new URL(read, 'http://x').searchParams.get('view_as')).toBe('human:sam');
@@ -603,7 +455,7 @@ describe('Finance tabs and sources', () => {
         return ok({ as_of: '2026-10-31', assets: [acct('Checking', '1000', 500000)], liabilities: [acct('Card', '2000', 100000)], equity: [acct('Retained', '3000', 400000)] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=balance');
+    show('/company/finance?tab=balance');
     const assets = await screen.findByRole('table', { name: 'Assets' });
     expect(within(assets).getAllByText('Assets').at(-1)!.closest('tr')!.textContent).toContain('$5,000');
     const other = screen.getByRole('table', { name: 'Liabilities and equity' });
@@ -620,7 +472,7 @@ describe('Finance tabs and sources', () => {
       if (url.includes('/finance/tax/sales-tax')) return ok({ rows: [row('North', '2026-10', 7000, 7000), row('South', '2026-09', 0, 5000)] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=tax');
+    show('/company/finance?tab=tax');
     const due = await screen.findByRole('table', { name: 'Due' });
     expect(within(due).getByText('North').closest('tr')!.textContent).toContain('$70');
     const filed = screen.getByRole('table', { name: 'Filed' });
@@ -640,7 +492,7 @@ describe('Finance tabs and sources', () => {
       if (url.endsWith('/finance/mercury-users')) return ok({ users: [{ id: 'u1', name: 'Lee' }] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=cards');
+    show('/company/finance?tab=cards');
     const cards = await screen.findByRole('table', { name: 'Cards' });
     expect(within(cards).getByText('Travel').closest('tr')!.textContent).toContain('$1,000');
     fireEvent.click(await screen.findByRole('button', { name: 'Add card' }));
@@ -661,7 +513,7 @@ describe('Finance tabs and sources', () => {
       if (url.endsWith('/finance/access')) return ok(access);
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=access');
+    show('/company/finance?tab=access');
     const table = await screen.findByRole('table', { name: 'Access' });
     expect(within(table).getByText('Everything').closest('tr')!.textContent).toContain('Any amount');
     expect(within(table).getByText("Their team's lines").closest('tr')!.textContent).toContain('Any amount');
@@ -691,7 +543,7 @@ describe('Finance tabs and sources', () => {
       if (url.endsWith('/finance/sources')) return ok({ groups: [] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=sources');
+    show('/company/finance?tab=sources');
     fireEvent.click(await screen.findByRole('button', { name: 'Add source' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Brex' }));
     const dialog = await screen.findByRole('dialog', { name: 'Connect Brex' });
@@ -715,7 +567,7 @@ describe('Finance tabs and sources', () => {
       if (url.endsWith('/finance/sources')) return ok({ groups: [] });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=sources');
+    show('/company/finance?tab=sources');
     fireEvent.click(await screen.findByRole('button', { name: 'Add source' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'QuickBooks' }));
     const dialog = await screen.findByRole('dialog', { name: 'Connect QuickBooks' });
@@ -742,7 +594,7 @@ describe('Finance tabs and sources', () => {
         });
       return { status: 404, body: {} };
     });
-    show('finance', '/company/finance?tab=sources');
+    show('/company/finance?tab=sources');
     const table = await screen.findByRole('table', { name: 'Sources' });
     expect(within(table).getByText('Bank feed').closest('tr')!.textContent).toContain('Cash, Transactions');
     fireEvent.click(screen.getByRole('button', { name: 'More for Ledger books' }));

@@ -7,21 +7,24 @@ import { ActionsRoot, run } from '@/actions';
 import { ticoRoomQuery } from '@/conversation';
 import { queryClient } from '@/data';
 import { openCallWindow, watchCallWindow, type CallWindowState, type TicoDesktop } from '@/desktop';
+import { Toasts } from '@/kit/Toast';
 import { dot } from '@/tico/dot';
 import './actions';
 import { CallBar } from './CallBar';
 import { CallPage } from './CallPage';
+import { CallSide } from './CallSide';
 import { callQuery, ringingQuery } from './queries';
 import { RingCard } from './RingCard';
 import { callState, resetCall } from './session';
 
-// The stage's file preview is the library's: not under test here.
+// The stage's file preview is the library's, and the chat beside is the conversation's: not under test here.
 vi.mock('@/features/library/exports', () => ({ FilePreview: () => null }));
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
   CallBars: () => <span className="lvl" />,
   dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null },
 }));
+vi.mock('@/conversation', async (real) => ({ ...(await real<Record<string, unknown>>()), Conversation: () => <div /> }));
 
 // LiveKit, faked: a room that records what it is asked and lets a test raise its events. Nothing connects.
 type Handler = (...a: unknown[]) => void;
@@ -31,14 +34,21 @@ const lk = vi.hoisted(() => ({
     emit: (e: string, ...a: unknown[]) => void;
     connect: { mock: { calls: unknown[][] } };
     disconnect: { mock: { calls: unknown[][] } };
-    localParticipant: { setMicrophoneEnabled: { mock: { calls: unknown[][] } } };
+    localParticipant: { setMicrophoneEnabled: { mock: { calls: unknown[][] } }; setScreenShareEnabled: { mock: { calls: unknown[][] } } };
   }[],
   refuseConnect: false,
 }));
 vi.mock('livekit-client', () => {
   class Room {
     handlers = new Map<string, Handler>();
-    localParticipant = { identity: 'human:me', audioLevel: 0, publishTrack: vi.fn(async () => undefined), setMicrophoneEnabled: vi.fn(async () => undefined) };
+    localParticipant = {
+      identity: 'human:me',
+      audioLevel: 0,
+      publishTrack: vi.fn(async () => undefined),
+      setMicrophoneEnabled: vi.fn(async () => undefined),
+      setScreenShareEnabled: vi.fn(async () => undefined),
+      getTrackPublication: vi.fn(() => undefined),
+    };
     remoteParticipants = new Map();
     canPlaybackAudio = true;
     startAudio = vi.fn(async () => undefined);
@@ -66,7 +76,7 @@ vi.mock('livekit-client', () => {
     Room,
     RoomEvent: new Proxy({}, { get: (_t, k) => k }),
     DisconnectReason: { ROOM_DELETED: 'room_deleted' },
-    Track: { Source: { Microphone: 'microphone' }, Kind: { Audio: 'audio' } },
+    Track: { Source: { Microphone: 'microphone', ScreenShare: 'screen_share' }, Kind: { Audio: 'audio', Video: 'video' } },
   };
 });
 
@@ -75,6 +85,8 @@ beforeAll(() => {
 });
 
 const ROOM = '0f8fad5b-d9cb-469f-a165-70867728950e';
+// What every call the server sends carries in this test, on top of the defaults.
+let base: Partial<Call> = {};
 const call = (p: Partial<Call> = {}): Call =>
   ({
     id: ROOM,
@@ -97,11 +109,13 @@ const call = (p: Partial<Call> = {}): Call =>
     thread_id: 'th1',
     title: 'Pricing review',
     voice: null,
+    ...base,
     ...p,
   }) as Call;
 
 const posted: string[] = [];
-const asked: { url: string; body?: unknown }[] = [];
+const asked: { url: string; method: string; body?: unknown }[] = [];
+const sent = () => asked.filter((a) => a.method !== 'GET');
 const getUserMedia = vi.fn();
 const fakeStream = () => ({ getAudioTracks: () => [{ kind: 'audio' }], getTracks: () => [{ stop: vi.fn() }] });
 
@@ -110,25 +124,38 @@ beforeEach(() => {
   queryClient.clear();
   lk.rooms.length = 0;
   lk.refuseConnect = false;
+  base = {};
   posted.length = 0;
   asked.length = 0;
   getUserMedia.mockReset();
   getUserMedia.mockImplementation(async () => fakeStream());
-  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia, getDisplayMedia: vi.fn() } });
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-  queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+  const gm = { id: 'bot:gm', name: 'Growth Manager', kind: 'bot' };
+  const fin = { id: 'bot:fin', name: 'Finance', kind: 'bot' };
+  queryClient.setQueryData(['directory'], { actors: [gm, fin], byId: { 'bot:gm': gm, 'bot:fin': fin } });
   queryClient.setQueryData(ticoRoomQuery.queryKey, 'th-tico');
   queryClient.setQueryData(callQuery(ROOM).queryKey, call());
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     const method = init?.method ?? 'GET';
     if (method === 'POST') posted.push(u);
-    asked.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    asked.push({ url: u, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const body = u.endsWith('/join')
       ? { call: call(), token: 'test-token', url: 'wss://example.invalid' }
       : u.endsWith('/notes')
-        ? { items: [], summary: ['Prices stay as they are'], pending: false, message_id: null }
-        : call({ state: u.endsWith('/leave') ? 'ended' : 'live' });
+        ? { items: [{ owner: 'human:ana', title: 'Send the deck' }], summary: ['Prices stay as they are'], pending: false, message_id: null }
+        : u.includes('/live-meetings/')
+          ? { chunks: [{ seq: 1, speaker: 'human:ana', text: 'We keep the prices' }], event_id: 4 }
+          : u.endsWith('/api/v2/tasks')
+            ? { task: { id: 't9', title: 'Send the deck' } }
+            : u.endsWith('/stage') && method === 'PUT'
+              ? call({ stage: { ...(init?.body ? JSON.parse(String(init.body)) : {}), by: 'human:me' } as Call['stage'] })
+              : u.includes('/bots/') && method === 'DELETE'
+                ? call({ bots: [] })
+                : u.endsWith('/bots')
+                  ? call({ bots: ['gm'] })
+                  : call({ state: u.endsWith('/leave') || u.endsWith('/end') ? 'ended' : 'live' });
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
 });
@@ -138,7 +165,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The root mounts the bar and the ring card on every page, as __root.tsx does.
+// The root mounts the bar, the ring card and the toasts on every page, as __root.tsx does.
 function show(at = `/call/${ROOM}`) {
   const root = createRootRoute({
     component: () => (
@@ -146,13 +173,16 @@ function show(at = `/call/${ROOM}`) {
         <ActionsRoot dot={() => null} fold={() => {}} />
         <CallBar />
         <RingCard />
+        <Toasts />
         <Outlet />
       </>
     ),
   });
   const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <CallPage room={page.useParams().room} /> });
+  const side = createRoute({ getParentRoute: () => root, path: '/side', component: () => <CallSide room={ROOM} /> });
   const tasks = createRoute({ getParentRoute: () => root, path: '/tasks', component: () => <h1>Tasks</h1> });
-  const router = createRouter({ routeTree: root.addChildren([page, tasks]), history: createMemoryHistory({ initialEntries: [at] }) });
+  const task = createRoute({ getParentRoute: () => root, path: '/task/$task', component: () => <h1>Task</h1> });
+  const router = createRouter({ routeTree: root.addChildren([page, side, tasks, task]), history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -163,6 +193,14 @@ function show(at = `/call/${ROOM}`) {
 
 async function joinNow() {
   fireEvent.click(await screen.findByRole('button', { name: 'Join' }));
+}
+async function joined() {
+  await joinNow();
+  await screen.findByRole('button', { name: 'Mute' });
+}
+async function joinThenGo(router: ReturnType<typeof show>, to = '/tasks') {
+  await joined();
+  await act(() => router.navigate({ to }));
 }
 const room = () => lk.rooms.at(-1) as (typeof lk.rooms)[number];
 
@@ -243,15 +281,6 @@ describe('Call window', () => {
     expect(await screen.findByText('Call disconnected')).toBeTruthy();
   });
 
-  it('Leave hangs up and tells the server @s1047', async () => {
-    show();
-    await joinNow();
-    fireEvent.click(await screen.findByRole('button', { name: 'Leave' }));
-    expect(await screen.findByText('Call ended')).toBeTruthy();
-    expect(await screen.findByText('Prices stay as they are')).toBeTruthy();
-    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
-  });
-
   it('with Tico, the Dot is the stage and speaks while the call voice talks @n:cl:tico', async () => {
     queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
     show();
@@ -327,6 +356,119 @@ describe('Call window', () => {
     expect(asked.find((a) => a.url.endsWith(`/threads/${ROOM}/calls`))?.body).toEqual({ provider: 'tico', bots: ['gm'] });
     await waitFor(() => expect(router.state.location.pathname).toBe(`/call/${ROOM}`));
     await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/join`))).toBe(true));
+  });
+});
+
+describe('The call bar @s1049', () => {
+  it('Captions hide what is said; Share screen sends the screen and puts it on the stage @s1049', async () => {
+    const router = show();
+    await joinThenGo(router);
+    const bar = await screen.findByRole('banner', { name: 'Call' });
+    act(() => room().emit('TranscriptionReceived', [{ text: 'Prices stay' }], { identity: 'human:ana' }));
+    expect(await within(bar).findByText('Prices stay')).toBeTruthy();
+    fireEvent.click(within(bar).getByRole('button', { name: 'Captions' }));
+    await waitFor(() => expect(within(bar).queryByText('Prices stay')).toBeNull());
+    expect(callState().captions).toBe(false);
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'Share screen' }));
+    await waitFor(() => expect(sent().some((x) => x.method === 'PUT' && x.url.endsWith(`/calls/${ROOM}/stage`))).toBe(true));
+    expect(room().localParticipant.setScreenShareEnabled.mock.calls[0]).toEqual([true, { audio: false }]);
+    expect(sent().find((x) => x.method === 'PUT')?.body).toEqual({ kind: 'screen' });
+    expect(await within(bar).findByRole('button', { name: 'Stop sharing' })).toBeTruthy();
+    expect(within(bar).queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
+  it('the call page’s More holds End call for the one who started it @s1049', async () => {
+    base = { connector: 'human:me' };
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call());
+    show();
+    await joined();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'End call' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'End the call for everyone?' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'End call' }));
+    await waitFor(() => expect(sent().some((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/end`))).toBe(true));
+  });
+
+  it('More’s Add agent brings the agent in; End is not there for someone else’s call, and Tico may not end it either @s1049', async () => {
+    show();
+    await joined();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const add = await screen.findByRole('menuitem', { name: 'Add agent' });
+    expect(screen.queryByRole('menuitem', { name: 'End call' })).toBeNull();
+    fireEvent.click(add);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Finance' }));
+    await waitFor(() => expect(sent().find((x) => x.url.endsWith(`/calls/${ROOM}/bots`))?.body).toEqual({ bots: ['fin'] }));
+
+    expect(await run('calls.end', { id: ROOM }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(sent().some((x) => x.url.endsWith('/end'))).toBe(false);
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call({ connector: 'human:me' }));
+    expect(await run('calls.end', { id: ROOM }, { via: 'tico' })).toMatchObject({ ok: true });
+    expect(sent().some((x) => x.url.endsWith(`/calls/${ROOM}/end`))).toBe(true);
+  });
+});
+
+describe('Show and take out @s1046', () => {
+  it('People takes an agent out, and Undo brings it back @s1046', async () => {
+    base = { bots: ['gm'] };
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call());
+    const router = show();
+    await joinThenGo(router, '/side');
+    fireEvent.click(await screen.findByRole('tab', { name: /People/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Take Growth Manager out' }));
+    await waitFor(() => expect(sent().some((x) => x.method === 'DELETE' && x.url.endsWith(`/calls/${ROOM}/bots/gm`))).toBe(true));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(sent().find((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/bots`))?.body).toEqual({ bots: ['gm'] }));
+  });
+
+  it('sharing my screen stays my own press: Tico may not start it @s1046', async () => {
+    const router = show();
+    await joinThenGo(router);
+    expect(await run('calls.share', { id: ROOM, on: true }, { via: 'tico' })).toMatchObject({ ok: false });
+    expect(room().localParticipant.setScreenShareEnabled.mock.calls).toEqual([]);
+  });
+});
+
+describe('After the call @s1047', () => {
+  it('Leave hangs up and tells the server; then the summary, the transcript, and Create task makes a task tied to the meeting @s1047', async () => {
+    show();
+    await joinNow();
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave' }));
+    expect(await screen.findByText('Call ended')).toBeTruthy();
+    await waitFor(() => expect(posted.some((u) => u.endsWith(`/calls/${ROOM}/leave`))).toBe(true));
+    expect(await screen.findByText('Prices stay as they are')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Transcript' })).toBeTruthy();
+    expect(await screen.findByText('We keep the prices')).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create task' }));
+    await waitFor(() => expect(sent().find((x) => x.url.endsWith('/api/v2/tasks'))?.body).toEqual({ title: 'Send the deck', owner: 'human:ana', live_meeting_id: 'm1' }));
+    expect(await screen.findByRole('link', { name: 'Open task' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create task' })).toBeNull();
+  });
+
+  it('Hide puts an item away @s1047', async () => {
+    show();
+    await joinNow();
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave' }));
+    expect(await screen.findByText('Send the deck')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
+    await waitFor(() => expect(screen.queryByText('Send the deck')).toBeNull());
+  });
+});
+
+describe('The agents’ chat beside the page @s488', () => {
+  it('a call with agents keeps their chat open beside the page until it is closed @s488', async () => {
+    base = { bots: ['gm'] };
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call());
+    await joinThenGo(show());
+    expect(callState().chat).toBe('thread:th1');
+    await run('calls.hideChat', {}, { via: 'click' });
+    expect(callState().chat).toBeNull();
+  });
+
+  it('no chat beside for a call with no agents @s488', async () => {
+    await joinThenGo(show());
+    expect(callState().chat).toBeNull();
   });
 });
 

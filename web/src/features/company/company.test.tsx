@@ -6,15 +6,15 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { queryClient } from '@/data';
 // eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
 import { PageFault } from '@/shell/PageFault';
-import type { CompanyFloor, GoalTree, Kpi, KpiDetail, ProductList } from '@/api/schema';
+import type { CompanyFloor, GoalTree, ProductList } from '@/api/schema';
 import { CompanyPage } from './CompanyPage';
-import { goalLink } from './exports';
 import { ProductsPage } from './ProductsPage';
-import { brandQuery, floorQuery, goalsTreeQuery, kpiQuery, productsQuery, strategyQuery, strategyVersionsQuery, type Brand, type Strategy } from './queries';
+import { floorQuery, goalsTreeQuery, productsQuery } from './queries';
 import { RiskPage } from './RiskPage';
 import { loadCompany } from './routing';
 import { StrategyPage } from './StrategyPage';
 
+/* Company: the Floor, the Strategy and Risk tabs' addresses, and Products. Sample data only. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 const toasts = vi.hoisted(() => vi.fn());
@@ -23,30 +23,44 @@ vi.mock('@/kit/Toast', async (real) => ({ ...(await real<object>()), toast: toas
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
   queryClient.clear();
+  toasts.mockClear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
 });
 afterEach(() => vi.unstubAllGlobals());
 
 type Reply = { status: number; body: unknown };
-function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
+type Sent = { url: string; method: string; body: unknown };
+/** Answers every read with `reply`, and keeps each write. */
+function serve(reply: (url: string, method: string) => Reply | Promise<Reply>): Sent[] {
+  const sent: Sent[] = [];
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-    const r = await reply(String(url), init?.method ?? 'GET');
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') sent.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : null });
+    const r = await reply(String(url), method);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
+  return sent;
 }
 const nothing = (): Reply => ({ status: 404, body: { detail: 'not_found' } });
+const ok = (body: unknown = {}): Reply => ({ status: 200, body });
 
-/** The page under a route at its own address, so a link to "." resolves as it does in the app. */
-function show(node: ReactNode, at: string) {
+/** The page under a route at its own address, so a link to "." resolves as it does in the app. Given as a function, the page gets the address's search, as its route hands it in. */
+function show(page: ReactNode | ((search: Record<string, unknown>) => ReactNode), at: string, basepath = '/') {
+  function Routed() {
+    const search = useLocation({ select: (l) => l.search as Record<string, unknown> });
+    return <>{typeof page === 'function' ? page(search) : page}</>;
+  }
   const root = createRootRoute({ component: Outlet });
-  const page = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: () => node });
-  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: [at] }), defaultErrorComponent: PageFault });
+  const route = createRoute({ getParentRoute: () => root, path: at.split('?')[0] ?? '/', component: Routed });
+  const history = createMemoryHistory({ initialEntries: [basepath === '/' ? at : basepath + at] });
+  const router = createRouter({ routeTree: root.addChildren([route]), basepath, history, defaultErrorComponent: PageFault });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 const href = (el: HTMLElement) => decodeURIComponent(el.closest('a')?.getAttribute('href') ?? '');
 
@@ -173,6 +187,18 @@ describe('Company @s248 @s250', () => {
     expect(await screen.findByText('This page did not load')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
+
+  it("opens a hall manager's chat beside the Floor, at the address @s291", async () => {
+    serve(nothing);
+    const em = { id: 'bot:em', kind: 'agent', name: 'Engineering Manager' };
+    queryClient.setQueryData(['directory'], { actors: [em], byId: { 'bot:em': em } });
+    queryClient.setQueryData(floorQuery.queryKey, { factories: [{ id: 'eng', manager_id: 'bot:em', name: 'Engineering', pipelines: [] }] } as unknown as CompanyFloor);
+    const router = show(<CompanyPage search={{}} />, '/company');
+    const face = await screen.findByRole('link', { name: 'Chat with Engineering Manager' });
+    expect(href(face)).toBe('/company?chat=agent:em');
+    fireEvent.click(face);
+    await waitFor(() => expect(router.state.location.search).toEqual({ chat: 'agent:em' }));
+  });
 });
 
 describe('Floor card, on a phone @s271', () => {
@@ -209,195 +235,6 @@ function CompanyRoute() {
   return <CompanyPage search={{ panel }} />;
 }
 
-const kpi: Kpi = {
-  id: 'k1',
-  name: 'Weekly signups',
-  unit: '',
-  direction: 'up',
-  cadence: 'weekly',
-  auto: false,
-  definition_version: 1,
-  freshness: 'fresh',
-  latest: { id: 'r1', value: 12, period_end: '2026-11-10', created_at: '2026-11-10T10:00:00Z', definition_version: 1, quality: 'measured', source: 'Stripe' },
-  owner_id: 'bot:growth',
-  readings: 1,
-  reason: '',
-  spark: [8, 12],
-  status: 'green',
-  link: { goal_id: 'g1', kind: 'improve', target: 40, deadline: '2026-12-31' },
-} as Kpi;
-const tree = {
-  goals: [
-    { id: 'g0', title: 'Reach 1,000 customers', body: '', owner_id: 'company', parent_id: null, rank: 0, status: null, status_at: null, status_by_id: null, status_note: '', status_source: null, created_at: '2026-11-01T00:00:00Z', created_by_id: '', updated_at: '', kpis: [], open_tasks: 0 },
-    { id: 'g1', title: 'Grow signups', body: '', owner_id: 'bot:growth', parent_id: 'g0', rank: 1, status: 'red', status_at: null, status_by_id: null, status_note: '', status_source: null, created_at: '2026-11-01T00:00:00Z', created_by_id: '', updated_at: '', kpis: [kpi], open_tasks: 0 },
-  ],
-  other_kpis: [],
-  owners: {},
-  proposals: [],
-  unaligned: {},
-} as unknown as GoalTree;
-const detail = { kpi, readings: [kpi.latest], links: [{ goal_id: 'g1', goal_title: 'Grow signups', kind: 'improve', target: 40, status: 'ok', target_label: '→ 40 by Dec 31' }], checkins: [], definitions: [], proposals: [], may_edit: true, may_log: true } as unknown as KpiDetail;
-
-const growth = { id: 'bot:growth', kind: 'agent', name: 'Growth Lead', slug: 'growth' };
-
-describe('Goals', () => {
-  it('opens another goal with its own title while a rename is unfinished', async () => {
-    serve(nothing);
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
-    function GoalsRoute() {
-      const search = useLocation({ select: (l) => l.search });
-      return <StrategyPage tab="goals" search={search} />;
-    }
-    show(<GoalsRoute />, '/company/strategy/goals?panel=goal:g1');
-    const first = within(await screen.findByRole('complementary', { name: 'Goal' }));
-    fireEvent.click(first.getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
-    fireEvent.change(first.getByRole('textbox', { name: 'Title' }), { target: { value: 'Draft goal name' } });
-    fireEvent.click(first.getByRole('link', { name: 'Reach 1,000 customers' }));
-    const panel = within(await screen.findByRole('complementary', { name: 'Company' }));
-    expect(panel.queryByRole('textbox', { name: 'Title' })).toBeNull();
-    expect(panel.getByText('Reach 1,000 customers')).toBeTruthy();
-  });
-
-  it('lists each goal with its KPIs under the company goal, each opening its panel, as the tree only @s310 @s337 @s338 @s339', async () => {
-    serve(nothing);
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
-    show(<StrategyPage tab="goals" />, '/company/strategy/goals');
-    const goal = await screen.findByText('Grow signups');
-    // the company's own top goal is the headline over the tree
-    expect(href(screen.getByText('Reach 1,000 customers'))).toBe('/company/strategy/goals?panel=goal:g0');
-    expect(href(goal)).toBe('/company/strategy/goals?panel=goal:g1');
-    expect(screen.getByText('Behind')).toBeTruthy();
-    expect(href(screen.getByText('Weekly signups'))).toBe('/company/strategy/goals?panel=kpi:k1');
-    // the old Loops and Journey views are gone: Goals is the tree, with no view switch
-    expect(screen.queryByText(/Loops|Journey/)).toBeNull();
-    // Add KPI lives in a goal's panel, not on the tree
-    expect(screen.queryByText('Add KPI')).toBeNull();
-  });
-
-  it('narrows the tree to the goals whose title or KPI holds the words searched @s310', async () => {
-    serve(nothing);
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
-    show(<StrategyPage tab="goals" />, '/company/strategy/goals');
-    await screen.findByText('Grow signups');
-    // the head's search starts as a button and opens into the field
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search goals' }), { target: { value: 'weekly' } });
-    await waitFor(() => expect(screen.queryByText('Reach 1,000 customers')).toBeNull());
-    expect(screen.getByText('Grow signups')).toBeTruthy();
-  });
-
-  it('opens a goal from a teammate page in its panel: owner, KPIs and check-ins @s311 @s363 @s365 @s664', async () => {
-    const one = { goal: { ...tree.goals[1], checkins: [{ created_at: '2026-11-12T10:00:00Z', body: 'Signups held at 12 this week.' }] } };
-    serve((url) => (url.includes('/api/v2/goals/g1') ? { status: 200, body: one } : nothing()));
-    queryClient.setQueryData(['directory'], { actors: [growth], byId: { 'bot:growth': growth } });
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
-    const link = goalLink('g1');
-    expect(link.href).toBe('/company/strategy/goals?panel=goal%3Ag1');
-    show(<StrategyPage tab="goals" search={link.search} />, link.href);
-    // the head is the goal's owner; the goal's title and flag stand under it, then what it feeds
-    const panel = await screen.findByRole('complementary', { name: 'Growth Lead' });
-    expect(within(panel).getByRole('heading', { name: /Grow signups/ }).textContent).toContain('Behind');
-    expect(within(panel).getByText('Feeds').nextElementSibling?.textContent).toBe('Reach 1,000 customers');
-    expect(href(within(within(panel).getByRole('region', { name: 'KPIs' })).getByText('Weekly signups'))).toBe('/company/strategy/goals?panel=kpi:k1');
-    expect(await within(panel).findByText('Signups held at 12 this week.')).toBeTruthy();
-    expect(within(panel).getByRole('button', { name: 'Archive' })).toBeTruthy();
-    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'Mark done' })).toBeTruthy();
-  });
-
-  it('shows a new reading at once with who recorded it, and takes it back when refused @s364', async () => {
-    let refuse: (r: Reply) => void = () => {};
-    serve((url, method) => {
-      if (method === 'POST') return new Promise<Reply>((ok) => (refuse = ok));
-      if (url.includes('/kpis/k1')) return { status: 200, body: detail };
-      return nothing();
-    });
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
-    queryClient.setQueryData(kpiQuery('k1').queryKey, detail);
-    show(<StrategyPage tab="goals" search={{ panel: 'kpi:k1' }} />, '/company/strategy/goals?panel=kpi:k1');
-    const panel = await screen.findByRole('complementary', { name: 'Weekly signups' });
-    expect(within(panel).getByTitle('Reads it: Stripe').querySelector('.src-tool')).toBeTruthy();
-    fireEvent.click(within(panel).getByRole('button', { name: 'Add reading' }));
-    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Reading' }), { target: { value: '31' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(within(panel).getAllByText('31').length).toBeGreaterThan(0));
-    expect(within(panel).getByTitle('Reads it: me, by hand')).toBeTruthy();
-    refuse({ status: 403, body: { detail: 'forbidden' } });
-    await waitFor(() => expect(within(panel).queryAllByText('31')).toHaveLength(0));
-    expect(within(panel).getAllByText('12').length).toBeGreaterThan(0);
-  });
-});
-
-describe('Goal proposals', () => {
-  const proposal = {
-    id: 'pr1',
-    kind: 'kpi_target',
-    goal_id: 'g1',
-    kpi_id: 'k1',
-    payload: { target: 50 },
-    reason: 'Signups beat the plan two weeks running.',
-    proposed_by: 'bot:growth',
-    status: 'pending',
-    card: { target_label: '50', now_label: '40', measure: { name: 'Weekly signups' } },
-    may_decide: true,
-  };
-  const asked = { ...tree, proposals: [proposal] } as unknown as GoalTree;
-
-  it('marks the goal, asks on its KPI, and says yes with an idempotency key', async () => {
-    const posts: { url: string; key: string | null; body: unknown }[] = [];
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      if (init?.method === 'POST') posts.push({ url: String(url), key: new Headers(init.headers).get('Idempotency-Key'), body: JSON.parse(String(init.body)) });
-      const body = init?.method === 'POST' ? { proposal: { ...proposal, status: 'confirmed' } } : { detail: 'not_found' };
-      return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
-    });
-    queryClient.setQueryData(goalsTreeQuery.queryKey, asked);
-    show(<StrategyPage tab="goals" search={{ panel: 'goal:g1' }} />, '/company/strategy/goals?panel=goal:g1');
-    const card = await screen.findByRole('region', { name: 'Move the target from 40 to 50?' });
-    expect(document.querySelector('.gt-title .dot')).toBeTruthy();
-    fireEvent.click(within(card).getByRole('button', { name: 'Set 50' }));
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]?.url).toContain('/api/v2/proposals/pr1/decide');
-    expect(posts[0]?.body).toEqual({ decision: 'confirm' });
-    expect(posts[0]?.key).toBeTruthy();
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Move the target from 40 to 50?' })).toBeNull());
-  });
-});
-
-describe('Strategy and Brand versions', () => {
-  const strategy: Strategy = {
-    current: { n: 3, summary: 'Sell kits to new gardeners.', sections: { serve: 'First gardeners.\n\nRenters with a balcony.' }, published_by: 'bot:strat', published_at: '2026-11-18T10:00:00Z' },
-    bets: [{ id: 'b1', statement: 'Balcony kits', status: 'active' }],
-  };
-
-  it('shows the version in the head and the strategy as written, with no change marks', async () => {
-    serve(nothing);
-    queryClient.setQueryData(strategyQuery.queryKey, strategy);
-    queryClient.setQueryData(strategyVersionsQuery.queryKey, [{ n: 3 }, { n: 2 }]);
-    show(<StrategyPage tab="strategy" />, '/company/strategy');
-    expect(await screen.findByRole('button', { name: 'v3' })).toBeTruthy();
-    expect(screen.getByText('Renters with a balcony.').tagName).toBe('P');
-    expect(screen.getByText('Balcony kits').tagName).toBe('SPAN');
-    expect(document.querySelector('ins, del')).toBeNull();
-  });
-
-  it('saves only the brand sections that changed onto the draft, then offers Publish', async () => {
-    const book: Brand = { published: { n: 1, body: { name: 'Fieldkit', voice: [{ trait: 'Plain', do: '', dont: '', level: 'warn' } as never] } }, draft: null, versions: [{ n: 1 }], may_edit: true };
-    const sent: unknown[] = [];
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      const put = init?.method === 'PUT' && String(url).endsWith('/brand/draft');
-      if (put) sent.push(JSON.parse(String(init.body)));
-      const body = put ? { ...book, draft: { body: { ...book.published!.body, name: 'Fieldkit Co' }, revision: 1, changed: ['name'] } } : { detail: 'not_found' };
-      return new Response(JSON.stringify(body), { status: put ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
-    });
-    queryClient.setQueryData(brandQuery.queryKey, book);
-    show(<StrategyPage tab="brand" search={{ edit: true }} />, '/company/strategy/brand?edit=true');
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Fieldkit Co' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent).toEqual([{ sections: { name: 'Fieldkit Co' } }]));
-    expect(await screen.findByRole('button', { name: 'Publish' })).toBeTruthy();
-  });
-});
-
 /** Each route file's address, from its flat file name: `a.b_.$c.tsx` is /a/b/<any>. */
 const addresses = Object.keys(import.meta.glob('/src/routes/*.tsx')).map((f) => {
   const parts = (f.split('/').pop() ?? '').replace(/\.tsx$/, '').split('.').map((s) => s.replace(/_$/, '')).filter((s) => s && s !== 'index' && s !== '__root');
@@ -409,9 +246,10 @@ const tabHrefs = (name: string) =>
     .map((a) => a.getAttribute('href') ?? '');
 
 describe('Tabs', () => {
-  it('sends every Strategy and Risk tab to an address the app has', async () => {
-    serve((url) => (url.includes('/api/v2/risks') ? { status: 200, body: { risks: [] } } : { status: 200, body: { matters: [], next_offset: null } }));
-    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
+  it('sends every Strategy and Risk tab to an address the app has; an empty Risk list says so', async () => {
+    serve((url) => (url.includes('/api/v2/risks') ? ok({ risks: [] }) : ok({ matters: [], next_offset: null })));
+    const goal = { id: 'g1', title: 'Grow signups', owner_id: 'company', parent_id: null, rank: 0, status: null, kpis: [], open_tasks: 0 };
+    queryClient.setQueryData(goalsTreeQuery.queryKey, { goals: [goal], other_kpis: [], owners: {}, proposals: [], unaligned: {} } as unknown as GoalTree);
     show(<StrategyPage tab="goals" />, '/company/strategy/goals');
     await screen.findByText('Grow signups');
     const strategy = tabHrefs('Strategy');
@@ -430,25 +268,55 @@ describe('Tabs', () => {
   });
 });
 
-describe('Products and Risk', () => {
-  it('opens a product from its row, and says so when there are none', async () => {
+// ---------------------------------------------------------------- Products
+
+const product = {
+  id: 'product/garden-kit',
+  key: 'garden-kit',
+  name: 'Garden kit',
+  kind: 'goods',
+  status: 'live',
+  tax_kind: 'goods',
+  owner_teammate: null,
+  agreements: [{ id: 'document/terms', name: 'Terms of sale', link_id: 'l1', file: { id: 'f1', title: 'Terms of sale, v4', page: true } }],
+  depends_on: [{ id: 'organization/oaks', name: 'Tall Oaks Timber', link_id: 'l2' }],
+  repositories: ['fieldkit/storefront'],
+  risks: [],
+  open_matters: 1,
+};
+const products = (...list: (typeof product)[]) => queryClient.setQueryData(productsQuery.queryKey, { products: list } as unknown as ProductList);
+const productsPage = (s: Record<string, unknown>) => <ProductsPage search={s} />;
+
+describe('Products @n:re:products @n:re:product', () => {
+  it('opens a product from its row', async () => {
     serve(nothing);
-    const list = { products: [{ id: 'pr1', key: 'widget', name: 'Widget', kind: 'software', status: 'live', tax_kind: null, owner_teammate: null, agreements: [], depends_on: [], repositories: [], risks: [], open_matters: 0 }] } as unknown as ProductList;
-    queryClient.setQueryData(productsQuery.queryKey, list);
-    show(<ProductsPage search={{}} />, '/company/products');
-    expect(href(await screen.findByText('Widget'))).toBe('/company/products?panel=widget');
+    products(product);
+    show(productsPage, '/company/products');
+    expect(href(await screen.findByText('Garden kit'))).toBe('/company/products?panel=garden-kit');
     expect(screen.getByText('Live')).toBeTruthy();
+  });
+
+  it('says so when there are none, then adds a product from its panel and closes it', async () => {
+    const sent = serve((_url, method) => (method === 'POST' ? ok({ product: { id: 'pr2', key: 'gadget', name: 'Gadget' } }) : nothing()));
+    products();
+    const router = show(productsPage, '/company/products');
+    expect(await screen.findByText('No products yet')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add product' })[0]!);
+    const panel = await screen.findByRole('complementary', { name: 'New product' });
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Gadget' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/products', method: 'POST', body: { name: 'Gadget', status: 'planned' } }]));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
   });
 
   it("shows a product owner pick at once, and takes it back with the server's reason", async () => {
     let refuse: (r: Reply) => void = () => {};
-    serve((_url, method) => (method === 'POST' ? new Promise<Reply>((ok) => (refuse = ok)) : nothing()));
+    serve((_url, method) => (method === 'POST' ? new Promise<Reply>((done) => (refuse = done)) : nothing()));
     const ana = { id: 'bot:ana', kind: 'agent', name: 'Ana', slug: 'ana' };
     queryClient.setQueryData(['directory'], { actors: [ana], byId: { 'bot:ana': ana, ana } });
-    const list = { products: [{ id: 'pr1', key: 'widget', name: 'Widget', kind: 'software', status: 'live', tax_kind: null, owner_teammate: null, agreements: [], depends_on: [], repositories: [], risks: [], open_matters: 0 }] } as unknown as ProductList;
-    queryClient.setQueryData(productsQuery.queryKey, list);
-    show(<ProductsPage search={{ panel: 'widget' }} />, '/company/products?panel=widget');
-    const panel = await screen.findByRole('complementary', { name: 'Widget' });
+    products(product);
+    show(productsPage, '/company/products?panel=garden-kit');
+    const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
     fireEvent.click(within(panel).getByRole('combobox', { name: 'Owner' }));
     const option = await screen.findByRole('option', { name: /Ana/ });
     fireEvent.pointerDown(option, { pointerType: 'mouse' });
@@ -460,9 +328,48 @@ describe('Products and Risk', () => {
     expect(toasts).toHaveBeenCalledWith({ text: "Couldn't save", name: 'No such teammate', kind: 'failed' });
   });
 
-  it('shows the empty Risk list', async () => {
-    serve((url) => (url.includes('/api/v2/risks') ? { status: 200, body: { risks: [] } } : { status: 200, body: { matters: [], next_offset: null } }));
-    show(<RiskPage search={{}} />, '/company/risk');
-    expect(await screen.findByText('No risks yet')).toBeTruthy();
+  it('opens a different product without carrying over an unfinished rename', async () => {
+    const sent = serve(nothing);
+    products(product, { ...product, id: 'product/tool-kit', key: 'tool-kit', name: 'Tool kit' });
+    show(productsPage, '/company/products?panel=garden-kit');
+    const first = within(await screen.findByRole('complementary', { name: 'Garden kit' }));
+    fireEvent.click(first.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(first.getByRole('textbox', { name: 'Name' }), { target: { value: 'Raised bed kit' } });
+    fireEvent.click(screen.getByRole('link', { name: 'Tool kit' }));
+    const panel = within(await screen.findByRole('complementary', { name: 'Tool kit' }));
+    expect(panel.queryByRole('textbox', { name: 'Name' })).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
+  it('adds and removes an agreement, a repository and a vendor, the whole set sent', async () => {
+    const sent = serve((_url, method) => (method === 'POST' ? ok({ product }) : nothing()));
+    products(product);
+    show(productsPage, '/company/products?panel=garden-kit', '/next');
+    const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
+    expect(href(within(panel).getByText('Terms of sale, v4'))).toBe('/next/library/f1');
+    expect(href(within(panel).getByText('Tall Oaks Timber'))).toBe('/next/library/contacts?type=organization&panel=organization/oaks');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Add an agreement' }));
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Agreement' }), { target: { value: 'Rental terms' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(sent[0]).toEqual({ url: '/api/v2/products/garden-kit', method: 'POST', body: { agreements: ['document/terms', 'Rental terms'] } }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove Tall Oaks Timber' }));
+    await waitFor(() => expect(sent[1]).toEqual({ url: '/api/v2/products/garden-kit', method: 'POST', body: { depends_on: [] } }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove fieldkit/storefront' }));
+    await waitFor(() => expect(sent[2]).toEqual({ url: '/api/v2/products/garden-kit', method: 'POST', body: { repositories: [] } }));
+  });
+
+  it('renames from ⋯, its record holding Agreement, Code and Depends on only', async () => {
+    const sent = serve((_url, method) => (method === 'POST' ? ok({ product: { ...product, name: 'Raised bed kit' } }) : nothing()));
+    products(product);
+    show(productsPage, '/company/products?panel=garden-kit');
+    const panel = await screen.findByRole('complementary', { name: 'Garden kit' });
+    expect(within(panel).getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Agreement', 'Code', 'Depends on']);
+    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const name = within(panel).getByRole('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Raised bed kit' } });
+    fireEvent.submit(name.closest('form')!);
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/products/garden-kit', method: 'POST', body: { name: 'Raised bed kit' } }]));
   });
 });
