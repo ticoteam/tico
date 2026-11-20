@@ -98,6 +98,7 @@ def test_the_wait_is_retry_after_capped_else_doubling():
     assert [H.wait_for(reply(None), n, first_wait=2) for n in range(3)] == [2.0, 4.0, 8.0]
     assert H.wait_for(reply("soon"), 2) == 4.0
     assert H.wait_for(None, 10, max_wait=5) == 5
+    assert H.retry_after(httpx.Headers([("Retry-After", "120"), ("Retry-After", "5")])) == 120.0
 
 
 def test_the_test_transport_seam_and_the_request_shape(monkeypatch):
@@ -113,6 +114,10 @@ def test_max_bytes_reads_one_byte_past_the_limit_and_no_more():
     big = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 5000))
     assert len(H.send("GET", "https://api.example/x", max_bytes=10, transport=big).content) == 11
     assert len(H.send("GET", "https://api.example/x", transport=big).content) == 5000
+    assert H.send("DELETE", "https://api.example/x", max_bytes=0, transport=big).content == b""
+    seen = []
+    H.send("GET", "https://api.example/x", max_bytes=10, transport=_replying((200, {}), seen=seen))
+    assert seen[0].headers["Accept-Encoding"] == "identity"  # the cap counts bytes as they arrive
 
 
 class _CutShort(httpx.SyncByteStream):
@@ -123,7 +128,8 @@ class _CutShort(httpx.SyncByteStream):
 
 def test_a_refusal_keeps_its_status_when_its_body_or_location_cannot_be_read():
     cut = httpx.MockTransport(lambda request: httpx.Response(403, stream=_CutShort()))
-    assert H.send("GET", "https://api.example/x", transport=cut).status == 403
+    refused = H.send("GET", "https://api.example/x", transport=cut)
+    assert (refused.status, refused.complete, refused.content) == (403, False, b'{"message": "')
     moved = httpx.MockTransport(lambda request: httpx.Response(302, headers={"Location": "https://h:99999/"}))
     assert H.send("GET", "https://api.example/x", transport=moved).status == 302
     cut_success = httpx.MockTransport(lambda request: httpx.Response(200, stream=_CutShort()))

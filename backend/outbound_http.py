@@ -38,9 +38,13 @@ TRANSPORT: httpx.BaseTransport | None = None  # tests stand in for the network h
 
 @dataclass(frozen=True)
 class Reply:
+    """An HTTP answer. `complete` is False for a refusal whose body was cut short (its status line arrived, the rest did
+    not): a caller that must know whether a write landed treats that as no answer."""
+
     status: int
     headers: httpx.Headers
     content: bytes
+    complete: bool = True
 
     @property
     def ok(self) -> bool:
@@ -82,9 +86,15 @@ class _Again(Exception):
         self.reply = reply
 
 
-def retry_after(headers: Mapping[str, str]) -> float | None:
+def header(headers: httpx.Headers, name: str) -> str | None:
+    """The first value of a header: httpx joins repeated ones with commas, where urllib read the first."""
+    values = headers.get_list(name)
+    return values[0] if values else None
+
+
+def retry_after(headers: httpx.Headers) -> float | None:
     """The seconds a Retry-After header asks for (a number or an HTTP date), never below 0; None when absent or unreadable."""
-    value = (headers.get("retry-after") or "").strip()
+    value = (header(headers, "retry-after") or "").strip()
     if not value:
         return None
     try:
@@ -133,7 +143,7 @@ def send(
     `deadline` (time.monotonic) bounds the whole call: each try's timeout is what is left of it, and a wait that would end
     past it is not taken (the reply in hand is returned). `idempotent` overrides the method's own rule: True for a POST
     that only reads or carries an idempotency key the service honours. `max_bytes` reads the body only to one byte past
-    it, so a caller can refuse an answer too large without holding all of it. `transport` stands in for the network in
+    it, so a caller can refuse an answer too large without holding all of it (0: the status alone, no body). `transport` stands in for the network in
     tests."""
     method = method.upper()
     idempotent = method in IDEMPOTENT if idempotent is None else idempotent
@@ -206,6 +216,10 @@ def _once(
         if timeout <= 0:
             raise Failed("out of time")
     answered: list[httpx.Response] = []  # the status line, kept when the body or a Location cannot be read
+    body = bytearray()
+    sent = dict(headers)
+    if max_bytes is not None:
+        sent.setdefault("Accept-Encoding", "identity")  # the cap counts the bytes that arrive, not what they expand to
     try:
         # A client per call: no pooled connection that went stale between calls can turn a write into an unknown one.
         with httpx.Client(
@@ -216,12 +230,11 @@ def _once(
             event_hooks={"response": [answered.append]},
         ) as client:
             request = client.build_request(
-                method, url, headers=headers, params=params, content=content, data=data, json=json
+                method, url, headers=sent, params=params, content=content, data=data, json=json
             )
             response = client.send(request, stream=True)
             try:
-                body = bytearray()
-                for chunk in response.iter_bytes():
+                for chunk in response.iter_bytes() if max_bytes != 0 else ():
                     body += chunk
                     if max_bytes is not None and len(body) > max_bytes:
                         del body[max_bytes + 1 :]
@@ -230,6 +243,6 @@ def _once(
             finally:
                 response.close()
     except (httpx.HTTPError, httpx.InvalidURL, OSError, ValueError) as exc:
-        if answered and not 200 <= answered[-1].status_code < 300:
-            return Reply(answered[-1].status_code, answered[-1].headers, b"")  # a refusal stays a refusal
+        if answered and not 200 <= answered[-1].status_code < 300:  # a refusal stays a refusal, marked cut short
+            return Reply(answered[-1].status_code, answered[-1].headers, bytes(body), complete=False)
         raise Failed(f"{type(exc).__name__}: no answer") from exc
