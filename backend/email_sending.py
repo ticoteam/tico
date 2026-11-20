@@ -647,6 +647,8 @@ def public(row):
     return {
         **{key: row[key] for key in keys},
         **{key: json.loads(row[key]) for key in ("recipients", "attachments", "decision", "classification")},
+        # Stored as "" when the send starts a new thread; null says "not a reply" on the wire.
+        **{key: row[key] or None for key in ("thread_id", "reply_to_id")},
     }
 
 

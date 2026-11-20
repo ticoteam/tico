@@ -30,6 +30,8 @@ SCHEMAS.update(
                 "provider_message_id": "n",
                 "detail": "s",
                 "draft_id": "s",
+                "thread_id": "n",
+                "reply_to_id": "n",
                 "recipients": items("s"),
                 "attachments": items("o"),
                 "decision": "o",

@@ -123,8 +123,10 @@ numbered message and save the answers there, dated. Work on the defaults until t
     mediator or regulator (does this business look careful and fair?), and as a reporter (how does one sentence
     look alone?). Fix what each would use.
 12. **Pass the gate, get the OK if one is needed, and send** through the channel it came in: the portal for the BBB
-    or an agency, the lawyer if one wrote, email plus tracked post for a formal demand. Use `tico email draft` and
-    `tico email send` as the signer. Save the sent copy and proof of delivery in the matter folder.
+    or an agency, the lawyer if one wrote, email plus tracked post for a formal demand. As the signer, use
+    `tico email draft`, then `tico email send <mailbox> --draft <draft-id> --task <matter task id>`; to answer an
+    email, `tico email reply <mailbox> --thread <thread-id> --task <matter task id> --body-file <letter>`. `--task`
+    asks any OK on the matter. Save the sent copy and proof of delivery in the matter folder.
 13. **Close the loop.** Calendar the next date. A further letter comes back to this skill; a chargeback or court
     papers go to `defend-a-consumer-claim`. When it ends, record the outcome and cost on the matter row. If the record
     showed a real failure, file a plain operations task for the team that owns the cause, describing what happened
