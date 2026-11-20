@@ -5,7 +5,7 @@ import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { useDesktopInset } from '@/desktop';
 import { Icon } from '@/kit/Icon';
-import { C, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
+import { C, foldOf, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
 import './Frame.css';
@@ -139,7 +139,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     if (!find(id)) return;
     const r = press(width, spec, saved, id, forward);
     cause.current = 'fold';
-    if (r.saved !== saved) update(now => withFold(now, arr, id, r.saved[arr]?.fold?.[id] === true));
+    if (r.saved !== saved) update(now => withFold(now, arr, id, foldOf(r.saved, arr, id) === true));
     setOpened(r.forward ? { arr: p.arr, id: r.forward } : null);
   };
   const resetOne = (id: SheetId) => {

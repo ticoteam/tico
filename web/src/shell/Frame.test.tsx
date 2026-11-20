@@ -97,14 +97,17 @@ describe('Frame', () => {
     expect(handle('Tico').getAttribute('aria-valuenow')).toBe('300');
   });
 
-  it('folds the menu by hand with [ and keeps it for this arrangement only', () => {
+  it('folds the menu by hand with [, and it stays folded on a deeper page (a panel, a teammate)', () => {
     resize(1440);
     const { rerender } = render(<Frame {...slots} arrangement="page" />);
     fireEvent.keyDown(document.body, { key: '[' });
     expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy();
-    expect(JSON.parse(localStorage.getItem(KEY) ?? '{}').page.fold.menu).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY) ?? '{}').fold.menu).toBe(true);
+    rerender(<Frame {...slots} arrangement="page" panel={<Sheet kind="column" label="Panel" />} />);
+    expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy();
     rerender(<Frame {...slots} arrangement="agent" widgets={<Sheet kind="column" label="Widgets" />} />);
-    expect(handle('the menu').getAttribute('aria-valuenow')).toBe('248');
+    expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy();
+    expect(screen.queryByRole('separator', { name: 'Resize the menu' })).toBeNull();
   });
 
   it("in the Mac app, marks the sheets under the window's buttons: a head moves right, an edge starts below", async () => {

@@ -153,11 +153,19 @@ describe('layout', () => {
     expect(g.mode === 'sheets' && g.stretch.width).toBe(480);
   });
 
-  it("keeps Tico's width as one number and its fold per arrangement", () => {
+  it("keeps Tico's and the menu's width and fold as one value: going deeper never opens or resizes them", () => {
     for (const n of ['page', 'chat', 'agent'] as const) expect(sheet(layout(1920, n, { tico: 340 }), 'tico').width).toBe(340);
-    expect(sheet(layout(1920, 'page', { page: { fold: { tico: true } } }), 'tico').state).toBe('fold');
-    expect(sheet(layout(1920, 'page', { page: { fold: { tico: true } } }), 'tico').width).toBe(C.EDGE);
-    expect(sheet(layout(1920, 'agent', { page: { fold: { tico: true } } }), 'tico').state).toBe('open');
+    for (const n of ['page', 'chat', 'agent'] as const) expect(sheet(layout(1920, n, { menu: 300 }), 'menu').width).toBe(300);
+    for (const n of ['page', 'chat', 'agent', 'task'] as const) {
+      expect(sheet(layout(1920, n, { fold: { tico: true } }), 'tico').state).toBe('fold');
+      expect(sheet(layout(1920, n, { fold: { tico: true } }), 'tico').width).toBe(C.EDGE);
+    }
+    for (const n of ['page', 'chat', 'agent'] as const) expect(sheet(layout(1920, n, { fold: { menu: true } }), 'menu').state).toBe('fold');
+    // kept per arrangement before: the page's is read until the person sets one
+    expect(sheet(layout(1920, { name: 'chat', chat: false, panel: true }, { page: { fold: { menu: true }, w: { menu: 300 } } }), 'menu')).toMatchObject({ state: 'fold' });
+    expect(sheet(layout(1920, 'agent', { page: { w: { menu: 300 } } }), 'menu').width).toBe(300);
+    // a call keeps its own: Tico tucks there by default
+    expect(sheet(layout(1920, 'call', { fold: { tico: false } }), 'tico').state).toBe('fold');
   });
 
   it('pulls saved widths inside the floor and ceiling', () => {
@@ -167,9 +175,10 @@ describe('layout', () => {
 
   it('opens a tucked sheet in the row when there is room, and by its edge for now when not', () => {
     const folded: Saved = { page: { fold: { tico: true } } };
-    expect(press(1440, 'page', folded, 'tico')).toMatchObject({ forward: null, saved: { page: { fold: { tico: false } } } });
+    expect(press(1440, 'page', folded, 'tico')).toMatchObject({ forward: null, saved: { fold: { tico: false } } });
     expect(press(1200, 'chat', {}, 'page')).toEqual({ saved: {}, forward: 'page' });
-    expect(press(1100, 'page', {}, 'tico').saved.page?.fold?.tico).toBe(true);
+    expect(press(1100, 'page', {}, 'tico').saved.fold?.tico).toBe(true);
+    expect(press(1440, 'call', {}, 'tico').saved.call?.fold?.tico).toBe(false);
     expect(press(1200, 'chat', {}, 'chat', 'chat').forward).toBeNull(); // folding the opened one lets it go
   });
 

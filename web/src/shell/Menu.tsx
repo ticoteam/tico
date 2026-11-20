@@ -56,11 +56,11 @@ export interface MenuProps {
   me: MenuMate;
   teams: MenuTeam[];
   counts?: MenuCounts;
-  /* the pipelines, drawn under Tasks while a Tasks page is open (as Company's pages are under Company) */
+  /* the pipelines, drawn under Tasks while it is open (as Company's pages are under Company) */
   pipelines?: { id: string; name: string; to: string }[];
   /* whether the person may open a page: 'tasks', 'company/finance', 'library/tools', 'settings' … (default: yes) */
   can?: (page: string) => boolean;
-  /* the team shown open (by default, the team of the teammate whose page is open) */
+  /* the team shown open until the person opens or shuts one (by default, the team of the page the menu first drew on) */
   openTeam?: string;
   /* drawn as icons; inside a Frame this follows the sheet's fold */
   folded?: boolean;
@@ -94,6 +94,13 @@ const KIDS: Partial<Record<MenuRowId, string[]>> = {
   library: ['Files', 'Docs', 'Tools', 'Skills', 'Contacts'],
 };
 const slug = (s: string) => s.toLowerCase();
+type Shown = Record<string, boolean>;
+const topOf = (path: string) => path.split('/')[1] ?? '';
+/* the team of the page at `path`: the team's own page, or the team of the teammate whose page it is */
+function teamAt(p: MenuProps, path: string) {
+  const onMate = [p.me, ...p.teams.flatMap(t => t.members)].find(m => path.startsWith(m.to));
+  return p.teams.find(t => path.startsWith(t.to) || t.members.some(m => m === onMate))?.id;
+}
 /* the menu's paths are plain strings from the table above; the router resolves them under its base path */
 const to = (path: string) => path as LinkProps['to'];
 const ACTIVE = { className: 'is-active', 'aria-current': 'page' as const };
@@ -126,18 +133,32 @@ export function Menu(p: MenuProps) {
   const folded = p.folded ?? sheet.folded;
   const path = useLocation({ select: l => l.pathname.replace(/^\/next(?=\/|$)/, '') });
   const can = p.can ?? (() => true);
-  const top = path.split('/')[1] ?? '';
-  const onMate = [p.me, ...p.teams.flatMap(t => t.members)].find(m => path.startsWith(m.to));
-  const openTeam = p.openTeam ?? p.teams.find(t => path.startsWith(t.to) || t.members.some(m => m === onMate))?.id;
-  const [shut, setShut] = useState<Record<string, boolean>>({});
-  const [closedPath, setClosedPath] = useState<string>();
+  const top = topOf(path);
+  /* What is open here is the person's: only the menu's own controls open or shut a section or a team. Until they do,
+     the section and the team of the page the menu first drew on are open, and that first guess is kept. Going deeper,
+     or landing on a page from a link, a card or an address, never opens, shuts or grows anything here: the page's
+     section is only marked. */
+  const [first] = useState(path);
+  const [sections, setSections] = usePref<Shown | null>('menu.sections.v1', null);
+  const [teamsShown, setTeamsShown] = usePref<Shown | null>('menu.teams.v1', null);
+  const firstTeam = p.openTeam ?? teamAt(p, first);
+  const shownSections = sections ?? { [topOf(first)]: true };
+  const shownTeams = teamsShown ?? (firstTeam ? { [firstTeam]: true } : {});
+  const keepSections = sections == null;
+  const keepTeams = teamsShown == null && p.teams.length > 0;
+  useEffect(() => {
+    if (keepSections) setSections({ [topOf(first)]: true });
+  }, [keepSections, first, setSections]);
+  useEffect(() => {
+    if (keepTeams) setTeamsShown(firstTeam ? { [firstTeam]: true } : {});
+  }, [keepTeams, firstTeam, setTeamsShown]);
   // Your last tab stays; the Threads page with no thread open says its list is here, so it shows that tab.
   const [talk, setTalk] = usePref<MenuTalk>('menu.talk.v1', 'team');
   const onThreads = path === '/threads' || path === '/threads/';
   useEffect(() => {
     if (onThreads) setTalk('threads');
   }, [onThreads, setTalk]);
-  const isOpen = (t: MenuTeam) => (t.id in shut ? !shut[t.id] : t.id === openTeam);
+  const isOpen = (t: MenuTeam) => shownTeams[t.id] === true;
   const rows = ROWS.filter(r => can(r.id));
   const c = p.counts ?? {};
   const kidsOf = (id: MenuRowId) =>
@@ -146,7 +167,7 @@ export function Menu(p: MenuProps) {
       : (KIDS[id] ?? []).filter(k => can(`${id}/${slug(k)}`)).map(k => ({ key: k, label: k, to: `/${id}/${slug(k)}` }));
 
   if (folded) {
-    const faces = p.teams.find(t => t.id === openTeam)?.members ?? [];
+    const faces = p.teams.find(isOpen)?.members ?? [];
     return (
       <nav className="pane nav is-rail" aria-label="Main">
         <header className="nav-head">
@@ -245,7 +266,9 @@ export function Menu(p: MenuProps) {
         const kids = kidsOf(r.id);
         const hasKids = kids.length > 0;
         const canToggle = hasKids && top === r.id && !!KIDS[r.id];
-        const expanded = hasKids && top === r.id && (!canToggle || closedPath !== path);
+        const expanded = hasKids && shownSections[r.id] === true;
+        // shut, the section marks the page inside it, which changes nothing else
+        const here = path === `/${r.id}` || (!expanded && top === r.id);
         const content = (
           <>
             <Icon name={r.icon} />
@@ -258,15 +281,23 @@ export function Menu(p: MenuProps) {
             <button
               key={r.id}
               type="button"
-              className={path === `/${r.id}` ? 'nav-item is-active' : 'nav-item'}
-              aria-current={path === `/${r.id}` ? 'page' : undefined}
+              className={here ? 'nav-item is-active' : 'nav-item'}
+              aria-current={here ? 'page' : undefined}
               aria-expanded={expanded}
-              onClick={() => setClosedPath(expanded ? path : undefined)}
+              onClick={() => setSections({ ...shownSections, [r.id]: !expanded })}
             >
               {content}
             </button>
           ) : (
-            <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} activeOptions={{ exact: hasKids }}>
+            // choosing a section here opens it, and shuts the others
+            <Link
+              key={r.id}
+              className="nav-item"
+              to={to(`/${r.id}`)}
+              activeProps={ACTIVE}
+              activeOptions={{ exact: expanded }}
+              onClick={() => setSections({ [r.id]: true })}
+            >
               {content}
             </Link>
           ),
@@ -316,9 +347,9 @@ export function Menu(p: MenuProps) {
             activeOptions={{ exact: true }}
             aria-expanded={open}
             onClick={e => {
-              const onChev = (e.target as Element).closest('.tree-chev');
-              if (onChev || (open && path === t.to)) e.preventDefault();
-              setShut(s => ({ ...s, [t.id]: onChev || (open && path === t.to) ? open : false }));
+              const flip = !!(e.target as Element).closest('.tree-chev') || (open && path === t.to);
+              if (flip) e.preventDefault();
+              setTeamsShown({ ...shownTeams, [t.id]: flip ? !open : true });
             }}
           >
             <span className="tree-chev">
