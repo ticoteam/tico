@@ -2138,6 +2138,70 @@ def test_thread_post_attaches_files_already_in_tico(monkeypatch):
     )
 
 
+def test_thread_post_attach_sends_checkout_files_with_the_message_in_one_request(monkeypatch, tmp_path):
+    """`tico thread post --attach PATH` (repeatable): the text and every file go in one multipart request to the
+    thread's upload route, each file a `files` part in order, so the message and its files land together. Files
+    already in Tico (--file) ride along as attachments."""
+    from clients import remotecli
+
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "weekly.html").write_text("<h1>Week</h1>")
+    (tmp_path / "letter.md").write_text("Dear Ana")
+    monkeypatch.chdir(tmp_path)  # not a git checkout, so the command's checkout is this folder
+    wire = cli_wire(
+        monkeypatch,
+        {"GET me": {"actor": "bot:ops"}, "POST uploads/threads/T1/messages": {"message": {"id": "m9"}}},
+    )
+    words = ["thread", "post", "T1", "The weekly report", "--attach", "reports/weekly.html", "--attach", "letter.md"]
+    remotecli.run(hubcli.parser().parse_args([*words, "--file", "f1@2", "--reply-to", "m7"]))
+    (sent,) = wire.writes()
+    assert sent.path == "/api/v2/uploads/threads/T1/messages"
+    assert sent.body == {
+        "text": "The weekly report",
+        "in_reply_to": "m7",
+        "attachments": '["f1@2"]',
+        "files": [
+            {"filename": "weekly.html", "content": b"<h1>Week</h1>"},
+            {"filename": "letter.md", "content": b"Dear Ana"},
+        ],
+    }
+
+
+def test_thread_post_attach_refuses_a_path_outside_the_checkout_before_sending(monkeypatch, tmp_path):
+    """A path that leaves the checkout is refused on this computer: nothing is posted, so no message names a file
+    that never arrived."""
+    from clients import remotecli
+
+    checkout = tmp_path / "bot"
+    checkout.mkdir()
+    (tmp_path / "secret.txt").write_text("x")
+    monkeypatch.chdir(checkout)
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "bot:ops"}})
+    with pytest.raises(Exception, match="outside the bot's checkout"):
+        remotecli.run(hubcli.parser().parse_args(["thread", "post", "T1", "See", "--attach", "../secret.txt"]))
+    assert wire.writes() == []
+
+
+def test_message_send_attach_uploads_the_file_and_sends_it_with_the_message(monkeypatch, tmp_path):
+    """`tico message send --attach PATH` uploads the checkout file, then sends the message with it attached."""
+    from clients import remotecli
+
+    (tmp_path / "spec.md").write_text("# Spec")
+    monkeypatch.chdir(tmp_path)
+    wire = cli_wire(
+        monkeypatch,
+        {
+            "GET me": {"actor": "bot:ops"},
+            "POST files/uploads": {"file_id": "f4", "version": 1},
+            "POST messages": {"id": "m9"},
+        },
+    )
+    remotecli.run(hubcli.parser().parse_args(["message", "send", "human:ana", "The spec", "--attach", "spec.md"]))
+    upload, message = wire.writes()
+    assert (upload.path, upload.body) == ("/api/v2/files/uploads?name=spec.md", b"# Spec")
+    assert message.body["attachments"] == [{"ref": "f4@1", "title": ""}]
+
+
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
     """`tico thread slack-resume` runs `tico_thread_slack_resume`: POST on the link's resume route, as the person asking."""
     from clients import remotecli

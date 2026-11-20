@@ -111,6 +111,9 @@ outside the checkout, no symbolic links, no credential-like names. `ID@VERSION` 
 already in Tico instead: a file on that task, or in that thread for a message. A `--title` with no
 `--visual` is refused. A visual with no title shows its file name.
 
+`--attach PATH` (repeatable) on `tico message send` and `tico thread post` sends any file from the checkout without
+a caption: a picture or page still shows as a card, anything else as a file chip.
+
 **MCP.** `tico_message_send` and `tico_task_comment` take `visuals`, a list of up to 10:
 `{"path": "reports/signups.png", "title": "…"}` for a file in the checkout, or `{"file": "<file id>@<version>",
 "title": "…"}` for a file already in Tico. A `path` works only from the tico tools on your bot's Computer.

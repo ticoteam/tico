@@ -362,14 +362,15 @@ class MultipartBody:
                     None,
                 )
             )
-        for name, path in files.items():
-            path = Path(path)
+        for name, paths in files.items():
             if not re.fullmatch(r"[a-z_]+", name):
                 raise ValueError("Invalid upload field")
-            filename = re.sub(r'[\r\n"\\]', "_", path.name)
-            mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-            prefix = f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'.encode()
-            self.parts.append((prefix, path))
+            for path in paths if isinstance(paths, (list, tuple)) else [paths]:  # a list: one part each, in order
+                path = Path(path)
+                filename = re.sub(r'[\r\n"\\]', "_", path.name)
+                mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                prefix = f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'.encode()
+                self.parts.append((prefix, path))
         self.ending = f"--{boundary}--\r\n".encode()
         self.file_sizes = {path: path.stat().st_size for _, path in self.parts if path}
         self.size = len(self.ending) + sum(

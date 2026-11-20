@@ -117,7 +117,12 @@ def _multipart(data, content_type):
     for part in message.iter_parts():
         name, filename = part.get_param("name", header="content-disposition"), part.get_filename()
         content = part.get_payload(decode=True)
-        fields[name] = {"filename": filename, "content": content} if filename else content.decode()
+        value = {"filename": filename, "content": content} if filename else content.decode()
+        if name in fields:  # a repeated part, such as several files: a list, in the order sent
+            prior = fields[name]
+            fields[name] = [*(prior if isinstance(prior, list) else [prior]), value]
+        else:
+            fields[name] = value
     return fields
 
 
