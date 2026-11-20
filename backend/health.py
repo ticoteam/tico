@@ -309,9 +309,9 @@ def _computers(c, runners_online, settings, limits=None):
     # The disk as of its last minute's sample: readiness sends the disk again only when something else changed.
     disks = latest_disks(c, [r["id"] for r in found])
     # Runtimes whose bots the Gateway runs meanwhile, since their subscription is not signed in (models_preset).
-    covered = _gateway_covered(c, settings, {r["id"]: readiness_document(r["readiness"]) for r in found})
+    covered = _gateway_covered(c, settings, {r["id"]: read_cache.readiness(c, r["id"], r["readiness"]) for r in found})
     for r in found:
-        document = readiness_document(r["readiness"])
+        document = read_cache.readiness(c, r["id"], r["readiness"])
         runtimes = document.get("runtimes") or {}
         # A runtime the company's plan signs in on this computer (model_subscriptions.in_effect, what a claim uses)
         # needs no sign-in of its own: its missing login is not a problem.
@@ -489,7 +489,7 @@ def _hosted_warnings(c):
         }
         found = []
         for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
-            for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
+            for bot, row in ((read_cache.readiness(c, r["id"], r["readiness"]).get("bots")) or {}).items():
                 if (bot, r["id"]) not in hosting:
                     continue  # a computer that no longer hosts the bot has nothing to publish for it
                 found += [(bot, str(warning)) for warning in (row or {}).get("warnings") or []]
@@ -615,7 +615,7 @@ def _missing_tool_credentials(c, online_ids):
     ]
     prime_granted(c, ["bot:" + row["bot"] for row in online])  # every bot's grants in one read, not one each
     for row in online:
-        report = (readiness_document(row["readiness"]).get("bots") or {}).get(row["bot"]) or {}
+        report = (read_cache.readiness(c, row["id"], row["readiness"]).get("bots") or {}).get(row["bot"]) or {}
         for tool in granted(c, row["bot"], report.get("tools") or []):
             if tool.get("credential") == "missing":
                 out.add((service_name(tool.get("service")), row["label"]))
@@ -657,7 +657,7 @@ def missing_repositories(c, online_ids):
         "SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "JOIN bots b ON b.id=a.bot WHERE b.state='active' AND r.revoked_at IS NULL ORDER BY a.bot"
     ):
-        report = (readiness_document(r["readiness"]).get("bots") or {}).get(r["bot"])
+        report = (read_cache.readiness(c, r["id"], r["readiness"]).get("bots") or {}).get(r["bot"])
         if r["id"] in online_ids and isinstance(report, dict) and report.get("repository_present") is False:
             why = next((p for p in report.get("problems") or [] if "repositor" in p.lower()), "Missing bot repository")
             out.append((r["bot"], r["label"], why))
