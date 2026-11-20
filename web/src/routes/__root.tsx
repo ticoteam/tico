@@ -290,7 +290,8 @@ function App() {
           side={side}
           panel={panel ? <PanelHost /> : undefined}
           lips={{ menu: <PhoneMenuLip /> }}
-          lipActs={{ call: <CallMute /> }}
+          lipActs={{ call: <CallMute />, tico: <SearchButton /> }}
+          edgeActs={{ tico: <SearchButton /> }}
           onCloseChat={callChat ? hideCallChat : closeChat}
           onClosePanel={closePanel}
         />
@@ -410,7 +411,6 @@ function AppMenu({ note }: { note: ReactNode }) {
           </Suspense>
         }
         note={note}
-        onSearch={() => openSearch()}
         onHelp={press('support.open')}
         onMessage={() => setMessaging(true)}
         onCall={() => setCalling(true)}
@@ -503,6 +503,12 @@ function PhoneMenuLip() {
 function CallMute() {
   const { muted } = useCall();
   return <IconButton icon={muted ? 'micoff' : 'mic'} label={muted ? 'Unmute' : 'Mute'} on={muted} onClick={() => run(TOGGLE_MUTE, {}, { via: 'click' })} />;
+}
+
+/* Search beside Tico: on the phone's bar and on Tico's edge. It opens with the cursor in its field, inside this same
+   press (iOS's keyboard; search/state.ts). */
+function SearchButton() {
+  return <IconButton icon="search" label="Search" onClick={() => openSearch()} />;
 }
 
 /* ---------------------------------------------------------------- the chats */

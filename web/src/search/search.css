@@ -25,3 +25,7 @@
   .pal.is-drop .pal-field{height:60px;padding-left:var(--s-5)}
   .shell-frame.is-search>.shell-place:is([data-sheet="menu"],[data-sheet="list"],[data-sheet="page"],[data-sheet="stage"])::after{content:"";position:absolute;inset:0;z-index:var(--z-scrim);border-radius:var(--r-pane);background:var(--scrim)}
 }
+/* the phone: it stays inside what the keyboard leaves (SearchDialog sets --vv-h and --vv-top from the visual viewport) */
+:where(html[data-layout="cards"]){
+  .pal.is-drop{--pal-top:max(var(--gap-pane),env(safe-area-inset-top,0px));top:calc(var(--vv-top,0px) + var(--pal-top));max-height:calc(var(--vv-h,100dvh) - var(--pal-top) - var(--gap-pane))}
+}

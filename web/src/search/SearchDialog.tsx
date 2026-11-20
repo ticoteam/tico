@@ -1,5 +1,5 @@
 import { Dialog } from '@base-ui/react/dialog';
-import { useEffect, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
 import { ctxFor, registry, run } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
@@ -9,7 +9,7 @@ import * as copy from './copy';
 import { loadProviders, providers, type Lead, type SearchHit } from './providers';
 import { gather, highlight, remember, RECENT, type Group } from './results';
 import './search.css';
-import { closeSearch, useSearchState } from './state';
+import { caught, closeSearch, released, useSearchState } from './state';
 
 /* The palette from pages/8-settings/more.html?screen=search: it drops from the menu's head and covers the menu and the
    page, which dim; Tico stays lit, since the last row hands the words to it. Base UI's dialog directly, not kit's:
@@ -32,11 +32,45 @@ function dropAt(): CSSProperties {
   return r?.width ? { left: Math.round(r.left), top: Math.round(r.top) } : {};
 }
 
+/** On a phone the keyboard covers the page's bottom (iOS shrinks only the visual viewport, and may pan it): the
+    palette keeps inside what can be seen. */
+function useVisible(el: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const node = el.current;
+    if (!vv || !node) return;
+    const put = () => {
+      node.style.setProperty('--vv-h', `${Math.round(vv.height)}px`);
+      node.style.setProperty('--vv-top', `${Math.max(0, Math.round(vv.offsetTop))}px`);
+    };
+    put();
+    vv.addEventListener('resize', put);
+    vv.addEventListener('scroll', put);
+    return () => {
+      vv.removeEventListener('resize', put);
+      vv.removeEventListener('scroll', put);
+    };
+  }, [el]);
+}
+
 function Palette({ opened }: { opened: string }) {
-  const [q, setQ] = useState(opened);
+  // anything typed between the tap (or Cmd+K) and this field drawing went to the catcher (state.ts)
+  const [q, setQ] = useState(() => opened + caught());
   const [results, setResults] = useState<{ query: string; groups: Group[] }>({ query: opened, groups: [] });
   const [selected, setSelected] = useState<string | null>();
   const [at] = useState(dropAt);
+  const field = useRef<HTMLInputElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
+  useVisible(popup);
+
+  // the cursor moves from the catcher to the field as it draws, so the keyboard a tap raised stays up
+  useLayoutEffect(() => {
+    const f = field.current;
+    if (!f) return;
+    f.focus({ preventScroll: true });
+    f.setSelectionRange(f.value.length, f.value.length);
+    released();
+  }, []);
 
   useEffect(() => {
     const app = document.querySelector('.shell-frame');
@@ -113,10 +147,11 @@ function Palette({ opened }: { opened: string }) {
   );
 
   return (
-    <Dialog.Popup className="pal is-drop" aria-label={copy.label} style={at}>
+    <Dialog.Popup ref={popup} className="pal is-drop" aria-label={copy.label} style={at} initialFocus={field}>
       <label className="pal-field" data-target="search:field">
         <Icon name="search" />
         <input
+          ref={field}
           className="pal-text"
           type="text"
           value={q}

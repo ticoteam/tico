@@ -29,9 +29,10 @@ export interface PhoneCardsProps {
   chat?: ReactNode;
   /** A live call. It takes the screen when it starts and becomes a lip when flicked down. Takes the chat's place. */
   call?: ReactNode;
-  /** What each lip shows. Defaults: "Message Tico", "Menu", the chat's or the call's name. */
+  /** What each lip shows. Defaults: "Tico" (its box), "Menu", the chat's or the call's name. */
   lips?: Partial<Record<'tico' | 'menu' | 'chat' | 'call', ReactNode>>;
-  /** A control on a lip that is not part of its tap target: "Join" on Tico's, mute on a call's. */
+  /** A control on a lip that is not part of its tap target: search beside Tico's box (on the bar, too), mute on a
+      call's. */
   lipActs?: Partial<Record<'tico' | 'chat' | 'call', ReactNode>>;
   /** Tico speaking while tucked: up to two lines on its lip. */
   peek?: ReactNode;
@@ -65,6 +66,18 @@ const LIP = { tico: 58, peek: 84, menu: 38, chat: 38 } as const;
 const ORDER: readonly Slot[] = ['chat', 'menu', 'tico'];
 const PEEK = 18;
 const SCROLL = { start: 20, draw: 48, dead: 2, idle: 120 } as const;
+
+/** A chat's scroller to its newest message. A virtual list draws and measures the rows it comes to, and grows as it
+    does, so it is put at its end again on each frame until it stays there. */
+function toLatest(scrollers: HTMLElement[], frames = 12): void {
+  let moved = false;
+  for (const s of scrollers)
+    if (s.scrollHeight - s.scrollTop - s.clientHeight > 1) {
+      s.scrollTop = s.scrollHeight;
+      moved = true;
+    }
+  if (moved && frames > 1) requestAnimationFrame(() => toLatest(scrollers, frames - 1));
+}
 
 const slotOf = (card: PhoneCard): Slot | null => (card === 'none' ? null : card === 'menu' || card === 'chat' ? card : 'tico');
 const historyCard = (state: unknown): PhoneCard | undefined =>
@@ -176,7 +189,9 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     if (!el) return;
     const prevSlot = slotOf(prev);
     const nextSlot = slotOf(card);
-    if (nextSlot && nextSlot !== prevSlot) el.querySelector<HTMLElement>(`.ly-${nextSlot}`)?.focus({ preventScroll: true });
+    const up = nextSlot ? el.querySelector<HTMLElement>(`.ly-${nextSlot}`) : null;
+    // a card that came up with the cursor already in it (Tico's box, from the bar) keeps it there
+    if (nextSlot && nextSlot !== prevSlot && !up?.contains(document.activeElement)) up?.focus({ preventScroll: true });
     else if (!nextSlot && prevSlot) {
       const from = el.querySelector(`.ly-${prevSlot}`);
       if (from?.contains(document.activeElement)) from.querySelector<HTMLElement>(':scope > .lip')?.focus({ preventScroll: true });
@@ -185,7 +200,22 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
 
   const raise = (next: Exclude<PhoneCard, 'none'>) => setCard(next);
   const tuck = () => setCard('none');
-  const tapLip = (s: Slot) => (s === 'tico' ? raise(card === 'tico-half' ? 'tico' : 'tico-half') : raise(s));
+  /* Tico's box on the bar: Tico comes up at its latest message with the cursor in its box. iOS raises the keyboard
+     only for a focus() inside the tap's own handler, so the box (drawn all along, out of reach in the tucked card)
+     is let out and focused here, before the card moves. */
+  const typeToTico = () => {
+    const ly = root.current?.querySelector<HTMLElement>(':scope > .ly-tico');
+    const full = ly?.querySelector<HTMLElement>(':scope > .full');
+    const box = full?.querySelector<HTMLElement>('.composer textarea, textarea, [contenteditable="true"]');
+    if (ly && full && box) {
+      ly.inert = false;
+      full.inert = false;
+      box.focus({ preventScroll: true });
+    }
+    toLatest([...(full?.querySelectorAll<HTMLElement>('[data-scroll], .chat-body') ?? [])]);
+    raise('tico');
+  };
+  const tapLip = (s: Slot) => (s === 'tico' ? typeToTico() : raise(s));
 
   // ---------- the lips draw down while the page is read downward (motion.md section 6) ----------
   const c = useRef(0);
@@ -507,17 +537,22 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
         {cardOf(
           'tico',
           tico,
-          peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">Message Tico</span>),
+          peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">Tico</span>),
           lipActs.tico,
           // Tico's one Dot on a phone, lip and head alike: it follows Tico, as the desktop head's does.
           <span className="tico-dot" aria-hidden="true">
             <Dot size={TICO_MARK_LIP} />
           </span>,
         )}
-        {/* Tico drawn in to its edge under whatever holds the bottom: the stack's last line, never on a field */}
-        <button className="nub" type="button" aria-label="Open Tico" inert={!nubOn} aria-hidden={!nubOn || undefined} onClick={() => raise('tico-half')}>
-          <Dot state="rest" size={14} />
-        </button>
+        {/* the bar on its own, under whatever holds the bottom (a raised chat, a task's answer): Tico's box and search,
+            the stack's last line, never on a field */}
+        <div className="nub" inert={!nubOn} aria-hidden={!nubOn || undefined}>
+          <button className="nub-tico" type="button" aria-label="Open Tico" onClick={typeToTico}>
+            <Dot size={TICO_MARK_LIP} />
+            {lips.tico ?? <span className="lip-t">Tico</span>}
+          </button>
+          {lipActs.tico && <div className="lip-act">{lipActs.tico}</div>}
+        </div>
         <i className="ph-sab" aria-hidden="true" />
       </div>
     </Ctx>

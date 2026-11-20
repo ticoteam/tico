@@ -1,5 +1,5 @@
 // A first run of the new app in a real browser, against a server already running on a rehearsal copy (e2e/hub).
-//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, responsive, dev, light (default: all)
+//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, quick, phone, responsive, dev, light (default: all)
 // Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173 (HUB= and APP= point elsewhere). Pictures hold
 // real data: keep them local.
 /// <reference lib="dom" />
@@ -138,6 +138,33 @@ async function desktop(browser: Browser) {
     check(!(await page.locator('.nav.is-rail').count()), 'menu opens again', 'menu did not open again');
   }
 
+  if (want('quick')) {
+    await page.goto(`${APP}/tasks`);
+    await page.waitForSelector('[data-sheet="tico"] .composer textarea', { timeout: 15000 });
+    const head = page.locator('[data-sheet="tico"] .tico-head');
+    if (await head.count()) await head.getByRole('button', { name: 'Fold Tico' }).click();
+    await settle(page, 900);
+    // folded to its edge: the edge opens Tico ready to type; search waits under the Dot
+    await quick(page, 'desktop, Tico folded', {
+      sync: false,
+      tico: () => page.getByRole('button', { name: 'Open Tico' }).click(),
+      reset: async () => {
+        await page.locator('[data-sheet="tico"] .tico-head').getByRole('button', { name: 'Fold Tico' }).click();
+        await settle(page, 900);
+      },
+      search: () => page.locator('.shell-edge-act').getByRole('button', { name: 'Search' }).click(),
+    });
+    await page.goto(`${APP}/tasks`);
+    await settle(page, 1500);
+    if (await page.locator('.tico.is-fold, [data-edge="tico"]').count()) await page.getByRole('button', { name: 'Open Tico' }).click();
+    await settle(page, 900);
+    // open: search in Tico's head
+    const f = await pressAndLook(page, () => page.locator('[data-sheet="tico"] .tico-head').getByRole('button', { name: 'Search' }).click());
+    check(f.during === 'Search', "Tico's head: search opens with the cursor in its field", `Tico's head: the cursor was on ${f.during || 'nothing'}`);
+    await page.keyboard.press('Escape');
+    check(!(await page.locator('[data-sheet="menu"] .nav-head').getByRole('button', { name: 'Search' }).count()), 'the menu has no search of its own', 'the menu still has a search button');
+  }
+
   if (want('keys')) {
     note('keys');
     await page.locator('body').click({ position: { x: 1300, y: 600 } });
@@ -174,11 +201,60 @@ async function desktop(browser: Browser) {
   await ctx.close();
 }
 
+/** What has the cursor, read inside the press's own click (iOS raises the keyboard only for a focus made there), and
+    again once the press is over. */
+async function pressAndLook(page: Page, press: () => Promise<void>): Promise<{ during: string; after: string }> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __during?: string };
+    w.__during = '';
+    window.addEventListener('click', () => (w.__during = document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? ''), { once: true });
+  });
+  await press();
+  return page.evaluate(() => ({
+    during: (window as unknown as { __during?: string }).__during ?? '',
+    after: document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? '',
+  }));
+}
+
+/** Tico and search, side by side: one press to type to Tico, one to type a search, then a result picked. On a phone
+    the cursor must be in place inside the press itself (`sync`); `reset` puts the search control back in reach. */
+async function quick(page: Page, where: string, o: { tico: () => Promise<void>; search: () => Promise<void>; reset?: () => Promise<void>; sync: boolean }) {
+  note(`quick actions (${where})`);
+  const t = await pressAndLook(page, o.tico);
+  await settle(page, 600);
+  const now = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '');
+  check((!o.sync || t.during === 'Message Tico') && now === 'Message Tico', "Tico: its box has the cursor", `Tico: the cursor was on ${t.during || 'nothing'}, then ${now || 'nothing'}`);
+  await settle(page, 300);
+  await page.keyboard.press('Escape');
+  await settle(page, 900);
+  await o.reset?.();
+  const before = page.url();
+  const f = await pressAndLook(page, o.search);
+  check((!o.sync || f.during === 'Search') && f.after === 'Search', 'search: its field has the cursor inside the press', `search: the cursor was on ${f.during || 'nothing'}, then ${f.after || 'nothing'}`);
+  await page.keyboard.type('settings', { delay: 40 });
+  await page.getByRole('option', { name: /Settings/ }).first().waitFor({ timeout: 8000 }).catch(() => bad('search: no result for "settings"'));
+  check((await page.locator('.pal-text').inputValue()) === 'settings', 'search: every letter typed is in the field', `search: the field holds "${await page.locator('.pal-text').inputValue()}"`);
+  await page.keyboard.press('Enter');
+  await settle(page, 1500);
+  check(!(await page.getByRole('dialog', { name: 'Search' }).count()) && page.url() !== before, `search: Enter opened the top result (${new URL(page.url()).pathname})`, 'search: Enter did not open a result');
+}
+
 async function phone(browser: Browser, name: string) {
   note(`phone (${name})`);
   const { ctx, page } = await open(browser, true, '/tasks', true); // gestures and layout only: nothing is written
   await settle(page, 4000);
   await shot(page, `phone-${name}-rest`);
+  if (want('quick')) {
+    // the bar: Tico's box and search on one level, each one tap to type
+    await quick(page, `phone, ${name}`, {
+      sync: true,
+      tico: () => page.locator('.phone>.ly-tico>.lip').tap(),
+      search: () => page.locator('.phone>.ly-tico>.lip-act').getByRole('button', { name: 'Search' }).tap(),
+    });
+    if (!want('phone')) return void (await ctx.close());
+    await page.goto(`${APP}/tasks`);
+    await settle(page, 2500);
+  }
   const lip = page.locator('.phone [data-card="tico"], .phone .lip').first();
   check(await lip.count(), 'lips drawn', 'no lips on the phone');
   const histBefore = await page.evaluate(() => history.length);
@@ -395,15 +471,15 @@ async function light(browser: Browser) {
 
 const browser = await chromium.launch();
 try {
-  if (['boot', 'menu', 'sheets', 'keys'].some(want)) await desktop(browser);
-  if (want('phone')) await phone(browser, 'chromium');
+  if (['boot', 'menu', 'sheets', 'quick', 'keys'].some(want)) await desktop(browser);
+  if (want('phone') || want('quick')) await phone(browser, 'chromium');
   if (want('responsive')) await responsive(browser);
   if (want('dev')) await dev(browser);
   if (want('light')) await light(browser);
 } finally {
   await browser.close();
 }
-if (want('phone') && process.env.WEBKIT !== '0') {
+if ((want('phone') || want('quick')) && process.env.WEBKIT !== '0') {
   const wk = await webkit.launch().catch(() => null);
   if (wk) {
     try {

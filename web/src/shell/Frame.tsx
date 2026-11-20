@@ -35,8 +35,10 @@ export interface FrameProps {
   side?: ReactNode;
   /* on the phone: what a card's lip shows at rest (the menu's: the company and its Flow count) */
   lips?: PhoneCardsProps['lips'];
-  /* on the phone: a control on a card's lip that is not its tap target (mute on a call's) */
+  /* on the phone: a control on a card's lip that is not its tap target (search beside Tico's box, mute on a call's) */
   lipActs?: PhoneCardsProps['lipActs'];
+  /* on a desktop: a control on a tucked sheet's edge that is not its tap target (search under Tico's Dot) */
+  edgeActs?: Partial<Record<SheetId, ReactNode>>;
   /* by default the address decides */
   arrangement?: Arrangement;
   onCloseChat?: () => void;
@@ -197,6 +199,10 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     e.preventDefault();
   };
 
+  /* Tico opened by its edge or Cmd+J: the cursor goes to its box once it has drawn, so one press is ready to type */
+  const typeToTico = () =>
+    requestAnimationFrame(() => places.current.get('tico')?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"]')?.focus());
+
   /* shortcuts (layout.md 5.1): Cmd/Ctrl+J Tico, [ the menu or list, ] widgets or a call's side, Escape */
   const onKey = useEffectEvent((e: globalThis.KeyboardEvent) => {
     if (mode === 'cards' || L.mode !== 'sheets') return;
@@ -207,7 +213,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       const inside = !!ticoEl && ticoEl.contains(document.activeElement);
       if (t && t.state !== 'open') {
         onPress('tico');
-        requestAnimationFrame(() => places.current.get('tico')?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"]')?.focus());
+        typeToTico();
       } else if (!inside) ticoEl?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"]')?.focus();
       else onPress('tico');
       return;
@@ -358,6 +364,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
           tucked: [],
         };
         const depth = { '--depth': s.depth } as CSSProperties;
+        const act = shut ? p.edgeActs?.[s.id] : undefined;
         return (
           <Fragment key={s.id}>
             <div
@@ -386,13 +393,22 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
                 data-first={i === 0 || undefined}
                 data-lights={clear}
                 data-edge={s.id}
+                data-act={act ? true : undefined}
                 aria-label={`Open ${NAME[s.id]}`}
                 title={`Open ${NAME[s.id]}`}
-                onClick={() => onPress(s.id)}
+                onClick={() => {
+                  onPress(s.id);
+                  if (s.id === 'tico') typeToTico();
+                }}
               >
                 <span className="shell-edge-mark">{mark(s.id)}</span>
                 <span className="shell-edge-name">{EDGE_NAME[s.id]}</span>
               </button>
+            ) : null}
+            {act ? (
+              <div className="shell-edge-act" style={{ ...depth, left: x, zIndex: s.z }} data-lights={clear}>
+                {act}
+              </div>
             ) : null}
           </Fragment>
         );

@@ -73,6 +73,21 @@ describe('Search @s1209', () => {
     expect(screen.queryByRole('combobox', { name: 'Search' })).toBeNull();
   });
 
+  it('has the cursor in a field from the moment it opens, and keeps what was typed while it drew', async () => {
+    render(<SearchDialog />);
+    act(() => {
+      openSearch();
+      // the press that opened it is not over yet: a field already holds the cursor (iOS raises the keyboard only now)
+      const holder = document.activeElement as HTMLInputElement;
+      expect(holder.tagName).toBe('INPUT');
+      holder.value = 'Q';
+    });
+    const field = (await screen.findByRole('combobox', { name: 'Search' })) as HTMLInputElement;
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe('Q');
+    expect(field.selectionStart).toBe(1);
+  });
+
   it('does not open a result from before the query was cleared', async () => {
     render(<SearchDialog />);
     act(() => openSearch('QA'));

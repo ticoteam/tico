@@ -54,6 +54,20 @@ describe('Tico drawn in to its edge', () => {
     expect(place.hasAttribute('inert')).toBe(false);
   });
 
+  it('keeps search under its Dot, beside the edge rather than inside it: one click opens search, not Tico', () => {
+    const search = vi.fn();
+    render(<Frame {...slots} arrangement="page" edgeActs={{ tico: <button type="button" onClick={search}>Search</button> }} />);
+    expect(screen.queryByRole('button', { name: 'Search' })).toBeNull(); // open, search is in Tico's own head
+    act(() => foldSheet('tico', true));
+    const edge = screen.getByRole('button', { name: 'Open Tico' });
+    const find = screen.getByRole('button', { name: 'Search' });
+    expect(edge.contains(find)).toBe(false);
+    expect(edge.dataset.act).toBe('true'); // the name moves down to make room under the Dot
+    fireEvent.click(find);
+    expect(search).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Open Tico' })).toBeTruthy(); // Tico stays folded
+  });
+
   it('draws in and opens about three times faster than a change of arrangement (200ms, not 620)', () => {
     level.now = 'more';
     const calls: { keys: Keyframe[]; opts: KeyframeAnimationOptions }[] = [];
