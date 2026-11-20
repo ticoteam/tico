@@ -367,9 +367,21 @@ def lines(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, tuple[Any
 
 
 def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
-    rows = c.execute("SELECT * FROM fin_lines WHERE entry_id=? ORDER BY line_no", (entry_id,)).fetchall()
+    return entries_lines(c, [entry_id]).get(entry_id, [])
+
+
+def entries_lines(c: sqlite3.Connection, entry_ids: Sequence[str]) -> dict[str, list[tuple[Any, Line]]]:
+    """{entry id: its lines in line order, each (row, Line) with its current tags}, read in one pass for many entries."""
+    wanted = list(dict.fromkeys(entry_ids))
+    rows: list[Any] = []
+    for chunk in _chunks(wanted):
+        marks = ",".join("?" * len(chunk))
+        rows += c.execute(f"SELECT * FROM fin_lines WHERE entry_id IN ({marks}) ORDER BY entry_id, line_no", chunk)
     tags = line_tags(c, [r["id"] for r in rows])
-    return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
+    out: dict[str, list[tuple[Any, Line]]] = {}
+    for r in rows:
+        out.setdefault(str(r["entry_id"]), []).append((r, _line(r, tags.get(r["id"], {}))))
+    return out
 
 
 def bank_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str]) -> list[Any]:

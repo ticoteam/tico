@@ -68,10 +68,7 @@ def feed_vendors(
     `lines_shown` (visible.py's rule) says a row's lines show to the viewer: its vendor's name shows then too, and a row
     whose vendor the viewer may not name shows no counterparty text (its label comes from its lines instead)."""
     keys = {str(r["id"]): _row_key(r) for r in rows}
-    resolved: dict[str, str] = {}
-    for key in keys.values():
-        if key and key not in resolved:
-            resolved[key] = SAP.vendor_resolved(c, book_id, key)
+    resolved = SAP.vendors_resolved(c, book_id, list(keys.values()))
     contacts = SAP.contacts(c, sorted(set(resolved.values())))
     out: dict[str, Row] = {}
     for r in rows:

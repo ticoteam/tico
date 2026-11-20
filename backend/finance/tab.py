@@ -317,8 +317,14 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
     bills: dict[str, list[str]] = {}  # feed row id: the bills it is the bank side of
     # The row's payment, by its request or by the row it settled on (a lost send matched by its note has no request).
     pays: dict[str, list[Any]] = {}
-    for pay in SK.payments_by_txn(ctx.c, [str(r["id"]) for r in rows if str(r["id"]) not in out]):
+    left = [r for r in rows if str(r["id"]) not in out]
+    for pay in SK.payments_by_txn(ctx.c, [str(r["id"]) for r in left]):
         pays.setdefault(str(pay["provider_txn_id"]), []).append(pay)
+    # Bills each row settled, whatever the settlement came from (the row, its payment or the entry they share). Voided
+    # settlements count: reversing a "Pays bill" entry must not make its row's amounts visible again.
+    by_feed, by_entry = SAP.bills_settled(
+        ctx.c, [str(r["id"]) for r in left], [str(r["entry_id"]) for r in left if r["entry_id"]]
+    )
     for r in rows:
         fid = str(r["id"])
         if fid in out:
@@ -334,13 +340,7 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
                 bills.setdefault(fid, []).append(str(pay["obligation"]).removeprefix("bill:"))
         if fid in out:
             continue
-        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share). Voided
-        # settlements count: reversing a "Pays bill" entry must not make its row's amounts visible again.
-        found = [
-            *SAP.settlements_from(ctx.c, "feed", fid, voided=True),
-            *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"]), voided=True) if r["entry_id"] else []),
-        ]
-        got = [str(s["to_id"]) for s in found if s["to_kind"] == "bill"]
+        got = [*by_feed.get(fid, []), *by_entry.get(str(r["entry_id"] or ""), [])]
         if got:
             bills.setdefault(fid, []).extend(got)
     hidden = hidden_bills(ctx, cut, [b for xs in bills.values() for b in xs])
@@ -417,13 +417,13 @@ def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str,
 
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
     """The P&L lines of these entries the viewer sees (private lines without full detail never show), each vendor
-    with the name it shows as (tab_ap.vendor_labels)."""
+    with the name it shows as (tab_ap.vendor_labels). An entry several feed rows stand for (a payout) is read once."""
     from .tab_ap import vendor_labels
 
     out: dict[str, list[Row]] = {}
     cut = set(private_cut(ctx, view))
-    for eid in entry_ids:
-        for r, line in SL.entry_lines(ctx.c, eid):
+    for eid, rows in SL.entries_lines(ctx.c, entry_ids).items():
+        for r, line in rows:
             account = ctx.accounts.get(line.account_id)
             if account is None or account.type not in PNL_TYPES:
                 continue
@@ -454,14 +454,19 @@ Visible = Callable[[list[Any]], list[tuple[tuple[str, str], Row]]]
 
 
 def _stream(
-    fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: int
+    fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: int, floor: tuple[str, str] | None = None
 ) -> tuple[list[tuple[tuple[str, str], Row]], tuple[str, str] | None, bool]:
     """Up to `most` visible rows after `mark` (newest first), where the scan stopped, and whether the source ran out.
     Past SCAN rows it stops once it has any row to hand back, so a viewer who sees few of many rows still gets an
-    answer quickly; it never hands back an empty page short of the end."""
+    answer quickly; it never hands back an empty page short of the end. With `floor`, the oldest row a full page of the
+    other stream holds, it stops once its scan is older: nothing past there can make this page (a book whose entries
+    all show as their feed rows was read to its first entry on every page). It then says it stopped at `floor`, a row
+    the viewer sees, so the cursor never carries the key of a row they don't (the rows between were all hidden)."""
     out: list[tuple[tuple[str, str], Row]] = []
     scanned, at = 0, mark
     while len(out) < most and (scanned < SCAN or not out):
+        if floor and at and at < floor:
+            return out[:most], floor if mark is None or floor < mark else at, False
         batch = fetch(at, most * 2)
         if not batch:
             return out, at, True
@@ -669,7 +674,9 @@ def transactions(
     else:
         streams.append(("feed", [], marks_f, True))
     if source in ("all", "entry") and marks[5] != "1" and not status:
-        streams.append(("entry", *_stream(fetch_lines, show_lines, marks_l, most)))
+        feed = streams[0][1]
+        floor = feed[most - 1][0] if len(feed) >= most else None
+        streams.append(("entry", *_stream(fetch_lines, show_lines, marks_l, most, floor)))
     else:
         streams.append(("entry", [], marks_l, True))
     merged = sorted(((key, name, row) for name, rows, _, _ in streams for key, row in rows), reverse=True)

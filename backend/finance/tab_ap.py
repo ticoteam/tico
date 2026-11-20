@@ -61,7 +61,7 @@ def vendor_labels(
     `shown` (visible.py's rule, by key) replaces the kind check when given: a record's name shows when its reader sees one
     of its lines, and a key not in `shown` shows "" (never its raw text)."""
     wanted = sorted({k for k in keys if k})
-    named = {k: SAP.vendor_resolved(ctx.c, ctx.book.id, k) for k in wanted if not _is_id(k)}
+    named = SAP.vendors_resolved(ctx.c, ctx.book.id, [k for k in wanted if not _is_id(k)])
     found = SAP.contacts(ctx.c, sorted(set(wanted) | set(named.values())))
     texts = SL.vendor_label_texts(ctx.c, ctx.book.id, sorted({v for v in named.values() if v not in found}))
     out: dict[str, str] = {}

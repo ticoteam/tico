@@ -47,7 +47,7 @@ def upload_get(c: sqlite3.Connection, upload_id: str) -> Any:
 
 def upload_rows(c: sqlite3.Connection, money_account_id: str, upload_id: str) -> list[Any]:
     """The feed rows an upload put in (the rows still in the feed). By account first: upload_id has no index of its own,
-    so the account's index (fin_feed_txns_account) narrows the scan for this rare read (undo)."""
+    so the account's index (fin_feed_txns_account_day) narrows the scan for this rare read (undo)."""
     return c.execute(
         "SELECT * FROM fin_feed_txns WHERE money_account_id=? AND upload_id=? ORDER BY txn_date, id",
         (money_account_id, upload_id),
