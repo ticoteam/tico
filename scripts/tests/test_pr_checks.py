@@ -446,10 +446,8 @@ def test_install_retry_is_bounded_and_warm_browser_or_python_never_downloads_apt
         if suite == "types":
             assert calls == ""  # the venv alone: no npm, no UI build, no system packages
         elif suite == "python":
-            assert calls.splitlines() == [
-                "npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline",
-                "npm run --silent build:ui",
-            ]
+            # npm alone: the UI build went with the old web app (ui/).
+            assert calls.splitlines() == ["npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline"]
         else:
             lines = calls.splitlines()
             unpack = lines.index(f"sudo tar -xpf {cache}/installed.tar -C /")
