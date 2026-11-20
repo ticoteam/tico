@@ -244,15 +244,21 @@ class Downloads:
                             if name.endswith(".deb")
                             else None
                         )
-                        if os_name:
-                            metadata = (value.get("installers") or {}).get(os_name) or {}
-                            installers[os_name] = {
-                                "file": name,
-                                "bytes": asset.get("size"),
-                                "url": asset["browser_download_url"],
-                                "signed": bool(metadata.get("signed", False)),
-                                "notarized": bool(metadata.get("notarized", False)),
-                            }
+                        if not os_name:
+                            continue
+                        metadata = (value.get("installers") or {}).get(os_name) or {}
+                        # The release also carries the Electron app's Tico-<version>-... installers with the same
+                        # suffixes; when the manifest names its installer and the release has it, only that file counts.
+                        named = metadata.get("file")
+                        if named != name and named in assets:
+                            continue
+                        installers[os_name] = {
+                            "file": name,
+                            "bytes": asset.get("size"),
+                            "url": asset["browser_download_url"],
+                            "signed": bool(metadata.get("signed", False)),
+                            "notarized": bool(metadata.get("notarized", False)),
+                        }
                     value = {**value, "installers": installers, "app_kind": "generic"}
             except Exception:
                 value = None

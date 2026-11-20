@@ -8,7 +8,9 @@
 # (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
-# and a desktop failure leaves the server release in place. See docs/releasing.md.
+# and a desktop failure leaves the server release in place. The Electron app (desktop/) follows the same way beside the
+# Tauri one: built when desktop/ changed, otherwise carried forward, its update feeds (latest*.yml) uploaded last. See
+# docs/releasing.md.
 # Linux jobs run on RunsOn Spot VMs in Tico's own AWS account: an interrupted job is rerun automatically, and every upload
 # uses --clobber with the manifest last, so a rerun finishes the same release. The three jobs between the tag and the
 # published release (validated, runner-changes, release) run on GitHub-hosted Ubuntu, which starts faster and is never
@@ -36,7 +38,7 @@ on:
         type: boolean
         default: true
 
-# Read-only by default; only the two jobs that write to the GitHub release (release, desktop-assets) get contents: write.
+# Read-only by default; only the jobs that write to the GitHub release (release and the *-assets jobs) get contents: write.
 permissions:
   contents: read
 
@@ -460,8 +462,9 @@ jobs:
           PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
         run: |
           mkdir -p dist/desktop
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern '*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
-            --pattern '*-setup.exe' --pattern '*-setup.exe.sig' --pattern '*.AppImage' --pattern '*.AppImage.sig' --pattern '*.deb' --pattern latest.json
+          # Tauri's own names (Tico_<version>_...): the Electron app's Tico-<version>-... files are electron-assets'.
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern 'Tico_*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
+            --pattern 'Tico_*-setup.exe' --pattern 'Tico_*-setup.exe.sig' --pattern 'Tico_*.AppImage' --pattern 'Tico_*.AppImage.sig' --pattern 'Tico_*.deb' --pattern latest.json
           sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
       - name: Add the desktop files to the release
         env:
@@ -469,6 +472,100 @@ jobs:
         run: |
           find dist/desktop -type f ! -name latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
           gh release upload "$GITHUB_REF_NAME" dist/desktop/latest.json --clobber
+
+  # Does this tag need a new Electron app? Only when desktop/ or its build workflow changed since the previous release,
+  # or that release has no Electron update feed. Tests and Markdown under desktop/ do not enter the app.
+  electron-changes:
+    needs: [validated, release]
+    if: >-
+      ${{ !cancelled() && needs.validated.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && needs.validated.outputs.dry_run != 'true' }}
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+      previous: ${{ steps.diff.outputs.previous }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}
+        run: |
+          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" \
+            | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          build=true
+          # A prerelease's app carries its rc version, so a stable tag never inherits it; and all three feeds must be
+          # on the previous release, or electron-assets would have nothing complete to carry forward.
+          if [ "$FORCE" != true ] && [ -n "$previous" ] && [[ "$previous" != *-* ]] \
+             && git diff --quiet "$previous" "$GITHUB_SHA" -- desktop .github/workflows/desktop.yml \
+                  ':!desktop/*.test.ts' ':!desktop/*.md' \
+             && [ "$(gh release view "$previous" --json assets -q '.assets[].name' \
+                     | grep -cxE 'latest-mac\.yml|latest\.yml|latest-linux\.yml')" = 3 ]; then
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Electron build: $build (previous release $previous)"
+
+  electron:
+    needs: electron-changes
+    if: >-
+      ${{ !cancelled() && needs.electron-changes.result == 'success'
+      && needs.electron-changes.outputs.build == 'true' }}
+    uses: ./.github/workflows/desktop.yml
+    # desktop.yml declares no secrets, so it inherits them (the DESKTOP_* Mac signing and notarization secrets).
+    secrets: inherit
+    permissions:
+      contents: read
+
+  # Adds the Electron files to the already published release: new builds, or the previous release's files carried
+  # forward (their feeds name files, not URLs, so they move unchanged). The feeds go last, so an installed app never
+  # reads a feed whose files are missing; until they arrive it finds no feed and shows no update.
+  electron-assets:
+    needs: [release, electron-changes, electron]
+    if: >-
+      ${{ !cancelled() && needs.electron-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && (needs.electron.result == 'success' || needs.electron.result == 'skipped') }}
+    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
+    permissions:
+      contents: write   # uploads the Electron files to the published release
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.electron-changes.outputs.build == 'true'
+        with:
+          pattern: electron-*
+          path: dist/electron
+          merge-multiple: true
+      - name: Carry the previous release's Electron files forward
+        if: needs.electron-changes.outputs.build != 'true'
+        env:
+          PREVIOUS: ${{ needs.electron-changes.outputs.previous }}
+        run: |
+          mkdir -p dist/electron
+          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" --dir dist/electron --clobber \
+            --pattern 'Tico-*' --pattern '*.blockmap' --pattern latest-mac.yml --pattern latest.yml --pattern latest-linux.yml
+      - name: Add the Electron files to the release
+        run: |
+          feeds=(dist/electron/latest-mac.yml dist/electron/latest.yml dist/electron/latest-linux.yml)
+          for feed in "${feeds[@]}"; do
+            test -s "$feed" || { echo "::error::no $(basename "$feed")"; exit 1; }
+          done
+          ls -la dist/electron
+          find dist/electron -type f ! -name 'latest*.yml' -print0 \
+            | xargs -0 bash scripts/ci/retry.sh -- gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber
+          bash scripts/ci/retry.sh -- gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${feeds[@]}" --clobber
 
   # A prerelease (any '-' in the tag, as the release job marks it) builds no company app: a company's installed apps
   # update from its own bucket's latest.json, which a prerelease must never move (scripts/company_apps.py refuses too).

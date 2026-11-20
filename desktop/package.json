@@ -5,6 +5,7 @@
   "private": true,
   "description": "Tico on your desk: a thin frame around each company's own web app.",
   "author": "Tico",
+  "homepage": "https://github.com/ticoteam/tico",
   "license": "SEE LICENSE IN ../LICENSE",
   "main": "dist/main/main.js",
   "engines": {
