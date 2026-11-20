@@ -8,7 +8,7 @@ from . import task_roles as TRo
 import base64
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 from .store import H
 from . import models as M
@@ -648,7 +648,7 @@ def readers(auth):
         from .files import readable_page_refs
 
         distinct = {tag["id"]: tag for row in rows for tag in row.get("tags") or ()}
-        checked = readable_page_refs(c, auth, who, list(distinct.values()))
+        checked = cast("list[dict[str, Any]]", readable_page_refs(c, auth, who, list(distinct.values())))
         return {
             tag_id: shown if shown.get("removed") is True else {k: shown[k] for k in LIST_TAG_FIELDS if k in shown}
             for tag_id, shown in zip(distinct, checked, strict=True)
