@@ -2,6 +2,7 @@ import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState,
 import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
+import { useTicoName } from '@/tico/look';
 import { useArrangement } from './arrangement';
 import { useDesktopInset } from '@/desktop';
 import { Icon } from '@/kit/Icon';
@@ -115,6 +116,9 @@ interface Placed {
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
   const { width, mode } = useWindowMode();
+  // Tico's sheet goes by your own name for it
+  const tico = useTicoName();
+  const named = (id: SheetId, names: Record<SheetId, string>) => (id === 'tico' ? tico : names[id]);
   const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
@@ -394,15 +398,15 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
                 data-lights={clear}
                 data-edge={s.id}
                 data-act={act ? true : undefined}
-                aria-label={`Open ${NAME[s.id]}`}
-                title={`Open ${NAME[s.id]}`}
+                aria-label={`Open ${named(s.id, NAME)}`}
+                title={`Open ${named(s.id, NAME)}`}
                 onClick={() => {
                   onPress(s.id);
                   if (s.id === 'tico') typeToTico();
                 }}
               >
                 <span className="shell-edge-mark">{mark(s.id)}</span>
-                <span className="shell-edge-name">{EDGE_NAME[s.id]}</span>
+                <span className="shell-edge-name">{named(s.id, EDGE_NAME)}</span>
               </button>
             ) : null}
             {act ? (
@@ -431,7 +435,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               role="separator"
               tabIndex={0}
               aria-orientation="vertical"
-              aria-label={`Resize ${NAME[s.id]}`}
+              aria-label={`Resize ${named(s.id, NAME)}`}
               aria-valuenow={Math.round(s.width)}
               aria-valuemin={s.min}
               aria-valuemax={s.dragMax}

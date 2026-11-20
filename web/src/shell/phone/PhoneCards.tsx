@@ -9,6 +9,7 @@ import { createContext, use, useEffect, useId, useLayoutEffect, useRef, useState
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { Dot } from '@/tico/dot';
 import { TICO_MARK_LIP } from '@/shell/layout';
+import { useTicoName } from '@/tico/look';
 import { watchKeyboard, stuckToBottom } from './keyboard';
 import type { Keys } from './keyboard';
 import { GESTURE, pickStop, progress, rubber, velocity } from './stops';
@@ -107,6 +108,8 @@ type Drag = {
 
 export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = {}, peek, handle = false, labels = {}, tucked = false, onCardChange }: PhoneCardsProps) {
   const router = useRouter({ warn: false });
+  // Tico's lip goes by your own name for it
+  const ticoName = useTicoName();
   // a chat that opens comes up; a call that starts takes over; either one ending tucks its card. An address that
   // already names one (a shared link, a reload) opens on it. A page's own chat (`tucked`) waits as a lip unless the
   // address names a chat.
@@ -132,7 +135,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   const handleMode = handle || card === 'chat';
   const back = card === 'menu' || card === 'tico' || (card === 'chat' && second !== 'call');
   const peeking = !!peek && card === 'none';
-  const label = { tico: 'Tico', menu: 'Menu', chat: second === 'call' ? (labels.call ?? 'Call') : (labels.chat ?? 'Chat') };
+  const label = { tico: ticoName, menu: 'Menu', chat: second === 'call' ? (labels.call ?? 'Call') : (labels.chat ?? 'Chat') };
 
   // ---------- history, focus and the callback: everything that follows a change of card ----------
   const was = useRef<PhoneCard>('none');
@@ -537,7 +540,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
         {cardOf(
           'tico',
           tico,
-          peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">Tico</span>),
+          peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">{ticoName}</span>),
           lipActs.tico,
           // Tico's one Dot on a phone, lip and head alike: it follows Tico, as the desktop head's does.
           <span className="tico-dot" aria-hidden="true">
@@ -547,9 +550,9 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
         {/* the bar on its own, under whatever holds the bottom (a raised chat, a task's answer): Tico's box and search,
             the stack's last line, never on a field */}
         <div className="nub" inert={!nubOn} aria-hidden={!nubOn || undefined}>
-          <button className="nub-tico" type="button" aria-label="Open Tico" onClick={typeToTico}>
+          <button className="nub-tico" type="button" aria-label={`Open ${ticoName}`} onClick={typeToTico}>
             <Dot size={TICO_MARK_LIP} />
-            {lips.tico ?? <span className="lip-t">Tico</span>}
+            {lips.tico ?? <span className="lip-t">{ticoName}</span>}
           </button>
           {lipActs.tico && <div className="lip-act">{lipActs.tico}</div>}
         </div>

@@ -20,6 +20,10 @@ export type DotProps = {
   still?: boolean;
 };
 
+/** The one sprite (tico/look.ts): a pixel face, two eyes and a smile on a 10 by 10 grid, shown under
+    `data-sprite="pixel"` (styles/dot.css). */
+const PIXEL_FACE = 'M3 3h1v2H3zM6 3h1v2H6zM2 5h1v1H2zM7 5h1v1H7zM3 6h4v1H3z';
+
 /** The droplets' start angles (DS.js L50). */
 const START = [40, 200, 130, 290, 245];
 const [ROUND_BACK, ROUND_FRONT] = flowPaths(0);
@@ -51,6 +55,9 @@ export function Dot({ size = 30, state, work, message, of, still }: DotProps) {
       </svg>
       <span className="dot">
         <i />
+        <svg className="sprite" viewBox="0 0 10 10" shapeRendering="crispEdges" aria-hidden="true">
+          <path d={PIXEL_FACE} />
+        </svg>
         <b />
       </span>
       <span className="motes">

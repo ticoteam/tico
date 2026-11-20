@@ -16,3 +16,27 @@ def test_send_way_keeps_only_a_way_the_web_menu_offers(api):
     assert get(api, "preferences/compose.send_way")["value"] == "defer:never"
     # Each person keeps their own.
     assert get(api, "preferences/compose.send_way", token="ben-test")["value"] is None
+
+
+def test_assistant_look_keeps_a_name_one_of_eight_colors_and_the_sprite(api):
+    # Each person names their own assistant and picks its Dot's look (web/src/tico/look.ts); only theirs changes.
+    look = {"name": "Penny", "color": "violet", "sprite": "pixel"}
+    assert post(api, "preferences/ui.assistant", {"value": look})["value"] == look
+    assert get(api, "preferences/ui.assistant")["value"] == look
+    assert get(api, "preferences/ui.assistant", token="ben-test")["value"] is None
+    assert (
+        post(api, "preferences/ui.assistant", {"value": {"color": "jade", "sprite": None}})["value"]["color"] == "jade"
+    )
+    for wrong in (
+        "Penny",
+        {"name": ""},
+        {"name": " Penny"},
+        {"name": "x" * 41},
+        {"color": "red"},
+        {"sprite": "cat"},
+        {"face": "pixel"},
+    ):
+        r = api.post("/api/v2/preferences/ui.assistant", json={"value": wrong}, headers=headers())
+        assert r.status_code == 422, (wrong, r.text)
+        assert "ui.assistant" in r.json()["error"]["detail"], r.text
+    assert get(api, "preferences/ui.assistant")["value"] == {"color": "jade", "sprite": None}

@@ -20,3 +20,27 @@
 .flow-mark.live .f1{animation-delay:-.5s}
 @keyframes fl-ride{0%,100%{transform:translateY(-1.5px)}50%{transform:translateY(1.5px)}}
 [data-motion="off"] .flow-mark g{animation:none}
+
+/* Your own look for your assistant (tico/look.ts): one of eight colors, worn by every Dot under `data-dot` (on <html>,
+   or on a picker's swatch). Each is the jade's lightness and chroma at another hue, so all eight sit on the sheets as
+   the jade does in both themes; gold is lighter, as a darker one goes brown. With no choice the tokens' jade stays. */
+:root{--dot-l:.631}
+[data-theme="dark"]{--dot-l:.659}
+html[data-dot],[data-dot]{--dot-dl:0;--dot-c:.101;--dot-h:157;
+  --dot:oklch(calc(var(--dot-l) + var(--dot-dl)) var(--dot-c) var(--dot-h));
+  --dot-hi:oklch(calc(var(--dot-l) + var(--dot-dl) + .036) var(--dot-c) var(--dot-h));
+  --dot-lo:oklch(calc(var(--dot-l) + var(--dot-dl) - .045) calc(var(--dot-c) * .95) var(--dot-h))}
+[data-dot="teal"]{--dot-c:.09;--dot-h:195}
+[data-dot="sky"]{--dot-dl:.02;--dot-c:.105;--dot-h:238}
+[data-dot="indigo"]{--dot-c:.12;--dot-h:272}
+[data-dot="violet"]{--dot-c:.12;--dot-h:305}
+[data-dot="rose"]{--dot-dl:.01;--dot-c:.12;--dot-h:355}
+[data-dot="coral"]{--dot-dl:.02;--dot-c:.13;--dot-h:35}
+[data-dot="gold"]{--dot-dl:.1;--dot-c:.12;--dot-h:85}
+
+/* The sprite (tico/dot/Dot.tsx `.sprite`): a pixel face on the Dot, under `data-sprite="pixel"`. A custom property, so
+   the nearest choice wins: a plain swatch inside a page that wears the sprite stays plain. Gone with the round Dot. */
+[data-sprite="pixel"]{--dot-face:block}
+[data-sprite="none"]{--dot-face:none}
+.dw .sprite{display:var(--dot-face,none);position:absolute;inset:18%;width:64%;height:64%;fill:var(--on-dot);opacity:.82;pointer-events:none;transition:opacity .16s var(--ease)}
+.dw.s-flow .sprite,.dw.s-off .sprite{opacity:0}
