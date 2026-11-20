@@ -352,6 +352,7 @@ function SkillPage({ name }: { name: string }) {
           </>
         )
       }
+      sideFacts
       side={
         d.data && (
           <div className="sp-side">
@@ -538,6 +539,7 @@ function ProposalPage({ id }: { id: string }) {
           </>
         )
       }
+      sideFacts
       side={
         p && (
           <div className="sp-side">

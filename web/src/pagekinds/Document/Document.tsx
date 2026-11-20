@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useCards } from '@/kit/Popover';
 import { Skeleton } from '@/kit/Skeleton';
 import { Page, PageBody } from '@/pagekinds/_parts';
 import type { PageBaseProps, PageTab } from '@/pagekinds/types';
@@ -14,23 +15,29 @@ export interface DocumentProps extends PageBaseProps {
   framed?: boolean;
   /** Outline (a doc) or facts (a skill, a file), in a column at the right. */
   side?: ReactNode;
+  /** The side holds facts (a file's, a skill's), not an outline. On a phone an outline folds into the head's jump menu;
+      facts follow the body instead, in its scroll. */
+  sideFacts?: boolean;
   /** Approve or send back, when it waits on you. Stays under the body. */
   foot?: ReactNode;
 }
 
 /** Something to read and decide on: a spec, a QA report, an update, a skill. Comes with a small crumb trail. */
-export function Document({ tabs, body, framed = false, side, foot, ...page }: DocumentProps) {
+export function Document({ tabs, body, framed = false, side, sideFacts = false, foot, ...page }: DocumentProps) {
+  const under = useCards() && sideFacts;
+  const aside = side && (
+    <aside className="pk-doc-side" aria-label={sideFacts ? 'Facts' : 'Outline'}>
+      {side}
+    </aside>
+  );
   return (
     <Page kind="document" tabs={tabs} skeleton={<DocumentSkeleton />} {...page}>
       <div className={side ? 'pk-doc has-side' : 'pk-doc'}>
         <PageBody className={framed ? 'pk-doc-body is-framed' : 'read-body pk-doc-body'}>
           {framed ? body : <article className="read">{body}</article>}
+          {under && aside}
         </PageBody>
-        {side && (
-          <aside className="pk-doc-side" aria-label="Outline">
-            {side}
-          </aside>
-        )}
+        {!under && aside}
       </div>
       {foot && <footer className="pk-foot">{foot}</footer>}
     </Page>

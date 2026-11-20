@@ -256,6 +256,7 @@
   .lib .skillrow>.row-age{grid-area:age}
   .lib .skillrow .skill-does,.lib .skillrow .row-fig,.lib .skillrow .avs-n:empty{display:none}
   .lib .fv-side,.lib .sp-side{width:auto;border-left:0;border-top:1px solid var(--line);margin:0 var(--s-4);padding:var(--s-1h) 0 0}
+  .lib .read-body .sp-side{margin:0}
   .lib :is(.fv-side,.sp-side) .facts .fact,.lib .fv-ver{height:44px}
   .tools .tool .fact{grid-template-columns:112px minmax(0,1fr);height:44px}
   .lib .fv-desk.is-paper{padding:var(--s-2)}
