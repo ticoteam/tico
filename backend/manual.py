@@ -103,21 +103,25 @@ def pages():
         sources = tuple((f.stem, f.read_text(encoding="utf-8", errors="replace")) for f in files)
         key = (version, str(DOCS_DIR), sources)
         if _cache["key"] != key:
-            _cache.update(key=key, pages={name: page_text(name, text) for name, text in sources}, corpus=None)
+            _cache.update(key=key, pages={name: page_text(name, text) for name, text in sources})
         return _cache["pages"]
 
 
 def _corpus():
-    """Each manual page's whole vocabulary (title and every section), sorted, built once per `pages()` build."""
+    """Each manual page's whole vocabulary (title and every section), sorted, built once per `pages()` build: kept with
+    the pages it was built from, so a reload in between is never read as this build's."""
     found = pages()
     with _lock:
-        if _cache.get("corpus_of") is not found:
-            _cache["corpus"] = [
-                sorted(page["title_words"].union(*(section["words"] for section in page["sections"])))
-                for page in found.values()
-            ]
-            _cache["corpus_of"] = found
-        return _cache["corpus"]
+        built = _cache.get("corpus")
+        if built is None or built[0] is not found:
+            built = _cache["corpus"] = (
+                found,
+                [
+                    sorted(page["title_words"].union(*(section["words"] for section in page["sections"])))
+                    for page in found.values()
+                ],
+            )
+        return built[1]
 
 
 def _stem(token):
