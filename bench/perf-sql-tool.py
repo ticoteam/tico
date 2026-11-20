@@ -1,12 +1,13 @@
 """Measures POST /api/v2/sql at the hosted TIDY company's size (Nov 19: 699 calls in 2 h, 1.6 s average, p95 2.2 s,
 about 36 statements and 50-60 ms of SQL each; 18.6k tasks with 1,150 open, 18.7k rooms, 39k messages) on
-bench/perf-hub-overload.py's fictional company, with a message history added to its task rooms and a few private tasks.
+bench/perf-hub-overload.py's fictional company, with a message history added to its task rooms (some citing their task),
+1,800 private tasks (TIDY has 1,796) and the history settled by read_deps, as on TIDY.
 
     nice -n 10 .venv/bin/python bench/perf-sql-tool.py
 
 Env: as perf-hub-overload.py (OPEN, CLOSED, THREADS, RUNS, DB=<file> to keep and reuse the seeded database), plus
-MESSAGES (default 36000 added), ANSWERS=<file> (every statement's answer per reader as JSON, to compare two
-checkouts on one DB), PROFILE=1 (cProfile three calls by the regular person) and TOP (rows of the profile).
+MESSAGES (default 36000 added), PRIVATE (1800), ANSWERS=<file> (every statement's answer per reader as JSON, to compare
+two checkouts on one DB), PROFILE=1 (cProfile three calls by the regular person) and TOP (rows of the profile).
 
 The readers are the owner (ana), a regular person (cara) and cara's Mac runner. Only fictional data, in a temporary
 folder removed afterwards (unless DB is given). Never point it at a real hub.
@@ -38,6 +39,7 @@ from backend.tests.helpers.api import headers
 
 RUNS = int(os.environ.get("RUNS", 7))
 MESSAGES = int(os.environ.get("MESSAGES", 36000))
+PRIVATE = int(os.environ.get("PRIVATE", 1800))
 STATEMENTS = (
     "SELECT id, title, status FROM tasks WHERE status='open' ORDER BY created_at DESC LIMIT 50",
     "SELECT count(*) FROM tasks",
@@ -57,25 +59,43 @@ def seed(api):
     overload.seed(api)
     store = api.app.state.store
     with store.transaction() as c:
-        rooms = [r[0] for r in c.execute("SELECT id FROM conversations WHERE task_id IS NOT NULL ORDER BY rowid")]
+        rooms = c.execute(
+            "SELECT c.id, c.task_id FROM conversations c JOIN tasks t ON t.id=c.task_id ORDER BY c.rowid"
+        ).fetchall()
         seq = c.execute("SELECT coalesce(max(seq), 0) FROM messages").fetchone()[0]
         senders = ["human:ana", "human:ben", "human:cara"] + ["bot:" + b for b in overload.BOTS[:40]]
+        # Most of TIDY's messages carry refs: here one in twelve cites its room's task, in each spelling bots write.
+        spellings = (
+            lambda t: json.dumps({"task": t}, separators=(",", ":")),
+            lambda t: json.dumps({"task": t}),
+            lambda t: json.dumps({"task_id": t}, separators=(",", ":")),
+            lambda t: json.dumps({"task": [t]}),
+        )
         rows = []
         for n in range(MESSAGES):
-            room = rooms[(n * 7) % len(rooms)]
+            room, task = rooms[(n * 7) % len(rooms)]
+            refs = spellings[n // 12 % len(spellings)](task) if n % 12 == 0 else "{}"
             seq += 1
             rows.append(
-                (H.new_id(), room, senders[n % len(senders)], "chat", f"Update {n} on the work", "{}", H.now(), seq)
+                (H.new_id(), room, senders[n % len(senders)], "chat", f"Update {n} on the work", refs, H.now(), seq)
             )
         c.executemany(
             "INSERT INTO messages(id,conversation_id,sender_id,kind,body,refs,created_at,seq) VALUES(?,?,?,?,?,?,?,?)",
             rows,
         )
-        # A few private tasks the regular person is no party to.
-        c.execute(
-            "UPDATE tasks SET private=1 WHERE id IN (SELECT id FROM tasks WHERE owner_id LIKE 'bot:%' "
-            "ORDER BY rowid LIMIT 150)"
+        # TIDY's 1,796 private tasks: asked by Ana or Ben, the regular person (Cara) is party to none.
+        c.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, NULL)")
+        ids = [r[0] for r in c.execute("SELECT id FROM tasks ORDER BY rowid")][5::10][:PRIVATE]
+        c.executemany(
+            "UPDATE tasks SET private=1, requester_id=? WHERE id=?",
+            [("human:ben" if n % 3 else "human:ana", tid) for n, tid in enumerate(ids)],
         )
+        c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+    # Settle history as the server does beside it (TIDY: nearly every message is in read_index).
+    from backend import read_deps
+
+    with store.read() as conn:
+        read_deps.sweep(conn, gate=store.writer, searched={})
     with store.read() as c:
         api.app.state.auth.sync_access(c)
 
