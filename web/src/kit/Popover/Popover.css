@@ -1,7 +1,7 @@
 /* Shared by every popup that opens from a button: the menu, the select, the pickers, this card.
    In: opacity 160ms --ease, transform 200ms --spring from --pop at the corner nearest the button. Out: a fade, no
    scale (motion.md G10). With Motion off the tokens collapse to a fade. */
-.kit-layer{z-index:var(--z-overlay)}
+.kit-layer{z-index:var(--z-menu)}
 .kit-pop{transform-origin:var(--transform-origin);transition:opacity calc(var(--dur) * .8) var(--ease),transform var(--dur) var(--ease-arrive)}
 .kit-pop[data-starting-style]{opacity:0;transform:scale(var(--pop))}
 .kit-pop[data-ending-style]{opacity:0;transition:opacity var(--dur-fast) var(--ease-in)}
