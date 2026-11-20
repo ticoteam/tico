@@ -201,52 +201,35 @@ def label_names(c, actors):
 
 
 # ------------------------------------------------------------------ the store
-def has_fts(c):
-    return c.execute("SELECT 1 FROM sqlite_master WHERE name='docs_fts'").fetchone() is not None
-
-
-def parse_for_search(c, rowid, title, path, body):
-    """Stores what search ranks a doc by: its manual.page_text words, title words and sections (each a span of the
-    body and its words). A change to what it stores needs a migration that sets docs.search_parse to NULL: the next start parses
-    every live doc again."""
-    page = manual.page_text(path, body, title)
-    parse = json.dumps({k: page[k] for k in ("title_words", "words", "sections")}, ensure_ascii=False)
-    c.execute("UPDATE docs SET search_parse=? WHERE rowid=?", (parse, rowid))
-
-
 def index(c, rowid, title, path, body):
-    """A doc's search forms after a write of its title, path or body: its stored parse and its full-text row."""
-    parse_for_search(c, rowid, title, path, body)
-    if has_fts(c):
-        c.execute("DELETE FROM docs_fts WHERE rowid=?", (rowid,))
-        c.execute("INSERT INTO docs_fts(rowid,title,path,body) VALUES(?,?,?,?)", (rowid, title, path, body))
+    """A doc's full-text rows after a write of its title, path or body: one per section (manual.section_rows)."""
+    unindex(c, rowid)
+    c.executemany(
+        "INSERT INTO doc_sections_fts(rowid,title,path,heading,body) VALUES(?,?,?,?,?)",
+        manual.section_rows(rowid, title, path, manual.page_text(path, body, title)),
+    )
 
 
 def unindex(c, rowid):
-    c.execute("UPDATE docs SET search_parse=NULL WHERE rowid=?", (rowid,))  # an archived doc's is made on restore
-    if has_fts(c):
-        c.execute("DELETE FROM docs_fts WHERE rowid=?", (rowid,))
+    c.execute(
+        "DELETE FROM doc_sections_fts WHERE rowid BETWEEN ? AND ?",
+        (rowid << manual.SECTION_BITS, ((rowid + 1) << manual.SECTION_BITS) - 1),
+    )
 
 
 def ensure_schema(c, settings=None):
-    """Each live doc's stored parse where it has none, the full-text index (rebuilt when it is behind the rows) and the
-    one-time move of the old linked sources and approved repositories into linked docs. Safe to run at every start."""
+    """The full-text index (rebuilt when its docs are not the live ones) and the one-time move of the old linked
+    sources and approved repositories into linked docs. Safe to run at every start."""
     from .flight import begin
 
     done = begin(c)
     try:
-        while rows := c.execute(
-            "SELECT rowid,title,path,body FROM docs WHERE archived=0 AND search_parse IS NULL LIMIT 100"
-        ).fetchall():
-            for rowid, title, path, body in rows:
-                parse_for_search(c, rowid, title, path, body)
-        if has_fts(c):
-            live = c.execute("SELECT COUNT(*) FROM docs WHERE archived=0").fetchone()[0]
-            if live != c.execute("SELECT COUNT(*) FROM docs_fts").fetchone()[0]:
-                c.execute("DELETE FROM docs_fts")
-                c.execute(
-                    "INSERT INTO docs_fts(rowid,title,path,body) SELECT rowid,title,path,body FROM docs WHERE archived=0"
-                )
+        live = c.execute("SELECT COUNT(*) FROM docs WHERE archived=0").fetchone()[0]
+        indexed = f"SELECT COUNT(DISTINCT rowid >> {manual.SECTION_BITS}) FROM doc_sections_fts"
+        if live != c.execute(indexed).fetchone()[0]:
+            c.execute("DELETE FROM doc_sections_fts")
+            for rowid, title, path, body in c.execute("SELECT rowid,title,path,body FROM docs WHERE archived=0"):
+                index(c, rowid, title, path, body)
         migrate(c, settings)
         c.commit()
     except Exception:
@@ -607,17 +590,21 @@ def add_link(c, actor, body):
 
 
 # ------------------------------------------------------------------ the service
+def named(title, path, tokens, glossary=None):
+    """Whether the words name the doc: every word of its title (but team, docs and doc) or of its path (but .md)."""
+    words = [t for t in manual.query_words(title, glossary) if t not in ("team", "docs", "doc")]
+    path_words = manual._words(re.sub(r"\.md$", "", path, flags=re.I))
+    return bool(words) and all(t in tokens for t in words) or all(t in tokens for t in path_words)
+
+
 def merge_ranked(groups, limit, tokens):
-    # Database and Python relevance scores have different scales; positions are comparable.
+    # Each source ranks its own results on its own scale; positions are comparable.
     def weight(row):
         if row.get('type') == 'linked':
             return 0.005
         if row.get('type') != 'internal' or not row.get('path', '').startswith('_librarian/'):
             return 1
-        title = [t for t in manual.query_words(row['title']) if t not in ('team', 'docs', 'doc')]
-        named = bool(title) and all(t in tokens for t in title)
-        named = named or all(t in tokens for t in manual._words(row['path']))
-        return 1 if named else 0.2
+        return 1 if named(row['title'], row['path'], tokens) else 0.2
 
     out = [
         {**row, "score": round(weight(row) * 100 / (60 + rank), 6)}
@@ -1030,57 +1017,43 @@ class Docs:
         external = self.app.state.doc_sources.find(c, tokens, limit, source_id) if self.app else []
         if source_id:
             return external
-        internal, linked = self.find_internal(c, tokens, limit), self.find_linked(c, tokens)
-        if external:
-            contents = merge_ranked([internal, external], limit, tokens)
-            metadata = [
-                {**row, 'score': 0.5 / (60 + i)} for i, row in enumerate(sorted(linked, key=lambda r: -r['score']), 1)
-            ]
-            return (contents + metadata)[:limit]
-        results = internal + linked
-        results.sort(key=lambda r: (-r["score"], r["type"] != "internal", r["title"].casefold()))
-        return results[:limit]
+        contents = merge_ranked([self.find_internal(c, tokens, limit), external], limit, tokens)
+        linked = sorted(self.find_linked(c, tokens), key=lambda r: -r["score"])
+        return (contents + [{**row, "score": 0.5 / (60 + i)} for i, row in enumerate(linked, 1)])[:limit]
 
     def find_internal(self, c, tokens, limit):
-        out = []
-        weights = manual.query_weights(tokens)
+        """Each matching doc's best section by bm25 (manual.best_sections); a doc the words name comes first and a
+        librarian map or log (`_librarian/`) the words do not name ranks lower. Results carry no score: `find`
+        ranks them by position with the other sources (merge_ranked)."""
+        best = {doc: (section, rank) for doc, section, rank in manual.best_sections(c, "doc_sections_fts", tokens)}
+        docs = c.execute(
+            "SELECT rowid,id,path,title FROM docs WHERE archived=0 AND rowid IN (SELECT value FROM json_each(?))",
+            (json.dumps(list(best)),),
+        ).fetchall()
         # All candidate titles use one glossary snapshot, rather than restatting every manual file per row.
-        glossary = manual.pages().get('glossary', {}).get('body', '')
-        sql, params = (
-            "SELECT id,path,title,body,search_parse FROM docs WHERE archived=0 AND search_parse IS NOT NULL",
-            (),
-        )
-        if has_fts(c):
-            expression = " OR ".join('"' + manual._stem(token) + '"*' for token in tokens)
-            sql += " AND rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"
-            params = (expression,)
-        for row in c.execute(sql, params):
-            page = {**json.loads(row["search_parse"]), "body": row["body"], "folded": row["body"].casefold()}
-            best = manual.best_section(page, tokens, weights)
-            if not best:
-                continue
-            score, section = best
-            title_tokens = [t for t in manual.query_words(row["title"], glossary) if t not in ("team", "docs", "doc")]
-            named = bool(title_tokens) and all(t in tokens for t in title_tokens)
-            named = named or all(t in tokens for t in manual._words(row["path"]))
-            if named:
-                score += 100 * sum(weights[t] for t in tokens if manual._has(page["title_words"], t))
-            elif row["path"].startswith("_librarian/"):
-                score *= 0.2
+        glossary = manual.pages().get("glossary", {}).get("body", "")
+
+        def order(row):
+            first = named(row["title"], row["path"], tokens, glossary)
+            rank = best[row["rowid"]][1]
+            return (not first, rank * 0.2 if not first and row["path"].startswith("_librarian/") else rank)
+
+        out = []
+        for row in sorted(docs, key=order)[:limit]:
+            section = best[row["rowid"]][0]
+            heading, body = c.execute("SELECT heading,body FROM doc_sections_fts WHERE rowid=?", (section,)).fetchone()
             out.append(
                 {
                     "type": "internal",
                     "id": row["id"],
                     "path": row["path"],
                     "title": row["title"],
-                    "section": section["heading"],
-                    "anchor": section["anchor"],
-                    "excerpt": row["body"][section["start"] : section["end"]],  # made an excerpt once kept, below
-                    "score": round(score, 3),
+                    "section": heading,
+                    "anchor": manual.slug(heading),
+                    "excerpt": manual._excerpt(" ".join(body.split()), tokens),
                 }
             )
-        out = sorted(out, key=lambda r: -r["score"])[:limit]
-        return [{**r, "excerpt": manual._excerpt(" ".join(r["excerpt"].split()), tokens)} for r in out]
+        return out
 
     @staticmethod
     def expressions(tokens):
@@ -1094,11 +1067,10 @@ class Docs:
 
     def find_linked(self, c, tokens):
         out = []
-        weights = manual.query_weights(tokens)
         for r in c.execute("SELECT * FROM linked_docs WHERE archived=0"):
             fields = [set(manual._words(r[key])) for key in ("title", "description", "url")]
-            hits = [(t, [manual._hits(field, t) for field in fields]) for t in tokens]
-            score = sum(weights[t] * (2.0 * h[0] + h[1] + 0.5 * h[2]) for t, h in hits)
+            hits = [[manual._hits(field, t) for field in fields] for t in tokens]
+            score = sum(2.0 * h[0] + h[1] + 0.5 * h[2] for h in hits)
             if not score:
                 continue
             out.append(
@@ -1256,11 +1228,7 @@ def install_docs(app, store, auth, mutate):
         found = docs.search(who, q, limit, source_id)["results"]
         if collection == "all":
             team = [{**r, "collection": "company"} for r in found]
-            if any(r["type"] == "external" for r in found):
-                return {"results": merge_ranked([team, manual.search(q, limit)], limit, manual.query_words(q))}
-            found = team + manual.search(q, limit)
-            found.sort(key=lambda row: (-row["score"], row["type"] == "linked", row["title"].casefold()))
-            found = found[:limit]
+            return {"results": merge_ranked([team, manual.search(q, limit)], limit, manual.query_words(q))}
         return {"results": found}
 
     @app.get("/api/v2/docs/manual")
