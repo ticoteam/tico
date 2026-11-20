@@ -7,8 +7,10 @@ the index is rebuilt when the running version (or a file) changes, with no netwo
 `collection: "manual"` and the label "Tico manual", the file (`docs/<name>.md`) and a link to that page.
 """
 
-import re
+import bisect
+import functools
 import math
+import re
 import threading
 from pathlib import Path
 
@@ -69,16 +71,27 @@ def page_text(name, text, title=None):
     for s in sections:
         body = " ".join(" ".join(s["lines"]).split())
         if s["heading"] or body:
+            words = set(_words(s["heading"] + " " + body))
             out.append(
                 {
                     "heading": s["heading"],
                     "anchor": s["anchor"],
                     "body": body,
-                    "words": set(_words(s["heading"] + " " + body)),
+                    "words": words,
                     "head_words": set(_words(s["heading"])),
+                    "sorted_words": sorted(words),  # for _prefixed: a word lookup that does not walk the section
+                    "folded": body.casefold(),
                 }
             )
-    return {"name": name, "title": title, "body": text, "sections": out, "title_words": set(_words(title + " " + name))}
+    title_words = set(_words(title + " " + name))
+    return {
+        "name": name,
+        "title": title,
+        "body": text,
+        "sections": out,
+        "title_words": title_words,
+        "sorted_title_words": sorted(title_words),
+    }
 
 
 def pages():
@@ -94,6 +107,23 @@ def pages():
         return _cache["pages"]
 
 
+def _corpus():
+    """Each manual page's whole vocabulary (title and every section), sorted, built once per `pages()` build: kept with
+    the pages it was built from, so a reload in between is never read as this build's."""
+    found = pages()
+    with _lock:
+        built = _cache.get("corpus")
+        if built is None or built[0] is not found:
+            built = _cache["corpus"] = (
+                found,
+                [
+                    sorted(page["title_words"].union(*(section["words"] for section in page["sections"])))
+                    for page in found.values()
+                ],
+            )
+        return built[1]
+
+
 def _stem(token):
     return token[:-1] if len(token) > 4 and token.endswith("s") else token
 
@@ -103,26 +133,44 @@ def _hits(words, token):
     return token in words or any(w.startswith(stem) for w in words)
 
 
+def _prefixed(ordered, token):
+    """`_hits` on a sorted word list, by bisection: the words starting with the stem sit together, from the first word
+    not below it (the token itself starts with its stem, so `token in words` needs no check of its own)."""
+    stem = _stem(token)
+    at = bisect.bisect_left(ordered, stem)
+    return at < len(ordered) and ordered[at].startswith(stem)
+
+
+@functools.lru_cache(maxsize=8)
+def _glossary_rules(glossary):
+    """The glossary's old-word -> new-word rules, compiled, longest first."""
+    mappings = re.findall(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$", glossary, re.M)
+    return tuple(
+        (re.compile(r"\b" + re.escape(old.casefold()) + r"\b"), new.casefold())
+        for old, new in sorted(mappings, key=lambda pair: -len(pair[0]))
+        if old.casefold() not in ("instead of", "---")
+    )
+
+
+@functools.lru_cache(maxsize=2048)
+def _query_words(q, glossary):
+    text = q.casefold()
+    for pattern, new in _glossary_rules(glossary):
+        text = pattern.sub(new, text)
+    tokens = _words(text)
+    return tuple(dict.fromkeys(t for t in tokens if t not in STOP)) or tuple(tokens)
+
+
 def query_words(q, glossary=None):
-    text = str(q).casefold()
     if glossary is None:
         glossary = pages().get("glossary", {}).get("body", "")
-    mappings = re.findall(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$", glossary, re.M)
-    for old, new in sorted(mappings, key=lambda pair: -len(pair[0])):
-        if old.casefold() in ("instead of", "---"):
-            continue
-        text = re.sub(r"\b" + re.escape(old.casefold()) + r"\b", new.casefold(), text)
-    tokens = _words(text)
-    return list(dict.fromkeys(t for t in tokens if t not in STOP)) or tokens
+    return list(_query_words(str(q), glossary))
 
 
 def query_weights(wanted):
-    corpus = [
-        page["title_words"] | set().union(*(section["words"] for section in page["sections"]))
-        for page in pages().values()
-    ]
+    corpus = _corpus()
     return {
-        term: 1 + math.log((len(corpus) + 1) / (1 + sum(_hits(words, term) for words in corpus))) for term in wanted
+        term: 1 + math.log((len(corpus) + 1) / (1 + sum(_prefixed(words, term) for words in corpus))) for term in wanted
     }
 
 
@@ -130,20 +178,14 @@ def best_section(page, wanted, weights=None):
     weights = weights or query_weights(wanted)
     need = 1
     best = None
+    titled = {t: _prefixed(page["sorted_title_words"], t) for t in wanted}
     for section in page["sections"]:
-        words = section["words"] | page["title_words"]
-        have = [t for t in wanted if _hits(words, t)]
+        have = [t for t in wanted if titled[t] or _prefixed(section["sorted_words"], t)]
         if len(have) < need:
             continue
-        body = section["body"].casefold()
+        body = section["folded"]
         score = sum(
-            weights[t]
-            * (
-                10
-                + 5 * _hits(page["title_words"], t)
-                + 15 * _hits(section["head_words"], t)
-                + min(body.count(_stem(t)), 5)
-            )
+            weights[t] * (10 + 5 * titled[t] + 15 * _hits(section["head_words"], t) + min(body.count(_stem(t)), 5))
             for t in have
         )
         if best is None or score > best[0]:

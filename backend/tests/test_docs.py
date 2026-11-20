@@ -14,8 +14,13 @@ def test_create_edit_conflict_history_and_restore(api):
     assert doc["path"] == "refund-policy.md" and doc["version"] == 1 and doc["updated_by_name"]
     assert make(api, "Refund policy", "again")["path"] == "refund-policy-2.md"  # a default path never collides
     call(api, "POST", "docs", {"title": "x", "path": "Refund-Policy.md"}, expected=409)  # a chosen one does
+    found = lambda: next(
+        r for r in call(api, "GET", "docs/search", params={"q": "refund"})["results"] if r["id"] == doc["id"]
+    )
+    assert found()["excerpt"] == "Refund within 30 days."
     second = edit(api, doc, body="Refund within 14 days.", note="Shorter window")["doc"]
     assert second["version"] == 2
+    assert found()["excerpt"] == "Refund within 14 days."  # search parses each version once, never an old one again
     stale = edit(api, doc, who=BEN, body="mine", expected=409)  # ben still holds version 1
     assert stale["error"]["code"] == "version_conflict" and stale["error"]["version"] == 2
     assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == "Refund within 14 days."
