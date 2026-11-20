@@ -12,8 +12,9 @@ updater has no browser session, and an installer is nothing to protect):
 - `GET /download/file/{version}/{name}` — one bundle, as a short-lived S3 link.
 
 `GET /api/download/{os}` is the signed-in question the site asks before it offers a download.
-Without a bucket manifest, downloads come from the running version's public GitHub release.
-A company bucket build always wins, including when it predates the server.
+Without a bucket manifest, downloads come from the running version's public GitHub release: the Electron app's
+installers (`Tico-<version>-...`, desktop/electron-builder.yml) when the release has them, otherwise the Tauri app's
+that its `latest.json` names. A company bucket build always wins, including when it predates the server.
 The updater feed never falls back to a generic GitHub build, even if the bucket build is older.
 GitHub lookups (including failures) are cached for ten minutes and never carry credentials.
 
@@ -42,6 +43,40 @@ MANIFEST_MAX_BYTES = 1024 * 1024
 OS_NAMES = ("mac", "windows", "linux")
 FILE_RE = re.compile(r"^[\w][\w. +()-]{0,200}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$")
+_VERSION = r"(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?)"
+# The Electron app's installers on a GitHub release, best first: Apple chip only from v0.6.146, universal before.
+# Its signing is decided in CI (desktop.yml) and recorded nowhere on the release, so these are offered as unsigned.
+ELECTRON_INSTALLERS = {
+    "mac": (re.compile(rf"^Tico-{_VERSION}-arm64\.dmg$"), re.compile(rf"^Tico-{_VERSION}-universal\.dmg$")),
+    "windows": (re.compile(rf"^Tico-{_VERSION}-setup\.exe$"),),
+    "linux": (re.compile(rf"^Tico-{_VERSION}-x86_64\.AppImage$"),),
+    "linux_deb": (re.compile(rf"^Tico-{_VERSION}-amd64\.deb$"),),
+}
+
+
+def electron_installers(assets):
+    """The Electron app's installer for each system the release has one for, as unsigned (see ELECTRON_INSTALLERS)."""
+    found = {}
+    for os_name, patterns in ELECTRON_INSTALLERS.items():
+        for pattern in patterns:
+            # Normally one per release; should a release carry two versions, the newest.
+            matches = [
+                (releases.parse(m["version"]), name, m["version"]) for name in assets if (m := pattern.match(name))
+            ]
+            matches = [m for m in matches if m[0]]
+            if matches:
+                _, name, version = max(matches)
+                asset = assets[name]
+                found[os_name] = {
+                    "file": name,
+                    "bytes": asset.get("size"),
+                    "url": asset["browser_download_url"],
+                    "version": version,
+                    "signed": False,
+                    "notarized": False,
+                }
+                break
+    return found
 
 
 class Downloads:
@@ -158,7 +193,8 @@ class Downloads:
             if not isinstance(entry, dict) or not FILE_RE.fullmatch(str(entry.get("file") or "")):
                 return None
             # Company human downloads also stay on the hub's authorized bucket path.
-            safe_installers[os_name] = {k: v for k, v in entry.items() if k != "url"}
+            # Its files are this manifest's version: an installer names no version of its own.
+            safe_installers[os_name] = {k: v for k, v in entry.items() if k not in ("url", "version")}
         return {**value, "platforms": safe_platforms, "installers": safe_installers, "app_kind": "company"}
 
     def github_manifest(self):
@@ -211,58 +247,63 @@ class Downloads:
                         and FILE_RE.fullmatch(str(a.get("name") or ""))
                         and a.get("browser_download_url") == asset_base + quote(a["name"])
                     }
-                    if "latest.json" not in assets:
-                        raise ValueError("no app manifest")
-                    response = http.get(assets["latest.json"]["browser_download_url"])
-                    response.raise_for_status()
-                    value = response.json()
-                    # A release whose desktop shell did not change carries the previous app forward: the app's
-                    # version may be older than the server's, but its files are assets of this release.
-                    if not isinstance(value, dict) or not VERSION_RE.fullmatch(str(value.get("version") or "")):
-                        raise ValueError("wrong app version")
-                    platforms = value.get("platforms")
-                    if not isinstance(platforms, dict) or not platforms:
-                        raise ValueError("no updater platforms")
-                    asset_urls = {a["browser_download_url"] for a in assets.values()}
-                    for entry in platforms.values():
-                        if (
-                            not isinstance(entry, dict)
-                            or not entry.get("signature")
-                            or entry.get("url") not in asset_urls
-                        ):
-                            raise ValueError("invalid updater asset")
-                    installers = {}
-                    for name, asset in assets.items():
-                        os_name = (
-                            "mac"
-                            if name.endswith(".dmg")
-                            else "windows"
-                            if name.endswith("-setup.exe")
-                            else "linux"
-                            if name.endswith(".AppImage")
-                            else "linux_deb"
-                            if name.endswith(".deb")
-                            else None
-                        )
-                        if not os_name:
-                            continue
-                        metadata = (value.get("installers") or {}).get(os_name) or {}
-                        # The release also carries the Electron app's Tico-<version>-... installers with the same
-                        # suffixes; when the manifest names its installer and the release has it, only that file counts.
-                        named = metadata.get("file")
-                        if named != name and named in assets:
-                            continue
-                        installers[os_name] = {
-                            "file": name,
-                            "bytes": asset.get("size"),
-                            "url": asset["browser_download_url"],
-                            "signed": bool(metadata.get("signed", False)),
-                            "notarized": bool(metadata.get("notarized", False)),
-                        }
-                    value = {**value, "installers": installers, "app_kind": "generic"}
+                    value = self._github_tauri(http, assets) if "latest.json" in assets else None
+                    installers = {**(value or {}).get("installers", {}), **electron_installers(assets)}
+                    if not installers:
+                        raise ValueError("no desktop app")
+                    # Without Tauri's manifest there is no updater feed here, only installers, each with its version.
+                    value = {**(value or {"version": self.version, "platforms": {}}), "installers": installers}
+                    value["app_kind"] = "generic"
             except Exception:
                 value = None
         return value
+
+    @staticmethod
+    def _github_tauri(http, assets):
+        """The Tauri app's manifest from the release, with `installers` holding only its own files."""
+        response = http.get(assets["latest.json"]["browser_download_url"])
+        response.raise_for_status()
+        value = response.json()
+        # A release whose desktop shell did not change carries the previous app forward: the app's
+        # version may be older than the server's, but its files are assets of this release.
+        if not isinstance(value, dict) or not VERSION_RE.fullmatch(str(value.get("version") or "")):
+            raise ValueError("wrong app version")
+        platforms = value.get("platforms")
+        if not isinstance(platforms, dict) or not platforms:
+            raise ValueError("no updater platforms")
+        asset_urls = {a["browser_download_url"] for a in assets.values()}
+        for entry in platforms.values():
+            if not isinstance(entry, dict) or not entry.get("signature") or entry.get("url") not in asset_urls:
+                raise ValueError("invalid updater asset")
+        installers = {}
+        for name, asset in assets.items():
+            os_name = (
+                "mac"
+                if name.endswith(".dmg")
+                else "windows"
+                if name.endswith("-setup.exe")
+                else "linux"
+                if name.endswith(".AppImage")
+                else "linux_deb"
+                if name.endswith(".deb")
+                else None
+            )
+            # The Electron app's Tico-<version>-... files share the suffixes; they are electron_installers'.
+            if not os_name or any(p.match(name) for p in ELECTRON_INSTALLERS[os_name]):
+                continue
+            metadata = (value.get("installers") or {}).get(os_name) or {}
+            # When the manifest names its installer and the release has it, only that file counts.
+            named = metadata.get("file")
+            if named != name and named in assets:
+                continue
+            installers[os_name] = {
+                "file": name,
+                "bytes": asset.get("size"),
+                "url": asset["browser_download_url"],
+                "signed": bool(metadata.get("signed", False)),
+                "notarized": bool(metadata.get("notarized", False)),
+            }
+        return {**value, "installers": installers}
 
     def file_url(self, version, name):
         if not self.bucket or not VERSION_RE.fullmatch(version) or not FILE_RE.fullmatch(name):
@@ -285,15 +326,16 @@ class Downloads:
         entry = (manifest.get("installers") or {}).get(os_name)
         if not isinstance(entry, dict) or not FILE_RE.fullmatch(str(entry.get("file") or "")):
             return None
+        # A GitHub Electron installer carries its own version; a company's files are its manifest's.
+        version = entry.get("version") or manifest["version"]
         return {
-            "version": manifest["version"],
+            "version": version,
             "file": entry["file"],
             "bytes": entry.get("bytes"),
             "app_kind": manifest.get("app_kind", "company"),
             "notarized": bool(entry.get("notarized", False)),
             "signed": bool(entry.get("signed", False)),
-            "url": entry.get("url")
-            or f"{self.base}/download/file/{quote(manifest['version'], safe='')}/{quote(entry['file'])}",
+            "url": entry.get("url") or f"{self.base}/download/file/{quote(version, safe='')}/{quote(entry['file'])}",
         }
 
 

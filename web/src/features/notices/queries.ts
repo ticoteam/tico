@@ -1,6 +1,6 @@
-import type { Query, QueryCacheNotifyEvent } from '@tanstack/react-query';
+import { queryOptions, type Query, type QueryCacheNotifyEvent } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
-import { ApiError } from '@/api/client';
+import { ApiError, api } from '@/api/client';
 import type { Problem } from '@/api/schema';
 import { queryClient } from '@/data';
 
@@ -107,4 +107,33 @@ export async function checkPlan(): Promise<boolean> {
   // An answer lifts it (onEvent), a refusal keeps it. With nothing left to read, the reload after it reads anew.
   if (again.length === 0) hold(null);
   return held === null;
+}
+
+/* ---------------------------------------------------------------- the new desktop app, for the older one */
+
+export type DesktopSystem = 'mac' | 'windows' | 'linux';
+
+/** Every desktop app's files, when the server names no installer (docs/desktop.md). */
+export const RELEASES_URL = 'https://github.com/ticoteam/tico/releases/latest';
+
+/** The server's answer (backend/downloads.py): the installer it hands out for one system. */
+export interface DesktopDownload {
+  available: boolean;
+  url?: string;
+  /** `generic`: from the running GitHub release (the new app when the release has it); `company`: the company's own build. */
+  app_kind?: 'generic' | 'company';
+}
+
+export const desktopDownloadQuery = (system: DesktopSystem) =>
+  queryOptions({
+    queryKey: ['notices', 'desktop-download', system],
+    queryFn: ({ signal }) => api.get<DesktopDownload>(`/api/download/${system}`, { signal }),
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** Where Download goes: the server's generic installer, else the release page. A company build is the older app. */
+export function downloadHref(answer: DesktopDownload | undefined): string {
+  const url = answer?.available && answer.app_kind === 'generic' ? answer.url : undefined;
+  return url && /^https:\/\/\S+$/.test(url) ? url : RELEASES_URL;
 }

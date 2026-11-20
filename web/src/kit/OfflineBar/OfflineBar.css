@@ -1,6 +1,9 @@
-/* The note at the foot of the menu while the app is offline (pages/15-start/start.css .nav-note). */
+/* The note at the foot of the menu (pages/15-start/start.css .nav-note): the offline bar, or one notice (NavNote). */
 .nav-note{flex:none;display:flex;align-items:flex-start;gap:var(--s-2h);margin:0 var(--s-2) var(--s-2);padding:calc(var(--s-2) + 1px) var(--s-2h);border-radius:var(--r-ctl);
   background:var(--well);color:var(--ink);font-size:var(--t-sm);line-height:1.4}
 .nav-note>.ico{margin-top:calc(var(--s-0) / 2);stroke-width:2}
 .nav-note b{display:block;font-weight:var(--w-strong)}
 .nav-note span{color:var(--ink-2)}
+/* A note the person may put away: its close mark at the top right; an action under the title. */
+.nav-note>.ib{margin:calc(-1 * var(--s-1)) calc(-1 * var(--s-1)) 0 auto}
+.nav-note .btn{margin-top:var(--s-2)}

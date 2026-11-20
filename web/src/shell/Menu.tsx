@@ -83,7 +83,7 @@ export interface MenuProps {
   can?: (page: string) => boolean;
   /* drawn as icons; inside a Frame this follows the sheet's fold */
   folded?: boolean;
-  /* a note above the foot, open menu only: the offline bar */
+  /* a note above the foot, open menu only: the offline bar, or the new desktop app (inside the older one) */
   note?: ReactNode;
   /* the company pick's menu (the root's rows: this company, the others the desktop app holds, Add company); without
      it the pick is a plain button that calls onPickCompany */

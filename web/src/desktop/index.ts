@@ -49,6 +49,11 @@ export interface TicoDesktop {
 export const desktop = (): TicoDesktop | null =>
   (typeof window !== 'undefined' && (window as { tico?: TicoDesktop }).tico) || null;
 
+/** Inside the older desktop app (the Tauri shell, app/): its bridge is `window.ticoNative`, and it has no `window.tico`.
+    The page there gets none of the desktop features; it is only told a new app is ready (features/notices DesktopMove). */
+export const inOldDesktopApp = (): boolean =>
+  typeof window !== 'undefined' && !desktop() && (window as { ticoNative?: unknown }).ticoNative != null;
+
 /** The desktop preload marks `<html data-desktop>` before the first paint; this covers a page the preload marked late. */
 export function markDesktop(): void {
   const t = desktop();

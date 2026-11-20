@@ -814,8 +814,10 @@ manifest, including older environment builds without an `app_kind` field, and re
 none exists. Explicitly generic manifests and updater URLs outside the hub's download-file
 route are rejected. Company installer URLs are constructed from that same hub route. Download
 storage uses the blob store's region, endpoint and bucket prefix; environment artifacts belong
-under `<prefix>/releases/app/` when a prefix is configured. When the manifest names an installer, the fallback offers
-that file only, never the Electron app's file with the same suffix.
+under `<prefix>/releases/app/` when a prefix is configured. The fallback offers the Electron app's installers when the
+release has them (`Tico-<version>-arm64.dmg`, else `-universal.dmg`; `-setup.exe`; `-x86_64.AppImage`; `-amd64.deb`),
+never marked signed or notarized since the release records neither, and the Tauri app's that `latest.json` names
+otherwise.
 
 **The Electron app** (`desktop/`) ships on the same releases, beside the Tauri app, the same way: the
 `electron-changes` job builds it with `.github/workflows/desktop.yml` when `desktop/` (tests and Markdown aside) or
