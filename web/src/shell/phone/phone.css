@@ -5,6 +5,7 @@
    Lips are full width and opaque (README, audit fix), so the mock's rest scales (.97, .93, .89) are not used.
 
    State on .phone (React):  data-card="none|tico-half|tico|menu|chat"   .has-chat  .is-peek  .is-handle  .is-back  .is-call
+   State on a card (React):  .is-up (raised)  .is-behind (behind the raised card: it peeks above it)
    State on .phone (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
      style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top */
 
@@ -19,7 +20,12 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --lipM:38px;                /* the menu's lip, above Tico's */
   --lipC:0px;                 /* the second chat's lip, above the menu's: 38px when a chat is open */
   --c:0;                      /* 0..1: how far a downward scroll has drawn the back lips down */
-  --drawM:calc(28px * var(--c));--drawC:0px;
+  /* a card behind another keeps this much of its top edge in view: 40% of the company's mark (a 20px mark 10px down
+     its lip; anything from 20% to 50% reads), enough to know the layer and tap it. Lips drawn down by a scroll stop there. */
+  --peek:18px;
+  --drawM:calc((var(--lipM) - var(--peek)) * var(--c));--drawC:0px;
+  --behind:var(--peek);       /* the peeks above a raised Tico: the menu's, and an open chat's above that */
+  --at:0px;                   /* where the raised card stands (its translateY), below the peeks of the cards behind it */
   --top:calc(var(--sat) + 57px);   /* where a raised card stops: the page's head stays in view above it */
   --half:410px;               /* Tico at half: this much of its card shows */
   --kb:0px;--vv-top:0px;
@@ -31,7 +37,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --up:var(--phone-up);       /* the shadow cast up from a card */
   --dim:var(--phone-dim)}     /* of --scrim */
 /* the card spring (--card-dur, --card-ease, and motion Off's 1ms) comes from tokens-app.css */
-.phone.has-chat{--lipC:38px;--drawC:var(--drawM)}
+.phone.has-chat{--lipC:38px;--drawC:var(--drawM);--behind:calc(var(--peek) * 2)}
 .phone.is-peek{--lipT:84px}
 .phone.is-handle{--cards-h:0px}
 .phone.is-back{--p:1}
@@ -99,9 +105,18 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 /* a request that waits on the person holds the bottom with its decision (plan/approvals.html): nothing rests over it,
    no lip, no handle, no second face. The task's chat is its Chat tab then. */
 .phone:has(>.pg [data-dock] .dcx){--cards-h:0px}
-.phone:has(>.pg [data-dock] .dcx)>.ly:not(.is-up){--ty:calc(100% + 48px)}
-.phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card="tico"]>.ly-tico{--ty:0px}
-.phone[data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--half))}
+.phone:has(>.pg [data-dock] .dcx)>.ly:not(.is-up):not(.is-behind){--ty:calc(100% + 48px)}
+/* raised: the card stands below the peeks of the cards behind it, and they come up with it in order (plan/layers.html:
+   Tico › Company › Thread, front to back), so the next layer is a tap away without tucking the raised one first */
+.phone[data-card="tico"]{--at:var(--behind)}
+.phone[data-card="tico-half"]{--at:calc(100% - var(--half))}
+.phone.has-chat[data-card="menu"]{--at:var(--peek)}
+.phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card^="tico"]>.ly-tico{--ty:var(--at)}
+.phone>.ly-menu.is-behind,.phone[data-card="menu"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek))}
+.phone[data-card^="tico"]>.ly-chat.is-behind{--ty:calc(var(--at) - var(--peek) * 2)}
+/* a call's card starts at the top of the screen, not at --top: a place counted from --top is moved down by it */
+.phone.is-call[data-card="menu"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek))}
+.phone.is-call[data-card="tico"]>.ly-chat.is-behind{--ty:calc(var(--top) + var(--at) - var(--peek) * 2)}
 /* raised, a card stands a step higher */
 .phone[data-card="menu"]>.ly-menu,.phone[data-card="chat"]>.ly-chat,.phone[data-card^="tico"]>.ly-tico{box-shadow:var(--lift-3),0 -14px 34px -10px var(--up)}
 
@@ -118,8 +133,13 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .ly-chat>.lip{height:42px}
 .phone .ly-chat .lip .lip-t{color:var(--ink-2)}
 .phone .lip>*{transition:opacity var(--dur) var(--ease)}
-/* drawn down, the back lips' contents fade by the time they are half way */
-.phone>.ly-menu>.lip>*,.phone>.ly-chat>.lip>*{opacity:calc(1 - min(1, var(--c) * 2))}
+/* drawn down, the back lips' words fade by the time they are half way; the company's mark stays, 40% of it in view */
+.phone>.ly-menu>.lip>:not(.co-mark),.phone>.ly-chat>.lip>:not(.co-mark){opacity:calc(1 - min(1, var(--c) * 2))}
+/* a peek shows the top of its lip: the words would be cut, so they go and the company's mark stays. A peek is a tap
+   target only (the lip under it raises its card); a control on it would be cut too. */
+.phone>.ly.is-behind>.lip>:not(.co-mark){opacity:0}
+.phone>.ly.is-behind>.lip-act{opacity:0;pointer-events:none}
+.phone.has-chat>.ly-menu.is-behind>.lip::before{display:none}
 /* a control that stands on a lip without being part of its tap target ("Join", mute) */
 .phone .lip-act{position:absolute;top:0;right:14px;z-index:1;display:flex;align-items:center;gap:6px;transition:opacity var(--dur) var(--ease)}
 .phone .ly-tico>.lip-act{height:var(--lipT)}
@@ -138,6 +158,9 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 /* a finger holds a card: no transitions on what follows it; lip and content crossfade by position */
 .phone[data-drag]>.pg,.phone[data-drag]>.pg::after{transition:none}
 .phone[data-drag="tico"]>.ly-tico,.phone[data-drag="menu"]>.ly-menu,.phone[data-drag="chat"]>.ly-chat{transition:none}
+/* the cards behind ride above the one held (PhoneCards, riders); their words go as they become peeks */
+.phone[data-drag="tico"]>.ly:is(.ly-menu,.ly-chat),.phone[data-drag="menu"]>.ly-chat{transition:none}
+.phone[data-drag="tico"]>.ly:is(.ly-menu,.ly-chat)>.lip>:not(.co-mark),.phone[data-drag="menu"]>.ly-chat>.lip>:not(.co-mark){opacity:min(1 - var(--f), 1 - min(1, var(--c) * 2));transition:none}
 .phone[data-drag="tico"]>.ly-tico>.full,.phone[data-drag="menu"]>.ly-menu>.full,.phone[data-drag="chat"]>.ly-chat>.full{opacity:var(--f);transition:none}
 .phone[data-drag="tico"]>.ly-tico>.lip,.phone[data-drag="menu"]>.ly-menu>.lip,.phone[data-drag="chat"]>.ly-chat>.lip{opacity:calc(1 - var(--f));transition:none}
 .phone[data-drag="tico"]>.ly-tico>.grab,.phone[data-drag="menu"]>.ly-menu>.grab,.phone[data-drag="chat"]>.ly-chat>.grab{opacity:var(--f);transition:none}
@@ -154,6 +177,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .ly-tico .lip .lip-did span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .phone .ly-tico>.full{height:var(--vis,100%)}
 .phone[data-card="tico-half"] .ly-tico>.full{--vis:var(--half)}
+.phone[data-card="tico"] .ly-tico>.full{--vis:calc(100% - var(--at))}
 .phone .tico-head{flex:none;height:58px;display:flex;align-items:center;gap:4px;padding:0 6px 0 56px}
 .phone .tico-head b{font-weight:var(--w-title);font-size:var(--t-md);line-height:var(--lh-tight);margin-right:auto}
 .phone .ly-tico .chat-body{padding:4px 16px 8px}
@@ -173,6 +197,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .tree-row,.phone .tree-team{height:44px;font-size:15px}
 .phone .tree-team{font-size:var(--t-base)}
 .phone .tree-head{height:36px}
+.phone[data-card="menu"] .ly-menu>.full{height:calc(100% - var(--at))}
 .phone .m-foot{flex:none;height:56px;display:flex;align-items:center;gap:2px;padding:0 6px 0 12px;border-top:1px solid var(--line);margin-bottom:calc(var(--sab) + var(--lipT))}
 .phone .m-foot .me-name{display:inline-flex;align-items:center;gap:10px;font-size:15px}
 .phone .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
@@ -212,19 +237,21 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 
 /* ---------- the keyboard: the card being typed in rides it (platforms.md 2.3) ----------
    The system keyboard sets the pace, so what follows it has no transition of its own. The layer is shifted down by
-   any pan iOS made, so it fills exactly what can be seen. Handles and the other lips are away while typing. */
+   any pan iOS made, so it fills exactly what can be seen. Handles and the lips in front are away while typing; the
+   peeks of the cards behind stay above the card being typed in, clear of its box, and ride the keyboard with it. */
 .phone[data-typing]{transform:translateY(var(--vv-top))}
-.phone[data-typing="tico"]>.ly:not(.ly-tico),.phone[data-typing="chat"]>.ly:not(.ly-chat),.phone[data-typing="menu"]>.ly:not(.ly-menu),.phone[data-typing="page"]>.ly{--ty:calc(100% + 48px)}
-.phone[data-typing="tico"]>.ly-tico,.phone[data-typing="chat"]>.ly-chat,.phone[data-typing="menu"]>.ly-menu{transition:none}
-.phone[data-typing="tico"][data-card="tico-half"]>.ly-tico{--ty:calc(100% - var(--kb) - 204px)}
+.phone[data-typing]>.ly:not(.is-up):not(.is-behind){--ty:calc(100% + 48px)}
+.phone[data-typing="tico"]>.ly-tico,.phone[data-typing="chat"]>.ly-chat,.phone[data-typing="menu"]>.ly-menu,.phone[data-typing]>.ly.is-behind{transition:none}
+.phone[data-typing="tico"][data-card="tico-half"]{--at:calc(100% - var(--kb) - 204px)}
 .phone[data-typing="tico"][data-card="tico-half"]>.ly-tico>.full{--vis:204px}
-.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--kb))}
+.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full{--vis:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="tico"][data-card="tico-half"] .tico-head{display:none}
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .tico-dot{opacity:0}
 /* stylelint-disable-next-line color-no-hex -- mask */
 .phone[data-typing="tico"][data-card="tico-half"] .ly-tico .chat-body{padding-top:18px;-webkit-mask-image:linear-gradient(transparent 4px,#000 16px);mask-image:linear-gradient(transparent 4px,#000 16px)}
 .phone[data-typing] .tico-foot,.phone[data-typing] .p-dock{padding-bottom:8px}
-.phone[data-typing="chat"]>.ly-chat>.full,.phone[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--kb))}
+.phone[data-typing="chat"]>.ly-chat>.full{height:calc(100% - var(--kb))}
+.phone[data-typing="menu"]>.ly-menu>.full{height:calc(100% - var(--at) - var(--kb))}
 .phone[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}
 /* typing in a page's own message box (an agent's page): the page ends at the keyboard and the stack waits under it */
 .phone[data-typing="page"]>.pg{bottom:var(--kb)}

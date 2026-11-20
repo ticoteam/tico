@@ -1,13 +1,14 @@
 // A first run of the new app in a real browser, against a server already running on a rehearsal copy (e2e/hub).
 //   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, responsive, dev, light (default: all)
-// Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173. Pictures hold real data: keep them local.
+// Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173 (HUB= and APP= point elsewhere). Pictures hold
+// real data: keep them local.
 /// <reference lib="dom" />
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright';
 
-const HUB = 'http://127.0.0.1:8765';
-const APP = 'http://127.0.0.1:5173';
+const HUB = process.env.HUB ?? 'http://127.0.0.1:8765';
+const APP = process.env.APP ?? 'http://127.0.0.1:5173';
 const TOKEN_FILE = process.env.HUB_TOKEN_FILE ?? '';
 const [out = '.', ...wanted] = process.argv.slice(2);
 const want = (s: string) => !wanted.length || wanted.includes(s);
@@ -175,7 +176,7 @@ async function desktop(browser: Browser) {
 
 async function phone(browser: Browser, name: string) {
   note(`phone (${name})`);
-  const { ctx, page } = await open(browser, true, '/tasks');
+  const { ctx, page } = await open(browser, true, '/tasks', true); // gestures and layout only: nothing is written
   await settle(page, 4000);
   await shot(page, `phone-${name}-rest`);
   const lip = page.locator('.phone [data-card="tico"], .phone .lip').first();
@@ -206,6 +207,19 @@ async function phone(browser: Browser, name: string) {
     note(`  history ${histBefore} → ${await page.evaluate(() => history.length)}`);
   } else bad('no menu lip button');
 
+  // a raised card keeps the stack behind it: the menu peeks above Tico, enough of its mark to know it, and a tap on the
+  // peek brings it forward without tucking Tico first
+  await page.goto(`${APP}/tasks`);
+  await settle(page, 2500);
+  await page.getByRole('button', { name: 'Open Tico' }).first().tap();
+  await settle(page, 900);
+  await shot(page, `phone-${name}-tico-peeks`);
+  if (await peekTaps(page, 'menu', 'tico', 'the menu behind Tico')) {
+    check((await page.locator('.phone').getAttribute('data-card')) === 'menu', 'a tap on the peek brings the menu forward', 'the menu peek did not raise the menu');
+  }
+  await page.goBack();
+  await settle(page, 900);
+
   // Tico's Dot never sits on a field: not the handle on a raised chat's message box, not a lip on a page's own box
   await page.goto(`${APP}/threads`);
   await settle(page, 2500);
@@ -235,9 +249,51 @@ async function phone(browser: Browser, name: string) {
       await settle(page, 900);
       await noTicoOnFields(page, "a task's chat, typing");
       await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator('.phone .ly-chat textarea').first().blur();
+      await settle(page, 600);
+      // Tico raised from the chat: the chat and the menu peek above it in order, and the chat is a tap away
+      await page.locator('.phone>.nub').tap();
+      await settle(page, 1200);
+      await shot(page, `phone-${name}-chat-peeks`);
+      await noTicoOnFields(page, 'Tico raised over a task');
+      if (await peekTaps(page, 'chat', 'menu', 'the chat behind the menu, behind Tico')) {
+        check((await page.locator('.phone').getAttribute('data-card')) === 'chat', 'a tap on the chat peek brings the chat forward', 'the chat peek did not raise the chat');
+      }
     }
   }
   await ctx.close();
+}
+
+/** A card behind a raised one shows a peek above the card in front of it, and a finger on the peek reaches its lip. */
+async function peekTaps(page: Page, card: 'menu' | 'chat', front: 'tico' | 'menu', where: string): Promise<boolean> {
+  const g = await page.evaluate(
+    ([c, f]) => {
+      const lip = document.querySelector(`.phone>.ly-${c}>.lip`);
+      const over = document.querySelector(`.phone>.ly-${f}`);
+      if (!lip || !over) return null;
+      const a = lip.getBoundingClientRect();
+      const top = over.getBoundingClientRect().top;
+      const x = a.left + a.width / 2;
+      const y = (a.top + top) / 2;
+      const mark = lip.querySelector('.co-mark')?.getBoundingClientRect();
+      return {
+        strip: top - a.top,
+        x,
+        y,
+        hit: !!document.elementFromPoint(x, y)?.closest(`.phone>.ly-${c}>.lip`),
+        mark: mark ? Math.max(0, Math.min(mark.bottom, top) - mark.top) / mark.height : null,
+      };
+    },
+    [card, front] as const,
+  );
+  if (!g) return (bad(`${where}: no card`), false);
+  check(g.strip >= 15 && g.strip <= 24, `${where} peeks ${Math.round(g.strip)}px`, `${where} peeks ${Math.round(g.strip)}px (want 15-24)`);
+  if (g.mark !== null) check(g.mark >= 0.2 && g.mark <= 0.5, `${Math.round(g.mark * 100)}% of the company mark shows`, `${Math.round(g.mark * 100)}% of the company mark shows (want 20-50%)`);
+  check(g.hit, `${where} can be tapped`, `${where}: its peek is covered`);
+  if (!g.hit) return false;
+  await page.touchscreen.tap(g.x, g.y);
+  await settle(page, 900);
+  return true;
 }
 
 /** No Tico mark (the stack's handle, Tico's Dot on its lip) drawn over a message box or a field that can be seen. */

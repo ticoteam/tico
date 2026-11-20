@@ -1,7 +1,8 @@
 /* The phone's layered cards (B/phone/notes.md is the model; motion.md section 6 the gestures; platforms.md 2 the
    Safari rules). The page is the back card. Tico, the menu and an open chat (or a call) rest as lips at the bottom
-   and come up over the page by tap, Enter or a drag. Which card is up is device state, but each raised card owns a
-   history entry so Back closes it. Everything that follows a finger is written straight to the DOM, never through
+   and come up over the page by tap, Enter or a drag. The cards behind a raised one come up with it and keep a peek of
+   their top edge above it, in order, so the next layer is one tap away. Which card is up is device state, but each
+   raised card owns a history entry so Back closes it. Everything that follows a finger is written straight to the DOM, never through
    React state, so a drag or a scroll costs no render. */
 import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
@@ -59,16 +60,25 @@ const KEY = 'tico-next:card';
 const GRAB = '.lip,.nub,.grab,.tico-head,.m-head,.c-head,.ly-chat .side-head,.call-head,[data-grab]';
 const PRESSABLE = 'button,a,input,textarea,select,label,[contenteditable],[role="button"],[role="tab"],[role="link"]';
 const EDITABLE = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])';
-const LIP = { tico: 58, peek: 84, menu: 38, chat: 38, draw: 28 } as const;
+const LIP = { tico: 58, peek: 84, menu: 38, chat: 38 } as const;
+/** Back to front. A card behind the raised one keeps a peek of its top edge above it (phone.css --peek). */
+const ORDER: readonly Slot[] = ['chat', 'menu', 'tico'];
+const PEEK = 18;
 const SCROLL = { start: 20, draw: 48, dead: 2, idle: 120 } as const;
 
 const slotOf = (card: PhoneCard): Slot | null => (card === 'none' ? null : card === 'menu' || card === 'chat' ? card : 'tico');
 const historyCard = (state: unknown): PhoneCard | undefined =>
   state && typeof state === 'object' && KEY in state ? ((state as Record<string, PhoneCard>)[KEY] ?? undefined) : undefined;
 
+/** A card behind the one a finger holds. Taken up, the held card pushes it along `depth` peeks above; taken down, it
+    follows at the gap it began with. */
+type Rider = { el: HTMLElement; depth: number; top: number; y0: number };
+
 type Drag = {
   slot: Slot | 'nub';
   card: HTMLElement | null;
+  top: number;
+  riders: Rider[];
   id: number;
   x0: number;
   y0: number;
@@ -102,6 +112,10 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   }
 
   const isUp = (s: Slot) => slotOf(card) === s;
+  const raised = slotOf(card);
+  // the cards behind the raised one that are there to show: Tico's has the menu and an open chat, the menu's the chat
+  const behindOf = (front: Slot | null): Slot[] => (front ? ORDER.slice(0, ORDER.indexOf(front)).filter((s) => s !== 'chat' || !!second) : []);
+  const behind = behindOf(raised);
   const handleMode = handle || card === 'chat';
   const back = card === 'menu' || card === 'tico' || (card === 'chat' && second !== 'call');
   const peeking = !!peek && card === 'none';
@@ -268,15 +282,19 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const r = root.current!;
     const size = el.offsetHeight;
     const sab = r.querySelector<HTMLElement>(':scope > .ph-sab')?.offsetHeight ?? 0;
-    const draw = LIP.draw * c.current;
+    const gap = parseFloat(getComputedStyle(r).getPropertyValue('--peek')) || PEEK;
+    // a scroll draws the back lips down to their peek
+    const draw = (LIP.menu - gap) * c.current;
     const lipT = peeking ? LIP.peek : LIP.tico;
+    // raised, a card stands below the peeks of the cards behind it
+    const top = behindOf(slot).length * gap;
     if (slot === 'tico') {
       const half = parseFloat(getComputedStyle(r).getPropertyValue('--half')) || 410;
-      return { stops: [0, size - half, size - sab - lipT], cards: ['tico', 'tico-half', 'none'] };
+      return { stops: [top, size - half, size - sab - lipT], cards: ['tico', 'tico-half', 'none'] };
     }
     const menuLip = LIP.menu - draw;
     const lip = slot === 'menu' ? size - sab - lipT - menuLip : size - sab - lipT - menuLip - (LIP.chat - draw);
-    return { stops: [0, lip], cards: [slot, 'none'] };
+    return { stops: [top, lip], cards: [slot, 'none'] };
   };
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
@@ -288,19 +306,29 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const pressed = target.closest(PRESSABLE);
     if (isHead && pressed && zone.contains(pressed)) return;
     const el = zone.closest<HTMLElement>('.ly');
+    // a peek behind the raised card is a tap target only: a sloppy tap must not drag the stack down
+    if (el?.classList.contains('is-behind')) return;
     const slot: Slot | 'nub' = zone.matches('.nub') ? 'nub' : el?.classList.contains('ly-tico') ? 'tico' : el?.classList.contains('ly-menu') ? 'menu' : 'chat';
     if (isHead && !el?.classList.contains('is-up')) return;
     let stops: number[] = [];
     let cards: PhoneCard[] = [];
     let ty0 = 0;
+    const ty = (n: HTMLElement) => new DOMMatrixReadOnly(getComputedStyle(n).transform).m42; // mid-settle, take it where it is
+    const riders: Rider[] = [];
     if (el && slot !== 'nub') {
       ({ stops, cards } = stopsFor(slot, el));
-      ty0 = new DOMMatrixReadOnly(getComputedStyle(el).transform).m42; // mid-settle, take it where it is
+      ty0 = ty(el);
+      behindOf(slot).forEach((s, i, all) => {
+        const b = root.current?.querySelector<HTMLElement>(`:scope > .ly-${s}`);
+        if (b) riders.push({ el: b, depth: all.length - i, top: b.offsetTop, y0: b.offsetTop + ty(b) });
+      });
     }
     const at = cards.indexOf(card);
     drag.current = {
       slot,
       card: el,
+      top: el?.offsetTop ?? 0,
+      riders,
       id: e.pointerId,
       x0: e.clientX,
       y0: e.clientY,
@@ -341,6 +369,13 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     const lip = d.stops[d.stops.length - 1] ?? 0;
     d.ty = rubber(d.ty0 + dy, top, lip, d.size);
     d.card.style.transform = `translateY(${d.ty}px)`;
+    // the cards behind come up with it, a peek above each other; taken down, they follow at the gap they had
+    const gap = parseFloat(getComputedStyle(r).getPropertyValue('--peek')) || PEEK;
+    const y = d.top + d.ty;
+    for (const b of d.riders) {
+      const at = d.ty <= d.ty0 ? Math.min(b.y0, y - b.depth * gap) : y + b.y0 - (d.top + d.ty0);
+      b.el.style.transform = `translateY(${at - b.top}px)`;
+    }
     const half = d.slot === 'tico' ? (d.stops[1] ?? lip) : lip;
     const takeover = d.slot === 'chat' && second === 'call';
     r.style.setProperty('--p', String(takeover ? 0 : progress(Math.max(d.ty, top), half, top)));
@@ -365,6 +400,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     }
     // hand the card back to CSS in this same frame, so its transition runs from where the finger left it
     if (d.card) d.card.style.transform = '';
+    for (const b of d.riders) b.el.style.transform = '';
     r.style.removeProperty('--p');
     r.style.removeProperty('--f');
     delete r.dataset.drag;
@@ -412,15 +448,14 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
   const cls = ['phone', second && 'has-chat', peeking && 'is-peek', handleMode && 'is-handle', back && 'is-back', second === 'call' && 'is-call'].filter(Boolean).join(' ');
   const nubOn = handleMode && slotOf(card) !== 'tico';
   // a card that cannot be seen takes no focus: focusing it would scroll the stack and strand the cards mid-screen.
-  // Out of view: below the screen (no chat open, or the page holds the bottom), or under a raised card in front.
-  const away = (s: Slot) =>
-    (s === 'chat' && (!second || slotOf(card) === 'menu')) || (handleMode && !isUp(s)) || (slotOf(card) === 'tico' && s !== 'tico');
+  // Out of view: below the screen (no chat open, or the page holds the bottom). A card behind a raised one peeks.
+  const away = (s: Slot) => (s === 'chat' && !second) || (handleMode && !isUp(s) && !behind.includes(s));
 
   const cardOf = (s: Slot, full: ReactNode, lip: ReactNode, act: ReactNode, extra?: ReactNode) => {
     const up = isUp(s);
     return (
       <section
-        className={`ly ly-${s}${up ? ' is-up' : ''}`}
+        className={`ly ly-${s}${up ? ' is-up' : behind.includes(s) ? ' is-behind' : ''}`}
         role={up ? 'dialog' : undefined}
         aria-label={label[s]}
         tabIndex={up ? -1 : undefined}
