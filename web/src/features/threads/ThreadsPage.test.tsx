@@ -134,33 +134,47 @@ describe('The menu\'s Threads list @s156', () => {
     expect(mail.closest('.cr')?.querySelector('.cr-arch')).toBeTruthy();
   });
 
-  it('Archive is the one verb: on a row, it leaves and folds into Archived at the foot', async () => {
+  it('Archive is only where it is the viewer\'s own: a mail row archives in its mailbox; a Tico thread has none', async () => {
     const asked: { url: string; method: string; body?: string }[] = [];
-    let archived: Thread[] = [];
+    // once archived, the inbox no longer holds it
+    const inbox = () => (asked.some((c) => c.url.includes('/organize')) ? [] : [letter]);
+    const letter = { msg_id: 'l1', thread_id: 'mt1', mailbox: 'orders@fernhill.example', epoch: Math.floor(Date.now() / 1000) - 600, from_header: 'Ruth Ames <r@x>', subject: 'Terms' };
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      asked.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body as string | undefined });
-      const body = String(url).includes('/threads/archived')
-        ? { threads: archived, next_cursor: null }
-        : init?.method === 'PATCH'
-          ? ((archived = [{ ...thread('t2', 'Hiring', 30), archived_at: at(1) }]), archived[0])
-          : {};
+      const u = String(url);
+      asked.push({ url: u, method: init?.method ?? 'GET', body: init?.body as string | undefined });
+      const body = u.includes('/mail/mailboxes')
+        ? { mailboxes: [{ address: 'orders@fernhill.example', connection: 'workspace', may: { organize: true } }] }
+        : u.includes('/mail/messages?')
+          ? { messages: inbox() }
+          : u.includes('/threads/archived')
+            ? { threads: [{ ...thread('t9', 'Old launch', 90), archived_at: at(80) }], next_cursor: null }
+            : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
     queryClient.setQueryData(threadKeys.list, seeded());
     show(<MenuThreads asks={new Set()} />, '/threads');
     const hiring = await screen.findByTitle('Hiring');
-    expect(screen.queryByRole('button', { name: 'Archived' })).toBeNull();
-    fireEvent.click(hiring.closest('.cr')!.querySelector<HTMLButtonElement>('.cr-arch')!);
-    await waitFor(() => expect(screen.queryByTitle('Hiring')).toBeNull());
-    expect(JSON.parse(asked.find((c) => c.method === 'PATCH')!.body!)).toEqual({ archived: true });
-    const fold = await screen.findByRole('button', { name: /Archived/, expanded: false });
-    fireEvent.click(fold);
-    expect((await screen.findByTitle('Hiring')).getAttribute('href')).toBe('/threads/t2');
-    expect(screen.getByTitle('Hiring').closest('.cr')?.querySelector('.cr-arch')).toBeNull();
+    // a thread's archive is everyone's on the server: no verb on its row
+    expect(hiring.closest('.cr')?.querySelector('.cr-arch')).toBeNull();
+    const mail = await screen.findByTitle('Ruth Ames: Terms');
+    fireEvent.click(mail.closest('.cr')!.querySelector<HTMLButtonElement>('.cr-arch')!);
+    await waitFor(() => expect(screen.queryByTitle('Ruth Ames: Terms')).toBeNull());
+    const organize = asked.find((c) => c.method === 'POST' && c.url.includes('/mail/messages/organize'));
+    expect(JSON.parse(organize!.body!)).toEqual({ mailbox: 'orders@fernhill.example', action: 'archive', ids: ['l1'] });
+    expect(asked.some((c) => c.method === 'PATCH')).toBe(false);
+    // archived threads fold at the foot
+    fireEvent.click(await screen.findByRole('button', { name: /Archived/, expanded: false }));
+    expect((await screen.findByTitle('Old launch')).getAttribute('href')).toBe('/threads/t9');
   });
 
-  it('a swipe to the left on a touch screen shows Archive; a tap puts the row back', async () => {
-    serve(() => ({ status: 200, body: {} }));
+  it('a swipe to the left on a touch screen shows Archive on a mail row; a tap puts the row back', async () => {
+    serve((url) =>
+      url.includes('/mail/mailboxes')
+        ? { status: 200, body: { mailboxes: [{ address: 'orders@fernhill.example', connection: 'workspace' }] } }
+        : url.includes('/mail/messages?')
+          ? { status: 200, body: { messages: [{ msg_id: 'l1', thread_id: 'mt1', mailbox: 'orders@fernhill.example', epoch: Math.floor(Date.now() / 1000) - 600, from_header: 'Ruth Ames <r@x>', subject: 'Terms' }] } }
+          : { status: 200, body: {} },
+    );
     // jsdom has no PointerEvent: one that carries the pointer's kind and place
     class Pointer extends MouseEvent {
       pointerType: string;
@@ -172,13 +186,13 @@ describe('The menu\'s Threads list @s156', () => {
     vi.stubGlobal('PointerEvent', Pointer);
     queryClient.setQueryData(threadKeys.list, seeded());
     show(<MenuThreads asks={new Set()} />, '/threads');
-    const row = (await screen.findByTitle('Hiring')).closest('.cr')!;
+    const row = (await screen.findByTitle('Ruth Ames: Terms')).closest('.cr')!;
     fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 200, clientY: 10 });
     fireEvent.pointerMove(row, { pointerType: 'touch', clientX: 120, clientY: 12 });
     expect(row.className).toContain('is-swiped');
     expect(within(row as HTMLElement).getByRole('button', { name: 'Archive' }).className).toBe('cr-swipe');
     fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 60, clientY: 10 });
-    fireEvent.click(screen.getByTitle('Hiring'));
+    fireEvent.click(screen.getByTitle('Ruth Ames: Terms'));
     expect(row.className).not.toContain('is-swiped');
   });
 

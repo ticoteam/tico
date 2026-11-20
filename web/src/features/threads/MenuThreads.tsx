@@ -29,8 +29,8 @@ const when = (s: string | null | undefined) => (s ? Date.parse(s) : 0);
 /**
  * The menu's Threads tab (plan/threads-team.html, pass 7): every conversation but your 1:1 DMs, newest first. Team
  * threads, group DMs, and what came from outside (mail and texts), each a row: its face, its title, one quiet mark
- * for where it came from, and its age, or the Dot when it asks you. Bold is new. Archive is the one verb: on hover,
- * or a swipe on a phone. What is archived folds at the foot.
+ * for where it came from, and its age, or the Dot when it asks you. Bold is new. Archive is the one verb, where it is
+ * the viewer's own (mail): on hover, or a swipe on a phone. Archived threads fold at the foot.
  */
 export function MenuThreads({ asks }: MenuThreadsProps) {
   const me = useMe();
@@ -59,7 +59,7 @@ export function MenuThreads({ asks }: MenuThreadsProps) {
       <div className="ca-list" role="tabpanel" aria-label="Threads">
         {items.map((it) =>
           it.kind === 'thread' ? (
-            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id)} swiped={swiped === it.key} onSwipe={swipe(it.key)} />
+            <ThreadLine key={it.key} t={it.t} ask={asks.has(it.t.id)} />
           ) : it.kind === 'mail' ? (
             <MailLine key={it.key} r={it.r} box={it.box} organize={it.organize} swiped={swiped === it.key} onSwipe={swipe(it.key)} />
           ) : (
@@ -120,16 +120,15 @@ function ThreadFace({ t, size = 22 }: { t: Thread; size?: 16 | 22 }) {
   );
 }
 
-function ThreadLine({ t, ask, gone, swiped = false, onSwipe }: { t: Thread; ask: boolean; gone?: boolean; swiped?: boolean; onSwipe?: (on: boolean) => void }) {
+/* No Archive on a Tico thread yet: the server's archive (PATCH archived) archives the thread for everyone in it.
+   Server need: a per-person archive for threads, a member-level archived flag that clears when someone writes. Until
+   then only mail, whose archive is the viewer's own mailbox's, has the verb. */
+function ThreadLine({ t, ask, gone }: { t: Thread; ask: boolean; gone?: boolean }) {
   const title = useTitle(t);
   const isNew = !gone && (unreadOf(t) > 0 || !!t.me?.activity);
   const at = gone ? t.archived_at : t.last_message_at;
   return (
-    <Line
-      archive={gone || t.me?.can_manage === false ? undefined : () => void press('threads.archive', { thread: t.id })}
-      swiped={swiped}
-      onSwipe={onSwipe}
-    >
+    <Line>
       <Link
         className={isNew ? 'tree-row is-new' : 'tree-row'}
         to="/threads/$thread"
