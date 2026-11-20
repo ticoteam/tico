@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { run, useAction } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
 import { clock } from '@/conversation';
@@ -101,6 +101,19 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   // A refusal, or what Approve binds to did not load: said in place of what Approve does, never over it.
   const fault = !!error || shown.isError || (preview?.complete === false && !shown.isPlaceholderData);
 
+  // A refusal that lands once the box has gone (the person moved on) is said in a toast: never silent.
+  const here = useRef(true);
+  useEffect(() => {
+    here.current = true;
+    return () => {
+      here.current = false;
+    };
+  }, []);
+  const refused = (res: { error?: string; why?: string }) => {
+    if (!here.current) toast(failedToast(res));
+    setError(reasonOf(res.error));
+  };
+
   useEffect(() => {
     if (!asking) return;
     onAsking?.(true);
@@ -123,8 +136,8 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     hold?.(res.ok ? null : r);
     if (!res.ok) {
       // It moved under the person: read it again, say Changed, and wait for a new press.
-      if (res.error?.startsWith('task_changed')) return void shown.refetch();
-      return setError(reasonOf(res.error));
+      if (res.error?.startsWith('task_changed') && here.current) return void shown.refetch();
+      return refused(res);
     }
     // The answer to take back: a plain answer names it; an OK bound to what was shown leaves it on the task's request.
     const out = res.out as { answer_id?: string; task?: TaskData } | undefined;
@@ -149,7 +162,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     hold?.(r, true);
     const res = await request.run({ task: t.id, requirement: r.requirement_id, note });
     hold?.(res.ok ? null : r);
-    if (!res.ok) return setError(reasonOf(res.error));
+    if (!res.ok) return refused(res);
     setAsking(false);
     setNote('');
   };

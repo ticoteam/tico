@@ -4,7 +4,7 @@ import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
 import { Markdown } from '@/kit/Markdown';
-import { changesAskedOf, decisionName, decisionOf, emailOf, personOf, sendTitle, tabAddress } from './model';
+import { answeringOf, changesAskedOf, decisionName, decisionOf, emailOf, personOf, sendTitle, tabAddress } from './model';
 import { Go } from './parts';
 import { addressesOf, emailSendQuery, taskDetailQuery, type TaskData } from './queries';
 import { isSendTask, sendTasksOf, stillToGo } from './waits';
@@ -20,15 +20,16 @@ export interface Waiting {
   send: string | null;
 }
 
-/** Each email's OK hung on a task that waits on the person (or that they asked changes on), once its send is read, so
-    one already sent or canceled never flashes. `settled` once every read is in. */
+/** Each email's OK hung on a task that waits on the person (or that they asked changes on, or whose answer is being
+    sent), once its send is read, so one already sent or canceled never flashes. `settled` once every read is in. An
+    answer in flight keeps it: its tab, and the decision on it, stay until the server says, so a refusal shows there. */
 export function useWaiting(t: TaskData): { items: Waiting[]; settled: boolean } {
   const me = useQuery(meQuery).data?.id;
   const reads = useQueries({ queries: sendTasksOf(t).map((id) => ({ ...taskDetailQuery(id), retry: false })) });
   const subs = reads
     .flatMap((q) => (q.data ? [q.data] : []))
     .flatMap((sub) => {
-      const r = decisionOf(sub) ?? changesAskedOf(sub, me);
+      const r = decisionOf(sub) ?? changesAskedOf(sub, me) ?? answeringOf(sub);
       return r ? [{ sub, send: emailOf(r) }] : [];
     });
   const mails = useQueries({ queries: subs.map(({ sub, send }) => ({ ...emailSendQuery(sub.id, send ?? ''), enabled: !!send })) });

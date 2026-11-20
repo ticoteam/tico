@@ -174,11 +174,14 @@ export const snoozeTask = (id: string, until: string | null) =>
 /** Approve or ask changes on one requirement. The row leaves Flow at once and comes back if the server refuses.
     `shown` is the hash of what the person was shown (decisionShownQuery): an OK bound to it is given with it; null
     answers a stage's own OK, which has no grant, with the page version it was asked on (ui/app/decide.ts). */
+/** The id an answer shows under while it is sent: the server's own takes its place (answeringOf). */
+export const PENDING_ANSWER = 'pending';
+
 export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: string, shown?: string | null): Promise<TaskResult> {
   const me = queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
   const answered = (t: TaskData): Fields => ({
     to_leave: (t.to_leave ?? []).map((r) =>
-      r.requirement_id === rid ? { ...r, met: value === 'ok', may: [], answer: { id: 'pending', value, note: note ?? null, by: me, at: new Date().toISOString() } } : r,
+      r.requirement_id === rid ? { ...r, met: value === 'ok', may: [], answer: { id: PENDING_ANSWER, value, note: note ?? null, by: me, at: new Date().toISOString() } } : r,
     ),
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });

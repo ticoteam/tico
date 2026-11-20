@@ -120,7 +120,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
   if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
-  const opened = first ?? defaultTab(tabs);
+  // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
+  const opened = first !== null && tabs.some((x) => x.slug === first) ? first : defaultTab(tabs);
   const on = known ? tab : opened;
   useEffect(() => {
     if (known || unresolved || first === null) return;
