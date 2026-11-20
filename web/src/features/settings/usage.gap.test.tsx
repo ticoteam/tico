@@ -172,7 +172,8 @@ describe('Usage › Limits: company, teams, Add limit, the panel', () => {
     serve(() => ok({}));
     seedLimits();
     show(<UsagePage search={{ view: 'limits' }} />, '/company/usage?view=limits');
-    expect((await screen.findByTitle('Whole company')).getAttribute('href')).toContain('open=pool');
+    // the company row is named for the company (t-limits)
+    expect((await screen.findByTitle('Sample Co')).getAttribute('href')).toContain('open=pool');
     expect(screen.getByTitle('Product')).toBeTruthy();
     const design = screen.getByTitle('Design').querySelector('.row-title') as HTMLElement;
     expect(design.style.getPropertyValue('--depth')).toBe('1');

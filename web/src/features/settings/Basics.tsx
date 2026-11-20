@@ -42,6 +42,7 @@ import {
   type DirectorySource,
   type DirectorySynced,
   type DirectoryView,
+  type PageOwnerRow,
   type ScreenMode,
 } from './queries';
 
@@ -53,10 +54,7 @@ export function General() {
   const config = useQuery(configQuery);
   const access = useQuery(accessQuery);
   const owners = useQuery(pageOwnersQuery);
-  const agents = useAgentFaces();
-  const faces = useFaces();
   const c = config.data;
-  const named = (actor?: string | null) => (actor ? (faces[actor]?.name ?? '') : '');
   const pages = Object.entries(owners.data ?? {});
   return (
     <>
@@ -82,36 +80,57 @@ export function General() {
           </Facts>
         </Section>
       )}
-      {pages.length > 0 && (
-        <Section name="Page owners" count={pages.length}>
-          <Facts label="Page owners">
-            {pages.map(([page, row]) => {
-              const fallback = named(row.default);
-              const choice = row.choice ?? 'default';
-              const value = choice === 'none' || choice === 'default' || agents.some((a) => a.id === choice) ? choice : 'default';
-              return (
-                <Line key={page} label={row.name ?? page} target={`page-owner:${page}`}>
-                  <Select
-                    label={`${row.name ?? page} owner`}
-                    labelHidden
-                    look="quiet"
-                    value={value}
-                    onValueChange={(owner) => void act('settings.setPageOwner', { page, owner })}
-                    options={[
-                      { value: 'default', label: fallback ? `Default (${fallback})` : 'Default' },
-                      { value: 'none', label: 'No owner' },
-                      ...agents.map((a) => ({ value: a.id, label: a.name })),
-                    ]}
-                  />
-                </Line>
-              );
-            })}
-          </Facts>
-        </Section>
-      )}
+      {pages.length > 0 && <PageOwners pages={pages} />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <TicoSection version={c?.version} />
     </>
+  );
+}
+
+/** Page owners (t-settings-general): the pages given an owner, each a face and a name to change; the pages left on
+    their defaults are one line that opens them. */
+function PageOwners({ pages }: { pages: [string, PageOwnerRow][] }) {
+  const agents = useAgentFaces();
+  const faces = useFaces();
+  const [all, setAll] = useState(false);
+  const set = pages.filter(([, row]) => row.choice && row.choice !== 'default');
+  const rest = pages.filter(([, row]) => !row.choice || row.choice === 'default');
+  const line = ([page, row]: [string, PageOwnerRow]) => {
+    const choice = row.choice ?? 'default';
+    const value = choice === 'none' || choice === 'default' || agents.some((a) => a.id === choice) ? choice : 'default';
+    const who = value === 'default' ? row.default : value === 'none' ? undefined : value;
+    const face = who ? faces[who] : undefined;
+    return (
+      <Line key={page} label={row.name ?? page} target={`page-owner:${page}`}>
+        {face && <Avatar kind={face.kind} name={face.name} hue={face.hue} size={22} decorative />}
+        <Select
+          label={`${row.name ?? page} owner`}
+          labelHidden
+          look="quiet"
+          value={value}
+          onValueChange={(owner) => void act('settings.setPageOwner', { page, owner })}
+          options={[
+            { value: 'default', label: (row.default && faces[row.default]?.name) || 'Default', meta: 'Default' },
+            { value: 'none', label: 'No owner' },
+            ...agents.map((a) => ({ value: a.id, label: a.name })),
+          ]}
+        />
+      </Line>
+    );
+  };
+  return (
+    <Section name="Page owners" count={set.length || undefined}>
+      <Facts label="Page owners">
+        {set.map(line)}
+        {rest.length > 0 && (
+          <button type="button" className="fact set-defaults" aria-expanded={all} onClick={() => setAll(!all)}>
+            <span>On their defaults</span>
+            <span className="fact-v">{`${rest.length} ${set.length ? 'more ' : ''}${rest.length === 1 ? 'page' : 'pages'}`}</span>
+          </button>
+        )}
+        {all && rest.map(line)}
+      </Facts>
+    </Section>
   );
 }
 

@@ -60,7 +60,8 @@ describe('team model', () => {
   it('writes the model line from the server’s model list', () => {
     const row = { model: 'm-1', reasoning_effort: 'xhigh' } as AgentRow;
     expect(modelLine(row, [{ id: 'm-1', label: 'Opus 5.5' } as never])).toBe('Opus 5.5, XHigh');
-    expect(modelLine({ resolved_model_label: 'haiku 5.5' } as AgentRow)).toBe('Haiku 5.5, Default');
+    expect(modelLine({ resolved_model_label: 'haiku 5.5' } as AgentRow)).toBe('Claude Haiku 5.5, Default');
+    expect(modelLine({ resolved_model_label: 'gpt 6.2 sol', reasoning_effort: 'high' } as AgentRow)).toBe('GPT 6.2 Sol, High');
     expect(modelLine({} as AgentRow)).toBe('');
   });
 

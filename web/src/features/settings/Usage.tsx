@@ -11,8 +11,8 @@ import { Popover } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Dashboard, FiguresStrip, Section } from '@/pagekinds';
-import { agentsQuery } from '@/features/team/routing';
-import { Meter, NO_ACCESS, PageOwner, Verb, isForbidden, useFaces, usd } from './parts';
+import { agentsQuery, modelName } from '@/features/team/routing';
+import { Meter, NO_ACCESS, PageOwner, Verb, dollars, isForbidden, useFaces, usd } from './parts';
 import {
   agentUsageWhereQuery,
   limitsQuery,
@@ -44,7 +44,9 @@ const RANGES: readonly { value: UsageRange; label: string }[] = [
 /** API-equivalent: what the runs would have cost on keys, plan runs included. */
 export const spent = (f: Pick<UsageFigures, 'est_cost_usd' | 'subscription_equiv_usd'>) => (f.est_cost_usd ?? 0) + (f.subscription_equiv_usd ?? 0);
 const tokens = (f: UsageFigures) => f.input_tokens + f.cached_tokens + f.cache_write_tokens + f.output_tokens;
-export const fmtTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
+/** "418M", "5.4B", "8.2M": a decimal only while the number is small (more.js). */
+const short = (v: number) => (v >= 10 ? String(Math.round(v)) : String(+v.toFixed(1)));
+export const fmtTok = (n: number) => (n >= 1e9 ? `${short(n / 1e9)}B` : n >= 1e6 ? `${short(n / 1e6)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n));
 
 function useWidth(fallback = 640) {
   const ref = useRef<HTMLDivElement>(null);
@@ -152,7 +154,7 @@ function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
               <span className="row-fig">{fmtTok(tokens(r))}</span>
               <span className="row-fig">{r.share != null ? `${Math.round(r.share * 100)}%` : ''}</span>
               <span className="row-fig">{fmtTok(r.output_tokens)}</span>
-              <span className="row-fig is-strong">{usd(spent(r))}</span>
+              <span className="row-fig is-strong">{dollars(spent(r))}</span>
             </div>
           ))}
         </>
@@ -165,8 +167,10 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
   const by = useQuery(usageWhereQuery(where, 'bot'));
   const faces = useFaces();
   const agents = useQuery(agentsQuery);
-  const modelOf = (id: string) =>
-    (Array.isArray(agents.data) ? agents.data.find((a) => a.id === id || a.slug === id)?.resolved_model_label : '') ?? '';
+  const modelOf = (slug: string) => {
+    const a = Array.isArray(agents.data) ? agents.data.find((x) => x.slug === slug || x.id === slug || `bot:${x.id}` === slug) : undefined;
+    return modelName(a?.resolved_model_label ?? a?.resolved_model ?? a?.model);
+  };
   const rows = [...(by.data?.rows ?? [])].sort((a, b) => spent(b) - spent(a));
   const top = Math.max(1e-9, ...rows.map(spent));
   if (rows.length === 0) return <Empty title="No runs in this range" />;
@@ -203,7 +207,7 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
             <span className="row-fig">{r.runs}</span>
             <span className="row-fig u-tok">{fmtTok(tokens(r))}</span>
             <Meter pct={(spent(r) / top) * 100} />
-            <span className="row-fig is-strong">{usd(spent(r))}</span>
+            <span className="row-fig is-strong">{dollars(spent(r))}</span>
           </Link>
         );
         return isOpen ? (
@@ -223,7 +227,7 @@ function ByAgent({ search, where }: { search: UsageSearch; where: UsageWhere }) 
           <span className="row-fig">{totals.runs}</span>
           <span className="row-fig u-tok">{fmtTok(tokens(totals))}</span>
           <span />
-          <span className="row-fig is-strong">{usd(spent(totals))}</span>
+          <span className="row-fig is-strong">{dollars(spent(totals))}</span>
         </div>
       )}
     </>
@@ -252,7 +256,7 @@ function ByModel({ where }: { where: UsageWhere }) {
           <span className="row-fig">{r.runs}</span>
           <span className="row-fig u-tok">{fmtTok(tokens(r))}</span>
           <Meter pct={(spent(r) / top) * 100} />
-          <span className="row-fig is-strong">{usd(spent(r))}</span>
+          <span className="row-fig is-strong">{dollars(spent(r))}</span>
         </div>
       ))}
     </>

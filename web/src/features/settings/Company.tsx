@@ -161,7 +161,10 @@ export function Repositories({ admin, owner }: { admin: boolean; owner: boolean 
   if (!v.github_connected)
     return (
       <Section name="Repositories" target="setting:repositories">
-        <Empty title="GitHub is not connected" />
+        {/* one quiet line, not an empty page inside the section */}
+        <Facts label="Repositories">
+          <LabelValue label="GitHub">Not connected</LabelValue>
+        </Facts>
       </Section>
     );
   const byName = (a: Repo, b: Repo) => a.full_name.localeCompare(b.full_name);

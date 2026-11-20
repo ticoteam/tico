@@ -85,7 +85,7 @@ describe('Settings › Agents', () => {
   it('checking agents shows how many, and Change model moves each one on its own harness @s713', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
-    expect(await screen.findByText('2 agents')).toBeTruthy();
+    expect(await screen.findByRole('checkbox', { name: 'Check Alpha Agent' })).toBeTruthy();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Check Alpha Agent' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Check Beta Agent' }));
     expect(await screen.findByText('2 checked')).toBeTruthy();
@@ -171,10 +171,22 @@ describe('Settings › Agents', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/usage/limits/alpha', method: 'PUT', body: { monthly_usd: 80 } }));
   });
 
+  it('the head box checks every agent shown; a search says how many it found', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Check all' }));
+    expect(await screen.findByText('2 checked')).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Check all' }));
+    expect(screen.queryByText('2 checked')).toBeNull();
+    expect(screen.queryByText('2 agents')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Search agents, models or computers'), { target: { value: 'alpha' } });
+    expect(await screen.findByText('1 agent')).toBeTruthy();
+  });
+
   it("what an agent's tasks run on goes to the server with its revision; empty is the agent's own", async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
-    await screen.findByText('2 agents');
+    await screen.findByRole('checkbox', { name: 'Check Alpha Agent' });
     expect(await run('settings.taskModel', { agent: 'alpha', model: 'model-two', effort: 'low' }, { via: 'tico' })).toMatchObject({ ok: true });
     expect(sent.at(-1)).toMatchObject({
       url: '/api/v2/bots/a1/task-model',
@@ -357,7 +369,7 @@ describe('Settings actions', () => {
   it('person-only changes are refused when Tico asks, and nothing is sent', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
-    await screen.findByText('2 agents');
+    await screen.findByRole('checkbox', { name: 'Check Alpha Agent' });
     const asks: [string, unknown][] = [
       ['settings.makeOwner', { person: 'p2', keepAdmin: true }],
       ['settings.changeEmail', { email: 'new@example.test', again: 'new@example.test' }],

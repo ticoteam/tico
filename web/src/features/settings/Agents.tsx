@@ -17,6 +17,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { poll } from '@/lib';
 import { Section } from '@/pagekinds';
+import { modelName } from '@/features/team/routing';
 import { AgentList } from './AgentList';
 import { GatewayLines } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
@@ -720,7 +721,7 @@ export function Models() {
   const shown = v.models.filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
   return (
     <>
-      {shown.length === 0 ? <Empty title="No models yet" /> : <Defaults names={shown.map((m) => ({ value: m.id, label: m.label }))} />}
+      {shown.length === 0 ? <Empty title="No models yet" /> : <Defaults names={shown.map((m) => ({ value: m.id, label: modelName(m.label) }))} />}
       <WhenOut />
     </>
   );
