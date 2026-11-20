@@ -486,7 +486,7 @@ function SecondChat({ chat }: { chat: string }) {
 /* A teammate's own page: their chat (or, on your own page, Tico's room) stretching beside the page's column. */
 function TeammateSheet({ who }: { who: string }) {
   const actor = useDirectory((d) => d.byId[who] ?? d.byId[`human:${who}`]);
-  const name = actor?.name ?? 'Teammate';
+  const name = actor?.name ?? (who.startsWith('bot:') ? 'Agent' : 'Person');
   return (
     <Sheet kind="chat" label={`Chat with ${name}`}>
       <SheetHead
@@ -540,7 +540,7 @@ function useLeaveFlowKey(on: boolean) {
 
 function ListFace({ id }: { id: string | null }) {
   const who = useActor(id);
-  return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? 'Teammate'} hue={who?.hue} live={who?.working} size={22} /> : null;
+  return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
 }
 
 /* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by pipeline

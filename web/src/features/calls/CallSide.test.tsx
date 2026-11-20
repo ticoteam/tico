@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '@/api/schema';
 import { queryClient } from '@/data';
@@ -12,8 +12,10 @@ import { callQuery, transcriptQuery } from './queries';
 vi.mock('@/conversation', async () => {
   const { Link } = await import('@tanstack/react-router');
   return {
-    Conversation: () => (
-      <div>
+    ticoRoomQuery: { queryKey: ['assistant', 'room'], queryFn: async () => 'th-tico' },
+    readTicoInfo: async () => ({ bot: 'b1', room_id: 'th-tico' }),
+    Conversation: ({ variant, title }: { variant: string; title?: string }) => (
+      <div data-variant={variant} data-to={title}>
         <Link to="/tasks">A task</Link>
         <a href="https://example.com/a" target="_blank" rel="noreferrer">
           Outside
@@ -79,6 +81,22 @@ describe('links in the small call window’s chat', () => {
     await screen.findByRole('heading', { name: 'Tasks' });
     expect(router.state.location.pathname).toBe('/tasks');
     expect(t.companies.switchTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('the call’s chat', () => {
+  it('in Tico’s own room is Tico’s chat; with one agent it is to that agent, never “Teammate”', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th-tico', participants: [], bots: ['b1'], state: 'live' } as unknown as Call);
+    show(`/call/${ROOM}`);
+    await vi.waitFor(() => expect(document.querySelector('[data-variant]')?.getAttribute('data-variant')).toBe('tico'));
+    cleanup();
+    const gm = { id: 'bot:gm', name: 'Growth Manager', kind: 'agent' };
+    queryClient.setQueryData(['directory'], { actors: [gm], byId: { 'bot:gm': gm } });
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th1', participants: [], bots: ['gm'], state: 'live' } as unknown as Call);
+    show(`/call/${ROOM}`);
+    await vi.waitFor(() => expect(document.querySelector('[data-variant]')?.getAttribute('data-variant')).toBe('task'));
+    expect(document.querySelector('[data-variant]')?.getAttribute('data-to')).toBe('Growth Manager');
+    expect(document.body.textContent).not.toContain('Teammate');
   });
 });
 

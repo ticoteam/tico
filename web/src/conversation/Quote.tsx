@@ -24,7 +24,7 @@ function useNames(): Record<string, { name: string }> {
 }
 
 const nameOf = (names: Record<string, { name: string }>, actor: string, me: string | undefined) =>
-  actor === me ? 'You' : (names[actor]?.name ?? (actor.startsWith('human:') ? 'Teammate' : agentWords(actor)));
+  actor === me ? 'You' : (names[actor]?.name ?? (actor.startsWith('human:') ? 'Person' : agentWords(actor)));
 
 /** A message's start in plain words, as a quote shows it. */
 export function excerpt(text: string | null | undefined): string {

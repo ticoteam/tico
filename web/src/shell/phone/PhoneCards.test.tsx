@@ -375,6 +375,31 @@ describe("phone: Tico's Dot never sits on a field", () => {
     expect(rule('.phone>.pg .chat-page>.chat-foot')).toContain('padding:6px 10px calc(var(--cards-h) + 10px)');
   });
 
+  it('a call that takes the screen ends above Tico’s edge: nothing of Tico sits on its controls', () => {
+    render(
+      <PhoneCards
+        page={null}
+        tico={<p>Tico's chat</p>}
+        menu={<a href="/next/tasks">Tasks</a>}
+        call={
+          <footer className="win-ctl">
+            <button type="button">Mute</button>
+            <button type="button">Leave</button>
+          </footer>
+        }
+      />,
+    );
+    const phone = document.querySelector<HTMLElement>('.phone')!;
+    expect(phone.classList.contains('is-call') && phone.classList.contains('is-handle')).toBe(true);
+    // the call is inside the card that ends at the edge; the handle is the stack's, outside it
+    expect(screen.getByRole('button', { name: 'Leave' }).closest('.ly-chat > .full')).toBeTruthy();
+    expect(document.querySelector('.phone > .nub')?.closest('.ly')).toBeNull();
+    expect(rule('.phone.is-handle>.ly-chat>.full')).toContain('height:calc(100% - var(--edgeT))');
+    // and no rule for a call gives its card the full height back or lifts the handle into it
+    for (const m of phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+      if (m[1]!.includes('is-call') && /(>\.full|\.nub)/.test(m[1]!)) expect(m[2]).not.toMatch(/height|bottom/);
+  });
+
   it('with a chat up, the handle is the stack’s, outside the chat card, and opens Tico', () => {
     render(cards({ chat: true }));
     const nub = document.querySelector<HTMLElement>('.phone > .nub');

@@ -2040,8 +2040,11 @@ def quiet_notice(message):
     if not isinstance(refs, dict):
         return False
     call = refs.get("call")
-    # A call's card (backend/calls.py) is the call's place in the thread, not something said to its bots.
-    return any(refs.get(k) for k in NO_WAKE_REF_KEYS) or (isinstance(call, dict) and bool(call.get("card")))
+    # A call's card and its record after it (transcript, action items: backend/calls.py) are the call's place in the
+    # thread, not something said to its bots.
+    return any(refs.get(k) for k in NO_WAKE_REF_KEYS) or (
+        isinstance(call, dict) and bool(call.get("card") or call.get("record"))
+    )
 
 
 def carrier_current(c, carrier, bot):

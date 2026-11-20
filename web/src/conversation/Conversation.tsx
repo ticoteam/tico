@@ -173,8 +173,9 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
   const marks = opened?.id === id ? opened.marks : null;
 
   const items = itemsOf(rows, live, myId, id, marks);
-  const name = variant === 'tico' ? 'Tico' : (title ?? 'Teammate');
   const mate = useActor(actor);
+  // never a stand-in word for someone: their name, else what they are
+  const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
   const mateHref = teammateHref(actor, mate);
   const here = useHerePage();
   const at = page === undefined ? here : page;

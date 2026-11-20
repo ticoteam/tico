@@ -71,6 +71,8 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
   const stage = c?.stage;
   const stoppable = s.sharing || (!!stage && (stage.by === (s.me ?? me) || c?.connector === (s.me ?? me)));
   const word = s.sharing ? 'Sharing' : 'Share';
+  // a phone's browser cannot send a screen: with nothing to stop either, there is no control
+  if (!canShare() && !stoppable) return null;
   return (
     <Menu
       align="start"
@@ -91,7 +93,9 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
 /** A screen or a file on the stage, everyone small under it (calls.js t-full-share). */
 export function Shared({ c, s, who, me }: { c: Call; s: CallState; who: InCall[]; me: string | undefined }) {
   const nameOf = useNameOf();
-  const stage = c.stage;
+  // my screen is out before the call's stage names it (or when setting the stage failed): it is still mine to see
+  const stage: Pick<NonNullable<Call['stage']>, 'by' | 'kind' | 'no_access' | 'file_id' | 'title' | 'version'> | null =
+    c.stage ?? (s.sharing ? { by: s.me ?? me ?? '', kind: 'screen' } : null);
   if (!stage) return null;
   const by = stage.by === (s.me ?? me) ? 'You' : nameOf(stage.by).split(' ')[0];
   return (

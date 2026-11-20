@@ -54,7 +54,7 @@ export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant
     if (variant === 'tico' || actor === 'keeper') return { name: 'Tico', kind: 'tico', hue: 0 };
     return { name: m.sender_name || known || agentWords(actor), kind: 'agent', hue: hueOf(actor) };
   }
-  return { name: m.sender_name || known || 'Teammate', kind: 'person', hue: hueOf(actor) };
+  return { name: m.sender_name || known || 'Person', kind: 'person', hue: hueOf(actor) };
 }
 
 /* ---------------------------------------------------------------- parts inside a message */

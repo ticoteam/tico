@@ -27,7 +27,7 @@ export function Face({ actor, name, size = 22 }: { actor: string | null | undefi
   const who = useActor(actor);
   if (!actor && !name) return null;
   const kind = who?.kind ?? (actor?.startsWith('bot:') ? 'agent' : 'person');
-  const shown = who?.name ?? name ?? 'Teammate';
+  const shown = who?.name ?? name ?? (kind === 'agent' ? 'Agent' : 'Person');
   // Someone outside the directory (a contact) gets a steady hue from their name, so a list of them is not one colour.
   return <Avatar kind={kind} name={shown} hue={who?.hue ?? hueOf(actor ?? shown)} live={who?.working} size={size} />;
 }
