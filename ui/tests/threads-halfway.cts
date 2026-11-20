@@ -10,7 +10,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {html, uiFile, noonZone} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 // Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
 declare const window: Window & typeof globalThis & {
@@ -69,8 +69,9 @@ const dmMessages = () => [{id: 'd1', seq: 1, thread_id: 't-dm-ops', sender_id: '
 // `twin`: a second bot named Ops, so the names that tell bots apart add the slug.
 // `idle`: the bot's DM has no status rows, and its sends wait on `state.sendGate` or fail when `state.sendFail` is set.
 async function open(browser: import('playwright').Browser, {phone = false, twin = false, idle = false}: {phone?: boolean; twin?: boolean; idle?: boolean} = {}) {
+  // The messages are 1 to 30 minutes before now: the browser runs where it is about noon, so no day line splits a group.
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
-    ...(phone ? {isMobile: true, hasTouch: true} : {})});
+    timezoneId: noonZone(), ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen: {errors: string[]; posts: Record<string, unknown>[]; stops: unknown[]; timelines: (string | null)[]; reacts: string[]} = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
   const sse: {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean} = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: [] as unknown[], sendGate: null as Promise<void> | null, sendFail: false};
   page.on('pageerror', e => seen.errors.push(e.message));

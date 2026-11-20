@@ -11,7 +11,7 @@ import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {html, uiFile, beta} = require('./support/page.cts') as PageSupport.Api;
+const {html, uiFile, beta, noonZone} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const fs = require('node:fs') as typeof import('node:fs');
 // @ts-expect-error t is not called in this spec; the require stays for load.cjs's side effects
@@ -66,10 +66,8 @@ declare function talkToUs(report: unknown): void;
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false, userAgent}: VisitOptions = {}) => {
-      // The fixtures are minutes and days before now; a browser whose local time is near midnight would put 'an hour
-      // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
-      const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
-      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent: userAgent as string, timezoneId: noon});
+      // The fixtures are minutes and days before now: the browser runs where it is about noon, so they keep their day lines.
+      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent: userAgent as string, timezoneId: noonZone()});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.ts
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
