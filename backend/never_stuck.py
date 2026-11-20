@@ -247,8 +247,8 @@ _READ_ACTIONS = {
     sqlite3.SQLITE_FUNCTION,
     getattr(sqlite3, "SQLITE_RECURSIVE", 33),
     sqlite3.SQLITE_SAVEPOINT,
-    sqlite3.SQLITE_TRANSACTION,
 }
+# By name, whatever their argument: a pragma with no argument can still change the file (incremental_vacuum).
 _READ_PRAGMAS = {"data_version", "table_info", "table_xinfo", "index_list", "index_info", "index_xinfo"}
 
 
@@ -265,7 +265,7 @@ class _Refused:
         self.asked = False
 
     def __call__(self, action: int, first: str | None, second: str | None, _db: str | None, _source: str | None) -> int:
-        if action in _READ_ACTIONS or (action == sqlite3.SQLITE_PRAGMA and (second is None or first in _READ_PRAGMAS)):
+        if action in _READ_ACTIONS or (action == sqlite3.SQLITE_PRAGMA and first in _READ_PRAGMAS):
             return sqlite3.SQLITE_OK
         self.asked = True
         return sqlite3.SQLITE_DENY
@@ -308,11 +308,17 @@ def check_read_first(
     failures: list[tuple[str, Exception]] | None = None,
 ) -> dict[str, int]:
     """`check`, first in one read snapshot with every write refused. When the pass wrote nothing (asked for no write,
-    left no after-commit work, raised nothing) it is the whole pass, and its failures are the pass's. Otherwise it is
-    thrown away and `check` runs again from the start in `locked()`, the step's write transaction, as it always did."""
+    left no after-commit work, failed on no task) and no write transaction would have had work of its own to do before
+    committing, it is the whole pass. Otherwise it is thrown away and `check` runs again from the start in `locked()`,
+    the step's write transaction, as it always did."""
     at: str = now or _h().now()
     tried: list[tuple[str, Exception]] = []
     refused, done = _Refused(), None
+    # The snapshot is taken behind every writer already queued, as the write transaction would have been: a due snooze
+    # a writer ahead of the pass is committing is in it.
+    gate: Any = store.writer
+    gate.acquire()
+    gate.release()
     with _held_logs() as held:
         # The authorizer stays on this connection for its read only: the pool closes a connection given one.
         snapshot = cast("AbstractContextManager[sqlite3.Connection]", store.read_transaction())
@@ -325,18 +331,28 @@ def check_read_first(
             finally:
                 c.set_authorizer(None)
             after: list[Any] = getattr(c, "after_commit", None) or []
-            refused.asked = refused.asked or bool(after)
+            refused.asked = refused.asked or bool(after) or _owed(c)
             after.clear()
-        wrote_nothing = done is not None and not refused.asked and (failures is not None or not tried)
+        wrote_nothing = done is not None and not refused.asked and not tried
         records = held.records if wrote_nothing else []
     for record in records:
         logging.getLogger(record.name).handle(record)
     if wrote_nothing and done is not None:
-        if failures is not None:
-            failures.extend(tried)
         return done
     with locked() as c:
         return check(c, at, failures)
+
+
+def _owed(c: "sqlite3.Connection") -> bool:
+    """Work every write transaction does before it commits (Store.transaction): message links left dirty, or a WAL sync
+    that failed earlier. The pass's own write transaction would have done it, so a pass that finds it runs as one."""
+    core: Any = _h()
+    if getattr(core, "_OWED", None):
+        return True
+    try:
+        return c.execute("SELECT 1 FROM message_links_dirty LIMIT 1").fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
 
 
 # ----------------------------------------------------------------------------- a bot's snooze on a ready task
