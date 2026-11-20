@@ -126,6 +126,15 @@ export const teamOf = (t: Pick<Thread, 'audience' | 'home'>) => {
   return owner.startsWith('group:') ? owner.slice('group:'.length) : undefined;
 };
 
+/** The agent a thread is with: the other one in your DM with one agent, or the agent whose Home it is. */
+export function agentOf(t: Thread | undefined, me: string | undefined): string | undefined {
+  if (!t) return undefined;
+  const home = t.audience === 'home' && typeof t.home?.actor === 'string' ? t.home.actor : '';
+  if (home) return home.startsWith('bot:') ? home : undefined;
+  const others = isDm(t) ? othersOf(t, me) : [];
+  return others.length === 1 && others[0]!.startsWith('bot:') ? others[0] : undefined;
+}
+
 /** What the Team tab holds, not Threads: your DM with one teammate, and an agent's own Home (its room is the agent's,
     as your DM is). */
 export const isOneToOne = (t: Thread, me: string | undefined) =>

@@ -25,6 +25,7 @@ import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, 
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
 import { waitSlugs } from './waits';
@@ -155,6 +156,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   };
 
   const cards = useCards();
+  // A phone's Chat tab: an email's OK hung on this task, as a card in the chat.
+  const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} flow={flow} details={quiet} />;
 
   const pageTabs: PageTab[] = tabs
@@ -205,6 +208,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         actor={t.owner_id ?? undefined}
         foot={<Decision t={t} flow={flow} onAsking={setAsking} />}
         canPost={!asking}
+        extra={approvals}
+        card={approvalCard}
       />
     ) : null;
 
@@ -256,6 +261,8 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
   const [asking, setAsking] = useState(false);
+  // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
+  const approvals = useApprovalCards({ task: t });
   if (!t) return <MessageBones />;
   const name = owner?.name ?? 'Teammate';
   return (
@@ -289,6 +296,8 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           actor={t.owner_id ?? undefined}
           foot={<Decision key={t.id} t={t} flow={flow} onAsking={setAsking} />}
           canPost={!asking}
+          extra={approvals}
+          card={approvalCard}
         />
       ) : (
         <Decision key={t.id} t={t} flow={flow} />

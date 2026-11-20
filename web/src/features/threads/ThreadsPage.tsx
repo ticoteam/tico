@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
+import { approvalCard, useApprovalCards } from '@/features/task/exports';
 import { Empty } from '@/kit/Empty';
 import { AgentBox } from './AgentBox';
-import { outsideOf, teamOf } from './model';
-import { useTitle } from './people';
+import { agentOf, outsideOf, teamOf } from './model';
+import { useMe, useTitle } from './people';
 import { threadQuery } from './queries';
 import { TeamThread } from './TeamThread';
 import { ThreadHead } from './ThreadHead';
@@ -40,6 +41,8 @@ export function ThreadsPage({ pane, thread }: ThreadsPageProps) {
 function ThreadConversation({ id }: { id: string }) {
   const { data } = useQuery(threadQuery(id));
   const title = useTitle(data);
+  // A thread with an agent shows what it asked you to approve, as cards among its messages.
+  const approvals = useApprovalCards({ agent: agentOf(data, useMe()) });
   const team = data && teamOf(data);
   if (team) return <TeamThread who={team} />;
   const outside = outsideOf(data);
@@ -48,7 +51,8 @@ function ThreadConversation({ id }: { id: string }) {
       id={id}
       variant="page"
       title={title || undefined}
-      card={callCard}
+      card={(m) => approvalCard(m) ?? callCard(m)}
+      extra={approvals}
       canPost={!outside && data?.me?.can_post !== false}
       foot={outside?.handler ? <AgentBox agent={outside.handler} page={{ path: `/threads/${id}`, title }} /> : undefined}
     />
