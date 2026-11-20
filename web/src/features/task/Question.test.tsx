@@ -6,15 +6,25 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import type { TaskData, TaskQuestion } from './queries';
-import { TaskPage } from './TaskPage';
+import type { TaskQuestion } from '@/api/schema';
+import type { TaskData } from './queries';
+import { TaskChat, TaskPage } from './TaskPage';
 
 /* A question is a task for a person (backend/questions.py): its page opens on the card, who asks on what, and an answer
    given to the round shown. Made-up rows only; every answer is stubbed. */
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
-vi.mock('@/conversation', async (orig) => ({ ...(await orig<object>()), Conversation: () => null }));
+// The conversation is tested in its own folder: here a stand-in with its foot and, while it may post, its message box.
+vi.mock('@/conversation', async (orig) => ({
+  ...(await orig<object>()),
+  Conversation: ({ foot, canPost = true }: { foot?: ReactNode; canPost?: boolean }) => (
+    <section aria-label="Chat">
+      {foot}
+      {canPost && <textarea aria-label="Message" />}
+    </section>
+  ),
+}));
 
 type Reply = { status?: number; body: unknown };
 const sent: { url: string; body: Record<string, unknown> }[] = [];
@@ -36,7 +46,7 @@ const question = (more: Partial<TaskQuestion> = {}): TaskQuestion => ({
   ...more,
 });
 
-const task = (q: TaskQuestion): TaskData =>
+const task = (q: TaskQuestion, more: Partial<TaskData> = {}): TaskData =>
   ({
     id: 't1',
     number: 40,
@@ -57,6 +67,7 @@ const task = (q: TaskQuestion): TaskData =>
     to_leave: [],
     links: [],
     question: q,
+    ...more,
   }) as unknown as TaskData;
 
 let shown = task(question());
@@ -69,7 +80,7 @@ function base(url: string): Reply {
       body: {
         actor: 'human:me',
         items: [
-          { kind: 'question_task', id: 't1', task_id: 't1', number: 40, title: 'Share an AWS key with 35 agents?', parent: { id: 'p9', number: 35, title: 'Credentials for agents' }, asker: 'bot:gm', since: '2026-11-19T10:00:00Z', link_url: null, round: 2, owner_id: 'human:me', line: '' },
+          { kind: 'question_task', id: 't1', task_id: 't1', number: 40, title: 'Share an AWS key with 35 agents?', asker: 'bot:gm', since: '2026-11-19T10:00:00Z', link_url: null, round: 2, owner_id: 'human:me', line: '' },
           { kind: 'ask', id: 'a9', task: { id: 't9', number: 13, title: 'Release notes', pipeline_id: 'p1', stage_id: 's1', owner_id: 'bot:gm' }, since: '2026-11-19T09:00:00Z', line: '' },
         ],
       },
@@ -121,6 +132,7 @@ function show(node: ReactNode, at: string) {
 }
 
 const card = () => screen.findByRole('region', { name: 'Question' });
+const answerBox = () => screen.findByRole('region', { name: 'Answer the question' });
 const answerWith = (box: HTMLElement, text: string) => {
   fireEvent.change(within(box).getByRole('textbox', { name: 'Your answer' }), { target: { value: text } });
   fireEvent.click(within(box).getByRole('button', { name: 'Answer' }));
@@ -134,9 +146,10 @@ describe('the question card', () => {
     expect(box.textContent).toContain('From General Manager · on Credentials for agents (#35)');
     expect(within(box).getByRole('link', { name: /Credentials for agents/ }).getAttribute('href')).toBe('/task/35');
     expect(box.textContent).toContain('One shared key is simplest');
-    expect(within(box).getByRole('link', { name: 'Open ↗' }).getAttribute('href')).toBe('https://acme.example/settings/keys');
-    expect(within(box).getByRole('button', { name: 'Answer' })).toHaveProperty('disabled', true);
-    answerWith(box, '  Keep apart  ');
+    const input = await answerBox();
+    expect(within(input).getByRole('link', { name: 'Open ↗' }).getAttribute('href')).toBe('https://acme.example/settings/keys');
+    expect(within(input).getByRole('button', { name: 'Answer' })).toHaveProperty('disabled', true);
+    answerWith(input, '  Keep apart  ');
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tasks/t1/question/answer', body: { text: 'Keep apart', round: 2 } }]));
   });
 
@@ -146,8 +159,7 @@ describe('the question card', () => {
     const box = await card();
     expect(await within(box).findByText('Keep apart.')).toBeTruthy();
     expect(box.textContent).toContain('Answered by Dana Ruiz');
-    expect(within(box).queryByRole('textbox')).toBeNull();
-    expect(within(box).queryByRole('button', { name: 'Answer' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Answer the question' })).toBeNull();
   });
 
   it('once withdrawn, says why, with no box', async () => {
@@ -155,7 +167,7 @@ describe('the question card', () => {
     show(<TaskPage task="40" pipeline="p1" />, '/tasks/p1/40');
     const box = await card();
     expect(box.textContent).toContain('Withdrawn: its task ended');
-    expect(within(box).queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Answer the question' })).toBeNull();
   });
 
   it('a question asked again since it was shown is read again and says Look again; the next press answers the new round', async () => {
@@ -168,7 +180,7 @@ describe('the question card', () => {
       return { status: 409, body: { error: { code: 'conflict', detail: 'Look again' } } };
     };
     show(<TaskPage task="40" pipeline="p1" />, '/tasks/p1/40');
-    const box = await card();
+    const box = await answerBox();
     const before = reads.filter((u) => u.endsWith('/api/v2/tasks/t1') || u.includes('%2340')).length;
     answerWith(box, 'Keep apart');
     expect((await within(box).findByRole('alert')).textContent).toBe('Look again');
@@ -181,10 +193,44 @@ describe('the question card', () => {
   it('in Flow, opens the next item once answered', async () => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks/t1/question/answer') ? { body: {} } : null);
     const router = show(<TaskPage task="40" flow />, '/flow/40');
-    const box = await card();
+    const box = await answerBox();
     // Flow's list is in before the press (Next links to it), so the next item is known before this one leaves it
     expect(await screen.findByRole('link', { name: 'Next' })).toBeTruthy();
     answerWith(box, 'Keep apart');
     await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
+  });
+
+  it('names no task when the one it was asked on is gone or not readable', async () => {
+    shown = task(question({ parent: null }));
+    show(<TaskPage task="40" pipeline="p1" />, '/tasks/p1/40');
+    const box = await card();
+    expect(box.textContent).toContain('From General Manager');
+    expect(box.textContent).not.toContain('Credentials');
+    expect(within(box).queryByRole('link')).toBeNull();
+    expect(await answerBox()).toBeTruthy();
+  });
+
+  it("in the task's chat, the person it asks answers in its box, not the message box; anyone else posts as before", async () => {
+    shown = task(question(), { conversation_id: 'c1' });
+    show(<TaskChat task="40" />, '/tasks/p1/40');
+    const chat = await screen.findByRole('region', { name: 'Chat' });
+    expect(await within(chat).findByRole('region', { name: 'Answer the question' })).toBeTruthy();
+    expect(within(chat).queryByRole('textbox', { name: 'Message' })).toBeNull();
+  });
+
+  it('once answered, the chat has its message box back', async () => {
+    shown = task(question({ state: 'answered', ended_reason: 'answered', answered_by: 'human:me', answered_at: '2026-11-19T11:00:00Z', answer_text: 'Keep apart.' }), { conversation_id: 'c1' });
+    show(<TaskChat task="40" />, '/tasks/p1/40');
+    const chat = await screen.findByRole('region', { name: 'Chat' });
+    expect(within(chat).getByRole('textbox', { name: 'Message' })).toBeTruthy();
+    expect(within(chat).queryByRole('region', { name: 'Answer the question' })).toBeNull();
+  });
+
+  it('a question for someone else leaves the message box as it is', async () => {
+    shown = task(question({ person: 'human:dana' }), { conversation_id: 'c1', owner_id: 'human:dana' });
+    show(<TaskChat task="40" />, '/tasks/p1/40');
+    const chat = await screen.findByRole('region', { name: 'Chat' });
+    expect(within(chat).getByRole('textbox', { name: 'Message' })).toBeTruthy();
+    expect(within(chat).queryByRole('region', { name: 'Answer the question' })).toBeNull();
   });
 });

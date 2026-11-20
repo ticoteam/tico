@@ -25,39 +25,7 @@ export type TaskData = TaskDetail['task'] & {
   mover: boolean;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
   note?: string | null;
-  /** On a question (a task for a person, filed under the agent's task that asked it): who asked whom, on what, and
-      where it stands. The task read carries it; the schema does not name it yet. */
-  question?: TaskQuestion | null;
-  /** On the task a question was asked on: its questions, each a task of its own. */
-  questions?: AskedHere[];
 };
-
-/** What a question is about and where it stands (backend/questions.py). `asker`, `person` and `answered_by` are actor
-    ids. `round` counts the askings: a follow-up reopens the same question with the next round, and an answer names the
-    round it was given to. */
-export interface TaskQuestion {
-  parent: { id: string; number: number | null; title: string };
-  asker: string;
-  person: string;
-  round: number;
-  link_url: string | null;
-  state: 'open' | 'answered' | 'withdrawn';
-  ended_reason: 'answered' | 'withdrawn' | 'parent_ended' | 'parent_moved' | 'asker_gone' | 'person_gone' | null;
-  answered_at: string | null;
-  answered_by: string | null;
-  answer_message_id: string | null;
-  /** The answer's words, once answered. */
-  answer_text: string | null;
-}
-
-/** One question asked on a task, as that task lists it. `person` is who it asks. */
-export interface AskedHere {
-  task_id: string;
-  number: number | null;
-  title: string;
-  person: string;
-  state: TaskQuestion['state'];
-}
 
 export interface TaskChild {
   id: string;
@@ -315,7 +283,7 @@ export async function answerQuestion(id: string, text: string, round: number): P
     const items = f.items.filter((w) => w.id !== id);
     return { ...f, items, count: items.length };
   });
-  const parent = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.question?.parent.id;
+  const parent = queryClient.getQueryData<TaskData>(keys.tasks.detail(id))?.question?.parent?.id;
   await Promise.all([reread(id), parent && reread(parent), queryClient.invalidateQueries({ queryKey: ['flow'] })]);
 }
 

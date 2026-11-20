@@ -3,7 +3,6 @@ import { api } from '@/api/client';
 import type { TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
-  NeedsYouItem,
   PipelineSettings,
   PipelineSettingsList,
   PipelineSettingsResult,
@@ -673,18 +672,6 @@ export interface Flow {
   items: FlowItem[];
 }
 
-/** A question to the person as Needs you lists it (`question_task`): a task of its own, asked on the agent's task. A ❓
-    on a message stays kind `question`. The schema does not name this kind yet. */
-interface QuestionItem {
-  task_id: string;
-  number: number | null;
-  title: string;
-  asker: string;
-  owner_id: string | null;
-  since: string | null;
-}
-const isQuestionTask = (it: NeedsYouItem): it is NeedsYouItem & QuestionItem => (it.kind as string) === 'question_task';
-
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you): a question to them opens as its own
     task. Asks without a task stay in chats. */
 export const flowQuery = queryOptions({
@@ -694,20 +681,21 @@ export const flowQuery = queryOptions({
     const seen = new Set<string>();
     const items: FlowItem[] = [];
     for (const it of await needsYouItems()) {
-      if (isQuestionTask(it)) {
-        if (seen.has(it.task_id)) continue;
+      // A question to the person, a task of its own (a ❓ on a message stays kind `question`).
+      if (it.kind === 'question_task') {
+        if (!it.task_id || seen.has(it.task_id)) continue;
         seen.add(it.task_id);
         items.push({
           id: it.task_id,
-          number: it.number,
-          title: it.title,
+          number: it.number ?? null,
+          title: it.title ?? '',
           pipeline_id: null,
           stage_id: null,
-          owner_id: it.owner_id,
+          owner_id: it.owner_id ?? null,
           late: false,
           stuck: false,
           since: it.since ?? new Date().toISOString(),
-          question: { asker: it.asker },
+          ...(it.asker && { question: { asker: it.asker } }),
         });
         continue;
       }

@@ -305,6 +305,7 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .qn .an-row .btn{flex:1;height:44px}
   .qn .an-row .grow{display:none}
   .qn .dcx-ask{margin-right:0}
+  .dock .answer.qn{padding:var(--s-0) 0 0 var(--s-1h)}
   .fv-bar small{display:none}
   .fv-bar>b{min-width:0;flex:1}
   .fv-bar>.grow{display:none}

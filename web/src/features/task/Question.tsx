@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run, useAction } from '@/actions';
+import type { TaskQuestion, TaskQuestionRow } from '@/api/schema';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { DateText } from '@/kit/DateText';
@@ -12,43 +13,56 @@ import { nextAfter, useFlowRows } from './flowOrder';
 import { snoozeChoices } from './Head';
 import { failedToast, reasonOf, tabAddress } from './model';
 import { Face, Go, NameOf } from './parts';
-import { type AskedHere, type TaskData, type TaskQuestion } from './queries';
+import { type TaskData } from './queries';
 
 /* A question is a task for a person, filed under the agent's task that asked it (backend/questions.py). Its page opens
-   on the question: who asks, on what, the detail, then the answer box. Any other task shows its description at the
-   top, and the questions asked on it, each a row to its own task. */
+   on the question: who asks, on what, the detail, and where it stands. While it is open, the person it is for answers
+   in the box that takes the chat's message box's place, as the decision does: on a computer at the foot of the task's
+   chat, on a phone at the bottom of every tab. Only that box answers. Any other task shows its description at the top,
+   and the questions asked on it, each a row to its own task. */
+
+/** Whether the reader answers this task's question now: it is open and asks them. Their chat's message box gives way
+    to the answer box then. */
+export function answersHere(t: TaskData, me: string | undefined): boolean {
+  return t.question?.state === 'open' && !!me && t.question.person === me;
+}
 
 /** A task's own address by its number, wherever it lives (`/task/<n>` finds its pipeline). */
 const taskHref = (number: number | null, id: string) => `/task/${number ?? encodeURIComponent(id)}`;
 
 /** The top of the open task: the question card on a question; else its description, then the questions asked on it. */
-export function TaskLead({ t, flow }: { t: TaskData; flow: boolean }) {
+export function TaskLead({ t }: { t: TaskData }) {
   const asked = (t.questions ?? []).filter((q) => q.state === 'open');
   const body = (t.body ?? '').trim();
   if (!t.question && !body && !asked.length) return null;
   return (
     <div className="tv-lead">
-      {t.question ? <QuestionCard t={t} q={t.question} flow={flow} /> : body && <Description text={body} />}
+      {t.question ? <QuestionCard t={t} q={t.question} /> : body && <Description text={body} />}
       {asked.length > 0 && <AskedHereRows rows={asked} />}
     </div>
   );
 }
 
-function QuestionCard({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: boolean }) {
+function QuestionCard({ t, q }: { t: TaskData; q: TaskQuestion }) {
   const me = useQuery(meQuery).data?.id;
   const body = (t.body ?? '').trim();
-  const mine = !!me && (me === q.person || me === t.owner_id);
+  // A task deleted, or one the reader may not open, is not named.
+  const on = q.parent;
   return (
     <section className="answer qn" aria-label="Question" data-target={`task-question:${t.id}`}>
       <p className="qn-from">
         <Face id={q.asker} size={16} decorative />
         <span>
           From <NameOf id={q.asker} />
-          {' · '}on{' '}
-          <Go to={taskHref(q.parent.number, q.parent.id)} className="qn-parent">
-            {q.parent.title}
-            {q.parent.number != null && ` (#${q.parent.number})`}
-          </Go>
+          {on && (
+            <>
+              {' · '}on{' '}
+              <Go to={taskHref(on.number, on.id)} className="qn-parent">
+                {on.title}
+                {on.number != null && ` (#${on.number})`}
+              </Go>
+            </>
+          )}
         </span>
       </p>
       {body && <p className="qn-body">{body}</p>}
@@ -58,9 +72,7 @@ function QuestionCard({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: bool
         <p className="qn-note">
           <Ended q={q} />
         </p>
-      ) : mine ? (
-        <Reply t={t} q={q} flow={flow} />
-      ) : (
+      ) : answersHere(t, me) ? null : (
         <p className="qn-note">
           Waiting on <NameOf id={q.person} />
         </p>
@@ -111,8 +123,30 @@ function Answered({ q }: { q: TaskQuestion }) {
   );
 }
 
-/** The answer box: free text, Answer, Snooze, and Open when the question links to where it is done. Answer is given to
-    the round the person was shown; a question asked again since is refused, read again, and says Look again. */
+export interface QuestionReplyProps {
+  t: TaskData;
+  /** Opened from Flow: once answered, the next item opens. */
+  flow: boolean;
+  /** The page's own dock (a phone's bottom); on a computer the box is in the task's chat. */
+  dock?: boolean;
+}
+
+/** The answer box, for the person the open question asks; nothing for anyone else or once it has ended. */
+export function QuestionReply({ t, flow, dock = false }: QuestionReplyProps) {
+  const me = useQuery(meQuery).data?.id;
+  if (!t.question || !answersHere(t, me)) return null;
+  const box = <Reply t={t} q={t.question} flow={flow} />;
+  return dock ? (
+    <div className="dock" data-dock>
+      {box}
+    </div>
+  ) : (
+    box
+  );
+}
+
+/** Free text, Answer, Snooze, and Open when the question links to where it is done. Answer is given to the round the
+    person was shown; a question asked again since is refused, read again, and says Look again. */
 function Reply({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: boolean }) {
   const answer = useAction('task.answerQuestion');
   const navigate = useNavigate();
@@ -153,7 +187,7 @@ function Reply({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: boolean }) 
   };
 
   return (
-    <>
+    <section className="answer qn qn-reply" aria-label="Answer the question">
       <label className="dcx-ask">
         <span>Your answer</span>
         <textarea className="dcx-field" rows={2} maxLength={4000} value={text} onChange={(e) => setText(e.target.value)} />
@@ -183,7 +217,7 @@ function Reply({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: boolean }) 
           Answer
         </Button>
       </div>
-    </>
+    </section>
   );
 }
 
@@ -204,7 +238,7 @@ function Description({ text }: { text: string }) {
 }
 
 /** The questions open on this task, a row each to its own task: "Waiting on Dana: Which carrier?". */
-function AskedHereRows({ rows }: { rows: AskedHere[] }) {
+function AskedHereRows({ rows }: { rows: TaskQuestionRow[] }) {
   const me = useQuery(meQuery).data?.id;
   return (
     <ul className="tv-asked" aria-label="Questions">
