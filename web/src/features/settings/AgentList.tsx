@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useState, type HTMLAttributes } from 'react';
+import { useState, type Ref } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery, useDirectory, type Directory } from '@/data';
 import { ModelPicker } from '@/features/team/exports';
@@ -9,6 +9,7 @@ import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
+import { useDrag } from '@/kit/Drag';
 import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -22,7 +23,6 @@ import { toast } from '@/kit/Toast';
 import { ValueButton } from '@/kit/ValueButton';
 import { Section } from '@/pagekinds';
 import { ComputerPanel } from './ComputerPanel';
-import { useRowDrag } from './drag';
 import { Foot, Line, SwitchLine, Verb, Word, act, useAgentFaces, useFaces, usd, type Face } from './parts';
 import {
   SAFE_RETRY,
@@ -45,6 +45,10 @@ import {
 /* Settings › Agents, the fleet (pages/8-settings/settings.js fleet): search, group by team, computer or subscription,
    change a row where it stands, check several to change their model or move them; open one in place for its model,
    owners, access, mail and stopped runs; bring back a retired one. */
+
+/** A computer's group in the list grouped by computer, by its id; "No computer" is the empty id. */
+const ON = 'group:computer:';
+const GROUP = `section.pk-sec[data-target^="${ON}"]`;
 
 const bare = (id: string) => id.replace(/^(human|bot):/, '');
 
@@ -590,7 +594,7 @@ interface LineProps {
   onPick: (on: boolean) => void;
   onEdit: (e: Change) => void;
   /** Grouped by computer: the row drags onto another computer's group. */
-  drag?: HTMLAttributes<HTMLDivElement>;
+  drag?: Ref<HTMLDivElement>;
 }
 
 function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit, onPick, onEdit, drag }: LineProps) {
@@ -606,11 +610,11 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
       className={['row g-bots g-fleet', picked && 'is-selected', limit?.blocked && 'is-bad'].filter(Boolean).join(' ')}
       title={a.name}
       data-target={`agent:${slug}`}
-      {...drag}
+      ref={drag}
     >
       <Checkbox label={<span className="set-hide">{`Check ${a.name}`}</span>} checked={picked} disabled={!manage} onCheckedChange={onPick} />
       <Avatar kind="agent" name={a.name} hue={a.hue} decorative />
-      <Link to="/settings/$section" params={{ section: 'agents' }} search={open ? {} : { open: slug }} className="row-title" aria-expanded={open}>
+      <Link to="/settings/$section" params={{ section: 'agents' }} search={open ? {} : { open: slug }} className="row-title" aria-expanded={open} draggable={drag ? false : undefined}>
         {a.name}
       </Link>
       <ValueButton label={`${a.name}'s model`} disabled={!manage} onClick={edit('model')}>
@@ -736,12 +740,20 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
   };
   const move = (m: Machine) => moveTo(checked, m.id);
   // A checked row carries the other checked rows with it; agents already there stay put.
-  const drag = useRowDrag((slug, computer) => {
-    const agents = (picked.has(slug) ? checked : [slug]).filter((s) => {
-      const r = rowOf(s);
-      return r?.can_manage !== false && r?.machine?.runner_id !== computer;
-    });
-    if (agents.length) void moveTo(agents, computer);
+  const drag = useDrag({
+    zones: GROUP,
+    controls: 'button, input, label, [role="checkbox"], [role="menuitem"]',
+    // "No computer" takes no drops, nor does the row's own group
+    takes: (group, row) => group.getAttribute('data-target') !== ON && !group.contains(row),
+    drop: (group, row) => {
+      const slug = row.getAttribute('data-target')?.slice('agent:'.length) ?? '';
+      const computer = group.getAttribute('data-target')?.slice(ON.length) ?? '';
+      const agents = (picked.has(slug) ? checked : [slug]).filter((s) => {
+        const r = rowOf(s);
+        return r?.can_manage !== false && r?.machine?.runner_id !== computer;
+      });
+      if (agents.length) void moveTo(agents, computer);
+    },
   });
   const opened = open?.startsWith('computer:') ? open.slice('computer:'.length) : '';
   const machineOf = (key: string) => (key.startsWith('computer:') ? live.find((m) => `computer:${m.id}` === key) : undefined);
@@ -766,7 +778,7 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
         limit={limits.data?.bots[slug]}
         onPick={(on) => setPicked((s) => toggled(s, slug, on))}
         onEdit={setEditing}
-        drag={by === 'computer' && r?.can_manage !== false ? drag(slug) : undefined}
+        drag={by === 'computer' && r?.can_manage !== false ? drag : undefined}
       />
     );
     return isOpen ? (

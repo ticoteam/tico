@@ -18,7 +18,6 @@ button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(-
 .tk-item:hover>.tk-more,.tk-item>.tk-more:focus-visible,.tk-item>.tk-more[aria-expanded="true"]{opacity:1}
 .tk-item:hover>.row{--surface:var(--hover);background:var(--hover)}
 .tk-item>.tk-more:not(:hover){background:var(--surface)}
-.tk-item.is-drag{z-index:var(--z-stick)}
 .col[data-drop]{border-radius:var(--r-ctl);background:var(--well)}
 /* over another card: a subtask or a merge (the drop dialog) */
 .tk-item[data-drop]>.card{--surface:var(--selected);background:var(--selected)}

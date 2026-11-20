@@ -1,5 +1,5 @@
 import { Link, useLocation } from '@tanstack/react-router';
-import type { HTMLAttributes, ReactElement, ReactNode } from 'react';
+import type { HTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
 import { useAction } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -86,8 +86,8 @@ export function Movable({
 }: {
   task: TaskItem;
   stages: readonly Stage[];
-  /** The wrapper's own handlers: a card's drag. */
-  wrap?: HTMLAttributes<HTMLDivElement>;
+  /** The wrapper's own props: a card's drag. */
+  wrap?: HTMLAttributes<HTMLDivElement> & { 'data-task'?: string; ref?: Ref<HTMLDivElement> };
   children: ReactElement;
 }) {
   const move = useAction('tasks.move');
