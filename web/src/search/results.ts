@@ -117,6 +117,21 @@ const pause = (ms: number, signal: AbortSignal) =>
     signal.addEventListener('abort', stop, { once: true });
   });
 
+/** Providers that share a group's name show as one group, in provider order: Threads by name from the list at once,
+    then by what was said in them when the server answers. */
+function joined(groups: Group[]): Group[] {
+  const byName = new Map<string, Group>();
+  for (const g of groups) {
+    const had = byName.get(g.name);
+    if (!had) byName.set(g.name, g);
+    else {
+      const boost = Math.max(had.boost ?? 0, g.boost ?? 0);
+      byName.set(g.name, { name: g.name, hits: [...had.hits, ...g.hits], ...(boost ? { boost } : {}) });
+    }
+  }
+  return [...byName.values()];
+}
+
 /**
  * The groups for a query, in provider order, with actions last. Publish each group as it arrives: a provider
  * searching a list can have a cold cache, and its read should hold up neither the local results nor the search
@@ -137,7 +152,7 @@ export async function gather(
   const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
   const found = new Map<SearchProvider, Group>();
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
-  const groups = () => rank([...from.flatMap((p) => found.get(p) ?? []), ...(acts.hits.length ? [acts] : [])], q);
+  const groups = () => rank([...joined(from.flatMap((p) => found.get(p) ?? [])), ...(acts.hits.length ? [acts] : [])], q);
   if (acts.hits.length && !signal.aborted) early?.(groups());
   await Promise.all(
     from.map(async (p) => {

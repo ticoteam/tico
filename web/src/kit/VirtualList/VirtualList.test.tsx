@@ -93,4 +93,57 @@ describe('a timeline', () => {
     resize(260);
     expect(top).toBe(1000);
   });
+
+  it('lands on its true end when a long last message is measured late or a new one comes, unless scrolled up', () => {
+    const watching: { cb: ResizeObserverCallback; els: Element[] }[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        els: Element[] = [];
+        constructor(public cb: ResizeObserverCallback) {
+          watching.push(this);
+        }
+        observe(el: Element) {
+          this.els.push(el);
+        }
+        unobserve() {}
+        disconnect() {
+          this.els = [];
+        }
+      },
+    );
+    render(<VirtualList items={items.slice(0, 50)} getKey={(t) => t.id} estimateSize={34} anchor="end" role="log" label="Chat" renderItem={(t) => <span>{t.title}</span>} />);
+    const log = screen.getByRole('log', { name: 'Chat' });
+    const space = log.firstElementChild!;
+    let end = 1700;
+    let top = 0;
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, get: () => end });
+    Object.defineProperty(log, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => (top = Math.max(0, Math.min(v, end - 340))) });
+    // the rows grow under the window: the spacer's height changes and the observers watching it are told
+    const grow = (by: number) => {
+      end += by;
+      act(() => {
+        for (const o of watching) if (o.els.includes(space)) o.cb([], o as unknown as ResizeObserver);
+      });
+    };
+
+    // opened at the estimated end, then the last message measures 4000px taller than its guess
+    top = end - 340;
+    grow(4000);
+    expect(top).toBe(end - 340);
+    // a new message while at the end
+    grow(120);
+    expect(top).toBe(end - 340);
+
+    // scrolled up to read: what comes in leaves the place alone
+    top = 900;
+    act(() => void log.dispatchEvent(new Event('scroll')));
+    grow(300);
+    expect(top).toBe(900);
+    // back at the end, it follows again
+    top = end - 340;
+    act(() => void log.dispatchEvent(new Event('scroll')));
+    grow(80);
+    expect(top).toBe(end - 340);
+  });
 });

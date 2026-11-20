@@ -1,6 +1,6 @@
 import { CancelledError, notifyManager, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -640,6 +640,18 @@ describe('Settings › General @s1072', () => {
     const off = await unfold('Not in use');
     fireEvent.click(within(off).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/repositories/acme/api', method: 'PUT', body: { enabled: true } }));
+  });
+
+  it('asks for the icon only when the config says one is set', async () => {
+    const config = queryClient.getQueryData(['config']) as object;
+    queryClient.setQueryData(['config'], { ...config, team_icon: '' });
+    general();
+    expect(await screen.findByText('None')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Team icon' })).toBeNull();
+    cleanup();
+    queryClient.setQueryData(['config'], { ...config, team_icon: 'abc123' });
+    general();
+    expect((await screen.findByRole('img', { name: 'Team icon' })).getAttribute('src')).toBe('/api/v2/team/icon?v=abc123');
   });
 
   it('Tico may not change the icon or make a repository', async () => {

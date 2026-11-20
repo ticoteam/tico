@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import type { SearchThreadsResponse } from '@/api/schema';
 import type { ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { toPage, type Letter, type ListPage, type Member, type Text, type Thread, type ThreadList, type Update } from './model';
@@ -52,6 +53,14 @@ export const threadListQuery = infiniteQueryOptions({
   initialPageParam: null as string | null,
   getNextPageParam: (last) => last.next ?? undefined,
 });
+
+/** Messages whose text has every word, newest first, only where the viewer may read (GET /api/v2/threads/search):
+    finds threads older than the list's first page, and what was said in them. */
+export const threadSearchQuery = (words: string, limit: number) =>
+  queryOptions({
+    queryKey: ['threads', 'search', words, limit] as const,
+    queryFn: ({ signal }) => api.get<SearchThreadsResponse>(`/api/v2/threads/search${qs({ q: words, limit })}`, { signal }),
+  });
 
 const readThread = (id: string, signal: AbortSignal) => api.get<Thread>(`/api/v2/threads/${enc(id)}`, { signal });
 

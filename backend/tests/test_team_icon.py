@@ -57,3 +57,10 @@ def test_apple_touch_icon_is_opaque_180_square_with_the_logo_fitted_and_padded()
         assert icon.getpixel((20, 20)) == (255, 255, 255)  # inside the fitted box, where the logo is transparent
         red = icon.getpixel((90, 90))  # the logo's own colour, in the middle
         assert red[0] > 240 and red[1] < 15 and red[2] < 15
+
+
+def test_config_says_whether_an_icon_is_set_so_settings_never_asks_for_a_missing_one(api):
+    assert api.get("/api/v2/config", headers=headers()).json()["team_icon"] == ""
+    assert api.post("/api/v2/team/icon", content=image(), headers=headers()).status_code == 200
+    digest = api.get("/api/v2/config", headers=headers("ben-test")).json()["team_icon"]
+    assert digest and api.get("/api/v2/team/icon").headers["etag"] == f'"{digest}"'
