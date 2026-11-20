@@ -13,6 +13,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
 import type { AddStep } from './actions';
+import { seatHref } from './model';
 import { cloudAgentsQuery, computersQuery, groupsQuery, isOpenRequest, seatsQuery, templatesQuery } from './queries';
 import './team.css';
 
@@ -46,18 +47,26 @@ export function AddTeammate({
 }) {
   const navigate = useNavigate();
   const addOpen = useAction('team.addTeammate');
-  const to = (s: AddStep) => (onStep ? onStep(s) : void addOpen.run({ step: s }));
+  // Cloud agents: the team picked there, and the agent being requested (its first task asked for) over the list.
+  const [cloudTeam, setCloudTeam] = useState(team);
+  const [asking, setAsking] = useState<Asking | null>(null);
+  const to = (s: AddStep) => {
+    setAsking(null);
+    if (onStep) onStep(s);
+    else void addOpen.run({ step: s });
+  };
+  const requesting = step === 'cloud' ? asking : null;
   const close =
     onClose ?? (() => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, add: undefined }) } as never));
   return (
     <Dialog
       open
       onOpenChange={(o) => !o && close()}
-      title={TITLE[step]}
+      title={requesting ? (requesting.id === OTHER ? 'Another agent' : `Request ${requesting.name}`) : TITLE[step]}
       className="add"
       lead={
         step !== 'pick' && (
-          <button type="button" className="ib ib-sm" aria-label="Back" title="Back" onClick={() => to('pick')}>
+          <button type="button" className="ib ib-sm" aria-label="Back" title="Back" onClick={() => (requesting ? setAsking(null) : to('pick'))}>
             <Icon name="chevron" className="flip" />
           </button>
         )
@@ -88,7 +97,12 @@ export function AddTeammate({
       {step === 'new' && <NewAgent team={team} />}
       {step === 'template' && <FromTemplate team={team} />}
       {step === 'person' && <Invite team={team} />}
-      {step === 'cloud' && <CloudAgents team={team} />}
+      {step === 'cloud' &&
+        (requesting ? (
+          <CloudRequest key={requesting.id} agent={requesting} team={cloudTeam} />
+        ) : (
+          <CloudAgents team={cloudTeam} onTeam={setCloudTeam} onRequest={setAsking} />
+        ))}
     </Dialog>
   );
 }
@@ -217,15 +231,20 @@ function Invite({ team: start }: { team: string }) {
   );
 }
 
+/** An agent not on the list, requested by the name or website the person types. */
+const OTHER = 'other';
+/** The agent a request is for: one from the list, or another one (`other`, its name typed in the request). */
+type Asking = { id: string; name: string };
+
 /** Cloud agents (cloud-agents.ts): the coding agents others make. One Tico connects is added as an agent under the
-    team's lead; any other is requested, and a seat holds its place until Tico support connects it. */
-function CloudAgents({ team: start }: { team: string }) {
+    team's lead; any other, or one not listed (Another agent), is requested, and a seat holds its place until Tico
+    support connects it. A requested one opens its seat's Connecting page. */
+function CloudAgents({ team, onTeam, onRequest }: { team: string; onTeam: (team: string) => void; onRequest: (agent: Asking) => void }) {
+  const navigate = useNavigate();
   const { data: agents, isError } = useQuery(cloudAgentsQuery);
   const { data: seats } = useQuery(seatsQuery);
   const add = useAction('agents.addCloud');
-  const request = useAction('agents.requestCloud');
   const cancel = useAction('agents.cancelCloudRequest');
-  const [team, setTeam] = useState(start);
   // The row waiting on the server: one press at a time.
   const [busy, setBusy] = useState('');
   const press = async (id: string, go: () => Promise<unknown>) => {
@@ -237,10 +256,9 @@ function CloudAgents({ team: start }: { team: string }) {
     }
   };
   const asked = (id: string) => seats?.find((x) => x.agent === id && isOpenRequest(x) && (x.team ?? '') === team);
-  const into = team || undefined;
   return (
     <>
-      <TeamPick value={team} onValueChange={setTeam} />
+      <TeamPick value={team} onValueChange={onTeam} />
       {isError ? (
         <Empty icon="alert" title="Cloud agents did not load" />
       ) : !agents ? (
@@ -258,18 +276,19 @@ function CloudAgents({ team: start }: { team: string }) {
                 </span>
                 <span className="cloud-act">
                   {a.supported ? (
-                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => press(a.id, () => add.run({ agent: a.id, team: into }))}>
+                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => press(a.id, () => add.run({ agent: a.id, team: team || undefined }))}>
                       Add
                     </Button>
                   ) : seat ? (
                     <>
                       <span className="cloud-mark">{seat.request_state === 'canceling' ? 'Canceling' : 'Requested'}</span>
                       <Menu trigger={<IconButton icon="more" label={`More on ${a.name}`} size="sm" quiet busy={busy === a.id} />}>
+                        <MenuItem label="Open" icon="arrow" onSelect={() => void navigate({ to: seatHref(seat.id) })} />
                         <MenuItem label="Cancel request" icon="close" onSelect={() => void press(a.id, () => cancel.run({ seat: seat.id }))} />
                       </Menu>
                     </>
                   ) : (
-                    <Button busy={busy === a.id} disabled={!!busy} onClick={() => press(a.id, () => request.run({ agent: a.id, team: into }))}>
+                    <Button disabled={!!busy} onClick={() => onRequest({ id: a.id, name: a.name })}>
                       Request
                     </Button>
                   )}
@@ -277,8 +296,51 @@ function CloudAgents({ team: start }: { team: string }) {
               </div>
             );
           })}
+          <div role="listitem" className="tpl cloud" data-target={`cloud:${OTHER}`}>
+            <Avatar kind="agent" name="Another agent" initials="" size={28} className="is-seat" />
+            <span className="tpl-name">Another agent</span>
+            <span className="tpl-line" />
+            <span className="cloud-act">
+              <Button disabled={!!busy} onClick={() => onRequest({ id: OTHER, name: '' })}>
+                Request
+              </Button>
+            </span>
+          </div>
         </div>
       )}
+    </>
+  );
+}
+
+/** A request (cloud-agents.ts requestDialog): another agent's name, then its first task, which waits on the seat until
+    the agent connects. Sent, it opens the seat's Connecting page. */
+function CloudRequest({ agent, team }: { agent: Asking; team: string }) {
+  const request = useAction('agents.requestCloud');
+  const other = agent.id === OTHER;
+  const [name, setName] = useState('');
+  const [task, setTask] = useState('');
+  const ready = !other || !!name.trim();
+  return (
+    <>
+      {other && <Field label="Name" placeholder="Name or website" value={name} onValueChange={setName} autoFocus />}
+      <Field label="First task" placeholder="Optional" area value={task} onValueChange={setTask} autoFocus={!other} />
+      <div className="modal-row">
+        <Button
+          variant="primary"
+          busy={request.pending}
+          disabled={!ready || request.pending}
+          onClick={() =>
+            void request.run({
+              agent: agent.id,
+              team: team || undefined,
+              first_task: task.trim() || undefined,
+              name: other ? name.trim() : undefined,
+            })
+          }
+        >
+          Request
+        </Button>
+      </div>
     </>
   );
 }

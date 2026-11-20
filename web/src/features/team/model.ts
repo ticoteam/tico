@@ -5,6 +5,21 @@ import type { AgentFile, AgentRow, Change, Group, Learned, ListRow, Model, Perso
 /** A team address key uses the directory's team name and a prefix reserved for teams. */
 export const teamSlug = (name: string) => `team:${name}`;
 
+/** A seat's address part: `seat:<id>`. Only a seat with a cloud agent request has a page (its Connecting page). */
+export const SEAT_PREFIX = 'seat:';
+export const seatHref = (seat: string) => `/team/${encodeURIComponent(SEAT_PREFIX + seat)}`;
+
+/** Who a seat reports to, as a directory id: a person (`human:<id>`) or an agent (its bare bot id). A seat over it
+    (`seat:<id>`) has no face. */
+export const seatBoss = (reportsTo: string | undefined) =>
+  !reportsTo || reportsTo.startsWith(SEAT_PREFIX) ? null : reportsTo.startsWith('human:') ? reportsTo : `bot:${reportsTo}`;
+
+/** The Connecting steps a request has reached: being filed or filed is the first, then building, then ready. */
+export function connectStep(steps: readonly string[], state: string | undefined): number {
+  const at = steps.indexOf(state === 'filing' ? 'requested' : (state ?? ''));
+  return Math.max(0, at);
+}
+
 const legacyTeamSlug = (name: string) =>
   name
     .toLowerCase()

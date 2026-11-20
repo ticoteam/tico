@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import type { Actor, Directory } from '@/data';
-import { computerStatus, GB, historyOf, instructionsChange, managerOf, membersUnder, modelLine, resolveWho, runFigures, startOfWeek, teamSlug, whoHref } from './model';
+import {
+  computerStatus,
+  connectStep,
+  GB,
+  historyOf,
+  instructionsChange,
+  managerOf,
+  membersUnder,
+  modelLine,
+  resolveWho,
+  runFigures,
+  seatBoss,
+  seatHref,
+  startOfWeek,
+  teamSlug,
+  whoHref,
+} from './model';
 import type { AgentRow, Group, PersonRow } from './queries';
 
 const ana: Actor = { id: 'bot:0190-ana', kind: 'agent', name: 'Ana', slug: 'ana' };
@@ -98,5 +114,23 @@ describe('team model', () => {
     expect(instructionsChange('A\n\nB', 'A\n\nB')).toBeNull();
     expect(instructionsChange('A\n\nB', 'A\n\nB\n\nC')).toBe('Add this after the paragraph that starts "B":\n\nC');
     expect(instructionsChange('A\n\nB\n\nC', 'A\n\nC')).toBe('Remove this:\n\nB');
+  });
+});
+
+describe('a requested seat', () => {
+  const steps = ['requested', 'building', 'ready'];
+  it('is at its first step while filed or being filed, then where the server says', () => {
+    expect(connectStep(steps, 'filing')).toBe(0);
+    expect(connectStep(steps, 'requested')).toBe(0);
+    expect(connectStep(steps, 'building')).toBe(1);
+    expect(connectStep(steps, 'ready')).toBe(2);
+    expect(connectStep(steps, 'canceling')).toBe(0);
+  });
+  it('reports to a person, an agent by its bot id, or a seat with no face', () => {
+    expect(seatBoss('human:p1')).toBe('human:p1');
+    expect(seatBoss('0190-ana')).toBe('bot:0190-ana');
+    expect(seatBoss('seat:s2')).toBeNull();
+    expect(seatBoss('')).toBeNull();
+    expect(seatHref('s9')).toBe('/team/seat%3As9');
   });
 });
