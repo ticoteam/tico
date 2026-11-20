@@ -11,8 +11,10 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
+from backend import outbound_http
 from backend.finance import books_link, books_sync, mirror, xero
 from backend.finance.core import ledger as L
 from backend.finance.core import mirror as M
@@ -987,6 +989,56 @@ def test_a_long_rate_limit_stops_the_pass_without_sleeping_and_the_next_pass_res
     assert not short.page("accounts", 1, 100).ok
     assert sleeps == [3.0]  # the first 3 seconds fit the budget, the next do not
     assert _client(xbooks, sleep=sleeps.append).page("accounts", 1, 100).ok
+
+
+def test_the_default_transport_keeps_decimals_the_retry_after_and_a_redirect_as_the_answer(monkeypatch):
+    answers = [
+        httpx.Response(429, headers={"Retry-After": "7"}, content=b'{"Amount": 10.10}'),
+        httpx.Response(302, headers={"Location": "https://elsewhere.example/"}),
+    ]
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return answers.pop(0)
+
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(handle))
+    limited = xero._http("GET", BASE + "/Accounts", {"Authorization": "Bearer t"}, None)
+    assert (limited.status, limited.retry_after, limited.body) == (429, 7.0, {"Amount": Decimal("10.10")})
+    assert xero._http("POST", BASE + "/Invoices", {}, b"{}").status == 302 and len(seen) == 2
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(down))
+    assert xero._http("GET", BASE + "/Accounts", {}, None) == xero.Reply(0, note="Xero did not answer")
+
+
+class _CutShort(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b'{"Message": "'
+        raise httpx.ReadError("connection dropped")
+
+
+def test_a_write_whose_refusal_is_cut_short_is_unknown_and_sent_once(monkeypatch):
+    """A 429 or 400 whose body never arrived says nothing sure about the write: no answer, never sent again."""
+    for status in (429, 400):
+        posts: list[str] = []
+
+        def cut(request: httpx.Request) -> httpx.Response:
+            posts.append(request.method)
+            return httpx.Response(status, headers={"Retry-After": "1"}, stream=_CutShort())
+
+        monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(cut))
+        sleeps: list[float] = []
+        client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, sleep=sleeps.append)
+        assert client._call("POST", "Invoices", body={"Invoices": []}).status == 0
+        assert posts == ["POST"] and sleeps == []
+    repeated = httpx.MockTransport(
+        lambda request: httpx.Response(429, headers=[("Retry-After", "120"), ("Retry-After", "5")])
+    )
+    monkeypatch.setattr(outbound_http, "TRANSPORT", repeated)
+    assert xero._http("GET", BASE + "/Accounts", {}, None).retry_after == 120.0  # the first value, as urllib read it
 
 
 def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):

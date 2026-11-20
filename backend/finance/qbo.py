@@ -4,21 +4,20 @@ read at use time and never logged. Only the books worker calls it, outside any t
 Reads page with QuickBooks' STARTPOSITION and MAXRESULTS (1-based, like the backfill cursor); the change feed is CDC.
 Writes carry a RequestId derived from the outbox key, so a retry after a lost answer is the same request to QuickBooks.
 A 429 waits out Retry-After a few times; a 401 gets one new token from HQ and the call is tried again; a redirect is
-never followed (the token stays with the host it was meant for). Every call returns a Read or a Sent: it never raises
-for an answer from QuickBooks."""
+never followed (the token stays with the host it was meant for; backend/outbound_http.py). Every call returns a Read or
+a Sent: it never raises for an answer from QuickBooks."""
 
 import json
 import logging
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from .. import outbound_http
 from . import books_link
 from .core import mirror as M
 from .core import qbo as Q
@@ -106,22 +105,14 @@ def base_url() -> str:
     return PRODUCTION
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
-        return None
-
-
-def _urllib(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
-    request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
-    opener = urllib.request.build_opener(_NoRedirect)
+def _http(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
     try:
-        with opener.open(request, timeout=TIMEOUT) as response:
-            return _reply(response.status, response.read(), response.headers.get("Retry-After"))
-    except urllib.error.HTTPError as e:
-        with e:
-            return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
-    except (urllib.error.URLError, TimeoutError, OSError):
+        reply = outbound_http.send(method, url, headers=headers, content=data, timeout=TIMEOUT)
+    except outbound_http.Failed:
         return Reply(0)
+    if not reply.complete:  # a refusal cut short: whether a write landed is unknown
+        return Reply(0)
+    return _reply(reply.status, reply.content, outbound_http.header(reply.headers, "Retry-After"))
 
 
 def _reply(status: int, raw: bytes, retry: str | None) -> Reply:
@@ -175,7 +166,7 @@ class QuickBooks:
     ) -> None:
         self.realm, self.tokens = realm, tokens
         self.base = (base or base_url()).rstrip("/")
-        self.transport = transport or _urllib
+        self.transport = transport or _http
         self.sleep = sleep
         self._items: dict[str, dict[str, str]] | None = None  # one read of the items per pass, when a document needs it
         self._per_line: bool | None = None  # whether the company tracks a class on each line, read once

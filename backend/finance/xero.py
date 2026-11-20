@@ -10,16 +10,14 @@ derived from the outbox key, so a retry after a lost answer is the same request 
 it may have made (find), by the Tico marker in its Narration or Reference, or by its name, through every page Xero holds.
 A lookup that cannot finish is unknown and the write is not sent again. A 429 waits out Retry-After within a small budget
 per pass; past it the pass stops, and the books wait out Retry-After across passes (`hold`). A 401 gets one new token from
-HQ and the call is tried again; a redirect is never followed. Every call returns a Read or a Sent: it never raises for an
-answer from Xero."""
+HQ and the call is tried again; a redirect is never followed (backend/outbound_http.py). Every call returns a Read or a
+Sent: it never raises for an answer from Xero."""
 
 import json
 import logging
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -28,6 +26,7 @@ from decimal import Decimal
 from email.utils import format_datetime
 from typing import Any
 
+from .. import outbound_http
 from . import books_link
 from .core import ledger as L
 from .core import mirror as M
@@ -137,11 +136,6 @@ def base_url() -> str:
     return BASE
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
-        return None
-
-
 def _reply(status: int, raw: bytes, retry: str | None) -> Reply:
     """The answer as JSON with decimals kept exact: a float would lose a cent in the books."""
     try:
@@ -155,17 +149,14 @@ def _reply(status: int, raw: bytes, retry: str | None) -> Reply:
     return Reply(status, as_map(body) or {}, wait)
 
 
-def _urllib(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
-    request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
-    opener = urllib.request.build_opener(_NoRedirect)
+def _http(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
     try:
-        with opener.open(request, timeout=TIMEOUT) as response:
-            return _reply(response.status, response.read(), response.headers.get("Retry-After"))
-    except urllib.error.HTTPError as e:
-        with e:
-            return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
-    except (urllib.error.URLError, TimeoutError, OSError):
+        reply = outbound_http.send(method, url, headers=headers, content=data, timeout=TIMEOUT)
+    except outbound_http.Failed:
         return Reply(0, note="Xero did not answer")
+    if not reply.complete:  # a refusal cut short: whether a write landed is unknown
+        return Reply(0, note="Xero did not answer")
+    return _reply(reply.status, reply.content, outbound_http.header(reply.headers, "Retry-After"))
 
 
 def _fault(reply: Reply) -> str:
@@ -309,7 +300,7 @@ class Xero:
     ) -> None:
         self.tenant, self.tokens = tenant, tokens
         self.base = (base or base_url()).rstrip("/")
-        self.transport = transport or _urllib
+        self.transport = transport or _http
         self.sleep = sleep
         self.hold = 0.0  # seconds the books wait before the next pass: the Retry-After that stopped this one
         self._location = location  # the tracking category whose options are locations ("" for none)
