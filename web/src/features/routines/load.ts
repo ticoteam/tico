@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
-import { allRunsQuery, dueQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
+import { allRunsQuery, dueQuery, holdsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, sourcesQuery, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
 import type { RulesSearch } from './RulesPage';
 
@@ -75,10 +75,16 @@ export function loadRules(qc: QueryClient, search: RulesSearch): Promise<unknown
     void qc.prefetchQuery(reachQuery);
     return qc.ensureQueryData(orgRulesQuery('active'));
   }
-  if (t === 'stages') return qc.ensureQueryData(stageRulesQuery('active'));
+  if (t === 'stages') {
+    const rules = qc.ensureQueryData(stageRulesQuery('active'));
+    void qc.prefetchQuery(teamsQuery);
+    return rules;
+  }
   if (t === 'outside') {
     void qc.prefetchQuery(dueQuery);
-    return qc.ensureQueryData(orgRulesQuery('active'));
+    const rules = qc.ensureQueryData(orgRulesQuery('active'));
+    void qc.prefetchQuery(holdsQuery);
+    return rules;
   }
   if (t === 'due') return qc.ensureQueryData(dueQuery);
   // Suggested reads two lists and shows what it has: neither alone faults the page.
@@ -89,5 +95,10 @@ export function loadRules(qc: QueryClient, search: RulesSearch): Promise<unknown
 export function loadListening(qc: QueryClient, search: ListeningSearch): Promise<unknown> {
   if (!search.watch) return qc.ensureQueryData(watchesQuery);
   // One watch draws from the list while its own read comes, and its matches have their own states.
-  return Promise.all([qc.prefetchQuery(watchQuery(search.watch)), ...(search.tab ? [] : [qc.prefetchQuery(matchesQuery(search.watch))])]);
+  const watch = qc.prefetchQuery(watchQuery(search.watch));
+  if (search.tab === 'sources') {
+    void qc.prefetchQuery(sourcesQuery(search.watch));
+    return watch;
+  }
+  return Promise.all([watch, qc.prefetchQuery(matchesQuery(search.watch))]);
 }

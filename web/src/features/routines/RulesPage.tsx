@@ -12,9 +12,8 @@ import { Find, press, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } fro
 import { ReadDocument } from './ReadDocument';
 import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
-import { runnerOf } from './RoutinesPage';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
-import { agentWords, dayWords, stageParts, triggerWords } from './words';
+import { agentWords, dayWords, runnerOf, stageParts, triggerWords } from './words';
 import './routines.css';
 
 /* Rules (pages/3-company/rules.js): one List, eight tabs on `?tab=`. Every rule is one dense row with no title; a row

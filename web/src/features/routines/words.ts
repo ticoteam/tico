@@ -1,8 +1,22 @@
-import type { Hook, OrgRule, StageRule, Trigger } from './types';
+import type { Hook, OrgRule, Routine, Run, StageRule, Trigger } from './types';
 
 /* Plain words for what the server stores: a schedule, a trigger, a stage rule's When / If / Then. Ported from the old
    app (ui/app/format.ts cronWords, ui/app/automations.ts auCronWords and auSource, ui/app/stage-rules.ts srParts),
    with "agent" where it said "bot". */
+
+/** Who runs it: the agent that takes the turn, or the owner. */
+export const runnerOf = (r: Routine) => r.steps?.find((s) => s.type === 'bot_turn')?.bot ?? r.owner_id ?? null;
+
+/** The task or thread a run made: the first one a step names. */
+export function runLink(run: Pick<Run, 'steps'>): string | undefined {
+  for (const s of run.steps ?? []) {
+    const o = s.outputs;
+    const task = o?.ref ?? o?.turn?.task;
+    if (typeof task === 'string' && task) return `/task/${encodeURIComponent(task)}`;
+    if (typeof o?.thread === 'string' && o.thread) return `/threads/${encodeURIComponent(o.thread)}`;
+  }
+  return undefined;
+}
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const LONG_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
