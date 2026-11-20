@@ -16,7 +16,7 @@ from sentry_sdk.transport import Transport
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
-from backend.observability import TRACE_RATE, Observability, browser_config, public_dsn, sanitize_event
+from backend.observability import Observability, browser_config, public_dsn, sanitize_event
 from backend.store import H, Problem
 from backend.tests.helpers.auth import signing
 
@@ -141,23 +141,17 @@ def events(transport):
     return [item.payload.json for env in transport.envelopes for item in env.items if item.type == "event"]
 
 
-def transactions(transport):
-    return [item.payload.json for env in transport.envelopes for item in env.items if item.type == "transaction"]
-
-
 @pytest.fixture
 def reporting_api(request, monkeypatch, recording):
-    """The api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99, plus the settings
-    an indirect parameter gives."""
+    """The api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99."""
     from backend.tests.helpers import api_app  # the api fixture reads api_settings here
 
     plain = api_app.api_settings
-    extra = getattr(request, "param", {})
     monkeypatch.setattr(
         api_app,
         "api_settings",
         lambda tmp: replace(
-            plain(tmp), observability_environment="test", sentry_server_dsn=DSN, instance_name="Acme Co", **extra
+            plain(tmp), observability_environment="test", sentry_server_dsn=DSN, instance_name="Acme Co"
         ),
     )
     monkeypatch.setenv("TICO_VERSION", "v0.3.99")
@@ -190,7 +184,6 @@ def test_route_and_runner_failures_each_send_one_tagged_event(reporting_api, rec
     )
     assert sent.status_code == 200, sent.text
     route, panic = events(recording)
-    assert transactions(recording) == []  # a self-hosted install traces nothing
     for event in (route, panic):
         assert event["release"] == "0.3.99" and event["tags"]["instance"] == "acme-co"
     assert route["tags"]["route"] == "GET /api/v2/tasks/{tid}/explode" and route["tags"]["status"] == "500"
@@ -273,115 +266,6 @@ def test_scrubber_drops_email_token_and_customer_text(settings):
             "frames": [{"filename": "backend/app.py", "lineno": 7, "in_app": True, "function": "create_task"}]
         },
     }
-
-
-@pytest.mark.parametrize(
-    "hosted, given, rate",
-    [
-        ("", "", 0.0),
-        ("", "0.5", 0.0),  # a self-hosted server never traces
-        ("own", "", TRACE_RATE),
-        ("invited", "0.25", 0.25),
-        ("own", "0", 0.0),
-        ("own", "1", 1.0),
-        ("own", "abc", TRACE_RATE),
-        ("own", "1.5", TRACE_RATE),
-        ("own", "-0.1", TRACE_RATE),
-        ("own", "nan", TRACE_RATE),
-    ],
-)
-def test_trace_rate_is_hosted_only_and_set_by_its_variable(settings, recording, hosted, given, rate):
-    telemetry = Observability(replace(settings, hosted=hosted, sentry_traces_sample_rate=given))
-    telemetry.start()
-    assert telemetry.trace_rate == rate and telemetry.client.options["traces_sample_rate"] == rate
-    telemetry.trace("GET /api/v2/tasks/{tid}", 200, 5.0)
-    if rate in (0.0, 1.0):
-        assert len(transactions(recording)) == rate
-    telemetry.close()
-
-
-def test_transaction_wire_allowlist(settings, recording):
-    telemetry = Observability(replace(settings, hosted="own", sentry_traces_sample_rate="1", instance_name="Acme Co"))
-    telemetry.start()
-    url = "https://acme.example/api/v2/tasks/t-secret-1?token=" + TOKEN
-    dirty = {
-        "type": "transaction",
-        "transaction": "GET /api/v2/tasks/{tid}",
-        "start_timestamp": 1_700_000_000.0,
-        "timestamp": 1_700_000_000.25,
-        "contexts": {
-            "trace": {
-                "trace_id": "a" * 32,
-                "span_id": "b" * 16,
-                "op": SECRET,
-                "status": "ok",
-                "data": {"url": url, "user": EMAIL},
-            },
-            "user": {"email": EMAIL},
-        },
-        "tags": {"status": "200", "caller": EMAIL, "instance": "acme-co", "secret": SECRET},
-        "measurements": {"sql": {"value": 3.5, "unit": "millisecond"}, SECRET: {"value": 1, "unit": "none"}},
-        "spans": [
-            {
-                "op": "db",
-                "description": "SELECT * FROM humans WHERE email='" + EMAIL + "'",
-                "data": {"db.statement": "SELECT ?", "db.params": [EMAIL, TOKEN]},
-            },
-            {"op": "http.client", "description": "GET " + url, "data": {"http.query": "token=" + TOKEN}},
-        ],
-        "request": {"url": url, "headers": {"Authorization": TOKEN}, "query_string": "token=" + TOKEN},
-        "user": {"id": "human:ana", "email": EMAIL},
-        "breadcrumbs": {"values": [{"message": TEXT}]},
-        "extra": {"task": TEXT},
-    }
-    telemetry.client.capture_event(dirty)
-    telemetry.client.capture_event({**dirty, "contexts": {"trace": {**dirty["contexts"]["trace"], "status": SECRET}}})
-    telemetry.trace("GET /api/v2/tasks/{tid}", 403, 12.0, 1.5, [4.0, 0.5, 3, {"SELECT ?": [1, 4.0]}], "human")
-    telemetry.trace("GET unmatched", 404, 1.0)  # no route template, so not sent
-    assert [item.type for env in recording.envelopes for item in env.items] == ["transaction"] * 3
-    first, odd, second = transactions(recording)
-    assert odd["contexts"]["trace"]["status"] == "unknown_error"
-    wire = json.dumps([first, odd, second])
-    for secret in (SECRET, EMAIL, TOKEN, TEXT, "t-secret-1", "human:ana", "SELECT"):
-        assert secret not in wire
-    for sent in (first, odd, second):
-        assert set(sent) <= {
-            "event_id", "type", "platform", "transaction", "transaction_info", "start_timestamp", "timestamp",
-            "contexts", "tags", "environment", "release", "measurements",
-        }  # fmt: skip
-        assert set(sent["contexts"]) == {"trace"} and set(sent["contexts"]["trace"]) == {
-            "trace_id", "span_id", "op", "status",
-        }  # fmt: skip
-        assert sent["transaction"] == "GET /api/v2/tasks/{tid}" and sent["contexts"]["trace"]["op"] == "http.server"
-    assert first["tags"] == {"app": "tico", "source": "request", "status": "200", "instance": "acme-co"}
-    assert first["measurements"] == {"sql": {"value": 3.5, "unit": "millisecond"}}
-    assert second["tags"] == {
-        "app": "tico",
-        "source": "request",
-        "status": "403",
-        "caller": "human",
-        "instance": "acme-co",
-    }
-    assert second["contexts"]["trace"]["status"] == "permission_denied"
-    assert second["measurements"] == {
-        "auth": {"value": 1.5, "unit": "millisecond"},
-        "sql": {"value": 4.0, "unit": "millisecond"},
-        "lock_wait": {"value": 0.5, "unit": "millisecond"},
-    }
-    assert second["timestamp"] - second["start_timestamp"] == pytest.approx(0.012, abs=1e-5)
-    telemetry.close()
-
-
-@pytest.mark.parametrize("reporting_api", [{"hosted": "own", "sentry_traces_sample_rate": "1"}], indirect=True)
-def test_hosted_requests_are_traced_by_route_template(reporting_api, recording):
-    from backend.tests.helpers.api import headers
-
-    client = TestClient(reporting_api.app, raise_server_exceptions=False)
-    assert client.get("/api/v2/tasks/t-secret-1/explode", headers=headers()).status_code == 500
-    (sent,) = [t for t in transactions(recording) if t["transaction"] == "GET /api/v2/tasks/{tid}/explode"]
-    assert sent["tags"]["status"] == "500" and sent["tags"]["caller"] == "human"
-    assert sent["contexts"]["trace"]["status"] == "internal_error"
-    assert "t-secret-1" not in json.dumps(transactions(recording))
 
 
 def test_hub_limits_what_one_runner_token_sends(settings, recording):

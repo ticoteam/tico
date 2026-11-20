@@ -373,10 +373,7 @@ async def watch_loop(timing, stop, every=0.5):
             timing.recorder.beat = None  # a probe that stopped is not a stalled loop
 
 
-def install_middleware(app, recorder, telemetry):
-    """Times every request for `Timing` and the recorder, and hands it to `telemetry` (backend/observability.py), which
-    sends a sampled share as Sentry transactions on a hosted server."""
-
+def install_middleware(app, recorder):
     @app.middleware("http")
     async def request_timing(request, call_next):
         started = time.perf_counter()
@@ -410,8 +407,6 @@ def install_middleware(app, recorder, telemetry):
             )
             # The recorder's caller kind, status and size; a raised error counts as a 500.
             who = getattr(request.state, "identity", None)
-            caller = caller_kind(who)
-            status = response.status_code if response is not None else 500
             size = response.headers.get("content-length") if response is not None else None
             # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
             active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
@@ -419,14 +414,13 @@ def install_middleware(app, recorder, telemetry):
                 key,
                 request.state.auth_ms,
                 active_ms,
-                caller,
-                status,
+                caller_kind(who),
+                response.status_code if response is not None else 500,
                 int(size) if size and size.isdigit() else 0,
                 getattr(who, "actor", "") or "",
                 cost,
                 client_of(who),
             )
-            telemetry.trace(key, status, active_ms, request.state.auth_ms, cost, caller)
             if cost_token is not None:
                 request_finished(cost_token)
 

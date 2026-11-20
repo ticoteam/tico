@@ -184,7 +184,7 @@ def _configure_app(
 
     may_edit_routines = _routine_permissions(auth, lambda *args, **kwargs: delegated_identity(*args, **kwargs))
 
-    flight.install_middleware(app, recorder, telemetry)
+    flight.install_middleware(app, recorder)
 
     actor_names.install_route_class(app, store)
 

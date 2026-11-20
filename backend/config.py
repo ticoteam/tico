@@ -330,9 +330,6 @@ class Settings:
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
-    # The share of a hosted server's requests sent to Sentry as transactions, as written; backend/observability.py
-    # `trace_rate` reads it, and a self-hosted server sends none whatever it says.
-    sentry_traces_sample_rate: str = ""
     # Which install a server error report comes from (backend/observability.py); unset: the company name.
     instance_name: str = ""
     # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
@@ -672,7 +669,6 @@ class Settings:
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
-            sentry_traces_sample_rate=os.environ.get("TICO_SENTRY_TRACES_SAMPLE_RATE", "").strip(),
             instance_name=os.environ.get("TICO_INSTANCE_NAME", "").strip(),
             gateway_key="" if rehearsal else _gateway_key(),
             gateway_url=_gateway_url(),
