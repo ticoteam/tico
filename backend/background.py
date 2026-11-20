@@ -34,10 +34,10 @@ class Joinable(Protocol):
 def start(name: str, target: Callable[..., object], *args: Any) -> threading.Thread:
     """`target(*args)` on a named daemon thread, started and registered."""
     thread = threading.Thread(target=target, args=args, name=name, daemon=True)
+    thread.start()  # before it is registered: a thread not started yet is not alive, and the prune would drop it
     with _lock:
         _threads.difference_update([t for t in _threads if not t.is_alive()])
         _threads.add(thread)
-    thread.start()
     return thread
 
 
@@ -110,16 +110,23 @@ class Loop:
         self.wake()
         return list(self.threads)
 
+    def forget(self, joined: list[threading.Thread]) -> None:
+        """Drop the threads a stop joined (or gave up on); one a start made since stays."""
+        with self.lock:
+            self.threads = [t for t in self.threads if t not in joined]
+
     def stop(self, timeout: float = STOP_WAIT) -> None:
         """Set the stop event, ring the bell and join the threads within `timeout` seconds all told."""
-        join(self.signal(), timeout)
-        self.threads = []
+        joined = self.signal()
+        join(joined, timeout)
+        self.forget(joined)
 
 
 def stop_all(timeout: float = STOP_WAIT) -> None:
     """Stop every Loop: all their stop events set and bells rung first, then one `timeout` for all the joins."""
     with _lock:
         loops = list(_loops)
-    join([thread for loop in loops for thread in loop.signal()], timeout)
-    for loop in loops:
-        loop.threads = []
+    joined = [(loop, loop.signal()) for loop in loops]
+    join([thread for _, threads in joined for thread in threads], timeout)
+    for loop, threads in joined:
+        loop.forget(threads)
