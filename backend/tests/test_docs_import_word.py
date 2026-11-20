@@ -96,6 +96,10 @@ def test_a_picture_brings_no_image_or_its_bytes():
         (docx(""), "That Word file has no text"),
         (docx(para("<broken")), "That Word file could not be read"),
         (
+            docx("<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val='x'/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"),
+            "could not be read",
+        ),
+        (
             docx(para("x"), parts={"word/styles.xml": '<!DOCTYPE x [<!ENTITY a "b">]><x/>'}),
             "That Word file uses XML features Tico does not read",
         ),
@@ -110,3 +114,25 @@ def test_a_word_part_over_the_size_cap_is_refused_before_it_is_read(monkeypatch)
     monkeypatch.setattr(docs_import, "MAX_XML", 100)
     with pytest.raises(ValueError, match="That Word file is too large to read"):
         docs_import.from_docx(docx(para("x" * 200)))
+
+
+def test_merged_cells_page_breaks_and_a_formatted_title_keep_their_place():
+    def cell(text, merge=""):
+        return f"<w:tc><w:tcPr>{merge}</w:tcPr>{para(text)}</w:tc>"
+
+    table = (
+        "<w:tbl><w:tr>" + cell("Name") + cell("Old") + cell("New") + "</w:tr>"
+        "<w:tr>" + cell("A", '<w:vMerge w:val="restart"/>') + cell("1") + cell("2") + "</w:tr>"
+        "<w:tr>" + cell("", "<w:vMerge/>") + cell("") + cell("3") + "</w:tr></w:tbl>"
+    )
+    title = (
+        '<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>Work</w:t></w:r>'
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>flow</w:t></w:r></w:p>"
+    )
+    paged = '<w:p><w:r><w:t>Page one</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>Page two</w:t></w:r></w:p>'
+    # The file's own style map, which mammoth reads unless told not to, would drop every paragraph.
+    text, guess = docs_import.from_docx(docx(title + table + paged, parts={"mammoth/style-map": "p => !"}))
+    assert guess == "Workflow"
+    assert text == (
+        "# Work**flow**\n\n| Name | Old | New |\n| --- | --- | --- |\n| A | 1 | 2 |\n|  |  | 3 |\n\nPage one\nPage two\n"
+    )
