@@ -5,8 +5,9 @@ word and every 5 minutes instead of every minute (runner-rs/src/events.rs relays
 For each binary given (BEFORE, AFTER: paths to `tico-runner` builds), a fresh fictional hub on a local port and one
 enrolled computer running `tico-runner run` with TICO_SIDE_JOBS=1 and no bots. After WARM seconds it counts every
 request for WINDOW seconds and prints them per hour. Then it moves a meeting importer onto the computer and back, and
-connects and clears the Gateway, SAMPLES times each, and prints how long until the computer read again (a hub write
-to the runner's read; the runner without hints waits for its minute).
+connects and clears the Gateway, SAMPLES times each, and prints how long from the commit until the computer read again
+(the runner without hints waits for its minute). The importers job the supervisor starts polls the same route every 30 s,
+so one sample in a few hundred may be its read rather than the supervisor's.
 
     BEFORE=/tmp/before/tico-runner AFTER=runner-rs/target/release/tico-runner nice -n 10 .venv/bin/python \
         bench/perf-runner-push.py
@@ -130,14 +131,13 @@ def measure(label, binary):
         late = []
         moves = []
         for n in range(SAMPLES):
-            at = time.monotonic()
             post(api, "meeting-importers/granola", {"enabled": n % 2 == 0, "runner_id": computer["runner_id"]})
+            at = time.monotonic()  # committed: a read from here on sees the change
             took = next_read(hub, IMPORTERS, at, 70)
             moves.append(took) if took is not None else late.append("importers")
             time.sleep(2)
         flips = []
         for n in range(SAMPLES):
-            at = time.monotonic()
             with store.transaction() as c:
                 record = gateway_connection._row(c)
                 if n % 2 == 0:
@@ -145,6 +145,7 @@ def measure(label, binary):
                 else:
                     record.pop("key", None)
                 gateway_connection._write(c, record)
+            at = time.monotonic()
             took = next_read(hub, CONFIG, at, 70)
             flips.append(took) if took is not None else late.append("config")
             time.sleep(2)

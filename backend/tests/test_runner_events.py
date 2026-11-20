@@ -191,3 +191,11 @@ def test_an_importer_moved_tells_the_computers_it_left_and_joined_that_take_rela
     off = newest(api)
     assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": plain["runner_id"]}) == {"ok": True}
     assert kinds(plain, start) == [] and kinds(new, off) == ["importers"]
+    # A save that moves nothing tells no one; turning it off tells the computer it ran on.
+    same = newest(api)
+    assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": new["runner_id"]}) == {"ok": True}
+    again = newest(api)
+    assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": new["runner_id"]}) == {"ok": True}
+    assert kinds(new, again) == []
+    assert post(api, "meeting-importers/granola", {"enabled": False, "runner_id": new["runner_id"]}) == {"ok": True}
+    assert kinds(new, again) == ["importers"] and kinds(new, same) == ["importers"]

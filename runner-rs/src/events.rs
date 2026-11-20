@@ -53,8 +53,9 @@ const VOICE_BACKUP: Duration = Duration::from_secs(3);
 /// A stream quiet this long may be dead without having failed yet: voice keeps its own poll until it is heard again.
 /// The server sends a keepalive every 15 s by default (20 s is a common setting).
 const VOICE_QUIET: Duration = Duration::from_secs(25);
-/// A stream quiet this long (keepalives come every 15 s by default) is not counted on for relay hints.
-const HINTS_QUIET: Duration = Duration::from_secs(35);
+/// A stream quiet this long is not counted on for relay hints: past the hub's longest keepalive (15 s by default, 50 s
+/// at most: backend/config.py), so a hub set to the longest does not send its computers back to the minute's clock.
+const HINTS_QUIET: Duration = Duration::from_secs(55);
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
 pub const CHANNELS: [&str; 11] = [
     "claim",
