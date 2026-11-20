@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
-import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter } from '@tanstack/react-router';
+import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
@@ -327,10 +327,13 @@ function AppMenu({ note }: { note: ReactNode }) {
   const self = useActor(me?.id);
   const teams = useDirectory((d) => teamsOf(d, me?.id));
   const { data: pipelines } = useQuery(pipelinesQuery);
-  const { data: flow } = useQuery(flowQuery);
-  const { data: catchUp } = useQuery(catchUpQuery);
-  const { data: updates } = useInfiniteQuery(updateListQuery('all'));
-  const { data: support } = useQuery(supportUnreadQuery);
+  const { data: flow } = useQuery({ ...flowQuery, select: (data) => data.count });
+  // The badges read whole feeds. Give the first page's loader the connection before warming those caches.
+  const pageOpened = useRouterState({ select: (state) => state.resolvedLocation !== undefined });
+  const badgesEnabled = pageOpened && !!me;
+  const { data: catchUp } = useQuery({ ...catchUpQuery, enabled: badgesEnabled, select: (data) => data.count });
+  const { data: updates } = useInfiniteQuery({ ...updateListQuery('all'), enabled: badgesEnabled, select: (data) => data.pages[0]?.unread });
+  const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
   const companies = useCompanies();
   const name = config?.company_name || config?.app_name || '';
   const meMate: MenuMate = self
@@ -346,7 +349,7 @@ function AppMenu({ note }: { note: ReactNode }) {
         // the Features pipeline read as horizons: only a company that has one gets the line
         ...(roadmapPipeline(pipelines) ? [{ id: 'roadmap', name: 'Roadmap', to: '/roadmap' }] : []),
       ]}
-      counts={{ flow: some(flow?.count), threads: some(catchUp?.count), updates: some(updates?.pages[0]?.unread), support: some(support) }}
+      counts={{ flow: some(flow), threads: some(catchUp), updates: some(updates), support: some(support) }}
       note={note}
       onSearch={() => openSearch()}
       onAddTeammate={press('shell.addTeammate')}

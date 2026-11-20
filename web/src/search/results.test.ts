@@ -64,17 +64,25 @@ describe('search', () => {
       return { find, provider: defineSearch({ group: 'Server', order: 0, remote: true, find }) };
     };
 
-    it('shows the cache at once and asks the server only after the pause', async () => {
+    it('shows ready groups and starts the debounced search while a cold list is still loading', async () => {
       vi.useFakeTimers();
       const { find, provider } = server();
+      let finishList!: () => void;
+      const list = defineSearch({
+        group: 'List',
+        order: 2,
+        find: () => new Promise((resolve) => { finishList = () => resolve([]); }),
+      });
       const early: Group[][] = [];
-      const done = gather('frost', [provider, tasks], [], ctx, new AbortController().signal, (g) => early.push(g));
+      const done = gather('frost', [provider, tasks, list], [], ctx, new AbortController().signal, (g) => early.push(g));
       await vi.advanceTimersByTimeAsync(REMOTE_WAIT_MS - 1);
       expect(early.map((g) => g.map((x) => x.name))).toEqual([['Tasks']]);
       expect(find).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      expect((await done).map((g) => g.name)).toEqual(['Server', 'Tasks']);
       expect(find).toHaveBeenCalledTimes(1);
+      expect(early.at(-1)?.map((g) => g.name)).toEqual(['Server', 'Tasks']);
+      finishList();
+      expect((await done).map((g) => g.name)).toEqual(['Server', 'Tasks']);
     });
 
     it('never asks the server for words typed over before the pause', async () => {

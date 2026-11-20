@@ -46,6 +46,21 @@ describe('PhoneCards', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
+  it('clears the deferred keyboard update if the phone layout unmounts after blur', () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<PhoneCards page={<input aria-label="Filter" />} tico={null} menu={null} />);
+      const input = screen.getByRole('textbox', { name: 'Filter' });
+      const before = vi.getTimerCount();
+      fireEvent.focusOut(input);
+      expect(vi.getTimerCount()).toBeGreaterThan(before);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a chat that opens comes up as its own card', () => {
     const { rerender } = render(cards());
     rerender(cards({ chat: true }));

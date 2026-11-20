@@ -57,21 +57,21 @@ export const REMOTE_WAIT_MS = 150;
 const pause = (ms: number, signal: AbortSignal) =>
   new Promise<boolean>((done) => {
     if (signal.aborted) return done(false);
-    const t = setTimeout(() => done(true), ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        done(false);
-      },
-      { once: true },
-    );
+    const stop = () => {
+      clearTimeout(t);
+      done(false);
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', stop);
+      done(true);
+    }, ms);
+    signal.addEventListener('abort', stop, { once: true });
   });
 
 /**
- * The groups for a query, in the providers' order, actions last. A provider that fails drops out quietly. Providers
- * that read the cache answer at once (handed to `early` when servers are still to come); the `remote` ones are asked
- * only after a pause in the typing, and never once the signal is aborted.
+ * The groups for a query, in provider order, with actions last. Publish each group as it arrives: a provider
+ * searching a list can have a cold cache, and its read should hold up neither the local results nor the search
+ * debounce. A provider that fails drops out quietly.
  */
 export async function gather(
   q: string,
@@ -85,20 +85,26 @@ export async function gather(
     const recent = readRecent();
     return recent.length ? [{ name: RECENT, hits: recent }] : [];
   }
-  const ask = (p: SearchProvider) =>
-    Promise.resolve()
-      .then(() => p.find(q, signal))
-      .catch(() => []);
-  const found = new Map<SearchProvider, SearchHit[]>();
-  const local = from.filter((p) => !p.remote);
-  const remote = from.filter((p) => p.remote);
-  (await Promise.all(local.map(ask))).forEach((hits, i) => found.set(local[i]!, hits));
+  const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
+  const found = new Map<SearchProvider, Group>();
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
-  const groups = () => [...from.flatMap((p) => (found.has(p) ? [{ name: p.group, hits: found.get(p)! }] : [])), acts].filter((g) => g.hits.length > 0);
-  if (remote.length) {
-    early?.(groups());
-    if (await pause(REMOTE_WAIT_MS, signal)) (await Promise.all(remote.map(ask))).forEach((hits, i) => found.set(remote[i]!, hits));
-  }
+  const groups = () => [...from.flatMap((p) => found.get(p) ?? []), ...(acts.hits.length ? [acts] : [])];
+  if (acts.hits.length && !signal.aborted) early?.([acts]);
+  await Promise.all(
+    from.map(async (p) => {
+      if (p.remote && !(await wait)) return;
+      if (signal.aborted) return;
+      let hits: SearchHit[];
+      try {
+        hits = await p.find(q, signal);
+      } catch {
+        return;
+      }
+      if (!hits.length || signal.aborted) return;
+      found.set(p, { name: p.group, hits });
+      early?.(groups());
+    }),
+  );
   return groups();
 }
 
