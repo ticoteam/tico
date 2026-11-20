@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Empty } from '@/kit/Empty';
+import { approvalCard, useApprovalCards } from '@/features/task/exports';
 import { dmQuery } from './queries';
 
 /**
@@ -17,10 +18,12 @@ export function TeammateChat({ who }: { who: string }) {
   // Until I know who I am, any teammate could be me: the server refuses a DM with yourself (422).
   const other = !!actor && !!me.data && actor.id !== me.data.id;
   const dm = useQuery({ ...dmQuery(actor?.id ?? ''), enabled: other });
+  // With an agent: what it asked you to approve, as cards among its messages.
+  const approvals = useApprovalCards({ agent: other && actor.kind === 'agent' ? actor.id : undefined });
   if (!other) return null;
   if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
   if (!dm.data) return null;
-  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} />;
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} />;
 }
 
 /** An agent's chat, by its slug. */

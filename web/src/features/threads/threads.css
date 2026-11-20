@@ -166,14 +166,6 @@ a.lr-row{color:inherit}
 .mg-list{padding-bottom:var(--s-4)}
 .mg-list>.btn{margin:var(--s-3) auto 0;display:flex}
 
-/* ---------- a team's thread: an update as a card in the timeline (plan/threads-team.html .kcard) ---------- */
-.kcard{display:grid;gap:var(--s-1);margin:var(--s-1) 0 var(--s-0);padding:var(--s-2h) var(--s-3);border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink)}
-.kcard:hover{background:var(--well)}
-.kcard .kh{display:flex;align-items:center;gap:var(--s-2);font-weight:var(--w-strong)}
-.kcard .kh .ico{width:15px;height:15px;color:var(--muted)}
-.kcard p{color:var(--ink-2);line-height:var(--lh-read)}
-.kcard .kf{font-size:var(--t-xs);color:var(--muted)}
-
 /* Message: the picker over the menu, "To", then teams, people and agents, or the one set the chips name */
 .msg-pick .to>.ico{width:15px;height:15px;color:var(--muted);flex:none}
 .msg-pick .to-label{width:auto}
