@@ -316,6 +316,14 @@ questions, the value and confidence per answer, the model, token usage and laten
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
+## Link previews
+
+When a person opens a thread with a link to an outside web page, the server (never the browser) may read that page once
+a day for its title, site name, description and picture (`GET /api/v2/link-preview`, backend/link_preview.py). The page's
+site sees a plain request from the server with no cookie or credential, and nothing about who posted or read the link.
+The picture is made small, kept in the server's database and served from `/api/`, so a thread never loads anything from
+the outside site. Private and internal addresses are never fetched. An answer is kept a day and deleted the day after.
+
 ## Tico models through Tico HQ
 
 Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`) and a bot is set to

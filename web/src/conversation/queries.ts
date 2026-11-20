@@ -2,8 +2,8 @@
 // Messages themselves reach the timeline through live/patch.ts (the built-in `messages` patcher); this file adds
 // what only a conversation knows: a pending send giving way to its echo, and a reply being written (`runs`).
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { api } from '@/api/client';
-import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
+import { api, ApiError } from '@/api/client';
+import type { Assistant, LinkPreview, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 import { onTopic } from '@/live';
 import { newId } from '@/lib/ids';
@@ -433,5 +433,22 @@ export const pageTextQuery = (url: `/api/${string}`) =>
     queryKey: ['files', 'page-text', url],
     queryFn: ({ signal }) => api.get<string>(url, { signal }).then((t) => (typeof t === 'string' ? t : '')),
     staleTime: Infinity,
+    retry: false,
+  });
+
+/**
+ * What the server read from an outside page (backend/link_preview.py): its title, site and picture, the picture served
+ * from /api/ so the browser never calls the page's site. Null when the page has none, or the address may not be read;
+ * a refusal for too many reads at once stays an error, so the next draw asks again.
+ */
+export const linkPreviewQuery = (href: string) =>
+  queryOptions({
+    queryKey: ['link-preview', href],
+    queryFn: ({ signal }) =>
+      api.get<LinkPreview>(`/api/v2/link-preview?url=${enc(href)}`, { signal }).catch((e: unknown) => {
+        if (e instanceof ApiError && (e.status === 404 || e.status === 422)) return null;
+        throw e;
+      }),
+    staleTime: 60 * 60_000,
     retry: false,
   });

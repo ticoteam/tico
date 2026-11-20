@@ -301,6 +301,28 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(chip.getAttribute('target')).toBe('_blank');
   });
 
+  const LONE = 'https://shop.acme.example/beds/cedar-raised-bed';
+  const previewOf = (answer: Reply) => serve((url) => (url === `/api/v2/link-preview?url=${encodeURIComponent(LONE)}` ? answer : undefined));
+
+  it('a link alone stays a chip when the server has no preview of its page', async () => {
+    previewOf({ status: 404, body: { error: { code: 'not_found', detail: 'This address has no preview', retryable: false } } });
+    show([msg(1, 'bot:qa', LONE)]);
+    await waitFor(() => expect(calls.some((c) => c.url.startsWith('/api/v2/link-preview?'))).toBe(true));
+    expect((await screen.findByRole('link', { name: /Cedar raised bed/ })).className).toContain('lchip');
+    expect(document.querySelector('.lcard')).toBeNull();
+  });
+
+  it('a link alone becomes a card with the title, site and picture the server read', async () => {
+    previewOf({ status: 200, body: { url: LONE, title: 'Cedar raised bed, 4 ft', site_name: 'Acme Garden', description: null, image: '/api/v2/link-preview/images/abc', image_width: 480, image_height: 251 } });
+    show([msg(1, 'bot:qa', LONE)]);
+    const card = await screen.findByRole('link', { name: /Cedar raised bed, 4 ft/ });
+    expect(card.className).toBe('lcard');
+    expect(card.getAttribute('href')).toBe(LONE);
+    expect(card.textContent).toContain('Acme Garden');
+    expect(card.querySelector('img')?.getAttribute('src')).toBe('/api/v2/link-preview/images/abc');
+    expect(calls.some((c) => !c.url.startsWith('/api/'))).toBe(false); // nothing loads from the outside site
+  });
+
   it('keeps words someone chose as a link, and opens an app link beside this thread', async () => {
     serve();
     show([msg(1, 'bot:qa', 'Read [the brief](https://fernhill.example/brief) and [Fix the cart](#/task/t7)')]);

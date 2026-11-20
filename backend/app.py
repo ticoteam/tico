@@ -2414,6 +2414,9 @@ def _install_features(
     from . import page_history
 
     page_history.install(app, store, mutate)  # the pages a person opened, kept for Tico (backend/page_history.py)
+    from . import link_preview
+
+    link_preview.install(app, store)  # outside pages' titles and pictures for link chips (backend/link_preview.py)
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
 

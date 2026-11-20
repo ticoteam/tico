@@ -164,19 +164,29 @@ def credential_headers(host, env):
 
 
 class Fetcher:
-    """One fetch: a shared 20 second deadline over every request it makes."""
+    """One fetch: a shared deadline over every request it makes. The limits are the class's: a caller that reads less
+    (the server's link previews, backend/link_preview.py) subclasses it with tighter ones and the same checks."""
+
+    timeout_s = TIMEOUT_S
+    max_redirects = MAX_REDIRECTS
+    max_bytes = MAX_BYTES
+    ports = PORTS
 
     def __init__(self, env=None, resolver=resolve, opener=connect, clock=time.monotonic):
         self.env = os.environ if env is None else env
         self.resolver, self.opener, self.clock = resolver, opener, clock
-        self.deadline = clock() + TIMEOUT_S
+        self.deadline = clock() + self.timeout_s
         self.requests = 0
 
     def left(self):
         remaining = self.deadline - self.clock()
         if remaining <= 0:
-            raise FetchError("timeout", f"Took longer than {TIMEOUT_S} seconds")
+            raise FetchError("timeout", f"Took longer than {self.timeout_s:g} seconds")
         return remaining
+
+    def accepts(self, ctype):
+        """Whether a body of this content type (no parameters, lower case) is read."""
+        return ctype in TEXT_TYPES or ctype.endswith("+json")
 
     def check_url(self, url):
         parts = urlsplit(url)
@@ -188,7 +198,7 @@ class Fetcher:
         if not host:
             raise FetchError("url", "That is not a web address")
         port = parts.port or (443 if parts.scheme == "https" else 80)
-        if port not in PORTS:
+        if port not in self.ports:
             raise FetchError("port", f"Port {port} is not fetched")
         return parts, host, port
 
@@ -211,7 +221,7 @@ class Fetcher:
 
     def get(self, url, accept="*/*", extra=None):
         """(final_url, content_type, body bytes, truncated) after following at most 5 redirects."""
-        for hop in range(MAX_REDIRECTS + 1):
+        for hop in range(self.max_redirects + 1):
             parts, host, port = self.check_url(url)
             ips = self.addresses(host, port)
             tls = parts.scheme == "https"
@@ -251,7 +261,7 @@ class Fetcher:
                         f"{host} answered {response.status} {response.reason or ''}".strip(),
                     )
                 ctype = (response.getheader("Content-Type") or "").split(";")[0].strip().lower()
-                if ctype not in TEXT_TYPES and not ctype.endswith("+json"):
+                if not self.accepts(ctype):
                     raise FetchError(
                         "content_type",
                         f"{ctype or 'An unknown type'} is not fetched; only text, markdown, HTML, JSON, XML and PDF",
@@ -260,20 +270,22 @@ class Fetcher:
                 return url, ctype, body, truncated
             finally:
                 conn.close()
-        raise FetchError("redirects", f"More than {MAX_REDIRECTS} redirects")
+        raise FetchError("redirects", f"More than {self.max_redirects} redirects")
 
     def read(self, response):
-        chunks, size = [], 0
-        while size <= MAX_BYTES:
+        """The body, cut at max_bytes ((body, True) when it was longer). Each read takes what one receive gave
+        (`read1`), so a server that sends a byte at a time is still stopped at the deadline."""
+        chunks, size, most = [], 0, self.max_bytes
+        while size <= most:
             self.left()
-            chunk = response.read(min(65536, MAX_BYTES + 1 - size))
+            chunk = response.read1(min(65536, most + 1 - size))
             if not chunk:
                 break
             chunks.append(chunk)
             size += len(chunk)
         body = b"".join(chunks)
-        if len(body) > MAX_BYTES:
-            return body[:MAX_BYTES], True
+        if len(body) > most:
+            return body[:most], True
         return body, False
 
 

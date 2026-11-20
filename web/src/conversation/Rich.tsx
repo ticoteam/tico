@@ -8,7 +8,7 @@ import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
 import { besideThread } from '@/lib';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
-import { fileFactsQuery, pageTextQuery } from './queries';
+import { fileFactsQuery, linkPreviewQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
 
 /* What a message holds besides its words, drawn so it reads at a glance (thread-content.html): a link is a chip with
@@ -31,9 +31,20 @@ function shortHref(href: string): string {
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
+/** A web chip's tip: the page's title once the server has read it (asked only while the tip shows), and its address. */
+function WebTip({ href }: { href: string }) {
+  const title = useQuery(linkPreviewQuery(href)).data?.title;
+  return (
+    <>
+      {title && <span className="tip-title">{title}</span>}
+      {shortHref(href)}
+    </>
+  );
+}
+
 function WebChip({ p }: { p: Extract<Pointer, { kind: 'web' }> }) {
   return (
-    <Tooltip label={shortHref(p.href)}>
+    <Tooltip label={<WebTip href={p.href} />}>
       <a className="lchip" href={p.href} target="_blank" rel="noreferrer" data-site={p.site}>
         <Icon name={p.icon} />
         {p.label}
@@ -102,6 +113,44 @@ function Pointed({ href, words, bare }: { href: string; words: ReactNode; bare: 
     <Link className="lnk" href={href} {...(away && { target: '_blank', rel: 'noreferrer', title: shortHref(href) })}>
       {words}
     </Link>
+  );
+}
+
+type WebPointer = Extract<Pointer, { kind: 'web' }>;
+
+/** The outside address a message's words are, when they are that one address and nothing else. */
+export function loneWebLink(text: string): WebPointer | null {
+  const t = text.trim();
+  const href = /^<?(https?:\/\/\S+?)>?$/.exec(t)?.[1] ?? /^\[[^\]\n]*\]\((https?:\/\/[^)\s]+)\)$/.exec(t)?.[1];
+  const p = href ? pointerOf(href, location.origin) : null;
+  return p?.kind === 'web' ? p : null;
+}
+
+/**
+ * A link alone in a message as a card: the page's picture, title and site, as the server read them. Until the server
+ * answers, and when the page has no preview, it is the message's own words (`words`: the chip).
+ */
+export function LinkCard({ p, words }: { p: WebPointer; words: ReactNode }) {
+  const preview = useQuery(linkPreviewQuery(p.href)).data;
+  const [lost, setLost] = useState(false);
+  if (!preview?.title) return words;
+  const pic = preview.image && !lost ? preview.image : null;
+  const wide = !!pic && (preview.image_width ?? 0) >= 1.3 * (preview.image_height ?? 1) && (preview.image_width ?? 0) >= 240;
+  return (
+    <a className={['lcard', pic && !wide && 'is-thumb'].filter(Boolean).join(' ')} href={p.href} target="_blank" rel="noreferrer" title={shortHref(p.href)}>
+      {pic && (
+        <span className="lcard-pic">
+          <img src={pic} alt="" loading="lazy" {...(preview.image_width && preview.image_height && { width: preview.image_width, height: preview.image_height })} onError={() => setLost(true)} />
+        </span>
+      )}
+      <span className="lcard-text">
+        <b>{preview.title}</b>
+        <span className="lcard-site">
+          <Icon name={p.icon} />
+          <span>{preview.site_name}</span>
+        </span>
+      </span>
+    </a>
   );
 }
 

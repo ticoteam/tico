@@ -19,7 +19,7 @@ import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
 import { agentWords, Quote } from './Quote';
-import { isPicture, linkRender, richText, Shelf } from './Rich';
+import { isPicture, LinkCard, linkRender, loneWebLink, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
 import type { Attachment, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
@@ -306,6 +306,8 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
   const quoted = quote && !m.deleted ? <Quote q={quote} me={me} onOpen={onQuote} /> : null;
   const read = words.length > LONG ? () => setFull(true) : null;
   const md = <Markdown text={richText(text)} compact link={m.pending ? undefined : linkRender} />;
+  // A link alone in a message is a card with its page's picture and title, once the server has read them.
+  const lone = m.pending || m.deleted ? null : loneWebLink(text);
   // What opens over the page stays outside the long-pressed row: a press inside it is not a press on the message.
   const over = (
     <>
@@ -324,8 +326,10 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
             <div className="mine-col" onClick={pics.onClick}>
               {quoted}
               {shown ??
-                (text && (
-                  <div className="bubble">{md}</div>
+                (lone ? (
+                  <LinkCard p={lone} words={<div className="bubble">{md}</div>} />
+                ) : (
+                  text && <div className="bubble">{md}</div>
                 ))}
               <Shelf m={m} onPicture={pics.openAt} />
               {failed && (
@@ -362,7 +366,7 @@ export function Message({ m, variant, me, cont, onRetry, card, onReply, quote, o
               </div>
             )}
             {quoted}
-            {shown ?? (text && md)}
+            {shown ?? (lone ? <LinkCard p={lone} words={md} /> : text && md)}
             <Steps run={m.run} />
             <Shelf m={m} onPicture={pics.openAt} />
             {aid && <Proposal aid={aid} />}
