@@ -8,8 +8,8 @@ import './actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { CalendarPage } from './CalendarPage';
-import { calendarSearch, parseDay, rangeOf } from './model';
-import { eventsQuery, liveCallsQuery, meetingsQuery } from './queries';
+import { addDays, calendarSearch, parseDay, rangeOf } from './model';
+import { eventsQuery, findEventsQuery, liveCallsQuery, meetingsQuery } from './queries';
 
 vi.mock('@/tico/dot', () => ({
   Dot: () => <span className="dot" />,
@@ -218,6 +218,16 @@ describe('Calendar', () => {
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'sync', review: 'pending' }));
     await waitFor(() => expect(fetches.some((u) => u.endsWith('/api/v2/meetings?review=pending&q=sync'))).toBe(true));
     expect(fetches.some((u) => u.endsWith('/api/v2/calendar/search?q=sync'))).toBe(true);
+  });
+
+  it('opens a found event outside the week shown by List', async () => {
+    const start = addDays(new Date(), 14);
+    const event = occ({ start: start.toISOString(), end: new Date(start.getTime() + 3_600_000).toISOString() });
+    queryClient.setQueryData(meetingsQuery('live', 'pricing').queryKey, { meetings: [], count: 0, pending_count: 0 });
+    queryClient.setQueryData(findEventsQuery('pricing').queryKey, { errors: [], partial: false, occurrences: [event] });
+    show('/calendar?view=list&q=pricing');
+    fireEvent.click(await screen.findByRole('link', { name: 'Pricing review' }));
+    expect(await screen.findByRole('complementary', { name: 'Pricing review' })).toBeTruthy();
   });
 
   it('Shared with me reads review=shared, and says when nothing is shared', async () => {

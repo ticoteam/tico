@@ -86,11 +86,35 @@ describe('Company @s248 @s250', () => {
     queryClient.setQueryData(floorQuery.queryKey, floor);
     show(<CompanyPage search={{}} />, '/company');
     const review = await screen.findByTitle('Review: 1');
+    expect(screen.getByRole('link', { name: 'Review: 1, waits on you' })).toBe(review);
     expect(href(review)).toBe('/company?panel=stage:p1:s2');
     expect(within(review).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Engineering' })).toBeTruthy();
     // a long pipeline name is clamped in its column; the full name stays in its title
     expect(screen.getByTitle('Features').textContent).toBe('Features');
+  });
+
+  it('loads the rest of a stage using the server cursor', async () => {
+    const seen: URLSearchParams[] = [];
+    const task = (id: string, title: string) => ({ id, title, turn: null });
+    const early = task('t1', 'Check the gift notes');
+    serve((url) => {
+      if (!url.startsWith('/api/v2/tasks?')) return nothing();
+      const params = new URLSearchParams(url.split('?')[1]);
+      seen.push(params);
+      return {
+        status: 200,
+        body: params.has('after') ? { tasks: [early, task('t2', 'Check the stock')] } : { tasks: [early], next_after: 'next-page' },
+      };
+    });
+    queryClient.setQueryData(floorQuery.queryKey, floor);
+    show(<CompanyPage search={{ panel: 'stage:p1:s2' }} />, '/company?panel=stage:p1:s2');
+    const panel = within(await screen.findByRole('complementary', { name: 'Review' }));
+    fireEvent.click(await panel.findByRole('button', { name: 'Load more' }));
+    expect(await panel.findByRole('link', { name: 'Check the stock' })).toBeTruthy();
+    expect(panel.getAllByRole('link', { name: 'Check the gift notes' })).toHaveLength(1);
+    expect(panel.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(Object.fromEntries(seen[1]!)).toMatchObject({ pipeline: 'p1', stage: 's2', snoozed: 'all', after: 'next-page' });
   });
 
   it('says so when nothing runs yet, and offers the owner Set up @s248', async () => {
@@ -199,6 +223,24 @@ const detail = { kpi, readings: [kpi.latest], links: [{ goal_id: 'g1', goal_titl
 const growth = { id: 'bot:growth', kind: 'agent', name: 'Growth Lead', slug: 'growth' };
 
 describe('Goals', () => {
+  it('opens another goal with its own title while a rename is unfinished', async () => {
+    serve(nothing);
+    queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
+    function GoalsRoute() {
+      const search = useLocation({ select: (l) => l.search });
+      return <StrategyPage tab="goals" search={search} />;
+    }
+    show(<GoalsRoute />, '/company/strategy/goals?panel=goal:g1');
+    const first = within(await screen.findByRole('complementary', { name: 'Goal' }));
+    fireEvent.click(first.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(first.getByRole('textbox', { name: 'Title' }), { target: { value: 'Draft goal name' } });
+    fireEvent.click(first.getByRole('link', { name: 'Reach 1,000 customers' }));
+    const panel = within(await screen.findByRole('complementary', { name: 'Company' }));
+    expect(panel.queryByRole('textbox', { name: 'Title' })).toBeNull();
+    expect(panel.getByText('Reach 1,000 customers')).toBeTruthy();
+  });
+
   it('lists each goal with its KPIs under the company goal, each opening its panel, as the tree only @s310 @s337 @s338 @s339', async () => {
     serve(nothing);
     queryClient.setQueryData(goalsTreeQuery.queryKey, tree);

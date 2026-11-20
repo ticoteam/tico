@@ -14,7 +14,7 @@ import { EmptyRow, Table } from '@/kit/Table';
 import { Dashboard, FiguresStrip, Section, type Figure, type PageTab } from '@/pagekinds';
 import { GROWTH } from './head';
 import { ChannelPanel, ManagerFace } from './GrowthPanels';
-import { axis, count, firstRead, growthMonths, isYm, lastFullMonth, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind, ymOf } from './model';
+import { axis, count, firstRead, growthMonths, isYm, loudHealth, monShort, monthName, pct, ratio, statusWord, valueKind } from './model';
 import { ActLink, usePhone, usePress } from './parts';
 import {
   growthManager,
@@ -127,9 +127,10 @@ function GrowthBoard({ search }: { search: GrowthSearch }) {
   const manager = useDirectory((dir) => growthManager(owners, dir)) ?? null;
   const segs = segments.data?.segments ?? [];
   const series = d.series ?? [];
-  const months = growthMonths(search.month);
-  const month = search.month ?? lastFullMonth();
-  const thisMonth = ymOf(new Date());
+  const month = d.period;
+  const asOf = new Date(`${d.as_of.slice(0, 10)}T00:00:00`);
+  const months = growthMonths(month, asOf);
+  const thisMonth = d.as_of.slice(0, 7);
   const open = panelOf(search.panel);
   const opened = open?.[0] === 'channel' ? open[1] : undefined;
 

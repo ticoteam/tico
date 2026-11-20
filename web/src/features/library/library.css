@@ -84,7 +84,7 @@
 .lib .fv-main .table th{position:sticky;top:0;z-index:var(--z-stick);background:var(--surface);box-shadow:inset 0 -1px 0 var(--line-strong);border-bottom:0}
 .lib .fv-main .table td:first-child,.lib .fv-main .table th:first-child{padding-left:0}
 .lib .fv-none{flex:1;display:flex;flex-direction:column}
-.lib .fv-side{width:224px;flex:none;min-height:0;overflow:auto;scrollbar-width:none;padding:0 var(--s-4) var(--s-6);border-left:1px solid var(--line);font-size:var(--t-sm)}
+.lib .fv-side{min-width:0;font-size:var(--t-sm)}
 .lib .fv-side .fact{height:28px}
 .lib .fv-side .fact-v{min-width:0}
 .lib .fv-h{height:36px;display:flex;align-items:center;margin-top:var(--s-2h)}

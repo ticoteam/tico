@@ -81,7 +81,7 @@ Write `reports/hq-TK-XXXXXXXX.md`: plain text (nothing is rendered as HTML in th
 `knowledge/voice.md`'s tone, ending with what happens next. No promise of a fix or a date. Never paste a token, a key or a
 person's details from the ticket. Put the same text on the task.
 
-If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool (`tico email send` queues it with Tico, which decides it); a send Tico holds or blocks stays a draft. HQ itself sends no email.
+If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool (`tico email send ... --task <task id>` queues it with Tico, which decides it); a send Tico holds or blocks stays a draft. HQ itself sends no email.
 
 ## 4. Post the requested reply
 

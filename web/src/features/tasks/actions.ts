@@ -178,10 +178,15 @@ export const moveAll = defineAction({
   kind: 'change',
   input: s.object({ tasks, to: s.string({ min: 1, max: 100, what: 'a stage id, or done, closed or reopen' }) }),
   run: async (_ctx, { tasks, to }) => {
-    const left = tell(await said(() => moveMany(tasks, to), "Couldn't move the tasks"), tasks.length);
+    const { moved, movedUnseen, skipped } = await said(() => moveMany(tasks, to), "Couldn't move the tasks");
+    const left = tell(skipped, tasks.length);
     // Closing is the one a slip makes: it says so and takes it back.
-    if (to === 'closed' && left.n < tasks.length)
-      toast({ text: `Closed ${plural(tasks.length - left.n)}`, action: { label: 'Undo', run: () => void moveMany(tasks, 'reopen') } });
+    const closed = moved.length + movedUnseen;
+    if (to === 'closed' && closed > 0)
+      toast({
+        text: `Closed ${plural(closed)}`,
+        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen') } : undefined,
+      });
     return left;
   },
   did: ({ tasks, to }) => (to === 'closed' ? `Closed ${plural(tasks.length)}` : `Moved ${plural(tasks.length)}`),

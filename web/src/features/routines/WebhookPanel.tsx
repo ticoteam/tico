@@ -362,9 +362,10 @@ function PayloadDialog({ hook, delivery, onClose }: { hook: string; delivery: st
   );
 }
 
-/** What a call started: "Started 2 tasks", or why it was turned away. */
+/** What handled the call, or why it was turned away. */
 export function deliveryWords(d: Delivery): string {
   if (d.outcome !== 'accepted') return d.reason || OUTCOME[d.outcome] || 'Refused';
   const n = d.tasks ?? 0;
-  return n ? `Started ${n} ${n === 1 ? 'task' : 'tasks'}` : 'Started nothing';
+  if (n) return `Started ${n} ${n === 1 ? 'task' : 'tasks'}`;
+  return d.rules ? 'Handled' : 'Started nothing';
 }

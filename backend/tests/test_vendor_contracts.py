@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import io
 import json
+import types
 from pathlib import Path
 
 import httpx
@@ -194,7 +195,7 @@ class InstallationStub:
         self.store = self
 
     def row(self):
-        return {"installation_id": None, "org": "acme"}
+        return {"app_id": 1, "installation_id": None, "org": "acme"}
 
     def _jwt(self):
         return "contract-app-jwt"
@@ -206,7 +207,9 @@ class InstallationStub:
     def transaction(self):
         return contextlib.nullcontext(self)
 
-    def execute(self, sql, params):
+    def execute(self, sql, params=()):
+        if sql.startswith("SELECT"):  # the installation stored now, read before it is replaced
+            return types.SimpleNamespace(fetchone=self.row)
         self.saved.append(params)
 
 

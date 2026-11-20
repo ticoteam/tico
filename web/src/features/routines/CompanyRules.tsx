@@ -132,7 +132,7 @@ export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: 
   const forParty = (p: string) => rules.filter((r) => partiesOf(r.who).includes(p));
   const myTeams = who.startsWith('group:') || who === '*' ? [] : teams.filter((g) => members(g).includes(who));
   const open = panel?.startsWith('org:') ? panel.slice(4) : null;
-  const searchFor = (r: OrgRule) => ({ ...(who !== '*' ? { who } : {}), panel: `org:${r.id}` });
+  const searchFor = (r: OrgRule) => ({ ...(who !== '*' ? { who } : {}), ...(q ? { q } : {}), panel: `org:${r.id}` });
   const rows = (list: OrgRule[]) =>
     list.map((r) => (
       <OrgRuleRow

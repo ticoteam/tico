@@ -91,6 +91,7 @@ import datetime
 import errno
 import fcntl
 import hashlib
+import io
 import hmac
 import http.client
 import ipaddress
@@ -109,6 +110,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,6 +137,26 @@ SERVER_SERVICE, SLACK_SERVICE = "server", "slack"  # compose.yaml's service name
 SLACK_MEMORY = "1g"  # the Slack gateway's memory limit: one Python process with an outbound websocket
 SERVER_UID = 10001  # the server image's user (Dockerfile)
 TUNNEL_UID = 65532  # cloudflared's image runs as nonroot (uid and gid 65532)
+# py-spy on every cell host, for `profile` (setup/cell_stats.py `t_profile`): the static binary from its PyPI wheel, for
+# each machine type the wheel's url and sha256 and the binary's sha256 (checked without running it). 0.4.3 reads
+# Python 3.15, the server image's Python.
+PY_SPY = "usr/local/bin/py-spy"
+PY_SPY_VERSION = "0.4.3"
+PY_SPY_WHEELS = {
+    "aarch64": (
+        "https://files.pythonhosted.org/packages/60/c3/c9384da6992d64e0dffab551cda3d1e990de1a2685fcfcc16fc8e5a98b18/"
+        "py_spy-0.4.3-py2.py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "bbcec46930d464b3bfc142d6d02ade4dd8ad5627823263b3eff0280e80c7c132",
+        "ad6e22882e8dcaced4f0a76fef10d372645cc7b94c48a289ebe1bedb754774ed",
+    ),
+    "x86_64": (
+        "https://files.pythonhosted.org/packages/78/1f/651389a861f6148754443834a50dd576993257af5f645d4316ab94505267/"
+        "py_spy-0.4.3-py2.py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.whl",
+        "8a4277225f470d394a85cca0cdd944bef87f0097b6f20150a6dd3ac2e92806b8",
+        "a41205d4925beafd108e1ace85e66c0a1a7adbfcbebcd4441f07848b608886c0",
+    ),
+}
+PY_SPY_MEMBER = f"py_spy-{PY_SPY_VERSION}.data/scripts/py-spy"
 
 # Never given to a company: our own names under the domain.
 RESERVED = frozenset(
@@ -484,6 +506,14 @@ class System:
                 return False if e.code == 404 else None
         except OSError:
             return None
+
+    def fetch(self, url: str, limit: int = 64 << 20) -> bytes:
+        """A download's bytes (at most `limit`); OSError when it fails."""
+        with urllib.request.urlopen(url, timeout=30) as r:
+            return r.read(limit)
+
+    def machine(self) -> str:
+        return os.uname().machine
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
@@ -873,6 +903,9 @@ def parser() -> Parser:
     r = cmd("remove", "remove one company's containers, route and (unless --keep-data) its folder")
     r.add_argument("--company", required=True, metavar="SLUG")
     r.add_argument("--keep-data", action="store_true", help="keep its folder, data and port for a later add")
+    f = cmd("profile", "py-spy on a company's server for a few seconds: its hottest stacks (docs/cell-stats.md)")
+    f.add_argument("--company", required=True)
+    f.add_argument("--seconds", type=int, default=30, help="how long to sample, 5 to 60 (default 30)")
     o = cmd("route", "a service on this host that is not a company (the public demo): its hosts to its loopback ports")
     o.add_argument("op", choices=["set", "remove", "list"])
     o.add_argument("--name", metavar="NAME", help="the route's name (a slug)")
@@ -1993,7 +2026,15 @@ class Cell:
             kms_key = saved.get("kms_key")
             if getattr(args, "kms_key", None) is not None:
                 kms_key = check_kms_key(args.kms_key) if args.kms_key.strip() else None
-            return self._init(saved, domain, token, page_domain, meet_domain, kms_key)
+            result = self._init(saved, domain, token, page_domain, meet_domain, kms_key)
+        # Last and outside the cell's lock: py-spy is a tool for people, so a slow or failed download never holds up or
+        # fails the rest of init (a core update runs init).
+        spy = self.py_spy()
+        if spy == "installed":
+            result["changed"].append("py-spy")
+        elif spy != "current":
+            result["py_spy"] = spy
+        return result
 
     def _init(
         self,
@@ -2100,6 +2141,57 @@ class Cell:
             **({"meet_domain": meet_domain} if meet_domain else {}),
             **({"kms_key": kms_key} if kms_key else {}),
         }
+
+    def py_spy(self) -> str:
+        """PY_SPY_VERSION at /usr/local/bin/py-spy, known by its sha256 (never by running it): "current" when it is
+        there, "installed" when this run put it there, else why not."""
+        arch = self.system.machine()
+        if arch not in PY_SPY_WHEELS:
+            return f"no py-spy wheel for {arch}"
+        url, wheel_digest, digest = PY_SPY_WHEELS[arch]
+        target = self.host / PY_SPY
+        with contextlib.suppress(OSError):
+            if not target.is_symlink() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+                return "current"
+        try:
+            wheel = self.system.fetch(url)
+        except OSError as e:
+            return f"py-spy download failed: {e}"
+        if hashlib.sha256(wheel).hexdigest() != wheel_digest:
+            return "py-spy download does not match its pinned sha256"
+        try:
+            with zipfile.ZipFile(io.BytesIO(wheel)) as z:
+                binary = z.read(PY_SPY_MEMBER)
+        except (zipfile.BadZipFile, KeyError) as e:
+            return f"py-spy wheel unreadable: {e}"
+        if hashlib.sha256(binary).hexdigest() != digest:
+            return "py-spy in the wheel does not match its pinned sha256"
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.new")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_bytes(binary)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, target)
+        except OSError as e:
+            return f"py-spy not written: {e}"
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+        return "installed"
+
+    def profile(self, args) -> dict:
+        """`seconds` of py-spy on the company's server process (setup/cell_stats.py `t_profile`, the same tool HQ's
+        debug requests run): its hottest stacks, and the file with all of them."""
+        from . import cell_stats
+
+        r = cell_stats.run_tool(
+            cell_stats.Box(self.host, self.root),
+            "profile",
+            {"company": check_slug(args.company), "seconds": args.seconds},
+        )
+        if not r["ok"]:
+            raise CellError("profile_failed", r["output"])
+        return {"ok": True, "company": args.company, "ms": r["ms"], "output": r["output"]}
 
     def meet_files(self) -> list[str]:
         """Tico Meet's files: the key pair (made once, 0600, never printed; its secret is scrubbed from every answer),

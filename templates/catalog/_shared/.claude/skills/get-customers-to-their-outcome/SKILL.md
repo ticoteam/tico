@@ -133,7 +133,7 @@ on the defaults at once. Save the answers, dated, under "Setup answers" in `know
     - under 100 words;
     - it never opens with a check-in and never says the account was "flagged".
     Lint it (`tico email lint <mailbox> --body-file <file> --subject "<subject>"`), then reply in the thread
-    (`tico email reply <mailbox> --thread <thread-id> --body-file <file>`) or start one (`tico email draft`, then
+    (`tico email reply <mailbox> --thread <thread-id> --task <id> --body-file <file>`) or start one (`tico email draft`, then
     `tico email send <mailbox> --draft <draft-id> --task <id>`). Tico decides every send from the sending policy.
 
 11. **Red accounts get a plan, not a message.** Within one working day: the reason in one line, the one change that

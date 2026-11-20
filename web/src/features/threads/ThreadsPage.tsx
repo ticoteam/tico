@@ -80,7 +80,7 @@ export function ThreadsPage({ pane, thread, q = '', open = false }: ThreadsPageP
 
   const item =
     pane === 'thread' && thread ? (
-      { itemHead: <ThreadHead id={thread} />, conversation: <ThreadConversation id={thread} />, itemLabel: 'Thread' }
+      { itemHead: <ThreadHead id={thread} q={q} />, conversation: <ThreadConversation id={thread} />, itemLabel: 'Thread' }
     ) : pane === 'new' ? (
       { itemHead: <NewHead />, item: <NewMessage draft={draft} />, foot: <NewMessageFoot draft={draft} />, itemLabel: 'New message' }
     ) : (

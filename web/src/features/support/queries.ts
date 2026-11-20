@@ -97,12 +97,13 @@ export function latestOpen(list: SupportList | undefined): SupportTicket | undef
 function keepPending(next: SupportList, held: SupportList | undefined): SupportList {
   if (!held) return next;
   const tmpTickets = held.tickets.filter((t) => t.pending);
-  const tickets = next.tickets.map((t) => {
-    const was = held.tickets.find((h) => h.id === t.id);
-    const mine = was?.messages?.filter((m) => m.pending) ?? [];
-    return mine.length ? { ...t, messages: [...(t.messages ?? []), ...mine] } : t;
-  });
+  const tickets = next.tickets.map((t) => withPending(t, held.tickets.find((h) => h.id === t.id)));
   return { ...next, tickets: [...tmpTickets, ...tickets] };
+}
+
+function withPending(ticket: SupportTicket, previous: SupportTicket | undefined): SupportTicket {
+  const pending = previous?.messages?.filter((m) => m.pending) ?? [];
+  return pending.length ? { ...ticket, messages: [...(ticket.messages ?? []), ...pending] } : ticket;
 }
 
 /** While the chat is open: ask Tico support for replies (the ticket in view first) and keep the answer as the list. */
@@ -232,8 +233,9 @@ function sendOnce({ message, to, key, diagnostics, edited }: Send): Promise<Sent
     },
     settle: (v: SupportList | undefined, { ticket, closed }: Sent) => {
       if (!v) return v;
-      const rest = dropRow(v, row).tickets.filter((t) => t.id !== ticket.id).map((t) => (t.id === closed ? { ...t, status: 'closed' } : t));
-      const tickets = [ticket, ...rest];
+      const remaining = dropRow(v, row).tickets;
+      const rest = remaining.filter((t) => t.id !== ticket.id).map((t) => (t.id === closed ? { ...t, status: 'closed' } : t));
+      const tickets = [withPending(ticket, remaining.find((t) => t.id === ticket.id)), ...rest];
       return { ...v, tickets, unread: sum(tickets) };
     },
     revert: (v: SupportList | undefined) => v && markRow(v, row, 'failed'),

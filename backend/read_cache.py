@@ -63,9 +63,29 @@ def configs(c, slugs=None):
     return tuple(out)
 
 
+METADATA = 'SELECT value FROM registry_metadata WHERE key=?'
+
+
 def metadata(c, key):
-    found = rows(c, 'SELECT value FROM registry_metadata WHERE key=?', (key,))
+    found = rows(c, METADATA, (key,))
     return found[0] if found else None
+
+
+def prime_metadata(c: Any, keys: Iterable[str]) -> None:
+    """Read these registry_metadata keys in one statement into the snapshot's cache, so the `metadata` reads that
+    follow read none of them again. Outside a snapshot nothing is kept, so it reads nothing."""
+    values = cache(c)
+    if values is None:
+        return
+    wanted = [key for key in dict.fromkeys(keys) if (METADATA, (key,)) not in values]
+    if not wanted:
+        return
+    found: dict[tuple[Any, ...], list[Any]] = {(key,): [] for key in wanted}
+    for row in c.execute(
+        'SELECT value,key FROM registry_metadata WHERE key IN (' + ','.join('?' * len(wanted)) + ')', wanted
+    ):
+        found[(row[1],)].append(row)
+    prime_rows(c, METADATA, found)
 
 
 def value(c: Any, key: Hashable, build: Callable[[], T], shared: bool = False) -> T:

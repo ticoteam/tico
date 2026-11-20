@@ -38,6 +38,7 @@ const panelHref = (search: ContactsSearch, id: string, type?: string) => {
   const t = type ?? search.type;
   if (t) p.set('type', t);
   if (search.q && !type) p.set('q', search.q);
+  if (search.link && !type) p.set('link', search.link);
   p.set('panel', id);
   return `/library/contacts?${p.toString()}`;
 };
@@ -147,7 +148,7 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
           <Empty title="Nothing matches" />
         )
       }
-      panel={search.panel ? <ContactPanel id={search.panel} search={search} /> : undefined}
+      panel={search.panel ? <ContactPanel key={search.panel} id={search.panel} search={search} /> : undefined}
     />
   );
 }

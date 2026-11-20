@@ -40,10 +40,12 @@ export interface MailPageProps {
 export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const tabs = useThreadTabs('/threads');
   const boxes = useSuspenseQuery(mailboxesQuery).data;
-  const current = box ?? boxes[0]?.address ?? '';
-  const mailbox = boxes.find((b) => b.address === current);
+  const selected = boxes.find((b) => b.address === box);
+  const mailbox = selected ?? boxes[0];
+  const current = mailbox?.address ?? '';
+  const available = box === undefined || !!selected;
   const agent = !!mailbox?.agent_instructions;
-  const reading = view === 'instructions' && agent;
+  const reading = available && view === 'instructions' && agent;
   const narrowed = !!words;
   // Nothing can read a mailbox until someone connects Google for it: ask for nothing, show the way there.
   const cut = mailbox?.connection === 'none';
@@ -56,6 +58,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
   const pick = boxes.length > 1;
   const none = boxes.length === 0;
   const unconnected = cut || (list.error instanceof ApiError && list.error.code === 'not_connected');
+  const letterId = available && mailbox && !unconnected ? open : undefined;
   const state =
     none || unconnected
       ? 'empty'
@@ -63,7 +66,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
         ? 'loading'
         : list.isError
           ? 'fault'
-          : rows.length === 0 && !open && !agent && !pick && !narrowed
+          : rows.length === 0 && !letterId && !agent && !pick && !narrowed
             ? 'empty'
             : 'ready';
   const more = () => {
@@ -77,7 +80,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
       actions={
         <>
           {pick && (
-            <Menu trigger={<IconButton icon="filter" label="Mailbox" />}>
+            <Menu trigger={<IconButton icon="filter" label="Mailbox" data-phone />}>
               {boxes.map((b) => (
                 <MenuItem key={b.address} label={b.name || b.address} on={b.address === current} onSelect={() => void press('mail.pickBox', { box: b.address })} />
               ))}
@@ -86,7 +89,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
           <NewButton />
         </>
       }
-      search={<SettledSearch label="Find mail" placeholder="Find mail" value={words ?? ''} onSettle={(next) => void press('mail.find', { box, q: next || undefined })} wide />}
+      search={<SettledSearch label="Find mail" placeholder="Find mail" value={words ?? ''} onSettle={(next) => void press('mail.find', { box: selected?.address, q: next || undefined })} wide />}
       tabs={tabs}
       listLabel="Mail"
       list={
@@ -116,11 +119,11 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             getKey={(r) => r.letter.thread_id}
             estimateSize={35}
             onReachEnd={more}
-            renderItem={(r) => <MailRow r={r} box={current} keep={keep} selected={!reading && r.letter.thread_id === open} />}
+            renderItem={(r) => <MailRow r={r} box={current} keep={keep} selected={!reading && r.letter.thread_id === letterId} />}
           />
         </>
       }
-      open={!!open || !!reading}
+      open={!!letterId || !!reading}
       state={state}
       empty={
         none || unconnected
@@ -137,11 +140,11 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             item: <Instructions box={current} />,
             itemLabel: 'Instructions',
           }
-        : open && mailbox
+        : letterId && mailbox
           ? {
-              itemHead: <LetterHead box={mailbox} id={open} back={back} />,
-              item: <LetterBody box={current} id={open} />,
-              foot: mailbox.may?.send !== false && <Reply box={current} id={open} />,
+              itemHead: <LetterHead box={mailbox} id={letterId} back={back} />,
+              item: <LetterBody box={current} id={letterId} />,
+              foot: mailbox.may?.send !== false && <Reply box={current} id={letterId} />,
               itemLabel: 'Mail',
             }
           : {})}
@@ -154,6 +157,7 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
   const l = r.letter;
   const from = senderName(l);
   const subject = l.subject || '(no subject)';
+  const at = letterAt(l);
   return (
     <Row
       className="ml-row"
@@ -170,7 +174,7 @@ function MailRow({ r, box, keep, selected }: { r: LetterRow; box: string; keep: 
         <span className="ml-sub">{subject}</span>
         {l.has_attachment && <Icon name="attach" label="Attachment" />}
       </span>
-      <Ago at={letterAt(l)} className="row-age" />
+      {at ? <Ago at={at} className="row-age" /> : <span />}
       <span className="ml-mark" />
     </Row>
   );
@@ -249,7 +253,7 @@ function Reply({ box, id }: { box: string; id: string }) {
       to={name}
       label={`Reply to ${name}`}
       attach={false}
-      onSend={(text) => void press('mail.reply', { box, letter: id, text })}
+      onSend={(text) => press('mail.reply', { box, letter: id, text })}
     />
   );
 }
@@ -277,13 +281,14 @@ const size = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB`
 function LetterPart({ l }: { l: Letter }) {
   const from = senderName(l);
   const draft = l.labels?.includes(DRAFT);
+  const at = letterAt(l);
   return (
     <article className={draft ? 'lt is-draft' : 'lt'}>
       <div className="msg-meta">
         <Avatar kind="person" name={from} className="is-out" decorative />
         <b>{from}</b>
         {!!l.to?.length && <span className="lt-to">to {l.to.join(', ')}</span>}
-        {draft ? <Pill>Draft</Pill> : <time dateTime={new Date(letterAt(l)).toISOString()}>{stamp(letterAt(l))}</time>}
+        {draft ? <Pill>Draft</Pill> : at && <time dateTime={at.toISOString()}>{stamp(at)}</time>}
       </div>
       <div className="lt-body">{l.body ?? l.snippet}</div>
       {l.attachments?.map((f, i) => (

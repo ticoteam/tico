@@ -210,6 +210,30 @@ describe('Conversation', () => {
     expect(line?.closest('.vl-item')?.nextElementSibling?.textContent).toContain('Fresh');
   });
 
+  it('uses each thread’s read mark when the timeline includes a sub-thread', async () => {
+    const branch = { thread_id: 'child', conversation_id: 'child' };
+    serve(() => ({ status: 200, body: {} }));
+    queryClient.setQueryData(key, {
+      pages: [{
+        messages: [
+          msg(1, 'bot:qa', 'Already read', branch),
+          msg(3, 'bot:qa', 'Unread reply', branch),
+          msg(4, 'bot:qa', 'Read in the root'),
+          msg(5, 'bot:qa', '', { ...branch, hidden: true }),
+        ],
+        next_cursor: null,
+        read_marks: { [T]: 4, child: 1 },
+      }],
+      pageParams: [null],
+    });
+    show();
+    const line = screen.getByText('New');
+    expect(line.closest('.vl-item')?.nextElementSibling?.textContent).toContain('Unread reply');
+    await waitFor(() => expect(posts.filter((p) => p.url.endsWith('/read'))).toEqual([
+      { url: '/api/v2/threads/child/read', body: { seq: 3 } },
+    ]));
+  });
+
   it('opens the newest messages when switching to a cached conversation', async () => {
     const other = 't2';
     const messages = Array.from({ length: 20 }, (_, i) => msg(i + 1, 'bot:qa', `Line ${i + 1}`));
@@ -266,7 +290,7 @@ describe('Message', () => {
 });
 
 describe('Conversation loading @s157', () => {
-  it('says the chat did not load, keeps the box, and Try again reads it again', async () => {
+  it('keeps an unsent draft editable when the chat fails to load and enables sending after retry', async () => {
     queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
     queryClient.removeQueries({ queryKey: key });
     let fail = true;
@@ -279,10 +303,17 @@ describe('Conversation loading @s157', () => {
     );
     show();
     expect(await screen.findByRole('heading', { name: 'This chat did not load' })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Message Ana' })).toBeTruthy();
+    const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message Ana' });
+    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
+    fireEvent.change(box, { target: { value: 'My draft' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(box.value).toBe('My draft');
+    expect(send.disabled).toBe(true);
+    expect(sends()).toHaveLength(0);
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Back again')).toBeTruthy();
+    expect(send.disabled).toBe(false);
   });
 });
 

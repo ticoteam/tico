@@ -137,7 +137,10 @@ export function senderName(l: Pick<Letter, 'from_header' | 'from_addr'>): string
 }
 
 export const letterUnread = (l: Letter) => !!l.labels?.includes('UNREAD');
-export const letterAt = (l: Letter) => (l.epoch ? new Date(l.epoch * 1000) : (l.date ?? new Date(0)));
+export function letterAt(l: Letter): Date | undefined {
+  const at = l.epoch ? new Date(l.epoch * 1000) : new Date(l.date ?? '');
+  return Number.isFinite(at.getTime()) ? at : undefined;
+}
 
 export interface Text {
   message_id: string;

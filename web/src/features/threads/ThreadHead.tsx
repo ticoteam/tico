@@ -18,7 +18,7 @@ import { Settings } from './Settings';
 const FACES = 6;
 
 /** The open thread's head: its name (renamed in place), who is in it, and "⋯". */
-export function ThreadHead({ id }: { id: string }) {
+export function ThreadHead({ id, q }: { id: string; q?: string }) {
   const { data: t } = useQuery(threadQuery(id));
   const me = useMe();
   const title = useTitle(t) || 'Thread';
@@ -43,7 +43,7 @@ export function ThreadHead({ id }: { id: string }) {
       <ItemHead
         title={title}
         target={`thread:${id}`}
-        back={{ to: '/threads', label: 'Threads' }}
+        back={{ to: '/threads', label: 'Threads', search: q ? { q } : undefined }}
         lead={other ? <Face actor={other} /> : undefined}
         actions={
           t && (

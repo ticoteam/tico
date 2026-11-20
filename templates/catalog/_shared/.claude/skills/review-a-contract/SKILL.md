@@ -127,7 +127,7 @@ message and save the answers at the top of `knowledge/playbook.md`, dated. Work 
     - Ready to sign: ask the signer for the OK, bound to the exact version
       (`tico task ask <id> --to <signer> --kind ok "OK to sign <document> v<N> with <party>?" --show page:<id> --version N`).
     - Needs changes, every change taken from the playbook and every red row answered by a change: send the markup
-      and a short cover note to the other side (`tico email draft`, then `tico email send`), copying the task's
+      and a short cover note to the other side (`tico email draft`, then `tico email send <mailbox> --draft <draft-id> --task <id>`), copying the task's
       owner. The note says the markup is for discussion and that nothing binds either side until both have signed.
       Asking for the company's written position commits it to nothing; giving one up does, so that needs an OK.
     - Needs a decision or counsel: ask the signer one question per decision, each with the options and the bot's

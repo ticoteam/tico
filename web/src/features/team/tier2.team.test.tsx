@@ -335,6 +335,27 @@ describe('Move agent, and Change model settings @s715', () => {
     await waitFor(() => expect(posted('/bots/ana/transitions')?.body).toMatchObject({ kind: 'model', model: 'm-two', expected_generation: 2, expected_revision: 3 }));
   });
 
+  it('uses the new configuration revision when applying a model and compact size together', async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url.endsWith('/compact-at')) return ok({ revision: 4 });
+      if (method === 'POST' && url.endsWith('/transitions')) return ok({ id: 'tr1' });
+    });
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    fireEvent.click(await screen.findByRole('button', { name: /^Model/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Model' }));
+    fireEvent.click(dialog.getByRole('radio', { name: 'Model Two' }));
+    fireEvent.click(dialog.getByRole('button', { name: 'More' }));
+    fireEvent.click(dialog.getByRole('combobox', { name: 'Compact' }));
+    const size = await screen.findByRole('option', { name: '400K' });
+    fireEvent.pointerDown(size, { pointerType: 'mouse' });
+    fireEvent.click(size);
+    fireEvent.click(dialog.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => expect(posted('/bots/ana/transitions')?.body).toMatchObject({ model: 'm-two', expected_revision: 4 }));
+    expect(sent[0]?.url).toMatch(/\/compact-at$/);
+    expect(sent[0]?.body).toEqual({ compact_at: 400000, expected_revision: 3 });
+  });
+
   it('moves it to another computer the same way, on pick', async () => {
     serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ id: 'tr2' }) : undefined));
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');

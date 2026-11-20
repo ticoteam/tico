@@ -210,7 +210,7 @@ describe('A routine: test run, versions, edit', () => {
 
 describe('A webhook: payload and signing', () => {
   const hook: Hook = { id: 'h1', name: 'Shop orders', url: 'https://in.example/hooks/h1', signed: false, automations: [] };
-  const calls = { deliveries: [{ delivery: 'd1', received_at: '2026-11-19T07:00:00Z', outcome: 'accepted', tasks: 1, stored: true }] };
+  const calls = { deliveries: [{ delivery: 'd1', received_at: '2026-11-19T07:00:00Z', outcome: 'accepted', tasks: 0, rules: 1, stored: true }] };
 
   it('opens a kept call’s headers and body @s576', async () => {
     record((url) =>
@@ -222,6 +222,7 @@ describe('A webhook: payload and signing', () => {
     );
     queryClient.setQueryData(hooksQuery.queryKey, [hook]);
     show(<RoutinesPage search={{ tab: 'webhooks', panel: 'hook:h1' }} />, '/company/routines?tab=webhooks&panel=hook:h1');
+    expect(await screen.findByText('Handled')).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Payload' }));
     const dialog = await screen.findByRole('dialog', { name: 'Payload' });
     const body = await within(dialog).findByRole('region', { name: 'Body' });
@@ -390,6 +391,14 @@ describe('Rules', () => {
     expect(within(row).getByTitle('Decision model')).toBeTruthy();
   });
 
+  it('keeps the rules search in the stage rule link', async () => {
+    serve(nothing);
+    queryClient.setQueryData<StageRules>(stageRulesQuery('active').queryKey, { items: [stage], built_in: [], may_add: true });
+    show(<RulesPage search={{ tab: 'stages', q: 'review' }} />, '/company/rules?tab=stages&q=review');
+    const row = await screen.findByTitle('Enters Review, the decision model decides, Block');
+    expect(href(within(row).getByRole('link'))).toBe('/company/rules?tab=stages&q=review&panel=stage:sr1');
+  });
+
   it('removes a rule only after asking, and puts it back when refused', async () => {
     let refuse: (r: Reply) => void = () => {};
     const shown: StageRules = { items: [stage], built_in: [], may_add: true };
@@ -476,5 +485,18 @@ describe('Listening', () => {
     queryClient.setQueryData(watchesQuery.queryKey, []);
     show(<ListeningPage search={{}} />, '/company/listening');
     expect(await screen.findByText('No watches yet')).toBeTruthy();
+  });
+
+  it('shows the health of a source when its storage id differs from its trigger key', async () => {
+    const watch = routine({ id: 'w1', trigger: { type: 'listening', sources: [{ id: 'release-feed', kind: 'github', target: 'sample/widgets' }] } });
+    queryClient.setQueryData(watchesQuery.queryKey, [watch]);
+    serve((url) => {
+      if (url.endsWith('/automations/w1')) return ok(watch);
+      if (url.startsWith('/api/v2/listening/sources?')) return ok({ sources: [{ id: 'db-source-1', key: 'release-feed', kind: 'github', status: 'blocked' }] });
+      return nothing();
+    });
+    show(<ListeningPage search={{ watch: 'w1', tab: 'sources' }} />, '/company/listening?watch=w1&tab=sources');
+    const source = within(await screen.findByTitle('sample/widgets'));
+    expect(await source.findByText('Blocked')).toBeTruthy();
   });
 });

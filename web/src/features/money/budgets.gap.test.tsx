@@ -182,6 +182,25 @@ describe('Finance tabs @s398 @s402', () => {
       delete document.documentElement.dataset.layout;
     }
   });
+
+  it('shows a projection and lets its line open when every P&L column is in the future', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      const statement = {
+        ...PNL([{ ...ROW('acc_ads', 'Ads'), budget: [16000], projection: [12300] }]),
+        columns: [{ start: '2040-01-01', end: '2040-01-31', label: '2040-01', state: 'future' }],
+      };
+      serve((url) => (url.endsWith('/finance/access') ? ok(OWNER) : url.includes('/finance/pnl') ? ok(statement) : ok({})));
+      show('/company/finance?tab=pnl&from=2040-01');
+      const line = await screen.findByRole('link', { name: /Ads/ });
+      expect(within(line).getByText('$123')).toBeTruthy();
+      fireEvent.click(line);
+      const panel = await screen.findByRole('complementary', { name: 'Ads' });
+      expect(within(panel).getByText('Jan plan')).toBeTruthy();
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
 });
 
 describe('Budgets @s404 @s462 @s463', () => {
