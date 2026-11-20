@@ -553,7 +553,7 @@ class Library:
             "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?"
         )
         if has_fts(c):
-            from .docs import Docs
+            from .docs import STOP
 
             query = select.format(
                 text="file_text.text",
@@ -563,8 +563,11 @@ class Library:
                 match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)",
             )
             seen, rows = set(), []
-            stemmed = [manual._stem(t) for t in tokens]
-            for n, expression in enumerate(Docs.expressions(stemmed)):
+            # The index has whole words (unicode61, no stemming): each query word, less a plural s, matches by its start.
+            stemmed = ['"' + manual._stem(t) + '"*' for t in tokens]
+            wanted = [m for t, m in zip(tokens, stemmed) if t not in STOP] or stemmed
+            expressions = [" AND ".join(stemmed)] + ([" OR ".join(wanted)] if len(wanted) > 1 else [])
+            for n, expression in enumerate(expressions):
                 if every and n:
                     break
                 try:
