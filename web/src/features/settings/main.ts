@@ -1,4 +1,5 @@
 import { isCancelledError, type FetchQueryOptions, type QueryClient } from '@tanstack/react-query';
+import { lazyRouteComponent, type AsyncRouteComponent } from '@tanstack/react-router';
 import { configQuery, meQuery } from '@/data';
 import {
   accessQuery,
@@ -15,6 +16,18 @@ import {
 } from './queries';
 import type { SectionId } from './sections';
 
+const loadFleet = () => import('./Agents');
+export const Agents = lazyRouteComponent(loadFleet, 'Agents');
+export const Computers = lazyRouteComponent(loadFleet, 'Computers');
+export const AddComputer = lazyRouteComponent(loadFleet, 'AddComputer');
+export const Models = lazyRouteComponent(loadFleet, 'Models');
+
+const fleetParts: Partial<Record<SectionId, readonly Pick<AsyncRouteComponent<object>, 'preload'>[]>> = {
+  agents: [Agents],
+  computers: [Computers, AddComputer],
+  models: [Models],
+};
+
 /** The server said this read is for owners and admins. */
 export const isForbidden = (e: unknown) => (e as { status?: number } | null)?.status === 403;
 
@@ -25,6 +38,7 @@ export const loadSection = (qc: QueryClient, section: SectionId) => {
   const read = () => Promise.all([
     qc.ensureQueryData(meQuery),
     qc.ensureQueryData({ ...(mainQuery(section) as FetchQueryOptions<unknown, Error, unknown, readonly unknown[]>), revalidateIfStale: true }),
+    ...(fleetParts[section] ?? []).map((part) => part.preload?.()),
   ]);
   return read()
     .catch((error: unknown) => {

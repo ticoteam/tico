@@ -886,6 +886,21 @@ export interface UsageView {
   to: string;
   totals: UsageFigures;
   rows: UsageRow[];
+  choices: UsageChoices;
+}
+
+function usageView(u: Usage): UsageView {
+  return {
+    from: u.from,
+    to: u.to,
+    totals: u.totals,
+    rows: (u.rows ?? []) as unknown as UsageRow[],
+    choices: {
+      departments: u.departments ?? [],
+      dimensions: (u.dimensions ?? {}) as Record<string, string[]>,
+      labels: (u.dimension_labels ?? {}) as Record<string, Record<string, string>>,
+    },
+  };
 }
 
 export const usageQuery = (range: UsageRange, group: 'bot' | 'day' | 'model') =>
@@ -894,7 +909,7 @@ export const usageQuery = (range: UsageRange, group: 'bot' | 'day' | 'model') =>
     queryFn: async ({ signal }) => {
       const { from, to } = rangeDays(range);
       const u = await api.get<Usage>(`/api/v2/usage?from=${from}&to=${to}&group=${group}`, { signal });
-      return { from: u.from, to: u.to, totals: u.totals, rows: (u.rows ?? []) as unknown as UsageRow[] } satisfies UsageView;
+      return usageView(u);
     },
   });
 
@@ -1275,7 +1290,7 @@ export const usageWhereQuery = (w: UsageWhere, group: 'bot' | 'day' | 'model') =
           const q = whereParams(w);
           q.set('group', group);
           const u = await api.get<Usage>(`/api/v2/usage?${q}`, { signal });
-          return { from: u.from, to: u.to, totals: u.totals, rows: (u.rows ?? []) as unknown as UsageRow[] } satisfies UsageView;
+          return usageView(u);
         },
       })
     : usageQuery(w.range, group);
@@ -1294,25 +1309,11 @@ export const agentUsageWhereQuery = (w: UsageWhere, bot: string) =>
     : agentUsageQuery(w.range, bot);
 
 /** What the filter can pick over the span: the teams and each dimension's values (`__unknown__`: not recorded). */
-export interface UsageChoices {
+interface UsageChoices {
   departments: string[];
   dimensions: Record<string, string[]>;
   labels: Record<string, Record<string, string>>;
 }
-
-export const usageChoicesQuery = (w: UsageWhere) =>
-  queryOptions({
-    queryKey: ['usage', 'choices', whereParams({ ...w, filter: undefined }).toString()],
-    queryFn: async ({ signal }) => {
-      const q = whereParams({ ...w, filter: undefined });
-      const u = await api.get<Usage>(`/api/v2/usage?${q}&group=bot`, { signal });
-      return {
-        departments: u.departments ?? [],
-        dimensions: (u.dimensions ?? {}) as Record<string, string[]>,
-        labels: (u.dimension_labels ?? {}) as Record<string, Record<string, string>>,
-      } satisfies UsageChoices;
-    },
-  });
 
 /** A combined limit: the whole company's, or a team's (its spend counts every agent under it). */
 export interface UsagePool {

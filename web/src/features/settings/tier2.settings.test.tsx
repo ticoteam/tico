@@ -28,7 +28,6 @@ import {
   roadmapQuery,
   stoppedRunsQuery,
   subscriptionsQuery,
-  usageQuery,
   withDestination,
   type DestinationChoice,
 } from './queries';
@@ -332,9 +331,6 @@ describe('Settings › Changelog @s1068', () => {
 describe('Usage › Limits, clear the automatic queue @s1115', () => {
   it('asks first, then clears; Tico cannot', async () => {
     serve((url) => (url === '/api/v2/usage/queues/purge' ? ok({ cancelled: 3, kept_people: 1, still_running: 0 }) : undefined));
-    const FIG = { runs: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, est_cost_usd: 0, subscription_equiv_usd: 0, low_estimate_runs: 0, unpriced_runs: 0 };
-    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: FIG, rows: [] } as never);
-    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', totals: FIG, rows: [] } as never);
     show(<UsagePage search={{ view: 'limits' }} />, '/company/usage?view=limits');
     fireEvent.click(await screen.findByRole('button', { name: 'Clear queue' }));
     const dlg = await screen.findByRole('alertdialog', { name: 'Clear the automatic queue?' });
