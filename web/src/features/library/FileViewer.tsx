@@ -5,14 +5,15 @@ import { Icon } from '@/kit/Icon';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
 import { size } from './parts';
+import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';
 import { viewing } from './viewing';
 import './library.css';
 
 /* A file wherever it opens (the old app's viewer.ts and file-review.ts): Files, a task's tab or Details, an email's
    attachment, a link in a chat. Whatever it is, it shows here or says what it is and offers it: a picture, a video or
-   a sound with the browser's own controls, a PDF in the browser's own viewer, a web page in a sandbox, Markdown as
-   reading text, other text as it is. Office files and the rest show their name and size, with Download. */
+   a sound with the browser's own controls, a PDF as one scroll of its pages (PdfView), a web page in a sandbox,
+   Markdown as reading text, other text as it is. Office files and the rest show their name and size, with Download. */
 
 const TEXT = /^(text\/|application\/(json|xml|csv|x-yaml|yaml|javascript))/;
 const MARKDOWN = /^text\/(x-)?markdown/;
@@ -177,6 +178,7 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
         <audio src={src} controls aria-label={title} />
       </div>
     );
+  if (view === 'pdf') return <PdfView src={src} title={title} url={url} name={name} />;
   return <iframe className="fv-frame" src={src} title={title} />;
 }
 
