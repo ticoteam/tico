@@ -247,6 +247,26 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 .tv-brief-text>:first-child{margin-top:0}
 .ap-scroll>.tv-brief{padding:var(--s-4) var(--pad-task) 0}
 
+/* the top of a task: a question's card, else its description, then the questions asked on it */
+.tv-view>.tv-lead{flex:none;padding-bottom:var(--s-1)}
+.answer.qn{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--s-2) var(--s-2) var(--s-3h)}
+.qn-from{display:flex;align-items:center;gap:var(--s-1h);font-size:var(--t-sm);color:var(--muted)}
+.qn-from>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qn-parent{color:var(--ink-2)}
+.qn-parent:hover{color:var(--ink);text-decoration:underline}
+.qn-body,.qn-said,.tv-desc-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:var(--lh-read)}
+.qn-said{color:var(--ink-2)}
+.qn-note{font-size:var(--t-sm);color:var(--muted)}
+.qn .dcx-ask{margin:0 var(--s-1) 0 0}
+.qn .an-err{margin:0}
+.tv-desc{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-1);font-size:var(--t-sm);color:var(--ink-2)}
+.tv-desc.is-short .tv-desc-text{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.tv-asked{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+.tv-asked-row{display:flex;align-items:center;gap:var(--s-2);min-height:28px;font-size:var(--t-sm);color:var(--ink-2)}
+.tv-asked-row:hover{color:var(--ink)}
+.tv-asked-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tv-asked-row .hollow{flex:none;margin:0 var(--s-0)}
+
 /* ---------- an approval's head: the title, then one quiet line (pipeline · stage · how long) ---------- */
 .tv.is-quiet .pk-where{order:1;margin-top:var(--s-1h)}
 .tv.is-quiet .pk-where>.pk-crumb{display:none}
@@ -281,6 +301,10 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .dcx:not(.is-asked) .dcx-top .dcx-eff{position:static;line-height:inherit}
   .dcx.is-asking .dcx-top .dcx-eff{display:inline}
   .dcx.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
+  /* a question's buttons share the width, as the decision's do */
+  .qn .an-row .btn{flex:1;height:44px}
+  .qn .an-row .grow{display:none}
+  .qn .dcx-ask{margin-right:0}
   .fv-bar small{display:none}
   .fv-bar>b{min-width:0;flex:1}
   .fv-bar>.grow{display:none}

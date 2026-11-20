@@ -4,6 +4,7 @@ import { defineAction } from '@/actions';
 import {
   addSubtask,
   answerAsk,
+  answerQuestion,
   requestChanges,
   undoAnswer,
   askSomeone,
@@ -235,6 +236,19 @@ export const undoApproval = defineAction({
   run: (_ctx, i) => said(undoAnswer(i.task, i.answer)),
   did: () => 'Undone',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
+});
+
+/* A question's answer is the person's own words to the agent that asked: their press, never Tico's. `round` is the
+   asking they were shown; one asked again since is refused (`question_stale`). */
+export const answer = defineAction({
+  id: 'task.answerQuestion',
+  title: 'Answer a question',
+  kind: 'change',
+  input: z.strictObject({ task, text: z.string().check(z.minLength(1), z.maxLength(4000)), round: z.int().check(z.minimum(1)) }),
+  tico: false,
+  run: (_ctx, i) => said(answerQuestion(i.task, i.text.trim(), i.round)),
+  did: () => 'Answered',
+  target: (i) => ({ kind: 'task-question', id: i.task }),
 });
 
 /* ---------------------------------------------------------------- what the open page shows */

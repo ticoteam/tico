@@ -28,6 +28,7 @@ import { changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, 
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { TaskLead } from './Question';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
@@ -264,6 +265,8 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       framed
       body={
         <div className="tv-view">
+          {/* A question's card, or the task's description and the questions asked on it, over every page but an approval's. */}
+          {!quiet && !current?.wait && <TaskLead t={t} flow={flow} />}
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
           {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug, flow).to }] : []))} />}
           {body}
