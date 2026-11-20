@@ -1,31 +1,6 @@
 {
  "answer": {
-  "assignments": [
-   {
-    "bot": "ops",
-    "computer_label": "Test Mac",
-    "computer_logins_v1": true,
-    "config": {
-     "model": "hermes-profile",
-     "name": "ops",
-     "repo_access_mode": "own",
-     "runtime": "fake",
-     "status": "active"
-    },
-    "config_json": "{\"name\":\"ops\",\"status\":\"active\",\"runtime\":\"fake\",\"repo_access_mode\":\"own\"}",
-    "generation": 1,
-    "mail_agent": false,
-    "onboarding_state": null,
-    "operator": "ana",
-    "owner_id": "ana",
-    "repository": "",
-    "runner_id": "00000000-0000-4000-8000-000000000001",
-    "state": "active",
-    "updated": "2026-01-01T00:00:00.000000Z",
-    "updated_at": "2026-01-01T00:00:00.000000Z",
-    "updated_by": "human:ana"
-   }
-  ],
+  "assignments": [],
   "browser_exit": false,
   "browser_exit_bots": [],
   "performance": true,
@@ -52,8 +27,17 @@
    "model_switch_type_v1",
    "model_remove_v1",
    "model_switch_to_key_v1",
+   "model_connect_v1",
    "turns_at_once_v1",
-   "private_lanes_v1"
+   "private_lanes_v1",
+   "model_subscriptions_v1",
+   "model_subscription_activation_v1",
+   "browser_exit_v1",
+   "memory_tidy_packets_v1",
+   "threads_v1",
+   "memory_tidy_keep_v1",
+   "harness_allocation_v1",
+   "make_page"
   ],
   "capacity": 4,
   "kind": "docker",
@@ -86,7 +70,7 @@
    "state": "idle",
    "target": ""
   },
-  "version": "0.5.0",
+  "version": "0.5.4",
   "worktrees": []
  },
  "status": 200

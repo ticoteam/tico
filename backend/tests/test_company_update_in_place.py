@@ -453,13 +453,13 @@ TURN = ["heartbeat.ok", "claim.attempt", "start_place.reserved", "started.ok", "
 
 
 def test_the_computer_still_on_the_last_release_keeps_working_until_it_updates(company):
-    """The server is updated first; the company's computer runs the last release's runner until it updates itself. Its
-    requests, as that release recorded them, are still taken: its heartbeat, a claim that hands it the work its bots
-    had waiting, and the turn through to done. A refusal here stops every bot of the company at once."""
+    """The server is updated first; the company's computer runs the oldest supported runner (the floor's, as its kept
+    contract copy recorded it) until it updates itself. Its requests are still taken: its heartbeat, a claim that hands
+    it the work its bots had waiting, and the turn through to done. A refusal here stops every bot of the company."""
     from backend.auth import digest
     from scripts import check_wire_contract as W
 
-    kept = W.RELEASES / "0.6.0"
+    kept = W.RELEASES / "0.6.21"
     wire = W.load(kept)["wire"]
     with closing(sqlite3.connect(company.db)) as c:
         # The computer's own token never leaves it: the test gives the enrolled computer one it knows.
@@ -474,7 +474,7 @@ def test_the_computer_still_on_the_last_release_keeps_working_until_it_updates(c
             name = step.split(".")[0]
             body = json.loads((kept / W.FIXTURES / (step + ".json")).read_text())["request"]
             if name == "heartbeat":
-                body["version"] = body["release"] = RELEASES[-1].removeprefix("v")
+                body["version"] = body["release"] = kept.name  # the floor (runner_versions.MIN_RUNNER_RELEASE)
                 body["readiness"] = {
                     "schema_version": 1,
                     "bots": {
@@ -494,7 +494,7 @@ def test_the_computer_still_on_the_last_release_keeps_working_until_it_updates(c
                 headers={"Authorization": "Bearer " + COMPUTER_TOKEN, "Idempotency-Key": f"{name}:{aid}"},
             )
             assert answer.status_code == 200, (
-                f"After the update the computer on {RELEASES[-1]} is refused at {name}: {answer.text[:400]}"
+                f"After the update the computer on {kept.name} is refused at {name}: {answer.text[:400]}"
             )
             if name == "heartbeat":
                 # Work is handed out once a computer that was out of contact has reported in for two minutes

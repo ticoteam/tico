@@ -1324,7 +1324,8 @@ impl Runner {
         mark("start_asked", &aid);
         let asked = Instant::now();
         let place = self
-            .post_allocated(&format!("attempts/{aid}/start-place"), &body, None)
+            .client
+            .post(&format!("attempts/{aid}/start-place"), &body, None)
             .await;
         let answer = match place.and_then(decode::<StartPlaceAnswer>) {
             Ok(answer) => answer,
@@ -1350,27 +1351,6 @@ impl Runner {
         grant_gone(flags);
         self.places.lock().unwrap().remove(&aid);
         Ok(false)
-    }
-
-    /// A rollback server keeps its original admission contract.
-    async fn post_allocated(
-        &self,
-        path: &str,
-        body: &Value,
-        key: Option<&str>,
-    ) -> Result<Value, crate::client::ApiError> {
-        match self.client.post(path, body, key).await {
-            Err(e)
-                if e.status == 422
-                    && body.get("harness_allocated").is_some()
-                    && e.detail.contains("harness_allocated") =>
-            {
-                let mut legacy = body.clone();
-                legacy.as_object_mut().unwrap().remove("harness_allocated");
-                self.client.post(path, &legacy, key).await
-            }
-            answer => answer,
-        }
     }
 
     /// After the `tries`-th `start_wait` in a row: a pause that doubles (1, 2, 4, 8 seconds) before the turn asks for
@@ -1399,20 +1379,9 @@ impl Runner {
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
             let path = format!("attempts/{aid}/start-place");
-            match self
-                .client
+            self.client
                 .post(&path, &json!({"waiting": reason}), None)
-                .await
-            {
-                // Older servers accept only the original closed list of wait reasons.
-                Err(e) if e.status == 422 && reason.starts_with("computer busy: memory ") => {
-                    self.client
-                        .post(&path, &json!({"waiting": "pre-start requirements"}), None)
-                        .await?;
-                }
-                Err(e) => return Err(e.into()),
-                Ok(_) => {}
-            }
+                .await?;
             self.places.lock().unwrap().remove(&aid);
         }
         Ok(())
@@ -1444,7 +1413,8 @@ impl Runner {
                 format!("started:{aid}:{tries}")
             };
             match self
-                .post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key))
+                .client
+                .post(&format!("attempts/{aid}/started"), &started, Some(&key))
                 .await
             {
                 Ok(_) => {
@@ -2904,7 +2874,7 @@ impl Runner {
                 let mut start_try = 0;
                 loop {
                     let key = if start_try == 0 { format!("started:{aid}") } else { format!("started:{aid}:{start_try}") };
-                    match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
+                    match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
                         Ok(_) => {
                             flags.start_acknowledged.store(true, Ordering::SeqCst);
                             break;
@@ -5133,42 +5103,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allocated_start_requests_drop_the_new_field_on_an_older_server() {
-        let (url, seen) = crate::client::tests::serve(vec![
-            (422, r#"{"error":{"code":"validation","detail":"body.harness_allocated: Extra inputs are not permitted"}}"#),
-            (200, r#"{"reserved":true}"#),
-            (422, r#"{"error":{"code":"validation","detail":"body.harness_allocated: Extra inputs are not permitted"}}"#),
-            (200, r#"{"started":true}"#),
-        ]).await;
-        let (runner, dir) = lease_runner(&url, "old-allocated-admission");
-        let attempt = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = lease_flags();
-        flags.harness_allocated.store(true, Ordering::SeqCst);
-        assert!(runner
-            .start_place_with_memory(&attempt, &flags, Some(98.0), "linux")
-            .await
-            .unwrap());
-        runner
-            .post_allocated(
-                "attempts/a1/started",
-                &json!({"thread_id": "t1", "harness_allocated": true}),
-                Some("started:a1"),
-            )
-            .await
-            .unwrap();
-        let requests = seen.lock().unwrap();
-        assert_eq!(requests.len(), 4);
-        assert!(
-            requests[0].contains("harness_allocated") && requests[2].contains("harness_allocated")
-        );
-        assert!(
-            !requests[1].contains("harness_allocated")
-                && !requests[3].contains("harness_allocated")
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
     async fn acknowledged_unallocated_fallback_waits_only_on_local_memory() {
         let (url, seen) = crate::client::tests::serve(vec![
             (200, r#"{"reserved":true}"#),
@@ -5317,28 +5251,6 @@ mod tests {
             .unwrap());
         assert_eq!(seen.lock().unwrap().len(), 1);
         assert!(!seen.lock().unwrap()[0].contains("waiting"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn an_older_server_can_still_park_a_local_memory_wait() {
-        let (url, seen) = crate::client::tests::serve(vec![
-            (422, r#"{"error":{"code":"validation","detail":"waiting"}}"#),
-            (200, r#"{"reserved":false}"#),
-        ])
-        .await;
-        let (runner, dir) = lease_runner(&url, "old-memory-wait");
-        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        runner.places.lock().unwrap().insert("a1".into());
-        assert!(!runner
-            .start_place_with_memory(&turn, &lease_flags(), Some(98.0), "linux")
-            .await
-            .unwrap());
-        assert!(runner.places.lock().unwrap().is_empty());
-        let requests = seen.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        assert!(requests[0].contains("computer busy: memory 98%"));
-        assert!(requests[1].contains("pre-start requirements"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

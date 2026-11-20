@@ -62,8 +62,7 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    Mode connection.
 5. Paste both tokens in the server's **Tools > Slack**, or put them in the secret named by
    `TICO_SLACK_SECRET_ARN` (`docs/slack-gateway.md`, Running it), and start the gateway. Bots need no
-   token of their own. (A computer still on v0.6.0-rc.1 runs the old connector, which needs the bot token
-   granted as `SLACK_BOT_TOKEN` in **Tools > Credentials**: older computers only.)
+   token of their own.
 6. Never paste the token into an Issue, a commit, a Slack message, or a bot prompt.
 7. Invite the bot to every channel the bots read: in each channel a person types `/invite @Tico`.
 8. List the channels the bots use: Settings > Tools > Slack (an owner or admin), or

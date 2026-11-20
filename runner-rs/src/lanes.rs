@@ -142,8 +142,9 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
     TURN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
-/// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
+/// The capabilities a supported server may not know, newest first: what a refusal that names no element drops, one by
+/// one, so an older server loses only what it does not know. Every server since the floor (0.6.21,
+/// contracts/runner/releases) takes the rest. A new capability goes at the top (`newest_first_lists_what_the_floor_lacks`).
 const NEWEST_FIRST: &[&str] = &[
     RELAY_HINTS,
     VOICE_INPUTS,
@@ -152,31 +153,6 @@ const NEWEST_FIRST: &[&str] = &[
     VOICE_SESSIONS,
     PLAN_SWITCH_RESUME,
     crate::claude_login::CAPABILITY,
-    PLAN_USAGE,
-    FRESH_SESSION,
-    FORK_SESSION,
-    crate::browser::CAPABILITY,
-    "make_page",
-    "harness_allocation_v1",
-    "threads_v1",
-    "model_subscription_activation_v1",
-    "browser_exit_v1",
-    "model_subscriptions_v1",
-    "private_lanes_v1",
-    "turns_at_once_v1",
-    "capacity_continue_v1",
-    "source_continue_v1",
-    crate::login::CONNECT_CAPABILITY,
-    crate::login::SWITCH_TO_KEY_CAPABILITY,
-    crate::login::REMOVE_CAPABILITY,
-    crate::login::SWITCH_TYPE_CAPABILITY,
-    crate::login::KEYS_CAPABILITY,
-    crate::login::SIGN_OUT_CAPABILITY,
-    COMPUTER_LOGINS,
-    crate::screen::CAPABILITY,
-    "task_goals_v1",
-    "session_roots_v1",
-    "task_lanes_v2",
 ];
 
 /// The capabilities this heartbeat advertises, less any a server refused in the last ten minutes. `computer_logins`:
@@ -210,46 +186,13 @@ fn rows<'a>(body: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     body[key].as_array().into_iter().flatten()
 }
 
-fn has_in_profiles(body: &Value, key: &str) -> bool {
-    rows(body, "profiles").any(|p| {
-        p["runtimes"]
-            .as_object()
-            .is_some_and(|r| r.values().any(|s| s.get(key).is_some()))
-    })
-}
-
-/// What to leave out after a heartbeat's 422 (service.py _report_heartbeat), as a hold name: only `weekly` of the
-/// profile report, the worktree reports' `record_updated` stamp, the capability it names by position (any of them; the
-/// newest sent when it names none), else a root field
-/// the detail names (or, for a bare "extra" with no path, the first one present). None: the refusal stands.
+/// What to leave out after a heartbeat's 422 (service.py _report_heartbeat), as a hold name: the capability it names
+/// by position (any of them; the newest a supported server may lack when it names none), else a root field the detail
+/// names (or, for a bare "extra" with no path, the first one present). None: the refusal stands. Every server since the
+/// floor (0.6.21) takes the profile report's `account`, `five_hour` and `weekly` and the worktree reports'
+/// `record_updated`, so none of those is dropped on its own any more.
 pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     let extra = detail.to_lowercase().contains("extra");
-    // Older servers keep receiving the sign-in report without the field they refuse.
-    static FIELD: OnceLock<regex::Regex> = OnceLock::new();
-    let field = FIELD.get_or_init(|| {
-        regex::Regex::new(
-            r"profiles\.(?:[^ :;]+\.)?runtimes\.[^ .:;]+\.(account|five_hour)(?:[.: ;]|$)",
-        )
-        .unwrap()
-    });
-    if let Some(key) = field
-        .captures(detail)
-        .filter(|_| extra)
-        .map(|c| c[1].to_string())
-    {
-        if has_in_profiles(body, &key) {
-            return Some(format!("profiles.{key}"));
-        }
-    }
-    if extra && detail.contains("weekly") && has_in_profiles(body, "weekly") {
-        return Some("profiles.weekly".into());
-    }
-    if extra
-        && detail.contains("record_updated")
-        && rows(body, "worktrees").any(|r| r.get("record_updated").is_some())
-    {
-        return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
-    }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
     // Only an error at the top-level `capabilities` or one of its elements: a bot or field named "capabilities"
     // further down (say readiness.bots.capabilities) is not about them.
@@ -295,33 +238,6 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
 pub fn drop_held(body: &mut Value) {
     if let Some(caps) = body["capabilities"].as_array_mut() {
         caps.retain(|c| !held_back(&text_of(c)));
-    }
-    for (hold, list, path) in [
-        ("profiles.weekly", "profiles", "runtimes"),
-        ("profiles.account", "profiles", "runtimes"),
-        ("profiles.five_hour", "profiles", "runtimes"),
-        ("worktrees.record_updated", "worktrees", ""),
-    ] {
-        if !held_back(hold) {
-            continue;
-        }
-        let key = hold.split('.').nth(1).unwrap();
-        for row in body[list].as_array_mut().into_iter().flatten() {
-            let targets: Vec<&mut Value> = if path.is_empty() {
-                vec![row]
-            } else {
-                row[path]
-                    .as_object_mut()
-                    .into_iter()
-                    .flat_map(|m| m.values_mut())
-                    .collect()
-            };
-            for t in targets {
-                if let Some(m) = t.as_object_mut() {
-                    m.remove(key);
-                }
-            }
-        }
     }
     if let Some(b) = body.as_object_mut() {
         for field in ROOT_FIELDS {
@@ -376,7 +292,7 @@ mod tests {
         (known.iter().map(text_of).collect(), max)
     }
 
-    /// The current server, then every kept release (contracts/runner/releases/<version>, the supported floor 0.6.0).
+    /// The current server, then every kept release (contracts/runner/releases/<version>, the supported floor 0.6.21).
     fn servers() -> Vec<(String, Vec<String>, usize)> {
         let mut found = vec![("current".to_string(), contract().join("requests.json"))];
         let mut kept: Vec<PathBuf> = std::fs::read_dir(contract().join("releases"))
@@ -448,9 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn newest_first_lists_every_capability_the_runner_sends() {
-        let mut all = sendable();
-        all.sort();
+    fn newest_first_lists_what_the_floor_lacks() {
         let mut listed = NEWEST_FIRST.to_vec();
         listed.sort();
         listed.dedup();
@@ -459,7 +373,15 @@ mod tests {
             NEWEST_FIRST.len(),
             "a capability is listed twice"
         );
-        assert_eq!(listed, all);
+        // Exactly what the floor's server does not know: the rest it always takes, so nothing else is ever dropped.
+        let floor = &servers()[1].1;
+        let mut lacking: Vec<&str> = sendable()
+            .into_iter()
+            .filter(|c| !floor.iter().any(|k| k == c))
+            .collect();
+        lacking.sort();
+        assert_eq!(listed, lacking);
+        let all = sendable();
         let _turn = holding();
         release_all();
         // What runner.rs advertises comes only from here, plan usage and computer logins included.
@@ -474,9 +396,6 @@ mod tests {
         let mut known = floor.to_vec();
         let mut found = vec![];
         for (release, added) in [
-            ("0.6.0-rc.23", &[crate::browser::CAPABILITY][..]),
-            ("0.6.0-rc.30", &[FORK_SESSION, FRESH_SESSION][..]),
-            ("0.6.16", &[PLAN_USAGE][..]),
             (
                 "0.6.37",
                 &[crate::claude_login::CAPABILITY, PLAN_SWITCH_RESUME][..],
@@ -597,22 +516,16 @@ mod tests {
         assert!(runtimes_in_use().contains("claude"));
         forget("a1");
         forget("a2");
+        // Every supported server knows these: a refusal that names none of them drops nothing.
         assert_eq!(
             refused_field(
                 "body.capabilities: bad",
                 &json!({"capabilities": ["task_lanes_v2", "task_goals_v1"]})
-            )
-            .as_deref(),
-            Some("task_goals_v1")
+            ),
+            None
         );
-        // A server from before private lanes or turn limits refuses the newest capability first, even without naming
-        // its position.
         let subscription =
             json!({"capabilities": ["model_subscriptions_v1", "model_subscription_activation_v1"]});
-        assert_eq!(
-            refused_field("body.capabilities: bad", &subscription).as_deref(),
-            Some("model_subscription_activation_v1")
-        );
         assert_eq!(
             refused_field(
                 "body.capabilities.1: Input should be 'model_subscriptions_v1'",
@@ -621,18 +534,7 @@ mod tests {
             .as_deref(),
             Some("model_subscription_activation_v1")
         );
-        let newest =
-            json!({"capabilities": ["task_lanes_v2", "turns_at_once_v1", "private_lanes_v1"]});
-        assert_eq!(
-            refused_field("body.capabilities: bad", &newest).as_deref(),
-            Some("private_lanes_v1")
-        );
-        let turns = json!({"capabilities": ["task_lanes_v2", "turns_at_once_v1"]});
-        assert_eq!(
-            refused_field("body.capabilities: bad", &turns).as_deref(),
-            Some("turns_at_once_v1")
-        );
-        // A server from before model keys refuses only that capability; the sign-out one stays.
+        // A refusal that names its element drops that one, whatever it is; the sign-out one stays.
         let both = json!({"capabilities": ["task_lanes_v2", crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY]});
         assert!(CAPABILITIES.contains(&crate::login::KEYS_CAPABILITY));
         assert_eq!(
@@ -643,7 +545,6 @@ mod tests {
             .as_deref(),
             Some(crate::login::KEYS_CAPABILITY)
         );
-        // A server from before capacity continuation refuses that capability first, not an older one it accepts.
         let all = json!({"capabilities": CAPABILITIES});
         assert_eq!(
             refused_field("body.capabilities.3: Input should be 'task_lanes_v2'", &all).as_deref(),
@@ -660,16 +561,11 @@ mod tests {
     }
 
     #[test]
-    fn an_older_server_can_drop_make_page_without_losing_ordinary_work() {
+    fn a_refusal_naming_make_page_drops_it_without_losing_ordinary_work() {
         let _turn = holding();
         let mut body = json!({"capabilities": ["task_lanes_v2", "threads_v1", "make_page"]});
         assert!(CAPABILITIES.contains(&"make_page"));
-        // A server from before website tools refuses the browser first, by position or not.
         let browser = json!({"capabilities": ["make_page", "browser_v1"]});
-        assert_eq!(
-            refused_field("body.capabilities: bad", &browser).as_deref(),
-            Some("browser_v1")
-        );
         assert_eq!(
             refused_field("body.capabilities.1: Input should be 'make_page'", &browser).as_deref(),
             Some("browser_v1")
@@ -682,10 +578,8 @@ mod tests {
             .as_deref(),
             Some("make_page")
         );
-        assert_eq!(
-            refused_field("body.capabilities: bad", &body).as_deref(),
-            Some("make_page")
-        );
+        // Every supported server knows make_page: a refusal that names no element does not drop it.
+        assert_eq!(refused_field("body.capabilities: bad", &body), None);
         hold_back("make_page");
         drop_held(&mut body);
         release("make_page");
@@ -693,30 +587,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runner_offers_to_fork_a_session_and_an_older_server_drops_only_that() {
+    fn the_runner_offers_to_fork_a_session_and_a_refusal_naming_it_drops_only_that() {
         assert!(CAPABILITIES.contains(&FORK_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
-        let older: Vec<&str> = CAPABILITIES
-            .iter()
-            .copied()
-            .filter(|c| {
-                ![
-                    RELAY_HINTS,
-                    VOICE_INPUTS,
-                    crate::fetch_fresh::PUSH_HINTS,
-                    VOICE_SESSION_RESUME,
-                    VOICE_SESSIONS,
-                    FRESH_SESSION,
-                    crate::claude_login::CAPABILITY,
-                    PLAN_SWITCH_RESUME,
-                ]
-                .contains(c)
-            })
-            .collect();
-        assert_eq!(
-            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
-            Some(FORK_SESSION)
-        );
         let index = CAPABILITIES
             .iter()
             .position(|c| *c == FORK_SESSION)
@@ -732,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
+    fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_what_it_lacks() {
         let _turn = holding();
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
@@ -788,9 +661,10 @@ mod tests {
             .into_iter()
             .filter(|c| *c != crate::claude_login::CAPABILITY)
             .collect();
+        // What is left the floor's server knows, so a refusal that names no element drops nothing more.
         assert_eq!(
-            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
-            Some(FRESH_SESSION)
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})),
+            None
         );
         let index = CAPABILITIES
             .iter()
@@ -817,18 +691,14 @@ mod tests {
     }
 
     #[test]
-    fn an_older_server_loses_only_the_field_it_refuses() {
+    fn an_older_server_loses_only_the_root_field_it_refuses() {
+        let _turn = holding();
         let mut body = json!({"profiles": [{"runtimes": {"codex": {"ok": true, "weekly": {"used_percent": 3}}}}],
                               "worktrees": [{"link_id": "l", "record_updated": "t"}], "repositories": [], "readiness": {}});
+        // Every supported server takes the nested stamps, so a refusal inside the profile report is a real one: the
+        // report is held back whole, as any root field is.
         let weekly = "body.profiles.0.runtimes.codex.weekly: Extra inputs are not permitted";
-        assert_eq!(
-            refused_field(weekly, &body).as_deref(),
-            Some("profiles.weekly")
-        );
-        assert_eq!(
-            refused_field("body.worktrees.0.record_updated: Extra inputs", &body).as_deref(),
-            Some("worktrees.record_updated")
-        );
+        assert_eq!(refused_field(weekly, &body).as_deref(), Some("profiles"));
         assert_eq!(
             refused_field("body.repositories: Extra inputs are not permitted", &body).as_deref(),
             Some("repositories")
@@ -841,20 +711,15 @@ mod tests {
             refused_field("body.readiness.worktrees: Extra inputs", &body),
             None
         );
-        hold_back("profiles.weekly");
         hold_back("repositories");
         drop_held(&mut body);
-        assert_eq!(
-            body["profiles"][0]["runtimes"]["codex"],
-            json!({"ok": true})
-        );
+        release("repositories");
         assert!(
             body.get("repositories").is_none()
                 && body["worktrees"][0].get("record_updated").is_some()
+                && body["profiles"][0]["runtimes"]["codex"]
+                    .get("weekly")
+                    .is_some()
         );
-        dropped()
-            .lock()
-            .unwrap()
-            .retain(|k, _| k != "profiles.weekly" && k != "repositories");
     }
 }

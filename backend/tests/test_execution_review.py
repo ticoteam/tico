@@ -1443,7 +1443,7 @@ def test_a_runner_from_before_the_floor_is_never_handed_the_continuation(api, mo
     assert claim_at(api, monkeypatch, machine, at(121), continues=False, release='0.5.9') is None
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-    following = claim_at(api, monkeypatch, machine, at(130), release='0.6.0-rc.1')
+    following = claim_at(api, monkeypatch, machine, at(130), release='0.6.21')
     assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
 
 

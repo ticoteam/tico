@@ -2,8 +2,7 @@
 # Create at https://api.slack.com/apps > Create New App > From an app manifest, paste this,
 # install to your company's workspace, then copy the Bot User OAuth Token. See connectors/README.md.
 #
-# These are exactly the scopes backend/slack_gateway.py uses (for itself and for bots' connectors/slack.py), and
-# v0.6.0-rc.1's connectors/slack.py, which older computers run with their own copy of the token:
+# These are exactly the scopes backend/slack_gateway.py uses (for itself and for bots' connectors/slack.py):
 #   channels:history      read public channel messages and threads  (history, gateway channel readers)
 #   channels:read         list public channels                      (channels, doctor, resolve #name)
 #   channels:join         join a public channel                     (join)
