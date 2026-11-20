@@ -1,7 +1,7 @@
 import { defineAction, run, s } from '@/actions';
 import { sendMessage, ticoRoomQuery } from '@/conversation';
 import { meQuery, queryClient } from '@/data';
-import { pageName } from './pageName';
+import { askedFrom, pageName } from './pageName';
 import { ticoPowerQuery, turnOnTico } from './queries';
 
 /* Handing words to Tico: search's last row, and anything else that asks Tico on the person's behalf. Tico does not
@@ -18,7 +18,7 @@ export const ask = defineAction({
     if (!power.available) throw Object.assign(new Error('Tico is off'), { code: 'assistant_off' });
     const [room, me] = await Promise.all([queryClient.ensureQueryData(ticoRoomQuery), queryClient.ensureQueryData(meQuery)]);
     if (!room) throw Object.assign(new Error('Tico has no chat yet'), { code: 'no_room' });
-    await sendMessage({ id: room, variant: 'tico', text, me: me.id, page: { path: location.pathname, title: pageName() } });
+    await sendMessage({ id: room, variant: 'tico', text, me: me.id, page: askedFrom(ctx.router.state.location.pathname + ctx.router.state.location.searchStr, pageName()) });
   },
   did: () => 'Asked Tico',
   target: () => ({ kind: 'sheet', id: 'tico' }),

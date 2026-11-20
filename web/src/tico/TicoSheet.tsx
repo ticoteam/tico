@@ -7,7 +7,7 @@ import { Sheet, SheetHead, TICO_MARK } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
-import { usePageName } from './pageName';
+import { askedFrom, usePageName } from './pageName';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
 
@@ -19,7 +19,7 @@ export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
   // what the person is looking at: the page's own name, not the window's title
-  const path = useLocation({ select: (l) => l.pathname });
+  const address = useLocation({ select: (l) => l.pathname + l.searchStr });
   const name = usePageName();
   // On a phone the card draws Tico's one Dot itself, where the lip had it: the head has none of its own.
   const phone = usePhoneCards();
@@ -29,7 +29,7 @@ export function TicoSheet() {
       {power?.available === false ? (
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (
-        <Conversation id={room.data} variant="tico" page={{ path, title: name }} foot={<TicoChips room={room.data} />} />
+        <Conversation id={room.data} variant="tico" page={askedFrom(address, name)} foot={<TicoChips room={room.data} />} />
       ) : room.isError ? (
         // The grey fault, then the one way out (the kit's empty-state row).
         <div className="chat-body">
