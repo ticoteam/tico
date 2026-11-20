@@ -58,7 +58,7 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
             "published": "true" if published else "false",
             "dry_run": "" if "validated" in failures else str(dry_run).lower(),
         },
-        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes")},
+        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes", "electron-changes")},
         "company-matrix": {"enabled": str(enabled).lower()},
     }
     results = {}
@@ -83,6 +83,8 @@ def test_release_build_and_carry_forward_schedules(published):
         "runner-changes",
         "desktop-changes",
         "desktop-assets",
+        "electron-changes",
+        "electron-assets",
         *([] if published else ["release"]),
     }
     assert _schedule(published=published, enabled=False)["companies"] == "skipped"
@@ -93,7 +95,7 @@ def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
     # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
     results = _schedule(ref=ref)
     assert results["company-matrix"] == results["companies"] == "skipped"
-    assert {"desktop", "desktop-assets", "macos", "macos-assets"} <= {
+    assert {"desktop", "desktop-assets", "electron", "electron-assets", "macos", "macos-assets"} <= {
         name for name, result in results.items() if result == "success"
     }
 
@@ -114,6 +116,8 @@ def test_dry_run_and_failed_validation_never_start_optional_jobs():
         ("macos", {"macos-assets"}),
         ("desktop-changes", {"desktop", "desktop-assets", "company-matrix", "companies"}),
         ("desktop", {"desktop-assets"}),
+        ("electron-changes", {"electron", "electron-assets"}),
+        ("electron", {"electron-assets"}),
         ("company-matrix", {"companies"}),
     ],
 )
@@ -176,7 +180,9 @@ def app_build_decision(tmp_path, monkeypatch):
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
 
-    def decide(kind, paths=(), *, force=False, assets="latest.json"):
+    def decide(kind, paths=(), *, force=False, assets=None):
+        # Each app's previous release counts only with its updater manifest: Tauri's latest.json, Electron's Mac feed.
+        assets = assets or {"desktop": "latest.json", "electron": "latest-mac.yml"}[kind]
         git("checkout", "-qf", "--detach", "v1.0.0")
         for name in paths:
             path = repo / name
@@ -224,6 +230,7 @@ def app_build_decision(tmp_path, monkeypatch):
                 "app/vendor/glib/README.md",
             ],
         ),
+        ("electron", ["desktop/src/main/updateErrors.test.ts", "desktop/README.md", "desktop/docs/notes.md"]),
     ],
 )
 def test_support_only_changes_keep_the_previous_app_version(app_build_decision, kind, paths):
@@ -249,19 +256,37 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
                 ".github/workflows/company-app.yml",
             ],
         ),
+        (
+            "electron",
+            [
+                "desktop/src/main/updater.ts",
+                "desktop/package.json",
+                "desktop/package-lock.json",
+                "desktop/electron-builder.yml",
+                "desktop/build/entitlements.mac.plist",
+                ".github/workflows/desktop.yml",
+            ],
+        ),
     ],
 )
 def test_shipping_changes_still_build_even_alongside_docs(app_build_decision, kind, paths):
     for path in paths:
-        assert app_build_decision(kind, ["app/README.md", path]), path
+        assert app_build_decision(kind, [f"{'app' if kind == 'desktop' else 'desktop'}/README.md", path]), path
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("kind", ["desktop"])
+@pytest.mark.parametrize("kind", ["desktop", "electron"])
 def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_decision, kind):
     assert not app_build_decision(kind)
     assert app_build_decision(kind, force=True)
     assert app_build_decision(kind, assets="other.json")
+
+
+@pytest.mark.slow
+def test_each_app_builds_only_for_its_own_sources(app_build_decision):
+    # The Tauri app (app/) and the Electron app (desktop/) ship side by side; a change to one never rebuilds the other.
+    assert not app_build_decision("electron", ["app/src/main.rs", ".github/workflows/app.yml"])
+    assert not app_build_decision("desktop", ["desktop/src/main/main.ts", ".github/workflows/desktop.yml"])
 
 
 # ---- The release train (train.yml), hotfixes (hotfix.yml) and the validations they dispatch (ci.yml) ----

@@ -1,0 +1,109 @@
+# The Electron desktop app (desktop/), built on macOS, Windows and Linux and uploaded as electron-<os> artifacts. A version
+# tag whose desktop/ changed calls it from release.yml, which adds the files to the published release; electron-builder
+# never publishes. The Tauri app (app/, app.yml) is built beside it until installed Tauri apps have moved over.
+# Mac signing and notarization happen only when their secrets exist (DESKTOP_MAC_CERT, DESKTOP_MAC_CERT_PASSWORD;
+# DESKTOP_NOTARY_KEY, DESKTOP_NOTARY_KEY_ID, DESKTOP_NOTARY_ISSUER); without them the app is unsigned, which runs but
+# cannot install its own updates on a Mac. Windows is unsigned for now. See docs/releasing.md.
+name: Electron desktop app
+
+on:
+  workflow_call:    # a version tag whose desktop/ changed (release.yml); the server release never waits for it
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-latest, name: mac, flag: --mac}
+          - {os: windows-latest, name: windows, flag: --win}
+          - {os: ubuntu-24.04, name: linux, flag: --linux}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      # electron-builder downloads the Electron it packages; npm ci needs no Electron binary of its own.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: The app's version is the release's
+        if: github.ref_type == 'tag'
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - name: Mac signing and notarization, only when the secrets exist
+        if: runner.os == 'macOS'
+        env:
+          CERT: ${{ secrets.DESKTOP_MAC_CERT }}
+          CERT_PASSWORD: ${{ secrets.DESKTOP_MAC_CERT_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.DESKTOP_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.DESKTOP_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.DESKTOP_NOTARY_ISSUER }}
+        run: |
+          if [ -z "$CERT" ]; then
+            echo "::warning::No DESKTOP_MAC_CERT: the Mac app is unsigned and cannot install its own updates."
+            { echo "CSC_IDENTITY_AUTO_DISCOVERY=false"; echo "MAC_FLAGS=-c.mac.identity=null"; } >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # electron-builder imports the certificate into a temporary keychain of its own.
+          printf '%s' "$CERT" | base64 --decode > "$RUNNER_TEMP/desktop-cert.p12"
+          { echo "CSC_LINK=$RUNNER_TEMP/desktop-cert.p12"; echo "CSC_KEY_PASSWORD=$CERT_PASSWORD"; echo "MAC_SIGNED=true"; } >> "$GITHUB_ENV"
+          if [ -z "$NOTARY_KEY" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
+            echo "::warning::No DESKTOP_NOTARY_KEY, DESKTOP_NOTARY_KEY_ID and DESKTOP_NOTARY_ISSUER: the Mac app is signed but not notarized."
+            exit 0
+          fi
+          printf '%s\n' "$NOTARY_KEY" > "$RUNNER_TEMP/desktop-notary.p8"
+          { echo "APPLE_API_KEY=$RUNNER_TEMP/desktop-notary.p8"; echo "APPLE_API_KEY_ID=$NOTARY_KEY_ID"; echo "APPLE_API_ISSUER=$NOTARY_ISSUER"
+            echo "MAC_FLAGS=-c.mac.notarize=true"; echo "MAC_NOTARIZED=true"; } >> "$GITHUB_ENV"
+      # Windows signing goes here later (Azure Trusted Signing: win.azureSignOptions in electron-builder.yml and its
+      # AZURE_* credentials in the environment). Until then the installer is unsigned.
+      - run: npm run build
+      - name: Package
+        env:
+          FLAG: ${{ matrix.flag }}
+        run: |
+          flags=("$FLAG" --publish never)
+          [ -n "${MAC_FLAGS:-}" ] && flags+=("$MAC_FLAGS")
+          if [ "${MAC_SIGNED:-}" = true ]; then
+            # Signing and notarization print certificate subjects and team identifiers.
+            if ! npx electron-builder "${flags[@]}" >/dev/null 2>&1; then
+              echo '::error::Signed desktop build failed; check the signing and notarization secrets, then rebuild unsigned to see the build output.'
+              exit 1
+            fi
+          else
+            npx electron-builder "${flags[@]}"
+          fi
+      - name: Check the Mac signature and notarization
+        if: runner.os == 'macOS' && env.MAC_SIGNED == 'true'
+        run: |
+          app=release/mac-universal/Tico.app
+          codesign --verify --deep --strict "$app" >/dev/null 2>&1 || { echo '::error::Tico.app does not verify (codesign --verify --deep --strict).'; exit 1; }
+          echo "codesign: Tico.app verifies"
+          if [ "${MAC_NOTARIZED:-}" = true ]; then
+            spctl -a -vv "$app" >/dev/null 2>&1 || { echo '::error::Gatekeeper rejects Tico.app (spctl -a -vv).'; exit 1; }
+            echo "spctl: Gatekeeper accepts Tico.app"
+          fi
+      - name: Collect the installers and update feeds
+        run: |
+          mkdir -p out
+          find release -maxdepth 1 -type f \( -name 'Tico-*' -o -name '*.blockmap' -o -name 'latest*.yml' \) -exec cp {} out/ \;
+          ls -la out
+          ls out/latest*.yml >/dev/null 2>&1 || { echo '::error::electron-builder wrote no latest*.yml update feed.'; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: electron-${{ matrix.name }}
+          path: desktop/out/
+          if-no-files-found: error
