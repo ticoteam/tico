@@ -283,6 +283,12 @@ def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_d
 
 
 @pytest.mark.slow
+def test_electron_builds_when_the_previous_release_lacks_a_feed(app_build_decision):
+    # electron-assets carries the previous files forward only when all three feeds are there to carry.
+    assert app_build_decision("electron", assets="latest-mac.yml\nlatest.yml")
+
+
+@pytest.mark.slow
 def test_each_app_builds_only_for_its_own_sources(app_build_decision):
     # The Tauri app (app/) and the Electron app (desktop/) ship side by side; a change to one never rebuilds the other.
     assert not app_build_decision("electron", ["app/src/main.rs", ".github/workflows/app.yml"])
