@@ -325,6 +325,7 @@
   --z-fx:35;                      /* the flight layer: above sheets and phone cards, below the scrim (motion.md 7) */
   --z-scrim:40;                   /* the dim behind a dialog or a phone sheet */
   --z-dialog:50;                  /* a dialog, a phone sheet */
+  --z-menu:55;                    /* a menu or picker: above the dialog it may open from */
   --z-toast:60;
   --z-tip:70;
 
