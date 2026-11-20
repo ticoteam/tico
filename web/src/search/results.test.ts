@@ -48,6 +48,19 @@ describe('search', () => {
     expect(both.map((g) => [g.name, g.hits.map((h) => h.run)])).toEqual([['Actions', [{ id: 'shell.goTo', input: { to: '/settings' } }]]]);
   });
 
+  it('keeps the groups on screen until their provider answers again, and drops one that now finds nothing', async () => {
+    const shown: Group[] = [
+      { name: 'Tasks', hits: [{ key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7 } } }] },
+      { name: 'Files', hits: [{ key: 'file:1', title: 'Frost map', run: { id: 'file.open', input: { file: 1 } } }] },
+    ];
+    const files = defineSearch({ group: 'Files', order: 2, find: () => [] });
+    const early: string[][] = [];
+    const groups = await gather('frost', [tasks, files], [], ctx, new AbortController().signal, (g) => early.push(g.map((x) => x.name)), shown);
+    expect(early[0]).toEqual(['Tasks', 'Files']);
+    expect(early.at(-1)).toEqual(['Tasks']);
+    expect(groups.map((g) => g.name)).toEqual(['Tasks']);
+  });
+
   it('opens on what was used last, newest first, once each', async () => {
     remember({ key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7 } } });
     remember({ key: 'page:/settings', title: 'Settings', run: { id: 'shell.goTo', input: { to: '/settings' } } });

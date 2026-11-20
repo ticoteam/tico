@@ -72,7 +72,8 @@ const pause = (ms: number, signal: AbortSignal) =>
 /**
  * The groups for a query, in provider order, with actions last. Publish each group as it arrives: a provider
  * searching a list can have a cold cache, and its read should hold up neither the local results nor the search
- * debounce. A provider that fails drops out quietly.
+ * debounce. A provider that fails drops out quietly. `shown` is what is on screen for this same query (asked again
+ * because more providers loaded): those groups stay until their provider answers, so a late group only adds itself.
  */
 export async function gather(
   q: string,
@@ -81,6 +82,7 @@ export async function gather(
   ctx: Ctx | null,
   signal: AbortSignal,
   early?: (groups: Group[]) => void,
+  shown: Group[] = [],
 ): Promise<Group[]> {
   if (!q.trim()) {
     const recent = readRecent();
@@ -88,9 +90,13 @@ export async function gather(
   }
   const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
   const found = new Map<SearchProvider, Group>();
+  for (const p of from) {
+    const kept = shown.find((g) => g.name === p.group);
+    if (kept) found.set(p, kept);
+  }
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
   const groups = () => [...from.flatMap((p) => found.get(p) ?? []), ...(acts.hits.length ? [acts] : [])];
-  if (acts.hits.length && !signal.aborted) early?.([acts]);
+  if ((acts.hits.length || found.size) && !signal.aborted) early?.(groups());
   await Promise.all(
     from.map(async (p) => {
       if (p.remote && !(await wait)) return;
@@ -101,7 +107,11 @@ export async function gather(
       } catch {
         return;
       }
-      if (!hits.length || signal.aborted) return;
+      if (signal.aborted) return;
+      if (!hits.length) {
+        if (found.delete(p)) early?.(groups());
+        return;
+      }
       found.set(p, { name: p.group, hits });
       early?.(groups());
     }),
