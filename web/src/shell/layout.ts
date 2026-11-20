@@ -7,6 +7,9 @@
      stay open comes from the window (C.OPEN_AT) and from the stretching sheet's floor, whichever tucks more.
    - Click a lower sheet's edge to open it (`forward`): the sheets above it collapse to edges, Tico too; the sheets below
      it follow the window.
+   - The sheet you navigate to counts as opened (its arrangement's `lead`: a page, a task, an agent's page or settings):
+     it stays open, the sheets below it follow the window, and the sheets above it collapse to edges only as needed,
+     Tico first, then the menu, then the thread. A view a thread leads (a page with a second chat) narrows as above.
    - With the stretching sheet tucked, the open sheets share the window by their widths.
    Pure: it reads only its arguments and never writes `saved`, which is what keeps automatic tucks out of memory. */
 
@@ -99,13 +102,15 @@ interface Arr {
   stretch: SheetId;
   spec?: Partial<Record<SheetId, SpecId>>;
   foldByDefault?: SheetId[];
+  /* the sheet the address opens: it stays open while the sheets above it collapse (see the head). None: a thread leads. */
+  lead?: SheetId;
 }
 export const ARR: Record<Arrangement, Arr> = {
-  page: { row: ['tico', 'menu', 'page'], stretch: 'page' },
-  chat: { row: ['tico', 'menu', 'chat', 'page', 'panel'], stretch: 'page' },
-  agent: { row: ['tico', 'menu', 'chat', 'widgets'], stretch: 'chat' },
-  task: { row: ['tico', 'list', 'chat', 'page'], stretch: 'page', spec: { chat: 'taskchat' } },
-  call: { row: ['tico', 'stage', 'side'], stretch: 'stage', foldByDefault: ['tico'] },
+  page: { row: ['tico', 'menu', 'page'], stretch: 'page', lead: 'page' },
+  chat: { row: ['tico', 'menu', 'chat', 'page', 'panel'], stretch: 'page', lead: 'page' }, // the page leads only with no chat
+  agent: { row: ['tico', 'menu', 'chat', 'widgets'], stretch: 'chat', lead: 'widgets' }, // the agent's page and settings
+  task: { row: ['tico', 'list', 'chat', 'page'], stretch: 'page', spec: { chat: 'taskchat' }, lead: 'page' },
+  call: { row: ['tico', 'stage', 'side'], stretch: 'stage', foldByDefault: ['tico'], lead: 'stage' },
 };
 
 export const specOf = (arr: Arrangement, id: SheetId): Spec => SPEC[(ARR[arr].spec ?? {})[id] ?? (id as SpecId)];
@@ -191,7 +196,12 @@ export function layout(width: number, arrangement: ArrangementSpec, saved: Saved
       }
     }
   }
-  for (const id of ids.slice().reverse()) {
+  // the sheet the address opens leads (unless an edge was clicked, a second chat is open, or it was tucked by hand):
+  // the sheets below it go first, right to left, then the ones above it, Tico first
+  const L = !F && A.lead && S[A.lead] && open(A.lead) && !(a.name === 'chat' && ids.includes('chat')) ? A.lead : null;
+  const li = L ? ids.indexOf(L) : -1;
+  const order = L ? [...ids.slice(li + 1).reverse(), ...ids.slice(0, li)] : ids.slice().reverse();
+  for (const id of order) {
     if (!tooMany() && !short()) break;
     if (id === F || !open(id)) continue;
     set(id, 'tucked', 'room');

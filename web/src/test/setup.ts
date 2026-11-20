@@ -5,8 +5,8 @@ import { afterEach, beforeEach } from 'vitest';
 // Nothing waits that long when the code is right; it only stops false failures under load.
 configure({ asyncUtilTimeout: 5000 });
 
-// A laptop's window. jsdom's own 1024 is narrow enough that the page slides under the menu (shell/layout.ts, Layers);
-// a test that wants another width resizes.
+// A laptop's window. At jsdom's own 1024 sheets tuck to their edges (shell/layout.ts, Layers), out of reach of a test
+// that reads them; a test that wants another width resizes.
 beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { value: 1440, configurable: true });
 });

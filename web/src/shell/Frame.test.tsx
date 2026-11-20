@@ -23,7 +23,7 @@ const slots = {
 const handle = (name: string) => screen.getByRole('separator', { name: `Resize ${name}` });
 
 describe('Frame', () => {
-  it('tucks right to left as the window narrows, saves none of it, and gives the layout back on widening', () => {
+  it('tucks as the window narrows, saves none of it, and gives the layout back on widening', () => {
     resize(1440);
     render(<Frame {...slots} arrangement="page" />);
     expect(screen.getByRole('main', { name: 'Tasks' })).toBeTruthy();
@@ -32,12 +32,13 @@ describe('Frame', () => {
     const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
     expect([place('tico'), place('menu'), place('page')].map(el => el.style.zIndex)).toEqual(['3', '2', '1']); // the leftmost on top
 
-    resize(1000); // the page goes under the menu, leaving its edge
-    expect(place('page').dataset.shut).toBe('true');
-    expect(place('page').hasAttribute('inert')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Open the page' })).toBeTruthy();
-    expect(place('menu').dataset.cast).toBe('true');
-    resize(820); // then the menu under Tico
+    resize(1000); // the page the address opened stays; Tico collapses to its edge first
+    expect(place('page').dataset.shut).toBeUndefined();
+    expect(place('tico').dataset.shut).toBe('true');
+    expect(place('tico').hasAttribute('inert')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Open Tico' })).toBeTruthy();
+    expect(place('tico').dataset.cast).toBe('true');
+    resize(800); // then the menu
     expect(screen.getByRole('button', { name: 'Open the menu' })).toBeTruthy();
     expect([place('tico'), place('menu'), place('page')].map(el => el.style.zIndex)).toEqual(['3', '2', '1']);
 
@@ -48,15 +49,36 @@ describe('Frame', () => {
     expect(localStorage.getItem(KEY)).toBeNull();
   });
 
+  it('on a 1440 laptop, opening a task shows the task: Tico collapses to its edge, the task’s chat stays', () => {
+    resize(1440);
+    render(<Frame {...slots} arrangement="task" chat={<Sheet kind="chat" label="The task's chat" />} list={<nav className="pane nav list" aria-label="Flow" />} />);
+    const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
+    expect(place('page').dataset.shut).toBeUndefined();
+    expect(screen.getByRole('main', { name: 'Tasks' })).toBeTruthy();
+    expect(place('tico').dataset.shut).toBe('true');
+    expect(screen.getByRole('button', { name: 'Open Tico' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: "The task's chat" })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Flow' })).toBeTruthy();
+    expect(['tico', 'list', 'chat', 'page'].map(id => place(id).style.zIndex)).toEqual(['4', '3', '2', '1']);
+  });
+
+  it('a page with a second chat narrows from the right: the page goes under the thread first', () => {
+    resize(1280);
+    render(<Frame {...slots} arrangement="chat" chat={<Sheet kind="chat" label="Chat with Maya" />} />);
+    const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
+    expect(place('page').dataset.shut).toBe('true');
+    expect(screen.getByRole('button', { name: 'Open the page' })).toBeTruthy();
+    expect(place('tico').dataset.shut).toBeUndefined();
+  });
+
   it("opens a lower sheet by its edge: the sheets above it collapse to edges, Tico too, and Escape gives the layout back", () => {
-    resize(1000);
-    render(<Frame {...slots} arrangement="page" />);
+    resize(1280);
+    render(<Frame {...slots} arrangement="chat" chat={<Sheet kind="chat" label="Chat with Maya" />} />);
     const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
     fireEvent.click(screen.getByRole('button', { name: 'Open the page' }));
     expect(place('page').dataset.shut).toBeUndefined();
-    expect(place('tico').dataset.shut).toBe('true');
-    expect(place('menu').dataset.shut).toBe('true');
-    expect([place('tico'), place('menu'), place('page')].map(el => el.style.zIndex)).toEqual(['3', '2', '1']); // nothing raised
+    for (const id of ['tico', 'menu', 'chat']) expect(place(id).dataset.shut).toBe('true');
+    expect(['tico', 'menu', 'chat', 'page'].map(id => place(id).style.zIndex)).toEqual(['4', '3', '2', '1']); // nothing raised
     expect(localStorage.getItem(KEY)).toBeNull();
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(place('page').dataset.shut).toBe('true');

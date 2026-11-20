@@ -20,24 +20,25 @@ const ARRS: [string, ArrangementSpec][] = [
 
 // left to right: an open sheet's width, or its edge. With the stretching sheet under, the open sheets share the window.
 const TABLE: Record<string, Record<number, string>> = {
-  page: { 2560: '300, 248, 1980', 1440: '300, 248, 860', 1280: '300, 248, 700', 1080: '300, 248, 500', 1024: '523, 433, edge', 840: '422, 350, edge', 800: '696, edge, edge', 760: 'cards' },
+  page: { 2560: '300, 248, 1980', 1440: '300, 248, 860', 1280: '300, 248, 700', 1080: '300, 248, 500', 1024: 'edge, 248, 708', 840: 'edge, 248, 524', 800: 'edge, edge, 696', 760: 'cards' },
   chat: { 2560: '300, 248, 320, 1652', 1440: '300, 248, 320, 532', 1360: '443, 366, 475, edge', 1080: '347, 286, 371, edge', 1024: '499, 413, edge, edge', 840: '398, 330, edge, edge', 800: '652, edge, edge, edge', 760: 'cards' },
   'chat + panel': { 2560: '300, 248, 320, 1300, 344', 1440: '300, 248, 320, 488, edge', 1280: '400, 331, 429, edge, edge', 1024: '475, 393, edge, edge, edge' },
-  'panel only': { 1728: '300, 248, 796, 344', 1440: '300, 248, 508, 344', 1280: '300, 248, 656, edge', 1024: '499, 413, edge, edge' },
-  agent: { 1920: '300, 248, 972, 360', 1440: '300, 248, 492, 360', 1360: '300, 248, 736, edge', 1100: '540, 448, edge, edge', 800: '652, edge, edge, edge' },
-  task: { 1920: '300, 288, 392, 900', 1728: '300, 288, 392, 708', 1440: '417, 400, 547, edge', 1024: '465, 447, edge, edge' },
+  'panel only': { 1728: '300, 248, 796, 344', 1440: '300, 248, 508, 344', 1280: '300, 248, 656, edge', 1024: 'edge, 248, 664, edge' },
+  agent: { 1920: '300, 248, 972, 360', 1440: '300, 248, 492, 360', 1360: 'edge, 248, 676, 360', 1100: 'edge, edge, 628, 360', 800: 'edge, edge, edge, 652' },
+  task: { 1920: '300, 288, 392, 900', 1728: '300, 288, 392, 708', 1440: 'edge, 288, 392, 684', 1024: 'edge, edge, 392, 520', 900: 'edge, edge, edge, 752' },
   call: { 1920: 'edge, 1468, 384', 1024: 'edge, 572, 384', 900: 'edge, 796, edge' },
 };
 
-// the window width under which each sheet goes under its left neighbour, in order, at default sizes: the page under
-// the thread first, then the thread under the company, then the company under Tico
+// the window width under which each sheet tucks, in order, at default sizes. A view a thread leads (a page with a
+// second chat): the page under the thread first, then the thread under the company, then the company under Tico. A view
+// the address opens a page, a task or an agent's page in: that sheet stays; the ones above it collapse, Tico first.
 const TUCKS: Record<string, [SheetId, number][]> = {
-  page: [['page', 1080], ['menu', 840]],
+  page: [['tico', 1080], ['menu', 840]],
   chat: [['page', 1388], ['chat', 1080], ['menu', 840]],
   'chat + panel': [['panel', 1740], ['page', 1432], ['chat', 1080], ['menu', 840]],
-  'panel only': [['panel', 1412], ['page', 1104], ['menu', 840]],
-  agent: [['widgets', 1428], ['chat', 1104], ['menu', 840]],
-  task: [['page', 1500], ['chat', 1080], ['list', 840]],
+  'panel only': [['panel', 1412], ['tico', 1104], ['menu', 840]],
+  agent: [['tico', 1428], ['menu', 1164], ['chat', 952]],
+  task: [['tico', 1500], ['list', 1236], ['chat', 984]],
   call: [['side', 932]],
 };
 
@@ -61,6 +62,21 @@ describe('layout', () => {
       before = now;
     }
     expect(seen).toEqual(TUCKS[name]);
+  });
+
+  it('shows the task on a 1440 laptop: the task stays open, Tico collapses to its edge, the task’s chat stays', () => {
+    const L = layout(1440, 'task', {});
+    expect(sheet(L, 'page')).toMatchObject({ state: 'open' });
+    expect(sheet(L, 'page').width).toBeGreaterThanOrEqual(C.FLOOR);
+    expect(sheet(L, 'tico')).toMatchObject({ state: 'tucked', width: C.EDGE });
+    expect(sheet(L, 'list').state).toBe('open');
+    expect(sheet(L, 'chat').state).toBe('open');
+    expect(L.sheets.map(s => s.z)).toEqual([4, 3, 2, 1]); // the order and stacking stay
+    // an agent's page and settings lead the same way; a page with a second chat narrows from the right
+    expect(sheet(layout(1280, 'agent', {}), 'widgets').state).toBe('open');
+    expect(sheet(layout(1280, 'agent', {}), 'tico').state).toBe('tucked');
+    expect(sheet(layout(1280, 'chat', {}), 'page').state).toBe('tucked');
+    expect(sheet(layout(1280, 'chat', {}), 'tico').state).toBe('open');
   });
 
   it('opens 4, 3, 2 or 1 sheets by the window, as the plan does', () => {
