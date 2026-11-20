@@ -83,7 +83,6 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .p-dock .composer{background:var(--dock-field)}
 .phone .p-dock.is-flat{background:none;box-shadow:inset 0 1px 0 var(--line);padding-top:10px}
 .phone .p-dock.is-flat .composer{background:var(--well)}
-.phone .p-dock .look{align-self:flex-start}
 .phone .pg>.p-dock{padding-top:18px}
 
 /* ---------- the cards in front of the page ---------- */
@@ -161,7 +160,6 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .tico-foot{flex:none;padding:4px 10px calc(var(--sab) + 6px);display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .phone .composer{min-height:48px;font-size:var(--t-md)}
 .phone .did{min-height:28px}
-.phone .look{font-size:var(--t-sm);height:28px}
 .phone .msg p,.phone .msg ul{font-size:15px}
 /* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4) */
 @media (pointer:coarse){.phone input,.phone textarea,.phone select,.phone [contenteditable]{font-size:max(16px,1em)}}

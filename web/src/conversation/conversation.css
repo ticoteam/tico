@@ -182,3 +182,17 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 :where(html[data-layout="cards"]){
   .msg.msg-read{padding:var(--s-4)}
 }
+
+/* Jump to latest: a round lifted button over the messages, centred just above the box (the foot's top edge). It comes
+   once the person is a window or more above the end, with a count of what came in since, and goes at the end. */
+.chat-foot{position:relative}
+.jump{position:absolute;left:50%;bottom:calc(100% + var(--s-2));translate:-50% var(--move-sm);opacity:0;visibility:hidden;
+  transition:opacity var(--dur-leave) var(--ease-in),translate var(--dur-leave) var(--ease-in),visibility 0s linear var(--dur-leave)}
+.jump.is-on{translate:-50% 0;opacity:1;visibility:visible;
+  transition:opacity var(--dur-enter) var(--ease),translate var(--dur-enter) var(--ease-arrive),visibility 0s}
+.jump .ib{border-radius:50%;background:var(--raised);color:var(--ink-2);box-shadow:var(--lift-2)}
+.jump .ib:hover{background:var(--raised);color:var(--ink)}
+.jump .ib:active{background:var(--raised);scale:var(--press)}
+.jump-n{position:absolute;right:calc(var(--s-1) * -1);top:calc(var(--s-1) * -1);min-width:16px;height:16px;line-height:16px;padding:0 var(--s-1);border-radius:var(--r-pill);
+  background:var(--well-2);color:var(--ink);font-style:normal;font-size:var(--t-micro);font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center;
+  box-shadow:0 0 0 2px var(--raised);pointer-events:none}

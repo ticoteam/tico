@@ -2,7 +2,7 @@ import { useRouter } from '@tanstack/react-router';
 import { useEffect, useSyncExternalStore } from 'react';
 
 /* The open page's name, as the person reads it: the h1 in the page's sheet (a record's name, "Tasks", a thread's
-   title). It is what Tico's chip and the tab's title show, and what a message to Tico says the person was looking at.
+   title). It is what the tab's title shows, and what a message to Tico says the person was looking at.
    Read when a route has drawn, and when a page's head says its name changed (`showPageName`): never by watching the
    page, whose chats change on every streamed word. */
 const H1 = '.pane.page h1';

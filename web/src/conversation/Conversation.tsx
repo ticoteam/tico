@@ -7,7 +7,9 @@ import { DidLine } from '@/kit/DidLine';
 import { Empty } from '@/kit/Empty';
 import { Link } from '@/kit/Link';
 import { useFollow } from '@/live';
-import { Icon, type IconName } from '@/kit/Icon';
+import { capCount } from '@/kit/Count';
+import { IconButton } from '@/kit/IconButton';
+import { motionLevel } from '@/motion';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
@@ -23,8 +25,11 @@ import { SessionLine, type Session } from './Session';
 import { installConversationLive, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery } from './queries';
 import type { ChatMessage, LiveRun, PageRef, Variant } from './types';
 
-/** Within this many pixels of the end counts as "at the bottom": what comes in is read. */
+/** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
 const READ_PX = 24;
+/** Scrolled up past this, the asks over the box (Tico's chips) fade away. More than their own height, so the room
+    they give back cannot bring the chat to its end again. */
+const UP_PX = 120;
 /** A row's guess before it is measured. */
 const ROW_PX = 60;
 /** Pages a jump from the Outline loads before it gives up (the old app's 40). */
@@ -40,8 +45,8 @@ export interface ConversationProps {
   actor?: string;
   /** A second chat's head, under the name: which of the agent's chats this is (a task's, or its main chat). */
   session?: Session;
-  /** The page it sits beside: the look chip, and `refs.page` on what is sent. Defaults to the address and title. */
-  page?: (PageRef & { icon?: IconName }) | null;
+  /** The page it sits beside, sent as `refs.page` with each message (nothing is drawn). Defaults to the address and title. */
+  page?: PageRef | null;
   /** Above the composer, in the chat's foot: a card the chat is waiting on (a task's answer card). */
   foot?: ReactNode;
   /** What a message draws in place of its text, when it is more than words (a thread's call card). */
@@ -99,6 +104,15 @@ function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, i
   return out;
 }
 
+/** The messages from others after `seen` (the newest when the person scrolled away): what Jump to latest counts. */
+function newSince(items: Item[], seen: string, me: string | undefined): number {
+  const from = items.findLastIndex((it) => it.key === seen);
+  if (from < 0) return 0;
+  let n = 0;
+  for (const it of items.slice(from + 1)) if (it.k === 'msg' && it.m.sender_id !== me && !it.m.hidden) n++;
+  return n;
+}
+
 /** What the Dot shows while Tico answers in its own chat. */
 function dotFor(rows: ChatMessage[], live: LiveRun[]): DotState | null {
   const r = live.find((x) => !x.ended);
@@ -112,7 +126,7 @@ function teammateHref(actor: string | undefined, a: Actor | undefined): string |
   return `/team/${encodeURIComponent(a?.kind === 'agent' && a.slug ? a.slug : actor.slice(actor.indexOf(':') + 1))}`;
 }
 
-/* the page the person is on, by its own name (its h1, as Tico's chip says it), not the window's "<name> - Tico". Kept
+/* the page the person is on, by its own name (its h1, as the tab's title says it), not the window's "<name> - Tico". Kept
    current: a page whose data comes after the chat drew (a task opened beside its thread) names itself once it has. */
 function useHerePage(): PageRef {
   const title = usePageName();
@@ -212,6 +226,23 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
     [id, fetchNextPage],
   );
 
+  /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
+     shows, counting what came in since. Set only when that changes, so scrolling draws nothing. */
+  const [place, setPlace] = useState({ id, up: false, far: false, seen: '' });
+  const where = place.id === id ? place : { id, up: false, far: false, seen: '' };
+  const followPlace = () => {
+    const s = scroller.current;
+    if (!s) return;
+    const off = s.fromEnd();
+    const up = off > UP_PX ? true : off <= READ_PX ? false : where.up;
+    const far = off > s.height();
+    if (up === where.up && far === where.far) return;
+    const newest = items.findLast((it) => it.k === 'msg')?.key ?? '';
+    setPlace({ id, up, far, seen: far ? (where.far ? where.seen : newest) : '' });
+  };
+  const fresh = where.far ? newSince(items, where.seen, myId) : 0;
+  const toLatest = () => scroller.current?.scrollToEnd(motionLevel() !== 'off');
+
   /* ---- read up to the last message shown, while it is in view */
   const readAtEnd = () => {
     if ((scroller.current?.fromEnd() ?? 0) > READ_PX || document.visibilityState !== 'visible') return;
@@ -264,7 +295,10 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
         role="log"
         label={`Chat with ${name}`}
         className="chat-body"
-        onScroll={readAtEnd}
+        onScroll={() => {
+          readAtEnd();
+          followPlace();
+        }}
         onReachStart={() => {
           if (timeline.hasNextPage && !timeline.isFetchingNextPage) void timeline.fetchNextPage();
         }}
@@ -306,20 +340,18 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
     list
   );
 
-  const look: ReactNode =
-    (variant === 'tico' || variant === 'side') && at?.title ? (
-      <span className="look">
-        <span className="look-ico">
-          <Icon name={page?.icon ?? 'file'} />
-        </span>
-        <span className="look-text">{at.title}</span>
-      </span>
-    ) : null;
-
+  // Jump to latest floats over the messages, centred above the box; it rides the foot's top edge.
   const footer = (
-    <footer className="chat-foot" data-dock ref={footRef}>
+    <footer className="chat-foot" data-dock data-up={where.up || undefined} ref={footRef}>
+      <div className={where.far ? 'jump is-on' : 'jump'}>
+        <IconButton icon="chevdown" label={fresh ? `Jump to latest, ${fresh} new` : 'Jump to latest'} onClick={toLatest} />
+        {fresh > 0 && (
+          <i className="jump-n" aria-hidden>
+            {capCount(fresh)}
+          </i>
+        )}
+      </div>
       {foot}
-      {look}
       {canReply && replyTo && myId && <Replying q={quoteFrom(replyTo)} me={myId} onDrop={() => setReplying(null)} />}
       {myId && canPost && <Composer id={id} me={myId} to={name} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>

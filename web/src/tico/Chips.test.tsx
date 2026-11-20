@@ -10,6 +10,11 @@ import { chipsFor, TicoChips } from './Chips';
 vi.mock('@/actions', async (orig) => ({ ...(await orig<object>()), run: vi.fn() }));
 afterEach(() => vi.clearAllMocks());
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+const menuCss = fs.readFileSync(new URL('../shell/Menu.css', here), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+
 const texts = (path: string, news = false) => chipsFor(path, news).map((c) => c.text);
 const ROOM = 'room-1';
 
@@ -56,5 +61,12 @@ describe("Tico's chips", () => {
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Catch up', 'What needs me?']);
     act(() => void client.setQueryData(liveQuery(ROOM).queryKey, [{ run: 'r1', ended: false } as never]));
     await waitFor(() => expect(screen.queryAllByRole('button')).toHaveLength(0));
+  });
+
+  it('fade away while the chat is scrolled up (the foot is data-up), and come back with a fade', () => {
+    const rule = (sel: string) => menuCss.match(new RegExp(`(^|\\n)${sel.replace(/[.[\]]/g, '\\$&')}\\{([^}]*)\\}`))?.[2] ?? '';
+    expect(rule('.chat-foot[data-up] .qchips')).toMatch(/display:none;opacity:0;transition:opacity var\(--dur-leave\)/);
+    expect(rule('.qchips')).toMatch(/transition:opacity var\(--dur-enter\)/);
+    expect(menuCss).toMatch(/@starting-style\{\.qchips\{opacity:0\}\}/);
   });
 });

@@ -72,7 +72,7 @@ export function TaskPage({ task, pipeline, tab, file, flow = false }: TaskPagePr
     return (
       <Document
         className="tv"
-        // no name until the task's own arrives: a placeholder would reach the tab title and a thread's page chip
+        // no name until the task's own arrives: a placeholder would reach the tab title and what a message sends as its page
         title={error ? 'Task' : ''}
         path={path}
         crumb={flow ? [{ label: 'Flow', to: '/flow' }] : pipeline ? [{ label: 'Tasks', to: `/tasks/${pipeline}` }] : undefined}

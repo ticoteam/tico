@@ -1,3 +1,5 @@
-/* The virtual list's spacer and its placed rows; the virtualizer writes the height and each row's transform. */
-.vl-space{position:relative;width:100%}
+/* The virtual list's spacer and its placed rows; the virtualizer writes the height and each row's transform. The
+   spacer never shrinks: in a column flex scroller (a chat's body) its rows are placed out of flow, so it would
+   otherwise shrink to nothing and the scroller's end would be wherever the drawn rows happen to stop. */
+.vl-space{position:relative;width:100%;flex:none}
 .vl-item{position:absolute;top:0;left:0;width:100%}
