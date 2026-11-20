@@ -145,6 +145,8 @@ def test_search_puts_a_named_doc_first_and_a_librarian_log_last_with_each_best_s
     by_path = make(api, "Day two", "Lunch.", path="finance/expense.md")
     hits = call(api, "GET", "docs/search", params={"q": "expense report"})["results"]
     assert [h["id"] for h in hits] == [named["id"], week["id"], by_path["id"], log["id"]]
+    three = call(api, "GET", "docs/search", params={"q": "expense report", "limit": 3})["results"]
+    assert [h["id"] for h in three] == [named["id"], week["id"], by_path["id"]]  # the log never crowds a doc out
     assert (hits[1]["section"], hits[1]["anchor"]) == ("Expense report", "expense-report")
     assert hits[1]["excerpt"] == "The expense report: receipts."
     assert [h["score"] for h in hits] == sorted((h["score"] for h in hits), reverse=True)

@@ -593,8 +593,8 @@ def add_link(c, actor, body):
 def named(title, path, tokens, glossary=None):
     """Whether the words name the doc: every word of its title (but team, docs and doc) or of its path (but .md)."""
     words = [t for t in manual.query_words(title, glossary) if t not in ("team", "docs", "doc")]
-    path_words = manual._words(re.sub(r"\.md$", "", path, flags=re.I))
-    return bool(words) and all(t in tokens for t in words) or all(t in tokens for t in path_words)
+    path_words = manual._words(re.sub(r"\.(md|markdown)$", "", path, flags=re.I))
+    return any(w and all(t in tokens for t in w) for w in (words, path_words))
 
 
 def merge_ranked(groups, limit, tokens):
@@ -1023,8 +1023,8 @@ class Docs:
 
     def find_internal(self, c, tokens, limit):
         """Each matching doc's best section by bm25 (manual.best_sections); a doc the words name comes first and a
-        librarian map or log (`_librarian/`) the words do not name ranks lower. Results carry no score: `find`
-        ranks them by position with the other sources (merge_ranked)."""
+        librarian map or log (`_librarian/`) the words do not name last, as merge_ranked would put it. Results carry
+        no score: `find` ranks them by position with the other sources (merge_ranked)."""
         best = {doc: (section, rank) for doc, section, rank in manual.best_sections(c, "doc_sections_fts", tokens)}
         docs = c.execute(
             "SELECT rowid,id,path,title FROM docs WHERE archived=0 AND rowid IN (SELECT value FROM json_each(?))",
@@ -1035,13 +1035,15 @@ class Docs:
 
         def order(row):
             first = named(row["title"], row["path"], tokens, glossary)
-            rank = best[row["rowid"]][1]
-            return (not first, rank * 0.2 if not first and row["path"].startswith("_librarian/") else rank)
+            return (not first, not first and row["path"].startswith("_librarian/"), best[row["rowid"]][1])
 
         out = []
-        for row in sorted(docs, key=order)[:limit]:
-            section = best[row["rowid"]][0]
-            heading, body = c.execute("SELECT heading,body FROM doc_sections_fts WHERE rowid=?", (section,)).fetchone()
+        for row in sorted(docs, key=order):
+            # A read outside a transaction may see a write between the ranking and this: that doc is left out.
+            found = c.execute("SELECT heading,body FROM doc_sections_fts WHERE rowid=?", (best[row["rowid"]][0],))
+            if not (found := found.fetchone()):
+                continue
+            heading, body = found
             out.append(
                 {
                     "type": "internal",
@@ -1053,6 +1055,8 @@ class Docs:
                     "excerpt": manual._excerpt(" ".join(body.split()), tokens),
                 }
             )
+            if len(out) == limit:
+                break
         return out
 
     @staticmethod
