@@ -10,7 +10,7 @@ import { queryClient } from '@/data';
 import { PageFault } from '@/shell/PageFault';
 import type { MatterRow, ProductList, RiskDetail, RiskList } from '@/api/schema';
 import { matterDatesQuery, matterFilesQuery, mattersQuery, productsQuery, riskQuery, risksQuery, waitingTasksQuery } from './queries';
-import { RiskPage, type RiskView } from './RiskPage';
+import { matterDatesLine, RiskPage, typedWhen, type RiskView } from './RiskPage';
 
 /* Risk: the risk list, one risk, one matter and Disputes. Sample rows only. */
 
@@ -326,6 +326,38 @@ describe('One matter @n:re:matter', () => {
     await waitFor(() => expect(posted(sent)[1]).toEqual({ product_id: 'product/seed-box', version: 2 }));
     await waitFor(() => expect(toasts).toHaveBeenCalled());
     expect(href(within(panel).getByText('Garden kit'))).toBe('/company/products?panel=garden-kit');
+  });
+
+  it('shows not before and due in one line, and changes them with what they are for', async () => {
+    const sent = serve((_url, method) => (method === 'POST' ? ok({ task_id: 't1', matter: null }) : nothing()));
+    const panel = await open();
+    expect(within(panel).getByText('Dates')).toBeTruthy();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Change dates' }));
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'For' }), { target: { value: 'Produce records' } });
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Not before' }), { target: { value: '2026-11-19 10am' } });
+    const due = within(panel).getByRole('textbox', { name: 'Due by' });
+    fireEvent.change(due, { target: { value: '2026-11-26' } });
+    fireEvent.submit(due.closest('form')!);
+    const starts = new Date(2026, 10, 19, 10).toISOString();
+    await waitFor(() => expect(posted(sent)).toEqual([{ dates_label: 'Produce records', starts_at: starts, due_at: '2026-11-26', version: 2 }]));
+    const line = matterDatesLine({ task: matter('t1', 'x').task, matter: { starts_at: starts, due_at: '2026-11-26' } as MatterRow['matter'] });
+    expect(await within(panel).findByText(line)).toBeTruthy();
+    expect(within(panel).getByText('Produce records')).toBeTruthy();
+  });
+
+  it('words its dates quietly and reads typed ones', () => {
+    const now = new Date(2026, 10, 10, 9);
+    const row = (m: Record<string, unknown>, due: string | null = null) => ({ task: { ...matter('t1', 'x').task, due_at: due }, matter: m as MatterRow['matter'] });
+    expect(matterDatesLine(row({ starts_at: new Date(2026, 10, 19, 10).toISOString(), due_at: '2026-11-26' }), now)).toBe('Not before Nov 19, 10 AM · Due Nov 26');
+    expect(matterDatesLine(row({ starts_at: '2026-11-19', due_at: new Date(2026, 10, 26, 17, 30).toISOString() }), now)).toBe('Not before Nov 19 · Due Nov 26, 5:30 PM');
+    expect(matterDatesLine(row({ starts_at: null, due_at: null }, '2026-11-24'), now)).toBe('Due Nov 24');
+    expect(matterDatesLine(row({ starts_at: null, due_at: null }), now)).toBe('');
+    expect(typedWhen('')).toBeNull();
+    expect(typedWhen('2026-11-19')).toBe('2026-11-19');
+    expect(typedWhen('2026-11-19 14:05')).toBe(new Date(2026, 10, 19, 14, 5).toISOString());
+    expect(typedWhen('2026-11-19 12am')).toBe(new Date(2026, 10, 19, 0).toISOString());
+    expect(typedWhen('next week')).toBeUndefined();
+    expect(typedWhen('2026-11-19 13pm')).toBeUndefined();
   });
 
   it('is open to Tico: ordinary work on a task', async () => {

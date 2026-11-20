@@ -226,16 +226,20 @@ export function isPast(o: CalendarOccurrence, now: Date): boolean {
   return new Date(o.end || o.start) <= now;
 }
 
-/** "Seed box pricing, Wed, Nov 18, 10:30 AM to 11:15 AM" */
+/** A moment, not a span: a matter's date at a time (its start is its end). */
+export const isInstant = (o: Pick<CalendarOccurrence, 'all_day' | 'start' | 'end'>) => !o.all_day && !!o.end && new Date(o.end).getTime() === new Date(o.start).getTime();
+
+/** "Seed box pricing, Wed, Nov 18, 10:30 AM to 11:15 AM"; a moment has no "to". */
 export function tip(o: CalendarOccurrence): string {
   const a = new Date(o.start);
   if (o.all_day) return `${o.title}, ${dl(parseDay(o.start.slice(0, 10)) ?? a)}`;
-  return `${o.title}, ${dl(a)}, ${clock(minutes(a))}${o.end ? ` to ${clock(minutes(new Date(o.end)))}` : ''}`;
+  return `${o.title}, ${dl(a)}, ${clock(minutes(a))}${o.end && !isInstant(o) ? ` to ${clock(minutes(new Date(o.end)))}` : ''}`;
 }
 
-/** What the panel names the kind. */
+/** What the panel names the kind. A matter's not before is never called a due date. */
 export function kindWords(o: CalendarOccurrence): string {
   if (o.kind === 'run') return 'Routine';
+  if (o.bound === 'not_before') return 'Not before';
   if (o.kind === 'due') return 'Due date';
   if (o.kind === 'away') return 'Away';
   if (o.meeting_url) return /meet\.google\.com/.test(o.meeting_url) ? 'Google Meet' : 'Video call';

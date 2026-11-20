@@ -6,8 +6,11 @@
   Making one adds the Risk page's owner bot to the tag's bot_writers, so it may tag any task it can read. A tag's kind
   never changes after it is made.
 - A matter is a task tagged with a risk. Its facts are one `matters` row: kind, party, amount claimed (whole minor units,
-  like Finance), currency, claim, side, forum, place, product. Whoever may update the task sets them, and so does a bot
-  the risk lets tag tasks (bot_writers) on a task it reads.
+  like Finance), currency, claim, side, forum, place, product, and its own dates: not before (`starts_at`, the earliest
+  its step may be done, never a deadline), due by (`due_at`) and what they are for (`dates_label`). Each date is a day
+  or a time; a time given without an offset is the company's (updates.ZONE). Whoever may update the task sets them, and
+  so does a bot the risk lets tag tasks (bot_writers) on a task it reads. The dates show on the calendar of the task's
+  owner and requester (backend/calendar_derived.py `matter_dates`); a change to them is a row on the `calendar` topic.
 - `risk_links` ties a risk to org rules (role `rule`) and Directory documents (role `source`, or `covers` for a policy).
 - Who sees what: every teammate lists every risk (backend/task_privacy.py `_listed_alone`); the counts, sums, dates and
   matters come only from the tasks the viewer reads (auth.task_sql), so they differ by viewer. Every rule is read by every
@@ -20,7 +23,7 @@
   due within 14 days, makes the risk live; the next date is the soonest one still due.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal, cast
 
 from fastapi import Request
@@ -76,6 +79,8 @@ LABEL_MAX = 200
 MARKDOWN_MAX = 20_000
 CLAIM_MAX = 2_000
 FORUM_MAX = 200
+DATES_LABEL_MAX = 120
+DATE_FIELDS = ("starts_at", "due_at")
 GROUPS = ("unconfirmed", "next", "later", "past")  # the Obligations tab, in its order
 DAYS_DEFAULT = 90
 DAYS_MAX = 366
@@ -119,6 +124,18 @@ class MatterWrite(Contract):
     place_id: ID | None = None
     # A product's id is product/<key>, and its key can be as long as a product's name (200).
     product_id: str | None = Field(default=None, min_length=1, max_length=256)
+    starts_at: str | None = Field(
+        default=None,
+        max_length=40,
+        description="Not before: the earliest the matter's step may be done, never a deadline. A day (2026-11-19) or a "
+        "time (2026-11-19T10:00; without an offset it is the company's time zone)",
+    )
+    due_at: str | None = Field(
+        default=None, max_length=40, description="Due by: the deadline. A day (2026-11-26) or a time, as starts_at"
+    )
+    dates_label: str | None = Field(
+        default=None, max_length=DATES_LABEL_MAX, description="What the dates are for, such as Produce records"
+    )
 
 
 def _via(who: Any) -> str:
@@ -496,6 +513,53 @@ def _entity(c: Any, actor: str, ident: str, field: str) -> str:
     return row["id"]
 
 
+def _zone() -> Any:
+    from .updates import ZONE
+
+    return ZONE
+
+
+def matter_date(value: object, field: str) -> str | None:
+    """A matter date as stored: a day stays YYYY-MM-DD; a time becomes UTC (YYYY-MM-DDTHH:MM:SSZ), a time with no offset
+    read in the company's zone. Blank is None."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if len(text) == 10:
+            return date.fromisoformat(text).isoformat()
+        at = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        raise Problem(
+            "validation", f"{field} is a day (2026-11-19) or a time (2026-11-19T10:00, or with its offset)", 422
+        ) from None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=_zone())
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def date_bound(value: str, *, end: bool) -> datetime:
+    """The instant a stored matter date stands for: a time as itself, a day from its first second (not before) or at
+    its last (due by) in the company's zone."""
+    if len(value) == 10:
+        day = date.fromisoformat(value) + timedelta(days=1 if end else 0)
+        at = datetime.combine(day, time(), _zone()).astimezone(timezone.utc)
+        return at - timedelta(seconds=1) if end else at
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _calendar_moved(c: Any, who: Any, task_id: str, before: Row | None, after: Row | None) -> None:
+    """A change to a matter's dates is a row on the `calendar` topic: the calendars that show it read again."""
+    keys = (*DATE_FIELDS, "dates_label")
+    if {k: (before or {}).get(k) for k in keys} == {k: (after or {}).get(k) for k in keys}:
+        return
+    owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    c.execute(
+        "INSERT INTO changes(topic, kind, subject_id, ref, actor, created_at) VALUES('calendar','due',?,?,?,?)",
+        ("matter:" + task_id, owner[0] if owner else None, who.actor, H.now()),
+    )
+
+
 def matter_view(c: Any, actor: str | None, row: Any) -> Row | None:
     """A matters row as JSON. A Directory record shows only to a reader the Directory lets see it: anyone else gets
     null for it."""
@@ -513,6 +577,9 @@ def matter_view(c: Any, actor: str | None, row: Any) -> Row | None:
         "claim": row["claim"],
         "side": row["side"],
         "forum": row["forum"],
+        "starts_at": row.get("starts_at"),
+        "due_at": row.get("due_at"),
+        "dates_label": row.get("dates_label") or "",
         "version": row["version"],
         "created_by_id": row["created_by_id"],
         "created_at": row["created_at"],
@@ -583,6 +650,7 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
         if found:
             c.execute("DELETE FROM matters WHERE task_id=?", (task_id,))
             audit_log.write(c, who.actor, "matter:" + task_id, before, None, _via(who))
+            _calendar_moved(c, who, task_id, before, None)
         return {"task_id": task_id, "matter": None}
     given = {k: getattr(body, k) for k in body.model_fields_set - {"clear", "version"}}
     if not given:
@@ -592,6 +660,11 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
             given[column] = _entity(c, who.actor, given[column], field)
     if given.get("currency"):
         given["currency"] = given["currency"].upper()
+    for name in DATE_FIELDS:
+        if name in given:
+            given[name] = matter_date(given[name], name)
+    if "dates_label" in given:
+        given["dates_label"] = " ".join(str(given["dates_label"] or "").split())
     for name, default in (("claim", ""), ("forum", "")):
         if name in given and given[name] is None:
             given[name] = default
@@ -604,6 +677,9 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
         raise Problem("validation", "Say what kind of matter it is: one of " + ", ".join(MATTER_KINDS), 422)
     if merged.get("amount") is not None and not merged.get("currency"):
         raise Problem("validation", "Say the amount's currency (for example USD)", 422)
+    if merged.get("starts_at") and merged.get("due_at"):
+        if date_bound(merged["starts_at"], end=False) > date_bound(merged["due_at"], end=True):
+            raise Problem("validation", "Not before (starts_at) comes after due by (due_at)", 422)
     ts = H.now()
     if found:
         sets = ", ".join(f"{k}=?" for k in given)
@@ -623,6 +699,9 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
             "forum": merged.get("forum") or "",
             "place_id": merged.get("place_id"),
             "product_id": merged.get("product_id"),
+            "starts_at": merged.get("starts_at"),
+            "due_at": merged.get("due_at"),
+            "dates_label": merged.get("dates_label") or "",
             "created_by_id": who.actor,
             "created_at": ts,
             "updated_by_id": who.actor,
@@ -633,6 +712,7 @@ def set_matter(auth: Any, c: Any, who: Any, tid: str, body: "MatterWrite") -> Ro
         )
     after = c.execute("SELECT * FROM matters WHERE task_id=?", (task_id,)).fetchone()
     audit_log.write(c, who.actor, "matter:" + task_id, before, dict(after), _via(who))
+    _calendar_moved(c, who, task_id, before, dict(after))
     return {"task_id": task_id, "matter": matter_view(c, who.actor, after)}
 
 
@@ -669,6 +749,9 @@ MATTER_FIELDS = (
     "forum",
     "place_id",
     "product_id",
+    "starts_at",
+    "due_at",
+    "dates_label",
     "version",
     "created_by_id",
     "created_at",

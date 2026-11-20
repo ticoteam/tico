@@ -28,6 +28,9 @@ FACTS = {
     "forum": "forum",
     "place": "place_id",
     "product": "product_id",
+    "not_before": "starts_at",
+    "due_by": "due_at",
+    "dates_label": "dates_label",
 }
 
 
@@ -132,7 +135,9 @@ def risk_update(api, args):
 
 @tool(
     "tico_risk_matter",
-    "Set a task's matter facts (it must carry a risk); only the facts given change. Amount is in cents.",
+    "Set a task's matter facts (it must carry a risk); only the facts given change. Amount is in cents. not_before is "
+    "the earliest the step may be done ('no earlier than Nov 19, 10 AM'), never a deadline; due_by is the deadline. "
+    "Both show on the calendar.",
     {
         "task": TASK_ID,
         "kind": _s("What it is", enum=MATTER_KINDS),
@@ -144,6 +149,12 @@ def risk_update(api, args):
         "forum": _s("Where it is: AAA, small claims, a demand letter"),
         "place": _s("A place id from Contacts"),
         "product": _s("The product it is about: its key or id (tico products list)"),
+        "not_before": _s(
+            "The earliest it may be done, never a deadline: a day (2026-11-19) or a time (2026-11-19T10:00, the "
+            "company's time zone unless it has an offset)"
+        ),
+        "due_by": _s("The deadline: a day (2026-11-26) or a time, as not_before"),
+        "dates_label": _s("What the dates are for, such as Produce records"),
         "unset": {"type": "array", "items": {"type": "string", "enum": list(FACTS)}, "description": "Facts to clear"},
         "clear": {"type": "boolean", "description": "Remove all its facts"},
         "version": {"type": "integer", "minimum": 1, "description": "The matter's version as you read it"},
@@ -210,7 +221,8 @@ CLI = (
     Command(
         "risk matter",
         "set a tagged task's matter facts",
-        example="tico risk matter D18450 --kind dispute --amount 250000 --currency USD --forum AAA",
+        example="tico risk matter D18450 --kind request --not-before 2026-11-19T10:00 --due-by 2026-11-26 "
+        "--dates-label 'Produce records'",
     ),
     Command(
         "risk matters",

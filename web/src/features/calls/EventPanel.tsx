@@ -19,7 +19,7 @@ import { Tabs } from '@/kit/Tabs';
 import { toast } from '@/kit/Toast';
 import { SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
-import { clock, dl, isLive, joinOf, kindWords, lengthWords, minIn, minutes, parseDay, running } from './model';
+import { clock, dl, isInstant, isLive, joinOf, kindWords, lengthWords, minIn, minutes, parseDay, running } from './model';
 import { joinNow, LiveMark, press, refsOf, useNameOf } from './parts';
 import {
   itemsQuery,
@@ -107,8 +107,8 @@ export function EventPanel({
       )}
       <RailSec name="When">
         <Fact k="Day" v={dl(day)} />
-        {!o.all_day && <Fact k="Time" v={`${clock(minutes(s))}${o.end ? ` to ${clock(minutes(new Date(o.end)))}` : ''}`} />}
-        {!o.all_day && o.end && <Fact k="Length" v={lengthWords((new Date(o.end).getTime() - s.getTime()) / 60_000)} />}
+        {!o.all_day && <Fact k="Time" v={`${clock(minutes(s))}${o.end && !isInstant(o) ? ` to ${clock(minutes(new Date(o.end)))}` : ''}`} />}
+        {!o.all_day && o.end && !isInstant(o) && <Fact k="Length" v={lengthWords((new Date(o.end).getTime() - s.getTime()) / 60_000)} />}
         <Fact k="Repeats" v={o.recurring ? 'Yes' : 'No'} />
         <Fact k="Kind" v={kindWords(o)} />
       </RailSec>

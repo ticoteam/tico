@@ -206,6 +206,88 @@
    "risk",
    "matter",
    "D18450",
+   "--kind",
+   "request",
+   "--not-before",
+   "2026-11-19T10:00",
+   "--due-by",
+   "2026-11-26",
+   "--dates-label",
+   "Produce records"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "dates_label": "Produce records",
+     "due_by": "2026-11-26",
+     "kind": "request",
+     "not_before": "2026-11-19T10:00",
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "kind": "request",
+     "starts_at": "2026-11-19T10:00",
+     "due_at": "2026-11-26",
+     "dates_label": "Produce records"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--version",
+   "4",
+   "--unset",
+   "not_before"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "operation_id": null,
+     "task": "D18450",
+     "unset": [
+      "not_before"
+     ],
+     "version": 4
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "version": 4,
+     "starts_at": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
    "--version",
    "2",
    "--unset",

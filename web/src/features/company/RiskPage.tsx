@@ -290,7 +290,7 @@ function Disputes({ search }: { search: RiskSearch }) {
                         <td className="num">{money(m.matter?.amount, m.matter?.currency)}</td>
                         <td className="t-words c-forum">{m.matter?.forum}</td>
                         <td className="t-words">{m.task.stage}</td>
-                        <td className="t-words c-next">{m.task.status === 'open' && m.task.due_at ? fmtDate(m.task.due_at) : ''}</td>
+                        <td className="t-words c-next">{m.task.status === 'open' && (m.matter?.due_at || m.task.due_at) ? fmtDate(m.matter?.due_at || m.task.due_at || '') : ''}</td>
                         <td className="num t-who">
                           <Face id={m.task.owner_id} />
                         </td>
@@ -314,21 +314,6 @@ const SIDE: Record<string, string> = { theirs: 'Theirs', ours: 'Ours' };
 
 function MatterPanel({ row }: { row: MatterRow }) {
   const close = useDo('company.closePanel');
-  const fact = (label: string, value: string | null | undefined, to?: string, search?: Record<string, string>) =>
-    value ? (
-      <div className="fact fld">
-        <span>{label}</span>
-        <span className="fact-v">
-          {to ? (
-            <Go to={to} search={search} className="fld-link">
-              {value}
-            </Go>
-          ) : (
-            <span>{value}</span>
-          )}
-        </span>
-      </div>
-    ) : null;
   return (
     <RecordPanel
       title={row.task.title ?? row.task.label ?? 'Matter'}
@@ -342,7 +327,7 @@ function MatterPanel({ row }: { row: MatterRow }) {
       facts={
         <div className="rec-flds">
           <MatterFacts row={row} />
-          {fact('Due', row.task.due_at ? fmtDate(row.task.due_at) : null)}
+          <MatterWhen row={row} />
         </div>
       }
       sections={
@@ -424,6 +409,101 @@ function MatterFacts({ row }: { row: MatterRow }) {
         search={product ? { panel: product.id.replace(/^product\//, '') } : undefined}
         choose={(close) => <ProductPick value={m?.product_id ?? null} onPick={(id, name) => (set({ product: id, ...(name && { product_name: name }) }), close())} />}
       />
+    </>
+  );
+}
+
+const BARE_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const pad = (n: number) => String(n).padStart(2, '0');
+const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** "Nov 19, 10 AM", "Nov 26" (a day), "Today, 2:30 PM": a matter date in the viewer's time. */
+export function matterWhen(value: string, now: Date = new Date()): string {
+  if (BARE_DAY.test(value)) return fmtDate(value, now);
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return '';
+  const h = ((d.getHours() + 11) % 12) + 1;
+  return `${fmtDate(d, now)}, ${h}${d.getMinutes() ? `:${pad(d.getMinutes())}` : ''} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
+}
+
+/** The one quiet line of a matter's dates: "Not before Nov 19, 10 AM · Due Nov 26". The task's own due date stands in
+    while the matter has none. */
+export function matterDatesLine(row: Pick<MatterRow, 'task' | 'matter'>, now: Date = new Date()): string {
+  const due = row.matter?.due_at || row.task.due_at;
+  return [row.matter?.starts_at && `Not before ${matterWhen(row.matter.starts_at, now)}`, due && `Due ${matterWhen(due, now)}`].filter(Boolean).join(' · ');
+}
+
+/** A typed date as the server takes it: "2026-11-19" stays a day; "2026-11-19 10:00" or "2026-11-19 10am" is that time
+    here. Blank is null; undefined is unreadable. */
+export function typedWhen(typed: string): string | null | undefined {
+  const t = typed.trim();
+  if (!t) return null;
+  if (BARE_DAY.test(t)) return t;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(t);
+  if (!m) return undefined;
+  let h = Number(m[4]);
+  const ampm = m[6]?.toLowerCase();
+  if (ampm && (h < 1 || h > 12)) return undefined;
+  if (ampm) h = (h % 12) + (ampm === 'pm' ? 12 : 0);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, Number(m[5] ?? 0));
+  return h < 24 && Number(m[5] ?? 0) < 60 && localDay(d) === `${m[1]}-${m[2]}-${m[3]}` ? d.toISOString() : undefined;
+}
+
+/** A stored date as it is typed back: a day as itself, a time as "2026-11-19 10:00" here. */
+const typedOf = (value: string | null | undefined) => {
+  if (!value) return '';
+  if (BARE_DAY.test(value)) return value;
+  const d = new Date(value);
+  return `${localDay(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+/** A matter's dates in one quiet line, named by what they are for; the pencil opens For, Not before and Due by. */
+function MatterWhen({ row }: { row: MatterRow }) {
+  const save = useDo('risk.setMatter');
+  const m = row.matter;
+  const [draft, setDraft] = useState<{ label: string; starts: string; due: string } | null>(null);
+  const line = matterDatesLine(row);
+  const submit = () => {
+    if (!draft) return;
+    const starts = typedWhen(draft.starts);
+    const due = typedWhen(draft.due);
+    if (starts === undefined || due === undefined) return void toast({ text: 'Check the fields', name: 'A day, or a day and time', kind: 'failed' });
+    const facts: Record<string, unknown> = {};
+    if (draft.label.trim() !== (m?.dates_label ?? '')) facts.dates_label = draft.label.trim() || null;
+    if (draft.starts.trim() !== typedOf(m?.starts_at)) facts.starts_at = starts;
+    if (draft.due.trim() !== typedOf(m?.due_at)) facts.due_at = due;
+    setDraft(null);
+    if (Object.keys(facts).length) void save.run({ task: row.task.id, ...(m && { version: m.version }), ...facts });
+  };
+  return (
+    <>
+      <div className="fact fld">
+        <span>{m?.dates_label || 'Dates'}</span>
+        <span className="fact-v">
+          <span className={line ? undefined : 'none'}>{line || 'None'}</span>
+          {m && <IconButton icon="edit" label="Change dates" size="sm" quiet on={!!draft} onClick={() => setDraft(draft ? null : { label: m.dates_label ?? '', starts: typedOf(m.starts_at), due: typedOf(m.due_at) })} />}
+        </span>
+      </div>
+      {draft && (
+        <form
+          className="mkt-ask"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              setDraft(null);
+            }
+          }}
+        >
+          <Field label="For" placeholder="Produce records" value={draft.label} onValueChange={(label) => setDraft({ ...draft, label })} autoFocus />
+          <Field label="Not before" placeholder="2026-11-19 10:00" value={draft.starts} onValueChange={(starts) => setDraft({ ...draft, starts })} />
+          <Field label="Due by" placeholder="2026-11-26" value={draft.due} onValueChange={(due) => setDraft({ ...draft, due })} />
+          <Button type="submit">Save</Button>
+        </form>
+      )}
     </>
   );
 }
