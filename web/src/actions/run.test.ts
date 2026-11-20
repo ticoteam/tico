@@ -1,10 +1,10 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as z from 'zod/mini';
 import { ApiError } from '@/api/client';
 import { flight, waitForTarget, wash } from '@/motion';
 import { bind } from './bind';
 import { runIn, showIn } from './run';
-import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
 // the real module, so feature actions that set up their queries on load still find what they use
@@ -19,7 +19,7 @@ const setOwner = defineAction({
   id: 'task.setOwner',
   title: 'Give a task to someone',
   kind: 'change',
-  input: s.object({ task: s.number({ int: true, min: 1 }), owner: s.string({ min: 1 }) }),
+  input: z.strictObject({ task: z.int().check(z.minimum(1)), owner: z.string().check(z.minLength(1)) }),
   can: (_ctx, { task }) => task !== 13,
   run: (_ctx, i) => did(i),
   show: () => did('show'),

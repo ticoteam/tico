@@ -1,9 +1,9 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as z from 'zod/mini';
 import { queryClient } from '@/data';
 import { actionsCatalog, buildRegistry, registry } from './registry';
 import { runIn } from './run';
-import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
 // the real module, so feature actions that set up their queries on load still find what they use; a cache of its own,
@@ -16,7 +16,7 @@ vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi
 vi.mock('@/motion', async (real) => ({ ...(await real<object>()), flight: vi.fn(), waitForTarget: vi.fn(async () => null), wash: vi.fn() }));
 
 const make = () =>
-  defineAction({ id: 'tasks.open', title: 'Open', kind: 'view', input: s.object({}), run: () => {} });
+  defineAction({ id: 'tasks.open', title: 'Open', kind: 'view', input: z.strictObject({}), run: () => {} });
 
 describe('registry', () => {
   it('fails loudly on a duplicate id, naming both files', () => {
@@ -60,7 +60,7 @@ describe('registry', () => {
   });
 
   it('refuses an id that is not area.verb', () => {
-    expect(() => defineAction({ id: 'Tasks.open', title: '', kind: 'view', input: s.object({}), run: () => {} })).toThrow();
+    expect(() => defineAction({ id: 'Tasks.open', title: '', kind: 'view', input: z.strictObject({}), run: () => {} })).toThrow();
   });
 });
 

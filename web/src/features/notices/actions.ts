@@ -1,4 +1,5 @@
-import { defineAction, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction } from '@/actions';
 import { meQuery, queryClient } from '@/data';
 import { BILLING_URL, EXPORT_PATH, checkPlan, currentLock } from './queries';
 
@@ -13,7 +14,7 @@ export const openBilling = defineAction({
   title: 'Open billing',
   kind: 'view',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   // HQ's page, beside the app: paying there and coming back to Check again opens the app.
   run: () => void window.open(currentLock()?.billingUrl ?? BILLING_URL, '_blank', 'noopener,noreferrer'),
   target: () => LOCK,
@@ -23,7 +24,7 @@ export const checkAgain = defineAction({
   id: 'notices.checkPlan',
   title: 'Check the plan again',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: async () => {
     if (!(await checkPlan())) throw Object.assign(new Error('the plan still needs attention'), { code: 'still_locked' });
     // What was open behind the lock was refused while it lasted (ui/app/cloud-access.ts): start clean.
@@ -38,7 +39,7 @@ export const downloadFiles = defineAction({
   title: 'Download all files',
   kind: 'view',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   // Only the owner may download every file (backend/tico_storage.py storage_export).
   can: () => isOwner(),
   // The server answers with an attachment: the browser saves it and the page stays.
@@ -51,6 +52,6 @@ export const reload = defineAction({
   title: 'Reload Tico',
   kind: 'view',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => location.reload(),
 });

@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
-import { defineAction, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
 import { chatAddress } from '@/lib';
@@ -39,9 +40,9 @@ import { TX_STATUSES, validateFinanceSearch } from './search';
 
 const FIN = '/company/finance';
 const GROWTH = '/company/growth';
-const id = s.string({ min: 1, max: 200 });
-const ym = s.string({ pattern: /^\d{4}-(0[1-9]|1[0-2])$/, what: 'a month, 2026-11' });
-const dollars = s.number({ min: 0, max: 1_000_000_000 });
+const id = z.string().check(z.minLength(1), z.maxLength(200));
+const ym = z.string().check(z.regex(/^\d{4}-(0[1-9]|1[0-2])$/), z.describe('a month, 2026-11'));
+const dollars = z.number().check(z.minimum(0), z.maximum(1_000_000_000));
 
 /** Moves within a page, keeping what its address already holds; from elsewhere it starts clean. */
 function go(router: AnyRouter, to: string, patch: Record<string, unknown>) {
@@ -58,7 +59,7 @@ export const setTab = defineAction({
   id: 'finance.setTab',
   title: 'Open a Finance page',
   kind: 'view',
-  input: s.object({ tab: s.oneOf(FINANCE_TAB_IDS) }),
+  input: z.strictObject({ tab: z.enum(FINANCE_TAB_IDS) }),
   run: ({ router }, { tab }) => go(router, FIN, { tab: tab === 'overview' ? undefined : tab, panel: undefined }),
   did: ({ tab }) => `Opened ${tab === 'pnl' ? 'P&L' : tab} in Finance`,
   target: ({ tab }) => ({ kind: 'tab', id: tab }),
@@ -68,7 +69,7 @@ export const setRange = defineAction({
   id: 'finance.setRange',
   title: 'Show the P&L from a month',
   kind: 'view',
-  input: s.object({ from: ym }),
+  input: z.strictObject({ from: ym }),
   run: ({ router }, { from }) => go(router, FIN, { tab: 'pnl', from }),
   did: () => 'Moved the range',
   target: () => ({ kind: 'range', id: 'pnl' }),
@@ -78,7 +79,7 @@ export const setPeriod = defineAction({
   id: 'finance.setPeriod',
   title: 'Show the P&L by month, quarter or year',
   kind: 'view',
-  input: s.object({ period: s.oneOf(['month', 'quarter', 'year'] as const) }),
+  input: z.strictObject({ period: z.enum(['month', 'quarter', 'year'] as const) }),
   run: ({ router }, { period }) => go(router, FIN, { tab: 'pnl', period: period === 'month' ? undefined : period, from: undefined }),
   did: ({ period }) => `Showed the P&L by ${period}`,
   target: () => ({ kind: 'range', id: 'pnl' }),
@@ -88,7 +89,7 @@ export const setBasis = defineAction({
   id: 'finance.setBasis',
   title: 'Show the P&L on a cash or accrual basis',
   kind: 'view',
-  input: s.object({ basis: s.oneOf(['cash', 'accrual'] as const) }),
+  input: z.strictObject({ basis: z.enum(['cash', 'accrual'] as const) }),
   run: ({ router }, { basis }) => go(router, FIN, { basis: basis === 'cash' ? 'cash' : undefined }),
   did: ({ basis }) => `Showed the ${basis} basis`,
   target: () => ({ kind: 'range', id: 'pnl' }),
@@ -98,7 +99,7 @@ export const openLine = defineAction({
   id: 'finance.openLine',
   title: 'Open a P&L line',
   kind: 'view',
-  input: s.object({ account: id }),
+  input: z.strictObject({ account: id }),
   run: ({ router }, { account }) => go(router, FIN, { tab: 'pnl', panel: `line:${account}` }),
   did: () => 'Opened the line',
   target: ({ account }) => ({ kind: 'line', id: account }),
@@ -108,7 +109,7 @@ export const closePanel = defineAction({
   id: 'finance.closePanel',
   title: 'Close the Finance panel',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => closeHere(router),
   did: () => 'Closed the panel',
 });
@@ -118,16 +119,16 @@ export const addSource = defineAction({
   id: 'finance.addSource',
   title: 'Connect a Finance source',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => router.navigate({ to: '/library/tools' }),
   did: () => 'Opened Tools',
 });
 
 // ---------------------------------------------------------------- money, sources and access (the old app's dialogs)
 
-const money = s.number({ min: 0.01, max: 1_000_000_000 });
+const money = z.number().check(z.minimum(0.01), z.maximum(1_000_000_000));
 const cents = (dollars: number) => Math.round(dollars * 100);
-const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-01-01' });
+const day = z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}$/), z.describe('a day, 2026-01-01'));
 
 /** A decision waiting for its approver says whom; the server names a teammate, an email or a role. */
 function waits(out: Decided | undefined, done: string) {
@@ -143,7 +144,7 @@ export const transfer = defineAction({
   kind: 'change',
   // Money leaves an account: the person's own press. An agent asks through Finance's own tools, where the rules see it as the agent.
   tico: false,
-  input: s.object({ from: id, to: id, amount: money, memo: s.optional(s.string({ max: 140 })) }),
+  input: z.strictObject({ from: id, to: id, amount: money, memo: z.optional(z.string().check(z.maxLength(140))) }),
   can: (_ctx, { from, to }) => from !== to,
   run: (_ctx, { from, to, amount, memo }) =>
     decide('payment_create', { method: 'internal', from_account: from, to_account: to, amount: cents(amount), ...(memo?.trim() ? { memo: memo.trim() } : {}) }),
@@ -155,7 +156,7 @@ export const newCard = defineAction({
   title: 'Issue a card with a monthly limit from a budget',
   kind: 'change',
   tico: false,
-  input: s.object({ holder: id, budget: id, amount: money, user: id, name: s.optional(s.string({ max: 50 })) }),
+  input: z.strictObject({ holder: id, budget: id, amount: money, user: id, name: z.optional(z.string().check(z.maxLength(50))) }),
   run: (_ctx, { holder, budget, amount, user, name }) =>
     decide('card_create', { holder, budget_id: budget, amount: cents(amount), provider_user_id: user, ...(name?.trim() ? { nickname: name.trim() } : {}) }),
   did: (_i, out) => waits(out, 'Card created'),
@@ -167,13 +168,13 @@ export const connect = defineAction({
   title: 'Connect a Mercury, Brex or Stripe account',
   kind: 'change',
   tico: false,
-  input: s.object({
-    provider: s.oneOf(['mercury', 'brex', 'stripe'] as const),
-    key: s.optional(id),
-    token: s.optional(s.string({ min: 1, max: 4000 })),
-    level: s.optional(s.oneOf(['read', 'read_write'] as const)),
-    from: s.optional(day),
-    approver: s.optional(s.string({ max: 254, pattern: /^[^@\s]+@[^@\s]+$/, what: 'an email' })),
+  input: z.strictObject({
+    provider: z.enum(['mercury', 'brex', 'stripe'] as const),
+    key: z.optional(id),
+    token: z.optional(z.string().check(z.minLength(1), z.maxLength(4000))),
+    level: z.optional(z.enum(['read', 'read_write'] as const)),
+    from: z.optional(day),
+    approver: z.optional(z.string().check(z.maxLength(254), z.regex(/^[^@\s]+@[^@\s]+$/), z.describe('an email'))),
   }),
   can: (_ctx, { key, token }) => !!key || !!token,
   run: (_ctx, { provider, key, token, level, from, approver }) =>
@@ -190,7 +191,7 @@ export const connectBooks = defineAction({
   title: 'Connect QuickBooks or Xero',
   kind: 'change',
   tico: false,
-  input: s.object({ provider: s.oneOf(['quickbooks', 'xero'] as const) }),
+  input: z.strictObject({ provider: z.enum(['quickbooks', 'xero'] as const) }),
   run: async (_ctx, { provider }) => {
     let url: string;
     try {
@@ -209,7 +210,7 @@ export const startMirror = defineAction({
   kind: 'change',
   // The books are the person's own press: what posts to them, and whether they are connected.
   tico: false,
-  input: s.object({ connection: id }),
+  input: z.strictObject({ connection: id }),
   run: (_ctx, { connection }) => decide('mirror_start', { connection_id: connection }),
   did: (_i, out) => waits(out, 'Mirroring'),
   target: ({ connection }) => ({ kind: 'source', id: connection }),
@@ -220,7 +221,7 @@ export const stopMirror = defineAction({
   title: 'Stop using QuickBooks or Xero as the books',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => decide('mirror_stop', {}),
   did: (_i, out) => waits(out, 'Stopped'),
 });
@@ -231,7 +232,7 @@ export const disconnect = defineAction({
   title: 'Disconnect a Finance source',
   kind: 'change',
   tico: false,
-  input: s.object({ connection: id, books: s.optional(s.boolean()) }),
+  input: z.strictObject({ connection: id, books: z.optional(z.boolean()) }),
   run: async (_ctx, { connection, books }): Promise<Decided | undefined> => {
     if (!books) return decide('connection_disconnect', { connection_id: connection });
     await disconnectBooks(connection);
@@ -246,7 +247,7 @@ export const addWebhook = defineAction({
   title: "Add Stripe's webhook to Finance",
   kind: 'change',
   tico: false,
-  input: s.object({ secret: s.optional(s.string({ max: 300 })) }),
+  input: z.strictObject({ secret: z.optional(z.string().check(z.maxLength(300))) }),
   run: (_ctx, { secret }) => addStripeHook(secret?.trim() || undefined),
   did: () => 'Added the webhook',
 });
@@ -257,10 +258,10 @@ export const setDefaults = defineAction({
   kind: 'change',
   // Who sees financial data is the person's own press.
   tico: false,
-  input: s.object({
-    manager: s.optional(s.oneOf(['none', 'team_expenses', 'own_expenses'] as const)),
-    manager_payroll: s.optional(s.oneOf(['totals', 'hidden'] as const)),
-    member: s.optional(s.oneOf(['none', 'own_expenses'] as const)),
+  input: z.strictObject({
+    manager: z.optional(z.enum(['none', 'team_expenses', 'own_expenses'] as const)),
+    manager_payroll: z.optional(z.enum(['totals', 'hidden'] as const)),
+    member: z.optional(z.enum(['none', 'own_expenses'] as const)),
   }),
   can: (_ctx, pick) => Object.values(pick).some(Boolean),
   run: (_ctx, pick) => decide('view_defaults_set', Object.fromEntries(Object.entries(pick).filter(([, v]) => v))),
@@ -273,7 +274,7 @@ export const viewAs = defineAction({
   id: 'finance.viewAs',
   title: 'Read Finance as a teammate sees it, or go back to your own view',
   kind: 'view',
-  input: s.object({ teammate: s.optional(s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' })) }),
+  input: z.strictObject({ teammate: z.optional(z.string().check(z.maxLength(200), z.regex(/^(human|bot):\S+$/), z.describe('a teammate, human:… or bot:…'))) }),
   // Reading as someone lands on their P&L, as the old app did (finance-shared.ts finViewAs); a teammate without one gets
   // the plain address, their first page. Never the page it was pressed on (Access is closed while viewing).
   run: ({ router, queryClient: qc }, { teammate }) => {
@@ -285,14 +286,14 @@ export const viewAs = defineAction({
   did: ({ teammate }) => (teammate ? 'Viewing as a teammate' : 'Back to your own view'),
 });
 
-const email = s.string({ max: 254, pattern: /^[^@\s]+@[^@\s]+$/, what: 'an email' });
+const email = z.string().check(z.maxLength(254), z.regex(/^[^@\s]+@[^@\s]+$/), z.describe('an email'));
 
 /** Bills emailed to this address land in Payables; none clears it. An address that is no Tico inbox is kept, and said. */
 export const setBillsEmail = defineAction({
   id: 'finance.setBillsAddress',
   title: 'Set or clear the address bills are emailed to',
   kind: 'change',
-  input: s.object({ address: s.nullable(email) }),
+  input: z.strictObject({ address: z.nullable(email) }),
   run: async (_ctx, { address }) => {
     let out;
     try {
@@ -314,12 +315,12 @@ export const postStatement = defineAction({
   kind: 'change',
   // No press takes a posted statement back (the server's undo is refused once reconciled): the person's own press.
   tico: false,
-  input: s.object({
+  input: z.strictObject({
     account: id,
-    file: s.string({ min: 1, max: 1_400_000 }),
-    name: s.string({ min: 1, max: 255 }),
+    file: z.string().check(z.minLength(1), z.maxLength(1_400_000)),
+    name: z.string().check(z.minLength(1), z.maxLength(255)),
     token: id,
-    signs: s.optional(s.oneOf(['as_shown', 'flipped'] as const)),
+    signs: z.optional(z.enum(['as_shown', 'flipped'] as const)),
   }),
   run: (_ctx, { account, file, name, token, signs }) =>
     decide('statement_post', { money_account_id: account, file, file_name: name, preview_token: token, ...(signs ? { signs } : {}) }),
@@ -328,8 +329,8 @@ export const postStatement = defineAction({
 });
 
 /** One part of a split: a teammate or a team and its share in basis points (10,000 is the whole line). */
-const share = s.object({ teammate: s.optional(id), team: s.optional(id), share_bps: s.number({ int: true, min: 1, max: 10_000 }) });
-const splits = s.array(share, { max: 10 });
+const share = z.strictObject({ teammate: z.optional(id), team: z.optional(id), share_bps: z.int().check(z.minimum(1), z.maximum(10_000)) });
+const splits = z.array(share).check(z.maxLength(10));
 type Split = { teammate?: string; team?: string; share_bps: number };
 const whole = (parts: readonly Split[]) => parts.every((p) => !!p.teammate !== !!p.team) && parts.reduce((a, p) => a + p.share_bps, 0) <= 10_000;
 
@@ -338,7 +339,7 @@ export const attribute = defineAction({
   id: 'finance.attribute',
   title: "Set who a line's amount is attributed to",
   kind: 'change',
-  input: s.object({ line: id, splits }),
+  input: z.strictObject({ line: id, splits }),
   can: (_ctx, { splits }) => whole(splits),
   run: (_ctx, { line, splits }) => decide('attribute', { line_id: line, splits }),
   did: (i, out) => waits(out, i.splits.length ? 'Saved' : 'Cleared'),
@@ -348,7 +349,7 @@ export const undoAttribution = defineAction({
   id: 'finance.undoAttribution',
   title: "Put a line's attribution back to what it was before the last change",
   kind: 'change',
-  input: s.object({ line: id }),
+  input: z.strictObject({ line: id }),
   run: (_ctx, { line }) => decide('attribute_undo', { line_id: line }),
   did: (_i, out) => waits(out, 'Undone'),
 });
@@ -358,14 +359,14 @@ export const saveRule = defineAction({
   id: 'finance.saveRule',
   title: 'Add or change an attribution rule',
   kind: 'change',
-  input: s.object({
-    rule: s.optional(id),
-    name: s.string({ min: 1, max: 80 }),
-    match: s.oneOf(['vendor', 'account', 'money_account'] as const),
+  input: z.strictObject({
+    rule: z.optional(id),
+    name: z.string().check(z.minLength(1), z.maxLength(80)),
+    match: z.enum(['vendor', 'account', 'money_account'] as const),
     to: id,
     splits,
-    on: s.optional(s.boolean()),
-    from: s.optional(day),
+    on: z.optional(z.boolean()),
+    from: z.optional(day),
   }),
   can: (_ctx, { splits }) => splits.length > 0 && whole(splits),
   run: (_ctx, { rule, name, match, to, splits, on, from }) =>
@@ -378,7 +379,7 @@ export const deleteRule = defineAction({
   id: 'finance.deleteRule',
   title: 'Delete an attribution rule; its lines go back to their tags',
   kind: 'change',
-  input: s.object({ rule: id }),
+  input: z.strictObject({ rule: id }),
   run: (_ctx, { rule }) => decide('attribution_rule_delete', { id: rule }),
   did: (_i, out) => waits(out, 'Deleted'),
 });
@@ -389,11 +390,11 @@ export const importHistory = defineAction({
   title: "Import a spreadsheet's monthly totals as history",
   kind: 'change',
   // Open to Tico: a posted month can be undone, and a non-owner's import waits for the owner's OK (decide).
-  input: s.object({
-    csv: s.string({ min: 1, max: 1_000_000 }),
-    basis: s.oneOf(['accrual', 'cash'] as const),
-    mapping: s.record(id),
-    source: s.optional(s.string({ max: 120 })),
+  input: z.strictObject({
+    csv: z.string().check(z.minLength(1), z.maxLength(1_000_000)),
+    basis: z.enum(['accrual', 'cash'] as const),
+    mapping: z.record(z.string(), id),
+    source: z.optional(z.string().check(z.maxLength(120))),
   }),
   run: (_ctx, { csv, basis, mapping, source }) => decide('import_raw_totals', { csv, basis, mapping, ...(source?.trim() ? { source_name: source.trim() } : {}) }),
   did: (_i, out) => waits(out, 'Imported'),
@@ -406,7 +407,7 @@ export const openBudget = defineAction({
   id: 'budget.openRow',
   title: 'Open a budget',
   kind: 'view',
-  input: s.object({ budget: id }),
+  input: z.strictObject({ budget: id }),
   run: ({ router }, { budget }) => go(router, FIN, { tab: 'budgets', panel: `budget:${budget}` }),
   did: () => 'Opened the budget',
   target: ({ budget }) => ({ kind: 'budget', id: budget }),
@@ -421,16 +422,16 @@ export const addRow = defineAction({
   kind: 'change',
   // A budget is money: the person's own press. Opening one (above) stays Tico's.
   tico: false,
-  input: s.object({
-    name: s.string({ min: 1, max: 120 }),
+  input: z.strictObject({
+    name: z.string().check(z.minLength(1), z.maxLength(120)),
     line: id,
     amount: dollars,
-    under: s.optional(id),
-    teammate: s.optional(s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' })),
-    vendor: s.optional(s.string({ min: 1, max: 120 })),
-    warn: s.optional(s.number({ int: true, min: 1, max: 100 })),
-    period: s.optional(s.oneOf(['month', 'quarter', 'year'] as const)),
-    from: s.optional(ym),
+    under: z.optional(id),
+    teammate: z.optional(z.string().check(z.maxLength(200), z.regex(/^(human|bot):\S+$/), z.describe('a teammate, human:… or bot:…'))),
+    vendor: z.optional(z.string().check(z.minLength(1), z.maxLength(120))),
+    warn: z.optional(z.int().check(z.minimum(1), z.maximum(100))),
+    period: z.optional(z.enum(['month', 'quarter', 'year'] as const)),
+    from: z.optional(ym),
   }),
   run: (_ctx, { name, line, amount, under, teammate, vendor, warn, period, from }) =>
     addBudget(budgetDay(), { name, line, cents: Math.round(amount * 100), parent: under, teammate, vendor, warn, period, from }),
@@ -448,7 +449,7 @@ export const updateRow = defineAction({
   id: 'budget.updateRow',
   title: 'Change a budget from a month on (this one when left out)',
   kind: 'change',
-  input: s.object({ budget: id, amount: dollars, month: s.optional(ym) }),
+  input: z.strictObject({ budget: id, amount: dollars, month: z.optional(ym) }),
   // Raising a budget is money: the person's own press. Lowering one stays Tico's.
   can: (ctx, { budget, amount, month }) => ctx.via !== 'tico' || lowers(budgetAt(month), budget, amount),
   run: (_ctx, { budget, amount, month }) => setBudgetAmount(budgetAt(month), budget, Math.round(amount * 100)),
@@ -462,7 +463,7 @@ export const removeRow = defineAction({
   title: 'Stop a budget from a month on (this one when left out)',
   kind: 'change',
   tico: false,
-  input: s.object({ budget: id, month: s.optional(ym) }),
+  input: z.strictObject({ budget: id, month: z.optional(ym) }),
   run: async ({ router }, { budget, month }) => {
     const done = removeBudget(budgetAt(month), budget);
     await closeHere(router);
@@ -475,7 +476,7 @@ export const setBudgetPeriod = defineAction({
   id: 'budget.setPeriod',
   title: 'Show budgets for this month, quarter or year',
   kind: 'view',
-  input: s.object({ period: s.oneOf(['month', 'quarter', 'year'] as const) }),
+  input: z.strictObject({ period: z.enum(['month', 'quarter', 'year'] as const) }),
   run: ({ router }, { period }) =>
     go(router, FIN, {
       // My budget keeps its tab; anywhere else it is Budgets.
@@ -493,7 +494,7 @@ export const setSegment = defineAction({
   id: 'growth.setSegment',
   title: 'Show Growth for all customers or one segment',
   kind: 'view',
-  input: s.object({ segment: s.optional(s.string({ min: 1, max: 80, pattern: /^[\w-]+$/, what: 'a segment slug' })) }),
+  input: z.strictObject({ segment: z.optional(z.string().check(z.minLength(1), z.maxLength(80), z.regex(/^[\w-]+$/), z.describe('a segment slug'))) }),
   run: ({ router }, { segment }) => go(router, GROWTH, { tab: undefined, segment, panel: undefined }),
   did: () => 'Showed the segment',
   target: ({ segment }) => ({ kind: 'tab', id: segment ?? 'all' }),
@@ -503,7 +504,7 @@ export const setMonth = defineAction({
   id: 'growth.setMonth',
   title: 'Show Growth for a month',
   kind: 'view',
-  input: s.object({ month: ym }),
+  input: z.strictObject({ month: ym }),
   run: ({ router }, { month }) => go(router, GROWTH, { tab: undefined, month }),
   did: () => 'Showed the month',
   target: () => ({ kind: 'range', id: 'growth' }),
@@ -513,7 +514,7 @@ export const openChannel = defineAction({
   id: 'growth.openChannel',
   title: 'Open a channel: where its number comes from',
   kind: 'view',
-  input: s.object({ channel: id }),
+  input: z.strictObject({ channel: id }),
   run: ({ router }, { channel }) => go(router, GROWTH, { tab: undefined, panel: `channel:${channel}` }),
   did: () => 'Opened the channel',
   target: ({ channel }) => ({ kind: 'channel', id: channel }),
@@ -535,7 +536,7 @@ export const askManager = defineAction({
   id: 'growth.askManager',
   title: 'Ask the Growth Manager',
   kind: 'change',
-  input: s.object({ text: s.optional(s.string({ min: 1, max: 4000 })) }),
+  input: z.strictObject({ text: z.optional(z.string().check(z.minLength(1), z.maxLength(4000))) }),
   run: async ({ router, queryClient: qc }, { text }): Promise<string> => {
     const who = await findGrowthManager(qc);
     if (!who) throw new Error('No Growth Manager');
@@ -556,7 +557,7 @@ export const closeGrowthPanel = defineAction({
   id: 'growth.closePanel',
   title: 'Close the Growth panel',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => closeHere(router),
   did: () => 'Closed the panel',
 });
@@ -568,14 +569,14 @@ export const closeGrowthPanel = defineAction({
    limit) is the person's own press; a draft, a vendor, a journal entry, a freeze and a lower limit are Tico's too. */
 
 const RECORD_TAB = { bill: 'payables', invoice: 'receivables', card: 'cards', tx: 'transactions' } as const;
-const tags = s.optional(s.record(s.string({ min: 1, max: 200 })));
-const words = (max: number) => s.optional(s.string({ max }));
+const tags = z.optional(z.record(z.string(), z.string().check(z.minLength(1), z.maxLength(200))));
+const words = (max: number) => z.optional(z.string().check(z.maxLength(max)));
 
 export const openRecord = defineAction({
   id: 'finance.openRecord',
   title: 'Open a bill, an invoice or a card beside its list, or a transaction in place',
   kind: 'view',
-  input: s.object({ kind: s.oneOf(['bill', 'invoice', 'card', 'tx'] as const), record: id }),
+  input: z.strictObject({ kind: z.enum(['bill', 'invoice', 'card', 'tx'] as const), record: id }),
   run: ({ router }, { kind, record }) => go(router, FIN, { tab: RECORD_TAB[kind], panel: `${kind}:${record}` }),
   did: () => 'Opened it',
   target: ({ kind, record }) => ({ kind, id: record }),
@@ -585,7 +586,7 @@ export const setAsOf = defineAction({
   id: 'finance.setAsOf',
   title: 'Show the balance sheet as of today, the last month end or the last year end',
   kind: 'view',
-  input: s.object({ asof: s.oneOf(['today', 'month', 'year'] as const) }),
+  input: z.strictObject({ asof: z.enum(['today', 'month', 'year'] as const) }),
   run: ({ router }, { asof }) => go(router, FIN, { tab: 'balance', asof: asof === 'today' ? undefined : asof }),
   did: () => 'Moved the day',
   target: () => ({ kind: 'tab', id: 'balance' }),
@@ -596,10 +597,10 @@ export const filterTransactions = defineAction({
   id: 'finance.filterTransactions',
   title: 'Filter transactions by source (bank or entries), status or line',
   kind: 'view',
-  input: s.object({
-    src: s.optional(s.nullable(s.oneOf(['feed', 'entry'] as const))),
-    status: s.optional(s.nullable(s.oneOf(TX_STATUSES))),
-    line: s.optional(s.nullable(id)),
+  input: z.strictObject({
+    src: z.optional(z.nullable(z.enum(['feed', 'entry'] as const))),
+    status: z.optional(z.nullable(z.enum(TX_STATUSES))),
+    line: z.optional(z.nullable(id)),
   }),
   run: ({ router }, f) => go(router, FIN, { tab: 'transactions', panel: undefined, ...Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v ?? undefined])) }),
   did: () => 'Filtered transactions',
@@ -611,7 +612,7 @@ export const exportBalance = defineAction({
   id: 'finance.exportBalance',
   title: 'Download the balance sheet as a CSV',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: async ({ router, queryClient: qc }) => {
     const at = validateFinanceSearch(router.state.location.search as Record<string, unknown>);
     const asof = at.asof ?? 'today';
@@ -631,7 +632,7 @@ export const addContact = defineAction({
   id: 'finance.addContact',
   title: 'Add a vendor or a customer',
   kind: 'change',
-  input: s.object({ name: s.string({ min: 1, max: 120 }), kind: s.oneOf(['vendor', 'customer'] as const) }),
+  input: z.strictObject({ name: z.string().check(z.minLength(1), z.maxLength(120)), kind: z.enum(['vendor', 'customer'] as const) }),
   run: async (_ctx, { name, kind }) => {
     const out = (await decide('contact_create', { name: name.trim(), kind })) as Decided & { result?: { contact_id?: unknown } };
     const made = out.result?.contact_id;
@@ -646,7 +647,7 @@ export const addBill = defineAction({
   id: 'finance.addBill',
   title: 'Enter a bill from a vendor, as a draft',
   kind: 'change',
-  input: s.object({ vendor: id, date: day, due: s.optional(day), number: words(60), memo: words(200), line: id, amount: money, tags }),
+  input: z.strictObject({ vendor: id, date: day, due: z.optional(day), number: words(60), memo: words(200), line: id, amount: money, tags }),
   run: (_ctx, b) => decide('bill_create', billPayload(b)),
   did: (_i, out) => waits(out, 'Bill added'),
   target: () => ({ kind: 'tab', id: 'payables' }),
@@ -658,7 +659,7 @@ export const approveBill = defineAction({
   kind: 'change',
   // Approving commits the company to paying it: the person's own press.
   tico: false,
-  input: s.object({ bill: id }),
+  input: z.strictObject({ bill: id }),
   run: (_ctx, { bill }) => decide('bill_approve', { bill_id: bill }),
   did: (_i, out) => waits(out, 'Approved'),
 });
@@ -669,7 +670,7 @@ export const scheduleBill = defineAction({
   kind: 'change',
   // Money leaves the bank on that day: the person's own press.
   tico: false,
-  input: s.object({ bill: id, on: day, from: id }),
+  input: z.strictObject({ bill: id, on: day, from: id }),
   run: (_ctx, { bill, on, from }) => decide('bill_schedule', { bill_id: bill, pay_on: on, money_account_id: from }),
   did: (_i, out) => waits(out, 'Scheduled'),
 });
@@ -681,7 +682,7 @@ export const markPaid = defineAction({
   kind: 'change',
   // It settles money in the books: the person's own press.
   tico: false,
-  input: s.object({ kind: s.oneOf(['bill', 'invoice'] as const), doc: id, amount: money, date: s.optional(day), account: s.optional(id) }),
+  input: z.strictObject({ kind: z.enum(['bill', 'invoice'] as const), doc: id, amount: money, date: z.optional(day), account: z.optional(id) }),
   run: (_ctx, p) => decide(p.kind === 'bill' ? 'bill_mark_paid' : 'invoice_record_payment', paidPayload(p)),
   did: (_i, out) => waits(out, 'Marked paid'),
 });
@@ -692,7 +693,7 @@ export const voidBill = defineAction({
   kind: 'change',
   // A void cannot be undone: the person's own press.
   tico: false,
-  input: s.object({ bill: id, reason: words(200) }),
+  input: z.strictObject({ bill: id, reason: words(200) }),
   run: (_ctx, { bill, reason }) => decide('bill_void', { bill_id: bill, ...(reason?.trim() ? { reason: reason.trim() } : {}) }),
   did: (_i, out) => waits(out, 'Voided'),
 });
@@ -702,13 +703,13 @@ export const newInvoice = defineAction({
   id: 'finance.newInvoice',
   title: 'Write an invoice to a customer, as a draft',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     customer: id,
     date: day,
-    due: s.optional(day),
+    due: z.optional(day),
     number: words(60),
     memo: words(200),
-    lines: s.array(s.object({ line: id, amount: money, taxable: s.optional(s.boolean()), tags }), { max: 50 }),
+    lines: z.array(z.strictObject({ line: id, amount: money, taxable: z.optional(z.boolean()), tags })).check(z.maxLength(50)),
   }),
   can: (_ctx, { lines }) => lines.length > 0,
   run: (_ctx, v) => decide('invoice_create', invoicePayload(v)),
@@ -722,7 +723,7 @@ export const sendInvoice = defineAction({
   kind: 'change',
   // It goes to the customer and books what they owe: the person's own press.
   tico: false,
-  input: s.object({ invoice: id }),
+  input: z.strictObject({ invoice: id }),
   run: (_ctx, { invoice }) => decide('invoice_send', { invoice_id: invoice }),
   did: (_i, out) => waits(out, 'Sent'),
 });
@@ -733,7 +734,7 @@ export const writeOff = defineAction({
   kind: 'change',
   // It takes income off the books for good: the person's own press.
   tico: false,
-  input: s.object({ invoice: id, amount: money, memo: words(200) }),
+  input: z.strictObject({ invoice: id, amount: money, memo: words(200) }),
   run: (_ctx, { invoice, amount, memo }) => decide('invoice_write_off', { invoice_id: invoice, amount: toCents(amount), ...(memo?.trim() ? { memo: memo.trim() } : {}) }),
   did: (_i, out) => waits(out, 'Written off'),
 });
@@ -743,10 +744,10 @@ export const addEntry = defineAction({
   id: 'finance.addEntry',
   title: 'Post a journal entry of two balanced lines or more',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     date: day,
     memo: words(200),
-    lines: s.array(s.object({ line: id, amount: s.number({ min: -1_000_000_000, max: 1_000_000_000 }), tags }), { max: 50 }),
+    lines: z.array(z.strictObject({ line: id, amount: z.number().check(z.minimum(-1_000_000_000), z.maximum(1_000_000_000)), tags })).check(z.maxLength(50)),
   }),
   can: (_ctx, { lines }) => balanced(lines),
   run: (_ctx, e) => decide('journal', entryPayload(e)),
@@ -759,7 +760,7 @@ export const freezeCard = defineAction({
   id: 'finance.freezeCard',
   title: 'Freeze a card',
   kind: 'change',
-  input: s.object({ card: id }),
+  input: z.strictObject({ card: id }),
   run: (_ctx, { card }) => decide('card_freeze', { card_id: card }),
   did: (_i, out) => waits(out, 'Frozen'),
   target: ({ card }) => ({ kind: 'card', id: card }),
@@ -771,7 +772,7 @@ export const unfreezeCard = defineAction({
   kind: 'change',
   // The card can spend again: the person's own press.
   tico: false,
-  input: s.object({ card: id }),
+  input: z.strictObject({ card: id }),
   run: (_ctx, { card }) => decide('card_unfreeze', { card_id: card }),
   did: (_i, out) => waits(out, 'Unfrozen'),
 });
@@ -780,7 +781,7 @@ export const setCardLimit = defineAction({
   id: 'finance.setCardLimit',
   title: "Change a card's monthly limit",
   kind: 'change',
-  input: s.object({ card: id, amount: money }),
+  input: z.strictObject({ card: id, amount: money }),
   // A higher limit lets more be spent: the person's own press. Tico may lower one the cards list shows.
   can: ({ via, queryClient: qc }, { card, amount }) => {
     if (via !== 'tico') return true;
@@ -794,13 +795,13 @@ export const setCardLimit = defineAction({
 
 // ---------------------------------------------------------------- sources and access, opened beside (finance-admin.ts)
 
-const mate = s.string({ max: 200, pattern: /^(human|bot):\S+$/, what: 'a teammate, human:… or bot:…' });
+const mate = z.string().check(z.maxLength(200), z.regex(/^(human|bot):\S+$/), z.describe('a teammate, human:… or bot:…'));
 
 export const openFinanceSource = defineAction({
   id: 'finance.openSource',
   title: 'Open a Finance source: its accounts, its line in the books, its last sync',
   kind: 'view',
-  input: s.object({ source: id }),
+  input: z.strictObject({ source: id }),
   run: ({ router }, { source }) => go(router, FIN, { tab: 'sources', panel: `source:${source}` }),
   did: () => 'Opened the source',
   target: ({ source }) => ({ kind: 'source', id: source }),
@@ -810,7 +811,7 @@ export const openMate = defineAction({
   id: 'finance.openMate',
   title: "Open a teammate's Finance access: what they see and why",
   kind: 'view',
-  input: s.object({ teammate: mate }),
+  input: z.strictObject({ teammate: mate }),
   run: ({ router }, { teammate }) => go(router, FIN, { tab: 'access', panel: `mate:${teammate}` }),
   did: () => 'Opened the teammate',
   target: ({ teammate }) => ({ kind: 'mate', id: teammate }),
@@ -821,7 +822,7 @@ export const syncSource = defineAction({
   id: 'finance.syncSource',
   title: 'Sync a Finance source now',
   kind: 'change',
-  input: s.object({ connection: id }),
+  input: z.strictObject({ connection: id }),
   run: (_ctx, { connection }) => decide('connection_sync', { connection_id: connection }),
   did: (_i, out) => waits(out, 'Syncing'),
   target: ({ connection }) => ({ kind: 'source', id: connection }),
@@ -832,7 +833,7 @@ export const mapSource = defineAction({
   id: 'finance.mapSource',
   title: 'Choose the balance sheet line a bank, card or payments account books to',
   kind: 'change',
-  input: s.object({ account: id, line: id }),
+  input: z.strictObject({ account: id, line: id }),
   run: (_ctx, { account, line }) => decide('connection_map', { money_account_id: account, account_id: line }),
   did: (_i, out) => waits(out, 'Saved'),
   target: ({ account }) => ({ kind: 'source', id: account }),
@@ -846,13 +847,13 @@ export const giveAccess = defineAction({
   kind: 'change',
   // Who sees financial data is a right given: the person's own press.
   tico: false,
-  input: s.object({
+  input: z.strictObject({
     teammate: mate,
-    what: s.oneOf(WHAT),
-    whose: s.optional(s.oneOf(['own', 'team', 'company'] as const)),
-    team: s.optional(id),
-    line: s.optional(id),
-    until: s.optional(day),
+    what: z.enum(WHAT),
+    whose: z.optional(z.enum(['own', 'team', 'company'] as const)),
+    team: z.optional(id),
+    line: z.optional(id),
+    until: z.optional(day),
   }),
   can: (_ctx, { what, whose, team, line }) => (whose !== 'team' || !!team) && (!(what === 'pnl_lines' || what === 'bs_lines') || !!line),
   run: (_ctx, { teammate, what, whose, team, line, until }) =>
@@ -874,7 +875,7 @@ export const takeAccess = defineAction({
   id: 'finance.takeAccess',
   title: 'Take back a view of Finance given to a teammate',
   kind: 'change',
-  input: s.object({ grant: id }),
+  input: z.strictObject({ grant: id }),
   run: (_ctx, { grant }) => decide('view_revoke', { grant_id: grant }),
   did: (_i, out) => waits(out, 'Access taken back'),
 });
@@ -885,7 +886,7 @@ export const setApprover = defineAction({
   kind: 'change',
   // Naming the approver gives a right: the owner's own press.
   tico: false,
-  input: s.object({ approver: s.optional(mate) }),
+  input: z.strictObject({ approver: z.optional(mate) }),
   run: (_ctx, { approver }) => decide('finance_approver_set', { approver: approver ?? '' }),
   did: (_i, out) => waits(out, 'Saved'),
   target: () => ({ kind: 'tab', id: 'access' }),
@@ -897,7 +898,7 @@ export const setLine = defineAction({
   id: 'finance.setLine',
   title: 'Put a bank or card row on a line',
   kind: 'change',
-  input: s.object({ tx: id, line: id }),
+  input: z.strictObject({ tx: id, line: id }),
   run: async ({ router, queryClient: qc }, { tx, line }) => {
     const tags = { ...((cachedTx(qc, tx)?.lines?.[0]?.tags as Record<string, unknown> | undefined) ?? {}) };
     delete tags.budget;

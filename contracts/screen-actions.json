@@ -41,6 +41,32 @@
       }
     },
     {
+      "id": "agents.addCloud",
+      "title": "Add a cloud agent Tico connects (Claude Code, Codex) to a team",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "a cloud agent's id, as the cloud agents list names it (claude, codex, devin…)"
+          },
+          "team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a team's id"
+          }
+        },
+        "required": [
+          "agent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.addList",
       "title": "Add a list to an agent's page: tasks matching a saved filter",
       "kind": "change",
@@ -59,6 +85,7 @@
             "maxLength": 40
           },
           "conditions": {
+            "maxItems": 20,
             "type": "array",
             "items": {
               "type": "object",
@@ -88,8 +115,7 @@
                 "value"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 20
+            }
           }
         },
         "required": [
@@ -159,6 +185,26 @@
       }
     },
     {
+      "id": "agents.cancelCloudRequest",
+      "title": "Cancel a cloud agent request: Tico support hears of it and its seat closes",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "seat": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "the request's seat id"
+          }
+        },
+        "required": [
+          "seat"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.changeList",
       "title": "Rename one of an agent's lists, or change its filter",
       "kind": "change",
@@ -182,6 +228,7 @@
             "maxLength": 40
           },
           "conditions": {
+            "maxItems": 20,
             "type": "array",
             "items": {
               "type": "object",
@@ -211,8 +258,7 @@
                 "value"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 20
+            }
           }
         },
         "required": [
@@ -383,6 +429,32 @@
         "required": [
           "slug",
           "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.requestCloud",
+      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "a cloud agent's id, as the cloud agents list names it (claude, codex, devin…)"
+          },
+          "team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a team's id"
+          }
+        },
+        "required": [
+          "agent"
         ],
         "additionalProperties": false
       }
@@ -635,14 +707,14 @@
             "description": "an agent's slug"
           },
           "people": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 100,
               "description": "a person's id"
-            },
-            "maxItems": 100
+            }
           }
         },
         "required": [
@@ -817,6 +889,7 @@
               "voice": {
                 "anyOf": [
                   {
+                    "maxItems": 12,
                     "type": "array",
                     "items": {
                       "type": "object",
@@ -838,8 +911,7 @@
                         "trait"
                       ],
                       "additionalProperties": false
-                    },
-                    "maxItems": 12
+                    }
                   },
                   {
                     "type": "null"
@@ -849,6 +921,7 @@
               "tone": {
                 "anyOf": [
                   {
+                    "maxItems": 20,
                     "type": "array",
                     "items": {
                       "type": "object",
@@ -866,8 +939,7 @@
                         "situation"
                       ],
                       "additionalProperties": false
-                    },
-                    "maxItems": 20
+                    }
                   },
                   {
                     "type": "null"
@@ -880,6 +952,7 @@
                     "type": "object",
                     "properties": {
                       "use": {
+                        "maxItems": 100,
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -897,10 +970,10 @@
                             "word"
                           ],
                           "additionalProperties": false
-                        },
-                        "maxItems": 100
+                        }
                       },
                       "avoid": {
+                        "maxItems": 200,
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -924,8 +997,7 @@
                             "word"
                           ],
                           "additionalProperties": false
-                        },
-                        "maxItems": 200
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -938,6 +1010,7 @@
               "naming": {
                 "anyOf": [
                   {
+                    "maxItems": 50,
                     "type": "array",
                     "items": {
                       "type": "object",
@@ -951,20 +1024,19 @@
                           "maxLength": 300
                         },
                         "wrong": {
+                          "maxItems": 20,
                           "type": "array",
                           "items": {
                             "type": "string",
                             "maxLength": 80
-                          },
-                          "maxItems": 20
+                          }
                         }
                       },
                       "required": [
                         "name"
                       ],
                       "additionalProperties": false
-                    },
-                    "maxItems": 50
+                    }
                   },
                   {
                     "type": "null"
@@ -977,6 +1049,7 @@
                     "type": "object",
                     "properties": {
                       "colors": {
+                        "maxItems": 30,
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -996,24 +1069,23 @@
                             "hex"
                           ],
                           "additionalProperties": false
-                        },
-                        "maxItems": 30
+                        }
                       },
                       "fonts": {
+                        "maxItems": 10,
                         "type": "array",
                         "items": {
                           "type": "string",
                           "maxLength": 80
-                        },
-                        "maxItems": 10
+                        }
                       },
                       "logo_files": {
+                        "maxItems": 20,
                         "type": "array",
                         "items": {
                           "type": "string",
                           "maxLength": 300
-                        },
-                        "maxItems": 20
+                        }
                       },
                       "imagery": {
                         "type": "string",
@@ -1033,6 +1105,7 @@
                     "type": "object",
                     "properties": {
                       "allowed": {
+                        "maxItems": 100,
                         "type": "array",
                         "items": {
                           "type": "object",
@@ -1060,16 +1133,15 @@
                             "claim"
                           ],
                           "additionalProperties": false
-                        },
-                        "maxItems": 100
+                        }
                       },
                       "never": {
+                        "maxItems": 100,
                         "type": "array",
                         "items": {
                           "type": "string",
                           "maxLength": 300
-                        },
-                        "maxItems": 100
+                        }
                       }
                     },
                     "additionalProperties": false
@@ -1082,6 +1154,7 @@
               "examples": {
                 "anyOf": [
                   {
+                    "maxItems": 30,
                     "type": "array",
                     "items": {
                       "type": "object",
@@ -1106,8 +1179,7 @@
                         "verdict"
                       ],
                       "additionalProperties": false
-                    },
-                    "maxItems": 30
+                    }
                   },
                   {
                     "type": "null"
@@ -1212,6 +1284,7 @@
             "description": "a call id"
           },
           "with": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
@@ -1219,8 +1292,7 @@
               "maxLength": 200,
               "pattern": "^(human|bot):[^\\s]+$",
               "description": "human:<id> or bot:<id>"
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -1296,6 +1368,7 @@
             "maximum": 1440
           },
           "with": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
@@ -1303,8 +1376,7 @@
               "maxLength": 200,
               "pattern": "^((human|bot|team):[^\\s]+|[^\\s@]+@[^\\s@]+)$",
               "description": "human:<id>, bot:<id>, team:<id> or an email"
-            },
-            "maxItems": 100
+            }
           },
           "meet": {
             "type": "boolean"
@@ -1352,6 +1424,7 @@
             "maximum": 1440
           },
           "with": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
@@ -1359,8 +1432,7 @@
               "maxLength": 200,
               "pattern": "^((human|bot|team):[^\\s]+|[^\\s@]+@[^\\s@]+)$",
               "description": "human:<id>, bot:<id>, team:<id> or an email"
-            },
-            "maxItems": 100
+            }
           },
           "meet": {
             "type": "boolean"
@@ -1568,14 +1640,14 @@
             "description": "an ISO time, 2026-11-18T10:30:00Z"
           },
           "with": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "a name or an email"
-            },
-            "maxItems": 100
+            }
           },
           "notes": {
             "type": "string",
@@ -1861,6 +1933,7 @@
         "type": "object",
         "properties": {
           "with": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
@@ -1868,8 +1941,7 @@
               "maxLength": 200,
               "pattern": "^(human|bot):[^\\s]+$",
               "description": "human:<id> or bot:<id>"
-            },
-            "maxItems": 50
+            }
           },
           "title": {
             "type": "string",
@@ -2235,6 +2307,31 @@
         "required": [
           "computer",
           "mode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "contacts.add",
+      "title": "Add a contact",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "type",
+          "name"
         ],
         "additionalProperties": false
       }
@@ -2864,6 +2961,7 @@
             "maxLength": 200
           },
           "lines": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "object",
@@ -2892,8 +2990,7 @@
                 "amount"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -2926,6 +3023,7 @@
             "maxLength": 200
           },
           "splits": {
+            "maxItems": 10,
             "type": "array",
             "items": {
               "type": "object",
@@ -2950,8 +3048,7 @@
                 "share_bps"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 10
+            }
           }
         },
         "required": [
@@ -3167,6 +3264,7 @@
             "maxLength": 200
           },
           "lines": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "object",
@@ -3198,8 +3296,7 @@
                 "amount"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -3326,6 +3423,7 @@
             "maxLength": 200
           },
           "splits": {
+            "maxItems": 10,
             "type": "array",
             "items": {
               "type": "object",
@@ -3350,8 +3448,7 @@
                 "share_bps"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 10
+            }
           },
           "on": {
             "type": "boolean"
@@ -4408,6 +4505,7 @@
             "maxLength": 200
           },
           "rules": {
+            "maxItems": 20,
             "type": "array",
             "items": {
               "type": "object",
@@ -4433,8 +4531,7 @@
                 "text"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 20
+            }
           }
         },
         "required": [
@@ -4463,14 +4560,14 @@
             "description": "a mail thread id"
           },
           "ids": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "a letter id"
-            },
-            "maxItems": 500
+            }
           }
         },
         "required": [
@@ -6009,6 +6106,7 @@
             "maximum": 500
           },
           "when": {
+            "maxItems": 20,
             "type": "array",
             "items": {
               "type": "object",
@@ -6038,8 +6136,7 @@
                 "value"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 20
+            }
           },
           "match": {
             "enum": [
@@ -6048,6 +6145,7 @@
             ]
           },
           "then": {
+            "maxItems": 20,
             "type": "array",
             "items": {
               "type": "object",
@@ -6082,8 +6180,7 @@
                 "do"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 20
+            }
           },
           "goTo": {
             "type": "string",
@@ -6125,13 +6222,13 @@
             "maxLength": 20000
           },
           "dests": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 100
-            },
-            "maxItems": 50
+            }
           },
           "unsure": {
             "type": "string",
@@ -6373,6 +6470,7 @@
             ]
           },
           "who": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
@@ -6380,8 +6478,7 @@
               "maxLength": 200,
               "pattern": "^(\\*|(group|bot|human):\\S+)$",
               "description": "*, group:<id>, bot:<id> or human:<id>"
-            },
-            "maxItems": 100
+            }
           }
         },
         "required": [
@@ -6427,6 +6524,7 @@
                 "description": "*, group:<id>, bot:<id> or human:<id>"
               },
               "who": {
+                "maxItems": 100,
                 "type": "array",
                 "items": {
                   "type": "string",
@@ -6434,8 +6532,7 @@
                   "maxLength": 200,
                   "pattern": "^(\\*|(group|bot|human):\\S+)$",
                   "description": "*, group:<id>, bot:<id> or human:<id>"
-                },
-                "maxItems": 100
+                }
               },
               "outside": {
                 "type": "boolean"
@@ -6487,13 +6584,13 @@
                 "maxLength": 100
               },
               "stages": {
+                "maxItems": 50,
                 "type": "array",
                 "items": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 100
-                },
-                "maxItems": 50
+                }
               },
               "event": {
                 "type": "string",
@@ -7008,6 +7105,7 @@
                 "description": "*, group:<id>, bot:<id> or human:<id>"
               },
               "who": {
+                "maxItems": 100,
                 "type": "array",
                 "items": {
                   "type": "string",
@@ -7015,8 +7113,7 @@
                   "maxLength": 200,
                   "pattern": "^(\\*|(group|bot|human):\\S+)$",
                   "description": "*, group:<id>, bot:<id> or human:<id>"
-                },
-                "maxItems": 100
+                }
               },
               "outside": {
                 "type": "boolean"
@@ -7068,13 +7165,13 @@
                 "maxLength": 100
               },
               "stages": {
+                "maxItems": 50,
                 "type": "array",
                 "items": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 100
-                },
-                "maxItems": 50
+                }
               },
               "event": {
                 "type": "string",
@@ -7316,13 +7413,13 @@
             "maximum": 200
           },
           "criteria": {
+            "maxItems": 10,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "maxItems": 10
+            }
           },
           "team": {
             "type": "boolean"
@@ -7371,14 +7468,14 @@
         "type": "object",
         "properties": {
           "agents": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "description": "an agent slug"
-            },
-            "maxItems": 200
+            }
           },
           "model": {
             "type": "string",
@@ -7410,14 +7507,14 @@
         "type": "object",
         "properties": {
           "ids": {
+            "maxItems": 250,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "an entry id"
-            },
-            "maxItems": 250
+            }
           }
         },
         "required": [
@@ -7539,14 +7636,14 @@
         "type": "object",
         "properties": {
           "agents": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120,
               "description": "an agent slug"
-            },
-            "maxItems": 200
+            }
           },
           "computer": {
             "type": "string",
@@ -7878,13 +7975,13 @@
         "type": "object",
         "properties": {
           "labels": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -7925,22 +8022,22 @@
         "type": "object",
         "properties": {
           "allowed": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 320
-            },
-            "maxItems": 500
+            }
           },
           "domains": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 253
-            },
-            "maxItems": 100
+            }
           }
         },
         "required": [
@@ -8492,6 +8589,7 @@
             "maxLength": 120
           },
           "targets": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "object",
@@ -8513,8 +8611,7 @@
                 "target_id"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 200
+            }
           },
           "version": {
             "type": "integer",
@@ -9642,22 +9739,22 @@
             "maxLength": 100
           },
           "add": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "maxItems": 50
+            }
           },
           "remove": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -9686,13 +9783,13 @@
             "description": "a short name: letters, digits, - or _"
           },
           "people": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -9894,13 +9991,13 @@
             "maxLength": 100
           },
           "labels": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 60
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -9979,14 +10076,14 @@
         "type": "object",
         "properties": {
           "tasks": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 100,
               "description": "a task id"
-            },
-            "maxItems": 500
+            }
           },
           "owner": {
             "type": "string",
@@ -10109,6 +10206,7 @@
             ]
           },
           "stages": {
+            "maxItems": 40,
             "type": "array",
             "items": {
               "type": "object",
@@ -10162,8 +10260,7 @@
                 "side"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 40
+            }
           }
         },
         "required": [
@@ -10355,14 +10452,14 @@
         "type": "object",
         "properties": {
           "tasks": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 100,
               "description": "a task id"
-            },
-            "maxItems": 500
+            }
           },
           "to": {
             "type": "string",
@@ -10537,6 +10634,7 @@
             ]
           },
           "stages": {
+            "maxItems": 40,
             "type": "array",
             "items": {
               "type": "object",
@@ -10590,8 +10688,7 @@
                 "side"
               ],
               "additionalProperties": false
-            },
-            "maxItems": 40
+            }
           },
           "version": {
             "type": "integer",
@@ -10662,14 +10759,14 @@
         "type": "object",
         "properties": {
           "tasks": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 100,
               "description": "a task id"
-            },
-            "maxItems": 500
+            }
           },
           "until": {
             "type": "string",
@@ -10759,7 +10856,8 @@
               "pick",
               "new",
               "template",
-              "person"
+              "person",
+              "cloud"
             ]
           }
         },
@@ -10844,6 +10942,7 @@
             "description": "a thread id"
           },
           "actors": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
@@ -10851,8 +10950,7 @@
               "maxLength": 200,
               "pattern": "^(human|bot|group):[^\\s]+$",
               "description": "human:<id>, bot:<slug> or group:<id>"
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -10948,14 +11046,14 @@
         "type": "object",
         "properties": {
           "threads": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "a thread id"
-            },
-            "maxItems": 100
+            }
           }
         },
         "required": [
@@ -10972,6 +11070,7 @@
         "type": "object",
         "properties": {
           "with": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
@@ -10979,8 +11078,7 @@
               "maxLength": 200,
               "pattern": "^(human|bot|group):[^\\s]+$",
               "description": "human:<id>, bot:<slug> or group:<id>"
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -11521,13 +11619,13 @@
             "pattern": "^https?:\\/\\/"
           },
           "events": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 120
-            },
-            "maxItems": 200
+            }
           }
         },
         "required": [
@@ -11554,13 +11652,13 @@
             "maxLength": 80
           },
           "sites": {
+            "maxItems": 50,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 300
-            },
-            "maxItems": 50
+            }
           }
         },
         "required": [
@@ -11985,13 +12083,13 @@
             ]
           },
           "senders": {
+            "maxItems": 100,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 320
-            },
-            "maxItems": 100
+            }
           }
         },
         "required": [
@@ -12296,13 +12394,13 @@
             "type": "boolean"
           },
           "blocked_recipients": {
+            "maxItems": 500,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 320
-            },
-            "maxItems": 500
+            }
           }
         },
         "additionalProperties": false
@@ -12354,14 +12452,14 @@
         "type": "object",
         "properties": {
           "ids": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "an update id"
-            },
-            "maxItems": 200
+            }
           },
           "archived": {
             "type": "boolean"
@@ -12381,14 +12479,14 @@
         "type": "object",
         "properties": {
           "ids": {
+            "maxItems": 200,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
               "maxLength": 200,
               "description": "an update id"
-            },
-            "maxItems": 200
+            }
           },
           "read": {
             "type": "boolean"

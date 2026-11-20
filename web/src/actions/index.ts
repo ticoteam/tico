@@ -1,6 +1,5 @@
-// Leaves first: actions files call `s` and `defineAction` while this module may still be loading (see registry.ts).
-export { s } from './schema';
-export type { Schema, Infer, JsonSchema } from './schema';
+// Leaves first: actions files call `defineAction` while this module may still be loading (see registry.ts).
+export type { Input, JsonSchema } from './input';
 export { defineAction } from './types';
 export type { Action, AnyAction, Ctx, Via, Result, Target } from './types';
 export { registry, actionsCatalog } from './registry';

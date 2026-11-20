@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { AnyRouter } from '@tanstack/react-router';
-import type { Schema } from './schema';
+import type { Input } from './input';
 
 /** Who pressed it. Only 'tico' flies the Dot. */
 export type Via = 'click' | 'key' | 'search' | 'tico';
@@ -40,8 +40,8 @@ export interface Action<I = unknown, O = unknown> {
   /** Its name: the search row, the shortcut list, the catalog Tico reads. "Open a task". */
   readonly title: string;
   readonly kind: 'view' | 'change';
-  /** Validates input from search, keys and Tico. Typed callers are checked too; it is cheap. */
-  readonly input: Schema<I>;
+  /** Validates input from search, keys and Tico (a zod/mini strictObject). Typed callers are checked too; it is cheap. */
+  readonly input: Input<I>;
   /** false: the person's own press only. Left out of Tico's catalog, and refused from Tico (run via 'tico', show). */
   readonly tico?: boolean;
   /** Tico's did line and the result: "Opened #412". Defaults to the title. */

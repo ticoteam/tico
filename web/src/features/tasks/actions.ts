@@ -1,4 +1,5 @@
-import { defineAction, refusalFor, s, toldOf, type Schema } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, refusalFor, toldOf } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { writePref } from '@/prefs';
 import {
@@ -22,10 +23,10 @@ import {
 import { VIEW_PREF } from './search';
 import { createTag, createTaggedTask, moreTagTasks, saveTag, tagKeyOf } from './queries';
 
-const pipeline = s.string({ min: 1, max: 100, what: 'a pipeline id' });
-const task = s.string({ min: 1, max: 100, what: 'a task id' });
-const tasks = s.array(task, { max: 500 });
-const actor = s.string({ min: 1, max: 120, what: 'an actor id: human:<id> or bot:<slug>' });
+const pipeline = z.string().check(z.minLength(1), z.maxLength(100), z.describe('a pipeline id'));
+const task = z.string().check(z.minLength(1), z.maxLength(100), z.describe('a task id'));
+const tasks = z.array(task).check(z.maxLength(500));
+const actor = z.string().check(z.minLength(1), z.maxLength(120), z.describe('an actor id: human:<id> or bot:<slug>'));
 const where = (p: string) => `/tasks/${encodeURIComponent(p)}`;
 
 /** A pipeline's page (`/tasks/<pipeline>`) or the Roadmap is on screen, not a task or another page. */
@@ -35,7 +36,7 @@ export const openTasks = defineAction({
   id: 'tasks.open',
   title: 'Open Tasks',
   kind: 'view',
-  input: s.object({ pipeline }),
+  input: z.strictObject({ pipeline }),
   run: ({ router }, { pipeline }) => router.navigate({ to: where(pipeline) }),
   show: ({ router }, { pipeline }) => router.navigate({ to: where(pipeline) }),
   did: ({ pipeline }) => `Opened Tasks, ${pipeline}`,
@@ -52,7 +53,7 @@ export const setView = defineAction({
   id: 'tasks.setView',
   title: 'Show tasks as a board, a list, or the archived ones',
   kind: 'view',
-  input: s.object({ pipeline, view: s.oneOf(['board', 'list', 'archived'] as const) }),
+  input: z.strictObject({ pipeline, view: z.enum(['board', 'list', 'archived'] as const) }),
   run: async ({ router }, { pipeline, view }) => {
     if (view !== 'archived') writePref(`${VIEW_PREF}:${pipeline}`, view);
     await router.navigate({ to: where(pipeline), search: (prev: Record<string, unknown>) => ({ ...prev, view }) });
@@ -61,21 +62,21 @@ export const setView = defineAction({
   target: ({ view }) => ({ kind: 'tasks', id: view === 'archived' ? 'archived' : 'view' }),
 });
 
-const clearable = <T>(sch: Schema<T>) => s.optional(s.nullable(sch));
+const clearable = <T extends z.core.SomeType>(sch: T) => z.optional(z.nullable(sch));
 
 /** Sets or clears filters on the pipeline on screen; null clears one. Filters replace the address, they do not push. */
 export const filterTasks = defineAction({
   id: 'tasks.filter',
   title: 'Filter tasks',
   kind: 'view',
-  input: s.object({
+  input: z.strictObject({
     owner: clearable(actor),
     waiting: clearable(actor),
     asked: clearable(actor),
-    tag: clearable(s.string({ max: 120, what: 'a tag key' })),
-    due: clearable(s.oneOf(['overdue', 'week', 'any'] as const)),
-    late: clearable(s.boolean()),
-    q: clearable(s.string({ max: 200 })),
+    tag: clearable(z.string().check(z.maxLength(120), z.describe('a tag key'))),
+    due: clearable(z.enum(['overdue', 'week', 'any'] as const)),
+    late: clearable(z.boolean()),
+    q: clearable(z.string().check(z.maxLength(200))),
   }),
   can: ({ router }) => onPipeline(router.state.location.pathname),
   run: async ({ router }, change) => {
@@ -113,7 +114,7 @@ export const move = defineAction({
   id: 'tasks.move',
   title: 'Move a task to a stage',
   kind: 'change',
-  input: s.object({ task, to: s.string({ min: 1, max: 100, what: 'a stage id or name, or next, done or closed' }) }),
+  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id or name, or next, done or closed')) }),
   run: (_ctx, { task, to }) => said(() => moveTask(task, to), "Couldn't move the task"),
   did: (_input, out) => (out ? `Moved #${out.number ?? out.id}` : 'Moved the task'),
   target: ({ task }, out) => ({ kind: 'task', id: out?.number ?? task }),
@@ -124,7 +125,7 @@ export const subtask = defineAction({
   id: 'tasks.makeSubtask',
   title: 'Make a task a subtask of another',
   kind: 'change',
-  input: s.object({ task, parent: task }),
+  input: z.strictObject({ task, parent: task }),
   run: (_ctx, { task, parent }) => said(() => makeSubtask(task, parent), "Couldn't make it a subtask"),
   did: (_input, out) => (out ? `Made #${out.number ?? out.id} a subtask` : 'Made it a subtask'),
   target: ({ parent }) => ({ kind: 'task', id: parent }),
@@ -137,7 +138,7 @@ export const merge = defineAction({
   title: 'Merge a task into another',
   kind: 'change',
   tico: false,
-  input: s.object({ task, into: task, owner: clearable(actor) }),
+  input: z.strictObject({ task, into: task, owner: clearable(actor) }),
   run: (_ctx, { task, into, owner }) => said(() => mergeTask(task, into, owner), "Couldn't merge the tasks"),
   did: (_input, out) => (out ? `Merged #${out.closed.number ?? out.closed.id} into #${out.task.number ?? out.task.id}` : 'Merged the tasks'),
   target: ({ into }, out) => ({ kind: 'task', id: out?.task.number ?? into }),
@@ -147,11 +148,11 @@ export const create = defineAction({
   id: 'tasks.create',
   title: 'New task',
   kind: 'change',
-  input: s.object({
-    title: s.string({ min: 1, max: 300 }),
+  input: z.strictObject({
+    title: z.string().check(z.minLength(1), z.maxLength(300)),
     pipeline,
     owner: clearable(actor),
-    stage: clearable(s.string({ min: 1, max: 100, what: 'a stage id' })),
+    stage: clearable(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id'))),
   }),
   run: async (_ctx, input) => {
     const { task, notMoved } = await said(() => createTask(input, listsOf(input.pipeline)), "Couldn't create the task");
@@ -176,7 +177,7 @@ export const moveAll = defineAction({
   id: 'tasks.moveMany',
   title: 'Move tasks to a stage',
   kind: 'change',
-  input: s.object({ tasks, to: s.string({ min: 1, max: 100, what: 'a stage id, or done, closed or reopen' }) }),
+  input: z.strictObject({ tasks, to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id, or done, closed or reopen')) }),
   run: async (_ctx, { tasks, to }) => {
     const { moved, movedUnseen, skipped } = await said(() => moveMany(tasks, to), "Couldn't move the tasks");
     const left = tell(skipped, tasks.length);
@@ -197,7 +198,7 @@ export const assignAll = defineAction({
   id: 'tasks.assignMany',
   title: 'Give tasks to an owner',
   kind: 'change',
-  input: s.object({ tasks, owner: actor }),
+  input: z.strictObject({ tasks, owner: actor }),
   run: async (_ctx, { tasks, owner }) => tell(await said(() => assignMany(tasks, owner), "Couldn't change the owner"), tasks.length),
   did: ({ tasks }) => `Assigned ${plural(tasks.length)}`,
 });
@@ -206,7 +207,7 @@ export const snoozeAll = defineAction({
   id: 'tasks.snoozeMany',
   title: 'Snooze tasks',
   kind: 'change',
-  input: s.object({ tasks, until: s.string({ min: 10, max: 40, what: 'an ISO date and time' }) }),
+  input: z.strictObject({ tasks, until: z.string().check(z.minLength(10), z.maxLength(40), z.describe('an ISO date and time')) }),
   run: async (_ctx, { tasks, until }) => tell(await said(() => snoozeMany(tasks, until), "Couldn't snooze the tasks"), tasks.length),
   did: ({ tasks }) => `Snoozed ${plural(tasks.length)}`,
 });
@@ -217,27 +218,27 @@ export const editPipeline = defineAction({
   id: 'tasks.editPipeline',
   title: 'Edit pipeline',
   kind: 'view',
-  input: s.object({ pipeline, open: s.optional(s.boolean()) }),
+  input: z.strictObject({ pipeline, open: z.optional(z.boolean()) }),
   // Its own page (`/tasks/<pipeline>/edit`); closing it goes back to the pipeline.
   run: ({ router }, { pipeline, open = true }) => router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline) }),
   did: ({ open = true }) => (open ? 'Opened Edit pipeline' : 'Closed Edit pipeline'),
   target: ({ pipeline }) => ({ kind: 'page', id: `${where(pipeline)}/edit` }),
 });
 
-const stageDraft = s.object({
-  id: s.optional(s.string({ min: 1, max: 100, what: 'a saved stage id; leave out for a new stage' })),
-  name: s.string({ min: 1, max: 80 }),
-  side: s.boolean(),
-  purpose: s.optional(s.string({ max: 300 })),
-  owner: clearable(s.string({ min: 1, max: 120, what: "an actor id, assignee (the task's), or pick (one of several, as set)" })),
-  task_limit: clearable(s.number({ int: true, min: 1, max: 1000 })),
+const stageDraft = z.strictObject({
+  id: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a saved stage id; leave out for a new stage'))),
+  name: z.string().check(z.minLength(1), z.maxLength(80)),
+  side: z.boolean(),
+  purpose: z.optional(z.string().check(z.maxLength(300))),
+  owner: clearable(z.string().check(z.minLength(1), z.maxLength(120), z.describe("an actor id, assignee (the task's), or pick (one of several, as set)"))),
+  task_limit: clearable(z.int().check(z.minimum(1), z.maximum(1000))),
 });
 
 const pipelineFacts = {
-  goal: s.optional(s.string({ max: 300 })),
+  goal: z.optional(z.string().check(z.maxLength(300))),
   manager_id: clearable(actor),
-  factory_id: clearable(s.string({ min: 1, max: 100, what: 'a factory id' })),
-  prefix: clearable(s.string({ pattern: /^[A-Za-z]{1,2}$/, what: 'one or two letters' })),
+  factory_id: clearable(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a factory id'))),
+  prefix: clearable(z.string().check(z.regex(/^[A-Za-z]{1,2}$/), z.describe('one or two letters'))),
 };
 
 /** Saves a pipeline: its Goal, Manager, Factory and Prefix, and its stages in order with each one's goal, owner and limit.
@@ -248,12 +249,12 @@ export const savePipelineStages = defineAction({
   id: 'tasks.savePipeline',
   title: 'Save a pipeline',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     pipeline,
     ...pipelineFacts,
-    stages: s.array(stageDraft, { max: 40 }),
-    version: s.optional(s.number({ int: true, min: 0 })),
-    move_to: s.optional(s.object({ pipeline, stage: s.string({ min: 1, max: 100 }) })),
+    stages: z.array(stageDraft).check(z.maxLength(40)),
+    version: z.optional(z.int().check(z.minimum(0))),
+    move_to: z.optional(z.strictObject({ pipeline, stage: z.string().check(z.minLength(1), z.maxLength(100)) })),
   }),
   // Removing a stage that holds tasks cannot be undone: Tico may save the rest, not that.
   can: ({ via }, { move_to }) => !(via === 'tico' && move_to),
@@ -267,7 +268,7 @@ export const newPipeline = defineAction({
   id: 'tasks.newPipeline',
   title: 'New pipeline',
   kind: 'view',
-  input: s.object({ pipeline, open: s.optional(s.boolean()) }),
+  input: z.strictObject({ pipeline, open: z.optional(z.boolean()) }),
   run: ({ router }, { pipeline, open = true }) =>
     router.navigate({ to: open ? `${where(pipeline)}/edit` : where(pipeline), search: open ? ({ new: true } as never) : undefined }),
   did: ({ open = true }) => (open ? 'Opened New pipeline' : 'Closed New pipeline'),
@@ -279,10 +280,10 @@ export const makePipeline = defineAction({
   id: 'tasks.createPipeline',
   title: 'Make a pipeline',
   kind: 'change',
-  input: s.object({
-    name: s.string({ min: 1, max: 80 }),
+  input: z.strictObject({
+    name: z.string().check(z.minLength(1), z.maxLength(80)),
     ...pipelineFacts,
-    stages: s.array(stageDraft, { max: 40 }),
+    stages: z.array(stageDraft).check(z.maxLength(40)),
   }),
   run: async ({ router }, { stages, ...facts }) => {
     const made = await createPipeline(facts, stages);
@@ -301,7 +302,7 @@ export const openRoadmap = defineAction({
   id: 'tasks.openRoadmap',
   title: 'Open Roadmap',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => router.navigate({ to: ROADMAP }),
   show: ({ router }) => router.navigate({ to: ROADMAP }),
   did: () => 'Opened Roadmap',
@@ -314,7 +315,7 @@ export const openRequesters = defineAction({
   id: 'tasks.openRequesters',
   title: 'Show who asked for a feature',
   kind: 'view',
-  input: s.object({ task, open: s.optional(s.boolean()) }),
+  input: z.strictObject({ task, open: z.optional(z.boolean()) }),
   run: async ({ router }, { task, open = true }) => {
     await router.navigate({
       to: ROADMAP,
@@ -328,7 +329,7 @@ export const openRequesters = defineAction({
   did: ({ open = true }) => (open ? 'Opened Requesters' : 'Closed Requesters'),
 });
 
-const text = (max: number) => s.optional(s.string({ max }));
+const text = (max: number) => z.optional(z.string().check(z.maxLength(max)));
 const requesterFields = {
   name: text(200),
   email: text(320),
@@ -336,8 +337,8 @@ const requesterFields = {
   other: text(500),
   organization: text(200),
   note: text(4000),
-  source: s.optional(s.oneOf(['manual', 'public_form', 'inbox', 'meeting'] as const)),
-  important: s.optional(s.boolean()),
+  source: z.optional(z.enum(['manual', 'public_form', 'inbox', 'meeting'] as const)),
+  important: z.optional(z.boolean()),
 };
 
 /** Record who asked for a task: a teammate (`actor`) or someone outside the team. */
@@ -345,7 +346,7 @@ export const addTaskRequester = defineAction({
   id: 'tasks.addRequester',
   title: 'Add who asked for a feature',
   kind: 'change',
-  input: s.object({ task, actor: s.optional(actor), ...requesterFields }),
+  input: z.strictObject({ task, actor: z.optional(actor), ...requesterFields }),
   run: (_ctx, { task, ...input }) => said(() => addRequester(task, input), "Couldn't add the requester"),
   did: () => 'Added a requester',
 });
@@ -354,7 +355,7 @@ export const updateTaskRequester = defineAction({
   id: 'tasks.updateRequester',
   title: 'Change a requester',
   kind: 'change',
-  input: s.object({ task, requester: s.string({ min: 1, max: 100, what: 'a requester id' }), ...requesterFields }),
+  input: z.strictObject({ task, requester: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a requester id')), ...requesterFields }),
   run: (_ctx, { task, requester, ...input }) => said(() => updateRequester(task, requester, input), "Couldn't save the requester"),
   did: () => 'Saved the requester',
   target: ({ requester }) => ({ kind: 'requester', id: requester }),
@@ -364,16 +365,16 @@ export const removeTaskRequester = defineAction({
   id: 'tasks.removeRequester',
   title: 'Remove a requester',
   kind: 'change',
-  input: s.object({ task, requester: s.string({ min: 1, max: 100, what: 'a requester id' }) }),
+  input: z.strictObject({ task, requester: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a requester id')) }),
   run: (_ctx, { task, requester }) => said(() => removeRequester(task, requester), "Couldn't remove the requester"),
   did: () => 'Removed a requester',
 });
 
 /* ---------------------------------------------------------------- tags (ui/app/tags.ts) */
 
-const tagId = s.string({ min: 1, max: 100, what: "a tag's id or key" });
-const tagKey = s.string({ min: 1, max: 40, pattern: /^[a-z0-9][a-z0-9-]*$/, what: 'a tag key: lowercase words joined by hyphens' });
-const metadata = s.optional(s.string({ max: 4000, what: 'a JSON object of fields, such as {"date": "2030-01-02"}' }));
+const tagId = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a tag's id or key"));
+const tagKey = z.string().check(z.minLength(1), z.maxLength(40), z.regex(/^[a-z0-9][a-z0-9-]*$/), z.describe('a tag key: lowercase words joined by hyphens'));
+const metadata = z.optional(z.string().check(z.maxLength(4000), z.describe('a JSON object of fields, such as {"date": "2030-01-02"}')));
 /** The metadata as written, as an object; anything else is refused before it is sent. */
 function fieldsOf(json: string | undefined): Record<string, unknown> | undefined {
   if (json === undefined || !json.trim()) return undefined;
@@ -398,7 +399,7 @@ export const filterTags = defineAction({
   id: 'tags.filter',
   title: 'Search or filter tags, or a tag\'s tasks',
   kind: 'view',
-  input: s.object({ q: clearable(s.string({ max: 200 })), owner: clearable(actor), late: clearable(s.boolean()) }),
+  input: z.strictObject({ q: clearable(z.string().check(z.maxLength(200))), owner: clearable(actor), late: clearable(z.boolean()) }),
   can: ({ router }) => onTags(router.state.location.pathname),
   run: async ({ router }, change) => {
     await router.navigate({
@@ -423,10 +424,10 @@ export const newTag = defineAction({
   id: 'tags.create',
   title: 'New tag',
   kind: 'change',
-  input: s.object({
-    name: s.string({ min: 1, max: 100 }),
-    key: s.optional(tagKey),
-    notes: s.optional(s.string({ max: 20000, what: 'markdown' })),
+  input: z.strictObject({
+    name: z.string().check(z.minLength(1), z.maxLength(100)),
+    key: z.optional(tagKey),
+    notes: z.optional(z.string().check(z.maxLength(20000), z.describe('markdown'))),
   }),
   run: async ({ router }, { name, key, notes }) => {
     const made = await said(
@@ -444,7 +445,7 @@ export const editTag = defineAction({
   id: 'tags.edit',
   title: "Change a tag's name, notes or metadata",
   kind: 'change',
-  input: s.object({ tag: tagId, name: s.optional(s.string({ min: 1, max: 100 })), notes: s.optional(s.string({ max: 20000 })), metadata }),
+  input: z.strictObject({ tag: tagId, name: z.optional(z.string().check(z.minLength(1), z.maxLength(100))), notes: z.optional(z.string().check(z.maxLength(20000))), metadata }),
   run: (_ctx, { tag, name, notes, metadata }) => {
     const fields = fieldsOf(metadata);
     return said(() => saveTag(tag, { label: name, markdown: notes, metadata: fields }), "Couldn't save the tag");
@@ -457,7 +458,7 @@ export const tagMore = defineAction({
   id: 'tags.moreTasks',
   title: "Read the next 500 of a tag's tasks",
   kind: 'view',
-  input: s.object({ tag: tagId }),
+  input: z.strictObject({ tag: tagId }),
   run: (_ctx, { tag }) => said(() => moreTagTasks(tag), "Couldn't read more"),
   did: () => 'Read more',
   target: ({ tag }) => onTag(tag),
@@ -467,7 +468,7 @@ export const newTaggedTask = defineAction({
   id: 'tags.newTask',
   title: 'New task with a tag on it',
   kind: 'change',
-  input: s.object({ tag: tagId, key: s.string({ min: 1, max: 120, what: "the tag's key" }), title: s.string({ min: 1, max: 300 }), pipeline, owner: clearable(actor) }),
+  input: z.strictObject({ tag: tagId, key: z.string().check(z.minLength(1), z.maxLength(120), z.describe("the tag's key")), title: z.string().check(z.minLength(1), z.maxLength(300)), pipeline, owner: clearable(actor) }),
   run: (_ctx, { tag, key, ...input }) => said(() => createTaggedTask(tag, key, input), "Couldn't create the task"),
   did: (_input, out) => (out?.number ? `Filed #${out.number}` : 'Filed a task'),
   target: (_input, out) => (out ? { kind: 'task', id: out.number ?? out.id } : null),

@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
-import { defineAction, run, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, run } from '@/actions';
 import { meQuery, queryClient } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
 import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
@@ -40,7 +41,7 @@ export const signOut = defineAction({
   title: 'Sign out',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   // the desktop app hears first (its count and small call window go before the page leaves)
   run: async () => {
     await tellDesktopSigningOut();
@@ -52,7 +53,7 @@ export const openSetup = defineAction({
   id: 'setup.open',
   title: 'Set up your company',
   kind: 'view',
-  input: s.object({ step: s.optional(s.oneOf(STEPS)) }),
+  input: z.strictObject({ step: z.optional(z.enum(STEPS)) }),
   can: () => isOwner(),
   run: ({ router }, { step }) => toStep(router, step ?? 'path'),
   show: ({ router }, { step }) => toStep(router, step ?? 'path'),
@@ -64,7 +65,7 @@ export const closeSetup = defineAction({
   id: 'setup.close',
   title: 'Close setup',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => {
     cancelConnect();
     return toStep(router, null);
@@ -76,7 +77,7 @@ export const choosePath = defineAction({
   id: 'setup.choosePath',
   title: 'Choose who sets up the company',
   kind: 'change',
-  input: s.object({ path: s.oneOf(['agents', 'self'] as const) }),
+  input: z.strictObject({ path: z.enum(['agents', 'self'] as const) }),
   can: () => isOwner(),
   run: async ({ router, via }, { path }) => {
     if (path === 'agents') {
@@ -101,7 +102,7 @@ export const nextStep = defineAction({
   id: 'setup.next',
   title: 'Next setup step',
   kind: 'change',
-  input: s.object({ from: s.oneOf(['name', 'model'] as const), name: s.optional(s.string({ min: 1, max: 100 })) }),
+  input: z.strictObject({ from: z.enum(['name', 'model'] as const), name: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
   can: () => isOwner(),
   run: async ({ router }, { from, name }) => {
     if (from === 'name') {
@@ -119,7 +120,7 @@ export const backStep = defineAction({
   id: 'setup.back',
   title: 'Previous setup step',
   kind: 'view',
-  input: s.object({ from: s.oneOf(STEPS) }),
+  input: z.strictObject({ from: z.enum(STEPS) }),
   run: ({ router }, { from }) => toStep(router, stepBefore(from)),
   target: () => SETUP_TARGET,
 });
@@ -130,7 +131,7 @@ export const connect = defineAction({
   title: 'Connect a model subscription',
   kind: 'change',
   tico: false,
-  input: s.object({ kind: s.oneOf(['claude_token', 'codex_login'] as const) }),
+  input: z.strictObject({ kind: z.enum(['claude_token', 'codex_login'] as const) }),
   run: (_ctx, { kind }) => startConnect(kind),
   target: () => SETUP_TARGET,
 });
@@ -140,7 +141,7 @@ export const sendCode = defineAction({
   title: 'Send the sign-in code',
   kind: 'change',
   tico: false,
-  input: s.object({ code: s.string({ min: 1, max: 700 }) }),
+  input: z.strictObject({ code: z.string().check(z.minLength(1), z.maxLength(700)) }),
   run: (_ctx, { code }) => sendLoginCode(code.trim()),
   target: () => SETUP_TARGET,
 });
@@ -150,7 +151,7 @@ export const pasteKey = defineAction({
   title: 'Paste a model key',
   kind: 'change',
   tico: false,
-  input: s.object({ kind: s.oneOf(['anthropic_key', 'openai_key'] as const), secret: s.string({ min: 1, max: 20000 }) }),
+  input: z.strictObject({ kind: z.enum(['anthropic_key', 'openai_key'] as const), secret: z.string().check(z.minLength(1), z.maxLength(20000)) }),
   run: async ({ router }, { kind, secret }) => {
     await saveKey(kind, secret.trim());
     return toStep(router, 'model');
@@ -162,7 +163,7 @@ export const finish = defineAction({
   id: 'setup.finish',
   title: 'Create the team',
   kind: 'change',
-  input: s.object({ job: s.string({ max: 40, pattern: /^[a-z]*$/, what: 'a first job key, or empty for the whole chart' }) }),
+  input: z.strictObject({ job: z.string().check(z.maxLength(40), z.regex(/^[a-z]*$/), z.describe('a first job key, or empty for the whole chart')) }),
   can: () => isOwner(),
   run: async ({ router }, { job }) => {
     await finishSetup(job);
@@ -189,9 +190,9 @@ async function withReason<T>(send: () => Promise<T>, onRefused?: (code: string) 
   }
 }
 
-const where = s.object({
-  org: s.optional(s.string({ min: 1, max: 39, pattern: /^[A-Za-z0-9-]+$/, what: "an organization's GitHub login, or none for your own account" })),
-  administration: s.boolean(),
+const where = z.strictObject({
+  org: z.optional(z.string().check(z.minLength(1), z.maxLength(39), z.regex(/^[A-Za-z0-9-]+$/), z.describe("an organization's GitHub login, or none for your own account"))),
+  administration: z.boolean(),
 });
 
 /* Making the App is the owner's own click on GitHub's page: the browser goes there. */
@@ -228,7 +229,7 @@ export const githubFinish = defineAction({
   title: 'Finish connecting GitHub',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: () => isOwner(),
   run: async () => {
     const state = pendingSetup();
@@ -245,7 +246,7 @@ export const githubCheck = defineAction({
   id: 'github.checkPermissions',
   title: 'Check GitHub permissions again',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   can: () => isOwner(),
   run: () => withReason(checkGithub),
   did: () => 'Checked GitHub',
@@ -258,7 +259,7 @@ export const githubAuthorize = defineAction({
   title: 'Authorize Tico on GitHub',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: () => isOwner(),
   run: async () => goToGithub((await withReason(githubAuthorizeLink)).url),
   target: () => GITHUB_TARGET,
@@ -269,7 +270,7 @@ export const githubDisconnect = defineAction({
   title: 'Disconnect GitHub',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: () => isOwner(),
   run: async () => {
     await withReason(disconnectGithub);

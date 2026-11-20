@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as z from 'zod/mini';
 import { keyHandler, shortcutsOf, type Shortcut } from './keys';
-import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
 // the real module, so feature actions that set up their queries on load still find what they use
@@ -9,7 +9,7 @@ vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi
 vi.mock('@/motion', async (real) => ({ ...(await real<object>()), flight: vi.fn(), waitForTarget: vi.fn(), wash: vi.fn() }));
 
 const act = (id: `${string}.${string}`, keys: Record<string, object>) =>
-  defineAction({ id, title: id, kind: 'view', input: s.object({}), run: () => {}, keys }) as AnyAction;
+  defineAction<object>({ id, title: id, kind: 'view', input: z.strictObject({}), run: () => {}, keys }) as AnyAction;
 const table = (...as: AnyAction[]) => shortcutsOf(new Map(as.map((a) => [a.id, a])));
 
 const fired: Shortcut[] = [];

@@ -1,6 +1,6 @@
-// What a person (or Tico) can do on the Calendar, in a meeting's panel and on a call.
 import type { Call, MeetingImporterList } from '@/api/schema';
-import { defineAction, s, type Ctx } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
 import { callWindowControls, desktop, isCallWindow } from '@/desktop';
 import { TRANSCRIPT_SOURCE_IDS, VIEWS, type TranscriptSource } from './model';
@@ -42,11 +42,11 @@ import { claim, hear, join, leave, pickDevice, prime, setMuted, toggleMute } fro
 import { clearStage, itemKey, keepItem, makeItemTask, setStage, takeOutAgent } from './queries';
 import { callState, hideChat, setCaptions, shareScreen } from './session';
 
-const id = (what: string) => s.string({ min: 1, max: 200, what });
-const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, 2026-11-18' });
-const when = s.string({ pattern: /^\d{4}-\d{2}-\d{2}T/, what: 'an ISO time, 2026-11-18T10:30:00Z' });
-const person = s.string({ min: 3, max: 200, pattern: /^(human|bot):[^\s]+$/, what: 'human:<id> or bot:<id>' });
-const guest = s.string({ min: 3, max: 200, pattern: /^((human|bot|team):[^\s]+|[^\s@]+@[^\s@]+)$/, what: 'human:<id>, bot:<id>, team:<id> or an email' });
+const id = (what: string) => z.string().check(z.minLength(1), z.maxLength(200), z.describe(what));
+const day = z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}$/), z.describe('a day, 2026-11-18'));
+const when = z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}T/), z.describe('an ISO time, 2026-11-18T10:30:00Z'));
+const person = z.string().check(z.minLength(3), z.maxLength(200), z.regex(/^(human|bot):[^\s]+$/), z.describe('human:<id> or bot:<id>'));
+const guest = z.string().check(z.minLength(3), z.maxLength(200), z.regex(/^((human|bot|team):[^\s]+|[^\s@]+@[^\s@]+)$/), z.describe('human:<id>, bot:<id>, team:<id> or an email'));
 
 type Search = Record<string, unknown>;
 const toCalendar = ({ router }: Ctx, search: (prev: Search) => Search) => router.navigate({ to: '/calendar', search });
@@ -59,11 +59,11 @@ const SOURCES = { kind: 'dialog', id: 'meeting-sources' } as const;
 
 /* ---------------------------------------------------------------- the calendar */
 
-const showInput = s.object({
-  view: s.optional(s.oneOf(VIEWS)),
-  date: s.optional(day),
-  q: s.optional(s.string({ max: 200, what: 'words to find in List' })),
-  review: s.optional(s.oneOf(['pending', 'dismissed', 'shared'] as const)),
+const showInput = z.strictObject({
+  view: z.optional(z.enum(VIEWS)),
+  date: z.optional(day),
+  q: z.optional(z.string().check(z.maxLength(200), z.describe('words to find in List'))),
+  review: z.optional(z.enum(['pending', 'dismissed', 'shared'] as const)),
 });
 const showRun = (ctx: Ctx, i: { view?: string; date?: string; q?: string; review?: string }) =>
   toCalendar(ctx, (prev) => {
@@ -88,7 +88,7 @@ export const openEvent = defineAction({
   id: 'calls.openEvent',
   title: 'Open an event',
   kind: 'view',
-  input: s.object({ id: id('an occurrence id') }),
+  input: z.strictObject({ id: id('an occurrence id') }),
   run: (ctx, { id }) => toCalendar(ctx, (prev) => ({ ...prev, panel: `event:${id}` })),
   did: () => 'Opened the event',
   target: ({ id }) => ({ kind: 'event', id }),
@@ -98,7 +98,7 @@ export const openMeeting = defineAction({
   id: 'calls.openMeeting',
   title: 'Open a meeting',
   kind: 'view',
-  input: s.object({ id: id('a meeting id') }),
+  input: z.strictObject({ id: id('a meeting id') }),
   run: (ctx, { id }) => toCalendar(ctx, (prev) => ({ ...prev, view: 'list', panel: `meeting:${id}` })),
   did: () => 'Opened the meeting',
   target: ({ id }) => ({ kind: 'meeting', id }),
@@ -108,17 +108,17 @@ export const closePanel = defineAction({
   id: 'calls.closePanel',
   title: 'Close the event',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: (ctx) => toCalendar(ctx, ({ panel: _, ...rest }) => rest),
   target: () => PAGE,
 });
 
 const eventInput = {
-  title: s.string({ min: 1, max: 300 }),
+  title: z.string().check(z.minLength(1), z.maxLength(300)),
   start: when,
-  minutes: s.number({ int: true, min: 5, max: 1440 }),
-  with: s.optional(s.array(guest, { max: 100 })),
-  meet: s.optional(s.boolean()),
+  minutes: z.int().check(z.minimum(5), z.maximum(1440)),
+  with: z.optional(z.array(guest).check(z.maxLength(100))),
+  meet: z.optional(z.boolean()),
 };
 const fields = (i: { title: string; start: string; minutes: number; with?: string[]; meet?: boolean }) => ({
   title: i.title,
@@ -131,7 +131,7 @@ export const newEvent = defineAction({
   id: 'calls.createEvent',
   title: 'Add an event',
   kind: 'change',
-  input: s.object(eventInput),
+  input: z.strictObject(eventInput),
   run: async (ctx, input) => {
     const o = await createEvent(fields(input));
     await toCalendar(ctx, (prev) => ({ ...prev, panel: `event:${o.occurrence_id}` }));
@@ -145,7 +145,7 @@ export const editEvent = defineAction({
   id: 'calls.changeEvent',
   title: 'Change an event',
   kind: 'change',
-  input: s.object({ id: id('an occurrence id'), ...eventInput }),
+  input: z.strictObject({ id: id('an occurrence id'), ...eventInput }),
   run: (_ctx, { id, ...input }) => changeEvent(id, fields(input)),
   did: ({ title }) => `Changed ${title}`,
   target: ({ id }) => ({ kind: 'event', id }),
@@ -155,7 +155,7 @@ export const deleteEvent = defineAction({
   id: 'calls.removeEvent',
   title: 'Remove an event',
   kind: 'change',
-  input: s.object({ id: id('an occurrence id') }),
+  input: z.strictObject({ id: id('an occurrence id') }),
   run: async (ctx, { id }) => {
     await removeEvent(id);
     await toCalendar(ctx, ({ panel: _, ...rest }) => rest);
@@ -177,7 +177,7 @@ export const dismissMeetingItem = defineAction({
   id: 'calls.dismissItem',
   title: 'Hide a meeting item',
   kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), item: id('an item id') }),
+  input: z.strictObject({ meeting: id('a meeting id'), item: id('an item id') }),
   run: (ctx, { meeting, item }) => dismissItem(meeting, itemOf(ctx, meeting, item)),
   did: () => 'Hid it',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -187,7 +187,7 @@ export const editMeetingItem = defineAction({
   id: 'calls.editItem',
   title: 'Reword a meeting item',
   kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), item: id('an item id'), text: s.string({ min: 1, max: 2000 }) }),
+  input: z.strictObject({ meeting: id('a meeting id'), item: id('an item id'), text: z.string().check(z.minLength(1), z.maxLength(2000)) }),
   run: (ctx, { meeting, item, text }) => editItem(meeting, itemOf(ctx, meeting, item), text),
   did: () => 'Changed it',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -197,7 +197,7 @@ export const editNotes = defineAction({
   id: 'calls.editNote',
   title: 'Write notes on a meeting',
   kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), note: s.string({ max: 20000 }) }),
+  input: z.strictObject({ meeting: id('a meeting id'), note: z.string().check(z.maxLength(20000)) }),
   run: (_ctx, { meeting, note }) => editNote(meeting, note),
   did: () => 'Saved the notes',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -207,12 +207,12 @@ export const review = defineAction({
   id: 'calls.review',
   title: 'Share or put away a meeting',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     meeting: id('a meeting id'),
-    action: s.oneOf(['approve', 'dismiss', 'restore'] as const),
+    action: z.enum(['approve', 'dismiss', 'restore'] as const),
     // Sharing only: who sees it once shared, and the agent that files its tasks then ('auto': Tico routes it).
-    private: s.optional(s.boolean()),
-    send: s.optional(s.string({ min: 4, max: 200, pattern: /^(auto|bot:\S+)$/, what: 'auto or bot:<id>' })),
+    private: z.optional(z.boolean()),
+    send: z.optional(z.string().check(z.minLength(4), z.maxLength(200), z.regex(/^(auto|bot:\S+)$/), z.describe('auto or bot:<id>'))),
   }),
   // Sharing shows a meeting only the person saw to the whole company: their own press.
   can: (ctx, { action }) => !(ctx.via === 'tico' && action === 'approve'),
@@ -227,7 +227,7 @@ export const makeMeetingTask = defineAction({
   id: 'calls.makeTask',
   title: 'Make a task from a meeting',
   kind: 'change',
-  input: s.object({ meeting: id('a meeting id'), item: id('an item id') }),
+  input: z.strictObject({ meeting: id('a meeting id'), item: id('an item id') }),
   run: (ctx, { meeting, item }) => makeTask(meeting, itemOf(ctx, meeting, item)),
   did: () => 'Made the task',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -242,7 +242,7 @@ export const startCallAction = defineAction({
   title: 'Start a call',
   kind: 'change',
   tico: false,
-  input: s.object({ with: s.array(person, { max: 50 }) }),
+  input: z.strictObject({ with: z.array(person).check(z.maxLength(50)) }),
   run: async (ctx, input) => {
     prime(null);
     // No call came of it: let the microphone go again.
@@ -290,7 +290,7 @@ export const startInThreadAction = defineAction({
   title: 'Start a call in a thread',
   kind: 'change',
   tico: false,
-  input: s.object({ thread: id('a thread id'), meet: s.optional(s.boolean()), agents: s.optional(s.array(person, { max: 50 })) }),
+  input: z.strictObject({ thread: id('a thread id'), meet: z.optional(z.boolean()), agents: z.optional(z.array(person).check(z.maxLength(50))) }),
   run: async (ctx, { thread, meet, agents = [] }) => {
     if (meet) {
       const tab = blankTab();
@@ -319,7 +319,7 @@ export const endCallAction = defineAction({
   id: 'calls.end',
   title: 'End a call for everyone',
   kind: 'change',
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   // For everyone at once: a started call by its starter only (calls.may_end), for Tico as for a click.
   can: (ctx, { id }) => {
     const c = ctx.queryClient.getQueryData<Call>(callKeys.one(id));
@@ -335,7 +335,7 @@ export const joinCallAction = defineAction({
   title: 'Join a call',
   kind: 'change',
   tico: false,
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   run: async (ctx, { id }) => {
     const known = ctx.queryClient.getQueryData<Call>(callKeys.one(id));
     if (known?.provider === 'google_meet') return intoMeet(blankTab(), () => joinCall(id), known.join_url);
@@ -350,7 +350,7 @@ export const openCallAction = defineAction({
   id: 'calls.open',
   title: 'Open a call',
   kind: 'view',
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   run: (ctx, { id }) => openCall(ctx, id),
   show: (ctx, { id }) => openCall(ctx, id),
   did: () => 'Opened the call',
@@ -362,7 +362,7 @@ export const mute = defineAction({
   title: 'Mute',
   kind: 'change',
   tico: false,
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   run: (_ctx, { on }) => setMuted(on),
   did: ({ on }) => (on ? 'Muted' : 'Unmuted'),
 });
@@ -373,7 +373,7 @@ export const toggleMuteAction = defineAction({
   title: 'Mute or unmute',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => toggleMute(),
 });
 
@@ -381,7 +381,7 @@ export const addPeople = defineAction({
   id: 'calls.add',
   title: 'Add to a call',
   kind: 'change',
-  input: s.object({ id: id('a call id'), with: s.array(person, { max: 50 }) }),
+  input: z.strictObject({ id: id('a call id'), with: z.array(person).check(z.maxLength(50)) }),
   run: (_ctx, i) => addToCall(i.id, i.with),
   did: ({ with: w }) => (w.length === 1 ? 'Added one to the call' : `Added ${w.length} to the call`),
   target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
@@ -391,7 +391,7 @@ export const declineAction = defineAction({
   id: 'calls.decline',
   title: 'Decline a call',
   kind: 'change',
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   run: (_ctx, { id }) => decline(id),
   did: () => 'Declined the call',
 });
@@ -401,7 +401,7 @@ export const device = defineAction({
   title: 'Pick a microphone',
   kind: 'change',
   tico: false,
-  input: s.object({ id: id('a device id') }),
+  input: z.strictObject({ id: id('a device id') }),
   run: (_ctx, { id }) => pickDevice(id),
 });
 
@@ -410,7 +410,7 @@ export const hearAction = defineAction({
   title: 'Turn on the call’s sound',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => hear(),
 });
 
@@ -418,7 +418,7 @@ export const leaveAction = defineAction({
   id: 'calls.leave',
   title: 'Leave the call',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => leave(),
   did: () => 'Left the call',
 });
@@ -433,7 +433,7 @@ export const keepOnTop = defineAction({
   title: 'Keep the call window on top',
   kind: 'view',
   tico: false,
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   can: (ctx) => !!callWindowControls() && smallWindow(ctx),
   run: async (_ctx, { on }) => {
     const w = callWindowControls();
@@ -450,7 +450,7 @@ export const backToApp = defineAction({
   title: 'Move the call back to the app',
   kind: 'view',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: (ctx) => !!desktop() && smallWindow(ctx),
   run: async () => {
     const t = desktop();
@@ -468,18 +468,18 @@ export const logMeetingAction = defineAction({
   id: 'calls.logMeeting',
   title: 'Log a meeting',
   kind: 'change',
-  input: s.object({
-    title: s.optional(s.string({ max: 300, what: 'a title' })),
-    start: s.optional(when),
-    with: s.optional(s.array(s.string({ min: 1, max: 200, what: 'a name or an email' }), { max: 100 })),
-    notes: s.optional(s.string({ max: 200_000, what: 'notes, in markdown' })),
-    transcript: s.optional(s.string({ max: 2_000_000, what: 'a transcript: Name: text, WebVTT, SRT or JSON' })),
+  input: z.strictObject({
+    title: z.optional(z.string().check(z.maxLength(300), z.describe('a title'))),
+    start: z.optional(when),
+    with: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(200), z.describe('a name or an email'))).check(z.maxLength(100))),
+    notes: z.optional(z.string().check(z.maxLength(200_000), z.describe('notes, in markdown'))),
+    transcript: z.optional(z.string().check(z.maxLength(2_000_000), z.describe('a transcript: Name: text, WebVTT, SRT or JSON'))),
     /** Where the transcript came from (upload when left out). */
-    source: s.optional(s.oneOf(TRANSCRIPT_SOURCE_IDS as readonly TranscriptSource[])),
-    recording: s.optional(s.string({ max: 2000, pattern: /^https:\/\/\S+$/, what: 'a recording link, https://…' })),
-    private: s.optional(s.boolean()),
+    source: z.optional(z.enum(TRANSCRIPT_SOURCE_IDS as readonly TranscriptSource[])),
+    recording: z.optional(z.string().check(z.maxLength(2000), z.regex(/^https:\/\/\S+$/), z.describe('a recording link, https://…'))),
+    private: z.optional(z.boolean()),
     /** An agent to hand it to once filed ('auto': Tico routes it). */
-    send: s.optional(s.string({ min: 4, max: 200, pattern: /^(auto|bot:\S+)$/, what: 'auto or bot:<id>' })),
+    send: z.optional(z.string().check(z.minLength(4), z.maxLength(200), z.regex(/^(auto|bot:\S+)$/), z.describe('auto or bot:<id>'))),
   }),
   run: async (ctx, i) => {
     if (!i.notes?.trim() && !i.transcript?.trim()) throw new Error('empty: add notes or a transcript');
@@ -502,12 +502,12 @@ export const logMeetingAction = defineAction({
   target: (_i, m) => (m?.id ? { kind: 'meeting', id: m.id } : PAGE),
 });
 
-const share = s.oneOf(['default', 'review', 'auto'] as const);
+const share = z.enum(['default', 'review', 'auto'] as const);
 export const meetingSettingsAction = defineAction({
   id: 'calls.meetingSettings',
   title: 'Change meeting settings',
   kind: 'change',
-  input: s.object({ mine: share, team: s.optional(s.oneOf(['review', 'auto'] as const)) }),
+  input: z.strictObject({ mine: share, team: z.optional(z.enum(['review', 'auto'] as const)) }),
   // Sharing at once shows every meeting brought in to the company without a look first: the person's own press.
   can: (ctx, { mine, team }) => !(ctx.via === 'tico' && (mine === 'auto' || team === 'auto')),
   run: (_ctx, { mine, team }) => setMeetingSettings({ auto_share: mine === 'default' ? null : mine === 'auto', ...(team ? { review_default: team } : {}) }),
@@ -520,7 +520,7 @@ export const connectGranolaAction = defineAction({
   title: 'Connect Granola',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => connectGranola(),
   did: () => 'Started connecting Granola',
 });
@@ -530,10 +530,10 @@ export const setImporterAction = defineAction({
   id: 'calls.setImporter',
   title: 'Turn a meeting importer on or off',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     source: id('an importer: zoom, google-meet or granola'),
-    on: s.boolean(),
-    computer: s.optional(id('a computer id from the importers list')),
+    on: z.boolean(),
+    computer: z.optional(id('a computer id from the importers list')),
   }),
   can: ({ queryClient }) => queryClient.getQueryData(meQuery.queryKey)?.role === 'owner',
   run: async ({ queryClient }, { source, on, computer }) => {
@@ -552,7 +552,7 @@ export const syncGranolaAction = defineAction({
   id: 'calls.syncGranola',
   title: 'Sync Granola now',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => syncGranola(),
   did: () => 'Asked Granola for new notes',
 });
@@ -561,7 +561,7 @@ export const disconnectGranolaAction = defineAction({
   id: 'calls.disconnectGranola',
   title: 'Remove Granola',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   // Only a person can connect it again (above), so removing it is the person's own press too.
   tico: false,
   run: () => disconnectGranola(),
@@ -576,7 +576,7 @@ export const setPrivateAction = defineAction({
   id: 'calls.setPrivate',
   title: 'Make a meeting private or the team’s',
   kind: 'change',
-  input: s.object({ meeting: meetingId, private: s.boolean() }),
+  input: z.strictObject({ meeting: meetingId, private: z.boolean() }),
   // Opening a meeting to the whole company is the person's own press; keeping it private is not.
   can: (ctx, i) => !(ctx.via === 'tico' && !i.private),
   run: (_ctx, i) => setMeetingPrivate(i.meeting, i.private),
@@ -588,7 +588,7 @@ export const sendMeetingAction = defineAction({
   id: 'calls.sendMeeting',
   title: 'Send a meeting to an agent',
   kind: 'change',
-  input: s.object({ meeting: meetingId, agent: s.string({ min: 5, max: 200, pattern: /^bot:[^\s]+$/, what: 'bot:<id>' }) }),
+  input: z.strictObject({ meeting: meetingId, agent: z.string().check(z.minLength(5), z.maxLength(200), z.regex(/^bot:[^\s]+$/), z.describe('bot:<id>')) }),
   run: (_ctx, { meeting, agent }) => sendMeeting(meeting, agent.slice(4)),
   did: () => 'Sent the meeting to the agent',
   target: ({ meeting }) => ({ kind: 'meeting', id: meeting }),
@@ -600,7 +600,7 @@ export const deleteMeetingAction = defineAction({
   kind: 'change',
   // It cannot be undone from the app: the person's own press.
   tico: false,
-  input: s.object({ meeting: meetingId }),
+  input: z.strictObject({ meeting: meetingId }),
   run: async (ctx, { meeting }) => {
     await deleteMeeting(meeting);
     await toCalendar(ctx, ({ panel: _, ...rest }) => rest);
@@ -611,7 +611,7 @@ export const deleteMeetingAction = defineAction({
 
 /* ---------------------------------------------------------------- booked calls */
 
-const callWith = s.array(person, { max: 50 });
+const callWith = z.array(person).check(z.maxLength(50));
 
 /** A voice call now, from New call: its title kept. The microphone opens on the person's own press. */
 export const startNowAction = defineAction({
@@ -619,7 +619,7 @@ export const startNowAction = defineAction({
   title: 'Start a voice call now',
   kind: 'change',
   tico: false,
-  input: s.object({ with: callWith, title: s.optional(s.string({ max: 200 })) }),
+  input: z.strictObject({ with: callWith, title: z.optional(z.string().check(z.maxLength(200))) }),
   run: async (ctx, i) => {
     prime(null);
     const call = await startTitled(i.with, i.title?.trim() ?? '').catch((e: unknown) => {
@@ -638,11 +638,11 @@ export const scheduleAction = defineAction({
   id: 'calls.schedule',
   title: 'Book a voice call',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     with: callWith,
-    title: s.optional(s.string({ max: 200 })),
+    title: z.optional(z.string().check(z.maxLength(200))),
     start: when,
-    minutes: s.number({ int: true, min: 5, max: 1440 }),
+    minutes: z.int().check(z.minimum(5), z.maximum(1440)),
   }),
   run: (_ctx, i) => {
     if (!i.with.length) throw new Error('empty: pick who the call is with');
@@ -658,7 +658,7 @@ export const moveCallAction = defineAction({
   id: 'calls.moveCall',
   title: 'Change a booked call’s time',
   kind: 'change',
-  input: s.object({ id: id('a call id'), start: when, minutes: s.number({ int: true, min: 5, max: 1440 }) }),
+  input: z.strictObject({ id: id('a call id'), start: when, minutes: z.int().check(z.minimum(5), z.maximum(1440)) }),
   run: (_ctx, i) => moveCall(i.id, new Date(i.start), i.minutes),
   did: () => 'Changed the call’s time',
   target: () => PAGE,
@@ -668,7 +668,7 @@ export const cancelCallAction = defineAction({
   id: 'calls.cancel',
   title: 'Cancel a booked call',
   kind: 'change',
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   run: async (ctx, { id }) => {
     await cancelCall(id);
     await toCalendar(ctx, ({ panel: _, ...rest }) => rest);
@@ -688,7 +688,7 @@ export const shareAction = defineAction({
   kind: 'change',
   // It sends what is on the person's own screen to everyone in the call, from the browser's picker: their own press.
   tico: false,
-  input: s.object({ id: id('a call id'), on: s.boolean() }),
+  input: z.strictObject({ id: id('a call id'), on: z.boolean() }),
   run: async (ctx, { id, on }) => {
     if (!on) return stopShowing(ctx, id);
     if (!(await shareScreen(true))) return;
@@ -712,7 +712,7 @@ export const stopShowAction = defineAction({
   id: 'calls.stopShow',
   title: 'Stop showing on the call',
   kind: 'change',
-  input: s.object({ id: id('a call id') }),
+  input: z.strictObject({ id: id('a call id') }),
   run: (ctx, { id }) => stopShowing(ctx, id),
   did: () => 'Stopped showing',
 });
@@ -721,7 +721,7 @@ export const captionsAction = defineAction({
   id: 'calls.captions',
   title: 'Show or hide captions in the call bar',
   kind: 'view',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   run: (_ctx, { on }) => setCaptions(on),
   did: ({ on }) => (on ? 'Captions on' : 'Captions off'),
 });
@@ -730,19 +730,19 @@ export const takeOutAction = defineAction({
   id: 'calls.takeOut',
   title: 'Take an agent out of the call',
   kind: 'change',
-  input: s.object({ id: id('a call id'), agent: id('the agent’s id in the call') }),
+  input: z.strictObject({ id: id('a call id'), agent: id('the agent’s id in the call') }),
   run: (_ctx, { id, agent }) => takeOutAgent(id, agent),
   did: () => 'Took the agent out',
   target: ({ id }) => ({ kind: 'page', id: `/call/${id}` }),
 });
 
-const item = { id: id('a call id'), owner: s.string({ max: 200 }), title: s.string({ min: 1, max: 2000 }) };
+const item = { id: id('a call id'), owner: z.string().check(z.maxLength(200)), title: z.string().check(z.minLength(1), z.maxLength(2000)) };
 
 export const makeItemTaskAction = defineAction({
   id: 'calls.makeItemTask',
   title: 'Make a task from a call’s action item',
   kind: 'change',
-  input: s.object(item),
+  input: z.strictObject(item),
   run: async (ctx, i) => {
     const task = await makeItemTask(cachedCall(ctx, i.id)?.meeting_id ?? null, i.title, i.owner || myId(ctx) || '');
     keepItem(i.id, itemKey(i), task.id);
@@ -755,7 +755,7 @@ export const hideItemAction = defineAction({
   id: 'calls.hideItem',
   title: 'Hide a call’s action item',
   kind: 'view',
-  input: s.object(item),
+  input: z.strictObject(item),
   run: (_ctx, i) => keepItem(i.id, itemKey(i), ''),
   did: () => 'Hid the item',
 });
@@ -764,7 +764,7 @@ export const hideChatAction = defineAction({
   id: 'calls.hideChat',
   title: 'Close the call’s chat beside the page',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => hideChat(),
   did: () => 'Closed the chat',
 });

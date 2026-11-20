@@ -28,7 +28,7 @@ describe('meetings search', () => {
       ['Frost planning', { id: 'calls.openMeeting', input: { id: 'm2' } }],
       ['Weekly sync', { id: 'calls.openMeeting', input: { id: 'm1' } }],
     ]);
-    expect(hits.every((h) => registry.get(h.run.id)?.input.parse(h.run.input).ok)).toBe(true);
+    expect(hits.every((h) => registry.get(h.run.id)?.input.safeParse(h.run.input).success)).toBe(true);
     expect(await meetingsSearch.find('', sig())).toEqual([]);
   });
 });

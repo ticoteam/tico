@@ -1,4 +1,5 @@
-import { defineAction, run, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, run } from '@/actions';
 import { sendMessage, ticoRoomQuery } from '@/conversation';
 import { meQuery, queryClient } from '@/data';
 import { askedFrom, pageName } from './pageName';
@@ -11,7 +12,7 @@ export const ask = defineAction({
   title: 'Ask Tico',
   kind: 'change',
   tico: false,
-  input: s.object({ text: s.string({ min: 1, max: 4000 }) }),
+  input: z.strictObject({ text: z.string().check(z.minLength(1), z.maxLength(4000)) }),
   run: async (ctx, { text }) => {
     await run('shell.fold', { sheet: 'tico', folded: false }, { via: ctx.via });
     const power = await queryClient.ensureQueryData(ticoPowerQuery);
@@ -32,7 +33,7 @@ export const turnOn = defineAction({
   title: 'Turn on Tico',
   kind: 'change',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: (ctx) => ctx.queryClient.getQueryData(ticoPowerQuery.queryKey)?.can_turn_on !== false,
   run: () => turnOnTico(),
   did: (_input, state) => (state === 'active' ? 'Turned on Tico' : 'Tico needs a computer'),
