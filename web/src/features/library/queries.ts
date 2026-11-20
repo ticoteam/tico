@@ -386,7 +386,7 @@ export interface SkillInstall {
   target: SkillActor;
 }
 export interface SkillDetail {
-  skill: { id: string | null; name: string; description: string; latest: SkillVersion | null };
+  skill: { id: string | null; name: string; description: string; latest: SkillVersion | null; from_tico?: boolean };
   versions: SkillVersion[];
   installs: SkillInstall[];
   shipped?: { files?: SkillFile[]; bots: SkillActor[] };
@@ -477,10 +477,12 @@ export interface InstallTargets {
   teams: Array<{ id: string; name: string; targets: Array<{ target_type: 'Bot' | 'Human'; target_id: string }> }>;
 }
 
-export const installTargetsQuery = queryOptions({
-  queryKey: ['skills', 'install-targets'],
-  queryFn: () => api.get<InstallTargets>('/api/v2/skills/install-targets'),
-});
+/** Who may get this skill: the agents whose role already ships it are left out (they have it as a file). */
+export const installTargetsQuery = (skill: string) =>
+  queryOptions({
+    queryKey: ['skills', 'install-targets', skill],
+    queryFn: () => api.get<InstallTargets>(`/api/v2/skills/install-targets?skill=${enc(skill)}`),
+  });
 
 export type InstallFor = Array<{ target_type: 'Bot' | 'Human'; target_id: string }>;
 

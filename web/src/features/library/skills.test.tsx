@@ -264,7 +264,7 @@ describe('a skill', () => {
     expect(screen.getByText('Mail helper')).toBeTruthy();
     expect(screen.getByText('4 runs')).toBeTruthy();
     expect(screen.getByText('v1')).toBeTruthy();
-    queryClient.setQueryData(installTargetsQuery.queryKey, { me: { type: 'Human', id: 'me' }, bots: [{ id: 'b1', name: 'Helper' }], people: [], teams: [] });
+    queryClient.setQueryData(installTargetsQuery('triage').queryKey, { me: { type: 'Human', id: 'me' }, bots: [{ id: 'b1', name: 'Helper' }], people: [], teams: [] });
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Install' }));
     expect(await screen.findByRole('dialog', { name: 'Install triage' })).toBeTruthy();
@@ -291,10 +291,10 @@ describe('a skill', () => {
     expect(sent.some(({ url }) => url.includes('/versions/'))).toBe(false);
   });
   it("Tico's library skill: Tico approved it, it is on its installs and its roles' agents once each, and installs", async () => {
-    serve();
+    const sent = serve();
     const byTico = { ...v(1), approved_by_id: null };
     queryClient.setQueryData(skillQuery('triage').queryKey, {
-      skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: byTico },
+      skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: byTico, from_tico: true },
       versions: [byTico],
       installs: [{ id: 'i1', target: { type: 'Bot', id: 'b1', name: 'Mail helper' } }],
       shipped: {
@@ -313,7 +313,25 @@ describe('a skill', () => {
     expect(screen.getByText('Desk agent')).toBeTruthy();
     expect(screen.getByLabelText('Tico')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'Install' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Install' }));
+    expect(await screen.findByRole('dialog', { name: 'Install triage' })).toBeTruthy();
+    // The picker asks for this skill's targets: the agents whose role ships it are left out by the server.
+    await waitFor(() => expect(sent.some(({ url }) => url === '/api/v2/skills/install-targets?skill=triage')).toBe(true));
+  });
+  it("the company's own skill of a name Tico ships is on its installs only", async () => {
+    serve();
+    queryClient.setQueryData(skillQuery('triage').queryKey, {
+      skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: v(1), from_tico: false },
+      versions: [v(1)],
+      installs: [{ id: 'i1', target: { type: 'Bot', id: 'b1', name: 'Mail helper' } }],
+      shipped: { bots: [{ type: 'Bot', id: 'b2', name: 'Desk agent' }] },
+    } as never);
+    queryClient.setQueryData(skillTextQuery('triage', 1).queryKey, { ...v(1), files: [{ path: 'SKILL.md', content: 'Read each letter.' }] } as never);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    at('/library/skills?skill=triage', <SkillsPage search={{ skill: 'triage' }} />);
+    expect(await screen.findByText('Mail helper')).toBeTruthy();
+    expect(screen.queryByText('Desk agent')).toBeNull();
   });
 
   it('takes a skill off a teammate from the page’s ⋯, with each one’s runs beside it @s782', async () => {

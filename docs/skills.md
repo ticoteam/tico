@@ -11,8 +11,11 @@ anyone can install one on any agent or person. Tico adds them at start and insta
 defaults to the agents made from them, as files in their repositories. Each one is marked as Tico's, with **Tico** as the
 approver of its versions; they're not screened. A release that changes one adds its next version (installs on latest
 get it, pinned ones stay). A skill the library drops is retired: it leaves the list and its installs stop resolving. Tico
-leaves a name alone when the company has its own skill of that name, or approved its own version on top of Tico's. Skills
-only one role ships (outside the library) are listed as before, not added.
+leaves a name alone when the company has its own skill of that name, or approved its own version on top of Tico's; then
+it is the company's skill, not Tico's, and the agents whose role ships the name (or their uses) don't count for it. If
+the library can't be read, or holds no valid skill, nothing is added or retired. Skills only one role ships (outside the
+library) are listed as before, not added. An agent whose role already ships a skill has it as a file: installing that
+skill on it again is refused ("already has it from its role"), a team install leaves it out, and Install doesn't offer it.
 
 ## Function
 

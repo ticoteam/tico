@@ -16,6 +16,7 @@ from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
 from backend.tests.helpers.automation_cli import Client
 from backend.tests.helpers.botops_parity import bot_id
+from backend.tests.helpers.skills import publish
 from clients import hubcli, remotecli
 
 SHIPPED = "answer-a-customer"  # in the library, function customers; the support-owner role ships it
@@ -150,6 +151,54 @@ def test_the_companys_own_skill_of_a_library_name_is_left_alone_and_logged_once(
     assert mine["created_by_type"] == "Human" and mine["versions"] == 0  # untouched
 
 
+def test_a_missing_or_empty_library_retires_nothing_and_is_read_again(company, tmp_path, caplog):
+    root = tmp_path / "catalog"
+    _write(root, "review-a-contract")
+    _seed(company, root)
+    missing = tmp_path / "nowhere"
+    with caplog.at_level(logging.WARNING, logger="tico.skill_library"):
+        assert _seed(company, missing) == {"unreadable": True}
+        empty = tmp_path / "empty"
+        (empty / "_shared" / ".claude" / "skills" / "broken").mkdir(parents=True)  # no SKILL.md: nothing valid
+        assert _seed(company, empty) == {"unreadable": True}
+    assert any("nothing is seeded or retired" in r.getMessage() for r in caplog.records)
+    assert _rows(company)["review-a-contract"]["deleted_at"] is None
+    # Not kept: once the library is there again, it is read.
+    with company.transaction() as c:
+        assert SL.seed(c, NAMES, missing) == {"unreadable": True}
+        _write(missing, "review-a-contract")
+        assert SL.seed(c, NAMES, missing) == {"unchanged": True}  # the same library as seeded
+
+
+def test_nothing_outside_the_real_catalog_is_seeded(company, tmp_path):
+    root, outside = tmp_path / "catalog", tmp_path / "outside"
+    _write(root, "review-a-contract")
+    _write(outside, "evil")
+    (root / "_shared" / ".claude" / "skills" / "evil").symlink_to(outside / "_shared" / ".claude" / "skills" / "evil")
+    done = _seed(company, root)
+    assert done["added"] == ["review-a-contract"] and "evil" not in _rows(company)
+    # A library folder that is a link out of the catalog is no library at all.
+    linked = tmp_path / "linked"
+    (linked / "_shared" / ".claude").mkdir(parents=True)
+    (linked / "_shared" / ".claude" / "skills").symlink_to(outside / "_shared" / ".claude" / "skills")
+    assert _seed(company, linked) == {"unreadable": True}
+    assert _rows(company)["review-a-contract"]["deleted_at"] is None
+
+
+def test_a_skill_the_rules_refuse_is_kept_then_retired_when_it_leaves(company, tmp_path):
+    root = tmp_path / "catalog"
+    _write(root, "review-a-contract")
+    _write(root, "check-the-build")
+    _seed(company, root)
+    broken = root / "_shared" / ".claude" / "skills" / "check-the-build" / "SKILL.md"
+    broken.write_text("---\nname: another-name\ndescription: d\n---\n")  # pack refuses a name that differs
+    done = _seed(company, root)
+    assert not done["retired"] and _rows(company)["check-the-build"]["deleted_at"] is None
+    broken.unlink()
+    broken.parent.rmdir()
+    assert _seed(company, root)["retired"] == ["check-the-build"]
+
+
 def test_the_migration_lets_ticos_version_have_no_proposal_or_approver(company):
     with company.read() as c:
         info = {r[1]: r[3] for r in c.execute("PRAGMA table_info(skill_versions)")}
@@ -171,7 +220,7 @@ def test_the_library_is_listed_once_per_name_installable_and_on_its_role_bots(ap
     SL.forget()
     with store.transaction() as c:
         done = SL.seed_company(c, store.settings)
-    library = sorted(SL.packed(store.settings.catalog_dir))
+    library = sorted(SL.packed(store.settings.catalog_dir).skills)
     assert sorted(done["added"]) == library and len(library) >= 50
     with store.transaction() as c:
         assert SL.seed_company(c, store.settings) == {"unchanged": True}
@@ -193,11 +242,20 @@ def test_the_library_is_listed_once_per_name_installable_and_on_its_role_bots(ap
     assert detail["skill"]["from_tico"] and detail["versions"][0]["approved_by_id"] is None
     assert detail["installs"] == [] and [b["id"] for b in detail["shipped"]["bots"]] == [ops]
 
-    # Install works for an agent that lacks it; the one that has it as a file is still counted once.
-    post(api, f"skills/{SHIPPED}/installs", {"target_type": "Bot", "target_id": finance})
-    post(api, f"skills/{SHIPPED}/installs", {"target_type": "Bot", "target_id": ops})
+    # Install works for an agent that lacks it. The one whose role ships it has it as a file: a second copy is refused
+    # (a team's install leaves it out), and the picker does not offer it.
+    refused = post(api, f"skills/{SHIPPED}/installs", {"target_type": "Bot", "target_id": ops}, expected=409)
+    assert refused["error"]["code"] == "has_from_role"
+    assert "already has answer-a-customer from its role" in str(refused["error"])
+    both = [{"target_type": "Bot", "target_id": b} for b in (ops, finance)]
+    done = post(api, f"skills/{SHIPPED}/installs/bulk", {"targets": both, "version_policy": "latest"})
+    assert [i["target"]["id"] for i in done["installs"]] == [finance]
+    assert done["left_out"] == [{"target_type": "Bot", "target_id": ops}]
+    offered = {b["id"] for b in get(api, f"skills/install-targets?skill={SHIPPED}")["bots"]}
+    assert finance in offered and ops not in offered
+    assert ops in {b["id"] for b in get(api, "skills/install-targets")["bots"]}
     seeded = row(get(api, "skills")["skills"], SHIPPED)
-    assert seeded["installs_count"] == 2 and seeded["on_count"] == 2
+    assert seeded["installs_count"] == 1 and seeded["on_count"] == 2
     assert sorted(t["id"] for t in seeded["on"]) == sorted([ops, finance])
 
     legal = [n for n in library if SL.bundles.function_group(SC.shipped()[n]["function"]) == "legal"]
@@ -222,5 +280,45 @@ def test_a_role_bots_uses_before_the_library_was_seeded_still_count(api):
         SL.seed_company(c, store.settings)
     used = row(get(api, "skills/usage?days=30", "ben-test")["skills"], SHIPPED)
     assert used["uses"] == 5 and used["bots"] == 1 and used["by_trigger"]["model"] == 5
-    totals = get(api, f"skills/{SHIPPED}/usage?days=30", "ben-test")["totals"]
-    assert totals["uses"] == 5 and totals["bots"] == 1
+    detail = get(api, f"skills/{SHIPPED}/usage?days=30", "ben-test")
+    assert detail["totals"]["uses"] == 5 and detail["totals"]["bots"] == 1
+    assert [(a["id"], a["uses"], a["by_trigger"]["model"]) for a in detail["actors"]] == [(ops, 5, 5)]
+    assert get(api, f"skills/{SHIPPED}/usage?days=30", "cara-test")["actors"] == []  # someone else's: totals only
+
+
+def test_the_companys_own_skill_of_a_shipped_name_gets_no_role_bots_or_their_uses(api):
+    store = api.app.state.store
+    ops = bot_id(api, "ops")
+    with store.transaction() as c:
+        BS.update(c, ops, {"template": "support-owner"})
+        c.execute(
+            "INSERT INTO unlisted_skill_usage_dailies (used_on, name, bot_id, uses_count) VALUES (?,?,?,5)",
+            (H.now()[:10], SHIPPED, ops),
+        )
+    publish(api, name=SHIPPED)  # the company's own, before any seed: seeding leaves it alone
+    SL.forget()
+    with store.transaction() as c:
+        assert SHIPPED in SL.seed_company(c, store.settings)["skipped"]
+    mine = row(get(api, "skills")["skills"], SHIPPED)
+    assert not mine["from_tico"] and mine["on"] == [] and mine["on_count"] == 0
+    assert not get(api, "skills/" + SHIPPED)["skill"]["from_tico"]
+    used = row(get(api, "skills/usage?days=30", "ben-test")["skills"], SHIPPED)
+    assert used["uses"] == 0 and used["bots"] == 0
+    detail = get(api, f"skills/{SHIPPED}/usage?days=30", "ben-test")
+    assert detail["totals"]["uses"] == 0 and detail["actors"] == []
+
+
+def test_a_persons_version_or_revival_makes_a_library_skill_the_companys(api):
+    store = api.app.state.store
+    SL.forget()
+    with store.transaction() as c:
+        SL.seed_company(c, store.settings)
+        c.execute("UPDATE skills SET deleted_at=? WHERE name='review-a-contract'", (H.now(),))  # as if retired
+    assert get(api, "skills/review-a-contract")["skill"]["id"] is None  # retired: only what its roles ship
+    publish(api, name=SHIPPED)  # a person's version on top of Tico's
+    publish(api, name="review-a-contract")  # a person brings a retired one back
+    listed = get(api, "skills")["skills"]
+    for name in (SHIPPED, "review-a-contract"):
+        assert not row(listed, name)["from_tico"] and row(listed, name)["latest"]["number"] == 2
+        detail = get(api, "skills/" + name)
+        assert not detail["skill"]["from_tico"] and detail["skill"]["latest"]["approved_by_id"] == "ben"

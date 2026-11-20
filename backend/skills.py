@@ -87,6 +87,19 @@ def _skill(c, name):
     return _row(c, "SELECT * FROM skills WHERE name=?", (name,))
 
 
+# Tico's own skill: Tico made it and its latest version is Tico's (no person approved one on top, or brought it back).
+_FROM_TICO = "(s.created_by_type = '" + SL.TICO + "' AND v.id IS NOT NULL AND v.approved_by_id IS NULL)"
+
+
+def _from_tico(c, skill):
+    """Whether this skills row is Tico's own (`_FROM_TICO`)."""
+    row = c.execute(
+        "SELECT " + _FROM_TICO + " FROM skills s LEFT JOIN skill_versions v ON v.id = s.latest_version_id WHERE s.id=?",
+        (skill["id"],),
+    ).fetchone()
+    return bool(row and row[0])
+
+
 def _skill_or_404(c, name):
     skill = None if name in bundles.RESERVED else _skill(c, name)
     if not skill or skill["deleted_at"]:  # a retired skill (backend/skill_library.py) is not in the directory
@@ -305,8 +318,20 @@ def _pin(c, skill, policy, number):
     return version["id"]
 
 
-def _install(c, auth, who, skill, target_type, target_id, policy, number):
+ROLE_COPY = "already has {name} from its role; installing it too would give it a second copy"
+
+
+def _install(c, auth, who, skill, target_type, target_id, policy, number, from_role, left_out=None):
+    """The install's id. A bot whose role ships a skill of this name (`from_role`, {bot id: names}) has it in its
+    repository already: refused (409 has_from_role), or with `left_out` (a team's install) left out and None."""
     tid = _target(c, auth, who, target_type, target_id)
+    if target_type == "Bot" and skill["name"] in from_role.get(tid, ()):
+        if left_out is not None:
+            left_out.append({"target_type": target_type, "target_id": tid})
+            return None
+        bot = H.resolve_bot(c, tid) or {}
+        who_has = bot.get("display_name") or bot.get("slug") or "This agent"
+        raise Problem("has_from_role", f"{who_has} " + ROLE_COPY.format(name=skill["name"]), 409)
     pinned = _pin(c, skill, policy, number)
     typ, ident = _actor(c, who)
     now = H.now()
@@ -871,17 +896,18 @@ def install(app, store, auth, mutate):
     ):
         """Every skill the company has, one row per name: the directory's (each with its latest approved version, how
         many installs it has and the first few of them the caller may see, `on`) and the ones Tico ships in its role
-        templates (`source: tico`, on the bots made from those roles). A directory skill Tico also ships is on its
-        installs and on those bots (`on_count` both, each bot once); `from_tico` marks Tico's own (its library's,
-        backend/skill_library.py). `q` keeps the rows whose name, description and function hold every word; `function`
+        templates (`source: tico`, on the bots made from those roles). `from_tico` marks Tico's own: its library's
+        (backend/skill_library.py) while its latest version is Tico's. One of those that a role also ships is on its
+        installs and on those bots (`on_count` both, each bot once); the company's own skill of a shipped name is on its
+        installs only. `q` keeps the rows whose name, description and function hold every word; `function`
         keeps one job function. `functions` counts the rows `q` keeps, per function."""
         who = reader(request)
         shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
             # Every name is searched and counted; only the first LIST_CAP the filter keeps get their versions and installs.
             names = c.execute(
-                "SELECT id, name, description, function, created_by_type FROM skills WHERE deleted_at IS NULL "
-                "ORDER BY name"
+                "SELECT s.id, s.name, s.description, s.function, " + _FROM_TICO + " AS from_tico FROM skills s "
+                "LEFT JOIN skill_versions v ON v.id = s.latest_version_id WHERE s.deleted_at IS NULL ORDER BY s.name"
             ).fetchall()
             directory = [
                 {
@@ -890,7 +916,7 @@ def install(app, store, auth, mutate):
                     "description": r["description"],
                     "function": r["function"] or (shipped[r["name"]]["function"] if r["name"] in shipped else None),
                     "source": "directory",
-                    "from_tico": r["created_by_type"] == SL.TICO,
+                    "from_tico": bool(r["from_tico"]),
                 }
                 for r in names
             ]
@@ -905,7 +931,10 @@ def install(app, store, auth, mutate):
             on = _installed_on(c, auth, who, ids)
             shown = set(ids)
             # The bots made from a role that ships a directory skill have it too (backend/skill_catalog.py).
-            installed = _installed_bots(c, [row["id"] for row in kept if row["id"] in shown and row["name"] in shipped])
+            # The bots made from a role that ships a skill Tico's own directory row holds have it too
+            # (backend/skill_catalog.py); the company's own skill of that name is another skill, on its installs only.
+            merged = [row for row in kept if row["id"] in shown and row["from_tico"] and row["name"] in shipped]
+            installed = _installed_bots(c, [row["id"] for row in merged])
             out = []
             for row in kept:
                 if row["source"] == "directory":
@@ -919,7 +948,7 @@ def install(app, store, auth, mutate):
                     )
                     row["installs_count"] = row["on_count"] = r["installs_count"]
                     row["on"] = on.get(row["id"], [])
-                    if row["name"] in shipped:
+                    if row["from_tico"] and row["name"] in shipped:
                         has = installed.get(row["id"], set())
                         bots = [b for b in template_bots.of(shipped[row["name"]]) if b["id"] not in has]
                         row["on"] = (row["on"] + [{"type": "Bot", **bot} for bot in bots])[:ON_CAP]
@@ -978,7 +1007,7 @@ def install(app, store, auth, mutate):
                     "description": skill["description"],
                     "function": skill["function"] or (entry["function"] if entry else None),
                     "source": "directory",
-                    "from_tico": skill["created_by_type"] == SL.TICO,
+                    "from_tico": _from_tico(c, skill),
                     "latest": _version_view(latest) if latest else None,
                 },
                 "versions": [_version_view(row) for row in versions],
@@ -1023,6 +1052,7 @@ def install(app, store, auth, mutate):
                         body.target_id,
                         body.version_policy,
                         body.pinned_version,
+                        SC.shipped_to(c, store.settings.catalog_dir),
                     ),
                 )
             )
@@ -1036,15 +1066,34 @@ def install(app, store, auth, mutate):
         ),
     )
     def skill_install_bulk(request: Request, name: str, body: M.SkillInstallBulk):
-        """Install for several targets at once, all or nothing: each target is checked before any row is written."""
+        """Install for several targets at once, all or nothing: each target is checked before any row is written. A bot
+        whose role already ships a skill of this name is left out (`left_out`): it has it in its repository."""
         who = reader(request)
 
         def work(c):
             skill = _skill_or_404(c, name)
+            from_role = SC.shipped_to(c, store.settings.catalog_dir)
+            left_out = []
             ids = [
-                _install(c, auth, who, skill, t.target_type, t.target_id, body.version_policy, body.pinned_version)
+                _install(
+                    c,
+                    auth,
+                    who,
+                    skill,
+                    t.target_type,
+                    t.target_id,
+                    body.version_policy,
+                    body.pinned_version,
+                    from_role,
+                    left_out,
+                )
                 for t in body.targets
             ]
-            return {"installs": [_install_view(_install_row(c, install_id)) for install_id in dict.fromkeys(ids)]}
+            return {
+                "installs": [
+                    _install_view(_install_row(c, install_id)) for install_id in dict.fromkeys(ids) if install_id
+                ],
+                "left_out": left_out,
+            }
 
         return mutate(request, body, work)
