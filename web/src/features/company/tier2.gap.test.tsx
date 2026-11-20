@@ -425,10 +425,9 @@ describe('Disputes @n:re:disputes', () => {
       next_offset: null,
     });
     show(riskPage('disputes'), '/company/risk/disputes');
-    const open = await screen.findByRole('region', { name: 'Open' });
-    expect(open.textContent).toContain('$541');
-    const table = within(open).getByRole('table', { name: 'Open disputes' });
-    expect(within(table).getByRole('columnheader', { name: 'Next' })).toBeTruthy();
+    const table = await screen.findByRole('rowgroup', { name: 'Open disputes' });
+    expect(table.textContent).toContain('$541');
+    expect(within(screen.getByRole('table', { name: 'Disputes' })).getByRole('columnheader', { name: 'Next' })).toBeTruthy();
     expect(within(table).getByText('Refund dispute A').closest('tr')!.textContent).toContain('Nov 24');
     expect(within(within(table).getByText('Refund dispute B').closest('tr')!).getByText('New')).toBeTruthy();
     expect(within(within(table).getByText('Refund dispute A').closest('tr')!).queryByText('New')).toBeNull();

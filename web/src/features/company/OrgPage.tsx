@@ -123,14 +123,12 @@ function OrgTeam({ team, byParent, open: picked }: { team: Team; byParent: Subgr
   const subs = byParent.get(team.id) ?? [];
   const n = mates.length + subs.reduce((a, s) => a + memberCount(s, byParent), 0);
   return (
-    <section className="oc-team" aria-label={team.name}>
+    <section className={lead ? 'oc-team' : 'oc-team no-lead'} aria-label={team.name}>
       <header className="oc-node">
-        {lead ? (
+        {lead && (
           <PanelLink panel={`mate:${lead}`} className="oc-face" aria-label={`${team.name} lead`}>
             <Face id={lead} size={36} />
           </PanelLink>
-        ) : (
-          <span className="oc-face" />
         )}
         <div className="oc-id">
           <h2>

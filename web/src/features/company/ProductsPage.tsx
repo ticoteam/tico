@@ -7,11 +7,11 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
-import { Table, Th, Tr } from '@/kit/Table';
-import { List, RecordPanel, Section, SidePanel } from '@/pagekinds';
+import { Table, Tr } from '@/kit/Table';
+import { List, RecordPanel, SidePanel } from '@/pagekinds';
 import type { Product } from '@/api/schema';
 import type { PRODUCT_FIELDS } from './actions';
-import { Face, Go, PageOwner, PanelLink, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, PanelSection, useDo } from './parts';
 import { productsQuery, repositoriesQuery, type ProductListField } from './queries';
 import './company.css';
 
@@ -53,7 +53,7 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
   const panel = search.panel;
   const shown = panel && panel !== 'new' ? products.find((p) => p.key === panel) : undefined;
   const add = (
-    <Button variant={panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'new' })}>
+    <Button variant={panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
       Add product
     </Button>
   );
@@ -69,18 +69,31 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
         </>
       }
       state={products.length ? 'ready' : 'empty'}
-      empty={{ title: 'No products yet', action: add }}
+      // One line; Add product stays the head's one filled button (records.js products, state empty).
+      empty={{ title: 'No products yet' }}
       sections={
-        <Table label="Products">
+        <Table label="Products" stick>
           <thead>
             <tr>
               <th className="t-mark" aria-hidden="true" />
-              <th className="t-name">Name</th>
-              <Th>Kind</Th>
-              <Th>Status</Th>
-              <Th>Tax kind</Th>
-              <Th>Agreement</Th>
-              <th className="num t-who">Owner</th>
+              <th scope="col" className="t-name">
+                Name
+              </th>
+              <th scope="col" className="c-kind">
+                Kind
+              </th>
+              <th scope="col" className="c-status">
+                Status
+              </th>
+              <th scope="col" className="c-tax">
+                Tax kind
+              </th>
+              <th scope="col" className="c-agr">
+                Agreement
+              </th>
+              <th scope="col" className="c-owner" aria-label="Owner">
+                <span className="who-name">Owner</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -94,9 +107,18 @@ export function ProductsPage({ search }: { search: ProductsSearch }) {
                 </td>
                 <td className="t-words">{word('kind', p.kind)}</td>
                 <td className="t-words">{word('status', p.status)}</td>
-                <td className="t-words">{word('tax_kind', p.tax_kind)}</td>
+                <td className="t-words c-tax">{word('tax_kind', p.tax_kind)}</td>
                 <td className={p.agreements.length ? 't-words' : 't-words is-none'}>{p.agreements.length ? p.agreements.map((a) => a.name).join(', ') : 'None'}</td>
-                <td className="num t-who">{p.owner_teammate && <Face id={p.owner_teammate} />}</td>
+                <td className="c-owner">
+                  {p.owner_teammate && (
+                    <span className="who-cell">
+                      <Face id={p.owner_teammate} />
+                      <span className="who-name">
+                        <NameOf id={p.owner_teammate} />
+                      </span>
+                    </span>
+                  )}
+                </td>
               </Tr>
             ))}
           </tbody>
@@ -259,14 +281,14 @@ function AddTo({ add, onDone }: { add: Adds; onDone: () => void }) {
   );
 }
 
-/** A record's section (the kit's `Section`, which folds): its rows and the quiet + that adds one in place. */
+/** A record's section (a panel section, which folds): its rows and the quiet + that adds one in place. */
 function RecSec({ name, n, add, children }: { name: string; n: number; add: Adds; children: ReactNode }) {
   const [adding, setAdding] = useState(false);
   return (
-    <Section name={name} count={n} actions={<IconButton icon="plus" label={add.label} size="sm" quiet onClick={() => setAdding(true)} />}>
+    <PanelSection name={name} count={n} actions={<IconButton icon="plus" label={add.label} size="sm" quiet onClick={() => setAdding(true)} />}>
       {adding && <AddTo add={add} onDone={() => setAdding(false)} />}
       {children}
-    </Section>
+    </PanelSection>
   );
 }
 

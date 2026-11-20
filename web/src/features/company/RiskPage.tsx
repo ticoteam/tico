@@ -9,15 +9,16 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { Table, Th, Tr } from '@/kit/Table';
+import { Table, Tr } from '@/kit/Table';
 import { toast } from '@/kit/Toast';
 import { fmtAge, fmtDate, fmtMoney } from '@/lib';
 import { FiguresStrip, List, PageMore, Record, RecordPanel, Section, SidePanel } from '@/pagekinds';
 import type { Risk, RiskDetail } from '@/api/schema';
 import { Markdown } from '@/kit/Markdown';
-import { Face, Go, NameOf, PageOwner, PanelLink, useDo } from './parts';
+import { Face, Go, NameOf, PageOwner, PanelLink, PanelSection, useDo } from './parts';
 import { fileSearchQuery, partySearchQuery, productsQuery, matterDatesQuery, matterFilesQuery, mattersQuery, riskQuery, risksQuery, waitingTasksQuery, type MatterRow, type RiskDate } from './queries';
 import './company.css';
 
@@ -111,7 +112,7 @@ function Risks({ search }: { search: RiskSearch }) {
   const open = useDo('company.openPanel');
   const rows = matters.data?.matters ?? [];
   const add = (
-    <Button variant={search.panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'new' })}>
+    <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
       Add risk
     </Button>
   );
@@ -125,7 +126,8 @@ function Risks({ search }: { search: RiskSearch }) {
         </>
       }
       state={risks.length ? 'ready' : 'empty'}
-      empty={{ title: 'No risks yet', action: add }}
+      // One line; Add risk stays the head's one filled button (records.js risk, state empty).
+      empty={{ title: 'No risks yet' }}
       sections={LEVELS.map(([level, name]) => {
         const list = risks.filter((r) => r.level === level);
         if (!list.length) return null;
@@ -212,6 +214,8 @@ function openClaimed(rows: MatterRow[]): string {
 function Disputes({ search }: { search: RiskSearch }) {
   const rows = useSuspenseQuery(mattersQuery('disputes')).data.matters;
   const waiting = useWaiting();
+  const open = useDo('company.openPanel');
+  const [shut, setShut] = useState<readonly string[]>([]);
   const groups: [string, MatterRow[]][] = [
     ['Open', rows.filter((m) => m.task.status === 'open')],
     ['Closed', rows.filter((m) => m.task.status !== 'open')],
@@ -219,50 +223,84 @@ function Disputes({ search }: { search: RiskSearch }) {
   return (
     <List
       {...useHead('disputes')}
-      actions={<PageOwner page="risk" />}
+      actions={
+        <>
+          <PageOwner page="risk" />
+          <Button variant={search.panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'new' })}>
+            Add risk
+          </Button>
+        </>
+      }
       state={rows.length ? 'ready' : 'empty'}
       empty={{ title: 'No disputes' }}
-      sections={groups
-        .filter(([, list]) => list.length)
-        .map(([name, list]) => (
-          <Section key={name} name={name} count={list.length} summary={name === 'Open' ? openClaimed(list) || undefined : undefined}>
-            <Table label={`${name} disputes`}>
-              <thead>
-                <tr>
-                  <th className="t-mark" aria-hidden="true" />
-                  <th className="t-name">Name</th>
-                  <Th>Risk</Th>
-                  <Th num>Amount</Th>
-                  <Th>Forum</Th>
-                  <Th>Stage</Th>
-                  <Th>Next</Th>
-                  <th className="num t-who">Owner</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((m) => (
-                  <Tr key={m.task.id} kind={name === 'Closed' ? 'quiet' : undefined} selected={search.panel === `matter:${m.task.id}`} linked>
-                    <td className="t-mark">{waiting.has(m.task.id) && <FlowMark size={10} />}</td>
-                    <td className="t-name" data-opens>
-                      <PanelLink panel={`matter:${m.task.id}`} data-target={`matter:${m.task.id}`}>
-                        {m.task.title ?? m.task.label}
-                      </PanelLink>
-                      {isNew(m) && <Pill>New</Pill>}
+      // One table, its head once at the top; Open and Closed are named rows in it that fold (records.js disputesPage).
+      sections={
+        <Table label="Disputes" stick>
+          <thead>
+            <tr>
+              <th className="t-mark" aria-hidden="true" />
+              <th scope="col" className="t-name">
+                Name
+              </th>
+              <th scope="col" className="c-risk">
+                Risk
+              </th>
+              <th scope="col" className="num c-amt">
+                Amount
+              </th>
+              <th scope="col" className="c-forum">
+                Forum
+              </th>
+              <th scope="col" className="c-stage">
+                Stage
+              </th>
+              <th scope="col" className="c-next">
+                Next
+              </th>
+              <th className="t-who" aria-label="Owner" />
+            </tr>
+          </thead>
+          {groups
+            .filter(([, list]) => list.length)
+            .map(([name, list]) => {
+              const folded = shut.includes(name);
+              return (
+                <tbody key={name} aria-label={`${name} disputes`}>
+                  <tr className="is-group">
+                    <td className="t-mark" />
+                    <td className="t-name" colSpan={2}>
+                      <span className="sec-name">
+                        <FoldButton name={name} count={list.length} open={!folded} onToggle={() => setShut(folded ? shut.filter((x) => x !== name) : [...shut, name])} />
+                      </span>
                     </td>
-                    <td className="t-words">{m.risks.map((r) => r.label).join(', ')}</td>
-                    <td className="num">{money(m.matter?.amount, m.matter?.currency)}</td>
-                    <td className="t-words">{m.matter?.forum}</td>
-                    <td className="t-words">{m.task.stage}</td>
-                    <td className="t-words">{m.task.status === 'open' && m.task.due_at ? fmtDate(m.task.due_at) : ''}</td>
-                    <td className="num t-who">
-                      <Face id={m.task.owner_id} />
-                    </td>
-                  </Tr>
-                ))}
-              </tbody>
-            </Table>
-          </Section>
-        ))}
+                    <td className="num">{name === 'Open' ? openClaimed(list) : ''}</td>
+                    <td colSpan={4} />
+                  </tr>
+                  {!folded &&
+                    list.map((m) => (
+                      <Tr key={m.task.id} kind={name === 'Closed' ? 'quiet' : undefined} selected={search.panel === `matter:${m.task.id}`} linked>
+                        <td className="t-mark">{waiting.has(m.task.id) && <FlowMark size={10} />}</td>
+                        <td className="t-name" data-opens>
+                          <PanelLink panel={`matter:${m.task.id}`} data-target={`matter:${m.task.id}`}>
+                            {m.task.title ?? m.task.label}
+                          </PanelLink>
+                          {isNew(m) && <Pill>New</Pill>}
+                        </td>
+                        <td className="t-words">{m.risks.map((r) => r.label).join(', ')}</td>
+                        <td className="num">{money(m.matter?.amount, m.matter?.currency)}</td>
+                        <td className="t-words c-forum">{m.matter?.forum}</td>
+                        <td className="t-words">{m.task.stage}</td>
+                        <td className="t-words c-next">{m.task.status === 'open' && m.task.due_at ? fmtDate(m.task.due_at) : ''}</td>
+                        <td className="num t-who">
+                          <Face id={m.task.owner_id} />
+                        </td>
+                      </Tr>
+                    ))}
+                </tbody>
+              );
+            })}
+        </Table>
+      }
       panel={panelFor(search.panel, rows)}
     />
   );
@@ -311,15 +349,14 @@ function MatterPanel({ row }: { row: MatterRow }) {
         <>
           {row.risks[0] && <MatterDates task={row.task.id} risk={row.risks[0].id} />}
           {row.risks.length > 0 && (
-            <section className="rail-sec" aria-label="Risks">
-              <h3>Risks</h3>
+            <PanelSection name="Risks" count={row.risks.length}>
               {row.risks.map((r) => (
                 <Link key={r.id} to={BASE as never} search={{ risk: r.id } as never} className="row lk">
                   <Icon name="rules" />
                   <span className="row-title">{r.label}</span>
                 </Link>
               ))}
-            </section>
+            </PanelSection>
           )}
           <MatterFiles task={row.task.id} />
         </>
@@ -493,10 +530,7 @@ function MatterDates({ task, risk }: { task: string; risk: string }) {
   const dates = (q.data ?? []).filter((d) => d.task?.id === task);
   if (!dates.length) return null;
   return (
-    <section className="rail-sec" aria-label="Dates">
-      <h3>
-        Dates<span>{dates.length}</span>
-      </h3>
+    <PanelSection name="Dates" count={dates.length}>
       {dates.map((d) => (
         <div key={`${d.id}:${d.due_on}`} className={d.mark ? 'dt is-done' : 'dt'}>
           <span className="dt-mark">
@@ -517,7 +551,7 @@ function MatterDates({ task, risk }: { task: string; risk: string }) {
           )}
         </div>
       ))}
-    </section>
+    </PanelSection>
   );
 }
 
@@ -528,25 +562,26 @@ function MatterFiles({ task }: { task: string }) {
   const pick = useRef<HTMLInputElement>(null);
   const files = q.data ?? [];
   return (
-    <section className="rail-sec" aria-label="Files">
-      <div className="rec-head">
-        <h3>
-          Files<span>{files.length || ''}</span>
-        </h3>
-        <span className="grow" />
-        <IconButton icon="plus" label="Add a file" size="sm" quiet busy={add.pending} onClick={() => pick.current?.click()} />
-        <input
-          ref={pick}
-          type="file"
-          hidden
-          aria-label="File"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = '';
-            if (file) void add.run({ task, file });
-          }}
-        />
-      </div>
+    <PanelSection
+      name="Files"
+      count={files.length}
+      actions={
+        <>
+          <IconButton icon="plus" label="Add a file" size="sm" quiet busy={add.pending} onClick={() => pick.current?.click()} />
+          <input
+            ref={pick}
+            type="file"
+            hidden
+            aria-label="File"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) void add.run({ task, file });
+            }}
+          />
+        </>
+      }
+    >
       {files.length > 0 && (
         <div className="chips">
           {files.map((f) => (
@@ -557,7 +592,7 @@ function MatterFiles({ task }: { task: string }) {
           ))}
         </div>
       )}
-    </section>
+    </PanelSection>
   );
 }
 
@@ -572,7 +607,7 @@ function OneRisk({ id, panel }: { id: string; panel?: string }) {
       crumb={[{ label: 'Risk', to: BASE }]}
       className="co"
       actions={
-        <Button variant={panel ? 'plain' : 'primary'} icon="plus" data-phone onClick={() => void open.run({ panel: 'matter-new' })}>
+        <Button variant={panel ? 'plain' : 'primary'} data-phone onClick={() => void open.run({ panel: 'matter-new' })}>
           Add matter
         </Button>
       }
