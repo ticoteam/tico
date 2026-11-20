@@ -136,7 +136,7 @@ class _Markdown(MarkdownConverter):
         return "\n\n" + (lead + "\n\n" if lead else "") + "\n".join(lines) + "\n\n"
 
 
-def _prepare(soup: BeautifulSoup) -> None:
+def _prepare(soup: BeautifulSoup, links: tuple[str, ...]) -> None:
     """Shape the tree for markdownify in one pass."""
     gone: set[int] = set()  # tags inside a nested table already turned into words
     for tag in soup.find_all(True):
@@ -152,8 +152,9 @@ def _prepare(soup: BeautifulSoup) -> None:
             tag.name = "div"  # a block of its own, as markdownify writes a div
         elif name == "a":
             tag.attrs.pop("title", None)
-            if str(tag.get("href") or "").strip().lower().startswith("javascript:"):
-                del tag["href"]  # its words stay, as plain text
+            href = str(tag.get("href") or "").strip().lower()
+            if not href or href.startswith("javascript:") or links and not href.startswith(links):
+                tag.name, tag.attrs = "span", {}  # its words stay, as plain text with their spaces
         elif name == "ol":
             start = str(tag.get("start") or "")
             number = int(start) if re.fullmatch(r"[0-9]{1,9}", start) else 1
@@ -164,11 +165,11 @@ def _prepare(soup: BeautifulSoup) -> None:
             tag.name = "span"  # markdownify would call its own convert_soup or convert_fn_cache for these
 
 
-def to_markdown(source: str) -> tuple[str, str]:
-    """(Markdown, title) of an HTML page. A page nested deeper than markdownify can walk comes out as its plain
-    text."""
+def to_markdown(source: str, links: tuple[str, ...] = ()) -> tuple[str, str]:
+    """(Markdown, title) of an HTML page. `links`: keep only links whose address starts with one of these (every link
+    but javascript: when empty). A page nested deeper than markdownify can walk comes out as its plain text."""
     soup, title = _soup(source)
-    _prepare(soup)
+    _prepare(soup, links)
     try:
         return _Markdown().convert_soup(soup), title
     except RecursionError:
