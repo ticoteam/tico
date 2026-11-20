@@ -652,7 +652,7 @@ def installed(c, auth, who):
     return {"installs": out}
 
 
-def targets(c, auth, who, has_it=frozenset()):
+def targets(c, auth, who, has_it: Collection[str] = ()):
     """Who the caller may install a skill for: bots they can write, people (an admin: everyone; anyone else:
     themselves), and each team as its current members the caller may install for (nested teams included). The bots in
     `has_it` (whose role ships the skill: they have it in their repository) are left out everywhere."""
