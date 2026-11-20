@@ -1,7 +1,7 @@
 """Stored ids are made by backend/slugs.py, each caller in its own style (limit, fallback, what it does first). These
 outputs are what the callers stored before they shared the rule; a change here moves ids already in databases. The
-lambdas repeat a call made inside a larger function; test_docs, test_triggers, test_pipeline_settings and
-test_worktrees cover those paths end to end."""
+lambdas repeat a call made inside a larger function; test_docs, test_triggers and test_pipeline_settings cover
+those paths end to end."""
 
 import sqlite3
 
