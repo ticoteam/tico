@@ -1305,7 +1305,13 @@
  "soupsieve==4.1.2": [
   "py3-none-any"
  ],
+ "stamina==26.1.0": [
+  "py3-none-any"
+ ],
  "starlette==1.10.0": [
+  "py3-none-any"
+ ],
+ "tenacity==9.2.1": [
   "py3-none-any"
  ],
  "types-protobuf==7.35.1.20260906": [

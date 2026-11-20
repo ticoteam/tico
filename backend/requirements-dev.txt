@@ -252,7 +252,7 @@ soupsieve==4.1.2
     # via
     #   -c requirements.txt
     #   beautifulsoup4
-stamina==26.2.0
+stamina==26.1.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
