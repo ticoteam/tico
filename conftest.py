@@ -116,6 +116,10 @@ def pytest_configure(config):
     spec.loader.exec_module(heavy_slot)
     heavy_slot.reexec()
     _unix_socket_bind_outside_tmp_path(config)
+    import stamina
+
+    # A retry keeps its count of tries in a test, never its wait (backend/outbound_http.py): a wait is a fixed sleep.
+    stamina.set_testing(True, attempts=1000, cap=True)
     from backend.tests import app_build
 
     app_build.install()  # every app after a worker's first builds in half the time

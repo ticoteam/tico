@@ -3,23 +3,23 @@ logged. Finance only reads from Brex: the card and cash accounts, their balances
 sync worker (finance/brex_sync.py) and the connect probe call it, outside any transaction. Every call returns an Answer
 (status, JSON); it never raises for an HTTP answer. Lists are cursor pages: `cursor` and `limit` in, `next_cursor` out
 (null at the end). A 429 or a 5xx waits and tries again a few times (Retry-After when Brex sends one); a redirect is never
-followed (the token stays with the host it was meant for) and a 3xx is a failed answer.
+followed (backend/outbound_http.py) (the token stays with the host it was meant for) and a 3xx is a failed answer.
 
 Brex's production API is api.brex.com (its staging host is not a sandbox and takes no customer tokens). A developer's
 override names only a local host, as the other providers do."""
 
-import http.client
 import json
 import logging
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
-from .mercury import Answer, Opener
+import httpx
+
+from .. import outbound_http
+from .mercury import Answer
 
 BASE = "https://api.brex.com"  # Brex's production API, the host of its OpenAPI server. There is no fallback host: a
 # connection error is reported, and the token is never sent to a second host
@@ -28,8 +28,8 @@ OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})  # the only hosts 
 log = logging.getLogger(__name__)
 _warned = [False]
 TIMEOUT = 15
-MAX_WAIT = 30.0  # seconds one Retry-After may make us wait
 TRIES = 3  # a 429 or 5xx is tried this many times more at most
+RETRY_ON = frozenset({429, *range(500, 600)})
 PAGE = 100  # rows asked for per page
 
 
@@ -58,67 +58,37 @@ def base_url() -> str:
     return BASE
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: urllib would resend the Authorization header to wherever Location points."""
-
-    def redirect_request(
-        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
-    ) -> urllib.request.Request | None:
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect())
-
-
 class Brex:
     def __init__(
         self,
         token: str,
         base: str = BASE,
-        opener: Opener | None = None,
-        sleep: Callable[[float], None] = time.sleep,
+        transport: httpx.BaseTransport | None = None,
         budget: float | None = None,
     ) -> None:
         """`budget`, when given, bounds every call made through this client together (the connect probe passes
         PROBE_SECONDS): a call's timeout is what is left of it, and a 429 or 5xx is not waited out past it."""
-        self._token, self._base, self._opener, self._sleep = token, base.rstrip("/"), opener, sleep
+        self._token, self._base, self._transport = token, base.rstrip("/"), transport
         self._until = None if budget is None else time.monotonic() + budget
-
-    def _fits(self, wait: float) -> bool:
-        return self._until is None or time.monotonic() + wait < self._until
 
     def _get(self, path: str, params: Sequence[tuple[str, str]]) -> Answer:
         query = urllib.parse.urlencode(list(params))
         url = self._base + path + (f"?{query}" if query else "")
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
-        for attempt in range(TRIES + 1):
-            timeout = float(TIMEOUT)
-            if self._until is not None:
-                left = self._until - time.monotonic()
-                if left <= 0:
-                    return Answer(None, {})
-                timeout = min(timeout, left)
-            request = urllib.request.Request(url, method="GET", headers=headers)
-            send = self._opener or cast(Opener, _OPENER.open)
-            try:
-                with send(request, timeout=timeout) as response:
-                    return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
-            except urllib.error.HTTPError as exc:
-                with exc:
-                    if (exc.code == 429 or exc.code >= 500) and attempt < TRIES:
-                        retry = exc.headers.get("Retry-After") if exc.headers and exc.code == 429 else None
-                        wait = _retry_after(retry, attempt)
-                        if self._fits(wait):
-                            self._sleep(wait)
-                            continue
-                    try:
-                        raw = exc.read()
-                    except (OSError, http.client.HTTPException):
-                        raw = b""
-                    return Answer(exc.code, _parse(raw))
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
-                return Answer(None, {})
-        return Answer(429, {})
+        try:
+            reply = outbound_http.send(
+                "GET",
+                url,
+                headers=headers,
+                timeout=TIMEOUT,
+                retries=TRIES,
+                retry_on=RETRY_ON,
+                deadline=self._until,
+                transport=self._transport,
+            )
+        except outbound_http.Failed:
+            return Answer(None, {})
+        return Answer(reply.status, _parse(reply.content))
 
     def card_accounts(self, cursor: str | None = None) -> Answer:
         """The company's card accounts (GET /v2/accounts/card). Brex answers them all at once as a bare array (_parse)."""
@@ -167,14 +137,6 @@ def _parse(raw: bytes) -> dict[str, Any]:
     if isinstance(value, list):
         return {"items": value}
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def _retry_after(value: object, attempt: int) -> float:
-    try:
-        wait = float(str(value))
-    except (TypeError, ValueError):
-        wait = 2.0**attempt
-    return max(0.0, min(wait, MAX_WAIT))
 
 
 def listed(answer: Answer) -> list[dict[str, Any]]:

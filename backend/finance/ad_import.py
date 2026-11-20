@@ -18,30 +18,27 @@ account's own can both list it; the run's note names each), then each account's 
 last 30 days after that. A complete fetch replaces the window's rows per account, so a day the platform restates
 overwrites. Rate limits back off and retry a few times. The worker sweeps every 15 minutes, runs what is due (4 hours
 since the last run, or asked for), then gives bots their budget warnings (ad_warnings.py). A rehearsal copy calls no
-platform. HTTP goes through an injectable opener; tests use fakes and never the network.
+platform. HTTP goes through backend/outbound_http.py; tests pass a fake transport and never use the network.
 """
 
-import http.client
 import json
 import logging
 import re
 import threading
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, cast
 
-from .. import background
+import httpx
+
+from .. import background, outbound_http
 from . import ad_warnings, key_use
 from .core import ledger as L
 from .core.org import SYSTEM
 from .context import load
-from .mercury import Opener
 from .store import ads as SA
 from .store import ap as SAP
 from .store import ledger as SL
@@ -229,23 +226,10 @@ def _secrets(c: Any, vault: object, imp: SA.AdImport) -> dict[str, str]:
 
 
 # ------------------------------------------------------------------------------------------------ HTTP
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: a token goes only to the host it was meant for."""
-
-    def redirect_request(
-        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
-    ) -> urllib.request.Request | None:
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect())
-
-
 @dataclass(frozen=True)
 class Reply:
     status: int | None  # None: unreachable
     body: Any  # parsed JSON ({} when none)
-    retry_after: float | None = None
 
 
 def _parse(raw: bytes) -> Any:
@@ -257,10 +241,10 @@ def _parse(raw: bytes) -> Any:
 
 @dataclass
 class Http:
-    """One run's HTTP: no redirects, rate limits waited out a few times (`throttled` says which answers are one)."""
+    """One run's HTTP (backend/outbound_http.py): no redirects, rate limits waited out a few times (`throttled` says
+    which answers are one). A POST is a read here (a GAQL search), so a throttled one is tried again too."""
 
-    opener: Opener | None = None
-    sleep: Callable[[float], None] = time.sleep
+    transport: httpx.BaseTransport | None = None
 
     def call(
         self,
@@ -280,40 +264,28 @@ class Http:
         elif body is not None:
             data = json.dumps(body).encode()
             sent["Content-Type"] = "application/json"
-        reply = Reply(None, {})
-        for attempt in range(TRIES):
-            reply = self._once(method, url, sent, data)
-            limited = reply.status == 429 or (throttled is not None and throttled(reply))
-            if not limited or attempt == TRIES - 1:
-                return reply
-            wait = reply.retry_after if reply.retry_after is not None else 2.0 * 2**attempt
-            self.sleep(max(0.0, min(wait, MAX_WAIT)))
-        return reply
 
-    def _once(self, method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> Reply:
-        request = urllib.request.Request(url, data=data, method=method, headers=dict(headers))
-        send = self.opener or cast(Opener, _OPENER.open)
+        def limited(reply: outbound_http.Reply) -> bool:
+            return reply.status == 429 or (
+                throttled is not None and throttled(Reply(reply.status, _parse(reply.content)))
+            )
+
         try:
-            with send(request, timeout=TIMEOUT) as response:
-                return Reply(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
-        except urllib.error.HTTPError as exc:
-            with exc:
-                try:
-                    raw = exc.read()
-                except (OSError, http.client.HTTPException):
-                    raw = b""
-                after: float | None = None
-                try:
-                    after = (
-                        float(str(exc.headers.get("Retry-After")))
-                        if exc.headers and exc.headers.get("Retry-After")
-                        else None
-                    )
-                except ValueError:
-                    after = None
-                return Reply(exc.code, _parse(raw), after)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
+            reply = outbound_http.send(
+                method,
+                url,
+                headers=sent,
+                content=data,
+                timeout=TIMEOUT,
+                retries=TRIES - 1,
+                retry_on=limited,
+                max_wait=MAX_WAIT,
+                idempotent=form is None,
+                transport=self.transport,
+            )
+        except outbound_http.Failed:
             return Reply(None, {})
+        return Reply(reply.status, _parse(reply.content))
 
 
 def _dict(value: Any) -> dict[str, Any]:

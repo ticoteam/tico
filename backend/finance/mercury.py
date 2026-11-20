@@ -1,22 +1,22 @@
 """The Mercury adapter (spec §8.1, §9): plain HTTP calls to Mercury's API with the company's own token, read at use
 time and never logged. It is only ever called outside a transaction, by the sync worker (finance/sync.py) and the
 connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a
-few times; 401/403 on a write means the token's IP allowlist lacks this server; a redirect is never followed (the
+few times (backend/outbound_http.py); 401/403 on a write means the token's IP allowlist lacks this server; a redirect is never followed (the
 token stays with the host it was meant for) and a 3xx is a failed answer. The Vault host (full card numbers) is never
 called."""
 
-import http.client
 import json
 import logging
 import os
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol, cast
+
+import httpx
+
+from .. import outbound_http
 
 BASE = "https://api.mercury.com/api/v1"
 SANDBOX = "https://api-sandbox.mercury.com/api/v1"
@@ -25,16 +25,9 @@ OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "api-sandbox.mercur
 log = logging.getLogger(__name__)
 _warned = [False]
 TIMEOUT = 15
-MAX_WAIT = 30.0  # seconds one 429 may make us wait
 TRIES_429 = 3
 PAGE = 500
 IP_HINT = "Mercury refused the write: add this server's IP address to the token's allowlist in Mercury"
-
-
-class Opener(Protocol):
-    """urlopen's shape: the request, then the timeout by keyword (never positionally: urlopen's 2nd arg is data)."""
-
-    def __call__(self, request: urllib.request.Request, *, timeout: float) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -103,24 +96,9 @@ def dollars(cents: int) -> Decimal:
     return (Decimal(cents) / 100).quantize(Decimal("0.01"))
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow a redirect: urllib would resend the Authorization header to wherever Location points, past the
-    host guard. The 3xx comes back as the answer (an HTTPError), a failure no one retries to the Location."""
-
-    def redirect_request(
-        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any, newurl: str
-    ) -> urllib.request.Request | None:
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect())
-
-
 class Mercury:
-    def __init__(
-        self, token: str, base: str = BASE, opener: Opener | None = None, sleep: Callable[[float], None] = time.sleep
-    ) -> None:
-        self._token, self._base, self._opener, self._sleep = token, base.rstrip("/"), opener, sleep
+    def __init__(self, token: str, base: str = BASE, transport: httpx.BaseTransport | None = None) -> None:
+        self._token, self._base, self._transport = token, base.rstrip("/"), transport
 
     def _call(
         self,
@@ -140,25 +118,19 @@ class Mercury:
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
-        for attempt in range(TRIES_429 + 1):
-            request = urllib.request.Request(url, data=data, method=method, headers=headers)
-            send = self._opener or cast(Opener, _OPENER.open)
-            try:
-                with send(request, timeout=TIMEOUT) as response:
-                    return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
-            except urllib.error.HTTPError as exc:
-                with exc:
-                    if exc.code == 429 and attempt < TRIES_429:
-                        self._sleep(_retry_after(exc.headers.get("Retry-After") if exc.headers else None, attempt))
-                        continue
-                    try:
-                        raw = exc.read()
-                    except (OSError, http.client.HTTPException):
-                        raw = b""
-                    return Answer(exc.code, _parse(raw))
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
-                return Answer(None, {})
-        return Answer(429, {})
+        try:
+            reply = outbound_http.send(
+                method,
+                url,
+                headers=headers,
+                content=data,
+                timeout=TIMEOUT,
+                retries=TRIES_429,
+                transport=self._transport,
+            )
+        except outbound_http.Failed:
+            return Answer(None, {})
+        return Answer(reply.status, _parse(reply.content))
 
     # reads
     def accounts(self) -> Answer:
@@ -284,14 +256,6 @@ def _parse(raw: bytes) -> dict[str, Any]:
     if isinstance(value, list):
         return {"items": cast(list[Any], value)}
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def _retry_after(value: object, attempt: int) -> float:
-    try:
-        wait = float(str(value))
-    except (TypeError, ValueError):
-        wait = 2.0**attempt
-    return max(0.0, min(wait, MAX_WAIT))
 
 
 def listed(answer: Answer, *keys: str) -> list[dict[str, Any]]:

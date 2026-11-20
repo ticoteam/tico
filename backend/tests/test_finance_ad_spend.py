@@ -284,9 +284,8 @@ def test_meta_rate_limits_back_off_then_go_on(books: Store):
         return real(m, url, h, b)
 
     net.on("GET", AI.GRAPH + "/act_", busy)
-    slept: list[float] = []
-    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net, slept)).status == "ok"
-    assert len(slept) == 2 and spends(books)[("111", "2026-10-10", "c1")] == 100
+    assert AI.run(books, Vault(books), iid, now=AT, http_=http(net)).status == "ok"
+    assert tries["n"] == 3 and spends(books)[("111", "2026-10-10", "c1")] == 100
 
 
 def test_a_next_page_on_another_host_is_not_followed(books: Store):
