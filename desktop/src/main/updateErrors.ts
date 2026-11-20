@@ -7,8 +7,10 @@ import type { UpdateState } from '../bridge';
 /** True when the error is a 404 for the feed or one of its files, rather than a real failure. */
 export function feedMissing(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
-  const { code, statusCode } = error as { code?: unknown; statusCode?: unknown };
-  return code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || statusCode === 404;
+  const { code, statusCode, message } = error as { code?: unknown; statusCode?: unknown; message?: unknown };
+  if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || statusCode === 404) return true;
+  // An installer download that 404s is a plain Error: 'Cannot download "<url>", status 404: Not Found'.
+  return typeof message === 'string' && /^Cannot download ".*", status 404\b/.test(message);
 }
 
 /** The state after an updater error: a ready update is kept, a missing feed changes nothing (a download it cut short

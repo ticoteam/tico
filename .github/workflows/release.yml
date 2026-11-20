@@ -501,10 +501,13 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
-          if [ "$FORCE" != true ] && [ -n "$previous" ] \
+          # A prerelease's app carries its rc version, so a stable tag never inherits it; and all three feeds must be
+          # on the previous release, or electron-assets would have nothing complete to carry forward.
+          if [ "$FORCE" != true ] && [ -n "$previous" ] && [[ "$previous" != *-* ]] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- desktop .github/workflows/desktop.yml \
                   ':!desktop/*.test.ts' ':!desktop/*.md' \
-             && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx latest-mac.yml; then
+             && [ "$(gh release view "$previous" --json assets -q '.assets[].name' \
+                     | grep -cxE 'latest-mac\.yml|latest\.yml|latest-linux\.yml')" = 3 ]; then
             build=false
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
