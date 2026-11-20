@@ -10,6 +10,12 @@ import pytest
 from scripts import replay_red_main as replay
 
 ROOT = Path(__file__).resolve().parents[2]
+# Failing tests deleted with the old web app (#4660): a case that names only these can no longer replay.
+RETIRED_WITH_UI = (
+    "ui/tests/",
+    "scripts/tests/test_release_shots.py",
+    "backend/tests/test_growth_page_fixtures.py",
+)
 # Case numbers in red_main_cases.json from the recorded PR replay.
 PINNED_CAUGHT = {
     1,
@@ -305,4 +311,7 @@ def test_red_main_replay_pinned_cases():
     assert not lost, f"Lost caught cases: {sorted(lost)}"
     missing_at_pr = PINNED_CAUGHT_AT_PR - caught_at_pr - stale
     assert not missing_at_pr, f"Lost PR-stage catches: {sorted(missing_at_pr)}"
-    assert len(stale) <= 10  # 10th: case 31, whose test and migration the v0.6.0 floor retired (#4169)
+    # The old web app's removal (#4660) deleted every ui/ browser script and the tests of its screenshot harness and
+    # growth fixtures, so their cases are stale for good; the bound is on the rest.
+    retired = {n for n, c in enumerate(cases, 1) if all(t.startswith(RETIRED_WITH_UI) for t in c["failing_tests"])}
+    assert len(stale - retired) <= 10  # 10th: case 31, whose test and migration the v0.6.0 floor retired (#4169)
