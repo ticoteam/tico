@@ -351,6 +351,8 @@ export interface SkillRow {
   name: string;
   description: string;
   source?: 'directory' | 'tico';
+  /** The job function its SKILL.md names (`legal`...); any value, or none. */
+  function?: string | null;
   latest: SkillVersion | null;
   installs_count: number;
   on_count?: number;

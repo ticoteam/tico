@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
@@ -233,6 +233,55 @@ describe('Skills', () => {
     expect(screen.getAllByText('plan-a-trip')).toHaveLength(1);
     expect(errors.mock.calls.some((c) => String(c[0]).includes('same key'))).toBe(false);
     errors.mockRestore();
+  });
+
+  describe('by function', () => {
+    const skill = (name: string, fn: string | null, description = '') => ({ id: name, name, description, function: fn, latest: null, installs_count: 0, on: [] });
+    const names = () => screen.queryAllByText(/^(nda|ads|pitch|plain|odd)$/).map((el) => el.textContent);
+    beforeEach(() => {
+      serve(nothing);
+      queryClient.setQueryData(skillsQuery.queryKey, [
+        skill('nda', 'legal', 'Review a contract'),
+        skill('ads', 'Marketing'),
+        skill('pitch', 'marketing', 'Contract pricing'),
+        skill('plain', null),
+        skill('odd', 'adtech'),
+      ]);
+      queryClient.setQueryData(proposalsQuery.queryKey, []);
+      queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    });
+
+    it('keeps the function in the address, lower case', () => {
+      expect(skillsSearch({ function: ' Legal ', q: 'nda' })).toEqual({ function: 'legal', q: 'nda' });
+      expect(skillsSearch({ function: '' })).toEqual({});
+    });
+
+    it('shows one function; other is unknown or untagged; an unknown value only matches itself', async () => {
+      show(<SkillsPage search={{ function: 'marketing' }} />, '/library/skills');
+      await screen.findByText('ads');
+      expect(names()).toEqual(['ads', 'pitch']);
+      cleanup();
+      show(<SkillsPage search={{ function: 'other' }} />, '/library/skills');
+      await screen.findByText('plain');
+      expect(names()).toEqual(['plain', 'odd']);
+      cleanup();
+      show(<SkillsPage search={{ function: 'adtech' }} />, '/library/skills');
+      await screen.findByText('odd');
+      expect(names()).toEqual(['odd']);
+    });
+
+    it('searches the function too, every word', async () => {
+      show(<SkillsPage search={{ q: 'legal contract' }} />, '/library/skills');
+      await screen.findByText('nda');
+      expect(names()).toEqual(['nda']);
+    });
+
+    it('lists each function in the filter with its count under the search', async () => {
+      show(<SkillsPage search={{ q: 'contract' }} />, '/library/skills');
+      fireEvent.click(await screen.findByRole('button', { name: 'Filter' }));
+      const items = (await screen.findAllByRole('menuitem')).map((el) => el.textContent);
+      expect(items).toEqual(['All skills', 'Waiting', 'Legal1', 'Marketing1']);
+    });
   });
 });
 

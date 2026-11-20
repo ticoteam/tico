@@ -8638,6 +8638,10 @@
           },
           "waiting": {
             "type": "boolean"
+          },
+          "function": {
+            "type": "string",
+            "maxLength": 64
           }
         },
         "additionalProperties": false

@@ -19,7 +19,7 @@ import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
 import { Document, List, PageMore, Section } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
-import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
 import { Face, Find, Foot, OwnerButton, press, useGo, when, Who } from './parts';
 import {
@@ -63,6 +63,41 @@ const SKILL_COLUMNS = (
 
 type SkillItem = { kind: 'columns' } | { kind: 'proposal'; proposal: Proposal } | { kind: 'skill'; skill: SkillRow };
 
+/** The job functions (clients/skills.py FUNCTIONS), in the menu's order; any other value, or none, is `other`. */
+const SKILL_FUNCTIONS = [
+  'tico',
+  'legal',
+  'marketing',
+  'growth',
+  'sales',
+  'customers',
+  'finance',
+  'product',
+  'engineering',
+  'people',
+  'operations',
+  'hardware',
+  'data',
+  'security',
+] as const;
+const norm = (f: string | null | undefined) => (f ?? '').trim().toLowerCase();
+/** A row's group: a known function, or `other`. */
+const functionGroup = (f: string | null | undefined): string => {
+  const w = norm(f);
+  return (SKILL_FUNCTIONS as readonly string[]).includes(w) ? w : 'other';
+};
+const functionLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+/** The function filter (ui/app/skills.ts, as the API does): a known function or `other` by the row's group, any other
+    value only the rows that name it. */
+const inFunction = (f: string | null | undefined, want: string | undefined) =>
+  !want || (want === 'other' || (SKILL_FUNCTIONS as readonly string[]).includes(want) ? functionGroup(f) === want : norm(f) === want);
+/** The search: every word, in the name, description or function. */
+const findsSkill = (s: { name: string; description: string | null }, fn: string | null | undefined, q: string | undefined) => {
+  const words = (q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  const text = [s.name, s.description ?? '', fn ?? ''].join(' ').toLowerCase();
+  return words.every((w) => text.includes(w));
+};
+
 /** A skill's install or use as a directory id: agents are `bot:<id>`, people `human:<id>`. */
 export const actorOf = (a: { type: string; id: string }) => `${a.type === 'Bot' ? 'bot' : 'human'}:${a.id}`;
 
@@ -104,12 +139,21 @@ function SkillsList({ search }: { search: SkillsSearch }) {
   const { data: skills } = useSuspenseQuery(skillsQuery);
   const asks = useQuery(proposalsQuery);
   const usage = useQuery(skillUsageQuery);
-  const words = search.q?.toLowerCase() ?? '';
-  const match = (s: { name: string; description: string }) => !words || s.name.toLowerCase().includes(words) || s.description.toLowerCase().includes(words);
   const used = new Map((usage.data ?? []).map((u) => [u.name, u]));
   const byName = new Map(skills.map((s) => [s.name, s]));
+  // A proposal goes by its skill's function; a new skill's has none yet.
+  const fnOf = (name: string) => byName.get(name)?.function;
+  const found = (s: { name: string; description: string | null }) => findsSkill(s, fnOf(s.name), search.q);
+  const match = (s: { name: string; description: string | null }) => found(s) && inFunction(fnOf(s.name), search.function);
   const pending = (asks.data ?? []).filter(match);
   const rows = search.waiting ? [] : skills.filter(match);
+  // Each function with its count under the search; the one in force shows even with none (an unknown value too).
+  const searched = skills.filter(found);
+  const known: string[] = [...SKILL_FUNCTIONS, 'other'];
+  const functions = (search.function && !known.includes(search.function) ? [...known, search.function] : known)
+    .map((f) => ({ f, n: searched.filter((s) => inFunction(s.function, f)).length }))
+    .filter(({ f, n }) => n > 0 || f === search.function);
+  const list = (to: { waiting?: boolean; function?: string }) => void press('skills.list', { q: search.q, ...to });
   const [making, setMaking] = useState(false);
   const proposalLine = (p: Proposal) => <AskLine key={p.id} p={p} skill={byName.get(p.name)} use={used.get(p.name)} />;
   const skillLine = (s: SkillRow) => <SkillLine key={s.name} s={s} use={used.get(s.name)} />;
@@ -123,12 +167,28 @@ function SkillsList({ search }: { search: SkillsSearch }) {
       title="Skills"
       path="/library/skills"
       className="lib"
-      search={<Find label="Search skills" value={search.q} onFind={(q) => void press('skills.list', { q, waiting: !!search.waiting || undefined })} />}
+      search={
+        <Find
+          label="Search skills"
+          value={search.q}
+          onFind={(q) => void press('skills.list', { q, waiting: !!search.waiting || undefined, function: search.function })}
+        />
+      }
       actions={
         <>
-          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!search.waiting} data-phone />}>
-            <MenuItem label="All skills" on={!search.waiting} onSelect={() => void press('skills.list', { q: search.q })} />
-            <MenuItem label="Waiting" on={!!search.waiting} onSelect={() => void press('skills.list', { q: search.q, waiting: true })} />
+          <Menu trigger={<IconButton icon="filter" label="Filter" on={!!search.waiting || !!search.function} data-phone />}>
+            <MenuItem label="All skills" on={!search.waiting && !search.function} onSelect={() => list({})} />
+            <MenuItem label="Waiting" on={!!search.waiting} onSelect={() => list({ waiting: !search.waiting || undefined, function: search.function })} />
+            {functions.length > 0 && <MenuRule />}
+            {functions.map(({ f, n }) => (
+              <MenuItem
+                key={f}
+                label={functionLabel(f)}
+                meta={String(n)}
+                on={f === search.function}
+                onSelect={() => list({ waiting: !!search.waiting || undefined, function: f === search.function ? undefined : f })}
+              />
+            ))}
           </Menu>
           <OwnerButton page="skills" />
           <Button variant="primary" onClick={() => setMaking(true)} data-target="skills:new" aria-label="New skill">

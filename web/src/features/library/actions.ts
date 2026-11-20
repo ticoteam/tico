@@ -370,8 +370,8 @@ export const skillsList = defineAction({
   id: 'skills.list',
   title: 'Open Skills',
   kind: 'view',
-  input: z.strictObject({ q: z.optional(text(200)), waiting: z.optional(z.boolean()) }),
-  run: ({ router }, i) => go(router, '/library/skills', { q: i.q, waiting: i.waiting ? 1 : undefined }, true),
+  input: z.strictObject({ q: z.optional(text(200)), waiting: z.optional(z.boolean()), function: z.optional(text(64)) }),
+  run: ({ router }, i) => go(router, '/library/skills', { q: i.q, waiting: i.waiting ? 1 : undefined, function: i.function }, true),
   target: () => ({ kind: 'page', id: '/library/skills' }),
 });
 
