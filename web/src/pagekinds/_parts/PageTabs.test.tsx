@@ -36,4 +36,16 @@ describe('PageTabs', () => {
     const row = await rowAt('/guide?panel=x');
     expect(current(row)).toEqual(['Color']);
   });
+
+  it('keeps a thread the page was opened from beside every tab (plan/layers.html)', async () => {
+    const row = await rowAt('/guide?chat=agent%3Agm&via=thread');
+    expect(row.getByRole('link', { name: 'Type' }).getAttribute('href')).toBe('/guide?at=type&chat=agent%3Agm&via=thread');
+    expect(row.getByRole('link', { name: 'Color' }).getAttribute('href')).toBe('/guide?chat=agent%3Agm&via=thread');
+    expect(current(row)).toEqual(['Color']);
+  });
+
+  it('leaves a second chat opened any other way to the tabs as before', async () => {
+    const row = await rowAt('/guide?chat=agent%3Agm');
+    expect(row.getByRole('link', { name: 'Type' }).getAttribute('href')).toBe('/guide?at=type');
+  });
 });

@@ -39,7 +39,7 @@ export function decisionOf(t: TaskData): TaskRequirement | null {
 }
 
 /** The files a requirement shows: the page it approves, and each `page:` or `file:` it names. */
-function thingsOf(r: TaskRequirement | null): Set<string> {
+export function thingsOf(r: TaskRequirement | null): Set<string> {
   const out = new Set<string>();
   if (!r) return out;
   for (const id of [r.approval?.file_id, r.page?.file_id, ...(r.approval?.pages ?? []).map((p) => p.file_id), ...(r.page?.pages ?? []).map((p) => p.file_id)])

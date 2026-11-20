@@ -7,6 +7,7 @@ import type * as Live from '@/live';
 import { Composer } from './Composer';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
+import { showPageName } from '@/tico/pageName';
 import type { ChatMessage } from './types';
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
@@ -333,5 +334,19 @@ describe('Composer', () => {
     fireEvent.keyDown(box(), { key: 'Enter' });
     expect(onSend).toHaveBeenCalledWith('Half a thought', []);
     expect(box().value).toBe('');
+  });
+});
+
+describe('the page chip', () => {
+  it('names the page beside the chat once its head does, not the window title', async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: {} }));
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    act(() => showPageName('Records production'));
+    expect((await screen.findByText('Records production')).className).toBe('look-text');
+    act(() => showPageName(''));
+    await waitFor(() => expect(screen.queryByText('Records production')).toBeNull());
   });
 });

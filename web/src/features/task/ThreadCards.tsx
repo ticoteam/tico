@@ -1,19 +1,21 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { ChatMessage } from '@/conversation';
-import { useActor } from '@/data';
+import { useActor, useDirectory } from '@/data';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import { besideThread } from '@/lib';
-import { flowQuery } from '@/features/tasks/routing';
-import { decisionOf, personOf, sendTitle, tabAddress } from './model';
-import { addressesOf, emailSendQuery, taskDetailQuery, type EmailFile, type TaskData } from './queries';
+import { flowQuery, type FlowItem } from '@/features/tasks/routing';
+import { decisionOf, personOf, sendTitle, tabAddress, thingsOf } from './model';
+import { addressesOf, emailSendQuery, taskDetailQuery, taskFilesQuery, type EmailFile, type TaskData } from './queries';
 import { useMatterOf } from './Waiting';
 import { sendTasksOf, stillToGo } from './waits';
 
 /* An approval an agent asked for that waits on the person, as a card in the agent's thread at the time it was asked
-   (plan/threads-team.html: an approval waiting, as a link in a thread). The card only points: Approve stays where the
-   email itself is on screen, the case's Email tab or the Send task's page. Answered, sent or canceled, it drops off. */
+   (plan/threads-team.html: an approval waiting, as a link in a thread). An OK the agent asked for (an email, a finance
+   item, a file) or a page its task's stage needs approved (a page OK, asked by no one: the task's owner holds it). The
+   card only points: Approve stays where the thing itself is on screen, the case's Email tab, the Send task's page, the
+   task's page that opens on what waits. Answered, sent or canceled, it drops off. */
 
 /** Chips a card shows before it counts the rest. */
 const CHIPS = 3;
@@ -45,8 +47,15 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
   const hung = task ? new Set(sendTasksOf(task)) : null;
   const on = !!agent?.startsWith('bot:') || !!hung?.size;
   const { data } = useQuery({ ...flowQuery, enabled: on });
-  const asks = (on ? (data?.items ?? []) : []).filter(
-    (it) => it.ask?.kind === 'ok' && !!it.ask.by?.startsWith('bot:') && (hung ? hung.has(it.id) : it.ask.by === agent),
+  // An ask names its agent by id or by slug (`bot:finance-owner`): both read as the agent's id here.
+  const byId = useDirectory((d) => d.byId);
+  const whose = (it: FlowItem) => {
+    // no asker named (a page its stage needs approved): the task's owner holds it, as Needs you groups it (views.needs_actor)
+    const by = it.ask?.by ?? (it.ask?.kind === 'page' ? it.owner_id : null);
+    return by?.startsWith('bot:') ? (byId?.[by]?.id ?? by) : null;
+  };
+  const asks = (on ? (data?.items ?? []) : []).filter((it) =>
+    hung ? it.ask?.kind === 'ok' && !!whose(it) && hung.has(it.id) : (it.ask?.kind === 'ok' || it.ask?.kind === 'page') && !!agent && whose(it) === agent,
   );
   const subs = useQueries({ queries: asks.map((it) => ({ ...taskDetailQuery(it.id), retry: false })) });
   const mails = useQueries({
@@ -62,6 +71,13 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
       return { ...taskDetailQuery(from && from !== it.id ? from : undefined), retry: false };
     }),
   });
+  // The files any other OK shows (its chips, ThingCard), read before the card draws.
+  const files = useQueries({
+    queries: asks.map((it, i) => {
+      const sub = subs[i]?.data;
+      return { ...taskFilesQuery(it.id), enabled: !!sub && !emailIn(it.ask?.shows ?? []) && thingsOf(decisionOf(sub)).size > 0, retry: false };
+    }),
+  });
   return asks.flatMap((it, i) => {
     const sub = subs[i]?.data;
     if (!sub || !decisionOf(sub)) return [];
@@ -71,11 +87,11 @@ export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessa
       if (!mail?.data || !stillToGo(mail.data.send.state)) return [];
       const from = mail.data.send.task_id;
       if (from && from !== it.id && froms[i]?.isPending && froms[i]?.fetchStatus !== 'idle') return [];
-    }
+    } else if (files[i]?.isPending && files[i]?.fetchStatus !== 'idle') return [];
     // The words stand for the card where words are read (a row with none is not drawn).
     const row: ChatMessage = {
       id: `approval:${it.id}`,
-      sender_id: it.ask?.by ?? undefined,
+      sender_id: whose(it) ?? undefined,
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
@@ -94,7 +110,16 @@ export function approvalCard(m: ChatMessage) {
 function ApprovalCard({ task, send, chat }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} />;
+  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <ThingCard sub={sub} chat={chat} />;
+}
+
+/** Any other OK (a page, a file, a finance item): the task's title, and the files it shows as chips. It opens the task's
+    page, which opens on what waits on the person. */
+function ThingCard({ sub, chat }: { sub: TaskData; chat?: string }) {
+  const shown = thingsOf(decisionOf(sub));
+  const files = useQuery({ ...taskFilesQuery(sub.id), enabled: shown.size > 0, retry: false }).data ?? [];
+  const chips = files.filter((f) => shown.has(f.id)).map((f) => ({ key: f.id, name: f.title || f.name, type: typeOf(f.name, undefined) }));
+  return <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, its files as chips. It opens on the case's
@@ -108,12 +133,20 @@ function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: st
   const title = sendTitle(sub.title);
   const address = (mail && addressesOf(mail).to[0]) ?? title?.to;
   const what = matter?.title ?? title?.subject ?? sub.title;
-  return <Card to={to} chat={chat} what={address ? `${what}, to ${personOf(address)}` : what} files={mail?.files ?? []} />;
+  const chips = (mail?.files ?? []).map((f: EmailFile) => ({ key: `${f.part}:${f.name}`, name: f.name, type: typeOf(f.name, f.type) }));
+  return <Card to={to} chat={chat} what={address ? `${what}, to ${personOf(address)}` : what} files={chips} />;
 }
 
-const typeOf = (f: EmailFile) => (f.type?.split('/')[1] ?? f.name.split('.').pop() ?? '').toUpperCase();
+/** A file's kind as a chip names it: from its media type, else its name's ending ("PDF"). */
+const typeOf = (name: string, mime: string | undefined) => (mime?.split('/')[1] ?? (name.includes('.') ? name.split('.').pop() : '') ?? '').toUpperCase();
 
-function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what: string; files?: EmailFile[] }) {
+interface Chip {
+  key: string;
+  name: string;
+  type: string;
+}
+
+function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what: string; files?: Chip[] }) {
   const more = files.length - CHIPS;
   return (
     <Link className="kcard is-link" href={besideThread(to, chat)} data-target={`approval:${to}`}>
@@ -127,10 +160,10 @@ function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what:
       {files.length > 0 && (
         <span className="kfiles">
           {files.slice(0, more > 1 ? CHIPS : files.length).map((f) => (
-            <span key={`${f.part}:${f.name}`} className="file">
+            <span key={f.key} className="file">
               <Icon name="file" />
               <span>{f.name}</span>
-              {typeOf(f) && <em>{typeOf(f)}</em>}
+              {f.type && <em>{f.type}</em>}
             </span>
           ))}
           {more > 1 && <span className="file is-more">+{more}</span>}

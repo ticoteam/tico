@@ -26,10 +26,11 @@ const reread = () => showPageName(pageName());
 
 /** The page's name, kept current: read again each time a route has drawn. */
 export function usePageName(): string {
-  const router = useRouter();
+  // a part drawn alone (a test, a call window) has no router: the page's head still names the page
+  const router = useRouter({ warn: false }) as ReturnType<typeof useRouter> | undefined;
   useEffect(() => {
     reread();
-    return router.subscribe('onRendered', reread);
+    return router?.subscribe('onRendered', reread);
   }, [router]);
   return useSyncExternalStore(listen, () => name, () => '');
 }

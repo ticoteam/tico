@@ -164,6 +164,15 @@ describe('task route loading', () => {
 });
 
 describe('one open task', () => {
+  it('has no name while it loads, so the tab title and a thread’s page chip never read a placeholder', async () => {
+    serve(() => new Promise<Reply>(() => {}));
+    show(<TaskPage task="12" pipeline="p1" />);
+    await screen.findByRole('status', { name: 'Loading' });
+    expect(screen.queryByRole('heading', { level: 1, name: 'Task' })).toBeNull();
+    // what Tico's page name reads (tico/pageName: the page's h1)
+    expect(document.querySelector('.pane.page h1')?.textContent ?? '').toBe('');
+  });
+
   it('opens on the page that waits on the person, with every tab a link, and follows the task @s51 @s54 @s74 @s780 @s789', async () => {
     serve(base);
     show(<TaskPage task="12" pipeline="p1" />);
