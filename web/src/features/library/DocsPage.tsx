@@ -109,7 +109,7 @@ function OwnDocs({ search }: { search: DocsSearch }) {
       actions={
         <>
           <OwnerButton page="docs" />
-          <Button variant="primary" icon="plus" onClick={newDoc} data-target="docs:new">
+          <Button variant="primary" onClick={newDoc} data-target="docs:new">
             New doc
           </Button>
         </>
@@ -226,7 +226,7 @@ function SourcesPage({ panel }: { panel?: string }) {
       actions={
         <>
           <OwnerButton page="docs" />
-          <Button variant="primary" icon="plus" onClick={() => setAdding(true)} data-target="sources:new">
+          <Button variant="primary" onClick={() => setAdding(true)} data-target="sources:new">
             Connect
           </Button>
           {adding && <SourceDialog source={null} onClose={() => setAdding(false)} />}

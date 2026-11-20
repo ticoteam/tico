@@ -94,7 +94,9 @@ const routine = (over: Partial<Routine> = {}) =>
 
 describe('words', () => {
   it('says a schedule, a stage rule and a company rule in plain words', () => {
-    expect(cronWords('0 7 * * *')).toBe('every day at 7 AM');
+    expect(cronWords('0 7 * * *')).toBe('every day at 7:00 AM');
+    expect(cronWords('30 1,9,17 * * *')).toBe('every day at 1:30 AM, 9:30 AM and 5:30 PM');
+    expect(cronWords('0 9 * * 4')).toBe('every Thursday at 9:00 AM');
     const r = { event: 'enters', timer: null, cond: {}, jev: 'Is the spec approved?', then: 'block', stage_names: ['Review'] } as unknown as StageRule;
     expect(stageParts(r)).toEqual(['Enters Review', 'the decision model decides', 'Block']);
     expect(orgParts({ text: 'Never share a card number', if_broken: 'warn', reviewer: null })).toEqual(['Never share a card number', 'Warn']);
@@ -121,7 +123,7 @@ describe('Routines', () => {
     const row = await screen.findByTitle('Morning numbers');
     expect(href(row)).toBe('/company/routines?panel=routine:r1');
     expect(screen.getByRole('region', { name: 'Scheduled' })).toBeTruthy();
-    expect(within(row).getByText('Every day at 7 AM')).toBeTruthy();
+    expect(within(row).getByText('Every day at 7:00 AM')).toBeTruthy();
   });
 
   it('pauses at once and takes it back when refused', async () => {

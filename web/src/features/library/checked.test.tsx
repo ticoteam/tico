@@ -346,6 +346,20 @@ describe('a doc', () => {
 describe('Contacts', () => {
   const row = (o: Record<string, unknown>) => ({ type: 'person', status: 'active', primary_email: null, primary_domain: null, last_activity_at: null, ...o });
 
+  it('Add makes a contact of the tab’s kind by its name and opens it beside the list', async () => {
+    const sent = serve((url, method) => (method === 'POST' && url === '/api/v2/entities' ? { id: 'c9', created: true, changed: ['name'] } : { rows: [], next: null }));
+    queryClient.setQueryData(typesQuery.queryKey, [{ key: 'person', name: 'Person', plural_name: 'People' }]);
+    queryClient.setQueryData(countsQuery.queryKey, [{ type: 'person', count: 1 }]);
+    queryClient.setQueryData(contactsQuery('person', '').queryKey, { pages: [{ rows: [row({ id: 'c1', name: 'Ada Sample' })], next: null }], pageParams: [''] } as never);
+    const router = at('/library/contacts', <ContactsPage search={{}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add person' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Robin Sample' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/entities', method: 'POST', body: { type: 'person', match: { name: 'Robin Sample' }, name: 'Robin Sample' } }]));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ panel: 'c9' }));
+  });
+
   it('keeps the relationship filter when searching contacts', async () => {
     serve(() => ({ rows: [], next: null, types: [], counts: [] }));
     queryClient.setQueryData(contactsQuery('person', '', 'customer_of').queryKey, {
@@ -353,8 +367,7 @@ describe('Contacts', () => {
       pageParams: [''],
     });
     const router = at('/library/contacts?link=customer_of', <ContactsPage search={{ link: 'customer_of' }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Search' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search contacts' }), { target: { value: 'seed' } });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search contacts' }), { target: { value: 'seed' } });
     await waitFor(() => expect(router.state.location.search).toMatchObject({ q: 'seed', link: 'customer_of' }));
   });
 

@@ -35,7 +35,7 @@ const KINDS = [
 
 const DAY = 86_400_000;
 
-type Item = { k: 'head'; name: string; n: number } | { k: 'file'; f: FileRow };
+type Item = { k: 'head'; name: string; n: number | undefined } | { k: 'file'; f: FileRow };
 
 function bucket(at: string, now: number): 'Today' | 'This week' | 'Earlier' {
   const age = now - new Date(at).getTime();
@@ -68,11 +68,14 @@ function FilesList({ search }: { search: FilesSearch }) {
   // Grouped against when the page opened, so the groups do not shift while it is read.
   const [now] = useState(() => Date.now());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  const items: Item[] = (['Today', 'This week', 'Earlier'] as const).flatMap((name) => {
-    const list = rows.filter((f) => bucket(f.last_activity_at, now) === name);
-    if (!list.length) return [];
-    return [{ k: 'head' as const, name, n: list.length }, ...(folded.has(name) ? [] : list.map((f) => ({ k: 'file' as const, f })))];
-  });
+  const groups = (['Today', 'This week', 'Earlier'] as const)
+    .map((name) => ({ name, list: rows.filter((f) => bucket(f.last_activity_at, now) === name) }))
+    .filter((g) => g.list.length);
+  // The last group goes on in pages not read yet: its count would be the page size, so it shows none until the end.
+  const items: Item[] = groups.flatMap(({ name, list }, i) => [
+    { k: 'head' as const, name, n: i === groups.length - 1 && files.hasNextPage ? undefined : list.length },
+    ...(folded.has(name) ? [] : list.map((f) => ({ k: 'file' as const, f }))),
+  ]);
   const fold = (name: string) => {
     const next = new Set(folded);
     if (!next.delete(name)) next.add(name);
@@ -111,6 +114,13 @@ function FilesList({ search }: { search: FilesSearch }) {
     };
   });
   const kindName = KINDS.find(([k]) => k === kind)?.[1];
+  // With no files at all, the head keeps only the owner and ⋯: the empty state holds the one button (files.js empty).
+  const none = !rows.length && !kind && !searching && files.isSuccess;
+  const add = (
+    <Button variant="primary" onClick={() => input.current?.click()} data-target="files:add">
+      Add
+    </Button>
+  );
 
   return (
     <>
@@ -118,26 +128,26 @@ function FilesList({ search }: { search: FilesSearch }) {
         title="Files"
         path="/library/files"
         className="lib"
-        search={<Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />}
+        search={!none && <Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />}
         actions={
           <>
-            <Menu trigger={<IconButton icon="filter" label="Filter by kind" on={!!kind} data-phone />}>
+            {!none && (
+              <Menu trigger={<IconButton icon="filter" label="Filter by kind" on={!!kind} data-phone />}>
               <MenuItem label="All files" on={!kind} onSelect={() => void press('files.list', { q: search.q })} />
               {KINDS.map(([k, label]) => (
                 <MenuItem key={k} label={label} on={k === kind} onSelect={() => void press('files.list', { kind: k, q: search.q })} />
               ))}
-            </Menu>
+              </Menu>
+            )}
             <OwnerButton page="docs" />
-            <Button variant="primary" icon="plus" onClick={() => input.current?.click()} data-target="files:add">
-              Add
-            </Button>
+            {!none && add}
             <input ref={input} type="file" multiple hidden aria-label="Choose files" onChange={(e) => take(e.target.files)} />
           </>
         }
         filter={kindName && <FilterRow filters={[{ label: kindName, onClear: () => void press('files.list', { q: search.q }) }]} />}
         state={searching || rows.length ? 'ready' : files.isPending ? 'loading' : files.isError ? 'fault' : kind ? 'ready' : 'empty'}
         onRetry={() => void files.refetch()}
-        empty={{ title: 'No files yet' }}
+        empty={{ title: 'No files yet', action: <Button variant="primary" onClick={() => input.current?.click()}>Add file</Button> }}
         sections={
           searching ? (
             <Section name="Found" count={found.data?.results.length}>
@@ -193,7 +203,15 @@ function FileLine({ f, href }: { f: FileRow; href: string }) {
         <KindGlyph kind={f.library_kind} />
       </span>
       <span className="row-title">{f.title}</span>
-      <span className="row-tags">{f.kind_label && <span className="tag">{f.kind_label}</span>}</span>
+      {/* The kind is the lead's glyph; the tag with the task mark is the task that made the file (files.js). */}
+      <span className="row-tags">
+        {f.task_title && (
+          <span className="tag" title={f.task_title}>
+            <Icon name="tasks" />
+            <span>{f.task_title}</span>
+          </span>
+        )}
+      </span>
       <Face actor={f.bot} name={f.bot_name} />
       <Ago at={f.last_activity_at} className="row-age" />
     </Row>
@@ -301,7 +319,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
         file && (
           <div className="fv-side">
             <Facts label="About this file">
-              <LabelValue label="Kind">{file.provider_label || file.kind}</LabelValue>
+              <LabelValue label="Kind">{file.provider_label || file.kind.replace(/^./, (c) => c.toUpperCase())}</LabelValue>
               {shown?.size != null && <LabelValue label="Size">{size(shown.size)}</LabelValue>}
               <LabelValue label="Made by">
                 <Who actor={file.actor ?? file.bot} className="fact-who" />

@@ -124,7 +124,8 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
       }
       state={state}
       onRetry={retry}
-      empty={{ title: empty, action: t === 'suggested' || t === 'built-in' ? undefined : add }}
+      // The tabs share one head, whose Add rule stays put; an empty tab says so and adds no second button.
+      empty={{ title: empty }}
       sections={children}
       panel={search.panel && <RulePanel key={search.panel} panel={search.panel} tab={t} onClose={close} />}
     />

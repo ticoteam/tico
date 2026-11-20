@@ -131,8 +131,8 @@ function SkillsList({ search }: { search: SkillsSearch }) {
             <MenuItem label="Waiting" on={!!search.waiting} onSelect={() => void press('skills.list', { q: search.q, waiting: true })} />
           </Menu>
           <OwnerButton page="skills" />
-          <Button variant="primary" icon="plus" onClick={() => setMaking(true)} data-target="skills:new">
-            New skill
+          <Button variant="primary" onClick={() => setMaking(true)} data-target="skills:new" aria-label="New skill">
+            New
           </Button>
           {making && <NewSkill onClose={() => setMaking(false)} />}
         </>
@@ -228,7 +228,7 @@ function Stack({ on, total }: { on: SkillActor[]; total: number }) {
 function Uses({ use, has }: { use: SkillUse | undefined; has: boolean }) {
   return (
     <>
-      <span className="row-fig">{has ? (use?.uses ?? 0) : ''}</span>
+      <span className="row-fig">{has && use?.uses ? use.uses : ''}</span>
       {use?.last_used_at ? <Ago at={use.last_used_at} className="row-age" /> : <span className="row-age" />}
     </>
   );
@@ -471,6 +471,7 @@ function ProposalPage({ id }: { id: string }) {
   const [busy, setBusy] = useState(false);
   const p = d.data?.proposal;
   const from = p ? proposer(p) : null;
+  const fromName = useActor(from)?.name;
   const lines = d.data ? diffLines(d.data.diff, d.data.files.length > 1) : [];
   const added = lines.filter((l) => l.kind === '+').length;
   const cut = lines.filter((l) => l.kind === '-').length;
@@ -588,7 +589,10 @@ function ProposalPage({ id }: { id: string }) {
       foot={
         open &&
         decider && (
-          <>
+          <div className="sp-decide">
+            <FlowMark />
+            <b>{fromName ? `${p?.base_version ? 'Change' : 'New'} from ${fromName}` : 'A change'}</b>
+            <span className="grow" />
             <Button onClick={() => setBack(true)} data-target={`proposal-back:${id}`}>
               Send back
             </Button>
@@ -596,7 +600,7 @@ function ProposalPage({ id }: { id: string }) {
               Approve
             </Button>
             {back && <SendBack id={id} onClose={() => setBack(false)} />}
-          </>
+          </div>
         )
       }
     />

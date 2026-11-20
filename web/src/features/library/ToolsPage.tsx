@@ -17,7 +17,7 @@ import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
 import { BrowserDialog } from '@/features/team/exports';
 import { FilterRow, ListAndItem, PageMore, Section } from '@/pagekinds';
-import { AddAccountDialog, AddDialog, AddItems, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
+import { AddAccountDialog, AddDialog, AddMenu, ReplaceLoginDialog, type Adding } from './AddTool';
 import { CodeDialog, Confirm, EditApiDialog, ExpiryDialog, PasteDialog, RevealDialog, SettingDialog, SitesDialog } from './ToolDialogs';
 import { Face, Held, idsAndNames, KindTile, More, OwnerButton, press, when } from './parts';
 import { apiToolQuery, teamsQuery, toolsQuery, vaultQuery, websiteToolQuery, type StoredKey } from './queries';
@@ -82,9 +82,9 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
       (!who || hasWho(k.grants.map((g) => g.subject), who, teams, same)),
   );
   const shown = [...rows.map(toolEntry), ...keys.map(keyEntry)].sort(order);
+  const cards = useCards();
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
-  const cards = useCards();
   const kinds = [...new Set([...all.map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
   const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
   const filterWho = (next?: string) => void press('tools.filterWho', next ? { who: next } : {});
@@ -140,17 +140,23 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
               ))}
               <WhoMenu who={who} teams={teams} people={whoList} onPick={filterWho} />
             </Menu>
-            {!cards && <AddMenu trigger={<IconButton icon="plus" label="Add tool" />} onPick={setAdding} />}
+            {/* A wide list's head has the plus; a phone's has Add, its one filled button (tools.js phone). */}
+            <AddMenu
+              trigger={
+                cards ? (
+                  <Button variant="primary" aria-label="Add tool" data-phone>
+                    Add
+                  </Button>
+                ) : (
+                  <IconButton icon="plus" label="Add tool" />
+                )
+              }
+              onPick={setAdding}
+            />
           </>
         }
-        // A phone's head keeps Filter and the ⋯; Add tool then moves into the ⋯.
         more={
           <PageMore>
-            {cards && (
-              <MenuSub label="Add tool" icon="plus">
-                <AddItems onPick={setAdding} />
-              </MenuSub>
-            )}
             <MenuItem label="Messages" onSelect={() => void press('tools.open', { tool: 'messages' })} />
             {SETTINGS.map(([tool, label]) => (
               <MenuItem key={tool} label={label} onSelect={() => void press('tools.open', { tool })} />

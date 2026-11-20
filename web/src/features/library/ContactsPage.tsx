@@ -1,6 +1,8 @@
 import { useQuery, useSuspenseInfiniteQuery } from '@tanstack/react-query';
 import { useState, type FocusEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Ago } from '@/kit/Ago';
+import { Button } from '@/kit/Button';
+import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
@@ -9,10 +11,11 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
+import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
 import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
 import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
-import { Face, Find, OwnerButton, press, Who } from './parts';
+import { Face, Find, Foot, OwnerButton, press, useGo, Who } from './parts';
 import {
   attributesQuery,
   cardQuery,
@@ -49,6 +52,8 @@ export function shown(v: FactValue | FactValue[] | undefined): string {
   const one = (x: FactValue) => (x.value == null ? '' : typeof x.value === 'object' ? JSON.stringify(x.value) : String(x.value));
   return Array.isArray(v) ? v.map(one).filter(Boolean).join(', ') : one(v);
 }
+
+const FIRST = ['person', 'organization', 'place', 'product'];
 
 const EDITABLE = new Set(['text', 'string', 'email', 'phone', 'url', 'number', 'date', 'money']);
 
@@ -99,9 +104,17 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
   const emptyTitle = none || !kind ? 'No contacts yet' : `No ${kind.plural_name.toLowerCase()} yet`;
 
   const listed = (to: { type?: string; q?: string; link?: string }) => void press('contacts.list', to);
+  const [adding, setAdding] = useState(false);
+  const add = (
+    <Button variant="primary" onClick={() => setAdding(true)} data-target="contacts:add">
+      Add
+    </Button>
+  );
 
   // People, organizations, places: one tab each (records.js contactsPage). People is the page with no `type`.
-  const tabs: PageTab[] = kinds.map((k) => ({
+  // People first, then organizations, places and products (records.js), then any other kind the company keeps.
+  const rank = (key: string) => (FIRST.indexOf(key) + 1 || FIRST.length + 1);
+  const tabs: PageTab[] = [...kinds].sort((a, b) => rank(a.key) - rank(b.key)).map((k) => ({
     label: k.plural_name,
     to: '/library/contacts',
     search: k.key === 'person' ? undefined : { type: k.key },
@@ -127,11 +140,13 @@ export function ContactsPage({ search }: { search: ContactsSearch }) {
             </Menu>
           )}
           <OwnerButton page="contacts" />
+          {state !== 'empty' && add}
+          {adding && <AddContact type={type} kind={kind?.name ?? 'contact'} onClose={() => setAdding(false)} />}
         </>
       }
       filter={search.link && <FilterRow filters={[{ label: relation(search.link), onClear: () => listed({ type: search.type, q: search.q }) }]} />}
       state={state}
-      empty={{ title: emptyTitle }}
+      empty={{ title: emptyTitle, action: add }}
       sections={
         rows.length ? (
           <VirtualList
@@ -170,6 +185,30 @@ function ContactLine({ r, search, selected }: { r: ContactRow; search: ContactsS
   );
 }
 
+/** A new contact of the tab's kind, by its name; it opens beside the list, where the rest of its facts are typed in. */
+function AddContact({ type, kind, onClose }: { type: string; kind: string; onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [busy, go] = useGo(onClose);
+  const add = () => void go('contacts.add', { type, name: name.trim() }, 'Not added');
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Add ${kind.toLowerCase()}`}
+      actions={<Foot onClose={onClose} label="Add" busy={busy} ready={!!name.trim()} onGo={add} />}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) add();
+        }}
+      >
+        <Field label="Name" value={name} onValueChange={setName} autoComplete="off" autoFocus />
+      </form>
+    </Dialog>
+  );
+}
+
 /* ---------------------------------------------------------------- one contact */
 
 function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
@@ -190,7 +229,9 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
       lead={c && <Face actor={null} name={c.name} size={28} />}
       onClose={close}
       facts={
-        card.isError ? (
+        card.isPending ? (
+          <SkeletonRows rows={6} label="Loading the contact" />
+        ) : card.isError ? (
           <Empty title="This contact did not load" icon="alert" />
         ) : (
           c && (

@@ -34,13 +34,22 @@ async function keep(from: Doc, change: { title?: string; body?: string }): Promi
   return r.ok;
 }
 
+/** The text as it reads under the page's title: a first "# heading" that only repeats the title (or its start, as
+    "Docs sweep findings" under "Docs sweep findings, 2026-11-16") is left out, as the mock's docs start with their
+    first paragraph. The text itself keeps it. */
+const unTitled = (body: string, title: string) => {
+  const m = /^\s*#[ \t]+(.+?)[ \t#]*(?:\r?\n|$)/.exec(body);
+  const same = (a: string) => a.trim().toLowerCase().replace(/\s+/g, ' ');
+  return m?.[1] && same(title).startsWith(same(m[1])) ? body.slice(m[0].length) : body;
+};
+
 function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   const { data: doc } = useSuspenseQuery(docQuery(id));
   const versions = useQuery(docVersionsQuery(id));
   const requested = search.v !== doc.version ? search.v : undefined;
   const old = useQuery(docVersionQuery(id, requested ?? 0));
   const past = old.data;
-  const body = past?.body ?? doc.body;
+  const body = unTitled(past?.body ?? doc.body, past?.title ?? doc.title);
   const outline = headings(body);
   // A locked doc changes only by an owner (docs-page.ts canChange; the server lets agent administrators too).
   const owner = useQuery(meQuery).data?.role === 'owner';
@@ -131,7 +140,7 @@ function TypeHere({ doc }: { doc: Doc }) {
   if (!typing)
     return (
       <div className="doc-type" tabIndex={0} aria-label="Text" onFocus={(e) => e.target === e.currentTarget && setTyping({ from: doc, text: doc.body })}>
-        <Markdown text={doc.body} />
+        <Markdown text={unTitled(doc.body, doc.title)} />
       </div>
     );
   const done = async () => {

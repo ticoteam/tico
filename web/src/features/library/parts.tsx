@@ -16,12 +16,20 @@ import { chatAddress } from '@/lib';
     an agent's status line does not draw the page again. */
 export const idsAndNames = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, { id: a.id, name: a.name }]));
 
+const hueOf = (s: string) => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+};
+
 /** A teammate's face from the directory. `bot:<slug>`, `human:<id>`, a bare slug or id all resolve. */
 export function Face({ actor, name, size = 22 }: { actor: string | null | undefined; name?: string | null; size?: 22 | 28 }) {
   const who = useActor(actor);
   if (!actor && !name) return null;
   const kind = who?.kind ?? (actor?.startsWith('bot:') ? 'agent' : 'person');
-  return <Avatar kind={kind} name={who?.name ?? name ?? 'Teammate'} hue={who?.hue} live={who?.working} size={size} />;
+  const shown = who?.name ?? name ?? 'Teammate';
+  // Someone outside the directory (a contact) gets a steady hue from their name, so a list of them is not one colour.
+  return <Avatar kind={kind} name={shown} hue={who?.hue ?? hueOf(actor ?? shown)} live={who?.working} size={size} />;
 }
 
 /** A face and the name beside it (`.doc-owner`, a fact's value). */
@@ -63,10 +71,10 @@ export function ChatWith({ actor }: { actor: string | null }) {
   return <KitOwnerButton name={who?.name ?? 'the owner'} kind={kind} hue={who?.hue} live={who?.working} href={href} />;
 }
 
-/** The head's search (the page kind's `search` slot): a button until pressed, then the field; on a phone, where it has its
-    own line, the field. Typing narrows the page after a short pause. */
+/** The head's search (the page kind's `search` slot): the field itself, first of the head's controls as the Library
+    mocks draw it (files.js, tools.js); on a phone it has its own line. Typing narrows the page after a short pause. */
 export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
-  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" button="Search" />;
+  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" />;
 }
 
 /** Run an action from a control and say why when it is refused (`run` itself shows nothing). */
@@ -201,11 +209,46 @@ export function ToolGlyph({ kind }: { kind: string }) {
   return kind === 'mcp' ? GLYPH.mcp : GLYPH[TOOL_GLYPH[kind] ?? 'key'];
 }
 
+/* A file's kinds as the Files mock draws them (files.js KIND): a sheet, a picture, a framed page, a play mark, a page of
+   text. */
+const box = <rect x="4" y="5" width="16" height="14" rx="2" />;
+const FILE_GLYPH: Record<string, ReactNode> = {
+  data: svg(
+    <>
+      {box}
+      <path d="M4 10h16M4 14.5h16M10 5v14" />
+    </>,
+  ),
+  image: svg(
+    <>
+      {box}
+      <circle cx="9" cy="10" r="1.4" />
+      <path d="m5 17 5-4.5 3.5 3 2.5-2 3.5 3.5" />
+    </>,
+  ),
+  page: svg(
+    <>
+      {box}
+      <path d="M4 9h16M7 7h.1M9.5 7h.1" />
+    </>,
+  ),
+  media: svg(
+    <>
+      {box}
+      <path d="m10.5 9.5 4 2.5-4 2.5Z" />
+    </>,
+  ),
+  document: svg(
+    <>
+      <path d="M7.5 3.5H14l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5Z" />
+      <path d="M9 11.5h6M9 15h6M9 18h3" />
+    </>,
+  ),
+};
+
 /** A file's or source's kind as a lead glyph. */
 export function KindGlyph({ kind }: { kind: string }) {
-  if (kind === 'image' || kind === 'media') return <Icon name="square" />;
-  if (kind === 'data') return GLYPH.cli;
-  if (kind === 'page') return <Icon name="library" />;
+  if (FILE_GLYPH[kind]) return FILE_GLYPH[kind];
   if (kind === 'site' || kind === 'website') return GLYPH.site;
   if (kind === 'repo' || kind === 'github') return GLYPH.cli;
   return <Icon name="file" />;

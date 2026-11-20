@@ -154,10 +154,12 @@
 
   .rr .split{display:block}
   .rr .scope-col{display:none}
-  .rr .scope-select{display:block;padding:var(--s-2h) var(--s-2) var(--s-1h) var(--s-8)}
+  .rr .scope-select{display:block;padding:var(--s-2h) var(--s-2) var(--s-1h)}
   .rr .set-from{display:none}
   .rr .sets{--set-w:calc(var(--s-18) + var(--s-8))}
 
+  /* a phone's page edge is the section name's: no margin for a mark to hang in, so a row starts at the row's own 8 */
+  .rr :is(.auto,.watch,.hook,.set,.rr-none){padding-left:var(--s-2)}
   .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
   .rr :is(.auto,.watch,.hook) .row-sub{display:none}
   .rr .brow{grid-template-columns:minmax(0,1fr)}
@@ -167,7 +169,7 @@
   .rr .hook{grid-template-columns:minmax(0,1fr) auto calc(var(--s-8) * 2) var(--s-10);column-gap:var(--s-2h);padding-right:var(--s-2)}
   .rr .hook .ib{display:none}
 
-  .rr .match{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) auto var(--s-8);grid-template-areas:"src pill age" "text text text";row-gap:var(--s-0);padding:var(--s-2) var(--s-2) var(--s-2) var(--s-8)}
+  .rr .match{height:auto;min-height:var(--row);grid-template-columns:minmax(0,1fr) auto var(--s-8);grid-template-areas:"src pill age" "text text text";row-gap:var(--s-0);padding:var(--s-2)}
   .rr .match .row-sub{grid-area:src}
   .rr .match .row-title{grid-area:text;white-space:normal;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .rr .match .pill{grid-area:pill}
@@ -177,3 +179,12 @@
   .rr .match-foot{grid-column:1/-1;min-height:var(--tap);gap:var(--s-2h)}
   .rr .match-foot .verb{position:relative}
 }
+
+/* Routines with none of the company's own: the empty state fills the page and Built in sits at its foot (rules.js
+   routinesScreen, state empty) */
+.rr .pk-body:has(>.empty+.stage){display:flex;flex-direction:column}
+.rr .pk-body>.empty:has(+.stage){flex:1}
+
+/* a panel's facts: the label at the left, the value at the right (rules.js routinePanel .kv) */
+.pnl.rr .facts .fact{grid-template-columns:auto minmax(0,1fr);column-gap:var(--s-3)}
+.pnl.rr .facts .fact-v{display:inline-flex;align-items:center;justify-content:flex-end;gap:var(--s-1h);justify-self:end;text-align:right}

@@ -213,12 +213,13 @@ function csvRows(text: string): string[][] {
 
 function TextPreview({ text, view, title }: { text: string; view: View; title: string }) {
   if (view === 'html') return <iframe className="fv-frame" srcDoc={text} title={title} sandbox={HTML_SANDBOX} referrerPolicy="no-referrer" />;
+  // Text reads as a sheet of paper on the desk, as an image does (files.js textView).
   if (view === 'markdown')
     return (
-      <div className="fv-main">
-        <div className="read">
+      <div className="fv-desk is-paper">
+        <article className="fv-paper read">
           <Markdown text={text} />
-        </div>
+        </article>
       </div>
     );
   if (view === 'csv') {
@@ -247,8 +248,10 @@ function TextPreview({ text, view, title }: { text: string; view: View; title: s
     );
   }
   return (
-    <div className="fv-main">
-      <pre className="fv-text t-code">{text}</pre>
+    <div className="fv-desk is-paper">
+      <article className="fv-paper">
+        <pre className="fv-text t-code">{text}</pre>
+      </article>
     </div>
   );
 }

@@ -23,6 +23,7 @@ import {
   signInCode,
   addKey,
   addMcp,
+  addContact,
   addNote,
   installSkill,
   importDoc,
@@ -983,6 +984,20 @@ export const contactsUpdate = defineAction({
   run: (_ctx, i) => saveFact(i.contact, i.type, i.key, i.value.trim()),
   did: () => 'Saved',
   target: (i) => ({ kind: 'contact-fact', id: `${i.contact}:${i.key}` }),
+});
+
+export const contactsAdd = defineAction({
+  id: 'contacts.add',
+  title: 'Add a contact',
+  kind: 'change',
+  input: s.object({ type: s.string({ min: 1, max: 60 }), name: s.string({ min: 1, max: 300 }) }),
+  run: async ({ router }, i) => {
+    const r = await addContact(i.type, i.name.trim());
+    await go(router, '/library/contacts', { type: i.type === 'person' ? undefined : i.type, panel: r.id });
+    return r.id;
+  },
+  did: (i) => `Added ${i.name.trim()}`,
+  target: (_i, out) => (out ? { kind: 'contact', id: out } : null),
 });
 
 export const contactsNote = defineAction({

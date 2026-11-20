@@ -267,7 +267,8 @@ export function editSource(id: string, change: SourceEdit) {
 
 // ---------------------------------------------------------------- files
 
-export type FileRow = LibraryFile;
+/** A list row. The server also sends the task that made the file (backend/files.py view), which its schema leaves out. */
+export type FileRow = LibraryFile & { task_id?: string | null; task_title?: string | null };
 export interface FileVersion {
   version: number;
   current: boolean;
@@ -1382,6 +1383,16 @@ export function saveFact(ref: string, type: string, key: string, value: string) 
       },
     send: (idempotencyKey) =>
       api.post('/api/v2/entities', { type, match: { id: ref }, ...(key === 'name' ? { name: value } : { values: { [key]: value } }) }, { idempotencyKey }),
+  });
+}
+
+/** A new contact by its name (POST /api/v2/entities, which takes one already named so rather than make a twin). The
+    list reads again after it (contacts is a quiet root); the answer is its id. */
+export function addContact(type: string, name: string) {
+  return write<{ id: string; created: boolean }>({
+    key: countsQuery.queryKey,
+    optimistic: (cur: unknown) => cur,
+    send: (idempotencyKey) => api.post<{ id: string; created: boolean }>('/api/v2/entities', { type, match: { name }, name }, { idempotencyKey }),
   });
 }
 
