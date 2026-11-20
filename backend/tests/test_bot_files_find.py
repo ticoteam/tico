@@ -49,7 +49,7 @@ def test_search_finds_a_word_whole_part_typed_or_plural(api):
     put(api, attempt, "notes/two.md", "# Two\n\nQuarterly reports are due.")
     for q in ("harness", "harn", "harnes", "harness+nightly"):
         assert titles(page(api, "q=" + q)) == ["one.md"], q
-    for q in ("report", "reports", "repo", "quarterly+reports"):
+    for q in ("report", "reports", "repo", "quarterly+reports", "box", "boxes"):
         assert titles(page(api, "q=" + q)) == ["two.md"], q
 
 
