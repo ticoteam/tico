@@ -341,7 +341,7 @@ describe('Add teammate', () => {
 });
 
 describe('A team', () => {
-  it('has Teammates and Rules tabs, the month’s spend, the mock’s pills and its open seats', async () => {
+  it('keeps Add teammate and Rules in More, the month’s spend, the mock’s pills and its open seats', async () => {
     queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0], status: 'paused' } as AgentRow]);
     queryClient.removeQueries({ queryKey: peopleQuery.queryKey });
     let rosterReads = 0;
@@ -352,14 +352,17 @@ describe('A team', () => {
       }
       if (url.includes('/api/v2/usage')) return { status: 200, body: { totals: { est_cost_usd: 782 } } };
     });
-    show(<TeamWho who="design" />, '/team/design');
-    expect((await screen.findByRole('link', { name: 'Rules' })).getAttribute('href')).toBe('/company/rules?who=group%3Ag1');
-    expect(screen.getByRole('link', { name: 'Teammates' })).toBeTruthy();
+    const router = show(<TeamWho who="design" />, '/team/design');
     expect(await screen.findByText('$782')).toBeTruthy();
+    expect(screen.queryByRole('tab')).toBeNull();
     expect(await screen.findByText('Security Owner')).toBeTruthy();
     expect(screen.queryByText('Elsewhere')).toBeNull();
     expect(screen.getByText('Stopped')).toBeTruthy();
     expect(rosterReads).toBe(1);
+    fireEvent.click(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Add teammate' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rules' }));
+    await waitFor(() => expect(router.state.location.href).toBe('/company/rules?who=group%3Ag1'));
   });
 });
 

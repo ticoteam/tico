@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useLocation } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { useActor, type Actor } from '@/data';
+import type { Actor } from '@/data';
 import { firstPipeline, pipelinesQuery } from '@/features/tasks/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -12,14 +11,12 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { LabelValue } from '@/kit/LabelValue';
 import { Link as KitLink } from '@/kit/Link';
-import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
 import { Row, TaskRow } from '@/kit/Row';
 import { Select, type SelectOption } from '@/kit/Select';
 import { VirtualList } from '@/kit/VirtualList';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
-import { chatAddress } from '@/lib';
 
 export const waitsOn = (t: Pick<OwnTask, 'turn'>, me: string | undefined) => !!me && t.turn?.state === 'person' && t.turn.who === me;
 export const taskHref = (t: Pick<OwnTask, 'pipeline_id' | 'number' | 'id'>) =>
@@ -94,20 +91,6 @@ export function Fold({ label, text, children }: { label: string; text: string; c
       {open && children}
     </>
   );
-}
-
-/** The page owner's face in the head: it opens their chat beside the page (`?chat=`, the shell's). */
-export function OwnerButton({ actor }: { actor: string }) {
-  const who = useActor(actor);
-  const href = useLocation({
-    select: (l) => {
-      const q = new URLSearchParams(l.searchStr);
-      q.set('chat', chatAddress(who?.id ?? actor, who?.kind));
-      return `${l.pathname}?${q.toString()}`;
-    },
-  });
-  if (!who) return null;
-  return <KitOwnerButton name={who.name} kind={who.kind} hue={who.hue} live={who.working} href={href} />;
 }
 
 /** A page's rare verbs as one quiet line, never red (mates.css `.rec .foot`). */
