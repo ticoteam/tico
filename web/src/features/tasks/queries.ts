@@ -673,17 +673,17 @@ export interface Flow {
   items: FlowItem[];
 }
 
-/** A question to the person as Needs you lists it: a task of its own, asked on the agent's task (`parent`). A ❓ on a
-    message is also kind `question`, with a `mark_id` and no round. The schema does not name these fields yet. */
+/** A question to the person as Needs you lists it (`question_task`): a task of its own, asked on the agent's task. A ❓
+    on a message stays kind `question`. The schema does not name this kind yet. */
 interface QuestionItem {
   task_id: string;
   number: number | null;
   title: string;
   asker: string;
+  owner_id: string | null;
   since: string | null;
-  round: number;
 }
-const isQuestionTask = (it: NeedsYouItem): it is NeedsYouItem & QuestionItem => it.kind === 'question' && typeof (it as { round?: unknown }).round === 'number';
+const isQuestionTask = (it: NeedsYouItem): it is NeedsYouItem & QuestionItem => (it.kind as string) === 'question_task';
 
 /** Every task that waits on the person, across pipelines (GET /api/v2/needs-you): a question to them opens as its own
     task. Asks without a task stay in chats. */
@@ -703,7 +703,7 @@ export const flowQuery = queryOptions({
           title: it.title,
           pipeline_id: null,
           stage_id: null,
-          owner_id: it.task?.owner_id ?? null,
+          owner_id: it.owner_id,
           late: false,
           stuck: false,
           since: it.since ?? new Date().toISOString(),

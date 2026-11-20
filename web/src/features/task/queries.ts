@@ -1,6 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
-import type { Message, OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
+import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskFileList, TaskLinkView, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, TaskFileResult, TaskFileView } from '@/api/schema';
@@ -46,6 +46,8 @@ export interface TaskQuestion {
   answered_at: string | null;
   answered_by: string | null;
   answer_message_id: string | null;
+  /** The answer's words, once answered. */
+  answer_text: string | null;
 }
 
 /** One question asked on a task, as that task lists it. `person` is who it asks. */
@@ -129,13 +131,6 @@ export const retiredStagesQuery = (id: string) =>
   queryOptions({
     queryKey: [...pipelinesQuery.queryKey, 'stages', id] as const,
     queryFn: async ({ signal }) => (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${enc(id)}`, { signal })).pipeline.stages,
-  });
-
-/** A question's answer: the message it was given in (GET /api/v2/messages/{mid}). */
-export const answerQuery = (task: string, message: string) =>
-  queryOptions({
-    queryKey: [...keys.tasks.detail(task), 'answer', message] as const,
-    queryFn: ({ signal }) => api.get<Message>(`/api/v2/messages/${enc(message)}`, { signal }),
   });
 
 /* ---------------------------------------------------------------- writes */
@@ -303,13 +298,13 @@ const rereadNamed = (other: string) => {
   });
 };
 
-/** Answer a question, given to the round the person was shown (POST /api/v2/questions/{tid}/answer). It leaves Flow once
+/** Answer a question, given to the round the person was shown (POST /api/v2/tasks/{tid}/question/answer). It leaves Flow once
     the server has it; then the question, the task it was asked on and Flow are read again. A question asked again, or
     given to someone else, since it was shown is refused (409): it is read again first, and the refusal is
     `question_stale`, so the person reads it before they answer. */
 export async function answerQuestion(id: string, text: string, round: number): Promise<void> {
   try {
-    await api.post<unknown>(`/api/v2/questions/${enc(id)}/answer`, { text, round });
+    await api.post<unknown>(`${taskPath(id)}/question/answer`, { text, round });
   } catch (e) {
     if (!(e instanceof ApiError && e.status === 409)) throw e;
     await reread(id);

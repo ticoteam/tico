@@ -32,6 +32,7 @@ const question = (more: Partial<TaskQuestion> = {}): TaskQuestion => ({
   answered_at: null,
   answered_by: null,
   answer_message_id: null,
+  answer_text: null,
   ...more,
 });
 
@@ -63,13 +64,12 @@ let shown = task(question());
 function base(url: string): Reply {
   if (url.includes('/api/v2/tasks/%2340') || url.endsWith('/api/v2/tasks/t1')) return { body: { task: shown, runs: [], children: [], can_comment: true, mover: true } };
   if (url.endsWith('/files?all=1')) return { body: { files: [] } };
-  if (url.endsWith('/api/v2/messages/m5')) return { body: { id: 'm5', body: 'Keep apart.', conversation_id: 'c1', created_at: '2026-11-19T11:00:00Z', kind: 'say', sender_id: 'human:dana', recipient_id: null, refs: {}, in_reply_to: null } };
   if (url.includes('/needs-you'))
     return {
       body: {
         actor: 'human:me',
         items: [
-          { kind: 'question', id: 't1', task_id: 't1', number: 40, title: 'Share an AWS key with 35 agents?', parent: { id: 'p9', number: 35, title: 'Credentials for agents' }, asker: 'bot:gm', since: '2026-11-19T10:00:00Z', link_url: null, round: 2, line: '' },
+          { kind: 'question_task', id: 't1', task_id: 't1', number: 40, title: 'Share an AWS key with 35 agents?', parent: { id: 'p9', number: 35, title: 'Credentials for agents' }, asker: 'bot:gm', since: '2026-11-19T10:00:00Z', link_url: null, round: 2, owner_id: 'human:me', line: '' },
           { kind: 'ask', id: 'a9', task: { id: 't9', number: 13, title: 'Release notes', pipeline_id: 'p1', stage_id: 's1', owner_id: 'bot:gm' }, since: '2026-11-19T09:00:00Z', line: '' },
         ],
       },
@@ -128,7 +128,7 @@ const answerWith = (box: HTMLElement, text: string) => {
 
 describe('the question card', () => {
   it('shows who asks on what, the detail and the link, and answers to the round shown', async () => {
-    reply = (url, method) => (method === 'POST' && url.endsWith('/api/v2/questions/t1/answer') ? { body: {} } : null);
+    reply = (url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks/t1/question/answer') ? { body: {} } : null);
     show(<TaskPage task="40" pipeline="p1" />, '/tasks/p1/40');
     const box = await card();
     expect(box.textContent).toContain('From General Manager · on Credentials for agents (#35)');
@@ -137,11 +137,11 @@ describe('the question card', () => {
     expect(within(box).getByRole('link', { name: 'Open ↗' }).getAttribute('href')).toBe('https://acme.example/settings/keys');
     expect(within(box).getByRole('button', { name: 'Answer' })).toHaveProperty('disabled', true);
     answerWith(box, '  Keep apart  ');
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/questions/t1/answer', body: { text: 'Keep apart', round: 2 } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/tasks/t1/question/answer', body: { text: 'Keep apart', round: 2 } }]));
   });
 
   it('once answered, says who answered and what, with no box', async () => {
-    shown = task(question({ state: 'answered', ended_reason: 'answered', answered_by: 'human:dana', answered_at: '2026-11-19T11:00:00Z', answer_message_id: 'm5' }));
+    shown = task(question({ state: 'answered', ended_reason: 'answered', answered_by: 'human:dana', answered_at: '2026-11-19T11:00:00Z', answer_message_id: 'm5', answer_text: 'Keep apart.' }));
     show(<TaskPage task="40" pipeline="p1" />, '/tasks/p1/40');
     const box = await card();
     expect(await within(box).findByText('Keep apart.')).toBeTruthy();
@@ -161,7 +161,7 @@ describe('the question card', () => {
   it('a question asked again since it was shown is read again and says Look again; the next press answers the new round', async () => {
     let refused = false;
     reply = (url, method) => {
-      if (method !== 'POST' || !url.endsWith('/api/v2/questions/t1/answer')) return null;
+      if (method !== 'POST' || !url.endsWith('/api/v2/tasks/t1/question/answer')) return null;
       if (refused) return { body: {} };
       refused = true;
       shown = task(question({ round: 3 }));
@@ -179,7 +179,7 @@ describe('the question card', () => {
   });
 
   it('in Flow, opens the next item once answered', async () => {
-    reply = (url, method) => (method === 'POST' && url.endsWith('/api/v2/questions/t1/answer') ? { body: {} } : null);
+    reply = (url, method) => (method === 'POST' && url.endsWith('/api/v2/tasks/t1/question/answer') ? { body: {} } : null);
     const router = show(<TaskPage task="40" flow />, '/flow/40');
     const box = await card();
     // Flow's list is in before the press (Next links to it), so the next item is known before this one leaves it

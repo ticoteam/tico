@@ -12,7 +12,7 @@ import { nextAfter, useFlowRows } from './flowOrder';
 import { snoozeChoices } from './Head';
 import { failedToast, reasonOf, tabAddress } from './model';
 import { Face, Go, NameOf } from './parts';
-import { answerQuery, type AskedHere, type TaskData, type TaskQuestion } from './queries';
+import { type AskedHere, type TaskData, type TaskQuestion } from './queries';
 
 /* A question is a task for a person, filed under the agent's task that asked it (backend/questions.py). Its page opens
    on the question: who asks, on what, the detail, then the answer box. Any other task shows its description at the
@@ -53,7 +53,7 @@ function QuestionCard({ t, q, flow }: { t: TaskData; q: TaskQuestion; flow: bool
       </p>
       {body && <p className="qn-body">{body}</p>}
       {q.state === 'answered' ? (
-        <Answered t={t} q={q} />
+        <Answered q={q} />
       ) : q.state === 'withdrawn' ? (
         <p className="qn-note">
           <Ended q={q} />
@@ -93,9 +93,8 @@ function Ended({ q }: { q: TaskQuestion }) {
   }
 }
 
-/** Who answered and when, then the answer itself, read from its message. */
-function Answered({ t, q }: { t: TaskData; q: TaskQuestion }) {
-  const said = useQuery({ ...answerQuery(t.id, q.answer_message_id ?? ''), enabled: !!q.answer_message_id });
+/** Who answered and when, then the answer itself. */
+function Answered({ q }: { q: TaskQuestion }) {
   return (
     <>
       <p className="qn-note">
@@ -107,7 +106,7 @@ function Answered({ t, q }: { t: TaskData; q: TaskQuestion }) {
           </>
         )}
       </p>
-      {said.data && <p className="qn-said">{said.data.body}</p>}
+      {q.answer_text && <p className="qn-said">{q.answer_text}</p>}
     </>
   );
 }
