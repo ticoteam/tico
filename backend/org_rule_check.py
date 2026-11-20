@@ -2319,6 +2319,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = json.loads(hold["payload"] or "{}")
     hidden = _hidden_from(c, who, stored.get("private_to"))
+    # Only a reviewer's copy matters here: who may send it (`partial_for`).
+    partial = reviewer and hold["state"] == "held" and partial_for(c, who, hold, stored)
     stored = {} if summary else stored
     if not summary:
         from .files import readable_page_refs
@@ -2338,13 +2340,16 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     parts = {} if summary or not isinstance(stored, dict) else _shown_parts(verdict.get("parts"), stored.get("text"))
     for rid in rule_ids:
         row = c.execute(
-            "SELECT id, kind, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)
+            "SELECT id, kind, text, version, status, if_broken, description FROM org_rules WHERE id=?", (rid,)
         ).fetchone()
         if row:
+            # An opened hold carries each rule's Why (`description`), said beside it on the reviewer's decision.
+            fields = dict(row)
+            why = fields.pop("description") or ""
             rules.append(
-                {**dict(row), "text": row["text"][:SUMMARY_CHARS]}
+                {**fields, "text": row["text"][:SUMMARY_CHARS]}
                 if summary
-                else {**dict(row), "part": parts.get(rid) or None}
+                else {**fields, "description": why or None, "part": parts.get(rid) or None}
             )
     reviewer_name = H.person_name(c, H.actor_id(hold["reviewer"])) if hold["reviewer"] else None
     cut = lambda v: v[:SUMMARY_CHARS] if summary and isinstance(v, str) else v
@@ -2363,7 +2368,7 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         "created_at": hold["created_at"],
         "decided_at": hold["decided_at"],
         "decided_by": hold["decided_by"],
-        "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY,
+        "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY and not partial,
         "can_withdraw": (author or stands_in) and hold["state"] == "held",
         # The part call still runs: the card reads this hold again once it stops saying so (ui/app/org-rule-holds.ts).
         "part_pending": bool(verdict.get("parts_pending")) and hold["state"] == "held",
@@ -2373,6 +2378,8 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         out["rules_count"] = len(json.loads(hold["rule_ids"] or "[]"))
         out["to_count"] = to_count
         return out
+    if partial:
+        out["partial"] = True  # this reader's copy leaves words out: someone who reads all of it sends it
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
     edited = (stored.get("replay") or {}).get("message_id") if hold["operation"] == "threads_edit" else None
@@ -2382,9 +2389,38 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         out["text_cut"] = len(text)
     if reviewer:
         out["why"] = hold["why"]
-        if hold["state"] == "held":
+        if hold["state"] == "held" and not partial:
             out["nonce"] = hold["nonce"]
     return out
+
+
+# An ask's labels (`PLAIN_LABELS`), at the start of any line: the reviewer's copy reads without them, so a copy that
+# differs from what was judged by these alone left nothing out.
+LABEL_LINES = re.compile(r"^(?:Ask|Shows): ", re.MULTILINE)
+PARTIAL = "Someone who can read all of it must send it."
+
+
+def partial_for(c, who, hold, stored=None):
+    """Whether `who`'s copy of a held write leaves out words they may not read: the hold kept the whole text it judged
+    (`input.text`: the words of the task it hands over, which its copy leaves out) and `who` may not read that task
+    (the private tasks it reaches people through, else the task it was checked on). Send anyway never sends what its
+    sender could not read (`send`); what was left out, and how much, is never said. A copy that left words out and
+    names no task is partial for everyone."""
+    stored = stored if stored is not None else json.loads(hold["payload"] or "{}")
+    found = stored.get("input") or {}
+    judged = found.get("text")
+    if not judged or LABEL_LINES.sub("", judged) == LABEL_LINES.sub("", stored.get("text") or ""):
+        return False
+    tasks = list(stored.get("private_to") or ()) or [t for t in [str(found.get("obj") or "").rpartition("@")[0]] if t]
+    if not tasks:
+        return True
+    from . import task_privacy
+
+    for tid in tasks:
+        row = H.task(c, tid)
+        if not (row and task_privacy.task_readable(c, who, row)):
+            return True
+    return False
 
 
 def _hidden_from(c, who, private_to):
@@ -2845,6 +2881,8 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     require_hold_meeting(c, who.actor, hold)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
+    if partial_for(c, who, hold):
+        raise Problem("partial", PARTIAL, 409)
     if not nonce or not secrets.compare_digest(str(nonce), hold["nonce"]):
         raise Problem("conflict", "This hold changed; open it again", 409)
     fn = (table or REPLAY).get(hold["operation"])
@@ -3432,6 +3470,7 @@ def install(app, store, auth, mutate):
             ready = (
                 _is_reviewer(who, hold, c, auth)
                 and hold["state"] == "held"
+                and not partial_for(c, who, hold)  # `send` refuses it: no new check is asked for
                 and not store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
             )
             if ready:

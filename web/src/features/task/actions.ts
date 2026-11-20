@@ -20,6 +20,7 @@ import {
   tagTask,
   dropLink,
 } from './queries';
+import { decideHold } from './holds';
 
 /* Every change a person makes on an open task. `task` is the task's id (the detail's, not its number). A refusal
    carries the server's reason in the result ("task_not_met: Not met: QA report", then a line for each thing missing,
@@ -234,6 +235,33 @@ export const undoApproval = defineAction({
   tico: false,
   run: (_ctx, i) => said(undoAnswer(i.task, i.answer)),
   did: () => 'Undone',
+  target: (i) => ({ kind: 'task-answer', id: i.task }),
+});
+
+/* What a company rule held, on its review task: the reviewer's own press (Tico never decides it for them). The server
+   says who may: the rule's owner or editors, its reviewer, the company's owner, an Admin; a refusal carries why. */
+const hold = z.string().check(z.minLength(1), z.maxLength(100));
+
+export const keepHold = defineAction({
+  id: 'task.keepHold',
+  title: 'Keep blocked',
+  kind: 'change',
+  input: z.strictObject({ task, hold }),
+  tico: false,
+  run: (_ctx, i) => said(decideHold(i.task, i.hold, 'keep')),
+  did: () => 'Kept blocked',
+  target: (i) => ({ kind: 'task-answer', id: i.task }),
+});
+
+/* Sent once, as it was written, with the hold's one-shot `nonce` (given only to a reviewer who opened it). */
+export const sendHold = defineAction({
+  id: 'task.sendHold',
+  title: 'Send anyway',
+  kind: 'change',
+  input: z.strictObject({ task, hold, nonce: z.string().check(z.minLength(1), z.maxLength(200)) }),
+  tico: false,
+  run: (_ctx, i) => said(decideHold(i.task, i.hold, 'send', i.nonce)),
+  did: () => 'Sent anyway',
   target: (i) => ({ kind: 'task-answer', id: i.task }),
 });
 

@@ -454,10 +454,34 @@ def test_send_anyway_of_a_private_hand_off_rechecks_a_new_rule_on_the_whole_task
     # A rule added since the hold covers the private task's request, which the reviewer never saw.
     rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}})
     judge.needles[LAUNCH] = "launch date is"
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
+    # Ana reads the private task, so her copy leaves nothing out of her reach: she may send it, and the new rule holds.
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")
+    assert view["can_send"] and "partial" not in view
+    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ana-test"))
     assert r.status_code == 409 and "launch date" in r.text, r.text
     assert row(api, task["id"])["owner_id"] == "bot:ops"
+
+
+def test_a_reviewer_whose_copy_leaves_out_a_private_tasks_words_may_not_send_it(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    task = private_task(api)
+    held = ops(api, f"tasks/{task['id']}/owner", {"owner": "ana", "version": task["version"]})["held"]
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
+    # Ben may not read the task: his copy is partial, said as that alone, with no Send anyway and no nonce.
+    assert view["partial"] is True and view["can_send"] is False and "nonce" not in view
+    assert "color is red" not in json.dumps(view) and "Palette plan" not in json.dumps(view)
+    [listed] = get(api, f"rule-holds?task={view['task_id']}", token="ben-test")["holds"]
+    assert listed["can_send"] is False
+    # Refused on the server too, even with the hold's real nonce, and before any new check is asked for.
+    calls = len(sql(api, "SELECT 1 FROM events WHERE action='judge.call'"))
+    nonce = hold_row(api, held["id"])["nonce"]
+    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": nonce}, headers=headers("ben-test"))
+    assert r.status_code == 409 and "Someone who can read all of it must send it." in r.text, r.text
+    assert len(sql(api, "SELECT 1 FROM events WHERE action='judge.call'")) == calls
+    assert hold_row(api, held["id"])["state"] == "held" and row(api, task["id"])["owner_id"] == "bot:ops"
+    # He may still keep it blocked.
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
 
 
 def test_a_rule_scoped_to_the_tasks_thread_holds_a_write_on_the_task(ruled):

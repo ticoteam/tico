@@ -11,6 +11,7 @@ import { toast } from '@/kit/Toast';
 import { changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, personOf, reasonOf, sendTitle, tabAddress } from './model';
 import { answered } from './answered';
 import { Face } from './parts';
+import { HeldDecision, isRuleReview } from './Held';
 import { followSend } from './sending';
 import { addressesOf, decisionShownQuery, emailSendQuery, waitingQuery, type TaskData } from './queries';
 
@@ -39,7 +40,8 @@ export function Decision({ t, flow, dock = false, onAsking }: DecisionProps) {
   if (live && held && !held.sending) setHeld(null);
   const r = held?.sending ? held.r : (live ?? held?.r);
   const asked = r ? null : changesAskedOf(t, me);
-  if (!r && !asked) return null;
+  // A rule's review asks no OK: what it held waits on the person in the same box (Held.tsx).
+  if (!r && !asked) return isRuleReview(t) ? <HeldDecision t={t} flow={flow} dock={dock} /> : null;
   const box = r ? (
     <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (
