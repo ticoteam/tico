@@ -795,3 +795,35 @@ def test_a_persons_streams_opening_together_start_at_once_and_build_one_needs_ba
     assert built == ["human:ana"]
     live("ana-test", "?topics=needs&needs=changes").until(topic("ready"))
     assert built == ["human:ana", "human:ana"]
+
+
+def test_streams_joining_a_baseline_build_before_its_snapshot_share_it_and_a_later_one_builds_again(api, monkeypatch):
+    """Baselines: ten of one person's streams that ask before the build's snapshot begins get one build, each its own
+    copy, at the version the route gives; one that asks after builds again; a failed build fails each that joined."""
+    import asyncio
+    from types import SimpleNamespace
+
+    auth, task_view = api.app.state.auth, api.app.state.task_view
+    ana = auth.authenticate({"authorization": "Bearer ana-test"})
+    built, real = [], E.needs_baseline
+    monkeypatch.setattr(E, "needs_baseline", lambda c, a, who, view: built.append(who.actor) or real(c, a, who, view))
+    baselines, app = E.Baselines(api.app.state.store), SimpleNamespace(state=SimpleNamespace(needs_lane=None))
+
+    async def burst(n):
+        return await asyncio.gather(
+            *[baselines.start(app, auth, ana, task_view) for _ in range(n)], return_exceptions=True
+        )
+
+    got = asyncio.run(burst(10))
+    version = api.get("/api/v2/needs-you", headers=headers()).json()["version"]
+    assert built == ["human:ana"] and {held["version"] for _, held in got} == {version}
+    assert len({seq for seq, _ in got}) == 1 and len({id(held["marks"]) for _, held in got}) == 10
+    asyncio.run(burst(1))
+    assert built == ["human:ana", "human:ana"]
+
+    def refused(*args):
+        raise RuntimeError("the build failed")
+
+    monkeypatch.setattr(E, "needs_baseline", refused)
+    failed = asyncio.run(burst(3))
+    assert [type(result) for result in failed] == [RuntimeError] * 3
