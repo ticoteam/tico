@@ -1,5 +1,8 @@
 /* Copied from the mocks (system/tokens.css) on 2026-11-19. Do not edit by hand: additions go in tokens-app.css.
-   Changed at copy: font paths; the Bricolage face dropped (one family); the red danger tokens dropped (errors are grey). */
+   Changed at copy: font paths; the Bricolage face dropped (one family); the red danger tokens dropped (errors are grey).
+   Then the Layers change (decided Nov 19, plan/layers.html; the mock's "TODO app" in its elevation block) landed here:
+   --sheet-menu, --lift-tuck, the --z-tico/nav/chat sheet layers, --tuck-edge, --tuck-step, --tico-mark and the
+   surfaces and lifts of the elevation block. */
 /* system/tokens.css — Sheets. The one token file every mock loads.
    Part 1 (to the phone rule) is directions/c-mono/tokens.css, every name and value as it was; only the font
    paths moved. Part 2, "Foundations", names what the styles only implied. It adds names and changes none.
@@ -112,7 +115,9 @@
   --ground:#E9E9E9;        /* the window behind the sheets */
   --sheet:#FFFFFF;         /* the page sheet, the highest */
   --sheet-mid:#FBFBFB;     /* the chat sheet, between the two */
-  --sheet-low:#F4F4F4;     /* the navigation sheet, close to the ground */
+  --sheet-low:#F4F4F4;     /* Tico's sheet, the top layer and the darkest */
+  --sheet-menu:#F8F8F8;    /* the menu's sheet, between Tico and the chat */
+  --lift-tuck:10px 0 20px -10px rgba(0,0,0,.24);   /* the side shadow a sheet casts on the sheet tucked under it */
   --well:#F3F3F3;          /* a field, a code block: set into a sheet */
   --well-2:#E9E9E9;        /* the chosen segment's track, a skeleton bar */
   --hover:#F3F3F3;         /* a row under the pointer */
@@ -153,6 +158,8 @@
   --sheet:#1A1A1A;
   --sheet-mid:#161616;
   --sheet-low:#111111;
+  --sheet-menu:#141414;
+  --lift-tuck:12px 0 24px -8px rgba(0,0,0,.85);
   --well:#222222;
   --well-2:#2B2B2B;
   --hover:#212121;
@@ -307,7 +314,10 @@
 
   /* ---------- layers ----------
      Low to high. A thing takes the layer of its kind, never a number of its own. */
-  --z-page:1;                     /* the page sheet over its neighbours' shadows */
+  --z-page:1;                     /* the page sheet; the sheets above it (fixed, never changes; the leftmost is on top): */
+  --z-chat:2;                     /*   the thread */
+  --z-nav:3;                      /*   the company, the menu */
+  --z-tico:4;                     /*   Tico */
   --z-stick:2;                    /* a stage name that sticks while its rows scroll */
   --z-pop:4;                      /* a card that opens in place, inside its sheet */
   --z-dock:20;                    /* the phone's bar and the answer docked above it */
@@ -348,11 +358,18 @@
   --ease-arrive:var(--ease);--dur-enter:var(--dur-fast);--dur-leave:var(--dur-fast);--dur-arrive:0ms}
 
 /* ---------- elevation ----------
+   Layers (decided Nov 19, plan/layers.html): one order, Tico › Company › Thread › Artifact, left to right on a desktop and
+   front to back on the phone. The stacking order never changes. Narrowing slides the right sheet under its left neighbour
+   as its own card, leaving a --tuck-edge edge; clicking a lower sheet's edge opens it and the sheets above it collapse to
+   their edges, Tico too. The page lies flattest and stays the brightest; Tico, Company and Thread sit higher and darker.
+   An agent's settings open in the artifact layer.
+     tico     top sheet     --sheet-low   + --lift-2       Tico
+     nav                    --sheet-menu  + --lift-1       the company: navigation, the task list
+     chat                   --sheet-mid   + --lift-1       the thread, the conversation
+     page     flattest      --sheet       + --lift-0       the artifact: the page, the task, an agent's settings
    Five heights. Each is a surface and a shadow; both come from the theme, so these sit on every themed element.
      ground                 --ground                       the desk everything floats on
-     nav      lowest sheet  --sheet-low   + --lift-0       navigation, the task list
-     chat     middle sheet  --sheet-mid   + --lift-1       the conversation
-     page     highest sheet --sheet       + --lift-2       the page, the task
+     sheets                 the four layers above
      card     raised card   --raised      + --lift-2       the answer that waits on you; sits on a sheet
      overlay                --raised      + --lift-3       menu, picker, toast, dialog; sits over everything
    Light lifts are a hairline plus a soft drop. Dark lifts are a top highlight, an inner hairline and a
@@ -360,11 +377,16 @@
    Also: --lift-ctl a button, --lift-fill the filled button, --desk + --lift-desk the well an agent's page sits
    in, --lift-paper that page. */
 :root,[data-theme]{
-  --surface-nav:var(--sheet-low);    --lift-nav:var(--lift-0);
+  --surface-tico:var(--sheet-low);   --lift-tico:var(--lift-2);
+  --surface-nav:var(--sheet-menu);   --lift-nav:var(--lift-1);
   --surface-chat:var(--sheet-mid);   --lift-chat:var(--lift-1);
-  --surface-page:var(--sheet);       --lift-page:var(--lift-2);
+  --surface-page:var(--sheet);       --lift-page:var(--lift-0);
   --surface-card:var(--raised);      --lift-card:var(--lift-2);
   --surface-overlay:var(--raised);   --lift-overlay:var(--lift-3);
+  --tuck-edge:44px;                  /* what shows of a tucked sheet: the edge you click to open it */
+  --tuck-step:10px;                  /* a card under its neighbour sits this much shorter, top and bottom, each step */
+  --tico-mark:22px;                  /* Tico's mark at the top of its sheet and on its edge */
+  --tico-mark-lip:26px;              /* on the phone's lip */
   --focus-ring:var(--focus-w) solid var(--focus);
   --art:var(--line-strong);          /* what an empty state's drawing is made of; faded for its second and third stroke */
 }
@@ -372,6 +394,8 @@
 /* ---------- colour by role, with contrast ----------
    WCAG 2 ratios, computed from the values above and rounded down. Floors: text 4.5, a mark or a ring that
    carries meaning 3. A column is a surface; a ratio is given only where the colour is really set on it.
+   Since the Layers change the "nav" column is Tico's sheet (--sheet-low); the menu's --sheet-menu sits between the
+   "nav" and "chat" columns, so its ratios lie between theirs.
                          nav     chat    page    raised  chosen  well    bubble  
    LIGHT                 #F4F4F4 #FBFBFB #FFFFFF #FFFFFF #EBEBEB #F3F3F3 #ECECEC 
    --ink        text     17.1    18.2    18.8    18.8    15.8    17.0    15.9

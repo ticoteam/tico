@@ -294,7 +294,7 @@ describe('an open task', () => {
     // a stage's name folds its rows
     fireEvent.click(within(list).getByRole('button', { name: /EngineeringQA/ }));
     expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
-    // Close folds the list to the menu's icons
+    // Close tucks the list to its edge, out of reach until it opens
     fireEvent.click(within(list).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull());
   });

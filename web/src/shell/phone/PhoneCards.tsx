@@ -7,6 +7,7 @@ import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { Dot } from '@/tico/dot';
+import { TICO_MARK_LIP } from '@/shell/layout';
 import { watchKeyboard, stuckToBottom } from './keyboard';
 import type { Keys } from './keyboard';
 import { GESTURE, pickStop, progress, rubber, velocity } from './stops';
@@ -478,7 +479,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
           peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">Message Tico</span>),
           lipActs.tico,
           <span className="tico-dot" aria-hidden="true">
-            <Dot state="rest" size={30} />
+            <Dot state="rest" size={TICO_MARK_LIP} />
           </span>,
         )}
         <button className="nub" type="button" aria-label="Open Tico" inert={!nubOn} aria-hidden={!nubOn || undefined} onClick={() => raise('tico-half')}>

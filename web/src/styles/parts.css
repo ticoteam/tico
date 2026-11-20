@@ -24,9 +24,11 @@ b{font-weight:var(--w-strong)}
 
 /* ---------- the sheets (the grid is .app-tico in shell.css; fixed: the retired .app grids are gone) ---------- */
 .pane{--surface:var(--sheet);border-radius:var(--r-pane);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative;background:var(--surface)}
-.nav{--surface:var(--sheet-low);box-shadow:var(--lift-0)}
-.side{--surface:var(--sheet-mid);box-shadow:var(--lift-1)}
-.page{box-shadow:var(--lift-2);z-index:1}
+/* Layers: each sheet takes its layer's surface and lift (tokens.css, elevation); --lift-here lets the shell add the
+   side shadow a sheet casts on the one tucked under it */
+.nav{--surface:var(--surface-nav);--lift-here:var(--lift-nav);box-shadow:var(--lift-here)}
+.side{--surface:var(--surface-chat);--lift-here:var(--lift-chat);box-shadow:var(--lift-here)}
+.page{--surface:var(--surface-page);--lift-here:var(--lift-page);box-shadow:var(--lift-here);z-index:1}
 
 /* ---------- marks: the Dot, avatars, working, stopped, writing ---------- */
 

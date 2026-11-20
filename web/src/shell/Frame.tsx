@@ -1,19 +1,20 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
 import { PhoneCards, type PhoneCardsProps } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
-import { useTicoPower } from '@/tico/power';
 import { useArrangement } from './arrangement';
 import { useDesktopInset } from '@/desktop';
 import { Icon } from '@/kit/Icon';
-import { C, layout, modeFor, press, specOf, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
+import { C, forwardFor, layout, modeFor, press, specOf, TICO_MARK, type Arrangement, type ArrangementSpec, type Saved, type SheetId, type SheetLayout } from './layout';
 import { keepOne, useSheetMemory, withFold, withWidth, withoutWidth } from './memory';
 import { SheetContext, type SheetControls } from './Sheet';
 import './Frame.css';
 import './desktop.css';
 
 /* The ground and the sheets: Tico | the menu (or a task's list) | a second chat | the page, plus a panel, an agent's
-   widgets or a call's side. Sizes come from layout() (layout.md); under 760 the phone's cards take over. */
+   widgets or a call's side. Sizes come from layout() (layout.md, then plan/layers.html); under 760 the phone's cards
+   take over. The stacking order never changes: the leftmost sheet is on top. A tucked sheet keeps its card under its
+   left neighbour and shows its edge, one button that opens it. */
 
 export interface FrameProps {
   /* Tico's open sheet; folded, the frame draws its strip */
@@ -51,6 +52,10 @@ const SHEET_RESET = { ms: 240, easing: 'cubic-bezier(.2,0,0,1)', arriveMs: 340, 
 
 /* the least head a sheet keeps beside the desktop window's buttons; narrower, its content starts below them */
 const BESIDE_LIGHTS = 160;
+
+/* what a tucked sheet's edge says, under its mark */
+const EDGE_NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'Menu', list: 'Tasks', chat: 'Chat', page: 'Page', panel: 'Panel', widgets: 'Page', stage: 'Call', side: 'Side' };
+const EDGE_ICON = { menu: 'company', list: 'tasks', chat: 'message', page: 'file', panel: 'panel', widgets: 'file', stage: 'call', side: 'panel' } as const;
 
 const NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'the menu', list: 'the list', chat: 'the chat', page: 'the page', panel: 'the panel', widgets: 'widgets', stage: 'the call', side: 'the side' };
 
@@ -103,8 +108,7 @@ interface Drag {
 type Cause = 'move' | 'fold' | 'reset' | null;
 interface Placed {
   x: number;
-  folded: boolean;
-  shown: boolean;
+  shut: boolean;
 }
 
 function Sheets(p: FrameProps & { arr: Arrangement }) {
@@ -112,7 +116,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   const lights = useDesktopInset();
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
-  const [peek, setPeek] = useState<SheetId | null>(null);
+  /* the sheet opened by its edge, for this arrangement only */
+  const [opened, setOpened] = useState<{ arr: Arrangement; id: SheetId } | null>(null);
   const [dragging, setDragging] = useState<SheetId | null>(null);
   const drag = useRef<Drag | null>(null);
   const cause = useRef<Cause>(null);
@@ -121,22 +126,21 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
 
   const spec = specFor(p.arr, p);
   const arr = typeof spec === 'string' ? spec : spec.name; // which memory: a panel alone uses the chat one
-  const L = layout(width, spec, draft ?? saved);
+  const mem = draft ?? saved;
+  // opened by its edge only while it would be tucked without it: once the window has room, the usual layout is back
+  const forward = forwardFor(width, spec, mem, opened?.arr === p.arr ? opened.id : null);
+  const L = layout(width, spec, mem, forward);
   const sheets = L.mode === 'sheets' ? L.sheets : [];
   const stretch = L.mode === 'sheets' ? L.stretch : null;
-  const peeking = peek && sheets.some(s => s.id === peek && s.state !== 'open') ? peek : null;
   const find = (id: SheetId) => sheets.find(s => s.id === id);
 
-  /* a fold control, a strip, or a tucked sheet's button (layout.md 5) */
+  /* a fold control, a shortcut, or a tucked sheet's edge (layout.md 5; plan/layers.html) */
   const onPress = (id: SheetId) => {
-    if (peeking === id) return setPeek(null);
-    const cur = find(id);
-    if (!cur) return;
-    if (cur.state === 'tucked' || (cur.state === 'fold' && !cur.width && cur.why === 'room')) return setPeek(id);
-    const r = press(width, spec, saved, id);
+    if (!find(id)) return;
+    const r = press(width, spec, saved, id, forward);
     cause.current = 'fold';
     if (r.saved !== saved) update(now => withFold(now, arr, id, r.saved[arr]?.fold?.[id] === true));
-    setPeek(r.peek);
+    setOpened(r.forward ? { arr: p.arr, id: r.forward } : null);
   };
   const resetOne = (id: SheetId) => {
     cause.current = 'reset';
@@ -148,7 +152,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   const onDown = (e: PointerEvent<HTMLDivElement>, s: SheetLayout, dir: 1 | -1) => {
     if (e.button !== 0) return;
     const sp = specOf(arr, s.id);
-    drag.current = { id: s.id, dir, x0: e.clientX, w0: s.width, folded: s.state === 'fold', max: s.state === 'open' ? (s.dragMax ?? sp.max) : sp.max, pointer: e.pointerId };
+    drag.current = { id: s.id, dir, x0: e.clientX, w0: s.width, folded: false, max: s.dragMax ?? sp.max, pointer: e.pointerId };
     e.currentTarget.setPointerCapture(e.pointerId);
     document.body.classList.add('is-dragging');
     cause.current = null;
@@ -162,10 +166,10 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     const sp = specOf(arr, d.id);
     const raw = d.w0 + (e.clientX - d.x0) * d.dir;
     let next = draft;
-    if (sp.fold != null) {
-      // past the floor it snaps shut; pulled back it opens (with a gap between, so it cannot flutter)
+    if (sp.fold) {
+      // past the floor it snaps under; pulled back it opens (with a gap between, so it cannot flutter)
       if (!d.folded && raw < sp.min - C.SNAP) d.folded = true;
-      else if (d.folded && raw >= sp.min - C.UNSNAP && press(width, spec, withFold(draft, arr, d.id, true), d.id).peek == null) d.folded = false;
+      else if (d.folded && raw >= sp.min - C.UNSNAP && press(width, spec, withFold(draft, arr, d.id, true), d.id).forward == null) d.folded = false;
       next = withFold(next, arr, d.id, d.folded);
     }
     if (!d.folded) next = withWidth(next, arr, d.id, Math.round(Math.min(Math.max(raw, sp.min), Math.max(sp.min, d.max))));
@@ -201,7 +205,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       e.preventDefault();
       const t = find('tico');
       const inside = !!ticoEl && ticoEl.contains(document.activeElement);
-      if (t && t.state !== 'open' && peeking !== 'tico') {
+      if (t && t.state !== 'open') {
         onPress('tico');
         requestAnimationFrame(() => places.current.get('tico')?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"]')?.focus());
       } else if (!inside) ticoEl?.querySelector<HTMLElement>('textarea, input, [contenteditable="true"]')?.focus();
@@ -210,7 +214,10 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     }
     if (e.key === 'Escape') {
       if (drag.current) return endDrag(false);
-      if (peeking) return setPeek(null);
+      if (forward) {
+        cause.current = 'fold';
+        return setOpened(null);
+      }
       const t = e.target;
       const inChat = places.current.get('chat')?.contains(t as Node);
       const inPanel = places.current.get('panel')?.contains(t as Node);
@@ -233,7 +240,7 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
   const onFold = useEffectEvent((id: SheetId, folded?: boolean) => {
     const cur = find(id);
     if (!cur) return;
-    const shut = cur.state !== 'open' && peeking !== id;
+    const shut = cur.state !== 'open';
     if (folded === undefined || folded !== shut) onPress(id);
   });
   useEffect(() => {
@@ -249,28 +256,15 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     return () => document.removeEventListener('keydown', on);
   }, []);
 
-  /* a sheet opened over its neighbours for now goes back on a click outside it */
-  useEffect(() => {
-    if (!peeking) return;
-    const on = (e: Event) => {
-      if (!places.current.get(peeking)?.contains(e.target as Node)) setPeek(null);
-    };
-    document.addEventListener('pointerdown', on);
-    return () => document.removeEventListener('pointerdown', on);
-  }, [peeking]);
-
-  /* folds and moves (motion.md E1-E3, E9): lay out at the end state, then play each sheet's old place to its new one
-     as a transform (FLIP). Drags and window resizes are not animated. */
+  /* tucks and moves (motion.md E1-E3, E9): lay out at the end state, then play each card's old place to its new one
+     as a transform (FLIP). Drags and window resizes are not animated; Off (and the system's reduced motion) jumps. */
   useLayoutEffect(() => {
     if (mode === 'cards' || L.mode !== 'sheets' || !stretch) {
       before.current = null;
       return;
     }
     const at: Partial<Record<SheetId, Placed>> = {};
-    for (const s of sheets) {
-      const shown = peeking === s.id || !(s.state === 'tucked' || (s.state === 'fold' && !s.width));
-      at[s.id] = { x: s.x ?? 0, folded: s.state === 'fold' && peeking !== s.id, shown };
-    }
+    for (const s of sheets) at[s.id] = { x: s.card?.x ?? s.x ?? 0, shut: s.state !== 'open' };
     const was = before.current;
     const why: Cause = was && was.arr !== p.arr ? 'move' : cause.current;
     before.current = { arr: p.arr, at };
@@ -281,8 +275,8 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     for (const [id, el] of places.current) {
       const a = was.at[id];
       const b = at[id];
-      if (!b?.shown) continue;
-      if (!a?.shown) {
+      if (!b) continue;
+      if (!a) {
         // a sheet arriving: from 60 to the right for a second chat (E5), and a fade
         el.animate([{ transform: id === 'chat' ? 'translateX(60px)' : 'none' }, { transform: 'none' }], { duration: dur, easing });
         el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: m.arriveMs, easing: 'cubic-bezier(.2,0,0,1)' });
@@ -295,9 +289,10 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
           () => el.classList.remove('is-moving'),
         );
       }
-      if (a.folded !== b.folded) {
-        // folding or opening: the sheet's content fades in at its new form (E2, E3, E4)
-        for (const c of el.firstElementChild?.children ?? []) c.animate([{ opacity: 0 }, { opacity: 1 }], { duration: m.fadeMs, delay: b.folded ? 0 : m.fadeDelayMs, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards' });
+      if (a.shut !== b.shut) {
+        // tucking shows the edge; opening fades the sheet's content in at its new form (E2, E3, E4)
+        const shown = b.shut ? [el.nextElementSibling].filter(e => e?.classList.contains('shell-edge')) : [...(el.firstElementChild?.children ?? [])];
+        for (const c of shown) c?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: m.fadeMs, delay: b.shut ? 0 : m.fadeDelayMs, easing: 'cubic-bezier(.2,0,0,1)', fill: 'backwards' });
       }
     }
   });
@@ -312,20 +307,14 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
     return <PhoneCards page={call ? null : p.page} tico={p.tico} menu={p.menu} chat={call ? undefined : p.chat} call={call ? p.page : undefined} tucked={tucked} lips={p.lips} lipActs={p.lipActs} />;
   }
 
-  const st = find(stretch.id);
-  const stX = st?.x ?? C.MARGIN;
-  const tucked = sheets
-    .filter(o => o.state === 'tucked' || (o.state === 'fold' && !o.width))
-    .map(o => ({ id: o.id, label: `Show ${NAME[o.id]}`, open: () => onPress(o.id) }));
-
-  const content = (s: SheetLayout, folded: boolean) => {
+  const content = (s: SheetLayout) => {
     switch (s.id) {
       case 'tico':
-        return folded ? <TicoStrip onOpen={() => onPress('tico')} /> : p.tico;
+        return p.tico;
       case 'menu':
         return p.menu;
       case 'list':
-        return folded ? p.menu : (p.list ?? p.menu);
+        return p.list ?? p.menu;
       case 'chat':
         return s.id === stretch.id ? p.page : p.chat;
       case 'panel':
@@ -338,50 +327,81 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
         return p.page;
     }
   };
+  const mark = (id: SheetId) =>
+    id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
+  const top = sheets.length + 1; // the handles sit over every sheet
 
   return (
     <div className="app-tico shell-frame" data-arrangement={p.arr}>
-      {sheets.map(s => {
-        const shown = peeking === s.id;
-        const out = s.state === 'over' || s.state === 'tucked' || (s.state === 'fold' && !s.width);
-        const folded = s.state === 'fold' && !shown && s.width > 0;
-        const w = shown ? (s.wanted ?? s.width) : s.width;
-        const x = shown && out && s.id !== 'chat' ? stX + stretch.width - w : (s.x ?? stX);
+      {sheets.map((s, i) => {
+        const shut = s.state !== 'open';
+        const card = s.card ?? { x: s.x ?? 0, width: s.width };
+        const x = s.x ?? card.x;
+        const under = x - card.x;
         // the desktop window's buttons sit over the top left corner: a sheet under them moves its head right past
-        // them, or, too narrow for that (a folded rail), starts below them (desktop.css)
-        const under = Math.max(0, lights.left - x);
-        const clear = under > 0 && lights.top > 0 ? (w - under < BESIDE_LIGHTS ? 'top' : 'left') : undefined;
-        const sp = s.id === stretch.id ? null : specOf(arr, s.id);
+        // them, or, too narrow for that (an edge), starts below them (desktop.css)
+        const past = Math.max(0, lights.left - x);
+        const clear = past > 0 && lights.top > 0 ? (s.width - past < BESIDE_LIGHTS ? 'top' : 'left') : undefined;
+        const style = { left: card.x, width: card.width, zIndex: s.z, '--depth': s.depth } as CSSProperties & Record<'--depth' | '--under' | '--lights-left', number | string>;
+        if (under > 0) style['--under'] = `${under}px`;
+        if (clear) style['--lights-left'] = `${past}px`;
         const controls: SheetControls = {
           id: s.id,
           state: s.state,
-          peek: shown,
-          folded,
-          canFold: sp?.fold != null,
+          peek: forward === s.id,
+          folded: false,
+          canFold: !!s.canFold,
           toggleFold: () => onPress(s.id),
           close: s.id === 'chat' && p.arr === 'chat' ? p.onCloseChat : s.id === 'panel' ? p.onClosePanel : undefined,
-          tucked: s.id === stretch.id ? tucked : [],
+          tucked: [],
         };
+        const depth = { '--depth': s.depth } as CSSProperties;
         return (
-          <div
-            key={s.id}
-            ref={el => {
-              if (el) places.current.set(s.id, el);
-              else places.current.delete(s.id);
-            }}
-            className={`shell-place${out || shown ? ' is-over' : ''}`}
-            style={clear ? ({ left: x, width: w, '--lights-left': `${under}px` } as CSSProperties) : { left: x, width: w }}
-            data-lights={clear}
-            hidden={out && s.state !== 'over' && !shown}
-            data-sheet={s.id}
-            data-target={`sheet:${s.id}`}
-          >
-            <SheetContext value={controls}>{content(s, folded)}</SheetContext>
-          </div>
+          <Fragment key={s.id}>
+            <div
+              ref={el => {
+                if (el) places.current.set(s.id, el);
+                else places.current.delete(s.id);
+              }}
+              className="shell-place"
+              style={style}
+              inert={shut}
+              aria-hidden={shut || undefined}
+              data-lights={clear}
+              data-shut={shut || undefined}
+              data-under={under > 0 || undefined}
+              data-cast={s.cast || undefined}
+              data-sheet={s.id}
+              data-target={`sheet:${s.id}`}
+            >
+              <SheetContext value={controls}>{content(s)}</SheetContext>
+            </div>
+            {shut ? (
+              <button
+                className="shell-edge"
+                type="button"
+                style={{ ...depth, left: x, zIndex: s.z }}
+                data-first={i === 0 || undefined}
+                data-lights={clear}
+                data-edge={s.id}
+                aria-label={`Open ${NAME[s.id]}`}
+                title={`Open ${NAME[s.id]}`}
+                onClick={() => onPress(s.id)}
+              >
+                <span className="shell-edge-mark">{mark(s.id)}</span>
+                <span className="shell-edge-name">{EDGE_NAME[s.id]}</span>
+              </button>
+            ) : null}
+          </Fragment>
         );
       })}
       {sheets
-        .filter(s => s.id !== stretch.id && s.x != null && (s.state === 'open' || (s.state === 'fold' && s.width)))
+        .filter((s, i) => {
+          if (s.id === stretch.id || !s.canDrag || s.x == null) return false;
+          // a handle only in a gap: between this sheet and its open neighbour on the stretching sheet's side
+          const right = i > sheets.findIndex(o => o.id === stretch.id);
+          return sheets[right ? i - 1 : i + 1]?.state === 'open';
+        })
         .map(s => {
           const right = sheets.indexOf(s) > sheets.findIndex(o => o.id === stretch.id);
           const dir = right ? -1 : 1;
@@ -395,9 +415,9 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
               aria-orientation="vertical"
               aria-label={`Resize ${NAME[s.id]}`}
               aria-valuenow={Math.round(s.width)}
-              aria-valuemin={s.state === 'open' ? s.min : s.width}
+              aria-valuemin={s.min}
               aria-valuemax={s.dragMax}
-              style={{ left: (right ? x - C.GAP : x + s.width) - 4 }}
+              style={{ left: (right ? x - C.GAP : x + s.width) - 4, zIndex: top }}
               onPointerDown={e => onDown(e, s, dir)}
               onPointerMove={onMove}
               onPointerUp={() => endDrag(true)}
@@ -409,25 +429,5 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
           );
         })}
     </div>
-  );
-}
-
-/* Tico folded: the Dot at the top, the panel icon at the foot. No number beside the Dot (motion.md R1). The whole strip
-   is one button that opens Tico; the Dot and the icon inside it only draw. */
-function TicoStrip({ onOpen }: { onOpen: () => void }) {
-  // folded, the strip's Dot still shows when Tico is off
-  useTicoPower();
-  return (
-    <aside className="pane tico is-fold" aria-label="Tico">
-      <button className="tico-strip" type="button" aria-label="Open Tico" title="Open Tico" onClick={onOpen}>
-        <span className="tico-orb">
-          <Dot size={30} />
-        </span>
-        <span className="grow" />
-        <span className="ib ib-quiet" aria-hidden="true">
-          <Icon name="panel" />
-        </span>
-      </button>
-    </aside>
   );
 }
