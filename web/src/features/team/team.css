@@ -377,8 +377,8 @@ html[data-layout="cards"] .rec.tm-page .widgets{grid-template-columns:repeat(3,m
   .rec.tm-page .widget+.widget{border-left:1px solid var(--line);padding-left:var(--s-3)}
   .rec.tm-page .widget:last-child{padding-right:0}
 }
-/* a teammate, an open seat or a team inside: mark, face, name, a pill, then Lead, Open seat or its faces */
-.tm-mate{grid-template-columns:16px var(--av-sm) minmax(0,1fr) auto auto;padding:0 var(--s-2) 0 0}
+/* a teammate, an open seat or a team inside: face, name, a pill, then Lead, Open seat or its faces */
+.tm-mate{grid-template-columns:var(--av-sm) minmax(0,1fr) auto auto;padding:0 var(--s-2) 0 0}
 .tm-mate .row-title{padding-left:var(--s-2h)}
 .tm-mate .row-pills{padding:0 0 0 var(--s-2)}
 .tm-mate .row-pills:empty{display:none}
@@ -386,9 +386,13 @@ html[data-layout="cards"] .rec.tm-page .widgets{grid-template-columns:repeat(3,m
 .tm-role{padding-left:var(--s-3);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
 .tm-role:empty{display:none}
 .tm-mate>.faces{padding-left:var(--s-3)}
-/* Running: a task's owner face stays, after its pills (the column's own tasks have none) */
-html:not([data-layout="cards"]) .rec.tm-page .task{grid-template-columns:16px minmax(0,1fr) auto calc(var(--av-sm) + var(--s-2h)) 48px}
-html[data-layout="cards"] .rec.tm-page .task{grid-template-columns:20px minmax(0,1fr) var(--av-sm) 52px;grid-template-areas:"mark title av age" ". pills pills pills"}
+/* Running and People rows: nothing before the title, a hairline under each row (the sketch's .wr); the kit's row
+   has no ruled form, so the rule is here. The rows stand on the column's axis, under the section's name. */
+.rec.tm-page .pk-sec .row{border-radius:0;border-bottom:1px solid var(--line)}
+.rec.tm-page .task .row-mark{display:none}
+html:not([data-layout="cards"]) .rec.tm-page .pk-sec .row{margin-left:var(--s-4)}
+html:not([data-layout="cards"]) .rec.tm-page .task{grid-template-columns:minmax(0,1fr) auto calc(var(--av-sm) + var(--s-2h)) 48px}
+html[data-layout="cards"] .rec.tm-page .task{grid-template-columns:minmax(0,1fr) var(--av-sm) 52px;grid-template-areas:"title av age" "pills pills pills"}
 .tm-faces{display:flex}
 .rec.tm-page .task .av{justify-self:end}
-html[data-layout="cards"] .tm-mate{grid-template-columns:20px var(--av-sm) minmax(0,1fr) auto auto;padding:0 var(--s-2)}
+html[data-layout="cards"] .tm-mate{padding:0 var(--s-2)}

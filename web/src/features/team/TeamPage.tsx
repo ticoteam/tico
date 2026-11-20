@@ -3,9 +3,8 @@ import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { Avatar, Faces } from '@/kit/Avatar';
 import { useAction } from '@/actions';
-import { directoryQuery, meQuery, type Actor } from '@/data';
+import { directoryQuery, type Actor } from '@/data';
 import { useFollow } from '@/live/follow';
-import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
@@ -17,7 +16,7 @@ import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
 import { managerOf, memberIds, membersUnder, startOfMonth, subTeams, teamSlug, whoHref } from './model';
-import { LONG_LIST, taskHref, waitsOn } from './parts';
+import { LONG_LIST, taskHref } from './parts';
 import {
   agentsQuery,
   allTasksQuery,
@@ -41,10 +40,10 @@ const face = (a: Actor) => ({ kind: a.kind, name: a.name, hue: a.hue, live: a.wo
 const MONTH = new Intl.DateTimeFormat('en-US', { month: 'short' });
 
 /** A team (threads-team pass 7, teamPage): its icon, name and faces; its figures; what its teammates are running; its
-    people, the lead marked; the teams inside it. The team's thread beside it is the shell's. */
+    people, the lead marked; the teams inside it. Rows carry no mark before the title, as the sketch draws them. The
+    team's thread beside it is the shell's. */
 export function TeamPage({ group, path, add }: TeamPageProps) {
   useFollow({ allTasks: true });
-  const { data: me } = useQuery(meQuery);
   // Every member's face and status line: the whole directory.
   const { data: dir } = useSuspenseQuery(directoryQuery);
   const { data: all } = useSuspenseQuery(groupsQuery);
@@ -91,7 +90,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
         title={t.title ?? ''}
         href={taskHref(t)}
         target={`task:${t.number ?? t.id}`}
-        mark={waitsOn(t, me?.id) ? <FlowMark /> : undefined}
         late={!!t.late}
         avatar={who && <Avatar {...face(who)} size={22} />}
         at={t.updated_at ?? new Date(0).toISOString()}
@@ -152,7 +150,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
               <Section name="People">
                 {people.map((a) => (
                   <Row key={a.id} className="tm-mate" title={a.name} href={whoHref(a)} target={`teammate:${a.slug ?? a.id}`}>
-                    <span className="row-mark">{(openTasks.data?.tasks ?? []).some((t) => ownerOf(t)?.id === a.id && waitsOn(t, me?.id)) && <FlowMark />}</span>
                     <Avatar {...face(a)} size={22} />
                     <span className="row-title">{a.name}</span>
                     <span className="row-pills">{a.slug && paused.has(a.slug) && <Pill flag>Stopped</Pill>}</span>
@@ -162,7 +159,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
                 {/* An open seat: a dashed face and its title; nobody sits there, so nothing opens (mates.js mateRow seat). */}
                 {seats.map((x) => (
                   <Row key={x.id} className="tm-mate is-seat" title={x.title}>
-                    <span className="row-mark" />
                     <Avatar kind="agent" name={x.title} initials="" size={22} className="is-seat" />
                     <span className="row-title">{x.title}</span>
                     <span className="row-pills" />
@@ -175,7 +171,6 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
               <Section name="Teams">
                 {inner.map((s) => (
                   <Row key={s.id} className="tm-mate" title={s.name} href={`/team/${encodeURIComponent(teamSlug(s.name))}`} target={`team:${s.id}`}>
-                    <span className="row-mark" />
                     <span className="tm-ic">
                       <Icon name="people" />
                     </span>
