@@ -100,7 +100,7 @@ def test_an_answer_ends_it_relays_it_restarts_the_parent_and_wakes_the_bot_once(
     Q.answer(c, asked["task_id"], ANA, "Yes, Friday.", 1)
     row = Q.get(c, asked["task_id"])
     assert (row["ended_reason"], row["answered_by_id"]) == (Q.ANSWERED, ANA)
-    assert E.task(c, asked["task_id"])["status"] == "done"
+    assert E.task(c, asked["task_id"])["status"] == "closed"  # answered is its row's state, never stage work
     relayed = [m for m in H.task_comments(c, parent["id"]) if m["body"].startswith("Re: ")]
     assert [(m["sender_id"], m["body"]) for m in relayed] == [
         (ANA, "Re: Should the launch note go out on Friday?: Yes, Friday.")
@@ -370,8 +370,11 @@ def test_an_asker_gone_from_a_persons_task_is_said_on_its_chat(c, general):
     c.execute("UPDATE bots SET state='archived' WHERE id='builder'")
     QM.clear_gone(c)
     assert Q.get(c, asked["task_id"])["ended_reason"] == Q.ASKER_GONE
-    said = [m["body"] for m in H.task_comments(c, row["id"]) if m["sender_id"] == H.TICO_ACTOR]
-    assert any("can no longer work on this task" in b for b in said), said
+    [said] = [m for m in H.task_comments(c, row["id"]) if "can no longer work on this task" in (m["body"] or "")]
+    delivered = c.execute(
+        "SELECT reason FROM message_deliveries WHERE message_id=? AND recipient=?", (said["id"], ANA)
+    ).fetchall()
+    assert len(delivered) == 1  # unread for Ana, the person holding the task
 
 
 def test_the_backfill_leaves_a_dreams_question_and_one_that_carries_more_than_words(c, general):
@@ -381,13 +384,19 @@ def test_the_backfill_leaves_a_dreams_question_and_one_that_carries_more_than_wo
     shown = _parent(c, "Pick a draft")
     said = H.task_comment(c, BUILDER, shown["id"], "Which draft?", wake=False, extra_refs={"shows": ["page:draft"]})
     QM.mark(c, BUILDER, said["id"], ANA)
+    replying = _parent(c, "Answer the client")
+    first = H.task_comment(c, ANA, replying["id"], "What did they say?", wake=False)
+    reply = H.task_comment(c, BUILDER, replying["id"], "Shall I send this?", wake=False)
+    c.execute("UPDATE messages SET in_reply_to=? WHERE id=?", (first["id"], reply["id"]))
+    QM.mark(c, BUILDER, reply["id"], ANA)
     done = Q.backfill(c)
     assert done["turned"] == []
     assert sorted(s["why"] for s in done["skipped"]) == [
         "it is a dream's question, which Learnings reads and answers",
         "its message carries more than words: shows",
+        "its message replies to another, whose readers it keeps",
     ]
-    assert done["after"]["open_task_marks"] == 2
+    assert done["after"]["open_task_marks"] == 3
 
 
 def test_with_the_switch_off_a_task_read_has_no_question_keys(ruled):
@@ -395,3 +404,44 @@ def test_with_the_switch_off_a_task_read_has_no_question_keys(ruled):
     task = task_for_ops(api)
     read = api.get(f"/api/v2/tasks/{task['id']}", headers=headers("ops-test")).json()["task"]
     assert "questions" not in read and "question" not in read
+
+
+def test_answering_closes_the_question_and_never_enters_a_later_stage(c):
+    for slug in ("builder", "manager"):
+        X.bot(c, slug)
+    X.pipeline(c, manager=MANAGER)
+    # General with a second work stage after To do, holding a sign-off of its own.
+    c.execute("UPDATE stages SET position=position+1 WHERE pipeline_id='general' AND kind<>'work'")
+    todo = dict(c.execute("SELECT * FROM stages WHERE id='general-todo'").fetchone())
+    review = {**todo, "id": "general-review", "name": "Review", "position": todo["position"] + 1}
+    c.execute(f"INSERT INTO stages ({','.join(review)}) VALUES ({','.join('?' * len(review))})", tuple(review.values()))
+    X.requirement(c, "general-review", "owner_done")
+    asked = _ask(c, _parent(c))
+    Q.answer(c, asked["task_id"], ANA, "Yes.", 1)
+    task = E.task(c, asked["task_id"])
+    assert (task["status"], task["stage"]["kind"]) == ("closed", "closed")
+    entered = c.execute(
+        "SELECT s.name FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? ORDER BY v.rowid",
+        (asked["task_id"],),
+    ).fetchall()
+    assert [r[0] for r in entered] == ["To do", "Closed"]
+    assert Q.get(c, asked["task_id"])["ended_reason"] == Q.ANSWERED
+
+
+def test_the_wake_never_carries_the_answer_and_a_snoozed_parent_gets_none(c, general):
+    parent = _parent(c)
+    asked = _ask(c, parent)
+    Q.answer(c, asked["task_id"], ANA, "The code is 4417.", 1)
+    [wake] = c.execute(
+        "SELECT body FROM messages WHERE wake_key LIKE ?", (f"{parent['id']}:%:question:{asked['task_id']}:1",)
+    ).fetchall()
+    assert "4417" not in wake[0] and "answered your question" in wake[0]
+    again = _ask(c, E.task(c, parent["id"]), text="And the backup code?")
+    E.snooze(c, parent["id"], ANA, "Back Monday", "2030-01-14T09:00:00Z")
+    Q.answer(c, again["task_id"], ANA, "None.", 2)
+    assert (
+        c.execute(
+            "SELECT COUNT(*) FROM messages WHERE wake_key LIKE ?", (f"{parent['id']}:%:question:{again['task_id']}:2",)
+        ).fetchone()[0]
+        == 0
+    )

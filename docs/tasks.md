@@ -153,7 +153,7 @@ where they do it. A ❓ in a direct chat, and one that shows a live browser to t
 
 - It runs every check a ❓ does, and lets the person into a private task the same way.
 - It is in the person's Needs you until they answer it with Answer (a post in its chat is a comment). Answering
-  finishes it, posts the answer on the task it was asked on as their message ("Re: <question>: <answer>", an @name in
+  closes it (shown as answered), posts the answer on the task it was asked on as their message ("Re: <question>: <answer>", an @name in
   it wakes no one), and wakes whoever has that task's turn now, once. Where that task's readers may not read the
   answer, it stays on the question and the bot is pointed to it.
 - The same bot asking the same person again on the same task reopens the question with the new words; two bots asking
