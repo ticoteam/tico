@@ -186,7 +186,7 @@ def test_open_pr_listing_is_rate_limited_to_thirty_minutes_per_repo(api, monkeyp
     waiting(api, ["done"])
     service, seen = _github(api, monkeypatch, open_now={1})
     clock = [1000.0]
-    monkeypatch.setattr(G.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(G, "_monotonic", lambda: clock[0])
     assert _refresh(service, monkeypatch) == 0
     assert seen == [LIST]
     clock[0] += G.FINISHED_LIST_INTERVAL_S - 1

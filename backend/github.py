@@ -644,6 +644,10 @@ _finished_retry = {}  # (repo, number) -> monotonic time a failed read may be tr
 _finished_list_due = {}  # (id(service), repo) -> monotonic time this repo's open PRs may be listed again
 
 
+def _monotonic() -> float:
+    return time.monotonic()
+
+
 def _open_pr_numbers(service, repo):
     """The numbers of `repo`'s open pull requests (drafts included), or None when the list could not be read whole."""
     token, _ = service.mint([repo], {"pull_requests": "read"})
@@ -693,7 +697,7 @@ def refresh_finished_task_prs(service: Any) -> int:
         )
     if not rows:
         return 0
-    now = time.monotonic()
+    now = _monotonic()
     for stale in [k for k, due in _finished_list_due.items() if due <= now]:
         _finished_list_due.pop(stale, None)
     gone = {}  # (repo, number) -> its links, for each pull request no longer open
