@@ -13,6 +13,9 @@ os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
 # The start jobs a server runs beside itself once it serves (backend/app.py start_jobs) run before it serves instead, so
 # a test that starts an app sees their result at once. backend/tests/test_start_jobs.py checks the served way.
 os.environ["TICO_START_JOBS"] = "inline"
+# Seeding Tico's library skills into the directory (backend/skill_library.py) writes about 2 MB at every app start;
+# backend/tests/test_skill_library.py seeds on purpose.
+os.environ["TICO_SKILL_LIBRARY"] = "off"
 # Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
 os.environ["TICO_SQLITE_SYNC"] = "off"
 # Tests send concurrent identical reads that must each run (the Needs you lane tests): the read rate limit

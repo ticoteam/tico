@@ -290,6 +290,31 @@ describe('a skill', () => {
     expect(screen.getByText('Mail helper')).toBeTruthy();
     expect(sent.some(({ url }) => url.includes('/versions/'))).toBe(false);
   });
+  it("Tico's library skill: Tico approved it, it is on its installs and its roles' agents once each, and installs", async () => {
+    serve();
+    const byTico = { ...v(1), approved_by_id: null };
+    queryClient.setQueryData(skillQuery('triage').queryKey, {
+      skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: byTico },
+      versions: [byTico],
+      installs: [{ id: 'i1', target: { type: 'Bot', id: 'b1', name: 'Mail helper' } }],
+      shipped: {
+        bots: [
+          { type: 'Bot', id: 'b1', name: 'Mail helper' },
+          { type: 'Bot', id: 'b2', name: 'Desk agent' },
+        ],
+      },
+    } as never);
+    queryClient.setQueryData(skillTextQuery('triage', 1).queryKey, { ...byTico, files: [{ path: 'SKILL.md', content: 'Read each letter.' }] } as never);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+    at('/library/skills?skill=triage', <SkillsPage search={{ skill: 'triage' }} />);
+    expect(await screen.findByText('Read each letter.')).toBeTruthy();
+    expect(screen.getAllByText('Mail helper')).toHaveLength(1);
+    expect(screen.getByText('Desk agent')).toBeTruthy();
+    expect(screen.getByLabelText('Tico')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Install' })).toBeTruthy();
+  });
 
   it('takes a skill off a teammate from the page’s ⋯, with each one’s runs beside it @s782', async () => {
     const detail = {

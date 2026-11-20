@@ -22,6 +22,7 @@ from . import brand
 from . import hubdb as H
 from . import models as M
 from . import skill_catalog as SC
+from . import skill_library as SL
 from .store import Problem
 from .api_contract import api_v2
 
@@ -88,7 +89,7 @@ def _skill(c, name):
 
 def _skill_or_404(c, name):
     skill = None if name in bundles.RESERVED else _skill(c, name)
-    if not skill:
+    if not skill or skill["deleted_at"]:  # a retired skill (backend/skill_library.py) is not in the directory
         raise Problem("not_found", f"No skill named {name}", 404)
     return skill
 
@@ -425,16 +426,41 @@ def _seen_bots(c, auth, who, bots):
     return {b for b in ids if access.get(b, auth.FULL)["see"]}
 
 
-def _shipped_rows(c, auth, who, entries):
+class _TemplateBots:
+    """The provisioned bots made from each role and the ones of them the caller may see, read once per list."""
+
+    def __init__(self, c, auth, who):
+        self.c, self.auth, self.who, self._read = c, auth, who, None
+
+    def of(self, entry):
+        """The bots, made from a role that ships this skill, that the caller may see."""
+        if self._read is None:
+            by_template = SC.bots_by_template(self.c)
+            seen = _seen_bots(self.c, self.auth, self.who, [bot for bots in by_template.values() for bot in bots])
+            self._read = (by_template, seen)
+        by_template, seen = self._read
+        return [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
+
+
+def _installed_bots(c, skill_ids):
+    """{skill id: the bots it is installed on}."""
+    out = {}
+    if skill_ids:
+        for r in c.execute(
+            "SELECT skill_id, target_id FROM skill_installs WHERE target_type='Bot' "
+            f"AND skill_id IN ({','.join('?' * len(skill_ids))})",
+            skill_ids,
+        ):
+            out.setdefault(r["skill_id"], set()).add(r["target_id"])
+    return out
+
+
+def _shipped_rows(template_bots, entries):
     """The list's rows of skills Tico ships that the directory does not have: on the provisioned bots made from a role
     that ships it and the caller may see (the first ON_CAP of them, `on_count` all of them)."""
-    if not entries:
-        return []
-    by_template = SC.bots_by_template(c)
-    seen = _seen_bots(c, auth, who, [bot for bots in by_template.values() for bot in bots])
     out = []
     for entry in entries:
-        bots = [bot for bot in SC.bots_with(entry, by_template) if bot["id"] in seen]
+        bots = template_bots.of(entry)
         out.append(
             {
                 "id": None,
@@ -442,6 +468,7 @@ def _shipped_rows(c, auth, who, entries):
                 "description": entry["description"],
                 "function": entry["function"],
                 "source": "tico",
+                "from_tico": True,
                 "latest": None,
                 "installs_count": 0,
                 "on": [{"type": "Bot", **bot} for bot in bots[:ON_CAP]],
@@ -579,8 +606,9 @@ def approve(c, auth, who, pid, acknowledged):
         number = c.execute(
             "SELECT COALESCE(MAX(number), 0) + 1 FROM skill_versions WHERE skill_id=?", (skill_id,)
         ).fetchone()[0]
+        # A person's version of a skill Tico retired brings it back, as theirs (backend/skill_library.py).
         c.execute(
-            "UPDATE skills SET description=?, function=?, updated_at=? WHERE id=?",
+            "UPDATE skills SET description=?, function=?, deleted_at=NULL, updated_at=? WHERE id=?",
             (row["description"], function, now, skill_id),
         )
     else:
@@ -843,14 +871,17 @@ def install(app, store, auth, mutate):
     ):
         """Every skill the company has, one row per name: the directory's (each with its latest approved version, how
         many installs it has and the first few of them the caller may see, `on`) and the ones Tico ships in its role
-        templates (`source: tico`, on the bots made from those roles). `q` keeps the rows whose name, description and
-        function hold every word; `function` keeps one job function. `functions` counts the rows `q` keeps, per function."""
+        templates (`source: tico`, on the bots made from those roles). A directory skill Tico also ships is on its
+        installs and on those bots (`on_count` both, each bot once); `from_tico` marks Tico's own (its library's,
+        backend/skill_library.py). `q` keeps the rows whose name, description and function hold every word; `function`
+        keeps one job function. `functions` counts the rows `q` keeps, per function."""
         who = reader(request)
         shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
             # Every name is searched and counted; only the first LIST_CAP the filter keeps get their versions and installs.
             names = c.execute(
-                "SELECT id, name, description, function FROM skills WHERE deleted_at IS NULL ORDER BY name"
+                "SELECT id, name, description, function, created_by_type FROM skills WHERE deleted_at IS NULL "
+                "ORDER BY name"
             ).fetchall()
             directory = [
                 {
@@ -859,18 +890,22 @@ def install(app, store, auth, mutate):
                     "description": r["description"],
                     "function": r["function"] or (shipped[r["name"]]["function"] if r["name"] in shipped else None),
                     "source": "directory",
+                    "from_tico": r["created_by_type"] == SL.TICO,
                 }
                 for r in names
             ]
             listed = {r["name"] for r in names}
             directory = [row for row in directory if _holds(row, q)]
             extra = [entry for name, entry in shipped.items() if name not in listed and _holds(entry, q)]
-            found = sorted(directory + _shipped_rows(c, auth, who, extra), key=lambda row: row["name"])
+            template_bots = _TemplateBots(c, auth, who)
+            found = sorted(directory + _shipped_rows(template_bots, extra), key=lambda row: row["name"])
             kept = [row for row in found if _in_function(row, function)]
             ids = [row["id"] for row in kept if row["source"] == "directory"][:LIST_CAP]
             details = _directory_details(c, ids)
             on = _installed_on(c, auth, who, ids)
             shown = set(ids)
+            # The bots made from a role that ships a directory skill have it too (backend/skill_catalog.py).
+            installed = _installed_bots(c, [row["id"] for row in kept if row["id"] in shown and row["name"] in shipped])
             out = []
             for row in kept:
                 if row["source"] == "directory":
@@ -884,6 +919,11 @@ def install(app, store, auth, mutate):
                     )
                     row["installs_count"] = row["on_count"] = r["installs_count"]
                     row["on"] = on.get(row["id"], [])
+                    if row["name"] in shipped:
+                        has = installed.get(row["id"], set())
+                        bots = [b for b in template_bots.of(shipped[row["name"]]) if b["id"] not in has]
+                        row["on"] = (row["on"] + [{"type": "Bot", **bot} for bot in bots])[:ON_CAP]
+                        row["on_count"] += len(bots)
                 out.append(row)
         return {"skills": out, "functions": _function_counts(found)}
 
@@ -903,6 +943,7 @@ def install(app, store, auth, mutate):
         entry = SC.shipped(store.settings.catalog_dir).get(name)
         with store.read() as c:
             skill = None if name in bundles.RESERVED else _skill(c, name)
+            skill = None if skill and skill["deleted_at"] else skill  # retired (backend/skill_library.py): not listed
             extra = {"shipped": _shipped_view(c, auth, who, store, entry, with_files=not skill)} if entry else {}
             if not skill:
                 if not entry:
@@ -914,6 +955,7 @@ def install(app, store, auth, mutate):
                         "description": entry["description"],
                         "function": entry["function"],
                         "source": "tico",
+                        "from_tico": True,
                         "latest": None,
                     },
                     "versions": [],
@@ -936,6 +978,7 @@ def install(app, store, auth, mutate):
                     "description": skill["description"],
                     "function": skill["function"] or (entry["function"] if entry else None),
                     "source": "directory",
+                    "from_tico": skill["created_by_type"] == SL.TICO,
                     "latest": _version_view(latest) if latest else None,
                 },
                 "versions": [_version_view(row) for row in versions],
