@@ -6,7 +6,7 @@
 
    State on .phone (React):  data-card="none|tico-half|tico|menu|chat"   .has-chat  .is-peek  .is-handle  .is-back  .is-call
    State on .phone (set by hand, never by React):  data-drag="tico|menu|chat"  data-scrolling  data-typing="tico|menu|chat|page"
-     style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top  --dock-h */
+     style --c (0..1, lips drawn down)  --p (page set back)  --f (full content shown)  --kb  --vv-top */
 
 /* the document never scrolls (platforms.md 2.1). The stack and its cards clip rather than hide: a hidden box still
    scrolls when something in it takes focus, which strands every card mid-screen. */
@@ -23,7 +23,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --top:calc(var(--sat) + 57px);   /* where a raised card stops: the page's head stays in view above it */
   --half:410px;               /* Tico at half: this much of its card shows */
   --kb:0px;--vv-top:0px;
-  --dock-h:96px;              /* the answer or message box that holds the bottom; measured */
+  --edgeT:calc(var(--sab) + 30px);   /* Tico drawn in to its edge (plan/layers.html, page tapped): the stack's last line */
   --cards-h:calc(var(--sab) + var(--lipT) + var(--lipM) + var(--lipC));
   --p:0;--f:0;
   --r-layer:24px;
@@ -69,8 +69,10 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .p-tabs{flex:none;display:flex;gap:2px;overflow:auto;scrollbar-width:none;padding:0 6px;box-shadow:inset 0 -1px 0 var(--line)}
 /* stylelint-disable-next-line color-no-hex -- mask */
 .phone .p-tabs.is-long{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent)}
-/* a message box that belongs to the page (an agent's own page) sits over the lips and follows them down */
-.phone .pg-foot{flex:none;padding:6px 10px calc(var(--cards-h) + 10px);transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease)}
+/* a message box that belongs to the page (an agent's own page, a thread) sits over the lips and follows them down:
+   nothing of the stack, Tico's Dot least of all, ever rests on it */
+.phone .pg-foot,.phone>.pg .chat-page>.chat-foot{flex:none;position:relative;z-index:6;padding:6px 10px calc(var(--cards-h) + 10px);
+  transform:translateY(calc(var(--drawM) + var(--drawC)));transition:transform var(--card-dur) var(--card-ease)}
 
 /* the bottom of a page or a chat that has its own: an answer, a message box, a call's controls */
 .phone .p-dock{flex:none;position:relative;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px 10px calc(var(--sab) + 6px);
@@ -141,7 +143,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-drag="tico"]>.ly-tico>.lip,.phone[data-drag="menu"]>.ly-menu>.lip,.phone[data-drag="chat"]>.ly-chat>.lip{opacity:calc(1 - var(--f));transition:none}
 .phone[data-drag="tico"]>.ly-tico>.grab,.phone[data-drag="menu"]>.ly-menu>.grab,.phone[data-drag="chat"]>.ly-chat>.grab{opacity:var(--f);transition:none}
 /* a scroll draws the lips down under the finger; the snap afterwards runs on the spring */
-.phone[data-scrolling]>.ly,.phone[data-scrolling]>.pg::before,.phone[data-scrolling] .pg-foot,.phone[data-scrolling]>.ly>.lip>*{transition:none}
+.phone[data-scrolling]>.ly,.phone[data-scrolling]>.pg::before,.phone[data-scrolling] :is(.pg-foot,.chat-page>.chat-foot),.phone[data-scrolling]>.ly>.lip>*{transition:none}
 
 /* Tico: the front card. Its Dot stays where it is while the lip turns into the card's head. */
 .phone .tico-dot{position:absolute;left:16px;top:16px;z-index:3;pointer-events:none;display:block}
@@ -188,14 +190,18 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .ly-chat .chat-body{padding:4px 16px 20px}
 .phone .chat-body{overscroll-behavior:contain;touch-action:pan-y}
 
-/* the handle: the whole stack drawn down to one small pull with the Dot, on the top edge of whatever holds the bottom.
-   It comes in once its card has landed. */
-.phone>.nub{position:absolute;left:50%;bottom:calc(var(--dock-h) - 15px);z-index:7;width:66px;height:30px;margin-left:-33px;padding:0;border:0;border-radius:15px;background:var(--c-tico);
-  box-shadow:var(--lift-2),0 6px 16px -6px var(--up);display:grid;place-items:center;opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);
-  touch-action:none;-webkit-tap-highlight-color:transparent;transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
-.phone>.nub::before{content:"";position:absolute;inset:-7px 0}
+/* the handle: whatever holds the bottom (a raised chat, a task's answer) ends above it, and the stack below is drawn in
+   to Tico's edge, its Dot at the middle (plan/layers.html, "Phone, page tapped"). It is the stack's last line, under
+   the message box, never on it. It comes in once its card has landed, and goes while typing. */
+.phone.is-handle>.pg{bottom:var(--edgeT)}
+.phone.is-handle>.ly-chat>.full{height:calc(100% - var(--edgeT))}
+.phone.is-handle .p-dock{padding-bottom:10px}
+.phone>.nub{position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);bottom:0;z-index:var(--z-tico);height:var(--edgeT);padding:0 0 var(--sab);border:0;
+  border-radius:14px 14px 0 0;background:var(--c-tico);box-shadow:var(--lift-2),0 -10px 26px -10px var(--up);display:grid;place-items:center;opacity:0;pointer-events:none;
+  transform:translateY(100%);touch-action:none;-webkit-tap-highlight-color:transparent;transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+.phone>.nub::before{content:"";position:absolute;left:0;right:0;top:-8px;height:8px}      /* a 30px edge is a 38px target */
 .phone.is-handle>.nub{opacity:1;pointer-events:auto;transform:none;transition:transform 260ms var(--card-ease) var(--card-dur),opacity var(--dur) var(--ease) var(--card-dur)}
-.phone.is-handle[data-card^="tico"]>.nub,.phone[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(40px) scale(.7);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
+.phone.is-handle[data-card^="tico"]>.nub,.phone[data-typing]>.nub{opacity:0;pointer-events:none;transform:translateY(100%);transition:transform var(--card-dur) var(--card-ease),opacity var(--dur) var(--ease)}
 
 /* measures the bottom safe area for the drag math */
 .phone>.ph-sab{position:absolute;left:0;bottom:0;width:0;height:var(--sab);visibility:hidden;pointer-events:none}
@@ -226,4 +232,4 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-typing="page"]>.pg{bottom:var(--kb)}
 .phone[data-typing="page"]>.pg::before{display:none}
 .phone[data-typing="page"] .pg-body{padding-bottom:12px}
-.phone[data-typing="page"] .pg-foot{padding-bottom:8px;transform:none;transition:none}
+.phone[data-typing="page"] :is(.pg-foot,.chat-page>.chat-foot){padding-bottom:8px;transform:none;transition:none}

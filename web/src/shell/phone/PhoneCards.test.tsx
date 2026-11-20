@@ -14,6 +14,18 @@ vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}
 vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
 vi.mock('@/motion', () => ({ motionLevel: () => 'off' }));
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+const phoneCss = fs.readFileSync(new URL('./phone.css', here), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+/** The declarations of the rule whose selector list includes `selector` exactly. */
+const rule = (selector: string): string => {
+  for (const m of phoneCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1]!.split(',').some((s) => s.trim() === selector)) return m[2]!.replace(/\s+/g, ' ');
+  }
+  return '';
+};
+
 const width = (w: number) =>
   act(() => {
     Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
@@ -341,5 +353,35 @@ describe("The phone's menu lip @s1191", () => {
     const lip = await screen.findByRole('button', { name: 'Open Menu' });
     expect(within(lip).getByText('Fernhill')).toBeTruthy();
     expect(within(lip).queryByRole('img', { name: 'Waits on you' })).toBeNull();
+  });
+});
+
+describe("phone: Tico's Dot never sits on a field", () => {
+  // jsdom lays nothing out, so this holds the geometry by its rules: the handle and whatever holds the bottom share one
+  // line (--edgeT), the handle below it and the box above it.
+  it('the handle is Tico drawn in to its edge at the bottom of the stack, under the message box', () => {
+    const nub = rule('.phone>.nub');
+    expect(nub).toMatch(/bottom:0[;}]?/);
+    expect(nub).toContain('height:var(--edgeT)');
+    expect(phoneCss).not.toContain('--dock-h');
+    // a raised chat and a page that holds the bottom both end where the edge starts
+    expect(rule('.phone.is-handle>.ly-chat>.full')).toContain('height:calc(100% - var(--edgeT))');
+    expect(rule('.phone.is-handle>.pg')).toContain('bottom:var(--edgeT)');
+    // and while typing it goes, with the stack, under the keyboard
+    expect(rule('.phone[data-typing]>.nub')).toContain('opacity:0');
+  });
+
+  it("a page's own message box (a thread) clears the lips instead of resting under Tico's", () => {
+    expect(rule('.phone>.pg .chat-page>.chat-foot')).toContain('padding:6px 10px calc(var(--cards-h) + 10px)');
+  });
+
+  it('with a chat up, the handle is the stack’s, outside the chat card, and opens Tico', () => {
+    render(cards({ chat: true }));
+    const nub = document.querySelector<HTMLElement>('.phone > .nub');
+    expect(nub?.closest('.ly')).toBeNull();
+    expect(nub?.hasAttribute('inert')).toBe(false);
+    expect(document.querySelector<HTMLElement>('.phone')?.style.getPropertyValue('--dock-h')).toBe('');
+    fireEvent.click(nub!);
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('tico-half');
   });
 });
