@@ -144,6 +144,9 @@ def _seal(c, vault, field, value):
 
 
 def _write(c, record):
+    from . import events
+
+    saved = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     for field, (cid, _, _) in SECRETS.items():
         if not record.get(field):
             drop_service(c, cid)  # a record without the key (or secret) leaves no copy of it in the vault
@@ -151,6 +154,10 @@ def _write(c, record):
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (KEY, json.dumps(record, sort_keys=True)),
     )
+    if bool(_decode(saved[0] if saved else None).get("key")) != bool(record.get("key")):
+        # Connected or not turns the Tico provider on or off (providers.with_gateway): every computer reads its
+        # config again, for the runtimes it installs (runner-rs/src/relays.rs), as on a change of the providers.
+        events.tell_runners(c, "config", events.ALL_RUNNERS)
 
 
 def revision(c):

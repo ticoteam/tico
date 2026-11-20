@@ -172,3 +172,22 @@ def test_every_chat_goal_change_tells_only_the_bots_computer_by_bot_id(api):
         change(lambda: action(api, cid, *step))
     attempt = claim(api, machine)
     assert change(lambda: goal_event(api, machine, attempt, "met", "The Acme summary is done.")) == 0
+
+
+def test_an_importer_moved_tells_the_computers_it_left_and_joined_that_take_relay_hints(api):
+    old, new, plain = runner(api, label="Old"), runner(api, label="New"), runner(api, label="Plain")
+    for computer in (old, new):
+        ready(api, computer, [], capabilities=[E.RELAY_HINTS])
+    ready(api, plain, [])
+    start = newest(api)
+    assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": old["runner_id"]}) == {"ok": True}
+    kinds = lambda computer, after: [data["kind"] for _, data in told(api, computer, after)[0]]  # noqa: E731
+    assert kinds(old, start) == ["importers"] and kinds(new, start) == []
+    moved = newest(api)
+    assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": new["runner_id"]}) == {"ok": True}
+    assert kinds(old, moved) == kinds(new, moved) == ["importers"]
+    # A computer that did not say it takes the hint is told nothing: it would read every endpoint again for a kind it
+    # does not know, and it asks every minute on its own.
+    off = newest(api)
+    assert post(api, "meeting-importers/granola", {"enabled": True, "runner_id": plain["runner_id"]}) == {"ok": True}
+    assert kinds(plain, start) == [] and kinds(new, off) == ["importers"]

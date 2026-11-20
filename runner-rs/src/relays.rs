@@ -25,7 +25,8 @@ struct HarnessRelay {
     rows: Option<Arc<Vec<Value>>>,
 }
 
-/// How often the harness relay reads the company's config (its default and Gateway runtimes) on its own.
+/// How often the harness relay reads the company's config (its default and Gateway runtimes) on its own; while the
+/// server tells this computer of every change to them (events.rs relays_pushed), every BACKUP_POLL_S and on its word.
 const HARNESS_CONFIG_S: f64 = 60.0;
 
 struct Relays {
@@ -172,10 +173,15 @@ pub fn poll(runner: &Arc<Runner>) {
                 // Install what this computer's bots run on and the optional defaults, including the Gateway
                 // before subscription sign-in. A computer with no bots yet also takes the company default.
                 let changed = CONFIG_CHANGED.swap(false, std::sync::atomic::Ordering::SeqCst);
+                let every = if me.events.relays_pushed() {
+                    BACKUP_POLL_S
+                } else {
+                    HARNESS_CONFIG_S
+                };
                 let due = changed
                     || harness
                         .default_at
-                        .is_none_or(|t| t.elapsed().as_secs_f64() >= HARNESS_CONFIG_S);
+                        .is_none_or(|t| t.elapsed().as_secs_f64() >= every);
                 // The bots' runtimes: while the event stream is up, from the run loop's own assignments answer, which
                 // it reads again whenever the server says they changed (and on its backup timer), so this relay asks
                 // for nothing the loop already has; with the stream down, read here every minute as before.

@@ -53,8 +53,10 @@ const VOICE_BACKUP: Duration = Duration::from_secs(3);
 /// A stream quiet this long may be dead without having failed yet: voice keeps its own poll until it is heard again.
 /// The server sends a keepalive every 15 s by default (20 s is a common setting).
 const VOICE_QUIET: Duration = Duration::from_secs(25);
+/// A stream quiet this long (keepalives come every 15 s by default) is not counted on for relay hints.
+const HINTS_QUIET: Duration = Duration::from_secs(35);
 /// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
-pub const CHANNELS: [&str; 10] = [
+pub const CHANNELS: [&str; 11] = [
     "claim",
     "sync",
     "config",
@@ -65,6 +67,7 @@ pub const CHANNELS: [&str; 10] = [
     "refresh",
     "keys",
     "claude_logins",
+    "importers",
 ];
 /// What a catch-up pass reads: every channel but `keys`, which only a credential change asks for.
 pub const ALL: &[&str] = &[
@@ -77,6 +80,7 @@ pub const ALL: &[&str] = &[
     "imports",
     "refresh",
     "claude_logins",
+    "importers",
 ];
 
 /// What a gap's catch-up asks for at once: queued work, and the heartbeat whose answer says how many may run.
@@ -111,6 +115,8 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         "screen_open" | "voice_inputs" => &[],
         // crate::fetch_fresh fetches the bots' checkouts at once.
         "pushed" => &[],
+        // The meeting importers assigned here (crate::sidejobs); only a server that took relay_hints_v1 sends it.
+        "importers" => &["importers"],
         _ => ALL,
     }
 }
@@ -200,6 +206,11 @@ pub struct Events {
     voice: broadcast::Sender<VoiceWake>,
     /// Whether the server took voice_inputs_v1 on the last heartbeat, so it pushes voice hints to this computer.
     voice_push: AtomicBool,
+    /// Whether the server took relay_hints_v1 on the last heartbeat: it tells this computer of a change to its
+    /// meeting importers and to the config the harness relay reads (`relays_pushed`).
+    relay_hints: AtomicBool,
+    /// Woken when `importers` is asked for, so the side jobs (crate::sidejobs) read their importers at once.
+    pub side: Notify,
     /// When the stream last said anything, a keepalive included.
     heard_at: Mutex<Option<tokio::time::Instant>>,
     /// TURN_RECOVERY_S in milliseconds; tests shorten it.
@@ -223,6 +234,8 @@ impl Events {
             notices: Mutex::new((0, HashMap::new())),
             voice: broadcast::channel(32).0,
             voice_push: AtomicBool::new(false),
+            relay_hints: AtomicBool::new(false),
+            side: Notify::new(),
             heard_at: Mutex::new(None),
             recovery_ms: AtomicU64::new((TURN_RECOVERY_S * 1000.0) as u64),
         })
@@ -241,6 +254,24 @@ impl Events {
         if self.voice_push.swap(taken, Ordering::SeqCst) && !taken {
             self.voice_unpushed();
         }
+    }
+
+    /// What the server's heartbeat answer says: whether it took relay_hints_v1 (runner.rs post_heartbeat).
+    pub fn relay_hints(&self, taken: bool) {
+        self.relay_hints.store(taken, Ordering::SeqCst);
+    }
+
+    /// Whether the relays that read on a minute's clock (the harness relay's config, the side jobs' importers) can
+    /// wait for the server's word instead: it took relay_hints_v1, and the stream is up and heard within HINTS_QUIET
+    /// (a stalled connection can stay `Up` until READ_TIMEOUT_S). They then read on a hint and every BACKUP_POLL_S.
+    pub fn relays_pushed(&self) -> bool {
+        self.relay_hints.load(Ordering::SeqCst)
+            && self.live()
+            && self
+                .heard_at
+                .lock()
+                .unwrap()
+                .is_some_and(|at| at.elapsed() < HINTS_QUIET)
     }
 
     /// Whether voice hints reach this computer now: the server takes them and the stream is up and not gone quiet.
@@ -351,8 +382,7 @@ impl Events {
             .filter(|(_, at)| **at >= since)
             .fold(0, |set, (bit, _)| set | bit);
         if bits != 0 {
-            self.pending.fetch_or(bits, Ordering::SeqCst);
-            self.wake.notify_one();
+            self.asked(bits);
         }
     }
 
@@ -396,9 +426,16 @@ impl Events {
     }
 
     pub fn ask(&self, channels: &[&'static str]) {
-        let asked = channels.iter().fold(0, |set, channel| set | bit(channel));
-        self.pending.fetch_or(asked, Ordering::SeqCst);
+        self.asked(channels.iter().fold(0, |set, channel| set | bit(channel)));
+    }
+
+    /// `bits` asked for: the run loop wakes, and the side jobs too when their importers are among them.
+    fn asked(&self, bits: u16) {
+        self.pending.fetch_or(bits, Ordering::SeqCst);
         self.wake.notify_one();
+        if bits & bit("importers") != 0 {
+            self.side.notify_one();
+        }
     }
 
     pub fn close(&self) {
@@ -603,8 +640,9 @@ impl Events {
                     }
                 }
                 if changed {
-                    // Another release may not push voice hints: voice polls until its heartbeat (asked above) says.
+                    // Another release may not push voice or relay hints: each polls until the heartbeat says.
                     self.voice_push(false);
+                    self.relay_hints(false);
                 }
                 *self.release.lock().unwrap() = Some(release);
                 *self.state.lock().unwrap() = Stream::Up;
@@ -837,6 +875,60 @@ mod tests {
             false,
         );
         assert_eq!(fresh.heard("acme"), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn relays_wait_for_hints_only_from_a_server_that_took_them_on_a_stream_that_is_heard() {
+        let e = Events::new();
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 1, "release": "v1"}),
+            false,
+        );
+        assert!(!e.relays_pushed(), "no heartbeat answer yet");
+        e.relay_hints(true);
+        assert!(e.relays_pushed());
+        // A stream gone quiet past HINTS_QUIET may be dead: the minute's clock again until it is heard.
+        tokio::time::advance(HINTS_QUIET + Duration::from_secs(1)).await;
+        assert!(!e.relays_pushed());
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 1, "release": "v1"}),
+            false,
+        );
+        assert!(e.relays_pushed());
+        // Another release may not send them: the clock until its heartbeat says.
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 1, "release": "v2"}),
+            false,
+        );
+        assert!(!e.relays_pushed());
+        e.relay_hints(true);
+        e.fall_back(Stream::Down);
+        assert!(!e.relays_pushed());
+    }
+
+    #[tokio::test]
+    async fn an_importers_hint_wakes_the_side_jobs_and_asks_for_nothing_else() {
+        let e = Events::new();
+        e.dispatch(
+            "runner",
+            None,
+            &serde_json::json!({"kind": "importers"}),
+            false,
+        );
+        let woke = tokio::time::timeout(Duration::from_millis(200), e.side.notified()).await;
+        assert!(woke.is_ok());
+        assert!(e.take("importers") && !e.take("importers"));
+        assert!(CHANNELS.iter().all(|c| !e.take(c)));
+        // A kind this runner does not know reads everything, its importers too, and wakes the side jobs for it.
+        e.dispatch("runner", None, &serde_json::json!({"kind": "later"}), false);
+        let woke = tokio::time::timeout(Duration::from_millis(200), e.side.notified()).await;
+        assert!(woke.is_ok() && e.take("importers") && e.take("config"));
     }
 
     /// A runner whose stream is up and whose server took voice_inputs_v1.

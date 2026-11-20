@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{json, Value};
 
@@ -552,13 +552,20 @@ pub fn remember(config: &Value) {
 }
 
 impl Runner {
-    /// The company's fallback models, read at most once a minute (service.py default_fallbacks).
+    /// The company's fallback models, read at most once a minute (service.py default_fallbacks); while the server
+    /// tells this computer of a config change (events.rs relays_pushed), the harness relay's last read stands for
+    /// BACKUP_POLL_S, as the relay reads again on that word.
     pub async fn default_fallbacks(&self) -> Vec<Value> {
+        let keep = if self.events.relays_pushed() {
+            crate::events::BACKUP_POLL_S
+        } else {
+            60.0
+        };
         let fresh = CHOICES
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|(at, _)| at.elapsed() < Duration::from_secs(60))
+            .filter(|(at, _)| at.elapsed().as_secs_f64() < keep)
             .map(|(_, rows)| rows.clone());
         if let Some(rows) = fresh {
             return rows;

@@ -97,4 +97,11 @@ when the server accepts output. The optional `voice=busy` query parameter checks
 claiming another. `voice=restart` returns a fresh primer and notes stamp with a bounded transcript recap.
 After a call closes, the runner can acknowledge discarded output and settle the stopped lease with usage counts.
 Older hubs negotiate the capability away through the heartbeat 422 fallback.
+
+With `relay_hints_v1`, the server tells the computer on its stream when its meeting importers change (`importers`, to the
+computer an importer left and the one it moved to) and when the Gateway connects or disconnects (`config`, to every
+computer, as for a change of the providers). While the server takes the capability and the stream is up and heard
+within 35 seconds, the runner reads `GET config` (harness relay) and `GET runners/importers` (side jobs) on those hints
+and every 5 minutes; otherwise every minute, as before. A server that refuses the capability sends no `importers` hint.
+
 With `voice_inputs_v1`, the runner stream's `voice_inputs` hint carries only `attempt_id` and `call_id`, and goes only to the computer still holding that attempt. It is sent for a new turn and when the active turn is skipped (its deadline passed). The runner fetches inputs on hints and reconnects, with a 3-second backup poll; while the server refuses the capability, or the stream is down or quiet past 25 seconds, it keeps the 400 ms poll.

@@ -1681,6 +1681,7 @@ class Heartbeat(Contract):
             "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
             "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
             "push_hints_v1",  # a push to a bot's repository is told to its computer at once (backend/github.py tell_pushed)
+            "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both

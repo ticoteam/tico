@@ -2,7 +2,7 @@
 
 The owner turns an importer on in Settings and picks the enrolled computer that holds its
 credentials. That computer's `python -m runner_support importers` job asks `GET /api/v2/runners/importers`
-what to run and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
+what to run (again at once on an `importers` hint: the runner's side jobs, runner-rs/src/sidejobs.rs) and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
 stored here: they live in `secrets/<file>` on the computer (docs/meetings.md).
 """
 
@@ -12,6 +12,7 @@ from typing import Literal
 from fastapi import Request
 from pydantic import Field
 
+from . import events
 from . import models as M
 from . import runner_online
 from .api_contract import api_v2, error
@@ -187,6 +188,10 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             if source not in RETIRED_IMPORTERS and (not old or (old["runner_id"] or "") != runner_id):
                 # A different computer starts with a clean bill of health, not the last one's.
                 c.execute("DELETE FROM service_health WHERE service=?", ("recording:" + source,))
+            # The computer it left and the one it is on now read `runners/importers` again at once.
+            events.tell_runners(
+                c, "importers", events.HINTED_RUNNERS, ((old["runner_id"] or "") if old else "", runner_id or "")
+            )
             H.event(
                 c, who.actor, "meeting_importer.configured", source, {"enabled": body.enabled, "runner_id": runner_id}
             )

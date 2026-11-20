@@ -970,6 +970,11 @@ impl Runner {
                 .as_array()
                 .is_some_and(|caps| caps.iter().any(|c| c == crate::lanes::VOICE_INPUTS));
             self.events.voice_push(pushes);
+            // A server that took relay_hints_v1 tells this computer of its importer and config changes.
+            let hinted = body["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|c| c == crate::lanes::RELAY_HINTS));
+            self.events.relay_hints(hinted);
             // Absent or null is automatic: the machine's own capacity is the limit.
             let owner = reply.turns_at_once.map(|n| n as usize);
             self.turn_limit.store(
