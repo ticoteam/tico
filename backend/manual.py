@@ -27,7 +27,7 @@ _lock = threading.Lock()
 _cache = {"key": None, "pages": {}, "index": None}
 SECTION_BITS = 20  # a section's full-text rowid: its page's (or doc's) number shifted left, plus its position
 # Title, path, heading and body: a heading that has the words marks the section that answers them best.
-RANK = "bm25({table}, 3.0, 2.0, 6.0, 1.0)"
+RANK = "bm25({table}, 6.0, 3.0, 6.0, 1.0)"
 
 
 def manual_url(version, name, anchor=""):
@@ -109,8 +109,9 @@ def section_rows(number, title, path, page):
 
 def best_sections(c, table, tokens):
     """[(page or doc number, section rowid, bm25)]: the best-ranked section of each that has any of the words (each
-    a prefix, so a word being typed matches); bm25 is SQLite's, lower is better."""
-    expression = " OR ".join('"' + _stem(t) + '"*' for t in tokens)
+    a prefix, so a word being typed matches); bm25 is SQLite's, lower is better. The words go in whole: the porter
+    tokenizer stems them as it stemmed the text (`_stem` would cut "harness" to "harnes", which no stem starts)."""
+    expression = " OR ".join('"' + t + '"*' for t in tokens)
     return c.execute(
         f"WITH hits AS MATERIALIZED (SELECT rowid AS section, {RANK.format(table=table)} AS rank FROM {table} "
         f"WHERE {table} MATCH ?) SELECT section >> {SECTION_BITS}, section, MIN(rank) FROM hits "
