@@ -109,9 +109,9 @@ def section_rows(number, title, path, page):
 
 def best_sections(c, table, tokens):
     """[(page or doc number, section rowid, bm25)]: the best-ranked section of each that has any of the words (each
-    a prefix, so a word being typed matches); bm25 is SQLite's, lower is better. The words go in whole: the porter
-    tokenizer stems them as it stemmed the text (`_stem` would cut "harness" to "harnes", which no stem starts)."""
-    expression = " OR ".join('"' + t + '"*' for t in tokens)
+    a prefix of a word's start, as `_hits` matches, so a word being typed matches); bm25 is SQLite's, lower is
+    better."""
+    expression = " OR ".join('"' + _stem(t) + '"*' for t in tokens)
     return c.execute(
         f"WITH hits AS MATERIALIZED (SELECT rowid AS section, {RANK.format(table=table)} AS rank FROM {table} "
         f"WHERE {table} MATCH ?) SELECT section >> {SECTION_BITS}, section, MIN(rank) FROM hits "
@@ -124,9 +124,8 @@ def _index(found):
     """The manual's sections in an in-memory full-text table, built once per `pages()` snapshot."""
     if _cache["index"] is None or _cache["index"][0] is not found:
         db = sqlite3.connect(":memory:", check_same_thread=False)
-        db.execute(
-            "CREATE VIRTUAL TABLE temp.sections USING fts5(title, path, heading, body, tokenize='porter unicode61')"
-        )
+        db.execute("PRAGMA temp_store=MEMORY")  # the temp schema too, so it needs no writable temp folder
+        db.execute("CREATE VIRTUAL TABLE temp.sections USING fts5(title, path, heading, body, tokenize='unicode61')")
         for number, page in enumerate(found.values()):
             db.executemany(
                 "INSERT INTO sections(rowid,title,path,heading,body) VALUES(?,?,?,?,?)",
@@ -210,10 +209,11 @@ def search(q, limit=20):
     with _lock:
         best = best_sections(_index(found), "sections", wanted)
     out = []
-    for number, section, rank in sorted(best, key=lambda hit: (hit[2], listed[hit[0]]["name"]))[:limit]:
+    ranked = sorted(best, key=lambda hit: (hit[2], listed[hit[0]]["name"]))[:limit]
+    for at, (number, section, _) in enumerate(ranked, 1):
         page = listed[number]
         chosen = page["sections"][section & ((1 << SECTION_BITS) - 1)]
-        row = result(page, chosen, version, -rank)
+        row = result(page, chosen, version, 100 / (60 + at))  # by position, as docs.merge_ranked scores
         row.update(section=chosen["heading"], excerpt=_excerpt(section_text(page, chosen), wanted))
         out.append(row)
     return out

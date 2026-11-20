@@ -11,7 +11,7 @@ def up(conn):
     conn.execute("DROP TABLE IF EXISTS docs_fts")
     conn.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS doc_sections_fts "
-        "USING fts5(title, path, heading, body, tokenize='porter unicode61')"
+        "USING fts5(title, path, heading, body, tokenize='unicode61')"
     )
     if "search_parse" in {row[1] for row in conn.execute("PRAGMA table_info(docs)")}:
         conn.execute("ALTER TABLE docs DROP COLUMN search_parse")
