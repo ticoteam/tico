@@ -376,6 +376,33 @@ SHARED_FILES = {
 }
 
 
+LOCAL_FILES = {
+    "type": "array",
+    "maxItems": 10,
+    "items": {"type": "string"},
+    "description": "Files in your checkout to attach (a report, letter, spec, HTML page): each is streamed to Tico "
+    "with the message, in one call, and the thread's readers open it from there. Needs your Computer",
+}
+
+
+def _post_with_files(api, args, more):
+    """A thread post with files from the checkout: one multipart request carries the text and every file, so the
+    message and its files land together or not at all (POST /api/v2/uploads/threads/{thread}/messages)."""
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("Attach local files with tico thread post on your Computer, or name a file already in Tico")
+    if args.get("refs"):
+        raise ValueError("A post with files from your checkout takes no references: post them in a second message")
+    from clients import bot_files as BF
+
+    root = BF.checkout_root()
+    files = [BF.local_file(root, path)[0] for path in args["paths"]]
+    fields = {"text": args["text"], "to": args.get("to"), "in_reply_to": args.get("reply_to"), **more}
+    fields = {name: value for name, value in fields.items() if value is not None}
+    return api.post_multipart(
+        "uploads/" + _thread_path(args["thread"], "messages"), {"files": files}, fields, key=_key(args)
+    )
+
+
 def _thread_message(args, **more):
     """A message body for a thread post or reply: the text, who it is addressed to and its references."""
     body = {"text": args["text"], "kind": "say", "to": args.get("to"), **more}
@@ -475,12 +502,15 @@ def thread_create(api, args):
         "reply_to": _s("The id of the message this answers, in the same thread or a sub-thread under it"),
         "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"},
         "attachments": SHARED_FILES,
+        "paths": LOCAL_FILES,
     },
     required=("thread", "text"),
     writes=True,
 )
 def thread_post(api, args):
     more = {"attachments": args["attachments"]} if args.get("attachments") else {}
+    if args.get("paths"):
+        return _post_with_files(api, args, more)
     return api.post(
         _thread_path(args["thread"], "messages"),
         _thread_message(args, in_reply_to=args.get("reply_to"), **more),
@@ -972,9 +1002,14 @@ CLI = (
     ),
     Command(
         "thread post",
-        "post a message to a thread, with files already in Tico attached by --file",
-        args=(Arg("reply_to", metavar="MESSAGE"), _REFS, Arg("attachments", "--file", metavar="ID@VERSION")),
-        example="tico thread post th_1 'The draft' --file f_1@2",
+        "post a message to a thread, with files from your checkout (--attach) or already in Tico (--file)",
+        args=(
+            Arg("reply_to", metavar="MESSAGE"),
+            _REFS,
+            Arg("attachments", "--file", metavar="ID@VERSION"),
+            Arg("paths", "--attach", metavar="PATH"),
+        ),
+        example="tico thread post th_1 'The weekly report' --attach reports/weekly.html",
     ),
     Command(
         "thread bot-status",

@@ -254,7 +254,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `tico thread dm <actor>` | `tico_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
 | `tico thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `tico_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
 | `tico thread create "title"` | `tico_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
-| `tico thread post <thread> "..."` | `tico_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat), `--file ID@VERSION` (repeat) to attach a file already in Tico that you can open, such as one a bot published |
+| `tico thread post <thread> "..."` | `tico_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat), `--file ID@VERSION` (repeat) to attach a file already in Tico that you can open, such as one a bot published, `--attach PATH` (repeat) to send files from your checkout with it in one request (not with `--ref`) |
 | `tico thread bot-status <thread>` | `tico_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
 | `tico thread reply <thread> <message> "..."` | `tico_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
 | `tico thread edit <message> "..."` | `tico_thread_edit` | a new revision of your own message |
@@ -287,7 +287,7 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 - `POST /api/v2/uploads/threads/{id}/messages`: a person or a bot posts a message with files attached (multipart,
-  `text` and `files`), under the chat upload size caps: `tico thread upload`. A post on either route may also name
+  `text` and `files`), under the chat upload size caps: `tico thread upload`, and `tico thread post --attach`. A post on either route may also name
   `attachments`, files already in Tico as `<file id>@<version>`: each must be one the poster can open, and the
   message carries a copy of its bytes, which everyone who reads the message opens. A run that carries a private task
   posts files only in that task's own thread, as it posts anything.

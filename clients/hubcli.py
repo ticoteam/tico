@@ -566,6 +566,12 @@ def parser():
         help="the caption for each --visual, in the same order",
     )
     s.add_argument(
+        "--attach",
+        action="append",
+        metavar="PATH",
+        help="a file in your checkout to attach (a report, letter, spec, HTML page); repeat for more",
+    )
+    s.add_argument(
         "--needs-action",
         dest="needs_action",
         action="store_true",

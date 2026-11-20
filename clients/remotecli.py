@@ -37,6 +37,13 @@ def visuals_from_args(args):
     return out
 
 
+def message_files(args):
+    """`tico message send`'s files in order: each `--visual` with its `--title`, then each `--attach` (a file in the
+    checkout, shown as its kind allows: a page or picture inline, anything else a file chip)."""
+    visuals = visuals_from_args(args) if getattr(args, "visual", None) else []
+    return visuals + [{"path": path, "title": ""} for path in getattr(args, "attach", None) or []]
+
+
 def _delivery(args):
     """The request's delivery fields from the command's --steer, --queue or --defer (clients/hubcli.py)."""
     from clients.hubcli import delivery_of
@@ -416,7 +423,7 @@ def run(args, who=None):
                 "needs_action": getattr(args, "needs_action", False),
                 "operation_id": key,
                 **_delivery(args),
-                **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {}),
+                **({"visuals": attached} if (attached := message_files(args)) else {}),
             },
         )
 

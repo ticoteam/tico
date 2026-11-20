@@ -510,6 +510,11 @@ fn parts(
     } else {
         put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own.".into());
     }
+    // A path on the bot's own disk opens for nobody else: 231 of 4,132 thread messages named one, none attached it.
+    if !make_page {
+        let here = conversation["id"].as_str().unwrap_or("<conversation>");
+        put(&mut lines, Part::Standing, format!("A file you name is a file you attach. When a reply mentions a report, letter, spec, HTML page or other file you made, send it with `tico thread post {here} \"<one line>\" --attach <path>` (on a task, `tico task attach <task> <path>`), or publish it as a page (`tico page publish <file>`). Never leave only a path on your own disk: nobody else can open it."));
+    }
     if conversation["scope"] == "shared" {
         put(&mut lines, Part::Standing, "This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.".into());
     }

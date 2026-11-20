@@ -26,6 +26,10 @@ These sit alongside `handoffs.md` and `approvals.md`.
 - **Visuals in replies.** Add a visual (chart, table, diagram, mockup, screenshot, clip or recording)
   to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer
   complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
+- **A file you name is a file you attach.** When a chat reply mentions a report, letter, spec, HTML
+  page or other file you made, send it: `tico thread post <conversation> "<one line>" --attach <path>`
+  (on a task, `tico task attach`), or publish it as a page (`tico page publish <file>`). Never leave only
+  a path on your own disk; nobody else can open it.
 - **Design and video come from their bots**. For brand assets, designed graphics (ad and social
   images, landing-page visuals, icons) or edited video (scripts, edits, cuts, captions), file a task
   for `designer` (Design) or `video-owner` (Video Owner): `tico task create --owner bot:designer --title ... --message ...`.
