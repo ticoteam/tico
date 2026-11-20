@@ -849,6 +849,8 @@ def redact_chart(view, roster, people_hidden, groups_hidden):
             row["parent"] = visible_group(row["parent"], roster, groups_hidden)
         if row.get("reports_to") in people_hidden:
             row["reports_to"] = ""
+        if str(row.get("lead") or "").removeprefix("person:") in people_hidden:
+            row["lead"] = ""
         groups.append(row)
     out["org_groups"] = groups
     if "teams" in out:

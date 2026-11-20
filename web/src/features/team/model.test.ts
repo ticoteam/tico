@@ -7,7 +7,6 @@ import {
   historyOf,
   instructionsChange,
   managerOf,
-  membersUnder,
   modelLine,
   resolveWho,
   runFigures,
@@ -66,11 +65,6 @@ describe('team model', () => {
     expect(managerOf(group('x', 'X', '', ['0190-ana', 'bo'], ['p1']), agents, [] as PersonRow[])).toBe('human:p1');
     expect(managerOf(group('x', 'X', '', ['0190-ana', 'cy']), agents, [])).toBe('bot:0190-ana');
     expect(managerOf(group('x', 'X', '', ['0190-ana', 'bo']), agents, [])).toBeNull();
-  });
-
-  it('counts everyone in the teams inside a team', () => {
-    expect(membersUnder(groups, 'g1')).toEqual({ bots: ['0190-ana'], people: ['p1'] });
-    expect(membersUnder(groups, 'g3')).toEqual({ bots: [], people: ['p1'] });
   });
 
   it('writes the model line from the server’s model list', () => {

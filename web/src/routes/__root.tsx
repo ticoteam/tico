@@ -12,7 +12,7 @@ import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
 import { filtersOf, flowGroups, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
-import { teamSlug, whoHref } from '@/features/team/routing';
+import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
@@ -50,7 +50,10 @@ import {
   watchCallWindow,
   type Company,
   type MenuMate,
+  type MenuNode,
   type MenuTeam,
+  orgTree,
+  type OrgNode,
 } from '@/shell';
 import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
@@ -62,13 +65,17 @@ export interface RouterContext {
   queryClient: QueryClient;
 }
 
-/** What the shell keeps in every page's address: the second chat, an open side panel (the page reads `panel`), and
-    `via=thread` when the page was opened from that chat (its head draws ✕, lib besideThread). */
+/** What the shell keeps in every page's address: the second chat, an open side panel (the page reads `panel`),
+    `via=thread` when the page was opened from that chat (its head draws ✕, lib besideThread), a team the menu shows
+    (`team`, where old team links land) and Add teammate's step (`add`, onto that team). */
 export interface RootSearch {
   chat?: string;
   panel?: string;
   via?: 'thread';
+  team?: string;
+  add?: AddStep;
 }
+type AddStep = NonNullable<ReturnType<typeof validateTeamSearch>['add']>;
 const word = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -81,6 +88,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     if (chat) out.chat = chat;
     if (panel) out.panel = panel;
     if (s.via === 'thread') out.via = 'thread';
+    const team = word(s.team);
+    const { add } = validateTeamSearch(s);
+    if (team) out.team = team;
+    if (add) out.add = add;
     return out;
   },
   notFoundComponent: () => <Placeholder title="Not found" />,
@@ -95,6 +106,8 @@ const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) 
 const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ default: m.FirstRun })));
 const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
+const AddTeammate = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.AddTeammate })));
+const TeamAccess = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeamAccess })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
@@ -169,11 +182,11 @@ function App() {
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
   };
   const [, top, a, b] = at.path.split('/');
-  // A teammate's own page is the `agent` arrangement; a team's page and your own page are plain pages. Only that one
-  // answer is read from the directory, so an agent's status line does not redraw the shell.
+  // A teammate's own page is the `agent` arrangement; a team's old address and your own page are plain pages. Only that
+  // one answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
   const known = useDirectory((d) => (who ? isTeammate(who, (key) => d.byId[key], me.data?.id) : false));
-  // a team's page is a plain page (its thread is a row in Threads); a teammate's page is your DM with them
+  // a team's old address is a plain page on its way home; a teammate's page is your DM with them
   const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
@@ -255,6 +268,8 @@ function App() {
   const callOut = useCallWindow().open;
   const ringing = (useQuery(ringingQuery).data?.calls ?? []).some((c) => c.ring && c.state === 'live');
   const setupOpen = useLocation({ select: (l) => !!(l.search as { setup?: unknown }).setup });
+  const adding = useLocation({ select: (l) => validateTeamSearch(l.search as Record<string, unknown>).add });
+  const addTo = useLocation({ select: (l) => word((l.search as Record<string, unknown>).team) });
   const fileOpen = useFileOpen();
 
   return (
@@ -285,6 +300,8 @@ function App() {
           <FirstRun />
         </Later>
       ) : null}
+      {/* Add teammate over any page (`?add=`), onto the team the address names */}
+      <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
       {/* the file `files.view` opens, over any page */}
@@ -317,17 +334,30 @@ const mate = (a: Actor): MenuMate => ({
   live: a.working,
 });
 
-function teamsOf(d: Directory, meId: string | undefined, asks: Asks): MenuTeam[] {
+/* The Team tab's tree (shell/orgTree.ts), its rows as the menu draws them: each person's or agent's DM, and the Dot
+   on whoever asks you something. */
+function menuOrg(d: Directory, meId: string | undefined, asks: Asks): MenuNode[] {
   // a DM names an agent by its id or slug; the directory knows both
   const asking = new Set([...asks.mates].map((x) => d.byId[x]?.id ?? x));
-  const by = new Map<string, MenuTeam>();
-  for (const a of d.actors) {
-    if (!a.team || a.id === meId) continue;
-    const t = by.get(a.team) ?? { id: a.team, name: a.team, to: `/team/${encodeURIComponent(teamSlug(a.team))}`, members: [] };
-    t.members.push({ ...mate(a), needs: asking.has(a.id) });
-    by.set(a.team, t);
-  }
-  return [...by.values()];
+  const draw = (n: OrgNode): MenuNode =>
+    n.kind === 'team'
+      ? { ...n, kids: n.kids.map(draw) }
+      : { kind: 'mate', key: n.key, mate: { ...mate(n.actor), needs: asking.has(n.actor.id) }, team: n.team, label: n.label, kids: n.kids.map(draw), size: n.size };
+  return orgTree(d, meId).map(draw);
+}
+
+/* A team's ⋯ in the menu: Add teammate onto it, its Rules, and its Access for whoever manages it (read when the menu
+   opens). */
+function TeamRows({ team, onAccess }: { team: MenuTeam; onAccess: () => void }) {
+  const router = useRouter();
+  const reach = useQuery(teammateAccessQuery('team', team.id)).data;
+  return (
+    <>
+      <MenuItem label="Add teammate" icon="plus" onSelect={press('team.addTeammate', { team: team.id })} />
+      <MenuItem label="Rules" icon="rules" onSelect={() => void router.navigate({ to: '/company/rules', search: { who: `group:${team.id}` } as never })} />
+      {reach?.you?.manage ? <MenuItem label="Access" icon="lock" onSelect={onAccess} /> : null}
+    </>
+  );
 }
 
 /** True once the router has resolved its first page. */
@@ -347,7 +377,9 @@ function AppMenu({ note }: { note: ReactNode }) {
   const { data: catchUp } = useQuery({ ...catchUpQuery, enabled: badgesEnabled });
   const { data: list } = useInfiniteQuery(threadListQuery);
   const asks = asksOf(catchUp, list?.pages.flatMap((p) => p.rows) ?? [], me?.id);
-  const teams = useDirectory((d) => teamsOf(d, me?.id, asks));
+  const org = useDirectory((d) => menuOrg(d, me?.id, asks));
+  const reveal = useLocation({ select: (l) => word((l.search as Record<string, unknown>).team) });
+  const [access, setAccess] = useState<MenuTeam | null>(null);
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery({ ...flowQuery, select: (data) => data.count });
   const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
@@ -363,7 +395,9 @@ function AppMenu({ note }: { note: ReactNode }) {
       <Menu
         company={{ name, mark: name.slice(0, 1).toUpperCase() }}
         me={meMate}
-        teams={teams ?? []}
+        org={org ?? []}
+        reveal={reveal}
+        teamMenu={(t) => <TeamRows team={t} onAccess={() => setAccess(t)} />}
         pipelines={pipelines && [
           ...pipelines.map((p) => ({ id: p.id, name: p.name, to: `/tasks/${encodeURIComponent(p.id)}` })),
           // the Features pipeline read as horizons: only a company that has one gets the line
@@ -390,6 +424,7 @@ function AppMenu({ note }: { note: ReactNode }) {
       <Later on={messaging}>
         <MessagePick open={messaging} onOpenChange={setMessaging} />
       </Later>
+      <Later on={!!access}>{access ? <TeamAccess key={access.id} team={access.id} name={access.name} onClose={() => setAccess(null)} /> : null}</Later>
     </>
   );
 }

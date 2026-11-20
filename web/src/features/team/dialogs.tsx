@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { agentsQuery, groupsQuery, peopleQuery, type AccessView, type AgentRow, type Credential, type Levels } from './queries';
+import { agentsQuery, groupsQuery, peopleQuery, teammateAccessQuery, type AccessView, type AgentRow, type Credential, type Levels } from './queries';
 
 const copy = (text: string, what: string) =>
   void navigator.clipboard.writeText(text).then(
@@ -301,4 +301,11 @@ export function ArchiveDialog({ open, onOpenChange, slug, name, row }: Open & { 
       <Select label="Hand its work to" options={options} value={heir} onValueChange={setHeir} />
     </Dialog>
   );
+}
+
+/** A team's Access, opened from the menu's ⋯ on the team: only whoever manages it gets the dialog. */
+export function TeamAccess({ team, name, onClose }: { team: string; name: string; onClose: () => void }) {
+  const reach = useQuery(teammateAccessQuery('team', team)).data;
+  if (!reach?.you?.manage) return null;
+  return <AccessDialog open onOpenChange={(o) => !o && onClose()} kind="team" id={team} name={name} now={reach} />;
 }
