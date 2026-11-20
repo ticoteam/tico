@@ -233,7 +233,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
       body={
         <div className="tv-view">
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
-          {!quiet && !current?.wait && <WaitingOnYou items={waiting.items} />}
+          {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug, flow).to }] : []))} />}
           {body}
           {!current?.chat && <Decision t={t} flow={flow} dock />}
         </div>

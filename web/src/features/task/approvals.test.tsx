@@ -532,12 +532,20 @@ describe('the matter shows the email that waits on the person', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-mail' } }));
   });
 
-  it('on its other pages the decision sits at the top, its name opening the email @approvals', async () => {
-    serve(matter({ relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as Partial<TaskData>), []);
-    show(<TaskPage task="40" pipeline="p9" tab="details" />, '/tasks/p9/40/details');
-    const box = await decision();
-    expect(box.closest('.tv-waits')).toBeTruthy();
-    expect((await within(box).findByRole('link', { name: 'Email to Dana Ruiz' })).getAttribute('href')).toBe('/tasks/general/12');
+  it('on its other pages, where the email is not on screen, only points to it: no Approve, Open goes to the email @approvals', async () => {
+    const deadlines = { file_id: 'd1', name: 'Deadlines', kind: 'markdown', version: 1 };
+    serve(matter({ documents: [deadlines], relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as unknown as Partial<TaskData>), []);
+    const router = show(<TaskPage task="40" pipeline="p9" tab="deadlines" />, '/tasks/p9/40/deadlines');
+    const pointer = await screen.findByRole('region', { name: 'Waits on you' });
+    expect(await within(pointer).findByText('Email to Dana Ruiz')).toBeTruthy();
+    expect(within(pointer).getByText('waits on you')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Request changes' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
+    fireEvent.click(within(pointer).getByRole('button', { name: 'Open' }));
+    // the Email tab, where the decision sits over the email (the test above)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    expect(sent).toEqual([]);
   });
 
   it('shows nothing once the email is no longer to go out, or with no OK hung on it @approvals', async () => {

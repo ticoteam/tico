@@ -1,14 +1,17 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { meQuery } from '@/data';
+import { Button } from '@/kit/Button';
+import { FlowMark } from '@/kit/FlowMark';
 import { Markdown } from '@/kit/Markdown';
-import { Decision } from './Answer';
-import { changesAskedOf, decisionOf, emailOf, tabAddress } from './model';
+import { changesAskedOf, decisionName, decisionOf, emailOf, personOf, sendTitle, tabAddress } from './model';
 import { Go } from './parts';
-import { emailSendQuery, taskDetailQuery, type TaskData } from './queries';
+import { addressesOf, emailSendQuery, taskDetailQuery, type TaskData } from './queries';
 import { isSendTask, sendTasksOf, stillToGo } from './waits';
 
-/* An email's OK hung on a matter (waits.ts): the matter opens on the email, its brief first, and shows the decision at
-   the top of its other pages; the email's OK names the matter it came from, with the matter's brief. */
+/* An email's OK hung on a matter (waits.ts): the matter opens on the email, its brief first, then the decision over the
+   email itself; its other pages point to it (no Approve where the email is not on screen). The email's OK names the
+   matter it came from, with the matter's brief. */
 
 export interface Waiting {
   /** The OK task. */
@@ -39,14 +42,34 @@ export function useWaiting(t: TaskData): { items: Waiting[]; settled: boolean } 
   return { items, settled };
 }
 
-/** At the top of a task's other pages: each email's OK that waits on the person, in the same box as on the email
-    itself, its name opening the email. */
-export function WaitingOnYou({ items }: { items: Waiting[] }) {
-  if (!items.length) return null;
+/** An email that waits on the person, as a pointer on the matter's other pages: the email is not on screen there, so
+    there is no Approve; Open goes to the Email tab, where the decision sits over the email itself. */
+function Pointer({ sub, send, to }: { sub: TaskData; send: string; to: string }) {
+  const navigate = useNavigate();
+  const mail = useQuery(emailSendQuery(sub.id, send));
+  const r = decisionOf(sub);
+  if (!r) return null;
+  const who = (mail.data && addressesOf(mail.data).to[0]) ?? sendTitle(sub.title)?.to;
+  return (
+    <section className="answer dcx tv-pointer" aria-label="Waits on you">
+      <div className="dcx-top">
+        <FlowMark />
+        <b className="an-name">{decisionName(sub, r, who ? personOf(who) : undefined)}</b>
+        <span className="dcx-eff">waits on you</span>
+        <span className="grow" />
+        <Button onClick={() => void navigate({ to: to as never })}>Open</Button>
+      </div>
+    </section>
+  );
+}
+
+/** At the top of a task's other pages: each email that waits on the person, pointing to its Email tab. */
+export function WaitingOnYou({ items }: { items: { sub: TaskData; send: string; to: string }[] }) {
+  if (!items.some((x) => decisionOf(x.sub))) return null;
   return (
     <div className="tv-waits">
-      {items.map(({ sub }) => (
-        <Decision key={sub.id} t={sub} flow={false} open={tabAddress(sub, undefined, false).to} />
+      {items.map((x) => (
+        <Pointer key={x.sub.id} {...x} />
       ))}
     </div>
   );
