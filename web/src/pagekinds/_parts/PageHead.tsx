@@ -2,11 +2,11 @@ import { Link, useLocation, useRouter, type LinkProps } from '@tanstack/react-ro
 import { Fragment, useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { stepBackIs, watchSteps } from '@/lib';
 import { useSheet } from '@/shell';
 import { showPageName } from '@/tico/pageName';
 import type { HeadProps } from '@/pagekinds/types';
 import { EditableTitle } from './EditableTitle';
-import { stepBackIs, watchSteps } from './backTo';
 
 export type PageHeadProps = HeadProps;
 
