@@ -11,8 +11,10 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
+from backend import outbound_http
 from backend.finance import books_link, books_sync, mirror, xero
 from backend.finance.core import ledger as L
 from backend.finance.core import mirror as M
@@ -987,6 +989,29 @@ def test_a_long_rate_limit_stops_the_pass_without_sleeping_and_the_next_pass_res
     assert not short.page("accounts", 1, 100).ok
     assert sleeps == [3.0]  # the first 3 seconds fit the budget, the next do not
     assert _client(xbooks, sleep=sleeps.append).page("accounts", 1, 100).ok
+
+
+def test_the_default_transport_keeps_decimals_the_retry_after_and_a_redirect_as_the_answer(monkeypatch):
+    answers = [
+        httpx.Response(429, headers={"Retry-After": "7"}, content=b'{"Amount": 10.10}'),
+        httpx.Response(302, headers={"Location": "https://elsewhere.example/"}),
+    ]
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return answers.pop(0)
+
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(handle))
+    limited = xero._send("GET", BASE + "/Accounts", {"Authorization": "Bearer t"}, None)
+    assert (limited.status, limited.retry_after, limited.body) == (429, 7.0, {"Amount": Decimal("10.10")})
+    assert xero._send("POST", BASE + "/Invoices", {}, b"{}").status == 302 and len(seen) == 2
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(down))
+    assert xero._send("GET", BASE + "/Accounts", {}, None) == xero.Reply(0, note="Xero did not answer")
 
 
 def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):
