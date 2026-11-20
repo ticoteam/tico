@@ -82,8 +82,9 @@ pub struct SideJobs {
     client: Client,
     events: Arc<Events>,
     poll: Duration,
-    /// When the hub was last asked which importers run here, and what it said (kept between hints).
-    asked: Option<(Instant, Vec<String>)>,
+    /// When the hub was last asked which importers run here, whether it pushed hints then, and what it said (kept
+    /// between hints).
+    asked: Option<(Instant, bool, Vec<String>)>,
     children: HashMap<&'static str, Child>,
     failures: HashMap<&'static str, u32>,
     retry_at: HashMap<&'static str, Instant>,
@@ -125,13 +126,17 @@ impl SideJobs {
         match name {
             "importers" => {
                 // The stream's word (or a catch-up) asks at once; else the last answer stands for its interval.
+                // The hub hints only a computer whose heartbeat already said it takes hints, so an answer read
+                // before this computer heard that it does may miss a change made in between: it stands for the
+                // poll, not the backstop.
                 let hinted = self.events.take("importers");
-                let every = if self.events.relays_pushed() {
-                    Duration::from_secs_f64(BACKUP_POLL_S)
-                } else {
-                    self.poll
-                };
-                if let Some((at, sources)) = self.asked.as_ref().filter(|_| !hinted) {
+                let pushed = self.events.relays_pushed();
+                if let Some((at, then, sources)) = self.asked.as_ref().filter(|_| !hinted) {
+                    let every = if pushed && *then {
+                        Duration::from_secs_f64(BACKUP_POLL_S)
+                    } else {
+                        self.poll
+                    };
                     if at.elapsed() < every {
                         return Ok(sources.clone());
                     }
@@ -149,7 +154,7 @@ impl SideJobs {
                         return Err(e);
                     }
                 };
-                self.asked = Some((Instant::now(), sources.clone()));
+                self.asked = Some((Instant::now(), pushed, sources.clone()));
                 Ok(sources)
             }
             "close-calls" => Ok(if close_key(&self.config.projects_dir()).is_empty() {
@@ -343,7 +348,7 @@ mod tests {
 
     /// The last answer, as if it came `ago`.
     fn asked_ago(jobs: &mut SideJobs, ago: Duration) {
-        if let Some((at, _)) = jobs.asked.as_mut() {
+        if let Some((at, _, _)) = jobs.asked.as_mut() {
             *at = Instant::now().checked_sub(ago).unwrap();
         }
     }
@@ -354,6 +359,7 @@ mod tests {
         let granola = r#"{"importers": [{"source": "granola"}]}"#;
         let (url, seen) = crate::client::tests::serve(vec![
             (200, granola),
+            (200, r#"{"importers": []}"#),
             (200, r#"{"importers": []}"#),
             (200, granola),
             (200, granola),
@@ -368,20 +374,29 @@ mod tests {
         asked_ago(&mut jobs, Duration::from_secs(POLL_SECONDS + 1));
         assert!(jobs.wanted("importers").await.unwrap().is_empty());
         assert_eq!(asks(), 2, "no hints from this hub: every minute, as before");
-        // The hub took relay_hints_v1 and the stream is up: the answer stands for BACKUP_POLL_S.
+        // The hub took relay_hints_v1 and the stream is up. The answer read before that may have missed an
+        // assignment the hub did not hint, so it still stands only for the minute.
         events.dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
         events.relay_hints(true);
+        asked_ago(&mut jobs, Duration::from_secs(POLL_SECONDS + 1));
+        assert!(jobs.wanted("importers").await.unwrap().is_empty());
+        assert_eq!(
+            asks(),
+            3,
+            "an answer from before the hints is not trusted for the backstop"
+        );
+        // One read while it pushes stands for BACKUP_POLL_S.
         asked_ago(&mut jobs, Duration::from_secs(120));
         assert!(jobs.wanted("importers").await.unwrap().is_empty());
-        assert_eq!(asks(), 2);
+        assert_eq!(asks(), 3);
         // Its word asks at once.
         events.dispatch("runner", None, &json!({"kind": "importers"}), false);
         assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
-        assert_eq!(asks(), 3);
+        assert_eq!(asks(), 4);
         asked_ago(&mut jobs, Duration::from_secs_f64(BACKUP_POLL_S + 1.0));
         assert_eq!(jobs.wanted("importers").await.unwrap(), ["granola"]);
-        assert_eq!(asks(), 4, "the backstop");
-        assert!(seen.lock().unwrap()[3].starts_with("GET /api/v2/runners/importers "));
+        assert_eq!(asks(), 5, "the backstop");
+        assert!(seen.lock().unwrap()[4].starts_with("GET /api/v2/runners/importers "));
     }
 
     #[test]
