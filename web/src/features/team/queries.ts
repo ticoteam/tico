@@ -77,7 +77,7 @@ export interface AgentRow {
 }
 
 export const agentsQuery = queryOptions({
-  queryKey: ['team', 'agents'] as const,
+  queryKey: keys.team.agents(),
   queryFn: ({ signal }) => api.get<AgentRow[]>('/api/employees', { signal }),
 });
 
@@ -404,7 +404,7 @@ export interface Group {
 }
 
 export const groupsQuery = queryOptions({
-  queryKey: ['team', 'groups'] as const,
+  queryKey: keys.team.groups(),
   // The team page's loader shares this request with the menu and a team's thread, even while they unmount: no signal.
   queryFn: () => api.get<Group[]>('/api/v2/groups'),
 });

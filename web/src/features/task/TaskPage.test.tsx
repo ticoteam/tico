@@ -661,6 +661,16 @@ describe('Details: the facts @s58', () => {
   );
   const facts = async () => fireEvent.click(await screen.findByRole('button', { name: 'Facts' }));
 
+  it('shows a related task once when it is both a parent and a blocker', async () => {
+    const rollout = { id: 't2', number: 13, title: 'Plan the rollout', status: 'open', direction: 'out', owner_id: 'bot:a1' };
+    serve(reads(task({ relations: { parent: [rollout], depends_on: [rollout] } })));
+    details();
+    const related = within(await screen.findByRole('region', { name: 'Related' }));
+    const rows = related.getAllByRole('link', { name: 'Plan the rollout' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.getAttribute('href')).toBe('/task/13');
+  });
+
   it('sets the Human in place', async () => {
     serve(base);
     details();

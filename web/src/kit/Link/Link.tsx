@@ -15,10 +15,10 @@ export function setLinkComponent(c: ComponentType<LinkProps>): void {
   InApp = c;
 }
 
-const outside = (href: string) => !href.startsWith('/') || href.startsWith('//');
+const inApp = (href: string) => /^#\//.test(href) || (href.startsWith('/') && !href.startsWith('//'));
 
 /** A link: in-app addresses move through the router with no page load; outside ones are plain anchors. */
 export function Link(p: LinkProps) {
-  const To = outside(p.href) ? Plain : InApp;
+  const To = inApp(p.href) ? InApp : Plain;
   return <To {...p} />;
 }

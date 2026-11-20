@@ -3,6 +3,11 @@
 export const keys = {
   me: () => ['me'] as const,
   directory: () => ['directory'] as const,
+  groups: () => ['groups'] as const,
+  team: {
+    groups: () => ['team', 'groups'] as const,
+    agents: () => ['team', 'agents'] as const,
+  },
   tasks: {
     list: (params: unknown) => ['tasks', 'list', params] as const,
     detail: (id: string) => ['tasks', 'detail', id] as const,

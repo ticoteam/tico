@@ -1,3 +1,4 @@
+import { Tabs } from '@base-ui/react/tabs';
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
@@ -112,10 +113,10 @@ function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
   return <Avatar decorative kind={m.kind} name={m.name} initials={m.short} hue={m.hue} size={size} live={m.live} />;
 }
 const Asks = () => <FlowMark label="Asks you" />;
-const TALK: { id: MenuTalk; label: string }[] = [
+const TALK = [
   { id: 'team', label: 'Team' },
   { id: 'threads', label: 'Threads' },
-];
+] as const;
 
 /* a control that opens a kit menu of the given rows, or the bare control when there are none */
 function dropIf(rows: ReactNode, trigger: ReactElement, side: 'top' | 'bottom' | 'right', align: 'start' | 'end') {
@@ -315,12 +316,14 @@ export function Menu(p: MenuProps) {
     </div>
   );
   const tabs = (
-    <div className="cat" role="tablist" aria-label="Conversations">
-      {TALK.map(x => (
-        <button key={x.id} type="button" role="tab" aria-selected={talk === x.id} className={talk === x.id ? 'is-on' : undefined} onClick={() => setTalk(x.id)}>
-          {x.label}
-        </button>
-      ))}
+    <div className="cat">
+      <Tabs.List className="cat-tabs" aria-label="Conversations" activateOnFocus>
+        {TALK.map(x => (
+          <Tabs.Tab key={x.id} value={x.id} className={talk === x.id ? 'is-on' : undefined}>
+            {x.label}
+          </Tabs.Tab>
+        ))}
+      </Tabs.List>
       <span className="acts">
         <IconButton icon="message" label="Message" size="sm" quiet onClick={p.onMessage} />
         <IconButton icon="call" label="Call" size="sm" quiet onClick={p.onCall} />
@@ -335,7 +338,7 @@ export function Menu(p: MenuProps) {
   /* Team: the org chart, the teams each folding to its faces; open, its teammates. A team opens its page, a teammate
      your DM with them. The chevron always folds or opens it, wherever you are. */
   const team = (
-    <div className="ca-list" role="tabpanel" aria-label="Team">
+    <Tabs.Panel className="ca-list" value="team" tabIndex={-1}>
       {p.teams.map(t => {
         const open = isOpen(t);
         const head = (
@@ -379,13 +382,16 @@ export function Menu(p: MenuProps) {
           </div>,
         ];
       })}
-    </div>
+    </Tabs.Panel>
   );
   const tree = (
-    <div className="ca">
+    <Tabs.Root className="ca" value={talk} onValueChange={value => setTalk(value as MenuTalk)}>
       {tabs}
-      {talk === 'team' ? team : p.threads}
-    </div>
+      {team}
+      <Tabs.Panel className="ca-panel" value="threads" tabIndex={-1}>
+        {p.threads}
+      </Tabs.Panel>
+    </Tabs.Root>
   );
   const foot = (
     <>

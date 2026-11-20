@@ -54,21 +54,19 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
       }
       actions={
         <>
-          {phone ? (
-            // the range and the owner fill a phone's head: the period and the basis wait in ⋯
-            <Menu trigger={<IconButton icon="more" label="More" data-phone />}>
-              {PERIODS.map((o) => (
-                <MenuItem key={o.value} label={o.label} on={o.value === period} onSelect={() => void press('finance.setPeriod', { period: o.value })} />
-              ))}
-              <MenuRule />
-              {BASES.map((o) => (
-                <MenuItem key={o.value} label={o.label} on={o.value === basis} onSelect={() => void press('finance.setBasis', { basis: o.value })} />
-              ))}
-            </Menu>
-          ) : (
+          <Menu trigger={<IconButton className="pnl-head-menu" icon="more" label="More" data-phone />}>
+            {PERIODS.map((o) => (
+              <MenuItem key={o.value} label={o.label} on={o.value === period} onSelect={() => void press('finance.setPeriod', { period: o.value })} />
+            ))}
+            <MenuRule />
+            {BASES.map((o) => (
+              <MenuItem key={o.value} label={o.label} on={o.value === basis} onSelect={() => void press('finance.setBasis', { basis: o.value })} />
+            ))}
+          </Menu>
+          {!phone && (
             <>
-              <Segmented label="Period" options={PERIODS} value={period} onValueChange={(v) => void press('finance.setPeriod', { period: v })} />
-              <Segmented label="Basis" options={BASES} value={basis} onValueChange={(v) => void press('finance.setBasis', { basis: v })} />
+              <Segmented className="pnl-head-option" label="Period" options={PERIODS} value={period} onValueChange={(v) => void press('finance.setPeriod', { period: v })} />
+              <Segmented className="pnl-head-option" label="Basis" options={BASES} value={basis} onValueChange={(v) => void press('finance.setBasis', { basis: v })} />
             </>
           )}
           <FinanceOwner />

@@ -408,7 +408,7 @@ export function createFactory(name: string, goal: string) {
 /** A group with its lead (sent when the caller may read leads; not in the schema). */
 export type Team = Group & { lead?: string };
 export const groupsQuery = queryOptions({
-  queryKey: ['groups'],
+  queryKey: keys.groups(),
   queryFn: ({ signal }) => api.get<Team[]>('/api/v2/groups', { signal }),
 });
 

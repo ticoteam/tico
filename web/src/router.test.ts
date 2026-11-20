@@ -44,6 +44,7 @@ describe('the address the app starts at', () => {
     expect(startAddress('/next/', '', '')).toBe('/');
     expect(startAddress('/next/tasks/engineering', '?view=list', '#top')).toBe('/tasks/engineering?view=list#top');
     expect(startAddress('/next/', '', '#/task/k_1')).toBe('/task/k_1');
+    expect(startAddress('/next//acme.example', '', '')).toBe('/acme.example');
   });
 
   it('takes an old app address in a link to its page and leaves any other link alone', () => {
@@ -52,6 +53,14 @@ describe('the address the app starts at', () => {
     expect(appHref('#/no-such-page')).toBe('/');
     expect(appHref('/tasks/engineering?view=list')).toBe('/tasks/engineering?view=list');
     expect(appHref('/library/f1#part-2')).toBe('/library/f1#part-2');
+  });
+
+  it('opens a link from the previous app base without a page reload', () => {
+    expect(appHref('/next/tasks/engineering?view=list#top')).toBe('/tasks/engineering?view=list#top');
+    expect(appHref('/next?view=list')).toBe('/?view=list');
+    expect(appHref('/next/#/task/k_1')).toBe('/task/k_1');
+    expect(appHref('/next//acme.example')).toBe('/acme.example');
+    expect(appHref('/nextdoor')).toBe('/nextdoor');
   });
 
   it('replaces the address before the router reads it: no new history entry', async () => {

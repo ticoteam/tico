@@ -144,9 +144,9 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const kids: Linked[] = t.children.map((c) => ({ id: c.id, title: c.title, owner: c.owner_id, stage: c.step, done: c.status !== 'open' }));
   const open = kids.filter((k) => !k.done);
   const fin = kids.filter((k) => k.done);
-  const related = Object.values(t.relations ?? {})
-    .flat()
-    .map((x) => ({ id: x.id, title: x.title, number: x.number, owner: x.owner_id, stage: x.stage, done: x.status !== 'open' }));
+  // A task can be linked in several ways, such as a parent that also blocks this task.
+  const relations = new Map(Object.values(t.relations ?? {}).flat().map((link) => [link.id, link]));
+  const related = [...relations.values()].map((x) => ({ id: x.id, title: x.title, number: x.number, owner: x.owner_id, stage: x.stage, done: x.status !== 'open' }));
   const code = (t.inputs ?? []).filter((x) => x.kind === 'pr');
   const shown = (files.data ?? []).filter((f) => !f.archived);
   const web = (t.links ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');

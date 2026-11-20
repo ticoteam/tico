@@ -529,6 +529,25 @@ describe('Settings › History @s1080', () => {
     expect(screen.getByTitle('Ana Sample, New work')).toBeTruthy();
     expect(read.filter((u) => u.includes('before=')).length).toBe(1);
   });
+
+  it('keeps older matches reachable after a filtered page is empty and the next read fails', async () => {
+    let attempts = 0;
+    serve((url) => {
+      if (!url.includes('before=c1')) return undefined;
+      if (++attempts === 1) return { status: 422, body: { error: { code: 'timeout', detail: 'History stopped' } } };
+      return ok({ items: [{ id: 'h0', at: '2026-11-01T09:00:00Z', actor: 'human:p2', kind: 'task', subject: 'Older work' }], names: { 'human:p2': 'Ben Sample' } });
+    });
+    queryClient.setQueryData(historyQuery.queryKey, {
+      items: [{ id: 'h1', at: '2026-11-18T09:00:00Z', actor: 'bot:builder', kind: 'run', result: 'Done' }],
+      names: { 'bot:builder': 'Builder' },
+      next: 'c1',
+    });
+    show(<SettingsPage section="history" who="people" />, '/settings/history?who=people');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByTitle('Ben Sample, Older work')).toBeTruthy();
+    expect(attempts).toBe(2);
+  });
 });
 
 describe('Settings › General @s1072', () => {

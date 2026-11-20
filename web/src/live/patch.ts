@@ -540,7 +540,9 @@ export function installPatchers(): void {
   onTopic<BotEvent>('bots', patchDirectory);
   onTopic<ThreadEvent>('threads', applyThreadEvents);
   // An agent added, archived or brought back.
-  onRefetch<{ area?: string }>('setup', (e) => (e.area === 'org' ? [keys.directory()] : []));
+  onRefetch<{ area?: string }>('setup', (e) =>
+    e.area === 'org' ? [keys.directory(), keys.groups(), keys.team.groups(), keys.team.agents()] : [],
+  );
   onRefetch<{ meeting_id?: string }>('meeting_items', (e) => [e.meeting_id ? ['meetings', e.meeting_id] : ['meetings']]);
   onRefetch<{ place?: string }>('presence', (e) => [e.place ? ['presence', e.place] : ['presence']]);
   // A call changed (`call.*` with `call_id` on the threads topic, meet-calls-contract.md): it, its notes, and the live
