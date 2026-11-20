@@ -5,6 +5,7 @@ import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { Sheet, SheetHead, TICO_MARK } from '@/shell';
+import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { usePageName } from './pageName';
 import { useTicoPower } from './power';
@@ -20,9 +21,11 @@ export function TicoSheet({ foot }: { foot?: ReactNode }) {
   // what the person is looking at: the page's own name, not the window's title
   const path = useLocation({ select: (l) => l.pathname });
   const name = usePageName();
+  // On a phone the card draws Tico's one Dot itself, where the lip had it: the head has none of its own.
+  const phone = usePhoneCards();
   return (
     <Sheet kind="tico" label="Tico">
-      <SheetHead kind="tico" title="Tico" lead={<Dot size={TICO_MARK} />} />
+      <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />} />
       {power?.available === false ? (
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (

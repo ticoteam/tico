@@ -478,8 +478,9 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
           tico,
           peeking ? <span className="lip-say">{peek}</span> : (lips.tico ?? <span className="lip-t">Message Tico</span>),
           lipActs.tico,
+          // Tico's one Dot on a phone, lip and head alike: it follows Tico, as the desktop head's does.
           <span className="tico-dot" aria-hidden="true">
-            <Dot state="rest" size={TICO_MARK_LIP} />
+            <Dot size={TICO_MARK_LIP} />
           </span>,
         )}
         <button className="nub" type="button" aria-label="Open Tico" inert={!nubOn} aria-hidden={!nubOn || undefined} onClick={() => raise('tico-half')}>
