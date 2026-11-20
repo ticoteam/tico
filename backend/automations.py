@@ -41,6 +41,7 @@ import asyncio
 import contextlib
 import contextvars
 import hashlib
+import itertools
 import json
 import logging
 import threading
@@ -115,14 +116,14 @@ def flow_of(row):
     return json.loads(row["flow"])
 
 
-def view(c, row, who=None, detail=False, chart=None, jobs=None):
+def view(c, row, who=None, detail=False, chart=None, jobs=None, flow=None):
     """An automation as its readers get it: `can_edit` for `who`, and with `detail` each Decide step that names a set
     carries that set's questions (read-only: a write sends `set` or `questions`, never both). `kind` is the trigger as
     the overview groups it (`system` for Tico's own jobs); a system job's mirror takes its last and next run from the
-    job (`jobs`, AO.system_jobs, read once for a list)."""
+    job (`jobs`, AO.system_jobs, read once for a list). `flow` is the row's flow already decoded, which it keeps."""
     from . import automation_overview as AO
 
-    flow = flow_of(row)
+    flow = flow_of(row) if flow is None else flow
     if detail:
         flow["steps"] = _with_questions(flow["steps"])
     last = c.execute(
@@ -3862,12 +3863,20 @@ def install(app, store, auth, mutate):
             chart = Chart(c) if who.role in ("human", "bot") else None  # one chart for every row's rule
             jobs = AO.system_jobs(c, store.settings)
             hidden = AO.hidden_jobs(c, store.settings)  # a system job that cannot run here is not listed
-            visible = [
-                {**view(c, dict(r), who, chart=chart, jobs=jobs), "pending": pending.get(r["id"], 0)}
-                for r in rows
-                if AO.shown(flow_of(r), hidden) and may_change(c, who, {**flow_of(r), "readonly": False}, chart)
-            ]
-        shown, more = page(visible[max(cursor, 0) :], max(1, min(limit, 500)), max(cursor, 0), LIST_BYTES)
+            start = max(cursor, 0)
+            # Each row's flow decoded once, for the visibility rule; only the rows the page takes are built (`view`
+            # reads each one's last run, hold and more), and one past them, which tells the pager there is more.
+            flows = ((r, flow_of(r)) for r in rows)
+            visible = (
+                (r, flow)
+                for r, flow in flows
+                if AO.shown(flow, hidden) and may_change(c, who, {**flow, "readonly": False}, chart)
+            )
+            built = (
+                {**view(c, dict(r), who, chart=chart, jobs=jobs, flow=flow), "pending": pending.get(r["id"], 0)}
+                for r, flow in itertools.islice(visible, start, None)
+            )
+            shown, more = page(built, max(1, min(limit, 500)), start, LIST_BYTES)
         return {"automations": shown, "next": more}
 
     @app.get(

@@ -414,7 +414,18 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             "canceled_at": row.get("canceled_at"),
         }
 
-    def note_visible(c, who, row):
+    def note_bots(row):
+        return [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
+
+    def note_levels(c, who, rows):
+        """The caller's access to every bot `note_visible` asks about for `rows`, in one pass (Auth.bot_accesses decides
+        each bot on its own, so it answers a page as it answers one note)."""
+        if who.role == "bot":
+            return {}
+        asked = [bot for row in rows if who.actor != row["from_actor"] for bot in note_bots(row)]
+        return auth.bot_accesses(c, who, asked) if asked else {}
+
+    def note_visible(c, who, row, levels=None):
         # A note copied from a message is read only while its recipient still reads that message (the same check a
         # run's claim makes, threads.revalidate_notes), whoever asks, and only by who may read that message themselves.
         from . import threads
@@ -428,8 +439,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         elif who.actor == row["from_actor"]:
             allowed = True
         else:
-            bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
-            allowed = all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
+            bots = note_bots(row)
+            found = levels if levels is not None else auth.bot_accesses(c, who, bots)
+            allowed = all(found[bot]["read"] for bot in bots)
         return allowed and threads.note_source_shown(c, auth, who, row)
 
     def note_write(c, who, body, rc=None):
@@ -475,7 +487,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         auth.domain(who)
         if limit < 1 or limit > 500:
             raise Problem("limit", "limit is between 1 and 500", 422)
-        with store.read() as c:
+        # One snapshot: the page's source messages are read together once, for both checks each copied note makes.
+        with store.read_transaction() as c:
             where, args = [], []
             if to:
                 where.append("n.to_actor=?")
@@ -503,7 +516,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 + " ORDER BY n.created_at DESC, n.id DESC LIMIT ?"
             )
             rows = [dict(r) for r in c.execute(sql, (*args, limit))]
-            return {"notes": [note_view(r, c) for r in rows if note_visible(c, who, r)]}
+            H.prime_messages(c, [r["message_id"] for r in rows])
+            levels = note_levels(c, who, rows)
+            return {"notes": [note_view(r, c) for r in rows if note_visible(c, who, r, levels)]}
 
     @app.post("/api/v2/notes/{nid}/cancel")
     def cancel_note(request: Request, nid: str, body: M.Empty):

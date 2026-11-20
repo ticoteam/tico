@@ -2185,9 +2185,9 @@ def _bots_only_room(root):
 def _note_source(c, note):
     """(the source message's stored row, its thread, its root) of a note copied from a message, else Nones."""
     mid = (note or {}).get("message_id")
-    row = c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone() if mid else None
+    row = read_cache.one_dict(c, H.MESSAGE_SQL, (mid,)) if mid else None  # a list's page primed (H.prime_messages)
     thread = thread_row(c, row["conversation_id"]) if row else None
-    return (dict(row), thread, root_of(c, thread)) if thread is not None else (None, None, None)
+    return (row, thread, root_of(c, thread)) if thread is not None else (None, None, None)
 
 
 def _source_private(c, source, thread, root):

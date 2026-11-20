@@ -7164,6 +7164,10 @@ def tasks(
         else:
             where.append(f"status IN ({','.join('?' * len(wanted))})")
             args += wanted
+            if order == "finished" and set(wanted) <= {"done", "closed"}:
+                # The same rows, in the words of tasks_finished_time's WHERE: SQLite uses a partial index only for a
+                # query that names its condition, and a bound status never does.
+                where.append("status IN ('done','closed')")
     if order == "queue":
         ordering = "(rank IS NULL), rank, created_at, id"
     elif order == "finished":

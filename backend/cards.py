@@ -371,8 +371,9 @@ def tasks_by_status(ctx, s):
     counts["open"] = ctx.c.execute(
         f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='open'", args
     ).fetchone()[0]
+    # A range of tasks_done_at; a task with no done_at is never at or after a date, so it counts nowhere.
     counts["done"] = ctx.c.execute(
-        f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='done' AND coalesce(done_at,'')>=?",
+        f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='done' AND done_at>=?",
         (*args, monday()),
     ).fetchone()[0]
     return {"counts": counts}
@@ -385,7 +386,7 @@ def done_per_week(ctx, s):
     out = {start: 0 for start in starts}
     for day, n in ctx.c.execute(
         f"SELECT substr(done_at,1,10), count(*) FROM tasks WHERE ({ctx.visible()}) AND {where} AND status='done' "
-        "AND coalesce(done_at,'')>=? GROUP BY substr(done_at,1,10)",
+        "AND done_at>=? GROUP BY substr(done_at,1,10)",
         (*args, starts[0]),
     ):
         week = monday(datetime.strptime(day, "%Y-%m-%d"))
