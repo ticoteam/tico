@@ -7,6 +7,9 @@ import { waitSlugs, waitsOnYou } from './waits';
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
 export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress } from './model';
+// The one-task moves Tasks' `tasks.move` makes: the task moves wherever it shows, and a refusal says what is missing.
+export { moveTask, moveTaskTo } from './queries';
+export { said } from './model';
 
 /** Load the task while the route loads its code. A refused read leaves the page to show the error. */
 export async function loadTask(client: QueryClient, param: string, tab?: string): Promise<{ task: TaskData; tab: string } | null> {

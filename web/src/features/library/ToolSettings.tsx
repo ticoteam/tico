@@ -535,18 +535,17 @@ export function useLetterReaders() {
   const grants = useQuery({ ...letterGrantsQuery, enabled: admin });
   const actors = useActors();
   if (!admin || !grants.data) return { who: undefined, add: null };
-  const short = (actor: string) => actor.slice(actor.indexOf(':') + 1);
   const subject = (type: string, who: string) => `${type === 'bot' ? 'bot' : 'human'}:${who}`;
   const granted = new Set(grants.data.map((g) => subject(g.grantee_type, g.grantee_id)));
   const who = grants.data.map((g) => {
     const actor = subject(g.grantee_type, g.grantee_id);
     const name = actors.find((a) => a.id === actor)?.name ?? g.grantee_id;
-    return <WhoRow key={g.id} actor={actor} name={name} onRemove={() => void press('tools.setLetterAccess', { type: g.grantee_type, who: g.grantee_id, read: false }, 'Not removed')} />;
+    return <WhoRow key={g.id} actor={actor} name={name} onRemove={() => void press('tools.setAccess', { kind: 'letters', who: actor, level: 'none' }, 'Not removed')} />;
   });
   const add = (
     <AddSomeone
       choices={actors.filter((a) => !granted.has(a.id))}
-      onPick={(id) => void press('tools.setLetterAccess', { type: id.startsWith('bot:') ? 'bot' : 'person', who: short(id), read: true }, 'Not added')}
+      onPick={(id) => void press('tools.setAccess', { kind: 'letters', who: id, level: 'read' }, 'Not added')}
     />
   );
   return { who, add };

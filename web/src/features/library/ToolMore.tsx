@@ -365,7 +365,7 @@ export function MailboxView({ id, row }: { id: string; row: ToolIndexRow }) {
           actor={a.grantee_type === 'admins' ? null : `${a.grantee_type === 'person' ? 'human' : 'bot'}:${a.grantee_id}`}
           name={a.name}
           level={a.level}
-          onLevel={d.can_manage && !a.implicit && a.id ? (level) => void press('tools.setMailboxAccess', { mailbox: id, access: a.id, level }, 'Not changed') : undefined}
+          onLevel={d.can_manage && !a.implicit && a.id ? (level) => void press('tools.setAccess', { kind: 'mailbox', id, who: a.id, level }, 'Not changed') : undefined}
         />
       ))}
       whoCount={d?.accesses.length || undefined}
@@ -447,7 +447,7 @@ export function InboxView({ inbox, row, number }: { inbox: string; row: ToolInde
   const editable = !number || admin;
   const team = box?.audience === 'team' ? teams.find((t) => t.id === box.group_id) : undefined;
   const readers = box?.audience === 'team' ? (team?.name ?? 'One team') : 'Everyone';
-  const pick = (audience: 'company' | 'team', group?: string) => press('tools.setInboxReaders', { inbox, audience, group }, 'Not saved');
+  const pick = (who: string) => press('tools.setAccess', { kind: 'inbox', id: inbox, who, level: 'read' }, 'Not saved');
   return (
     <ToolPage
       name={box?.name ?? row?.name ?? (number ? 'Phone number' : 'Tico address')}
@@ -489,7 +489,7 @@ export function InboxView({ inbox, row, number }: { inbox: string; row: ToolInde
                   <MenuItem label="Everyone" on={box.audience !== 'team'} onSelect={() => pick('company')} />
                   {teams.length > 0 && <MenuRule />}
                   {teams.map((t) => (
-                    <MenuItem key={t.id} label={t.name} on={!!team && t.id === team.id} onSelect={() => pick('team', t.id)} />
+                    <MenuItem key={t.id} label={t.name} on={!!team && t.id === team.id} onSelect={() => pick(`group:${t.id}`)} />
                   ))}
                 </Menu>
               ) : (

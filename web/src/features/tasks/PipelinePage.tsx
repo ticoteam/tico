@@ -1,4 +1,5 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
 import { useActors } from '@/data';
@@ -64,11 +65,11 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
   const pipes = useSuspenseQuery(pipelinesQuery).data;
   const p = fresh ? undefined : pipes.find((x) => x.id === pipeline);
   const rec = useQuery({ ...pipelineSettingsQuery(p?.id ?? ''), enabled: !!p });
-  const edit = useAction('tasks.editPipeline');
-  const onClose = () => void edit.run({ pipeline, open: false });
+  const navigate = useNavigate();
+  const onClose = () => void navigate({ to: '/tasks/$pipeline', params: { pipeline } });
   const factories = useQuery(factoryChoicesQuery).data;
   const actors = useActors();
-  const save = useAction('tasks.savePipeline');
+  const save = useAction('tasks.editPipeline');
   const create = useAction('tasks.createPipeline');
   const [draft, setDraft] = useState<Draft | null>(null);
   /** The record the edits started from: its settings_version is what the save says it read. */

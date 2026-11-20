@@ -44,8 +44,8 @@ function show(node: ReactNode, at: string) {
 }
 
 /* Made-up rows only. */
-let shown: Partial<TaskData> & { followers?: unknown } = {};
-const task = (more: Partial<TaskData> & { followers?: unknown } = {}): TaskData =>
+let shown: Partial<TaskData> = {};
+const task = (more: Partial<TaskData> = {}): TaskData =>
   ({
     id: 't1',
     number: 12,
@@ -119,15 +119,6 @@ const facts = async () => fireEvent.click(await screen.findByRole('button', { na
 const more = async () => fireEvent.click((await screen.findAllByRole('button', { name: 'More' }))[0] as HTMLElement);
 
 describe('Details: the facts', () => {
-  it('sets the Human in place @s58', async () => {
-    serve(() => undefined);
-    details();
-    await facts();
-    fireEvent.click(await screen.findByRole('button', { name: 'Human' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Bo Lee' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1', body: { human: 'human:bo' } }));
-  });
-
   it('validates and saves the size in place @s58', async () => {
     serve(() => undefined);
     details();
@@ -142,19 +133,11 @@ describe('Details: the facts', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1', body: { size: 3 } }));
   });
 
-  it('follows the task, and puts someone in a role @s58', async () => {
-    shown = { followers: [] };
-    serve((url, method) => {
-      if (method === 'PUT' && url.endsWith('/followers')) return { status: 200, body: { task_id: 't1', following: true, notify: 'live', followers: [{ actor: 'human:me', notify: 'live' }] } };
-      return undefined;
-    });
+  it('puts someone in a role @s58', async () => {
+    serve(() => undefined);
     details();
     await facts();
-    fireEvent.click(await screen.findByRole('button', { name: 'Follow' }));
-    await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'PUT', url: '/api/v2/tasks/t1/followers', body: { following: true } }));
-    expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add someone' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add someone' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add someone' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Role' }), { target: { value: 'QA Lead' } });
     expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true);

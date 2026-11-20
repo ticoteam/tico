@@ -1,5 +1,6 @@
-import { defineAction, s } from '@/actions';
-import type { Ctx, Schema } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction } from '@/actions';
+import type { Ctx } from '@/actions';
 import { run } from '@/actions/run';
 import { meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
@@ -86,7 +87,6 @@ import {
 } from './queries';
 import {
   askQuery,
-  healthQuery,
   markChangelogRead,
   resetAsk,
   roadmapQuery,
@@ -99,7 +99,7 @@ import { SECTION_IDS } from './sections';
 /* Every change on Settings and Usage. Appearance is this device's own (prefs); the rest goes to the server. Anything
    that sets or shows a secret, deletes the company or changes billing is the person's own press (tico: false). */
 
-const id = (what: string) => s.string({ min: 1, max: 200, what });
+const id = (what: string) => z.string().check(z.minLength(1), z.maxLength(200), z.describe(what));
 const setting = (key: string) => ({ kind: 'setting', id: key });
 const bare = (actor: string) => actor.replace(/^human:/, '');
 
@@ -107,7 +107,7 @@ export const openSection = defineAction({
   id: 'settings.open',
   title: 'Open a settings section',
   kind: 'view',
-  input: s.object({ section: s.oneOf(SECTION_IDS) }),
+  input: z.strictObject({ section: z.enum(SECTION_IDS) }),
   run: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section } }),
   show: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section } }),
   did: ({ section }) => `Opened ${section}`,
@@ -120,7 +120,7 @@ export const setTheme = defineAction({
   id: 'settings.setTheme',
   title: 'Change the theme',
   kind: 'change',
-  input: s.object({ theme: s.oneOf(['system', 'light', 'dark'] as const) }),
+  input: z.strictObject({ theme: z.enum(['system', 'light', 'dark'] as const) }),
   run: (_ctx, { theme }: { theme: Theme }) => setThemeChoice(theme),
   did: ({ theme }) => `Theme set to ${theme}`,
   target: () => setting('theme'),
@@ -130,7 +130,7 @@ export const setMotion = defineAction({
   id: 'settings.setMotion',
   title: 'Change the motion level',
   kind: 'change',
-  input: s.object({ motion: s.oneOf(['system', 'more', 'less', 'off'] as const) }),
+  input: z.strictObject({ motion: z.enum(['system', 'more', 'less', 'off'] as const) }),
   run: (_ctx, { motion }) => setMotionChoice(motion),
   did: ({ motion }) => `Motion set to ${motion}`,
   target: () => setting('motion'),
@@ -148,7 +148,7 @@ export const setNotice = defineAction({
   id: 'settings.notify',
   title: 'Change a notification',
   kind: 'change',
-  input: s.object({ field: s.oneOf(['notify_browser', 'email_digest'] as const), on: s.boolean() }),
+  input: z.strictObject({ field: z.enum(['notify_browser', 'email_digest'] as const), on: z.boolean() }),
   run: (ctx, { field, on }) => setMyNotice(myId(ctx), field, on),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: ({ field }) => setting(field),
@@ -158,7 +158,7 @@ export const signOut = defineAction({
   id: 'settings.signOut',
   title: 'Sign out',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   tico: false,
   // the desktop app hears first, so it drops the person's count and small call window before the page leaves
   run: async () => {
@@ -172,7 +172,7 @@ export const makeToken = defineAction({
   title: 'Make an API token',
   kind: 'change',
   // `days` until it stops working (the server's 1 to 365); left out, 90.
-  input: s.object({ label: s.string({ min: 1, max: 80 }), days: s.optional(s.number({ int: true, min: 1, max: 365 })) }),
+  input: z.strictObject({ label: z.string().check(z.minLength(1), z.maxLength(80)), days: z.optional(z.int().check(z.minimum(1), z.maximum(365))) }),
   tico: false,
   run: async (ctx, { label, days }) => {
     const made = await createToken(label, days);
@@ -188,7 +188,7 @@ export const dropToken = defineAction({
   id: 'settings.revokeToken',
   title: 'Revoke an API token',
   kind: 'change',
-  input: s.object({ token: id('a token id') }),
+  input: z.strictObject({ token: id('a token id') }),
   // Its scripts stop for good: the person's own press.
   tico: false,
   run: (_ctx, { token }) => revokeToken(token),
@@ -202,7 +202,7 @@ export const invite = defineAction({
   id: 'settings.invite',
   title: 'Add a person',
   kind: 'change',
-  input: s.object({ email: s.string({ min: 3, max: 320, pattern: /^[^\s@]+@[^\s@]+$/, what: 'an email address' }), name: s.optional(s.string({ max: 120 })) }),
+  input: z.strictObject({ email: z.string().check(z.minLength(3), z.maxLength(320), z.regex(/^[^\s@]+@[^\s@]+$/), z.describe('an email address')), name: z.optional(z.string().check(z.maxLength(120))) }),
   // Inviting a member is Tico's too, as on Team (people.invite): setup is an agent's work.
   run: (_ctx, { email, name }) => addPerson(email, name ?? ''),
   did: ({ email }) => `Invited ${email}`,
@@ -213,7 +213,7 @@ export const resendInvite = defineAction({
   id: 'settings.resendInvite',
   title: 'Send an invite again',
   kind: 'change',
-  input: s.object({ person: id('a person id') }),
+  input: z.strictObject({ person: id('a person id') }),
   run: (_ctx, { person }) => sendInvite(person),
   did: () => 'Invite sent',
   target: ({ person }) => ({ kind: 'person', id: person }),
@@ -223,7 +223,7 @@ export const changeRole = defineAction({
   id: 'settings.setRole',
   title: "Change a person's role",
   kind: 'change',
-  input: s.object({ person: id('a person id'), role: s.oneOf(['admin', 'member'] as const) }),
+  input: z.strictObject({ person: id('a person id'), role: z.enum(['admin', 'member'] as const) }),
   // Making someone an admin widens their rights: the person's own press. Back to member stays Tico's.
   can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: (_ctx, { person, role }) => setRole(person, role),
@@ -235,7 +235,7 @@ export const rename = defineAction({
   id: 'settings.rename',
   title: 'Rename a person',
   kind: 'change',
-  input: s.object({ person: id('a person id'), name: s.string({ min: 1, max: 120 }) }),
+  input: z.strictObject({ person: id('a person id'), name: z.string().check(z.minLength(1), z.maxLength(120)) }),
   run: (_ctx, { person, name }) => renamePerson(person, name),
   did: ({ name }) => `Renamed to ${name}`,
   target: ({ person }) => ({ kind: 'person', id: person }),
@@ -245,7 +245,7 @@ export const remove = defineAction({
   id: 'settings.removePerson',
   title: 'Remove a person',
   kind: 'change',
-  input: s.object({ person: id('a person id') }),
+  input: z.strictObject({ person: id('a person id') }),
   // Takes away someone's sign-in: the person's own press.
   tico: false,
   run: (_ctx, { person }) => removePerson(person),
@@ -257,7 +257,7 @@ export const makeOwner = defineAction({
   id: 'settings.makeOwner',
   title: 'Make someone the owner',
   kind: 'change',
-  input: s.object({ person: id('a person id'), keepAdmin: s.boolean() }),
+  input: z.strictObject({ person: id('a person id'), keepAdmin: z.boolean() }),
   // Hands the whole company to someone else, and the owner's controls go with it.
   tico: false,
   run: (_ctx, { person, keepAdmin }) => transferOwner(person, keepAdmin),
@@ -265,13 +265,13 @@ export const makeOwner = defineAction({
   target: ({ person }) => ({ kind: 'person', id: person }),
 });
 
-const email = s.string({ min: 3, max: 320, pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, what: 'an email address' });
+const email = z.string().check(z.minLength(3), z.maxLength(320), z.regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/), z.describe('an email address'));
 
 export const changeEmail = defineAction({
   id: 'settings.changeEmail',
   title: "Change the owner's sign-in email",
   kind: 'change',
-  input: s.object({ email, again: email }),
+  input: z.strictObject({ email, again: email }),
   // The old address stops signing in at once: a security change only the owner makes.
   tico: false,
   run: (_ctx, { email: to, again }) => changeOwnerEmail(to, again),
@@ -281,30 +281,28 @@ export const changeEmail = defineAction({
 
 // ---------------------------------------------------------------- directory sync (owner)
 
-const lines = s.array(s.string({ min: 1, max: 200 }), { max: 50 });
+const lines = z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(50));
 
 export const saveSync = defineAction({
   id: 'settings.saveDirectory',
   title: 'Change where people sync from',
   kind: 'change',
-  input: s.object({
-    source: s.oneOf(['', 'google', 'entra', 'scim'] as const),
+  input: z.strictObject({
+    source: z.enum(['', 'google', 'entra', 'scim'] as const),
     // Minutes between syncs; 0 syncs only when a person presses Sync now.
-    interval: s.number({ int: true, min: 0, max: 10080 }),
-    massLeave: s.number({ int: true, min: 0, max: 10000 }),
+    interval: z.int().check(z.minimum(0), z.maximum(10080)),
+    massLeave: z.int().check(z.minimum(0), z.maximum(10000)),
     groups: lines,
     orgUnits: lines,
     domains: lines,
-    credentials: s.optional(
-      s.object({
-        service_account_json: s.optional(s.string({ max: 20000 })),
-        admin_email: s.optional(s.string({ max: 320 })),
-        tenant: s.optional(s.string({ max: 200 })),
-        client_id: s.optional(s.string({ max: 100 })),
-        client_secret: s.optional(s.string({ max: 400 })),
-      }),
-    ),
-    replaceLostKey: s.optional(s.boolean()),
+    credentials: z.optional(z.strictObject({
+        service_account_json: z.optional(z.string().check(z.maxLength(20000))),
+        admin_email: z.optional(z.string().check(z.maxLength(320))),
+        tenant: z.optional(z.string().check(z.maxLength(200))),
+        client_id: z.optional(z.string().check(z.maxLength(100))),
+        client_secret: z.optional(z.string().check(z.maxLength(400))),
+      })),
+    replaceLostKey: z.optional(z.boolean()),
   }),
   // Who may sign in, and the directory's own keys: a security change only the owner makes.
   tico: false,
@@ -325,7 +323,7 @@ export const scimToken = defineAction({
   id: 'settings.scimToken',
   title: 'Make a SCIM token',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   // Shown once, to the press that made it; the one before stops at once.
   tico: false,
   run: async () => ({ token: await newScimToken() }),
@@ -337,7 +335,7 @@ export const previewSync = defineAction({
   id: 'settings.previewDirectory',
   title: 'See what a directory sync would change',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => previewDirectory(),
   did: () => 'Previewed',
   target: () => setting('directory-sync'),
@@ -347,9 +345,9 @@ export const applySync = defineAction({
   id: 'settings.syncDirectory',
   title: 'Sync people from the directory',
   kind: 'change',
-  input: s.object({
-    plan: s.string({ min: 1, max: 64, what: 'the hash of the previewed plan' }),
-    confirm: s.boolean(),
+  input: z.strictObject({
+    plan: z.string().check(z.minLength(1), z.maxLength(64), z.describe('the hash of the previewed plan')),
+    confirm: z.boolean(),
   }),
   // People join, change and leave: who may sign in changes at once.
   tico: false,
@@ -364,7 +362,7 @@ export const pageOwner = defineAction({
   id: 'settings.setPageOwner',
   title: "Change a page's owner",
   kind: 'change',
-  input: s.object({ page: id('a page key'), owner: id("'default', 'none' or an agent id") }),
+  input: z.strictObject({ page: id('a page key'), owner: id("'default', 'none' or an agent id") }),
   run: (_ctx, { page, owner }) => setPageOwner(page, owner),
   did: () => 'Owner changed',
   target: ({ page }) => ({ kind: 'page-owner', id: page }),
@@ -374,7 +372,7 @@ export const reportsDirect = defineAction({
   id: 'settings.reportsDirect',
   title: 'Agents report to Tico support',
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   // Sending reports outside the company is the person's own press; turning it off stays Tico's.
   can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setRule('bot_reports_direct', on),
@@ -384,23 +382,11 @@ export const reportsDirect = defineAction({
 
 // ---------------------------------------------------------------- security
 
-export const screenMode = defineAction({
-  id: 'settings.setScreening',
-  title: 'Change how a door is screened',
-  kind: 'change',
-  input: s.object({ door: s.oneOf(['webhook', 'mail', 'idea', 'watcher', 'document', 'slack'] as const), mode: s.oneOf(['off', 'warn', 'hold'] as const) }),
-  // Holding is the strict side and stays Tico's; anything looser is the person's own press.
-  can: (ctx, { mode }) => !(mode !== 'hold' && ctx.via === 'tico'),
-  run: (_ctx, { door, mode }) => setScreening({ [door]: mode }),
-  did: ({ mode }) => `Screening set to ${mode}`,
-  target: ({ door }) => setting(`screen-${door}`),
-});
-
 export const detector = defineAction({
   id: 'settings.setDetector',
   title: 'Turn a screening detector on or off',
   kind: 'change',
-  input: s.object({ detector: s.oneOf(['patterns', 'model'] as const), on: s.boolean() }),
+  input: z.strictObject({ detector: z.enum(['patterns', 'model'] as const), on: z.boolean() }),
   // Turning a detector on is Tico's; turning one off loosens security.
   can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
   run: (_ctx, { detector, on }) => setScreening({ [detector]: on }),
@@ -412,7 +398,7 @@ export const support = defineAction({
   id: 'settings.setSupport',
   title: 'Let Tico support reach the computers',
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   // Letting Tico support in widens who can reach the computers; shutting it out is Tico's.
   can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setSupport(on),
@@ -428,7 +414,7 @@ export const connect = defineAction({
   id: 'settings.connect',
   title: 'Connect Claude or Codex',
   kind: 'change',
-  input: s.object({ kind: s.oneOf(['claude_login', 'codex_login'] as const) }),
+  input: z.strictObject({ kind: z.enum(['claude_login', 'codex_login'] as const) }),
   // The sign-in opens the provider's page in the person's own browser, signed in as them.
   tico: false,
   run: async (_ctx, { kind }) => {
@@ -442,7 +428,7 @@ export const signInCode = defineAction({
   id: 'settings.signInCode',
   title: 'Send the code from the sign-in page',
   kind: 'change',
-  input: s.object({ computer: id('a computer id'), login: id('a sign-in id'), code: s.string({ min: 1, max: 2000, what: 'the code' }) }),
+  input: z.strictObject({ computer: id('a computer id'), login: id('a sign-in id'), code: z.string().check(z.minLength(1), z.maxLength(2000), z.describe('the code')) }),
   tico: false,
   run: (_ctx, { computer, login, code }) => sendSignInCode(computer, login, code),
   did: () => 'Code sent',
@@ -453,7 +439,7 @@ export const stopSignIn = defineAction({
   id: 'settings.cancelSignIn',
   title: 'Stop a sign-in',
   kind: 'change',
-  input: s.object({ computer: id('a computer id'), login: id('a sign-in id') }),
+  input: z.strictObject({ computer: id('a computer id'), login: id('a sign-in id') }),
   run: (_ctx, { computer, login }) => cancelSignIn(computer, login),
   did: () => 'Stopped',
   target: () => setting('subscriptions'),
@@ -463,7 +449,7 @@ export const addKey = defineAction({
   id: 'settings.addKey',
   title: 'Add a model key',
   kind: 'change',
-  input: s.object({ kind: id('a subscription kind'), secret: s.string({ min: 8, max: 20000, what: 'the key' }), name: s.optional(s.string({ max: 80 })) }),
+  input: z.strictObject({ kind: id('a subscription kind'), secret: z.string().check(z.minLength(8), z.maxLength(20000), z.describe('the key')), name: z.optional(z.string().check(z.maxLength(80))) }),
   tico: false,
   run: async (ctx, { kind, secret, name }) => {
     const added = await addSubscription(kind, secret, name);
@@ -478,7 +464,7 @@ export const removeSub = defineAction({
   id: 'settings.removeSubscription',
   title: 'Remove a subscription',
   kind: 'change',
-  input: s.object({ subscription: id('a subscription id') }),
+  input: z.strictObject({ subscription: id('a subscription id') }),
   // Its runs stop and the key is gone: the person's own press (the page asks first).
   tico: false,
   run: (_ctx, { subscription }) => removeSubscription(subscription),
@@ -490,7 +476,7 @@ export const refreshSub = defineAction({
   id: 'settings.refreshUsage',
   title: "Check a subscription's use again",
   kind: 'change',
-  input: s.object({ subscription: id('a subscription id') }),
+  input: z.strictObject({ subscription: id('a subscription id') }),
   run: (_ctx, { subscription }) => refreshSubscription(subscription),
   did: () => 'Checked',
   target: ({ subscription }) => sub(subscription),
@@ -502,7 +488,7 @@ export const nameComputer = defineAction({
   id: 'settings.nameComputer',
   title: 'Rename a computer',
   kind: 'change',
-  input: s.object({ computer: id('a computer id'), name: s.string({ min: 1, max: 80 }) }),
+  input: z.strictObject({ computer: id('a computer id'), name: z.string().check(z.minLength(1), z.maxLength(80)) }),
   run: (_ctx, { computer, name }) => labelComputer(computer, name),
   did: ({ name }) => `Renamed to ${name}`,
   target: ({ computer }) => comp(computer),
@@ -512,7 +498,7 @@ export const dropComputer = defineAction({
   id: 'settings.removeComputer',
   title: 'Remove a computer',
   kind: 'change',
-  input: s.object({ computer: id('a computer id') }),
+  input: z.strictObject({ computer: id('a computer id') }),
   // Its sign-in ends for good and its agents stop: the person's own press.
   tico: false,
   run: (_ctx, { computer }) => removeComputer(computer),
@@ -524,7 +510,7 @@ export const fallback = defineAction({
   id: 'settings.gatewayFallback',
   title: 'Fall back to Tico Gateway',
   kind: 'change',
-  input: s.object({ computer: id('a computer id'), on: s.boolean() }),
+  input: z.strictObject({ computer: id('a computer id'), on: z.boolean() }),
   // Gateway runs are paid from the company's credit: a billing change.
   tico: false,
   run: (_ctx, { computer, on }) => setGatewayFallback(computer, on),
@@ -536,7 +522,7 @@ export const addComputer = defineAction({
   id: 'settings.addComputer',
   title: 'Add a computer',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   // The one-time code lets a machine join the company: a secret, shown once.
   tico: false,
   run: async (ctx) => {
@@ -551,10 +537,10 @@ export const editSub = defineAction({
   id: 'settings.editSubscription',
   title: 'Rename a subscription or change who holds it',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     subscription: id('a subscription id'),
-    name: s.string({ min: 1, max: 80 }),
-    owner: s.optional(s.string({ max: 200, what: 'a person id, for a plan' })),
+    name: z.string().check(z.minLength(1), z.maxLength(80)),
+    owner: z.optional(z.string().check(z.maxLength(200), z.describe('a person id, for a plan'))),
   }),
   // Who holds a plan's sign-in is the person's own press; a new name stays Tico's.
   can: (ctx, { owner }) => !(owner && ctx.via === 'tico'),
@@ -567,7 +553,7 @@ export const setSleepHours = defineAction({
   id: 'settings.setSleep',
   title: 'Sleep the server when idle',
   kind: 'change',
-  input: s.object({ hours: s.number({ int: true, min: 0, max: 24 }) }),
+  input: z.strictObject({ hours: z.int().check(z.minimum(0), z.maximum(24)) }),
   run: (_ctx, { hours }) => setSleep({ hours }),
   did: ({ hours }) => (hours ? `Sleeps after ${hours} h` : 'Sleep off'),
   target: () => setting('sleep'),
@@ -577,7 +563,7 @@ export const sleepComputers = defineAction({
   id: 'settings.sleepComputers',
   title: "Let agents' computers sleep too",
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   run: (_ctx, { on }) => setSleep({ runners: on }),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: () => setting('sleep'),
@@ -587,7 +573,7 @@ export const startHosted = defineAction({
   id: 'settings.startServer',
   title: 'Start a hosted server',
   kind: 'change',
-  input: s.object({ server: id('a hosted server id') }),
+  input: z.strictObject({ server: id('a hosted server id') }),
   // A hosted server runs on the company's credit: money, the person's own press.
   tico: false,
   run: async (ctx, { server }) => {
@@ -605,7 +591,7 @@ export const setDefaultModel = defineAction({
   id: 'settings.defaultModel',
   title: 'Change the model a new agent uses',
   kind: 'change',
-  input: s.object({ model: s.string({ min: 1, max: 100, what: 'a model id from GET /api/v2/models' }) }),
+  input: z.strictObject({ model: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a model id from GET /api/v2/models')) }),
   run: (_ctx, { model }) => setDefaults({ model }),
   did: () => 'Default changed',
   target: () => setting('default-model'),
@@ -615,7 +601,7 @@ export const setMeetingModel = defineAction({
   id: 'settings.meetingModel',
   title: 'Change the model meetings reply on',
   kind: 'change',
-  input: s.object({ model: s.string({ max: 100, what: "a model id; empty for each agent's own" }) }),
+  input: z.strictObject({ model: z.string().check(z.maxLength(100), z.describe("a model id; empty for each agent's own")) }),
   run: (_ctx, { model }) => setDefaults({ meeting: model }),
   did: () => 'Meeting model changed',
   target: () => setting('meeting-model'),
@@ -625,11 +611,11 @@ export const changeModels = defineAction({
   id: 'settings.changeModels',
   title: 'Change the model for several agents',
   kind: 'change',
-  input: s.object({
-    agents: s.array(s.string({ min: 1, max: 120, what: 'an agent slug' }), { max: 200 }),
-    model: s.string({ min: 1, max: 120, what: 'a model id from GET /api/v2/models' }),
-    effort: s.optional(s.string({ max: 20 })),
-    harness: s.optional(s.string({ max: 40 })),
+  input: z.strictObject({
+    agents: z.array(z.string().check(z.minLength(1), z.maxLength(120), z.describe('an agent slug'))).check(z.maxLength(200)),
+    model: z.string().check(z.minLength(1), z.maxLength(120), z.describe('a model id from GET /api/v2/models')),
+    effort: z.optional(z.string().check(z.maxLength(20))),
+    harness: z.optional(z.string().check(z.maxLength(40))),
   }),
   run: async (ctx, { agents, model, effort, harness }) => {
     if (!agents.length) throw new Error('Pick at least one agent');
@@ -659,9 +645,9 @@ export const moveAgents = defineAction({
   id: 'settings.moveAgents',
   title: 'Move several agents to another computer',
   kind: 'change',
-  input: s.object({
-    agents: s.array(s.string({ min: 1, max: 120, what: 'an agent slug' }), { max: 200 }),
-    computer: s.string({ min: 1, max: 100, what: "a computer's id" }),
+  input: z.strictObject({
+    agents: z.array(z.string().check(z.minLength(1), z.maxLength(120), z.describe('an agent slug'))).check(z.maxLength(200)),
+    computer: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id")),
   }),
   run: async (_ctx, { agents, computer }) => {
     if (!agents.length) throw new Error('Pick at least one agent');
@@ -678,10 +664,10 @@ export const taskModel = defineAction({
   id: 'settings.taskModel',
   title: "Change the model an agent's tasks run on",
   kind: 'change',
-  input: s.object({
-    agent: s.string({ min: 1, max: 120, what: 'an agent slug' }),
-    model: s.string({ max: 120, what: "a model id from GET /api/v2/models; empty for the agent's own" }),
-    effort: s.optional(s.string({ max: 20 })),
+  input: z.strictObject({
+    agent: z.string().check(z.minLength(1), z.maxLength(120), z.describe('an agent slug')),
+    model: z.string().check(z.maxLength(120), z.describe("a model id from GET /api/v2/models; empty for the agent's own")),
+    effort: z.optional(z.string().check(z.maxLength(20))),
   }),
   run: async (ctx, { agent: slug, model, effort }) => {
     const [rows, catalog] = await Promise.all([ctx.queryClient.ensureQueryData(agentsQuery), ctx.queryClient.ensureQueryData(modelsQuery)]);
@@ -703,7 +689,7 @@ export const restore = defineAction({
   id: 'settings.restoreAgent',
   title: 'Bring back a retired agent',
   kind: 'change',
-  input: s.object({ agent: id('an agent id or slug') }),
+  input: z.strictObject({ agent: id('an agent id or slug') }),
   run: async (ctx, { agent: bot }) => {
     await restoreAgent(bot);
     void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
@@ -716,10 +702,10 @@ export const owners = defineAction({
   id: 'settings.agentOwners',
   title: "Change who owns an agent",
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     agent: id('an agent id or slug'),
-    add: s.array(s.string({ min: 1, max: 200 }), { max: 100 }),
-    remove: s.array(s.string({ min: 1, max: 200 }), { max: 100 }),
+    add: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(100)),
+    remove: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(100)),
   }),
   // Owners manage the agent and its access: a permission change.
   tico: false,
@@ -728,18 +714,18 @@ export const owners = defineAction({
   target: ({ agent: bot }) => agent(bot),
 });
 
-const audience = s.object({
-  everyone: s.boolean(),
-  people: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
-  teams: s.array(s.string({ min: 1, max: 200 }), { max: 200 }),
-  bots: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+const audience = z.strictObject({
+  everyone: z.boolean(),
+  people: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(500)),
+  teams: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(200)),
+  bots: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(500)),
 });
 
 export const access = defineAction({
   id: 'settings.agentAccess',
   title: 'Change who can see, read and write to an agent',
   kind: 'change',
-  input: s.object({ agent: id('an agent id or slug'), see: audience, read: audience, write: audience }),
+  input: z.strictObject({ agent: id('an agent id or slug'), see: audience, read: audience, write: audience }),
   // Who reaches an agent's work is a permission change.
   tico: false,
   run: (_ctx, { agent: bot, ...levels }) => setBotAccess(bot, levels),
@@ -751,7 +737,7 @@ export const mail = defineAction({
   id: 'settings.agentMail',
   title: 'Let an agent send mail without asking',
   kind: 'change',
-  input: s.object({ agent: id('an agent id or slug'), on: s.boolean() }),
+  input: z.strictObject({ agent: id('an agent id or slug'), on: z.boolean() }),
   // Mail that leaves the company with no one's OK cannot be called back: Tico may only turn it off (asks first).
   can: (ctx, { on }) => !(on && ctx.via === 'tico'),
   run: (_ctx, { agent: bot, on }) => setBotMail(bot, on),
@@ -763,12 +749,12 @@ export const settleRun = defineAction({
   id: 'settings.stoppedRun',
   title: 'Try a stopped run again, or let it go',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     agent: id('an agent id or slug'),
     job: id('a job id'),
     run: id('a run id'),
-    decision: s.oneOf(['resume', 'dismiss'] as const),
-    detail: s.optional(s.string({ max: 3000 })),
+    decision: z.enum(['resume', 'dismiss'] as const),
+    detail: z.optional(z.string().check(z.maxLength(3000))),
   }),
   // A retry may repeat work that already reached the outside world.
   tico: false,
@@ -784,7 +770,7 @@ export const roadmapLabels = defineAction({
   id: 'settings.roadmapLabels',
   title: 'Change the labels on the public roadmap',
   kind: 'change',
-  input: s.object({ labels: s.array(s.string({ min: 1, max: 200 }), { max: 50 }) }),
+  input: z.strictObject({ labels: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(50)) }),
   // What the public sees: Tico may only take a label off (shows less); putting one on is the person's own press.
   can: (ctx, { labels }) => ctx.via !== 'tico' || labels.every((l) => ctx.queryClient.getQueryData(roadmapQuery.queryKey)?.labels.includes(l)),
   run: (_ctx, { labels }) => setRoadmap({ labels }),
@@ -796,7 +782,7 @@ export const roadmapApproval = defineAction({
   id: 'settings.roadmapApproval',
   title: "Ask a person before an agent's words go public",
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   // Asking first is Tico's; dropping the ask lets an agent's words leave the company unread.
   can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
   run: (_ctx, { on }) => setRoadmap({ bot_public_approval: on }),
@@ -808,11 +794,11 @@ export const addField = defineAction({
   id: 'settings.addField',
   title: 'Add a contact field',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     type: id('a contact type'),
-    name: s.string({ min: 1, max: 80 }),
-    kind: s.oneOf(FIELD_KINDS),
-    description: s.string({ min: 1, max: 500, what: 'what the field holds' }),
+    name: z.string().check(z.minLength(1), z.maxLength(80)),
+    kind: z.enum(FIELD_KINDS),
+    description: z.string().check(z.minLength(1), z.maxLength(500), z.describe('what the field holds')),
   }),
   run: async (ctx, { type, name, kind, description }) => {
     const made = await addContactField(type, name, kind, description);
@@ -828,9 +814,9 @@ export const productUpdate = defineAction({
   id: 'settings.productUpdate',
   title: 'Add a product update',
   kind: 'change',
-  input: s.object({
-    title: s.string({ min: 1, max: 90 }),
-    bullets: s.array(s.string({ min: 1, max: 500 }), { max: 12 }),
+  input: z.strictObject({
+    title: z.string().check(z.minLength(1), z.maxLength(90)),
+    bullets: z.array(z.string().check(z.minLength(1), z.maxLength(500))).check(z.maxLength(12)),
   }),
   // Published to everyone, and the server has no way to take an update back.
   tico: false,
@@ -844,17 +830,17 @@ export const productUpdate = defineAction({
 
 // ---- usage (anchor: the Usage builder adds its actions below) ----
 
-const money = s.optional(s.number({ min: 0, max: 1_000_000 }));
+const money = z.optional(z.number().check(z.minimum(0), z.maximum(1_000_000)));
 
 export const openUsage = defineAction({
   id: 'usage.open',
   title: 'Open usage',
   kind: 'view',
-  input: s.object({
-    view: s.optional(s.oneOf(['limits'] as const)),
-    range: s.optional(s.oneOf(['today', '7d', '30d', 'month'] as const)),
-    by: s.optional(s.oneOf(['model'] as const)),
-    open: s.optional(s.string({ max: 120 })),
+  input: z.strictObject({
+    view: z.optional(z.enum(['limits'] as const)),
+    range: z.optional(z.enum(['today', '7d', '30d', 'month'] as const)),
+    by: z.optional(z.enum(['model'] as const)),
+    open: z.optional(z.string().check(z.maxLength(120))),
   }),
   run: ({ router }, search) => router.navigate({ to: '/company/usage', search }),
   show: ({ router }, search) => router.navigate({ to: '/company/usage', search }),
@@ -866,7 +852,7 @@ export const limit = defineAction({
   id: 'usage.setLimit',
   title: "Change an agent's monthly limit",
   kind: 'change',
-  input: s.object({ agent: id('an agent slug'), monthly: money }),
+  input: z.strictObject({ agent: id('an agent slug'), monthly: money }),
   // Raising or removing a spending limit is budget, the person's own press; Tico may only lower one.
   can: (ctx, { agent, monthly }) => {
     if (ctx.via !== 'tico') return true;
@@ -882,7 +868,7 @@ export const defaultLimit = defineAction({
   id: 'usage.setDefaultLimit',
   title: 'Change the monthly limit for a new agent',
   kind: 'change',
-  input: s.object({ monthly: money }),
+  input: z.strictObject({ monthly: money }),
   // Raising or removing the default is budget, the person's own press; Tico may only lower it.
   can: (ctx, { monthly }) => ctx.via !== 'tico' || lowers(ctx.queryClient.getQueryData(limitsQuery.queryKey)?.default.monthly_usd, monthly),
   run: (_ctx, { monthly }) => setDefaultLimit(monthly ?? null),
@@ -894,7 +880,7 @@ export const countPlanRuns = defineAction({
   id: 'usage.countPlanRuns',
   title: 'Count plan runs against the limits',
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   // Counting less spend raises every limit: budget, the person's own press. Tico may only turn it on.
   can: (ctx, { on }) => ctx.via !== 'tico' || on,
   run: (_ctx, { on }) => setCountPlanRuns(on),
@@ -906,7 +892,7 @@ export const clearQueue = defineAction({
   id: 'usage.clearQueue',
   title: 'Clear the automatic queue',
   kind: 'change',
-  input: s.object({ scope: s.optional(s.string({ max: 200, what: "'company' or 'group:<id>'" })) }),
+  input: z.strictObject({ scope: z.optional(z.string().check(z.maxLength(200), z.describe("'company' or 'group:<id>'"))) }),
   // Cancelled wakes do not come back.
   tico: false,
   run: (ctx, { scope }) => {
@@ -924,9 +910,9 @@ export const gatewaySave = defineAction({
   id: 'settings.saveGateway',
   title: 'Change the Tico Gateway key or address',
   kind: 'change',
-  input: s.object({
-    url: s.string({ max: 300, what: "the Gateway's address; empty for Tico's" }),
-    key: s.optional(s.string({ min: 1, max: 500 })),
+  input: z.strictObject({
+    url: z.string().check(z.maxLength(300), z.describe("the Gateway's address; empty for Tico's")),
+    key: z.optional(z.string().check(z.minLength(1), z.maxLength(500))),
   }),
   // Sets a secret and where it goes: the owner's own press. A move with a key saved asks first (Keep or Clear).
   tico: false,
@@ -948,7 +934,7 @@ export const restartToUpdate = defineAction({
   id: 'settings.restartToUpdate',
   title: 'Restart the desktop app to update',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   tico: false,
   can: onDesktop,
   // The app refuses while a call is live.
@@ -961,7 +947,7 @@ export const openAtLogin = defineAction({
   id: 'settings.openAtLogin',
   title: 'Open the desktop app at login',
   kind: 'change',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   tico: false,
   can: onDesktop,
   run: (_ctx, { on }) => theApp().openAtLogin(on),
@@ -981,7 +967,7 @@ export const poolLimit = defineAction({
   id: 'usage.setPoolLimit',
   title: "Change the company's or a team's monthly limit",
   kind: 'change',
-  input: s.object({ scope: id("'company' or a team's group id"), monthly: money }),
+  input: z.strictObject({ scope: id("'company' or a team's group id"), monthly: money }),
   // Raising or removing a combined limit is budget, the person's own press; Tico may only lower one.
   can: (ctx, { scope, monthly }) => {
     if (ctx.via !== 'tico') return true;
@@ -998,10 +984,10 @@ export const taskCap = defineAction({
   id: 'usage.setTaskCap',
   title: 'Cap the tasks one teammate sends another a day',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     sender: id("'bot:<slug>' or 'person:<id>'"),
     receiver: id("a manager above the sender, 'bot:<slug>' or 'person:<id>'"),
-    perDay: s.optional(s.number({ min: 0, max: 10_000 })),
+    perDay: z.optional(z.number().check(z.minimum(0), z.maximum(10_000))),
   }),
   // A cap is a limit: Tico may add or lower one, never raise or remove it.
   can: (ctx, { sender, receiver, perDay }) => {
@@ -1028,25 +1014,16 @@ export const taskCap = defineAction({
 
 const accessNow = (ctx: Ctx) => ctx.queryClient.getQueryData<AccessFull>(accessQuery.queryKey);
 const person = (p: string) => ({ kind: 'person', id: p });
-const addresses = s.array(s.string({ min: 1, max: 320 }), { max: 500 });
+const addresses = z.array(z.string().check(z.minLength(1), z.maxLength(320))).check(z.maxLength(500));
 
 /** A file from the person's disk: only a click has one (as files.upload). */
-const picture: Schema<File> = {
-  parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
-  json: () => ({ type: 'object', description: 'A picture the person chose' }),
-  optional: false,
-  '~standard': {
-    version: 1,
-    vendor: 'tico',
-    validate: (v) => (typeof File !== 'undefined' && v instanceof File ? { value: v } : { issues: [{ message: 'expected a file' }] }),
-  },
-};
+const picture = z.custom<File>((v) => typeof File !== 'undefined' && v instanceof File, 'expected a file');
 
 export const joining = defineAction({
   id: 'settings.setJoining',
   title: 'Change who can join by signing in',
   kind: 'change',
-  input: s.object({ allowed: addresses, domains: s.array(s.string({ min: 1, max: 253 }), { max: 100 }) }),
+  input: z.strictObject({ allowed: addresses, domains: z.array(z.string().check(z.minLength(1), z.maxLength(253))).check(z.maxLength(100)) }),
   // Letting more people in is the person's own press; taking an address or a domain off stays Tico's.
   can: (ctx, { allowed, domains }) => {
     if (ctx.via !== 'tico') return true;
@@ -1062,7 +1039,7 @@ export const agentLimit = defineAction({
   id: 'settings.agentLimit',
   title: 'Change how many agents a person may have',
   kind: 'change',
-  input: s.object({ limit: s.number({ int: true, min: 0, max: 1000 }) }),
+  input: z.strictObject({ limit: z.int().check(z.minimum(0), z.maximum(1000)) }),
   // Raising a limit is the person's own press; lowering it stays Tico's.
   can: (ctx, { limit }) => ctx.via !== 'tico' || limit <= (accessNow(ctx)?.member_bot_limit ?? 0),
   run: (_ctx, { limit }) => setAgentLimit(limit),
@@ -1074,7 +1051,7 @@ export const restoreLeft = defineAction({
   id: 'settings.restorePerson',
   title: 'Bring back a person who left',
   kind: 'change',
-  input: s.object({ person: id('a person id') }),
+  input: z.strictObject({ person: id('a person id') }),
   // Gives someone their sign-in back.
   tico: false,
   run: (_ctx, { person: p }) => restorePerson(p),
@@ -1086,7 +1063,7 @@ export const forget = defineAction({
   id: 'settings.forgetPerson',
   title: 'Remove a person who left, for good',
   kind: 'change',
-  input: s.object({ person: id('a person id') }),
+  input: z.strictObject({ person: id('a person id') }),
   // Cannot be undone.
   tico: false,
   run: (_ctx, { person: p }) => forgetPerson(p),
@@ -1098,7 +1075,7 @@ export const revokeAny = defineAction({
   id: 'settings.revokeAnyToken',
   title: "Revoke someone's API token",
   kind: 'change',
-  input: s.object({ token: id('a token id') }),
+  input: z.strictObject({ token: id('a token id') }),
   // Its scripts stop for good: cannot be undone.
   tico: false,
   run: (_ctx, { token }) => revokeAnyToken(token),
@@ -1110,7 +1087,7 @@ export const letSupportIn = defineAction({
   id: 'settings.letSupportIn',
   title: 'Let Tico support sign in for a while',
   kind: 'change',
-  input: s.object({ ticket: id('a support request id'), tier: s.oneOf(['app', 'full'] as const), hours: s.number({ int: true, min: 1, max: 8760 }) }),
+  input: z.strictObject({ ticket: id('a support request id'), tier: z.enum(['app', 'full'] as const), hours: z.int().check(z.minimum(1), z.maximum(8760)) }),
   // Lets someone from outside the company in: the person's own press.
   tico: false,
   run: (_ctx, { ticket, tier, hours }) => startSupportAccess(ticket, tier, hours),
@@ -1122,7 +1099,7 @@ export const stopSupport = defineAction({
   id: 'settings.stopSupport',
   title: "End Tico support's sign-in now",
   kind: 'change',
-  input: s.object({ session: id('a support session id') }),
+  input: z.strictObject({ session: id('a support session id') }),
   run: (_ctx, { session }) => stopSupportAccess(session),
   did: () => 'Tico support stopped',
   target: () => setting('support-access'),
@@ -1132,7 +1109,7 @@ export const teamIcon = defineAction({
   id: 'settings.teamIcon',
   title: "Change the company's icon",
   kind: 'change',
-  input: s.object({ file: picture }),
+  input: z.strictObject({ file: picture }),
   // Only a press has a file to send.
   tico: false,
   run: (_ctx, { file }) => setTeamIcon(file),
@@ -1140,13 +1117,13 @@ export const teamIcon = defineAction({
   target: () => setting('icon'),
 });
 
-const repo = s.string({ min: 3, max: 200, pattern: /^[^/\s]+\/[^/\s]+$/, what: 'owner/name' });
+const repo = z.string().check(z.minLength(3), z.maxLength(200), z.regex(/^[^/\s]+\/[^/\s]+$/), z.describe('owner/name'));
 
 export const useRepo = defineAction({
   id: 'settings.useRepo',
   title: 'Put a repository in use or take it out',
   kind: 'change',
-  input: s.object({ repo, on: s.boolean() }),
+  input: z.strictObject({ repo, on: z.boolean() }),
   run: (_ctx, { repo: name, on }) => setRepo(name, { enabled: on }),
   did: ({ on }) => (on ? 'In use' : 'Not in use'),
   target: ({ repo: name }) => ({ kind: 'repo', id: name }),
@@ -1156,7 +1133,7 @@ export const repoSetup = defineAction({
   id: 'settings.repoSetup',
   title: "Change a repository's setup command",
   kind: 'change',
-  input: s.object({ repo, command: s.string({ max: 2000 }) }),
+  input: z.strictObject({ repo, command: z.string().check(z.maxLength(2000)) }),
   run: (_ctx, { repo: name, command }) => setRepo(name, { setup_command: command.trim() }),
   did: () => 'Setup command saved',
   target: ({ repo: name }) => ({ kind: 'repo', id: name }),
@@ -1166,7 +1143,7 @@ export const newAgentRepos = defineAction({
   id: 'settings.newAgentRepos',
   title: 'Choose the repositories new agents get',
   kind: 'change',
-  input: s.object({ value: s.oneOf(['own', 'all'] as const) }),
+  input: z.strictObject({ value: z.enum(['own', 'all'] as const) }),
   run: (_ctx, { value }) => setNewAgentRepos(value),
   did: () => 'Saved',
   target: () => setting('repositories'),
@@ -1176,19 +1153,19 @@ export const reposRefresh = defineAction({
   id: 'settings.refreshRepos',
   title: 'Read the repositories from GitHub again',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => refreshRepos(),
   did: () => 'Refreshed',
   target: () => setting('repositories'),
 });
 
-const repoName = s.string({ min: 1, max: 100, pattern: /^[A-Za-z0-9._-]+$/, what: 'a repository name' });
+const repoName = z.string().check(z.minLength(1), z.maxLength(100), z.regex(/^[A-Za-z0-9._-]+$/), z.describe('a repository name'));
 
 export const repoPreview = defineAction({
   id: 'settings.previewRepo',
   title: 'See what a new repository would be',
   kind: 'view',
-  input: s.object({ name: repoName }),
+  input: z.strictObject({ name: repoName }),
   run: (_ctx, { name }): Promise<ProductRepoPreview> => previewRepo(name),
   did: () => 'Previewed',
   target: () => setting('repositories'),
@@ -1198,7 +1175,7 @@ export const repoCreate = defineAction({
   id: 'settings.createRepo',
   title: 'Make a new private repository on GitHub',
   kind: 'change',
-  input: s.object({ name: repoName }),
+  input: z.strictObject({ name: repoName }),
   // Makes a repository outside Tico that Tico cannot take back: the owner's own press.
   tico: false,
   run: async (ctx, { name }) => {
@@ -1215,16 +1192,16 @@ export const repoCreate = defineAction({
 // ---- tier 2 gaps (Tasks, Health, Changelog, Contacts): this builder's actions below ----
 
 const askInput = {
-  mode: s.oneOf(['off', 'on'] as const),
-  budget: s.number({ int: true, min: 1, max: 200 }),
-  criteria: s.array(s.string({ min: 1, max: 200 }), { max: 10 }),
+  mode: z.enum(['off', 'on'] as const),
+  budget: z.int().check(z.minimum(1), z.maximum(200)),
+  criteria: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(10)),
 };
 
 export const askRules = defineAction({
   id: 'settings.askRules',
   title: 'Change what agents may ask a person',
   kind: 'change',
-  input: s.object({ ...askInput, team: s.optional(s.boolean()) }),
+  input: z.strictObject({ ...askInput, team: z.optional(z.boolean()) }),
   run: (_ctx, { team, ...rules }) => saveAsk(rules, !!team),
   did: () => 'Saved; the next ask uses it',
   target: () => setting('ask'),
@@ -1234,30 +1211,18 @@ export const askReset = defineAction({
   id: 'settings.askReset',
   title: 'Use the team default for what agents may ask',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   can: (ctx) => !!ctx.queryClient.getQueryData(askQuery.queryKey)?.settings.own,
   run: () => resetAsk(),
   did: () => 'Using the team default',
   target: () => setting('ask'),
 });
 
-export const healthCheck = defineAction({
-  id: 'settings.checkHealth',
-  title: 'Check health now',
-  kind: 'view',
-  input: s.object({}),
-  run: async (ctx) => {
-    await ctx.queryClient.refetchQueries({ queryKey: healthQuery.queryKey, exact: true });
-  },
-  did: () => 'Checked',
-  target: () => setting('health'),
-});
-
 export const changelogRead = defineAction({
   id: 'settings.changelogRead',
   title: 'Mark product updates read',
   kind: 'change',
-  input: s.object({ ids: s.array(id('an entry id'), { max: 250 }) }),
+  input: z.strictObject({ ids: z.array(id('an entry id')).check(z.maxLength(250)) }),
   run: (_ctx, { ids }) => markChangelogRead(ids),
   did: () => 'Marked read',
   target: () => ({ kind: 'page', id: '/settings/changelog' }),
@@ -1270,7 +1235,7 @@ export const companyRename = defineAction({
   id: 'settings.renameCompany',
   title: 'Rename the company',
   kind: 'change',
-  input: s.object({ name: s.string({ min: 1, max: 100, what: 'the company name' }) }),
+  input: z.strictObject({ name: z.string().check(z.minLength(1), z.maxLength(100), z.describe('the company name')) }),
   run: (_ctx, { name }) => renameCompany(name),
   did: ({ name }) => `Renamed to ${name}`,
   target: () => setting('companyName'),

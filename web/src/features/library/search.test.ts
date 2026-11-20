@@ -9,7 +9,7 @@ import { contactsOpen, filesOpen } from './actions';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
-const valid = (h: SearchHit) => registry.get(h.run.id)?.input.parse(h.run.input).ok;
+const valid = (h: SearchHit) => registry.get(h.run.id)?.input.safeParse(h.run.input).success;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 const runs = (hits: SearchHit[]) => hits.map((h) => [h.title, h.run]);
 

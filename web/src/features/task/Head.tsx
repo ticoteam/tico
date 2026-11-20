@@ -77,7 +77,7 @@ export function StagePick({ t }: { t: TaskData }) {
   const [held, setHeld] = useState<Held | null>(null);
   const label = t.status === 'open' ? (t.stage?.name ?? 'No stage') : t.status === 'done' ? 'Done' : 'Closed';
   const move = async (to: string, name: string) => {
-    const r = await run('task.move', { task: t.id, to }, { via: 'click' });
+    const r = await run('tasks.move', { tasks: t.id, to }, { via: 'click' });
     if (r.ok) return;
     const refusal = refusalOf(r.error);
     if (refusal.code === 'task_not_met') setHeld({ to, name, refusal });
@@ -121,7 +121,7 @@ function MoveAnyway({ t, held, onClose }: { t: TaskData; held: Held; onClose: ()
   const press = async () => {
     setBusy(true);
     setError('');
-    const r = await run('task.moveAnyway', { task: t.id, to: held.to, why }, { via: 'click' });
+    const r = await run('tasks.move', { tasks: t.id, to: held.to, anyway: true, why }, { via: 'click' });
     setBusy(false);
     if (r.ok) return onClose();
     const again = refusalOf(r.error);
@@ -302,7 +302,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
   };
   const press = async (id: string, input: object) => {
     setBusy(true);
-    const r = await run(id, { task: t.id, ...input }, { via: 'click' });
+    const r = await run(id, input, { via: 'click' });
     setBusy(false);
     if (r.ok) setAsking(null);
     else setError(reasonOf(r.error));
@@ -312,7 +312,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
     if (!r.ok) failed(r);
   };
   const moveBack = async (to: string) => {
-    const r = await run('task.moveBack', { task: t.id, to }, { via: 'click' });
+    const r = await run('tasks.move', { tasks: t.id, to }, { via: 'click' });
     if (r.ok) order.next();
     else failed(r);
   };
@@ -413,7 +413,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
               variant="primary"
               busy={busy}
               disabled={!to || busy}
-              onClick={() => to && void press('task.moveTo', { pipeline: to.pipeline, ...(to.stage && { stage: to.stage }), ...(why.trim() && { why: why.trim() }) })}
+              onClick={() => to && void press('tasks.move', { tasks: t.id, pipeline: to.pipeline, ...(to.stage && { to: to.stage }), ...(why.trim() && { why: why.trim() }) })}
             >
               Move
             </Button>
@@ -439,7 +439,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         actions={
           <>
             {cancel}
-            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.reopen', { why: why.trim() })}>
+            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.reopen', { task: t.id, why: why.trim() })}>
               Reopen
             </Button>
           </>
@@ -456,7 +456,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         actions={
           <>
             {cancel}
-            <Button variant="primary" busy={busy} disabled={busy} onClick={() => press('task.delete', {})}>
+            <Button variant="primary" busy={busy} disabled={busy} onClick={() => press('task.delete', { task: t.id })}>
               Delete
             </Button>
           </>

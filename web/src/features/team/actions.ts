@@ -1,4 +1,5 @@
-import { defineAction, refusalFor, s, toldOf, type Ctx } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, refusalFor, toldOf, type Ctx } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
 import { toast } from '@/kit/Toast';
@@ -59,9 +60,9 @@ import {
 } from './queries';
 import { instructionsChange, LIST_FIELDS, managerOf, resolveWho, rowOf, type ListLine } from './model';
 
-const slug = s.string({ min: 1, max: 100, what: "an agent's slug" });
-const person = s.string({ min: 1, max: 100, what: "a person's id" });
-const team = s.string({ min: 1, max: 100, what: "a team's id" });
+const slug = z.string().check(z.minLength(1), z.maxLength(100), z.describe("an agent's slug"));
+const person = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a person's id"));
+const team = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a team's id"));
 const page = (who: string) => `/team/${encodeURIComponent(who)}`;
 const onPage = (who: string) => ({ kind: 'page', id: page(who) });
 
@@ -85,7 +86,7 @@ export const openTeammate = defineAction({
   id: 'team.open',
   title: 'Open a teammate',
   kind: 'view',
-  input: s.object({ who: s.string({ min: 1, max: 120, what: "an agent's slug, a person's id or a team" }), tab: s.optional(s.oneOf(TABS)) }),
+  input: z.strictObject({ who: z.string().check(z.minLength(1), z.maxLength(120), z.describe("an agent's slug, a person's id or a team")), tab: z.optional(z.enum(TABS)) }),
   run: ({ router }, { who, tab }) => router.navigate({ to: page(who), search: tab ? { tab } : {} }),
   show: ({ router }, { who, tab }) => router.navigate({ to: page(who), search: tab ? { tab } : {} }),
   did: ({ who }) => `Opened ${who}`,
@@ -105,7 +106,7 @@ export const openAdd = defineAction({
   id: 'team.addTeammate',
   title: 'Add a teammate',
   kind: 'view',
-  input: s.object({ step: s.optional(s.oneOf(ADD_STEPS)) }),
+  input: z.strictObject({ step: z.optional(z.enum(ADD_STEPS)) }),
   // Its dialog is drawn on a team's page only, not on an agent's or a person's.
   can: ({ router, queryClient }) => {
     const at = /^\/team\/([^/]+)\/?$/.exec(router.state.location.pathname);
@@ -130,7 +131,7 @@ export const rename = defineAction({
   id: 'agents.rename',
   title: 'Rename an agent',
   kind: 'change',
-  input: s.object({ slug, name: s.string({ min: 1, max: 100 }) }),
+  input: z.strictObject({ slug, name: z.string().check(z.minLength(1), z.maxLength(100)) }),
   run: (_ctx, { slug, name }) => said("Couldn't rename it", () => changeAgent(slug, { display_name: name })),
   did: ({ name }) => `Renamed it ${name}`,
   target: ({ slug }) => onPage(slug),
@@ -140,7 +141,7 @@ export const setRole = defineAction({
   id: 'agents.setRole',
   title: "Change an agent's role",
   kind: 'change',
-  input: s.object({ slug, role: s.string({ max: 2000 }) }),
+  input: z.strictObject({ slug, role: z.string().check(z.maxLength(2000)) }),
   run: (_ctx, { slug, role }) => said("Couldn't change the role", () => changeAgent(slug, { description: role })),
   did: () => 'Changed the role',
   target: ({ slug }) => onPage(slug),
@@ -150,7 +151,7 @@ export const setReportsTo = defineAction({
   id: 'agents.setReportsTo',
   title: 'Change who an agent reports to',
   kind: 'change',
-  input: s.object({ slug, to: s.string({ max: 120, what: "a teammate's slug or person id; empty for nobody" }) }),
+  input: z.strictObject({ slug, to: z.string().check(z.maxLength(120), z.describe("a teammate's slug or person id; empty for nobody")) }),
   run: (_ctx, { slug, to }) => said("Couldn't change it", () => changeAgent(slug, { reports_to: to })),
   did: () => 'Changed who it reports to',
   target: ({ slug }) => onPage(slug),
@@ -160,11 +161,11 @@ export const setModel = defineAction({
   id: 'agents.setModel',
   title: "Change an agent's model",
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     slug,
-    model: s.string({ min: 1, max: 120, what: 'a model id from GET /api/v2/models' }),
-    effort: s.optional(s.string({ max: 20, what: "one of the model's efforts; empty for its default" })),
-    harness: s.optional(s.string({ max: 40 })),
+    model: z.string().check(z.minLength(1), z.maxLength(120), z.describe('a model id from GET /api/v2/models')),
+    effort: z.optional(z.string().check(z.maxLength(20), z.describe("one of the model's efforts; empty for its default"))),
+    harness: z.optional(z.string().check(z.maxLength(40))),
   }),
   run: (_ctx, { slug, ...pick }) => said("Couldn't change the model", () => setAgentModel(slug, pick)),
   did: ({ model }) => `Moved it to ${model}`,
@@ -175,7 +176,7 @@ export const setCompact = defineAction({
   id: 'agents.setCompact',
   title: "Change where an agent's conversation compacts",
   kind: 'change',
-  input: s.object({ slug, at: s.nullable(s.oneOf(COMPACT_AT)) }),
+  input: z.strictObject({ slug, at: z.nullable(z.literal(COMPACT_AT)) }),
   run: (_ctx, { slug, at }) => said("Couldn't change it", () => setCompactAt(slug, at)),
   did: () => 'Changed where it compacts',
   target: ({ slug }) => onPage(slug),
@@ -185,7 +186,7 @@ export const pause = defineAction({
   id: 'agents.pause',
   title: 'Pause an agent',
   kind: 'change',
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: (_ctx, { slug }) => said("Couldn't pause it", () => controlAgent(slug, 'pause')),
   did: () => 'Paused it',
   target: ({ slug }) => onPage(slug),
@@ -195,7 +196,7 @@ export const resume = defineAction({
   id: 'agents.resume',
   title: 'Resume an agent',
   kind: 'change',
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: (_ctx, { slug }) => said("Couldn't resume it", () => controlAgent(slug, 'resume')),
   did: () => 'Resumed it',
   target: ({ slug }) => onPage(slug),
@@ -206,7 +207,7 @@ export const archive = defineAction({
   id: 'agents.archive',
   title: 'Archive an agent',
   kind: 'change',
-  input: s.object({ slug, successor: s.optional(s.string({ max: 100, what: "the id of the agent that takes its open tasks; empty for the person who runs it" })) }),
+  input: z.strictObject({ slug, successor: z.optional(z.string().check(z.maxLength(100), z.describe("the id of the agent that takes its open tasks; empty for the person who runs it"))) }),
   // The page asks first; Tico may archive without that question, so the did line says plainly what happened.
   run: async ({ router, queryClient }, { slug, successor }) => {
     const dir = queryClient.getQueryData(directoryQuery.queryKey);
@@ -230,7 +231,7 @@ export const copy = defineAction({
   id: 'agents.makeCopy',
   title: 'Make my copy of an agent',
   kind: 'change',
-  input: s.object({ slug, computer: s.optional(s.string({ min: 1, max: 100, what: "one of my computers' ids" })) }),
+  input: z.strictObject({ slug, computer: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.describe("one of my computers' ids"))) }),
   run: async ({ router }, { slug, computer }) => {
     const made = await said("Couldn't make your copy", () => makeCopy(slug, computer));
     await router.navigate({ to: page(made.slug), search: { tab: 'settings' } });
@@ -244,7 +245,7 @@ export const status = defineAction({
   id: 'agents.setStatus',
   title: "Set a copy's status: setting up, active or paused",
   kind: 'change',
-  input: s.object({ slug, status: s.oneOf(['planned', 'active', 'paused'] as const) }),
+  input: z.strictObject({ slug, status: z.enum(['planned', 'active', 'paused'] as const) }),
   run: (_ctx, { slug, status }) => said("Couldn't change it", () => setAgentStatus(slug, status)),
   did: () => 'Changed its status',
   target: ({ slug }) => onPage(slug),
@@ -255,10 +256,10 @@ export const profile = defineAction({
   id: 'agents.setProfile',
   title: 'Change how an agent takes work (its profile)',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     slug,
-    profile: s.oneOf(['doer', 'reviewer', 'lead', 'manager', 'responder', 'monitor', 'custom'] as const),
-    dropRules: s.optional(s.boolean()),
+    profile: z.enum(['doer', 'reviewer', 'lead', 'manager', 'responder', 'monitor', 'custom'] as const),
+    dropRules: z.optional(z.boolean()),
   }),
   can: (ctx, { dropRules }) => !(dropRules && ctx.via === 'tico'),
   run: async (_ctx, { slug, profile, dropRules }) => {
@@ -279,7 +280,7 @@ export const moveComputer = defineAction({
   id: 'agents.move',
   title: 'Move an agent to another computer',
   kind: 'change',
-  input: s.object({ slug, computer: s.string({ min: 1, max: 100, what: "a computer's id" }) }),
+  input: z.strictObject({ slug, computer: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id")) }),
   run: async ({ queryClient }, { slug, computer }) => {
     const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === computer)?.label ?? 'the computer';
     await said("Couldn't move it", () => moveAgent(slug, computer));
@@ -293,7 +294,7 @@ export const worksFor = defineAction({
   id: 'agents.setWorksFor',
   title: 'Change who an agent works for',
   kind: 'change',
-  input: s.object({ slug, people: s.array(person, { max: 100 }) }),
+  input: z.strictObject({ slug, people: z.array(person).check(z.maxLength(100)) }),
   // Who an agent works for is ordinary setup among teammates: Tico's too.
   run: (_ctx, { slug, people }) => said("Couldn't change it", () => setWorksFor(slug, people)),
   did: () => 'Changed who it works for',
@@ -306,7 +307,7 @@ export const credential = defineAction({
   title: 'Make a new credential for an agent that runs elsewhere',
   kind: 'change',
   tico: false,
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: (_ctx, { slug }) => said("Couldn't make a credential", () => newCredential(slug)),
   did: () => 'Made a new credential',
   target: ({ slug }) => onPage(slug),
@@ -314,14 +315,14 @@ export const credential = defineAction({
 
 /* ---------------------------------------------------------------- dream */
 
-const dreamTask = s.string({ min: 1, max: 100, what: "the dream's task id" });
+const dreamTask = z.string().check(z.minLength(1), z.maxLength(100), z.describe("the dream's task id"));
 const onDream = (slug: string) => ({ kind: 'dream', id: slug });
 
 export const dream = defineAction({
   id: 'agents.dream',
   title: 'Start a dream: an agent cleans up its own memory',
   kind: 'change',
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: (_ctx, { slug }) => said("Couldn't start the dream", () => startDream(slug)),
   did: () => 'Started a dream',
   target: ({ slug }) => onDream(slug),
@@ -331,7 +332,7 @@ export const dreamAnswer = defineAction({
   id: 'agents.answerDream',
   title: "Answer a dreaming agent's questions",
   kind: 'change',
-  input: s.object({ slug, task: dreamTask, text: s.string({ min: 1, max: 8000 }) }),
+  input: z.strictObject({ slug, task: dreamTask, text: z.string().check(z.minLength(1), z.maxLength(8000)) }),
   run: (_ctx, { slug, task, text }) => said("Couldn't send the answers", () => answerDream(slug, task, text)),
   did: () => 'Sent the answers',
   target: ({ slug }) => onDream(slug),
@@ -341,7 +342,7 @@ export const dreamStop = defineAction({
   id: 'agents.stopDream',
   title: "Stop an agent's dream",
   kind: 'change',
-  input: s.object({ slug, task: dreamTask }),
+  input: z.strictObject({ slug, task: dreamTask }),
   run: (_ctx, { slug, task }) => said("Couldn't stop the dream", () => stopDream(slug, task)),
   did: () => 'Stopped the dream',
   target: ({ slug }) => onDream(slug),
@@ -351,7 +352,7 @@ export const dreamWake = defineAction({
   id: 'agents.wakeUp',
   title: 'Put away a finished dream',
   kind: 'view',
-  input: s.object({ slug, task: dreamTask }),
+  input: z.strictObject({ slug, task: dreamTask }),
   run: (_ctx, { slug, task }) => wakeUp(slug, task),
   did: () => 'Woke up',
   target: ({ slug }) => onPage(slug),
@@ -361,12 +362,12 @@ export const add = defineAction({
   id: 'agents.add',
   title: 'Add an agent',
   kind: 'change',
-  input: s.object({
-    name: s.string({ min: 1, max: 100 }),
-    role: s.optional(s.string({ max: 2000 })),
-    team: s.optional(team),
-    template: s.optional(s.string({ max: 100, what: "a template's slug" })),
-    computer: s.optional(s.string({ max: 100, what: "a computer's id" })),
+  input: z.strictObject({
+    name: z.string().check(z.minLength(1), z.maxLength(100)),
+    role: z.optional(z.string().check(z.maxLength(2000))),
+    team: z.optional(team),
+    template: z.optional(z.string().check(z.maxLength(100), z.describe("a template's slug"))),
+    computer: z.optional(z.string().check(z.maxLength(100), z.describe("a computer's id"))),
   }),
   run: async ({ router }, input) => {
     const made = await said("Couldn't add the agent", () => addAgent(input));
@@ -379,7 +380,7 @@ export const add = defineAction({
 
 /* ---------------------------------------------------------------- cloud agents */
 
-const cloudAgent = s.string({ min: 1, max: 40, what: "a cloud agent's id, as the cloud agents list names it (claude, codex, devin…)" });
+const cloudAgent = z.string().check(z.minLength(1), z.maxLength(40), z.describe("a cloud agent's id, as the cloud agents list names it (claude, codex, devin…)"));
 const onCloud = (agent: string) => ({ kind: 'cloud', id: agent });
 type Cache = Ctx['queryClient'];
 
@@ -395,7 +396,7 @@ export const addCloud = defineAction({
   id: 'agents.addCloud',
   title: 'Add a cloud agent Tico connects (Claude Code, Codex) to a team',
   kind: 'change',
-  input: s.object({ agent: cloudAgent, team: s.optional(team) }),
+  input: z.strictObject({ agent: cloudAgent, team: z.optional(team) }),
   can: ({ queryClient }, { agent }) => queryClient.getQueryData(cloudAgentsQuery.queryKey)?.find((a) => a.id === agent)?.supported !== false,
   run: async ({ router, queryClient }, { agent, team }) => {
     const made = await said("Couldn't add the agent", () => addCloudAgent(agent, placeIn(queryClient, team)));
@@ -412,7 +413,7 @@ export const requestCloud = defineAction({
   id: 'agents.requestCloud',
   title: 'Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it',
   kind: 'change',
-  input: s.object({ agent: cloudAgent, team: s.optional(team) }),
+  input: z.strictObject({ agent: cloudAgent, team: z.optional(team) }),
   can: ({ queryClient }, { agent }) => queryClient.getQueryData(cloudAgentsQuery.queryKey)?.find((a) => a.id === agent)?.supported !== true,
   run: ({ queryClient }, { agent, team }) => said("Couldn't send the request", () => requestCloudAgent(agent, placeIn(queryClient, team))),
   did: ({ agent }, out) => `Requested ${out?.agent_name || agent}`,
@@ -423,7 +424,7 @@ export const cancelCloud = defineAction({
   id: 'agents.cancelCloudRequest',
   title: "Cancel a cloud agent request: Tico support hears of it and its seat closes",
   kind: 'change',
-  input: s.object({ seat: s.string({ min: 1, max: 200, what: "the request's seat id" }) }),
+  input: z.strictObject({ seat: z.string().check(z.minLength(1), z.maxLength(200), z.describe("the request's seat id")) }),
   can: ({ queryClient }, { seat }) => {
     const seats = queryClient.getQueryData(seatsQuery.queryKey);
     return !seats || seats.some((x) => x.id === seat && isOpenRequest(x));
@@ -438,11 +439,11 @@ export const cancelCloud = defineAction({
 
 /* ---------------------------------------------------------------- its own lists */
 
-const listName = s.string({ min: 1, max: 40 });
-const listId = s.string({ pattern: /^c\d{1,3}$/, what: "a list's key (c0, c1…) as its page names it" });
+const listName = z.string().check(z.minLength(1), z.maxLength(40));
+const listId = z.string().check(z.regex(/^c\d{1,3}$/), z.describe("a list's key (c0, c1…) as its page names it"));
 // A row's value in words: "open" or "open,done" (Status), a number of days, "overdue" or days (Due), "this_bot", "me",
 // "others" or an actor id (Assigned to, Asked by), "any", "person", "bot", "me" or "not_me" (Waiting on), "you" (Needs).
-const listRows = s.array(s.object({ field: s.oneOf(LIST_FIELDS), value: s.string({ min: 1, max: 200 }) }), { max: 20 });
+const listRows = z.array(z.strictObject({ field: z.enum(LIST_FIELDS), value: z.string().check(z.minLength(1), z.maxLength(200)) })).check(z.maxLength(20));
 const onList = (slug: string, list: string) => ({ kind: 'list', id: `${slug}:${list}` });
 const own = (tabs: TaskTab[], list: string) => {
   const i = Number(list.slice(1));
@@ -456,7 +457,7 @@ export const addList = defineAction({
   id: 'agents.addList',
   title: "Add a list to an agent's page: tasks matching a saved filter",
   kind: 'change',
-  input: s.object({ slug, name: listName, conditions: listRows }),
+  input: z.strictObject({ slug, name: listName, conditions: listRows }),
   can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
   run: async (_ctx, { slug, name, conditions }) => {
     let key = '';
@@ -476,7 +477,7 @@ export const changeList = defineAction({
   id: 'agents.changeList',
   title: "Rename one of an agent's lists, or change its filter",
   kind: 'change',
-  input: s.object({ slug, list: listId, name: s.optional(listName), conditions: s.optional(listRows) }),
+  input: z.strictObject({ slug, list: listId, name: z.optional(listName), conditions: z.optional(listRows) }),
   can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
   run: (_ctx, { slug, list, name, conditions }) =>
     said("Couldn't change the list", () =>
@@ -495,7 +496,7 @@ export const removeList = defineAction({
   id: 'agents.removeList',
   title: "Remove one of an agent's lists (its tasks stay)",
   kind: 'change',
-  input: s.object({ slug, list: listId }),
+  input: z.strictObject({ slug, list: listId }),
   can: ({ queryClient }, { slug }) => mayEdit(queryClient, slug),
   run: (_ctx, { slug, list }) =>
     said("Couldn't remove the list", () =>
@@ -514,7 +515,7 @@ export const reviewStopped = defineAction({
   id: 'agents.reviewStopped',
   title: "Open an agent's stopped run, to try it again or let it go",
   kind: 'view',
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: ({ router }, { slug }) => router.navigate({ to: '/settings/$section', params: { section: 'agents' }, search: { open: slug } }),
   show: ({ router }, { slug }) => router.navigate({ to: '/settings/$section', params: { section: 'agents' }, search: { open: slug } }),
   did: () => 'Opened the stopped run',
@@ -527,7 +528,7 @@ export const move = defineAction({
   id: 'team.move',
   title: 'Move a teammate to a team',
   kind: 'change',
-  input: s.object({ kind: s.oneOf(['agent', 'person'] as const), id: s.string({ min: 1, max: 100, what: "an agent's slug or a person's id" }), team }),
+  input: z.strictObject({ kind: z.enum(['agent', 'person'] as const), id: z.string().check(z.minLength(1), z.maxLength(100), z.describe("an agent's slug or a person's id")), team }),
   run: (_ctx, { kind, id, team }) => said("Couldn't move them", () => moveToTeam(kind, id, team)),
   did: () => 'Moved them',
   target: ({ id }) => onPage(id),
@@ -537,11 +538,11 @@ export const invite = defineAction({
   id: 'people.invite',
   title: 'Invite a person',
   kind: 'change',
-  input: s.object({
-    email: s.string({ min: 3, max: 200, pattern: /^[^@\s]+@[^@\s]+$/,what: 'an email address' }),
-    name: s.optional(s.string({ max: 100 })),
-    team: s.optional(team),
-    role: s.optional(s.oneOf(['member', 'admin'] as const)),
+  input: z.strictObject({
+    email: z.string().check(z.minLength(3), z.maxLength(200), z.regex(/^[^@\s]+@[^@\s]+$/), z.describe('an email address')),
+    name: z.optional(z.string().check(z.maxLength(100))),
+    team: z.optional(team),
+    role: z.optional(z.enum(['member', 'admin'] as const)),
   }),
   // An admin's rights are the person's own to give; inviting a member stays Tico's.
   can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
@@ -559,7 +560,7 @@ export const setPermissions = defineAction({
   id: 'people.setRole',
   title: "Change a person's permissions",
   kind: 'change',
-  input: s.object({ person, role: s.oneOf(['member', 'admin'] as const) }),
+  input: z.strictObject({ person, role: z.enum(['member', 'admin'] as const) }),
   // Making someone an admin is the person's own press; back to member stays Tico's.
   can: (ctx, { role }) => !(role === 'admin' && ctx.via === 'tico'),
   run: (_ctx, { person, role }) => said("Couldn't change it", () => setPersonRole(person, role)),
@@ -571,7 +572,7 @@ export const renameOne = defineAction({
   id: 'people.rename',
   title: 'Rename a person',
   kind: 'change',
-  input: s.object({ person, name: s.string({ min: 1, max: 120 }) }),
+  input: z.strictObject({ person, name: z.string().check(z.minLength(1), z.maxLength(120)) }),
   run: (_ctx, { person, name }) => said("Couldn't rename them", () => renamePerson(person, name)),
   did: ({ name }) => `Renamed them ${name}`,
   target: ({ person }) => onPage(person),
@@ -581,7 +582,7 @@ export const setTitle = defineAction({
   id: 'people.setTitle',
   title: "Change a person's role",
   kind: 'change',
-  input: s.object({ person, title: s.string({ max: 200 }) }),
+  input: z.strictObject({ person, title: z.string().check(z.maxLength(200)) }),
   run: (_ctx, { person, title }) => said("Couldn't change the role", () => setPersonTitle(person, title)),
   did: () => 'Changed the role',
   target: ({ person }) => onPage(person),
@@ -593,7 +594,7 @@ export const setPersonReportsTo = defineAction({
   title: 'Change who a person reports to',
   kind: 'change',
   tico: false,
-  input: s.object({ person, boss: person }),
+  input: z.strictObject({ person, boss: person }),
   run: (_ctx, { person, boss }) => said("Couldn't change it", () => setPersonFields(person, { reports_to: boss })),
   did: () => 'Changed who they report to',
   target: ({ person }) => onPage(person),
@@ -603,7 +604,7 @@ export const setGithub = defineAction({
   id: 'people.setGithub',
   title: "Change a person's GitHub login",
   kind: 'change',
-  input: s.object({ person, login: s.string({ max: 100 }) }),
+  input: z.strictObject({ person, login: z.string().check(z.maxLength(100)) }),
   run: (_ctx, { person, login }) => said("Couldn't change it", () => setPersonFields(person, { github: login })),
   did: () => 'Changed the GitHub login',
   target: ({ person }) => onPage(person),
@@ -613,17 +614,17 @@ export const giveATask = defineAction({
   id: 'people.giveTask',
   title: 'Give a person a task',
   kind: 'change',
-  input: s.object({ person, title: s.string({ min: 1, max: 300 }), message: s.optional(s.string({ max: 20000 })) }),
+  input: z.strictObject({ person, title: z.string().check(z.minLength(1), z.maxLength(300)), message: z.optional(z.string().check(z.maxLength(20000))) }),
   run: (_ctx, { person, title, message }) => said("Couldn't make the task", () => giveTask(`human:${person}`, title, message || undefined)),
   did: ({ title }) => `Gave them "${title}"`,
   target: ({ person }) => onPage(person),
 });
 
-const audience = s.object({
-  everyone: s.boolean(),
-  people: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
-  teams: s.array(s.string({ min: 1, max: 200 }), { max: 200 }),
-  bots: s.array(s.string({ min: 1, max: 200 }), { max: 500 }),
+const audience = z.strictObject({
+  everyone: z.boolean(),
+  people: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(500)),
+  teams: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(200)),
+  bots: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(500)),
 });
 
 /** Who may see, read and write to a person or a team: a permission change, so only a person makes it. */
@@ -632,9 +633,9 @@ export const setAccess = defineAction({
   title: 'Change who can see, read and write to a person or a team',
   kind: 'change',
   tico: false,
-  input: s.object({
-    kind: s.oneOf(['person', 'team'] as const),
-    id: s.string({ min: 1, max: 100, what: "a person's id or a team's id" }),
+  input: z.strictObject({
+    kind: z.enum(['person', 'team'] as const),
+    id: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a person's id or a team's id")),
     see: audience,
     read: audience,
     write: audience,
@@ -650,7 +651,7 @@ export const password = defineAction({
   title: 'Make a Tico account with a password for a person',
   kind: 'change',
   tico: false,
-  input: s.object({ person }),
+  input: z.strictObject({ person }),
   run: (_ctx, { person }) => said("Couldn't make the account", () => makePassword(person)),
   did: () => 'Made an account',
   target: ({ person }) => onPage(person),
@@ -662,7 +663,7 @@ export const remove = defineAction({
   title: 'Remove a person',
   kind: 'change',
   tico: false,
-  input: s.object({ person }),
+  input: z.strictObject({ person }),
   run: async ({ router }, { person }) => {
     await said("Couldn't remove them", () => removePerson(person));
     await router.navigate({ to: '/' });
@@ -677,7 +678,7 @@ export const restart = defineAction({
   id: 'computers.restart',
   title: 'Restart a computer',
   kind: 'change',
-  input: s.object({ id: s.string({ min: 1, max: 100, what: "a computer's id" }) }),
+  input: z.strictObject({ id: z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id")) }),
   // The page asks first; Tico may restart without that question, so the did line says plainly what happened.
   run: async ({ queryClient }, { id }) => {
     const label = queryClient.getQueryData(computersQuery.queryKey)?.find((c) => c.id === id)?.label ?? 'the computer';
@@ -688,9 +689,9 @@ export const restart = defineAction({
   target: () => ({ kind: 'team', id: 'computer' }),
 });
 
-const computer = s.string({ min: 1, max: 100, what: "a computer's id" });
-const runtime = s.string({ min: 1, max: 40, what: "an AI tool's runtime id, as the computer reports it" });
-const login = s.string({ min: 1, max: 100, what: 'a sign-in id' });
+const computer = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a computer's id"));
+const runtime = z.string().check(z.minLength(1), z.maxLength(40), z.describe("an AI tool's runtime id, as the computer reports it"));
+const login = z.string().check(z.minLength(1), z.maxLength(100), z.describe('a sign-in id'));
 
 /** The provider's page opens in the person's own browser, signed in as them: only a person does this. */
 export const signIn = defineAction({
@@ -698,7 +699,7 @@ export const signIn = defineAction({
   title: 'Sign in to an AI tool on a computer',
   kind: 'change',
   tico: false,
-  input: s.object({ computer, runtime }),
+  input: z.strictObject({ computer, runtime }),
   run: (_ctx, { computer, runtime }) => said("Couldn't start the sign-in", () => startLogin(computer, runtime)),
   did: () => 'Sign-in started',
   target: () => ({ kind: 'team', id: 'computer' }),
@@ -709,7 +710,7 @@ export const signInCode = defineAction({
   title: 'Send the code from the sign-in page',
   kind: 'change',
   tico: false,
-  input: s.object({ computer, login, code: s.string({ min: 1, max: 700, what: 'the code' }) }),
+  input: z.strictObject({ computer, login, code: z.string().check(z.minLength(1), z.maxLength(700), z.describe('the code')) }),
   run: (_ctx, { computer, login, code }) => said("Couldn't send the code", () => sendLoginCode(computer, login, code)),
   did: () => 'Code sent',
   target: () => ({ kind: 'team', id: 'computer' }),
@@ -719,7 +720,7 @@ export const stopSignIn = defineAction({
   id: 'computers.cancelSignIn',
   title: 'Stop a sign-in on a computer',
   kind: 'change',
-  input: s.object({ computer, login }),
+  input: z.strictObject({ computer, login }),
   run: (_ctx, { computer, login }) => said("Couldn't stop it", () => cancelLogin(computer, login)),
   did: () => 'Stopped the sign-in',
   target: () => ({ kind: 'team', id: 'computer' }),
@@ -732,7 +733,7 @@ export const signOut = defineAction({
   kind: 'change',
   // Only a person can sign in again, so signing out is the person's own press too.
   tico: false,
-  input: s.object({ computer, runtime }),
+  input: z.strictObject({ computer, runtime }),
   run: (_ctx, { computer, runtime }) => said("Couldn't sign out", () => startLogout(computer, runtime)),
   did: () => 'Signing out. The agents that use it stop until someone signs in again.',
   target: () => ({ kind: 'team', id: 'computer' }),
@@ -754,7 +755,7 @@ export const watchScreen = defineAction({
   title: "Watch a computer's screen",
   kind: 'view',
   tico: false,
-  input: s.object({ computer }),
+  input: z.strictObject({ computer }),
   run: (_ctx, { computer }) => session(computer, false),
   did: () => 'Watching the screen',
   target: ({ computer }) => ({ kind: 'screen', id: computer }),
@@ -765,7 +766,7 @@ export const controlScreen = defineAction({
   title: "Take control of a computer's screen",
   kind: 'change',
   tico: false,
-  input: s.object({ computer }),
+  input: z.strictObject({ computer }),
   run: (_ctx, { computer }) => session(computer, true),
   did: () => 'You have control',
   target: ({ computer }) => ({ kind: 'screen', id: computer }),
@@ -776,7 +777,7 @@ export const setScreen = defineAction({
   id: 'computers.setScreen',
   title: "Turn a computer's screen off, view only or on",
   kind: 'change',
-  input: s.object({ computer, mode: s.oneOf(['off', 'view', 'control'] as const) }),
+  input: z.strictObject({ computer, mode: z.enum(['off', 'view', 'control'] as const) }),
   // Off and view only only take access away, so Tico may; turning control on gives it, so that is the person's own press.
   can: (ctx, { mode }) => !(mode === 'control' && ctx.via === 'tico'),
   run: (_ctx, { computer, mode }) => said("Couldn't change it", () => setScreenMode(computer, mode)),
@@ -790,7 +791,7 @@ export const fullScreen = defineAction({
   title: "Show a computer's screen full screen",
   kind: 'view',
   tico: false,
-  input: s.object({ computer }),
+  input: z.strictObject({ computer }),
   run: (_ctx, { computer }) => document.querySelector(`[data-target="screen:${CSS.escape(computer)}"]`)?.requestFullscreen(),
   did: () => 'Full screen',
   target: ({ computer }) => ({ kind: 'screen', id: computer }),
@@ -798,8 +799,8 @@ export const fullScreen = defineAction({
 
 /* ---------------------------------------------------------------- an account's browser (Open browser) */
 
-const tool = s.string({ min: 1, max: 100, what: "a website tool's id" });
-const account = s.string({ min: 1, max: 100, what: "one of its accounts' ids" });
+const tool = z.string().check(z.minLength(1), z.maxLength(100), z.describe("a website tool's id"));
+const account = z.string().check(z.minLength(1), z.maxLength(100), z.describe("one of its accounts' ids"));
 const onBrowser = (account: string) => ({ kind: 'browser', id: account });
 
 /** Opens, or wakes, the account's browser so a person can sign in or finish a step by hand. */
@@ -808,7 +809,7 @@ export const browserOpen = defineAction({
   title: "Open a website account's browser",
   kind: 'change',
   tico: false,
-  input: s.object({ tool, account }),
+  input: z.strictObject({ tool, account }),
   run: (_ctx, { tool, account }) => said("The browser didn't open", () => openBrowser(tool, account)),
   did: () => 'Opened the browser',
   target: ({ account }) => onBrowser(account),
@@ -819,7 +820,7 @@ export const browserTake = defineAction({
   title: "Take control of a website account's browser",
   kind: 'change',
   tico: false,
-  input: s.object({ tool, account }),
+  input: z.strictObject({ tool, account }),
   run: (_ctx, { tool, account }) => said("Couldn't take control", () => setBrowserControl(tool, account, true)),
   did: () => 'You have control',
   target: ({ account }) => onBrowser(account),
@@ -830,7 +831,7 @@ export const browserGiveBack = defineAction({
   title: "Give back control of a website account's browser",
   kind: 'change',
   tico: false,
-  input: s.object({ tool, account }),
+  input: z.strictObject({ tool, account }),
   run: (_ctx, { tool, account }) => said("Couldn't give it back", () => setBrowserControl(tool, account, false)),
   did: () => 'Gave back control',
   target: ({ account }) => onBrowser(account),
@@ -842,15 +843,15 @@ export const browserInput = defineAction({
   title: "Click, type or scroll in a website account's browser",
   kind: 'change',
   tico: false,
-  input: s.object({
+  input: z.strictObject({
     tool,
     account,
-    kind: s.oneOf(['click', 'type', 'key', 'scroll'] as const),
-    x: s.optional(s.number({ int: true, min: 0 })),
-    y: s.optional(s.number({ int: true, min: 0 })),
-    text: s.optional(s.string({ min: 1, max: 2000 })),
-    key: s.optional(s.oneOf(['Enter', 'Tab', 'Backspace'] as const)),
-    dy: s.optional(s.number({ int: true })),
+    kind: z.enum(['click', 'type', 'key', 'scroll'] as const),
+    x: z.optional(z.int().check(z.minimum(0))),
+    y: z.optional(z.int().check(z.minimum(0))),
+    text: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))),
+    key: z.optional(z.enum(['Enter', 'Tab', 'Backspace'] as const)),
+    dy: z.optional(z.int()),
   }),
   run: (_ctx, { tool, account, ...input }) => said("It didn't reach the browser", () => sendBrowserInput(tool, account, input)),
   did: () => 'Sent',
@@ -869,7 +870,7 @@ export const newAgentRule = defineAction({
   id: 'agents.newRule',
   title: 'Start a new rule for an agent',
   kind: 'view',
-  input: s.object({ slug }),
+  input: z.strictObject({ slug }),
   run: ({ router, queryClient }, { slug }) => {
     const actor = queryClient.getQueryData(directoryQuery.queryKey)?.actors.find((a) => a.kind === 'agent' && a.slug === slug);
     const id = actor?.id ?? (rosterRow(queryClient, slug) ? `bot:${rosterRow(queryClient, slug)!.id}` : undefined);
@@ -891,7 +892,7 @@ export const editInstructions = defineAction({
   kind: 'change',
   // A message to Tico itself: Tico changes the file on the computer directly instead.
   tico: false,
-  input: s.object({ slug, text: s.string({ max: 100_000, what: 'the whole new instructions' }) }),
+  input: z.strictObject({ slug, text: z.string().check(z.maxLength(100_000), z.describe('the whole new instructions')) }),
   can: ({ queryClient }, { slug }) => rosterRow(queryClient, slug)?.can_manage !== false,
   run: async ({ queryClient }, { slug, text }) => {
     const before = (await queryClient.ensureQueryData(instructionsQuery(slug))).content ?? '';
@@ -914,7 +915,7 @@ export const requestInstructions = defineAction({
   kind: 'change',
   // A message to Tico itself: Tico asks the agent's manager directly instead.
   tico: false,
-  input: s.object({ slug, changes: s.string({ min: 1, max: 6000, what: 'what should change' }) }),
+  input: z.strictObject({ slug, changes: z.string().check(z.minLength(1), z.maxLength(6000), z.describe('what should change')) }),
   run: async ({ queryClient }, { slug, changes }) => {
     const name = rosterRow(queryClient, slug)?.display_name ?? slug;
     const msg = `Ask whoever manages ${name} [${slug}] to change its Instructions (AGENTS.md). What should change:\n\n${changes.trim()}`;

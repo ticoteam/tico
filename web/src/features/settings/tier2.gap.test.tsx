@@ -140,7 +140,7 @@ describe('Settings › Health @s1082', () => {
     stuck: [{ bot: 'alpha', name: 'Alpha Agent', reason: 'no_computer', why: 'No computer is online' }],
   };
 
-  it('splits Needs a look from Fine with the checked time, lists a stuck agent, and Check now reads again @s1082', async () => {
+  it('splits Needs a look from Fine with the checked time, and lists a stuck agent @s1082', async () => {
     serve((url) => (url === '/api/v2/health' ? ok(HEALTH) : undefined));
     queryClient.setQueryData(healthQuery.queryKey, HEALTH as never);
     show(<SettingsPage section="health" />, '/settings/health');
@@ -150,9 +150,6 @@ describe('Settings › Health @s1082', () => {
     expect(within(screen.getByRole('region', { name: 'Fine' })).getByTitle('Database')).toBeTruthy();
     const stuck = screen.getByRole('region', { name: 'Stuck agents' });
     expect(within(stuck).getByRole('link', { name: /Alpha Agent/ }).getAttribute('href')).toBe('/team/alpha');
-    read = [];
-    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
-    await waitFor(() => expect(read).toContain('/api/v2/health'));
   });
 });
 

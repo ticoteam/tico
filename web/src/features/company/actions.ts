@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
-import { defineAction, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction } from '@/actions';
 import { meQuery } from '@/data';
 import {
   acceptSize,
@@ -30,11 +31,11 @@ import { chatAddress } from '@/lib';
 /* Every change and every move a person makes on Company, Strategy, Products and Risk. Panels live in `?panel=`, so
    Back closes them; a change is shown first and taken back if the server refuses it. */
 
-const id = s.string({ min: 1, max: 200 });
-const actor = s.string({ min: 1, max: 200, pattern: /^(human|bot):\S+$/, what: 'human:<id> or bot:<slug>' });
+const id = z.string().check(z.minLength(1), z.maxLength(200));
+const actor = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(human|bot):\S+$/), z.describe('human:<id> or bot:<slug>'));
 /** A goal's owner may also be the company itself (backend/goals.py COMPANY). */
-const goalOwner = s.string({ min: 1, max: 200, pattern: /^((human|bot):\S+|company)$/, what: 'company, human:<id> or bot:<slug>' });
-const day = s.string({ pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a date, 2026-12-31' });
+const goalOwner = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^((human|bot):\S+|company)$/), z.describe('company, human:<id> or bot:<slug>'));
+const day = z.string().check(z.regex(/^\d{4}-\d{2}-\d{2}$/), z.describe('a date, 2026-12-31'));
 
 const GOALS = '/company/strategy/goals';
 const BRAND = '/company/strategy/brand';
@@ -48,7 +49,7 @@ export const openStage = defineAction({
   id: 'company.openStage',
   title: 'Open a stage on the Floor',
   kind: 'view',
-  input: s.object({ pipeline: id, stage: id }),
+  input: z.strictObject({ pipeline: id, stage: id }),
   run: ({ router }, { pipeline, stage }) => go(router, '/company', { panel: `stage:${pipeline}:${stage}` }),
   did: () => 'Opened the stage',
   target: ({ stage }) => ({ kind: 'stage', id: stage }),
@@ -58,7 +59,7 @@ export const closePanel = defineAction({
   id: 'company.closePanel',
   title: 'Close the panel',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) =>
     router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: undefined }) }),
   did: () => 'Closed the panel',
@@ -69,7 +70,7 @@ export const openPanel = defineAction({
   id: 'company.openPanel',
   title: 'Open a panel',
   kind: 'view',
-  input: s.object({ panel: s.string({ min: 1, max: 200 }) }),
+  input: z.strictObject({ panel: z.string().check(z.minLength(1), z.maxLength(200)) }),
   run: ({ router }, { panel }) => router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel }) }),
   did: () => 'Opened the panel',
   target: ({ panel }) => ({ kind: 'panel', id: panel }),
@@ -79,7 +80,7 @@ export const openTeammate = defineAction({
   id: 'company.openTeammate',
   title: 'Open a teammate',
   kind: 'view',
-  input: s.object({ who: id }),
+  input: z.strictObject({ who: id }),
   run: ({ router }, { who }) => router.navigate({ to: `/team/${encodeURIComponent(who)}` }),
   did: () => 'Opened the teammate',
   target: ({ who }) => ({ kind: 'page', id: `/team/${who}` }),
@@ -90,7 +91,7 @@ export const chatWith = defineAction({
   id: 'company.chatWith',
   title: "Open a hall manager's chat beside the Floor",
   kind: 'view',
-  input: s.object({ who: actor }),
+  input: z.strictObject({ who: actor }),
   run: ({ router }, { who }) => router.navigate({ to: '/company', search: { chat: chatAddress(who) } as never }),
   did: () => 'Opened the chat',
   target: ({ who }) => ({ kind: 'chat', id: chatAddress(who) }),
@@ -100,7 +101,7 @@ export const openGoal = defineAction({
   id: 'goals.open',
   title: 'Open a goal',
   kind: 'view',
-  input: s.object({ goal: id }),
+  input: z.strictObject({ goal: id }),
   run: ({ router }, { goal }) => go(router, GOALS, { panel: `goal:${goal}` }),
   did: () => 'Opened the goal',
   target: ({ goal }) => ({ kind: 'goal', id: goal }),
@@ -110,7 +111,7 @@ export const openKpi = defineAction({
   id: 'kpis.open',
   title: 'Open a KPI',
   kind: 'view',
-  input: s.object({ kpi: id }),
+  input: z.strictObject({ kpi: id }),
   run: ({ router }, { kpi }) => go(router, GOALS, { panel: `kpi:${kpi}` }),
   did: () => 'Opened the KPI',
   target: ({ kpi }) => ({ kind: 'kpi', id: kpi }),
@@ -120,7 +121,7 @@ export const openKpiForm = defineAction({
   id: 'kpis.openForm',
   title: 'Add or edit a KPI',
   kind: 'view',
-  input: s.object({ goal: s.optional(id), kpi: s.optional(id) }),
+  input: z.strictObject({ goal: z.optional(id), kpi: z.optional(id) }),
   run: ({ router }, { goal, kpi }) => go(router, GOALS, { panel: kpi ? `kpi-edit:${kpi}` : `kpi-new:${goal ?? ''}` }),
   did: () => 'Opened the KPI form',
   target: () => ({ kind: 'panel', id: 'kpi-form' }),
@@ -130,7 +131,7 @@ export const openProduct = defineAction({
   id: 'products.open',
   title: 'Open a product',
   kind: 'view',
-  input: s.object({ product: id }),
+  input: z.strictObject({ product: id }),
   run: ({ router }, { product }) => go(router, '/company/products', { panel: product }),
   did: () => 'Opened the product',
   target: ({ product }) => ({ kind: 'product', id: product }),
@@ -140,7 +141,7 @@ export const openRisk = defineAction({
   id: 'risk.open',
   title: 'Open a risk',
   kind: 'view',
-  input: s.object({ risk: id }),
+  input: z.strictObject({ risk: id }),
   run: ({ router }, { risk }) => go(router, '/company/risk', { risk }),
   did: () => 'Opened the risk',
   target: ({ risk }) => ({ kind: 'risk', id: risk }),
@@ -150,7 +151,7 @@ export const openMatter = defineAction({
   id: 'risk.openMatter',
   title: 'Open a matter',
   kind: 'view',
-  input: s.object({ task: id }),
+  input: z.strictObject({ task: id }),
   run: ({ router }, { task }) =>
     router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: `matter:${task}` }) }),
   did: () => 'Opened the matter',
@@ -163,7 +164,7 @@ export const goalCreate = defineAction({
   id: 'goals.create',
   title: 'Add a goal',
   kind: 'change',
-  input: s.object({ title: s.string({ min: 1, max: 300 }), owner: goalOwner, parent: s.optional(id) }),
+  input: z.strictObject({ title: z.string().check(z.minLength(1), z.maxLength(300)), owner: goalOwner, parent: z.optional(id) }),
   run: (_ctx, { title, owner, parent }) => createGoal({ title, owner, parent_id: parent ?? null }),
   did: ({ title }) => `Added “${title}”`,
   target: (_input, out) => (out ? { kind: 'goal', id: out.goal.id } : null),
@@ -173,7 +174,7 @@ export const goalUpdate = defineAction({
   id: 'goals.update',
   title: 'Change a goal',
   kind: 'change',
-  input: s.object({ goal: id, title: s.optional(s.string({ min: 1, max: 300 })), owner: s.optional(goalOwner), body: s.optional(s.string({ max: 4000 })) }),
+  input: z.strictObject({ goal: id, title: z.optional(z.string().check(z.minLength(1), z.maxLength(300))), owner: z.optional(goalOwner), body: z.optional(z.string().check(z.maxLength(4000))) }),
   run: (_ctx, { goal, ...patch }) => updateGoal(goal, patch),
   did: () => 'Changed the goal',
   target: ({ goal }) => ({ kind: 'goal', id: goal }),
@@ -183,7 +184,7 @@ export const goalClose = defineAction({
   id: 'goals.close',
   title: 'Close a goal',
   kind: 'change',
-  input: s.object({ goal: id, status: s.oneOf(['done', 'dropped'] as const) }),
+  input: z.strictObject({ goal: id, status: z.enum(['done', 'dropped'] as const) }),
   run: (_ctx, { goal, status }) => closeGoal(goal, status),
   did: ({ status }) => (status === 'done' ? 'Marked the goal done' : 'Archived the goal'),
 });
@@ -193,19 +194,19 @@ export const goalDecide = defineAction({
   id: 'goals.decide',
   title: 'Decide a proposal on a goal or a KPI',
   kind: 'change',
-  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const) }),
+  input: z.strictObject({ proposal: id, decision: z.enum(['confirm', 'reject'] as const) }),
   run: (_ctx, { proposal, decision }) => decideProposal(proposal, decision),
   did: ({ decision }) => (decision === 'confirm' ? 'Said yes' : 'Said no'),
   target: (_input, out) => (out?.proposal.goal_id ? { kind: 'goal', id: out.proposal.goal_id } : null),
 });
 
 const kpiFields = {
-  name: s.string({ min: 1, max: 200 }),
-  unit: s.string({ max: 20 }),
-  direction: s.oneOf(['up', 'down'] as const),
-  target: s.nullable(s.number()),
-  deadline: s.nullable(day),
-  owner: s.nullable(actor),
+  name: z.string().check(z.minLength(1), z.maxLength(200)),
+  unit: z.string().check(z.maxLength(20)),
+  direction: z.enum(['up', 'down'] as const),
+  target: z.nullable(z.number()),
+  deadline: z.nullable(day),
+  owner: z.nullable(actor),
 };
 const fields = (i: KpiFields): KpiFields => ({ name: i.name, unit: i.unit, direction: i.direction, target: i.target, deadline: i.deadline, owner: i.owner });
 
@@ -213,7 +214,7 @@ export const kpiCreate = defineAction({
   id: 'kpis.create',
   title: 'Add a KPI to a goal',
   kind: 'change',
-  input: s.object({ goal: id, ...kpiFields }),
+  input: z.strictObject({ goal: id, ...kpiFields }),
   run: async ({ router }, input) => {
     const out = await createKpi(input.goal, fields(input));
     await go(router, GOALS, { panel: `goal:${input.goal}` });
@@ -227,7 +228,7 @@ export const kpiUpdate = defineAction({
   id: 'kpis.update',
   title: 'Change a KPI',
   kind: 'change',
-  input: s.object({ kpi: id, goal: id, ...kpiFields }),
+  input: z.strictObject({ kpi: id, goal: id, ...kpiFields }),
   run: async ({ router }, input) => {
     await go(router, GOALS, { panel: `kpi:${input.kpi}` });
     return updateKpi(input.kpi, input.goal, fields(input));
@@ -240,7 +241,7 @@ export const kpiArchive = defineAction({
   id: 'kpis.archive',
   title: 'Archive a KPI',
   kind: 'change',
-  input: s.object({ kpi: id }),
+  input: z.strictObject({ kpi: id }),
   run: (_ctx, { kpi }) => archiveKpi(kpi),
   did: () => 'Archived the KPI',
 });
@@ -249,7 +250,7 @@ export const kpiAddReading = defineAction({
   id: 'kpis.addReading',
   title: 'Add a KPI reading',
   kind: 'change',
-  input: s.object({ kpi: id, value: s.number() }),
+  input: z.strictObject({ kpi: id, value: z.number() }),
   run: ({ queryClient }, { kpi, value }) => addReading(kpi, value, queryClient.getQueryData(meQuery.queryKey)?.id ?? null),
   did: ({ value }) => `Added a reading of ${value}`,
   target: ({ kpi }) => ({ kind: 'kpi', id: kpi }),
@@ -263,7 +264,7 @@ export const productCreate = defineAction({
   id: 'products.create',
   title: 'Add a product',
   kind: 'change',
-  input: s.object({ name: s.string({ min: 1, max: 200 }) }),
+  input: z.strictObject({ name: z.string().check(z.minLength(1), z.maxLength(200)) }),
   run: (_ctx, { name }) => createProduct(name),
   did: ({ name }) => `Added ${name}`,
   target: (_input, out) => (out ? { kind: 'product', id: out.product.key } : null),
@@ -273,7 +274,7 @@ export const productUpdate = defineAction({
   id: 'products.update',
   title: 'Change a product',
   kind: 'change',
-  input: s.object({ product: id, field: s.oneOf(PRODUCT_FIELDS), value: s.string({ max: 200 }) }),
+  input: z.strictObject({ product: id, field: z.enum(PRODUCT_FIELDS), value: z.string().check(z.maxLength(200)) }),
   run: (_ctx, { product, field, value }) => updateProduct(product, { [field]: value }),
   did: () => 'Saved',
   target: ({ product, field }) => ({ kind: 'fact', id: `${product}:${field}` }),
@@ -284,7 +285,7 @@ export const riskView = defineAction({
   id: 'risk.view',
   title: 'Show Risk as risks or as disputes',
   kind: 'view',
-  input: s.object({ view: s.oneOf(['risks', 'disputes'] as const) }),
+  input: z.strictObject({ view: z.enum(['risks', 'disputes'] as const) }),
   run: ({ router }, { view }) => go(router, view === 'disputes' ? '/company/risk/disputes' : '/company/risk'),
   did: ({ view }) => (view === 'disputes' ? 'Showed disputes' : 'Showed risks'),
   target: () => ({ kind: 'page', id: '/company/risk' }),
@@ -294,7 +295,7 @@ export const riskCreate = defineAction({
   id: 'risk.create',
   title: 'Add a risk',
   kind: 'change',
-  input: s.object({ label: s.string({ min: 1, max: 200 }) }),
+  input: z.strictObject({ label: z.string().check(z.minLength(1), z.maxLength(200)) }),
   run: (_ctx, { label }) => createRisk(label),
   did: ({ label }) => `Added ${label}`,
   target: (_input, out) => (out ? { kind: 'risk', id: out.risk.id } : null),
@@ -304,7 +305,7 @@ export const riskUpdate = defineAction({
   id: 'risk.update',
   title: 'Change a risk',
   kind: 'change',
-  input: s.object({ risk: id, version: s.number({ int: true, min: 0 }), label: s.optional(s.string({ min: 1, max: 200 })), owner: s.optional(actor) }),
+  input: z.strictObject({ risk: id, version: z.int().check(z.minimum(0)), label: z.optional(z.string().check(z.minLength(1), z.maxLength(200))), owner: z.optional(actor) }),
   run: (_ctx, { risk, version, ...patch }) => updateRisk(risk, patch, version),
   did: () => 'Changed the risk',
   target: ({ risk }) => ({ kind: 'risk', id: risk }),
@@ -312,14 +313,14 @@ export const riskUpdate = defineAction({
 
 // ---------------------------------------------------------------- Strategy and Brand: versions and the brand draft
 
-const versionN = s.number({ int: true, min: 1 });
+const versionN = z.int().check(z.minimum(1));
 const nav = (router: AnyRouter, to: string, search: Record<string, unknown> = {}) => router.navigate({ to, search });
 
 export const strategyOpenVersion = defineAction({
   id: 'strategy.openVersion',
   title: 'Open a version of the strategy',
   kind: 'view',
-  input: s.object({ v: s.optional(versionN) }),
+  input: z.strictObject({ v: z.optional(versionN) }),
   run: ({ router }, { v }) => nav(router, '/company/strategy', v ? { v } : {}),
   did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
   target: () => ({ kind: 'page', id: '/company/strategy' }),
@@ -329,7 +330,7 @@ export const brandOpenVersion = defineAction({
   id: 'brand.openVersion',
   title: 'Open a version of the brand book',
   kind: 'view',
-  input: s.object({ v: s.optional(versionN) }),
+  input: z.strictObject({ v: z.optional(versionN) }),
   run: ({ router }, { v }) => nav(router, BRAND, v ? { v } : {}),
   did: ({ v }) => (v ? `Opened v${v}` : 'Opened the latest version'),
   target: () => ({ kind: 'page', id: BRAND }),
@@ -339,54 +340,42 @@ export const brandEdit = defineAction({
   id: 'brand.edit',
   title: 'Edit the brand book',
   kind: 'view',
-  input: s.object({ on: s.boolean() }),
+  input: z.strictObject({ on: z.boolean() }),
   run: ({ router }, { on }) => nav(router, BRAND, on ? { edit: true } : {}),
   did: ({ on }) => (on ? 'Opened the brand draft' : 'Closed the brand draft'),
   target: () => ({ kind: 'page', id: BRAND }),
 });
 
 // The brand body's shapes (backend/models.py BrandBody); a row keeps the fields this form does not show.
-const text = (max: number) => s.string({ max });
-const brandSections = s.object({
-  name: s.optional(s.nullable(text(60))),
-  positioning: s.optional(s.nullable(text(120))),
-  voice: s.optional(s.nullable(s.array(s.object({ trait: text(80), do: s.optional(text(300)), dont: s.optional(text(300)) }), { max: 12 }))),
-  tone: s.optional(s.nullable(s.array(s.object({ situation: text(80), guide: s.optional(text(300)) }), { max: 20 }))),
-  words: s.optional(
-    s.nullable(
-      s.object({
-        use: s.optional(s.array(s.object({ word: text(80), not: s.optional(text(300)) }), { max: 100 })),
-        avoid: s.optional(s.array(s.object({ word: text(80), why: s.optional(text(300)), level: s.optional(s.oneOf(['warn', 'block'] as const)) }), { max: 200 })),
-      }),
-    ),
-  ),
-  naming: s.optional(s.nullable(s.array(s.object({ name: text(80), rule: s.optional(text(300)), wrong: s.optional(s.array(text(80), { max: 20 })) }), { max: 50 }))),
-  visual: s.optional(
-    s.nullable(
-      s.object({
-        colors: s.optional(s.array(s.object({ name: text(80), hex: s.string({ pattern: /^#[0-9A-Fa-f]{3,8}$/, what: 'a color, #2f5d3a' }) }), { max: 30 })),
-        fonts: s.optional(s.array(text(80), { max: 10 })),
-        logo_files: s.optional(s.array(text(300), { max: 20 })),
-        imagery: s.optional(text(1000)),
-      }),
-    ),
-  ),
-  claims: s.optional(
-    s.nullable(
-      s.object({
-        allowed: s.optional(s.array(s.object({ claim: text(300), proof: s.optional(text(1000)), check: s.optional(text(300)), status: s.optional(s.oneOf(['proven', 'due'] as const)) }), { max: 100 })),
-        never: s.optional(s.array(text(300), { max: 100 })),
-      }),
-    ),
-  ),
-  examples: s.optional(s.nullable(s.array(s.object({ text: text(1000), verdict: s.oneOf(['on', 'off'] as const), why: s.optional(text(300)) }), { max: 30 }))),
+const text = (max: number) => z.string().check(z.maxLength(max));
+const brandSections = z.strictObject({
+  name: z.optional(z.nullable(text(60))),
+  positioning: z.optional(z.nullable(text(120))),
+  voice: z.optional(z.nullable(z.array(z.strictObject({ trait: text(80), do: z.optional(text(300)), dont: z.optional(text(300)) })).check(z.maxLength(12)))),
+  tone: z.optional(z.nullable(z.array(z.strictObject({ situation: text(80), guide: z.optional(text(300)) })).check(z.maxLength(20)))),
+  words: z.optional(z.nullable(z.strictObject({
+        use: z.optional(z.array(z.strictObject({ word: text(80), not: z.optional(text(300)) })).check(z.maxLength(100))),
+        avoid: z.optional(z.array(z.strictObject({ word: text(80), why: z.optional(text(300)), level: z.optional(z.enum(['warn', 'block'] as const)) })).check(z.maxLength(200))),
+      }))),
+  naming: z.optional(z.nullable(z.array(z.strictObject({ name: text(80), rule: z.optional(text(300)), wrong: z.optional(z.array(text(80)).check(z.maxLength(20))) })).check(z.maxLength(50)))),
+  visual: z.optional(z.nullable(z.strictObject({
+        colors: z.optional(z.array(z.strictObject({ name: text(80), hex: z.string().check(z.regex(/^#[0-9A-Fa-f]{3,8}$/), z.describe('a color, #2f5d3a')) })).check(z.maxLength(30))),
+        fonts: z.optional(z.array(text(80)).check(z.maxLength(10))),
+        logo_files: z.optional(z.array(text(300)).check(z.maxLength(20))),
+        imagery: z.optional(text(1000)),
+      }))),
+  claims: z.optional(z.nullable(z.strictObject({
+        allowed: z.optional(z.array(z.strictObject({ claim: text(300), proof: z.optional(text(1000)), check: z.optional(text(300)), status: z.optional(z.enum(['proven', 'due'] as const)) })).check(z.maxLength(100))),
+        never: z.optional(z.array(text(300)).check(z.maxLength(100))),
+      }))),
+  examples: z.optional(z.nullable(z.array(z.strictObject({ text: text(1000), verdict: z.enum(['on', 'off'] as const), why: z.optional(text(300)) })).check(z.maxLength(30)))),
 });
 
 export const brandSave = defineAction({
   id: 'brand.save',
   title: 'Save sections of the brand draft',
   kind: 'change',
-  input: s.object({ sections: brandSections, revision: s.optional(s.number({ int: true, min: 0 })) }),
+  input: z.strictObject({ sections: brandSections, revision: z.optional(z.int().check(z.minimum(0))) }),
   run: (_ctx, { sections, revision }) => saveBrandDraft(sections, revision),
   did: () => 'Saved the brand draft',
   target: () => ({ kind: 'page', id: BRAND }),
@@ -396,7 +385,7 @@ export const brandPublish = defineAction({
   id: 'brand.publish',
   title: 'Publish the brand draft as the next version',
   kind: 'change',
-  input: s.object({ note: s.string({ max: 500 }) }),
+  input: z.strictObject({ note: z.string().check(z.maxLength(500)) }),
   run: async ({ router }, { note }) => {
     const out = await publishBrand(note);
     await nav(router, BRAND);
@@ -413,23 +402,23 @@ export const openMarket = defineAction({
   id: 'market.open',
   title: 'Open Market or one of its panels',
   kind: 'view',
-  input: s.object({ panel: s.optional(s.string({ min: 1, max: 200, pattern: /^(segment:\S+|player:\S+|definition|briefing)$/, what: 'segment:<id>, player:<id>, definition or briefing' })) }),
+  input: z.strictObject({ panel: z.optional(z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(segment:\S+|player:\S+|definition|briefing)$/), z.describe('segment:<id>, player:<id>, definition or briefing'))) }),
   run: ({ router }, { panel }) => go(router, MARKET, panel ? { panel } : {}),
   did: ({ panel }) => (panel ? 'Opened it on Market' : 'Opened Market'),
   target: ({ panel }) => (panel ? { kind: 'panel', id: panel } : { kind: 'page', id: MARKET }),
 });
 
-const answer = s.string({ max: 4000 });
+const answer = z.string().check(z.maxLength(4000));
 
 /** The owner's answers to Market's four questions: kept (`save`, `skip`), or `finish` files the research. */
 export const marketSetUp = defineAction({
   id: 'market.setUp',
   title: "Answer Market's set-up questions",
   kind: 'change',
-  input: s.object({
-    answers: s.object({ sell: answer, buyers: answer, competitors: answer, watch: answer }),
-    step: s.number({ int: true, min: 0 }),
-    action: s.oneOf(['save', 'skip', 'finish'] as const),
+  input: z.strictObject({
+    answers: z.strictObject({ sell: answer, buyers: answer, competitors: answer, watch: answer }),
+    step: z.int().check(z.minimum(0)),
+    action: z.enum(['save', 'skip', 'finish'] as const),
   }),
   run: (_ctx, { answers, step, action }) => setUpMarket(answers, Math.min(step, 3), action),
   did: ({ action }) => (action === 'finish' ? 'Asked for the market research' : action === 'skip' ? 'Set Market aside' : 'Kept the answers'),
@@ -440,7 +429,7 @@ export const marketSize = defineAction({
   id: 'market.size',
   title: 'Ask for the market to be defined and sized',
   kind: 'change',
-  input: s.object({ description: s.string({ min: 1, max: 500 }) }),
+  input: z.strictObject({ description: z.string().check(z.minLength(1), z.maxLength(500)) }),
   run: (_ctx, { description }) => sizeMarket(description.trim()),
   did: () => 'Asked for the market to be sized',
   target: () => ({ kind: 'panel', id: 'definition' }),
@@ -450,7 +439,7 @@ export const marketAcceptSize = defineAction({
   id: 'market.acceptSize',
   title: "Accept an estimate as its segment's size",
   kind: 'change',
-  input: s.object({ size: id }),
+  input: z.strictObject({ size: id }),
   run: (_ctx, { size }) => acceptSize(size),
   did: () => 'Accepted the estimate',
   target: ({ size }) => ({ kind: 'estimate', id: size }),
@@ -460,7 +449,7 @@ export const marketSetParam = defineAction({
   id: 'market.setParam',
   title: "Change a parameter of a market estimate",
   kind: 'change',
-  input: s.object({ size: id, name: s.string({ min: 1, max: 100 }), value: s.number() }),
+  input: z.strictObject({ size: id, name: z.string().check(z.minLength(1), z.maxLength(100)), value: z.number() }),
   run: (_ctx, { size, name, value }) => setSizeParam(size, name, value),
   did: ({ name, value }) => `Set ${name} to ${value}`,
   target: ({ size }) => ({ kind: 'estimate', id: size }),
@@ -468,14 +457,14 @@ export const marketSetParam = defineAction({
 
 // ---------------------------------------------------------------- KPI places and the Org chart
 
-const role = s.oneOf(['north_star', 'input', 'guardrail', 'check_signups', 'check_new_customers', 'check_cost'] as const);
+const role = z.enum(['north_star', 'input', 'guardrail', 'check_signups', 'check_new_customers', 'check_cost'] as const);
 
 /** What a KPI feeds and its role in the KPI tree (Loop, Step and the funnel stage are gone). */
 export const kpiPlace = defineAction({
   id: 'kpis.place',
   title: 'Place a KPI in the KPI tree',
   kind: 'change',
-  input: s.object({ kpi: id, feeds: s.nullable(id), role: s.nullable(role) }),
+  input: z.strictObject({ kpi: id, feeds: z.nullable(id), role: z.nullable(role) }),
   run: async ({ router }, { kpi, feeds, role }) => {
     const out = await placeKpi(kpi, feeds, role);
     await go(router, GOALS, { panel: `kpi:${kpi}` });
@@ -489,7 +478,7 @@ export const openOrgMate = defineAction({
   id: 'org.openTeammate',
   title: 'Open a teammate on the Org chart',
   kind: 'view',
-  input: s.object({ who: actor }),
+  input: z.strictObject({ who: actor }),
   run: ({ router }, { who }) => go(router, ORG, { panel: `mate:${who}` }),
   did: () => 'Opened the teammate',
   target: ({ who }) => ({ kind: 'mate', id: who }),
@@ -500,7 +489,7 @@ export const orgMove = defineAction({
   id: 'org.move',
   title: 'Move a teammate to another group',
   kind: 'change',
-  input: s.object({ who: actor, from: s.string({ max: 200 }), to: s.string({ max: 200 }) }),
+  input: z.strictObject({ who: actor, from: z.string().check(z.maxLength(200)), to: z.string().check(z.maxLength(200)) }),
   can: (_ctx, { from, to }) => from !== to && !!(from || to),
   run: (_ctx, { who, from, to }) => moveTeammate(who, from, to),
   did: () => 'Moved the teammate',
@@ -513,7 +502,7 @@ export const orgNewFactory = defineAction({
   id: 'org.newFactory',
   title: 'Make a factory',
   kind: 'change',
-  input: s.object({ name: s.string({ min: 1, max: 60 }), goal: s.optional(s.string({ max: 200 })) }),
+  input: z.strictObject({ name: z.string().check(z.minLength(1), z.maxLength(60)), goal: z.optional(z.string().check(z.maxLength(200))) }),
   can: (ctx) => ctx.via !== 'tico',
   run: (_ctx, { name, goal }) => createFactory(name.trim(), (goal ?? '').trim()),
   did: ({ name }) => `Made ${name}`,
@@ -522,7 +511,6 @@ export const orgNewFactory = defineAction({
 
 // ---------------------------------------------------------------- tier 2 gaps: Needs you, records, brand, market
 
-import type { Schema } from '@/actions';
 import {
   addMatter,
   addMatterFile,
@@ -544,7 +532,7 @@ export const goalsAnswer = defineAction({
   id: 'goals.answer',
   title: 'Answer a suggestion that waits on you in Goals',
   kind: 'change',
-  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const), option: s.optional(s.number({ int: true, min: 0 })) }),
+  input: z.strictObject({ proposal: id, decision: z.enum(['confirm', 'reject'] as const), option: z.optional(z.int().check(z.minimum(0))) }),
   run: (_ctx, { proposal, decision, option }) => decideNeed(proposal, decision, option),
   did: ({ decision }) => (decision === 'confirm' ? 'Approved it' : 'Rejected it'),
   target: () => ({ kind: 'panel', id: 'needs' }),
@@ -554,7 +542,7 @@ export const riskEdit = defineAction({
   id: 'risk.edit',
   title: "Change a risk's name and page",
   kind: 'change',
-  input: s.object({ risk: id, version: s.number({ int: true, min: 0 }), label: s.string({ min: 1, max: 200 }), markdown: s.string({ max: 20000 }) }),
+  input: z.strictObject({ risk: id, version: z.int().check(z.minimum(0)), label: z.string().check(z.minLength(1), z.maxLength(200)), markdown: z.string().check(z.maxLength(20000)) }),
   run: (_ctx, { risk, version, label, markdown }) => editRisk(risk, label.trim(), markdown, version),
   did: () => 'Changed the risk',
   target: ({ risk }) => ({ kind: 'risk', id: risk }),
@@ -567,7 +555,7 @@ export const riskAddMatter = defineAction({
   id: 'risk.addMatter',
   title: 'Add a matter to a risk',
   kind: 'change',
-  input: s.object({ risk: id, title: s.string({ min: 1, max: 300 }), kind: s.oneOf(MATTER_KINDS) }),
+  input: z.strictObject({ risk: id, title: z.string().check(z.minLength(1), z.maxLength(300)), kind: z.enum(MATTER_KINDS) }),
   run: async ({ queryClient }, { risk, title, kind }) => {
     const d = await queryClient.ensureQueryData(riskQuery(risk));
     return addMatter({ id: risk, key: d.risk.key }, title.trim(), kind);
@@ -581,14 +569,14 @@ export const riskMarkDate = defineAction({
   id: 'risk.markDate',
   title: "Mark a risk's date met with proof, waived or missed",
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     risk: id,
     date: id,
     on: day,
-    how: s.oneOf(['proof', 'waived', 'missed'] as const),
-    link: s.optional(s.string({ max: 2000, pattern: /^https:\/\/\S+$/i, what: 'a link, https://…' })),
-    file: s.optional(id),
-    note: s.optional(s.string({ max: 2000 })),
+    how: z.enum(['proof', 'waived', 'missed'] as const),
+    link: z.optional(z.string().check(z.maxLength(2000), z.regex(/^https:\/\/\S+$/i), z.describe('a link, https://…'))),
+    file: z.optional(id),
+    note: z.optional(z.string().check(z.maxLength(2000))),
   }),
   // A waiver is a person's own call (backend/rule_due.py: "waived, a person, with a note"); proof needs a link or a file.
   can: (ctx, i) => (i.how === 'waived' ? ctx.via !== 'tico' && !!i.note?.trim() : i.how === 'missed' || !!(i.link || i.file)),
@@ -602,16 +590,7 @@ export const riskMarkDate = defineAction({
 });
 
 /** A file from the person's disk, only from a click or a drop. */
-const picked: Schema<File> = {
-  parse: (v, p) => (typeof File !== 'undefined' && v instanceof File ? { ok: true, value: v } : { ok: false, error: `${p || 'input'}: expected a file` }),
-  json: () => ({ type: 'object', description: 'A file the person chose' }),
-  optional: false,
-  '~standard': {
-    version: 1,
-    vendor: 'tico',
-    validate: (v) => (typeof File !== 'undefined' && v instanceof File ? { value: v } : { issues: [{ message: 'expected a file' }] }),
-  },
-};
+const picked = z.custom<File>((v) => typeof File !== 'undefined' && v instanceof File, 'expected a file');
 
 /* The file comes from the person's own disk, so only their press adds it. */
 export const riskAddFile = defineAction({
@@ -619,7 +598,7 @@ export const riskAddFile = defineAction({
   title: "Add a file to a matter",
   kind: 'change',
   tico: false,
-  input: s.object({ task: id, file: picked }),
+  input: z.strictObject({ task: id, file: picked }),
   run: (_ctx, { task, file }) => addMatterFile(task, file),
   did: ({ file }) => `Added ${file.name}`,
   target: ({ task }) => ({ kind: 'matter', id: task }),
@@ -629,14 +608,14 @@ export const productRename = defineAction({
   id: 'products.rename',
   title: 'Rename a product',
   kind: 'change',
-  input: s.object({ product: id, name: s.string({ min: 1, max: 200 }) }),
+  input: z.strictObject({ product: id, name: z.string().check(z.minLength(1), z.maxLength(200)) }),
   run: (_ctx, { product, name }) => renameProduct(product, { name: name.trim() }),
   did: ({ name }) => `Renamed it ${name}`,
   target: ({ product }) => ({ kind: 'product', id: product }),
 });
 
 const LISTS = ['agreements', 'repositories', 'depends_on'] as const;
-const listInput = s.object({ product: id, field: s.oneOf(LISTS), value: s.string({ min: 1, max: 200 }) });
+const listInput = z.strictObject({ product: id, field: z.enum(LISTS), value: z.string().check(z.minLength(1), z.maxLength(200)) });
 
 /** An agreement, a repository or a vendor onto a product: by id, or by name (a new record of that name is made). */
 export const productAddTo = defineAction({
@@ -670,7 +649,7 @@ export const brandDecide = defineAction({
   id: 'brand.decide',
   title: 'Add a suggested brand change to the draft, or decline it',
   kind: 'change',
-  input: s.object({ proposal: id, decision: s.oneOf(['confirm', 'reject'] as const) }),
+  input: z.strictObject({ proposal: id, decision: z.enum(['confirm', 'reject'] as const) }),
   run: (_ctx, { proposal, decision }) => decideBrandProposal(proposal, decision),
   did: ({ decision }) => (decision === 'confirm' ? 'Added it to the draft' : 'Declined it'),
   target: () => ({ kind: 'page', id: BRAND }),
@@ -680,7 +659,7 @@ export const brandDecide = defineAction({
 
 import { setMatter, type MatterFacts } from './queries';
 
-const fact = (max: number) => s.optional(s.nullable(s.string({ max })));
+const fact = (max: number) => z.optional(z.nullable(z.string().check(z.maxLength(max))));
 
 /** A matter's facts, each saved as it changes: kind, side, party, amount claimed (cents) and its currency, claim,
     forum, product. Null clears one. Ordinary work on a task, so Tico may do it too. */
@@ -688,19 +667,19 @@ export const riskSetMatter = defineAction({
   id: 'risk.setMatter',
   title: "Change a matter's facts",
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     task: id,
-    version: s.optional(s.number({ int: true, min: 0 })),
-    kind: s.optional(s.nullable(s.oneOf(MATTER_KINDS))),
-    side: s.optional(s.nullable(s.oneOf(['theirs', 'ours'] as const))),
-    party: s.optional(s.nullable(id)),
-    party_name: s.optional(s.string({ max: 300 })),
-    amount: s.optional(s.nullable(s.number({ int: true, min: 0 }))),
-    currency: s.optional(s.nullable(s.string({ pattern: /^[A-Za-z]{3}$/, what: 'three letters, USD' }))),
+    version: z.optional(z.int().check(z.minimum(0))),
+    kind: z.optional(z.nullable(z.enum(MATTER_KINDS))),
+    side: z.optional(z.nullable(z.enum(['theirs', 'ours'] as const))),
+    party: z.optional(z.nullable(id)),
+    party_name: z.optional(z.string().check(z.maxLength(300))),
+    amount: z.optional(z.nullable(z.int().check(z.minimum(0)))),
+    currency: z.optional(z.nullable(z.string().check(z.regex(/^[A-Za-z]{3}$/), z.describe('three letters, USD')))),
     claim: fact(2000),
     forum: fact(200),
-    product: s.optional(s.nullable(s.string({ min: 1, max: 256 }))),
-    product_name: s.optional(s.string({ max: 300 })),
+    product: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(256)))),
+    product_name: z.optional(z.string().check(z.maxLength(300))),
   }),
   run: (_ctx, { task, version, party, party_name, product, product_name, currency, ...rest }) => {
     const facts = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)) as MatterFacts;

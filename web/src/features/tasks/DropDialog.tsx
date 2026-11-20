@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { run } from '@/actions';
+import { refusal, run } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
+import { toast } from '@/kit/Toast';
 import { dropChecksQuery, type DropChecks, type DropEnd } from './queries';
 
 /* A card let go over another card (ui/app/task-board.ts taskDropOpen): make it a subtask, or merge the two. Each choice
@@ -51,8 +52,9 @@ export function DropDialog({ task, onto, onClose }: { task: string; onto: string
     const keeper = owner && owner !== c.into.owner_id ? owner : null;
     const r = merge
       ? await run('tasks.merge', { task: c.task.id, into: c.into.id, owner: keeper }, { via: 'click' })
-      : await run('tasks.makeSubtask', { task: c.task.id, parent: c.into.id }, { via: 'click' });
+      : await run('task.subtask', { task: c.into.id, subtask: c.task.id }, { via: 'click' });
     setBusy(false);
+    if (!r.ok && !merge) toast(refusal(r, "Couldn't make it a subtask"));
     // Refused: nothing changed; the toast says why and the dialog stays open.
     if (r.ok) onClose();
   };

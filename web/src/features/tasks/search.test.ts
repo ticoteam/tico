@@ -7,7 +7,7 @@ import { tasksSearch } from './search';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
-const valid = (h: SearchHit) => registry.get(h.run.id)?.input.parse(h.run.input).ok;
+const valid = (h: SearchHit) => registry.get(h.run.id)?.input.safeParse(h.run.input).success;
 const pipeline: Pipeline = { id: 'p1', name: 'Garden', stages: [{ id: 's1', name: 'Sowing' }], owner: null, done: null, closed: null, mayChange: true };
 const owner: Actor = { id: 'bot:helper', kind: 'agent', name: 'Seed Helper', hue: 3 };
 

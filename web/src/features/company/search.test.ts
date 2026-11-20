@@ -28,7 +28,7 @@ describe('company search', () => {
       ['Frost guides sell kits', 'Bet', { id: 'shell.goTo', input: { to: '/company/strategy' } }],
       ['Frost kit', 'Product', { id: 'products.open', input: { product: 'frost-kit' } }],
     ]);
-    expect(hits.every((h) => registry.get(h.run.id)?.input.parse(h.run.input).ok)).toBe(true);
+    expect(hits.every((h) => registry.get(h.run.id)?.input.safeParse(h.run.input).success)).toBe(true);
     expect(await companySearch.find('', sig())).toEqual([]);
   });
 });

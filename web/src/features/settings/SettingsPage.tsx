@@ -10,7 +10,7 @@ import { Link as To } from '@/kit/Link';
 import { useCards } from '@/kit/Popover';
 import { Section, Settings } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
-import { Billing, Changelog, CheckNow, Health } from './Records';
+import { Billing, Changelog, Health } from './Records';
 import { History, type HistoryWho } from './HistoryViews';
 import { Account, General, People, Security } from './Basics';
 import { Contacts, Tasks } from './Catalog';
@@ -45,7 +45,6 @@ const HEAD: Partial<Record<SectionId, ReactNode>> = {
   people: <AddPersonButton />,
   agents: <AddAgentButton />,
   computers: <AddComputer />,
-  health: <CheckNow />,
 };
 
 function Nav({ current }: { current: SectionId }) {

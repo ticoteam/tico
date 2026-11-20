@@ -1,9 +1,9 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as z from 'zod/mini';
 import { queryClient } from '@/data';
 import { actionsCatalog, buildRegistry, registry } from './registry';
 import { runIn } from './run';
-import { s } from './schema';
 import { defineAction, type AnyAction } from './types';
 
 // the real module, so feature actions that set up their queries on load still find what they use; a cache of its own,
@@ -16,7 +16,7 @@ vi.mock('@/search', async (real) => ({ ...(await real<object>()), openSearch: vi
 vi.mock('@/motion', async (real) => ({ ...(await real<object>()), flight: vi.fn(), waitForTarget: vi.fn(async () => null), wash: vi.fn() }));
 
 const make = () =>
-  defineAction({ id: 'tasks.open', title: 'Open', kind: 'view', input: s.object({}), run: () => {} });
+  defineAction({ id: 'tasks.open', title: 'Open', kind: 'view', input: z.strictObject({}), run: () => {} });
 
 describe('registry', () => {
   it('fails loudly on a duplicate id, naming both files', () => {
@@ -60,7 +60,7 @@ describe('registry', () => {
   });
 
   it('refuses an id that is not area.verb', () => {
-    expect(() => defineAction({ id: 'Tasks.open', title: '', kind: 'view', input: s.object({}), run: () => {} })).toThrow();
+    expect(() => defineAction({ id: 'Tasks.open', title: '', kind: 'view', input: z.strictObject({}), run: () => {} })).toThrow();
   });
 });
 
@@ -103,9 +103,9 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['settings.setRole', { person: 'p1', role: 'admin' }],
     ['threads.whoCanRead', { thread: 't1', audience: 'company' }],
     ['threads.openEarlier', { thread: 't1' }],
-    ['tools.setAccess', { tool: 'keyed', subject: 'bot:new', level: 'read' }],
-    ['tools.setAccess', { tool: 'keyed', subject: 'bot:ro', level: 'read_write' }],
-    ['tools.setAccess', { tool: 'unread', subject: 'bot:qa', level: 'read' }],
+    ['tools.setAccess', { kind: 'api', id: 'keyed', who: 'bot:new', level: 'read' }],
+    ['tools.setAccess', { kind: 'api', id: 'keyed', who: 'bot:ro', level: 'read_write' }],
+    ['tools.setAccess', { kind: 'api', id: 'unread', who: 'bot:qa', level: 'read' }],
     ['settings.reportsDirect', { on: true }],
     // where a stored credential goes, and credentials ended
     ['tools.editApi', { tool: 'keyed', base_url: 'https://elsewhere.example.test' }],
@@ -138,8 +138,8 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['settings.setRole', { person: 'p1', role: 'member' }],
     ['threads.whoCanRead', { thread: 't1', audience: 'members' }],
     ['threads.keepMessages', { thread: 't1', days: null }],
-    ['tools.setAccess', { tool: 'keyed', subject: 'bot:qa', level: 'read' }],
-    ['tools.setAccess', { tool: 'unread', subject: 'bot:qa', level: 'none' }],
+    ['tools.setAccess', { kind: 'api', id: 'keyed', who: 'bot:qa', level: 'read' }],
+    ['tools.setAccess', { kind: 'api', id: 'unread', who: 'bot:qa', level: 'none' }],
     ['tools.editApi', { tool: 'keyed', name: 'Billing API' }],
     ['tools.editApi', { tool: 'keyed', base_url: 'https://api.example.test' }],
     ['tools.editApi', { tool: 'keyless', base_url: 'https://elsewhere.example.test' }],

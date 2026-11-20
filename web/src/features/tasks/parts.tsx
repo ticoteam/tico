@@ -1,6 +1,6 @@
-import { Link, useLocation } from '@tanstack/react-router';
+import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import type { HTMLAttributes, ReactElement, ReactNode, Ref } from 'react';
-import { useAction } from '@/actions';
+import { refusal, useAction } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { FlowMark } from '@/kit/FlowMark';
@@ -9,6 +9,7 @@ import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import { OwnerButton as KitOwnerButton } from '@/kit/OwnerButton';
 import { Pill } from '@/kit/Pill';
+import { toast } from '@/kit/Toast';
 import type { Stage, TaskItem } from './queries';
 import { chatAddress } from '@/lib';
 
@@ -74,6 +75,22 @@ export const taskHref = (pipeline: string, t: Pick<TaskItem, 'id' | 'number'>) =
 /** A pending row (filed, not yet answered) is not a link and has no menu. */
 export const isPending = (t: Pick<TaskItem, 'id'>) => t.id.startsWith('tmp:');
 
+/** Edit pipeline, or New pipeline (`fresh`): its own page, and Back goes to `pipeline`. */
+export function useOpenEditor() {
+  const navigate = useNavigate();
+  return (pipeline: string, fresh = false) => void navigate({ to: '/tasks/$pipeline/edit', params: { pipeline }, search: fresh ? { new: true } : {} });
+}
+
+/** One task to a stage, from a menu or a drag (`tasks.move`, so Tico moves a task the same way); a refusal says why. */
+export function useMove() {
+  const move = useAction('tasks.move');
+  return (task: string, to: string) =>
+    move.run({ tasks: task, to }).then((r) => {
+      if (!r.ok) toast(refusal(r, "Couldn't move the task"));
+      return r;
+    });
+}
+
 /**
  * A row or a card with its "Move to" menu: on "⋯" (a pointer or the keyboard) and on a right click or a long press.
  * The move is an action, so Tico moves a task the same way.
@@ -90,10 +107,10 @@ export function Movable({
   wrap?: HTMLAttributes<HTMLDivElement> & { 'data-task'?: string; ref?: Ref<HTMLDivElement> };
   children: ReactElement;
 }) {
-  const move = useAction('tasks.move');
+  const move = useMove();
   if (isPending(task)) return <div className="tk-item">{children}</div>;
   const items = stages.map((s) => (
-    <MenuItem key={s.id} label={s.name} on={s.id === task.stage_id} onSelect={() => s.id !== task.stage_id && void move.run({ task: task.id, to: s.id })} />
+    <MenuItem key={s.id} label={s.name} on={s.id === task.stage_id} onSelect={() => s.id !== task.stage_id && void move(task.id, s.id)} />
   ));
   return (
     <div className="tk-item" {...wrap}>

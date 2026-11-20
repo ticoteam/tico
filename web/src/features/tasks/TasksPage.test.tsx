@@ -179,7 +179,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Doing' }));
 
     await waitFor(() => expect(stageOf('a1')).toBe('s2'));
-    expect(posts[0]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } });
+    expect(posts[0]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's2' } });
     await waitFor(() => expect(refuse).toBeTypeOf('function'));
     await act(async () => refuse());
     await waitFor(() => expect(stageOf('a1')).toBe('s1'));
@@ -205,7 +205,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(posts).toEqual([]);
 
     dragTo(card('Fix the export'), column('Doing').querySelector('.col-head'));
-    await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
+    await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2' } }]));
     expect(await screen.findByText('Moved #7 to Doing')).toBeTruthy();
     expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
 

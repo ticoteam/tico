@@ -27,7 +27,7 @@ import { DropDialog } from './DropDialog';
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, waitsOnMe } from './parts';
+import { Blocks, Face, FlowButton, isPending, markOf, Movable, OwnerButton, taskHref, useMove, useOpenEditor, waitsOnMe } from './parts';
 import {
   flowQuery,
   isFiltered,
@@ -80,7 +80,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const tasks = useSuspenseQuery(pipelineTasksQuery(pipeline, filters)).data;
   const me = useQuery(meQuery).data?.id;
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
-  const edit = useAction('tasks.editPipeline');
+  const edit = useOpenEditor();
   const [newIn, setNewIn] = useState<{ stage: string | null } | null>(null);
   // A phone's head has no room for the search: "⋯" › Search brings its line up under the head.
   const cards = useCards();
@@ -128,7 +128,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
   const more = cut ? () => void loadMore(pipeline, filters) : undefined;
   const body: BodyProps | null = p
-    ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+    ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => edit(pipeline) }
     : null;
   const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
@@ -156,7 +156,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
 function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
   const filters: Filters = filtersOf(search);
   const shelves = useShelves(pipeline, filters);
-  const edit = useAction('tasks.editPipeline');
+  const edit = useOpenEditor();
   const empty = !p || (Object.values(shelves).every((x) => !x.tasks.length) && !isFiltered(filters));
   return (
     <List
@@ -168,7 +168,7 @@ function ArchivedPage({ pipeline, p, search, head }: Omit<PageProps, 'pipes'>) {
       // "⋯" stays last in the head (list.js archived): the pipeline's own verb, for whoever may change it
       more={
         <PageMore target="tasks:more">
-          {p?.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
+          {p?.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => edit(p.id)} />}
         </PageMore>
       }
       state={empty ? 'empty' : 'ready'}
@@ -212,8 +212,7 @@ interface PhoneMore {
     New task, Search, Filter and the other view come first. */
 function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly Pipeline[]; onSelect: () => void; phone?: PhoneMore }) {
   const setView = useAction('tasks.setView');
-  const edit = useAction('tasks.editPipeline');
-  const make = useAction('tasks.newPipeline');
+  const edit = useOpenEditor();
   const owner = useQuery(meQuery).data?.role === 'owner';
   const actors = useActors();
   const tags = useQuery(tagsQuery).data ?? [];
@@ -238,8 +237,8 @@ function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly 
       <MenuItem icon="archive" label="Archived" onSelect={() => void setView.run({ pipeline: p.id, view: 'archived' })} />
       <MenuItem icon="square" label="Select" onSelect={onSelect} />
       {(p.mayChange || mayMake) && <MenuRule />}
-      {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => void edit.run({ pipeline: p.id })} />}
-      {mayMake && <MenuItem icon="plus" label="New pipeline" onSelect={() => void make.run({ pipeline: p.id })} />}
+      {p.mayChange && <MenuItem icon="edit" label="Edit pipeline" onSelect={() => edit(p.id)} />}
+      {mayMake && <MenuItem icon="plus" label="New pipeline" onSelect={() => edit(p.id, true)} />}
     </PageMore>
   );
 }
@@ -418,7 +417,7 @@ const COLUMN = '.col[data-target^="stage:"]';
 const CARD = '.tk-item[data-task]';
 
 function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
-  const move = useAction('tasks.move');
+  const move = useMove();
   const [dropped, setDropped] = useState<{ task: string; onto: string } | null>(null);
   // A card let go over a stage moves there; over another card it asks: a subtask or a merge (DropDialog).
   const drag = useDrag({
@@ -432,7 +431,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
       if (zone.contains(card)) return;
       const to = zone.getAttribute('data-target')?.slice('stage:'.length) ?? '';
       const name = p.stages.find((s) => s.id === to)?.name;
-      void move.run({ task, to }).then((r) => r.ok && announce(`${r.did} to ${name}`));
+      void move(task, to).then((r) => r.ok && announce(`${r.did} to ${name}`));
     },
   });
   const groups = byStage(p.stages, rows);

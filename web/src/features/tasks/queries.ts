@@ -238,43 +238,6 @@ const patchRow = (cur: TaskPage | undefined, id: string, change: (t: TaskItem) =
     }),
   };
 
-function findTask(id: string): TaskItem | undefined {
-  for (const [, d] of queryClient.getQueriesData<TaskPage>({ queryKey: ['tasks', 'list'] })) {
-    const t = d?.tasks?.find((x) => x.id === id);
-    if (t) return t;
-  }
-  return undefined;
-}
-
-/** The stage `to` names in the task's pipeline (an id or a name), or null for done, closed or next. */
-function stageIn(pipelineId: string | null, to: string): Stage | null {
-  const p = queryClient.getQueryData<Pipeline[]>(pipelinesQuery.queryKey)?.find((x) => x.id === pipelineId);
-  return p?.stages.find((s) => s.id === to || s.name.toLowerCase() === to.toLowerCase()) ?? null;
-}
-
-/**
- * Move a task to a stage: it shows there at once and is taken back if the server refuses (a requirement not met, a
- * newer version). The refusal's words are the error's message.
- */
-export async function moveTask(id: string, to: string): Promise<TaskItem> {
-  const before = findTask(id);
-  const stage = before ? stageIn(before.pipeline_id, to) : null;
-  const shown = listsHolding(id);
-  const now = new Date().toISOString();
-  const { task } = await write<{ task: TaskItem }>({
-    key: shown.length ? shown : keys.tasks.detail(id),
-    optimistic: (cur: TaskPage | undefined) =>
-      stage && cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, stage_id: stage.id, stage_since: now })) : cur,
-    send: (idempotencyKey) =>
-      api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/move`, { to: stage?.id ?? to, version: before?.version }, { idempotencyKey }),
-    settle: (cur: TaskPage | undefined, answer) =>
-      cur?.tasks ? patchRow(cur, id, (t) => (answer.task.status === t.status ? { ...t, ...answer.task } : null)) : cur,
-    revert: (cur: TaskPage | undefined) =>
-      before && cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, stage_id: before.stage_id, stage_since: before.stage_since })) : cur,
-  });
-  return task;
-}
-
 export interface NewTask {
   title: string;
   pipeline: string;
@@ -387,13 +350,14 @@ async function many<T extends { skipped: readonly { reason: string }[] }>(
 }
 
 /** Move tasks to a stage of their pipeline, or to `done`, `closed` or `reopen`, in one write. */
-export async function moveMany(ids: readonly string[], to: string) {
+export async function moveMany(ids: readonly string[], to: string | undefined, pipeline?: string, why?: string) {
   const now = new Date().toISOString();
-  const leaves = to === 'done' || to === 'closed';
+  const leaves = !to || to === 'done' || to === 'closed' || !!pipeline;
   const { moved, moved_unseen, skipped } = await many(
     ids,
     (t) => (leaves ? null : to === 'reopen' ? t : { ...t, stage_id: to, stage_since: now }),
-    (idempotencyKey) => api.post<TaskMoveResult>('/api/v2/tasks/move', { ids, to }, { idempotencyKey }),
+    (idempotencyKey) =>
+      api.post<TaskMoveResult>('/api/v2/tasks/move', { ids, ...(to && { to }), ...(pipeline && { to_pipeline: pipeline }), ...(why && { why }) }, { idempotencyKey }),
   );
   return { moved, movedUnseen: moved_unseen, skipped: skippedOf(skipped) };
 }
@@ -751,18 +715,6 @@ export const dropChecksQuery = (task: string, into: string) =>
   });
 
 /** Put a task under another as its subtask; both keep their owners and stages. */
-export async function makeSubtask(id: string, parent: string): Promise<TaskItem> {
-  const shown = listsHolding(id);
-  const { task } = await write<{ task: TaskItem }>({
-    key: shown.length ? shown : keys.tasks.detail(id),
-    optimistic: (cur: unknown) => cur,
-    send: (idempotencyKey) => api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/parent`, { parent }, { idempotencyKey }),
-    settle: (cur: TaskPage | undefined, answer) => (cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, ...answer.task })) : cur),
-  });
-  void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(parent) });
-  return task;
-}
-
 /**
  * Merge a task into another: `into` stays and gets its details; the task is closed as a duplicate. It leaves the
  * board at once and comes back if the server refuses. `owner` picks who keeps `into` when the owners differ.

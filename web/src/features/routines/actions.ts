@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
-import { defineAction, s, type Ctx } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
 import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Part } from './board';
 import {
@@ -74,13 +75,13 @@ export type RuleTab = (typeof RULE_TABS)[number];
 export const BUILTINS = ['maintenance', 'heartbeat', 'system'] as const;
 export type Builtin = (typeof BUILTINS)[number];
 
-const id = s.string({ min: 1, max: 200 });
-const agent = s.string({ min: 1, max: 200, pattern: /^bot:\S+$/, what: 'bot:<id>' });
-const party = s.string({ min: 1, max: 200, pattern: /^(\*|(group|bot|human):\S+)$/, what: '*, group:<id>, bot:<id> or human:<id>' });
-const cron = s.string({ min: 9, max: 100, pattern: /^\S+( \S+){4}$/, what: 'a five-part cron, like 0 9 * * 1-5' });
-const name = s.string({ min: 1, max: 200 });
-const owner = s.string({ min: 1, max: 200, pattern: /^(bot|human):\S+$/, what: 'bot:<id> or human:<id>' });
-const day = s.string({ min: 10, max: 10, pattern: /^\d{4}-\d{2}-\d{2}$/, what: 'a day, YYYY-MM-DD' });
+const id = z.string().check(z.minLength(1), z.maxLength(200));
+const agent = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^bot:\S+$/), z.describe('bot:<id>'));
+const party = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(\*|(group|bot|human):\S+)$/), z.describe('*, group:<id>, bot:<id> or human:<id>'));
+const cron = z.string().check(z.minLength(9), z.maxLength(100), z.regex(/^\S+( \S+){4}$/), z.describe('a five-part cron, like 0 9 * * 1-5'));
+const name = z.string().check(z.minLength(1), z.maxLength(200));
+const owner = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(bot|human):\S+$/), z.describe('bot:<id> or human:<id>'));
+const day = z.string().check(z.minLength(10), z.maxLength(10), z.regex(/^\d{4}-\d{2}-\d{2}$/), z.describe('a day, YYYY-MM-DD'));
 const REPEATS = ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] as const;
 /** The range the Runs tab shows when the address names none: the last hour, as the old app opened it. */
 export const RUNS_RANGE = '1h';
@@ -106,7 +107,7 @@ export const openRoutine = defineAction({
   id: 'routines.open',
   title: 'Open a routine',
   kind: 'view',
-  input: s.object({ routine: id }),
+  input: z.strictObject({ routine: id }),
   run: ({ router }, { routine }) => go(router, ROUTINES, { panel: `routine:${routine}` }),
   did: () => 'Opened the routine',
   target: ({ routine }) => ({ kind: 'routine', id: routine }),
@@ -116,7 +117,7 @@ export const openBuiltin = defineAction({
   id: 'routines.openBuiltin',
   title: 'Open Maintenance, Heartbeat or System jobs',
   kind: 'view',
-  input: s.object({ which: s.oneOf(BUILTINS) }),
+  input: z.strictObject({ which: z.enum(BUILTINS) }),
   run: ({ router }, { which }) => go(router, ROUTINES, { panel: `builtin:${which}` }),
   did: () => 'Opened it',
   target: ({ which }) => ({ kind: 'routine', id: which }),
@@ -126,7 +127,7 @@ export const newRoutine = defineAction({
   id: 'routines.new',
   title: 'Start a new routine',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => go(router, ROUTINES, { panel: 'routine:new' }),
   did: () => 'Opened a new routine',
   target: () => ({ kind: 'panel', id: 'routine:new' }),
@@ -136,7 +137,7 @@ export const closePanel = defineAction({
   id: 'routines.closePanel',
   title: 'Close the panel',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => panelOff(router),
   did: () => 'Closed the panel',
 });
@@ -145,9 +146,9 @@ export const showRuns = defineAction({
   id: 'routines.showRuns',
   title: 'Show every run across routines',
   kind: 'view',
-  input: s.object({
-    status: s.optional(s.oneOf(RUN_STATUSES)),
-    range: s.optional(s.oneOf(RUN_RANGES)),
+  input: z.strictObject({
+    status: z.optional(z.enum(RUN_STATUSES)),
+    range: z.optional(z.enum(RUN_RANGES)),
   }),
   run: ({ router }, i) => go(router, ROUTINES, { tab: 'runs', status: i.status, range: i.range === RUNS_RANGE ? undefined : i.range }),
   did: () => 'Opened the runs',
@@ -173,12 +174,12 @@ export const createRoutineAction = defineAction({
   id: 'routines.create',
   title: 'Add a routine',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     name,
     agent,
-    instruction: s.string({ min: 1, max: 20_000 }),
-    cron: s.optional(cron),
-    event: s.optional(s.string({ min: 1, max: 100 })),
+    instruction: z.string().check(z.minLength(1), z.maxLength(20_000)),
+    cron: z.optional(cron),
+    event: z.optional(z.string().check(z.minLength(1), z.maxLength(100))),
   }),
   run: async ({ router }, i) => {
     const made = await said(createRoutine({ name: i.name.trim(), agent: i.agent, instruction: i.instruction.trim(), trigger: triggerOf(i) }));
@@ -193,13 +194,13 @@ export const updateRoutineAction = defineAction({
   id: 'routines.update',
   title: 'Change a routine',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     routine: id,
-    name: s.optional(name),
-    agent: s.optional(agent),
-    instruction: s.optional(s.string({ min: 1, max: 20_000 })),
-    cron: s.optional(cron),
-    event: s.optional(s.string({ min: 1, max: 100, pattern: /^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/, what: 'an event name, like task.created' })),
+    name: z.optional(name),
+    agent: z.optional(agent),
+    instruction: z.optional(z.string().check(z.minLength(1), z.maxLength(20_000))),
+    cron: z.optional(cron),
+    event: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.regex(/^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/), z.describe('an event name, like task.created'))),
   }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (ctx, i) => {
@@ -222,7 +223,7 @@ export const runNow = defineAction({
   id: 'routines.runNow',
   title: 'Run a routine now',
   kind: 'change',
-  input: s.object({ routine: id }),
+  input: z.strictObject({ routine: id }),
   run: (_ctx, i) => said(runRoutine(i.routine)),
   did: () => 'Started a run',
   target: (i) => ({ kind: 'routine-runs', id: i.routine }),
@@ -246,7 +247,7 @@ export const testRun = defineAction({
   title: 'Test a routine with sample input',
   kind: 'change',
   // `sample`: JSON standing in for what its trigger gives (a message, an event, a webhook body)
-  input: s.object({ routine: id, sample: s.optional(s.string({ max: 50_000 })) }),
+  input: z.strictObject({ routine: id, sample: z.optional(z.string().check(z.maxLength(50_000))) }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (_ctx, i) => {
     const r = await said(runRoutine(i.routine, sampleOf(i.sample)));
@@ -260,7 +261,7 @@ export const restoreVersionAction = defineAction({
   id: 'routines.restoreVersion',
   title: "Restore a routine's version, or turn on a proposed one",
   kind: 'change',
-  input: s.object({ routine: id, n: s.number({ int: true, min: 1, max: 1_000_000 }) }),
+  input: z.strictObject({ routine: id, n: z.int().check(z.minimum(1), z.maximum(1_000_000)) }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(restoreVersion(i.routine, i.n)).then(() => undefined),
   did: (i) => `Restored v${i.n}`,
@@ -271,7 +272,7 @@ export const discardVersionAction = defineAction({
   id: 'routines.discardVersion',
   title: "Discard an agent's proposed version",
   kind: 'change',
-  input: s.object({ routine: id, n: s.number({ int: true, min: 1, max: 1_000_000 }) }),
+  input: z.strictObject({ routine: id, n: z.int().check(z.minimum(1), z.maximum(1_000_000)) }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(discardVersion(i.routine, i.n)).then(() => undefined),
   did: (i) => `Discarded v${i.n}`,
@@ -282,7 +283,7 @@ export const pause = defineAction({
   id: 'routines.pause',
   title: 'Pause a routine',
   kind: 'change',
-  input: s.object({ routine: id }),
+  input: z.strictObject({ routine: id }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_pause !== false,
   run: (_ctx, i) => said(setRoutineOn(i.routine, false)),
   did: () => 'Paused',
@@ -293,7 +294,7 @@ export const setLimit = defineAction({
   id: 'routines.setLimit',
   title: "Set a routine's spend limit",
   kind: 'change',
-  input: s.object({ routine: id, per30m: s.nullable(s.number({ min: 0, max: 100_000 })) }),
+  input: z.strictObject({ routine: id, per30m: z.nullable(z.number().check(z.minimum(0), z.maximum(100_000))) }),
   // A spending limit is budget: the person's own press.
   tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
@@ -306,7 +307,7 @@ export const resume = defineAction({
   id: 'routines.resume',
   title: 'Turn a routine back on',
   kind: 'change',
-  input: s.object({ routine: id }),
+  input: z.strictObject({ routine: id }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_pause !== false,
   run: (_ctx, i) => said(setRoutineOn(i.routine, true)),
   did: () => 'Turned on',
@@ -318,7 +319,7 @@ export const endHoldAction = defineAction({
   id: 'routines.endHold',
   title: "Release or drop a routine's held runs",
   kind: 'change',
-  input: s.object({ routine: id, action: s.oneOf(['release', 'drop'] as const) }),
+  input: z.strictObject({ routine: id, action: z.enum(['release', 'drop'] as const) }),
   // Dropped runs are skipped for good: the person's own press.
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false && !(i.action === 'drop' && ctx.via === 'tico'),
   run: (_ctx, i) => said(endHold(i.routine, i.action)).then(() => undefined),
@@ -330,7 +331,7 @@ export const removeRoutineAction = defineAction({
   id: 'routines.remove',
   title: 'Remove a routine',
   kind: 'change',
-  input: s.object({ routine: id }),
+  input: z.strictObject({ routine: id }),
   // Nothing brings a removed routine back, and what it held is dropped: the person's own press.
   tico: false,
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
@@ -345,11 +346,11 @@ export const setMaintenanceAction = defineAction({
   id: 'routines.setMaintenance',
   title: 'Change Maintenance',
   kind: 'change',
-  input: s.object({
-    schedule: s.optional(s.oneOf(['hourly', '2h', '3h', '6h', '12h', 'daily'] as const)),
-    paused: s.optional(s.boolean()),
-    step: s.optional(s.string({ min: 1, max: 60 })),
-    stepOn: s.optional(s.boolean()),
+  input: z.strictObject({
+    schedule: z.optional(z.enum(['hourly', '2h', '3h', '6h', '12h', 'daily'] as const)),
+    paused: z.optional(z.boolean()),
+    step: z.optional(z.string().check(z.minLength(1), z.maxLength(60))),
+    stepOn: z.optional(z.boolean()),
   }),
   run: (_ctx, i) =>
     said(setMaintenance({ schedule: i.schedule, paused: i.paused, step: i.step !== undefined ? { key: i.step, enabled: i.stepOn ?? true } : undefined })),
@@ -361,7 +362,7 @@ export const runMaintenanceAction = defineAction({
   id: 'routines.runMaintenance',
   title: 'Run Maintenance now',
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => said(runMaintenance()),
   did: () => 'Started Maintenance',
   target: () => ({ kind: 'routine-runs', id: 'maintenance' }),
@@ -371,7 +372,7 @@ export const setHeartbeatAction = defineAction({
   id: 'routines.setHeartbeat',
   title: 'Set how often Heartbeat checks',
   kind: 'change',
-  input: s.object({ seconds: s.number({ int: true, min: 5, max: 60 }) }),
+  input: z.strictObject({ seconds: z.int().check(z.minimum(5), z.maximum(60)) }),
   run: (_ctx, i) => said(setHeartbeat(i.seconds)),
   did: (i) => `Heartbeat every ${i.seconds} s`,
   target: () => ({ kind: 'routine', id: 'heartbeat' }),
@@ -381,7 +382,7 @@ export const runJobAction = defineAction({
   id: 'routines.runJob',
   title: 'Run a system job now',
   kind: 'change',
-  input: s.object({ job: s.string({ min: 1, max: 100 }) }),
+  input: z.strictObject({ job: z.string().check(z.minLength(1), z.maxLength(100)) }),
   run: (_ctx, i) => said(runJob(i.job)),
   did: () => 'Started it',
   target: (i) => ({ kind: 'job', id: i.job }),
@@ -391,7 +392,7 @@ export const setJobAction = defineAction({
   id: 'routines.setJob',
   title: 'Turn a system job on or off',
   kind: 'change',
-  input: s.object({ job: s.string({ min: 1, max: 100 }), on: s.boolean() }),
+  input: z.strictObject({ job: z.string().check(z.minLength(1), z.maxLength(100)), on: z.boolean() }),
   run: (_ctx, i) => said(setJob(i.job, i.on)),
   did: (i) => (i.on ? 'Turned on' : 'Turned off'),
   target: (i) => ({ kind: 'job', id: i.job }),
@@ -403,10 +404,10 @@ export const setJobScheduleAction = defineAction({
   id: 'routines.setJobSchedule',
   title: 'Pick when a system job runs: a preset, or its daily time',
   kind: 'change',
-  input: s.object({
-    job: s.string({ min: 1, max: 100 }),
-    preset: s.optional(s.oneOf(JOB_PRESETS)),
-    at: s.optional(s.string({ min: 5, max: 5, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, what: 'a time, HH:MM' })),
+  input: z.strictObject({
+    job: z.string().check(z.minLength(1), z.maxLength(100)),
+    preset: z.optional(z.enum(JOB_PRESETS)),
+    at: z.optional(z.string().check(z.minLength(5), z.maxLength(5), z.regex(/^([01]\d|2[0-3]):[0-5]\d$/), z.describe('a time, HH:MM'))),
   }),
   run: (_ctx, i) => said(setJobSchedule(i.job, { preset: i.preset, at: i.at })),
   did: (i) => (i.at && !i.preset ? `Runs at ${i.at}` : 'Schedule changed'),
@@ -421,7 +422,7 @@ export const listRoutines = defineAction({
   id: 'routines.list',
   title: 'Search or filter the routines',
   kind: 'view',
-  input: s.object({ q: s.optional(s.string({ max: 200 })), state: s.optional(s.oneOf(ROUTINE_STATES)) }),
+  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))), state: z.optional(z.enum(ROUTINE_STATES)) }),
   run: ({ router }, i) => go(router, ROUTINES, { q: i.q?.trim() || undefined, state: i.state }),
   did: () => 'Listed the routines',
   target: () => ({ kind: 'tab', id: 'routines' }),
@@ -432,31 +433,31 @@ export const listRoutines = defineAction({
 const notLoaded = () => Object.assign(new Error('That routine is not loaded'), { code: 'not_found: That routine is not loaded' });
 const notBoard = () => Object.assign(new Error("This routine isn't a board"), { code: "not_a_board: This routine isn't a board" });
 
-const act = s.object({ do: s.oneOf(Object.keys(ACTS)), args: s.optional(s.record(s.string({ max: 20_000 }))) });
-const cond = s.object({ field: s.string({ min: 1, max: 200 }), op: s.optional(s.oneOf(['is', 'is_not', 'contains', 'matches', '>=', '<='] as const)), value: s.string({ max: 2000 }) });
+const act = z.strictObject({ do: z.enum(Object.keys(ACTS)), args: z.optional(z.record(z.string(), z.string().check(z.maxLength(20_000)))) });
+const cond = z.strictObject({ field: z.string().check(z.minLength(1), z.maxLength(200)), op: z.optional(z.enum(['is', 'is_not', 'contains', 'matches', '>=', '<='] as const)), value: z.string().check(z.maxLength(2000)) });
 
 export const saveBoardItem = defineAction({
   id: 'routines.saveBoardItem',
   title: "Add or change a rule, question, destination or the LLM on a routine's board",
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     routine: id,
-    part: s.oneOf(['rule', 'question', 'destination', 'llm'] as const),
+    part: z.enum(['rule', 'question', 'destination', 'llm'] as const),
     // which one, from 0; left out adds a new one (the LLM has just one)
-    at: s.optional(s.number({ int: true, min: 0, max: 500 })),
-    when: s.optional(s.array(cond, { max: 20 })),
-    match: s.optional(s.oneOf(['all', 'any'] as const)),
-    then: s.optional(s.array(act, { max: 20 })),
+    at: z.optional(z.int().check(z.minimum(0), z.maximum(500))),
+    when: z.optional(z.array(cond).check(z.maxLength(20))),
+    match: z.optional(z.enum(['all', 'any'] as const)),
+    then: z.optional(z.array(act).check(z.maxLength(20))),
     // a rule's or question's last step: a destination id, or '' to end (or, a rule with moveOn, to move on)
-    goTo: s.optional(s.string({ max: 100 })),
-    moveOn: s.optional(s.boolean()),
-    text: s.optional(s.string({ max: 8000 })),
-    min: s.optional(s.nullable(s.number({ min: 0, max: 1 }))),
-    name: s.optional(name),
-    mode: s.optional(s.oneOf(['sort', 'draft', 'reply'] as const)),
-    prompt: s.optional(s.string({ max: 20_000 })),
-    dests: s.optional(s.array(s.string({ min: 1, max: 100 }), { max: 50 })),
-    unsure: s.optional(s.string({ max: 100 })),
+    goTo: z.optional(z.string().check(z.maxLength(100))),
+    moveOn: z.optional(z.boolean()),
+    text: z.optional(z.string().check(z.maxLength(8000))),
+    min: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(1)))),
+    name: z.optional(name),
+    mode: z.optional(z.enum(['sort', 'draft', 'reply'] as const)),
+    prompt: z.optional(z.string().check(z.maxLength(20_000))),
+    dests: z.optional(z.array(z.string().check(z.minLength(1), z.maxLength(100))).check(z.maxLength(50))),
+    unsure: z.optional(z.string().check(z.maxLength(100))),
   }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (ctx, { routine, ...item }) => {
@@ -474,7 +475,7 @@ export const removeBoardItem = defineAction({
   id: 'routines.removeBoardItem',
   title: "Remove a rule, question or destination from a routine's board",
   kind: 'change',
-  input: s.object({ routine: id, part: s.oneOf(['rule', 'question', 'destination'] as const), at: s.number({ int: true, min: 0, max: 500 }) }),
+  input: z.strictObject({ routine: id, part: z.enum(['rule', 'question', 'destination'] as const), at: z.int().check(z.minimum(0), z.maximum(500)) }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (ctx, i) => {
     const r = cached(ctx, i.routine);
@@ -494,12 +495,12 @@ export const newInbox = defineAction({
   id: 'routines.newInbox',
   title: 'Add an inbox routine from a template',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     // an email address, or a channel a team hears
-    inbox: s.string({ min: 1, max: 300 }),
-    owner: s.string({ min: 1, max: 200, pattern: /^(human|person|bot|group):\S+$/, what: 'human:<id>, bot:<id> or group:<id>' }),
-    template: s.string({ min: 1, max: 100 }),
-    on: s.optional(s.boolean()),
+    inbox: z.string().check(z.minLength(1), z.maxLength(300)),
+    owner: z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(human|person|bot|group):\S+$/), z.describe('human:<id>, bot:<id> or group:<id>')),
+    template: z.string().check(z.minLength(1), z.maxLength(100)),
+    on: z.optional(z.boolean()),
   }),
   run: async ({ router }, i) => {
     const filled = await said(fillTemplate(i.template, ownerRef(i.owner), i.inbox.trim()));
@@ -515,7 +516,7 @@ export const applyTemplate = defineAction({
   id: 'routines.applyTemplate',
   title: 'Move an inbox routine onto a template',
   kind: 'change',
-  input: s.object({ routine: id, template: s.string({ min: 1, max: 100 }) }),
+  input: z.strictObject({ routine: id, template: z.string().check(z.minLength(1), z.maxLength(100)) }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (ctx, i) => {
     const r = cached(ctx, i.routine);
@@ -535,7 +536,7 @@ export const openWebhook = defineAction({
   id: 'webhooks.open',
   title: 'Open a webhook',
   kind: 'view',
-  input: s.object({ hook: id }),
+  input: z.strictObject({ hook: id }),
   run: ({ router }, { hook }) => go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${hook}` }),
   did: () => 'Opened the webhook',
   target: ({ hook }) => ({ kind: 'hook', id: hook }),
@@ -548,7 +549,7 @@ export const addWebhook = defineAction({
   kind: 'change',
   // Its address carries a secret shown once, and so may its signing secret: the person's own press.
   tico: false,
-  input: s.object({ name, preset: s.optional(s.oneOf(PRESETS)), secret: s.optional(s.string({ max: 300 })) }),
+  input: z.strictObject({ name, preset: z.optional(z.enum(PRESETS)), secret: z.optional(z.string().check(z.maxLength(300))) }),
   // The full address (secret included) and a made signing secret go back to the page that added it, held in its
   // state: never cached. Making one is two calls, as the old app made it: create, then signing.
   run: async ({ router }, i) => {
@@ -565,7 +566,7 @@ export const updateWebhook = defineAction({
   id: 'webhooks.update',
   title: "Rename a webhook",
   kind: 'change',
-  input: s.object({ hook: id, name }),
+  input: z.strictObject({ hook: id, name }),
   run: (_ctx, i) => said(updateHook(i.hook, { name: i.name.trim() })).then(() => undefined),
   did: () => 'Saved',
   target: (i) => ({ kind: 'hook', id: i.hook }),
@@ -576,7 +577,7 @@ export const rotateWebhook = defineAction({
   title: 'Give a webhook a new secret',
   kind: 'change',
   tico: false,
-  input: s.object({ hook: id }),
+  input: z.strictObject({ hook: id }),
   run: async ({ router }, i) => {
     const url = await said(rotateHook(i.hook));
     await go(router, ROUTINES, { tab: 'webhooks', panel: `hook:${i.hook}` });
@@ -593,10 +594,10 @@ export const signWebhook = defineAction({
   title: "Check a webhook's calls with a signing secret",
   kind: 'change',
   tico: false,
-  input: s.object({
+  input: z.strictObject({
     hook: id,
-    preset: s.oneOf(['hmac', 'github', 'standard', 'stripe', 'slack'] as const),
-    secret: s.optional(s.string({ max: 300 })),
+    preset: z.enum(['hmac', 'github', 'standard', 'stripe', 'slack'] as const),
+    secret: z.optional(z.string().check(z.maxLength(300))),
   }),
   run: (_ctx, i) => said(signHook(i.hook, i.preset, i.secret?.trim() || undefined)),
   did: () => 'Signing on',
@@ -608,7 +609,7 @@ export const signWebhookOff = defineAction({
   title: "Stop checking a webhook's signature",
   kind: 'change',
   tico: false,
-  input: s.object({ hook: id }),
+  input: z.strictObject({ hook: id }),
   run: (_ctx, i) => said(signHookOff(i.hook)).then(() => undefined),
   did: () => 'Signing off',
   target: (i) => ({ kind: 'hook', id: i.hook }),
@@ -618,7 +619,7 @@ export const removeWebhook = defineAction({
   id: 'webhooks.remove',
   title: 'Remove a webhook',
   kind: 'change',
-  input: s.object({ hook: id }),
+  input: z.strictObject({ hook: id }),
   // Its address and secret are gone for good, and whoever calls it is refused: the person's own press.
   tico: false,
   can: (ctx, i) => !ctx.queryClient.getQueryData<{ id: string; builtin?: boolean }[]>(hooksQuery.queryKey)?.find((h) => h.id === i.hook)?.builtin,
@@ -637,7 +638,7 @@ export const openRule = defineAction({
   id: 'rules.open',
   title: 'Open a rule',
   kind: 'view',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), tab: s.optional(s.oneOf(RULE_TABS)) }),
+  input: z.strictObject({ rule: id, kind: z.enum(['org', 'stage'] as const), tab: z.optional(z.enum(RULE_TABS)) }),
   run: ({ router }, i) => ruleTab(router, i.tab ?? (i.kind === 'stage' ? 'stages' : ''), `${i.kind}:${i.rule}`),
   did: () => 'Opened the rule',
   target: (i) => ({ kind: 'rule', id: i.rule }),
@@ -647,7 +648,7 @@ export const newRule = defineAction({
   id: 'rules.new',
   title: 'Start a new rule',
   kind: 'view',
-  input: s.object({ kind: s.oneOf(['org', 'stage', 'outside'] as const) }),
+  input: z.strictObject({ kind: z.enum(['org', 'stage', 'outside'] as const) }),
   run: ({ router }, i) => ruleTab(router, i.kind === 'stage' ? 'stages' : i.kind === 'outside' ? 'outside' : '', `${i.kind === 'stage' ? 'stage' : 'org'}:new`),
   did: () => 'Opened a new rule',
   target: () => ({ kind: 'panel', id: 'rule:new' }),
@@ -657,7 +658,7 @@ export const pickScope = defineAction({
   id: 'rules.pickScope',
   title: 'Show the rules for a team, an agent or a person',
   kind: 'view',
-  input: s.object({ who: party }),
+  input: z.strictObject({ who: party }),
   run: ({ router }, i) => go(router, RULES, i.who === '*' ? {} : { who: i.who }),
   did: () => 'Opened their rules',
   target: (i) => ({ kind: 'scope', id: i.who }),
@@ -668,7 +669,7 @@ export const listRules = defineAction({
   id: 'rules.list',
   title: 'Search the rules on a tab',
   kind: 'view',
-  input: s.object({ tab: s.optional(s.oneOf(RULE_TABS)), q: s.optional(s.string({ max: 200 })) }),
+  input: z.strictObject({ tab: z.optional(z.enum(RULE_TABS)), q: z.optional(z.string().check(z.maxLength(200))) }),
   run: ({ router }, i) => {
     // whose rules (Company) stay as they are
     const prev = router.state.location.search as { tab?: string; who?: string };
@@ -682,7 +683,7 @@ export const closeRule = defineAction({
   id: 'rules.closePanel',
   title: 'Close the rule',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: ({ router }) => panelOff(router),
   did: () => 'Closed the rule',
 });
@@ -701,16 +702,16 @@ const missing = () => Object.assign(new Error('That rule is not loaded'), { code
 
 const SOURCE_KINDS = ['vendor', 'customer', 'government', 'other'] as const;
 const orgFields = {
-  text: s.string({ min: 1, max: 2000 }),
-  ifBroken: s.oneOf(['block', 'escalate', 'warn'] as const),
+  text: z.string().check(z.minLength(1), z.maxLength(2000)),
+  ifBroken: z.enum(['block', 'escalate', 'warn'] as const),
   // under Ask first: the person who OKs it; left out, the manager above whoever broke it
-  reviewer: s.optional(party),
+  reviewer: z.optional(party),
   // who follows it: ['*'] (Everyone, the default) or teams, agents and people
-  who: s.optional(s.array(party, { max: 100 })),
-  outside: s.optional(s.boolean()),
+  who: z.optional(z.array(party).check(z.maxLength(100))),
+  outside: z.optional(z.boolean()),
   // an outside rule: who it is from, an existing From's id, or a new one by name and kind
-  source: s.optional(id),
-  newSource: s.optional(s.object({ name: s.string({ min: 1, max: 200 }), kind: s.oneOf(SOURCE_KINDS) })),
+  source: z.optional(id),
+  newSource: z.optional(z.strictObject({ name: z.string().check(z.minLength(1), z.maxLength(200)), kind: z.enum(SOURCE_KINDS) })),
 };
 type OrgIn = { text: string; ifBroken: 'block' | 'escalate' | 'warn'; reviewer?: string; who?: string[]; outside?: boolean; source?: string; newSource?: { name: string; kind: string } };
 
@@ -729,15 +730,15 @@ const orgOut = (o: OrgIn, kind: 'internal' | 'external', source?: string): OrgRu
 });
 const noFrom = () => Object.assign(new Error('Pick who it is from'), { code: 'bad_input: Pick who it is from' });
 const stageFields = {
-  name: s.optional(s.string({ max: 200 })),
-  pipeline: s.string({ max: 100 }),
-  stages: s.array(s.string({ min: 1, max: 100 }), { max: 50 }),
-  event: s.string({ min: 1, max: 100, pattern: /^(timer|(enters|owner_changes|bot_snoozes)(,(enters|owner_changes|bot_snoozes))*)$/, what: 'enters, owner_changes, bot_snoozes or timer' }),
-  timerKind: s.optional(s.oneOf(['in_stage', 'quiet', 'waiting_person'] as const)),
-  timerHours: s.optional(s.number({ min: 0.25, max: 2000 })),
-  decisionModel: s.optional(s.string({ max: 2000 })),
-  then: s.oneOf(['block', 'tell_manager', 'tell_owner', 'move_back'] as const),
-  reason: s.optional(s.string({ max: 2000 })),
+  name: z.optional(z.string().check(z.maxLength(200))),
+  pipeline: z.string().check(z.maxLength(100)),
+  stages: z.array(z.string().check(z.minLength(1), z.maxLength(100))).check(z.maxLength(50)),
+  event: z.string().check(z.minLength(1), z.maxLength(100), z.regex(/^(timer|(enters|owner_changes|bot_snoozes)(,(enters|owner_changes|bot_snoozes))*)$/), z.describe('enters, owner_changes, bot_snoozes or timer')),
+  timerKind: z.optional(z.enum(['in_stage', 'quiet', 'waiting_person'] as const)),
+  timerHours: z.optional(z.number().check(z.minimum(0.25), z.maximum(2000))),
+  decisionModel: z.optional(z.string().check(z.maxLength(2000))),
+  then: z.enum(['block', 'tell_manager', 'tell_owner', 'move_back'] as const),
+  reason: z.optional(z.string().check(z.maxLength(2000))),
 };
 
 export const addRule = defineAction({
@@ -745,7 +746,7 @@ export const addRule = defineAction({
   title: 'Add a rule',
   kind: 'change',
   // `stay`: keep the page where it is (the pipeline editor) instead of opening the new rule on the Rules page
-  input: s.object({ kind: s.oneOf(['org', 'stage'] as const), org: s.optional(s.object(orgFields)), stage: s.optional(s.object(stageFields)), stay: s.optional(s.boolean()) }),
+  input: z.strictObject({ kind: z.enum(['org', 'stage'] as const), org: z.optional(z.strictObject(orgFields)), stage: z.optional(z.strictObject(stageFields)), stay: z.optional(z.boolean()) }),
   run: async ({ router }, i) => {
     if (i.kind === 'org' && i.org) {
       const o = i.org;
@@ -784,7 +785,7 @@ export const updateRule = defineAction({
   id: 'rules.update',
   title: 'Change a rule',
   kind: 'change',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), org: s.optional(s.object(orgFields)), stage: s.optional(s.object(stageFields)) }),
+  input: z.strictObject({ rule: id, kind: z.enum(['org', 'stage'] as const), org: z.optional(z.strictObject(orgFields)), stage: z.optional(z.strictObject(stageFields)) }),
   can: (ctx, i) => (i.kind === 'org' ? orgRule(ctx, i.rule)?.can_edit !== false : stageRule(ctx, i.rule)?.can_edit !== false),
   run: async (ctx, i) => {
     if (i.kind === 'org' && i.org) {
@@ -823,7 +824,7 @@ export const removeRule = defineAction({
   id: 'rules.remove',
   title: 'Remove a rule',
   kind: 'change',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), stay: s.optional(s.boolean()) }),
+  input: z.strictObject({ rule: id, kind: z.enum(['org', 'stage'] as const), stay: z.optional(z.boolean()) }),
   can: (ctx, i) => (i.kind === 'org' ? orgRule(ctx, i.rule)?.can_edit !== false : stageRule(ctx, i.rule)?.can_edit !== false),
   run: async (ctx, i) => {
     if (i.kind === 'org') {
@@ -845,7 +846,7 @@ export const acceptRule = defineAction({
   title: 'Add a suggested rule',
   kind: 'change',
   // `who`: who follows it, for a suggestion that names no one (the server takes none without)
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const), who: s.optional(s.array(party, { max: 100 })) }),
+  input: z.strictObject({ rule: id, kind: z.enum(['org', 'stage'] as const), who: z.optional(z.array(party).check(z.maxLength(100))) }),
   run: async (ctx, i) => {
     if (i.kind === 'org') {
       const was = orgRule(ctx, i.rule);
@@ -869,7 +870,7 @@ export const skipRule = defineAction({
   id: 'rules.skip',
   title: 'Set a suggested rule aside',
   kind: 'change',
-  input: s.object({ rule: id, kind: s.oneOf(['org', 'stage'] as const) }),
+  input: z.strictObject({ rule: id, kind: z.enum(['org', 'stage'] as const) }),
   run: async (ctx, i) => {
     if (i.kind === 'org') {
       const was = orgRule(ctx, i.rule);
@@ -888,12 +889,12 @@ export const setReachAction = defineAction({
   id: 'rules.setReach',
   title: 'Set who a teammate may reach, and how much a day',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     who: party,
-    mode: s.optional(s.nullable(s.oneOf(['open', 'nearby', 'closed'] as const))),
-    book: s.optional(s.nullable(s.oneOf(['anyone', 'nearby', 'none'] as const))),
-    chatsPerDay: s.optional(s.nullable(s.number({ int: true, min: 0, max: 10_000 }))),
-    tasksPerDay: s.optional(s.nullable(s.number({ int: true, min: 0, max: 10_000 }))),
+    mode: z.optional(z.nullable(z.enum(['open', 'nearby', 'closed'] as const))),
+    book: z.optional(z.nullable(z.enum(['anyone', 'nearby', 'none'] as const))),
+    chatsPerDay: z.optional(z.nullable(z.int().check(z.minimum(0), z.maximum(10_000)))),
+    tasksPerDay: z.optional(z.nullable(z.int().check(z.minimum(0), z.maximum(10_000)))),
   }),
   run: (_ctx, i) =>
     said(
@@ -914,7 +915,7 @@ export const openDue = defineAction({
   id: 'rules.openDue',
   title: 'Open a due date',
   kind: 'view',
-  input: s.object({ due: id }),
+  input: z.strictObject({ due: id }),
   run: ({ router }, i) => ruleTab(router, 'due', `due:${i.due}`),
   did: () => 'Opened the due date',
   target: (i) => ({ kind: 'due', id: i.due }),
@@ -925,7 +926,7 @@ export const newDue = defineAction({
   title: 'Start a new due date',
   kind: 'view',
   // `rule`: the rule it is for, already picked
-  input: s.object({ rule: s.optional(id) }),
+  input: z.strictObject({ rule: z.optional(id) }),
   run: ({ router }, i) => ruleTab(router, 'due', i.rule ? `due:new:${i.rule}` : 'due:new'),
   did: () => 'Opened a new due date',
   target: () => ({ kind: 'panel', id: 'due:new' }),
@@ -935,13 +936,13 @@ export const addDueAction = defineAction({
   id: 'rules.addDue',
   title: 'Add a due date to a rule',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     rule: id,
     due: day,
-    repeats: s.oneOf(REPEATS),
+    repeats: z.enum(REPEATS),
     owner,
     // a task opens this many days before each due day
-    taskDays: s.optional(s.number({ int: true, min: 0, max: 366 })),
+    taskDays: z.optional(z.int().check(z.minimum(0), z.maximum(366))),
   }),
   run: async ({ router }, i) => {
     const made = await said(addDue(i.rule, { first_due: i.due, repeats: i.repeats, owner: i.owner, ...(i.taskDays !== undefined ? { task_days: i.taskDays } : {}) }));
@@ -956,13 +957,13 @@ export const updateDueAction = defineAction({
   id: 'rules.updateDue',
   title: 'Change a due date',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     due: id,
-    first: s.optional(day),
-    repeats: s.optional(s.oneOf(REPEATS)),
-    owner: s.optional(owner),
+    first: z.optional(day),
+    repeats: z.optional(z.enum(REPEATS)),
+    owner: z.optional(owner),
     // null: no task before it
-    taskDays: s.optional(s.nullable(s.number({ int: true, min: 0, max: 366 }))),
+    taskDays: z.optional(z.nullable(z.int().check(z.minimum(0), z.maximum(366)))),
   }),
   run: async ({ router }, i) => {
     const saved = await said(
@@ -985,7 +986,7 @@ export const satisfyDueAction = defineAction({
   id: 'rules.satisfyDue',
   title: 'Mark a due date satisfied',
   kind: 'change',
-  input: s.object({ due: id, on: s.optional(day) }),
+  input: z.strictObject({ due: id, on: z.optional(day) }),
   run: (_ctx, i) => said(satisfyDue(i.due, i.on)).then(() => undefined),
   did: () => 'Marked satisfied',
   target: (i) => ({ kind: 'due', id: i.due }),
@@ -995,7 +996,7 @@ export const removeDueAction = defineAction({
   id: 'rules.removeDue',
   title: 'Remove a due date',
   kind: 'change',
-  input: s.object({ due: id }),
+  input: z.strictObject({ due: id }),
   run: async ({ router }, i) => {
     await said(removeDue(i.due));
     await panelOff(router);
@@ -1009,13 +1010,13 @@ export const readDocumentAction = defineAction({
   id: 'rules.readDocument',
   title: 'Have a document read for outside rules',
   kind: 'change',
-  input: s.object({
-    file: s.optional(id),
-    url: s.optional(s.string({ min: 8, max: 2000, pattern: /^https?:\/\/\S+$/i, what: 'an http(s) link' })),
-    note: s.optional(s.string({ max: 2000 })),
+  input: z.strictObject({
+    file: z.optional(id),
+    url: z.optional(z.string().check(z.minLength(8), z.maxLength(2000), z.regex(/^https?:\/\/\S+$/i), z.describe('an http(s) link'))),
+    note: z.optional(z.string().check(z.maxLength(2000))),
     // an existing From's id, or a new From's name with `kind`
-    source: s.string({ min: 1, max: 200 }),
-    kind: s.optional(s.oneOf(['vendor', 'customer', 'government', 'other'] as const)),
+    source: z.string().check(z.minLength(1), z.maxLength(200)),
+    kind: z.optional(z.enum(['vendor', 'customer', 'government', 'other'] as const)),
   }),
   run: (_ctx, i) => {
     if (!i.file === !i.url) throw Object.assign(new Error('Pick a file or paste a link'), { code: 'bad_input: Pick a file or paste a link' });
@@ -1031,7 +1032,7 @@ export const openWatch = defineAction({
   id: 'listening.open',
   title: 'Open a listening watch',
   kind: 'view',
-  input: s.object({ watch: id, tab: s.optional(s.oneOf(['matches', 'sources'] as const)) }),
+  input: z.strictObject({ watch: id, tab: z.optional(z.enum(['matches', 'sources'] as const)) }),
   run: ({ router }, i) => go(router, LISTENING, { watch: i.watch, tab: i.tab === 'sources' ? 'sources' : undefined }),
   did: () => 'Opened the watch',
   target: (i) => ({ kind: 'watch', id: i.watch }),
@@ -1041,7 +1042,7 @@ export const openMatch = defineAction({
   id: 'listening.openMatch',
   title: 'Open a match',
   kind: 'view',
-  input: s.object({ watch: id, match: s.nullable(id) }),
+  input: z.strictObject({ watch: id, match: z.nullable(id) }),
   run: ({ router }, i) => go(router, LISTENING, { watch: i.watch, match: i.match ?? undefined }),
   did: () => 'Opened the match',
   target: (i) => (i.match ? { kind: 'match', id: i.match } : null),
@@ -1051,7 +1052,7 @@ export const listWatches = defineAction({
   id: 'listening.list',
   title: 'Search the listening watches',
   kind: 'view',
-  input: s.object({ q: s.optional(s.string({ max: 200 })) }),
+  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))) }),
   run: ({ router }, i) => go(router, LISTENING, { q: i.q?.trim() || undefined }),
   did: () => 'Listed the watches',
   target: () => ({ kind: 'section', id: 'watches' }),
@@ -1061,7 +1062,7 @@ export const addWatch = defineAction({
   id: 'listening.add',
   title: 'Add a listening watch',
   kind: 'change',
-  input: s.object({ name }),
+  input: z.strictObject({ name }),
   run: async ({ router, queryClient }, i) => {
     const me = await queryClient.ensureQueryData(meQuery);
     const watch = await said(createWatch(i.name.trim(), me.id));
@@ -1079,7 +1080,7 @@ export const pauseWatch = defineAction({
   id: 'listening.pause',
   title: 'Pause a listening watch',
   kind: 'change',
-  input: s.object({ watch: id }),
+  input: z.strictObject({ watch: id }),
   run: (_ctx, i) => said(setRoutineOn(i.watch, false, watchesQuery.queryKey, watchQuery(i.watch).queryKey).then(() => undefined)),
   did: () => 'Paused',
   target: (i) => ({ kind: 'watch', id: i.watch }),
@@ -1089,7 +1090,7 @@ export const resumeWatch = defineAction({
   id: 'listening.resume',
   title: 'Turn a listening watch back on',
   kind: 'change',
-  input: s.object({ watch: id }),
+  input: z.strictObject({ watch: id }),
   run: (_ctx, i) => said(setRoutineOn(i.watch, true, watchesQuery.queryKey, watchQuery(i.watch).queryKey).then(() => undefined)),
   did: () => 'Turned on',
   target: (i) => ({ kind: 'watch', id: i.watch }),
@@ -1099,7 +1100,7 @@ export const removeWatch = defineAction({
   id: 'listening.remove',
   title: 'Remove a listening watch',
   kind: 'change',
-  input: s.object({ watch: id }),
+  input: z.strictObject({ watch: id }),
   // The same delete as a routine's: nothing brings it back.
   tico: false,
   run: async ({ router }, i) => {
@@ -1117,13 +1118,13 @@ export const addSource = defineAction({
   id: 'listening.addSource',
   title: 'Add a source to a listening watch',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     watch: id,
     // search: words on a site; page: an address; github: owner/repo; push: a name (posts are sent to its own address)
-    kind: s.oneOf(['search', 'page', 'github', 'push'] as const),
-    target: s.optional(s.string({ max: 500 })),
-    site: s.optional(s.string({ max: 200 })),
-    follow: s.optional(s.oneOf(['prs', 'releases'] as const)),
+    kind: z.enum(['search', 'page', 'github', 'push'] as const),
+    target: z.optional(z.string().check(z.maxLength(500))),
+    site: z.optional(z.string().check(z.maxLength(200))),
+    follow: z.optional(z.enum(['prs', 'releases'] as const)),
   }),
   // A push source's address carries a secret, shown once: the person's own press.
   can: (ctx, i) => !(i.kind === 'push' && ctx.via === 'tico'),
@@ -1160,11 +1161,11 @@ export const updateWatch = defineAction({
   id: 'listening.update',
   title: 'Rename a listening watch, or change what it keeps',
   kind: 'change',
-  input: s.object({
+  input: z.strictObject({
     watch: id,
-    name: s.optional(name),
+    name: z.optional(name),
     // keep (with a tag) or drop what a sentence describes
-    rules: s.optional(s.array(s.object({ do: s.oneOf(['keep', 'drop'] as const), tag: s.optional(s.string({ max: 24 })), text: s.string({ min: 1, max: 300 }) }), { max: 20 })),
+    rules: z.optional(z.array(z.strictObject({ do: z.enum(['keep', 'drop'] as const), tag: z.optional(z.string().check(z.maxLength(24))), text: z.string().check(z.minLength(1), z.maxLength(300)) })).check(z.maxLength(20))),
   }),
   run: (ctx, i) => {
     const w = watchOf(ctx, i.watch);
@@ -1186,7 +1187,7 @@ export const removeSource = defineAction({
   id: 'listening.removeSource',
   title: 'Remove a source from a listening watch',
   kind: 'change',
-  input: s.object({ watch: id, source: id }),
+  input: z.strictObject({ watch: id, source: id }),
   run: (ctx, i) => {
     const w = watchOf(ctx, i.watch);
     if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });

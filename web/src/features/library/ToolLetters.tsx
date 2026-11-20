@@ -214,17 +214,16 @@ function useAddressReaders(scope: string, on: boolean) {
   if (!on) return { who: undefined, add: null };
   if (q.isError && !q.data) return { who: <ReadFault name="Who may use it" error={q.error} onRetry={() => void q.refetch()} />, add: null };
   const subject = (type: string, who: string) => `${type === 'bot' ? 'bot' : 'human'}:${who}`;
-  const short = (actor: string) => actor.slice(actor.indexOf(':') + 1);
   const grants = q.data ?? [];
   const taken = new Set(grants.map((g) => subject(g.grantee_type, g.grantee_id)));
-  const set = (type: 'bot' | 'person', who: string, read: boolean) => press('tools.setAddressAccess', { address: scope, type, who, read }, read ? 'Not added' : 'Not removed');
+  const set = (who: string, read: boolean) => press('tools.setAccess', { kind: 'address', id: scope, who, level: read ? 'read' : 'none' }, read ? 'Not added' : 'Not removed');
   return {
     who: grants.map((g) => {
       const actor = subject(g.grantee_type, g.grantee_id);
       const name = actors.find((x) => x.id === actor)?.name ?? g.grantee_id;
-      return <WhoRow key={actor} actor={actor} name={name} onRemove={() => void set(g.grantee_type === 'bot' ? 'bot' : 'person', g.grantee_id, false)} />;
+      return <WhoRow key={actor} actor={actor} name={name} onRemove={() => void set(actor, false)} />;
     }),
-    add: <AddSomeone choices={actors.filter((x) => !taken.has(x.id))} onPick={(id) => void set(id.startsWith('bot:') ? 'bot' : 'person', short(id), true)} />,
+    add: <AddSomeone choices={actors.filter((x) => !taken.has(x.id))} onPick={(id) => void set(id, true)} />,
   };
 }
 

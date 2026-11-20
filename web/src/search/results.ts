@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import type { AnyAction, Ctx } from '@/actions';
 import type { SearchHit, SearchProvider } from './providers';
 
@@ -35,7 +36,7 @@ export function actionHits(q: string, actions: Iterable<AnyAction>, ctx: Ctx | n
   const out: SearchHit[] = [];
   for (const a of actions) {
     if (a.id === 'search.open') continue;
-    const rows = a.offer ? a.offer(ctx) : a.input.parse({}).ok ? [{ input: {} as unknown }] : [];
+    const rows = a.offer ? a.offer(ctx) : z.safeParse(a.input, {}).success ? [{ input: {} as unknown }] : [];
     for (const row of rows) {
       const title = row.title ?? a.title;
       if (!matches(title, q)) continue;

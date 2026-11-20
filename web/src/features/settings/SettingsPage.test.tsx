@@ -409,19 +409,8 @@ describe('Settings › Security', () => {
     fireEvent.click(await screen.findByRole('switch', { name: 'Patterns' }));
     await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/screening', method: 'PUT', body: { patterns: false } }));
     expect(await run('settings.setDetector', { detector: 'model', on: false }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.setScreening', { door: 'webhook', mode: 'off' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(await run('settings.setSupport', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
     expect(sent).toHaveLength(1);
-  });
-
-  it('When caught sets every door but mail, which has its own row @s1079', async () => {
-    const SCREEN = { modes: { webhook: 'warn', idea: 'warn', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] };
-    serve(() => ({ status: 200, body: SCREEN }));
-    queryClient.setQueryData(screeningQuery.queryKey, SCREEN as never);
-    show(<SettingsPage section="security" />, '/settings/security');
-    fireEvent.click(within(await screen.findByRole('group', { name: 'When caught' })).getByRole('button', { name: 'Hold' }));
-    await waitFor(() => expect(sent.map((x) => x.body)).toEqual([{ webhook: 'hold' }, { idea: 'hold' }]));
-    expect(within(screen.getByRole('group', { name: 'In mail' })).queryByRole('button', { name: 'Hold' })).toBeNull();
   });
 });
 
