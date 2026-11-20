@@ -143,21 +143,44 @@ def retire_health_rows(c):
         )
 
 
+# Rows the idempotency, delta and token sweeps delete per write transaction, as EVENT_SWEEP_BATCH (below) does for
+# `events`: 5000 held the one writer for seconds on TIDY, and every request queued behind it. Each sweep still counts
+# and caps in its batches of 5000 (`batch`), so a pass deletes the same rows and leaves its mark in the same place, in
+# ten times as many short writes (`_delete_in_writes`).
+SWEEP_BATCH = 500
+
+
+def _delete_in_writes(store, sql, args, batch, write=None):
+    """`sql` (a DELETE ending in `LIMIT ?`, `args` without it) for up to `batch` rows, as one write of `batch` rows did,
+    in writes of at most `write` rows; returns how many it deleted. A short write ends it: nothing more matched."""
+    write = write or SWEEP_BATCH
+    removed = 0
+    while removed < batch:
+        step = min(write, batch - removed)
+        with store.transaction() as c:
+            took = c.execute(sql, (*args, step)).rowcount
+        removed += took
+        if took < step:
+            break
+    return removed
+
+
 def sweep_idempotency(store, now=None, batch=5000):
     """Delete idempotency rows past the retry window in short transactions; returns the count.
 
     Each batch is its own write transaction so the API's writers only ever wait for a
-    few thousand deletions, never for the whole backlog.
+    few hundred deletions, never for the whole backlog.
     """
     cutoff = H.shift(now or H.now(), hours=-IDEMPOTENCY_RETENTION_HOURS)
     deleted = 0
     while True:
-        with store.transaction() as c:
-            removed = c.execute(
-                "DELETE FROM idempotency WHERE rowid IN "
-                "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
-                (cutoff, batch),
-            ).rowcount
+        removed = _delete_in_writes(
+            store,
+            "DELETE FROM idempotency WHERE rowid IN "
+            "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
+            (cutoff,),
+            batch,
+        )
         deleted += removed
         if removed < batch:
             return deleted
@@ -197,13 +220,14 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
             ).fetchall()
         done = [r["id"] for r in rows if r["whole"] and r["finished_at"] and r["finished_at"] < cutoff]
         while done and deleted < most:
-            with store.transaction() as c:
-                removed = c.execute(
-                    "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events WHERE attempt_id IN (%s) "
-                    "AND kind='delta' AND CASE WHEN json_valid(payload) THEN "
-                    "json_extract(payload,'$.delta_kind') END IS NOT 'thought' LIMIT ?)" % ",".join("?" * len(done)),
-                    (*done, batch),
-                ).rowcount
+            removed = _delete_in_writes(
+                store,
+                "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events WHERE attempt_id IN (%s) "
+                "AND kind='delta' AND CASE WHEN json_valid(payload) THEN "
+                "json_extract(payload,'$.delta_kind') END IS NOT 'thought' LIMIT ?)" % ",".join("?" * len(done)),
+                tuple(done),
+                batch,
+            )
             deleted += removed
             if removed < batch:
                 break
@@ -256,12 +280,13 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
             break
         done = [r["id"] for r in rows if r["recorded"] and r["finished_at"] and r["finished_at"] < cutoff]
         while done:
-            with store.transaction() as c:
-                removed = c.execute(
-                    "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
-                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
-                    (*done, batch),
-                ).rowcount
+            removed = _delete_in_writes(
+                store,
+                "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
+                "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
+                tuple(done),
+                batch,
+            )
             deleted += removed
             if removed < batch:
                 break

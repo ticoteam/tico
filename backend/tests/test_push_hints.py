@@ -101,3 +101,22 @@ def test_a_push_tells_only_the_computers_of_that_repositorys_bots_that_take_the_
         assert pushed(api, mine, after) == []
     finally:
         other_company.close()
+
+
+def test_a_branch_hears_of_a_push_to_its_originals_repository_with_the_fleets_configs_read_together(api):
+    """A branch works on its original's repository (execution._repository_of): a push there tells the branch's computer.
+    The webhook reads every hinted bot's configuration, and its original's, in set reads under its write lock, not two
+    reads a bot."""
+    from backend import bot_settings as BS
+
+    box = runner(api, label="Box")
+    ids = company(api, {"ops": ("acme/ops", box, True), "cpo": ("", box, True), "finance": ("acme/other", box, True)})
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "cpo", {"shared_from": "ops"})
+    statements = []
+    with api.app.state.store.transaction() as c:
+        c.set_trace_callback(statements.append)
+        told = G.tell_pushed(c, api.app.state.store.settings, push("acme/ops"))
+        c.set_trace_callback(None)
+    assert sorted(told) == sorted([ids["ops"], ids["cpo"]])
+    assert not [s for s in statements if "FROM bot_config" in s and "WHERE bot IN" not in s]

@@ -77,3 +77,27 @@ def test_an_invite_whose_outcome_is_unknown_is_refused_again_and_its_send_is_nev
     with signin.auth.store.read() as c:
         row = c.execute("SELECT binding,state FROM idempotency WHERE key=?", (headers_["idempotency-key"],)).fetchone()
     assert tuple(row) == ("invites", "pending")
+
+
+def test_the_sweep_deletes_a_backlog_in_writes_of_at_most_a_few_hundred_rows(api, monkeypatch):  # noqa: F811
+    """Each sweep write holds the one writer: 5000 deletions per write held it for seconds on a busy host. A backlog is
+    deleted whole, a few hundred rows per write."""
+    from backend import store as S
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.executemany(
+            "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+            [("human:ana", "/api/v2/x", f"backlog-{n}", "h", "{}", "2026-01-01T00:00:00.000000Z") for n in range(1200)],
+        )
+    writes, opened = [], store.transaction
+
+    def counted(*args, **kwargs):
+        writes.append(1)
+        return opened(*args, **kwargs)
+
+    monkeypatch.setattr(store, "transaction", counted)
+    assert sweep_idempotency(store, now="2026-03-01T00:00:00.000000Z") >= 1200
+    assert S.SWEEP_BATCH <= 500 and len(writes) >= 1200 // S.SWEEP_BATCH
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM idempotency WHERE key LIKE 'backlog-%'").fetchone()
