@@ -66,6 +66,9 @@ PINNED_CAUGHT = {
     58,
     59,
     60,
+    61,
+    62,
+    63,
 }
 # Case numbers whose failing checks must run in the light PR plan.
 PINNED_CAUGHT_AT_PR = {
@@ -116,6 +119,9 @@ PINNED_CAUGHT_AT_PR = {
     58,
     59,
     60,
+    61,
+    62,
+    63,
 }
 
 
@@ -124,6 +130,7 @@ def small_replay(tmp_path):
     runner.root = tmp_path
     runner.graph = SimpleNamespace(by_base=defaultdict(set))
     runner.definitions = defaultdict(set)
+    runner.slow = defaultdict(set)
     return runner
 
 
@@ -233,6 +240,34 @@ def test_replay_catches_one_of_multiple_resolved_failures_at_either_stage(tmp_pa
     assert row["caught_pr"] == (stage == "pull_request")
     assert row["caught_queue"] == (stage == "merge_group")
     assert not row["stale"]
+
+
+def test_replay_counts_a_slow_failing_test_only_when_the_contracts_job_runs_it(tmp_path):
+    # A slow test runs only in the contracts job (-m slow): its file in the default Python jobs does not catch it, as
+    # #4672's release.yml change showed (cases 61 to 63).
+    runner = small_replay(tmp_path)
+    test = "scripts/tests/test_release_workflow.py"
+    path = tmp_path / test
+    path.parent.mkdir(parents=True)
+    path.touch()
+    runner.slow = {test: {"test_feeds"}}
+    case = dict(fix_pr=1, cause="other", changed_files=[".github/workflows/release.yml"], failing_tests=[])
+    for description, sweeps, caught in (
+        (f"{test}::test_feeds[electron]", [], False),
+        (f"{test}::test_feeds[electron]", [test], True),
+        ("test_feeds (three cases)", [], False),
+        (f"{test}::test_fast", [], True),
+    ):
+        runner.definitions["test_feeds"] = {test}
+        runner.plan = lambda changed, event, sweeps=sweeps: {
+            "python": [test],
+            "contracts": bool(sweeps),
+            "sweeps": sweeps,
+        }
+        row = runner.case({**case, "failing_tests": [description]}, 1)
+        assert row["caught_pr"] == caught, description
+        if not caught:
+            assert row["results"][0]["stages"]["pull_request"]["reason"].startswith("slow test")
 
 
 def test_replay_combines_named_breakers_before_resolving_paths(monkeypatch, tmp_path):

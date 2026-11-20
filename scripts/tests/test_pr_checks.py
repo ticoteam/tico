@@ -2819,6 +2819,65 @@ def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan
     assert checks.CLI_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
 
 
+RELEASE_WORKFLOW_TEST = "scripts/tests/test_release_workflow.py"
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_workflow_change_runs_the_script_tests_that_name_it_slow_tests_included(event, repo_map):
+    # Nov 19: #4672's review fix 15cc674d changed release.yml (all three Electron feeds); test_release_workflow.py was in
+    # the plan but its feed tests are slow, so none ran, and release validation failed three of them (#4683). Rule 11.
+    changed = [".github/workflows/release.yml"]
+    light = light_plan(changed, event, repo_map, added=[])
+    assert RELEASE_WORKFLOW_TEST in light["python"] and light["narrow"]["tier"][RELEASE_WORKFLOW_TEST] == 0
+    assert RELEASE_WORKFLOW_TEST in light["guards"] and RELEASE_WORKFLOW_TEST in light["sweeps"]
+    assert light["contracts"] and RELEASE_WORKFLOW_TEST in checks.contract_files(light["sweeps"])
+    # Only the script tests that name the workflow, and of those only the ones with a slow test, turn on.
+    assert set(light["sweeps"]) <= {t for t in repo_map.named_by(changed[0]) if t.startswith(checks.SCRIPT_TESTS)}
+    assert all(checks.slow_tests(repo_map.parse(t)) for t in light["sweeps"])
+    assert "rule 11" in light["reason"]
+    # A gone workflow does the same; a change to some other script turns nothing on.
+    assert RELEASE_WORKFLOW_TEST in light_plan([".github/workflows/train.yml"], event, repo_map, added=[])["sweeps"]
+    assert light_plan(["scripts/diff_facts.py"], event, repo_map, added=[])["sweeps"] == []
+
+
+def test_a_large_deletion_runs_every_script_test_slow_tests_included(repo_map):
+    # Nov 19: d2f26f0d deleted ui/ (1,271 files); test_pr_checks.py's install test and test_replay_red_main.py's replay,
+    # both slow, still expected ui/ and failed at release (#4679, 3035ce8b). Rule 12.
+    every = checks.script_tests(ROOT)
+    slow = checks.with_slow(every, ROOT, repo_map)
+    assert {"scripts/tests/test_pr_checks.py", "scripts/tests/test_replay_red_main.py", RELEASE_WORKFLOW_TEST} <= slow
+    for changed in (
+        ["ui/package.json"],  # a top-level folder that is gone
+        [f"scripts/gone_{i}.py" for i in range(checks.LARGE_DELETION + 1)],  # more than LARGE_DELETION gone files
+    ):
+        for event in checks.NARROW:
+            light = light_plan(changed, event, repo_map, added=[])
+            assert set(every) <= set(light["guards"]), event
+            assert slow <= set(light["sweeps"]) and light["contracts"], event
+            assert "rule 12" in light["reason"]
+    # A few gone files in a folder that is still there are rule 1's, not rule 12's.
+    few = light_plan([f"scripts/gone_{i}.py" for i in range(3)], "pull_request", repo_map, added=[])
+    assert few["sweeps"] == [] and "rule 12" not in few["reason"]
+
+
+def test_slow_tests_reads_the_mark_on_a_test_or_its_module():
+    assert checks.slow_tests(
+        ast.parse("""
+import pytest
+@pytest.mark.slow
+def test_marked(): pass
+@pytest.mark.slow
+@pytest.mark.parametrize("x", [1])
+def test_marked_too(x): pass
+def test_plain(): pass
+def helper(): pass
+""")
+    ) == {"test_marked", "test_marked_too"}
+    assert checks.slow_tests(ast.parse("import pytest\npytestmark = [pytest.mark.slow]\ndef test_a(): pass\n")) == {
+        "test_a"
+    }
+
+
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
     tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
     seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
