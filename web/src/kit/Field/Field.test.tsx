@@ -55,6 +55,24 @@ describe('Search', () => {
     expect(box.value).toBe('');
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
   });
+
+  it('marks the well while it holds words, so a page head keeps it open (its width only gives way when empty)', () => {
+    render(<SearchHarness />);
+    const box = screen.getByRole('textbox', { name: 'Search tasks' });
+    const well = box.closest('.search');
+    expect(well?.classList.contains('has-words')).toBe(false);
+    fireEvent.change(box, { target: { value: 'launch' } });
+    expect(well?.classList.contains('has-words')).toBe(true);
+  });
+
+  it('puts the cursor in the words when the magnifier is pressed (all a squeezed head search shows)', () => {
+    render(<SearchHarness />);
+    const box = screen.getByRole('textbox', { name: 'Search tasks' });
+    const glass = box.closest('.search')?.querySelector('svg');
+    if (!glass) throw new Error('no magnifier');
+    fireEvent.pointerDown(glass);
+    expect(document.activeElement).toBe(box);
+  });
 });
 
 describe('SettledSearch', () => {

@@ -26,6 +26,17 @@
 .pk-where>.pk-crumb{display:contents}
 .pk-where>.pk-crumb>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .pk-acts{display:contents}
+/* the head's search gives way first: it takes only the room the head has left (up to its own 208, parts.css .search),
+   down to its magnifier in a control-sized well, so the title loses no letter until the search is an icon. Its
+   placeholder goes once it no longer fits (the query reads the well inside its padding). */
+.pk-head .search{container:head-search / inline-size;flex:1000 1 0;min-width:var(--ctl);max-width:208px;overflow:hidden}
+.pk-head .search>.ico{translate:clamp(calc(var(--s-0) * -1), (100cqw - 36px) / 2, 0px) 0}
+/* in use, it is the search's turn: it wants its whole width and the title gives way first, then the search */
+.pk-head .search:is(:focus-within,.has-words){flex:0 1 auto}
+.pk-head:has(.search:is(:focus-within,.has-words)) .pk-title{flex-shrink:1000}
+@container head-search (width < 72px){
+  .pk-head .search input::placeholder{color:transparent}
+}
 .pk .pk-back{display:none}
 
 /* ---------- tabs: one underlined row right under the head, never pills (kit Tabs.css, at the page margin) ---------- */

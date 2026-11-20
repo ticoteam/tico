@@ -118,13 +118,15 @@ export type SearchProps = {
 /** The search well: a magnifier, the words, and a clear button once there are words. */
 export function Search({ label, value, onValueChange, placeholder, wide = false, autoFocus, ref }: SearchProps) {
   const own = useRef<HTMLInputElement | null>(null);
+  // a press anywhere on the well but the words and Clear puts the cursor in it: the magnifier too, which is all a head
+  // search squeezed to its icon shows
   const focusInput = (e: PointerEvent) => {
-    if (e.target !== e.currentTarget) return;
+    if ((e.target as Element).closest('input, button')) return;
     e.preventDefault();
     own.current?.focus();
   };
   return (
-    <div className={wide ? 'search search-wide' : 'search'} onPointerDown={focusInput}>
+    <div className={`search${wide ? ' search-wide' : ''}${value ? ' has-words' : ''}`} onPointerDown={focusInput}>
       <Icon name="search" />
       <Input
         ref={(el: HTMLInputElement | null) => {
