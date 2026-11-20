@@ -45,6 +45,7 @@ from .usage_records import ran_on
 from . import task_relations as TR
 from . import bot_settings as BS
 from .api_contract import api_v2
+from .api_answers.conversations import Snapshot
 
 
 MIN_RUNNER_VERSION = (0, 2, 0)
@@ -3638,7 +3639,7 @@ def install_views(app, store, auth, mutate, task_view):
             "Conversations",
             "getConversationSnapshot",
             "The newest messages and the bot's current run (its newest 40 reply pieces), in one read; limit= and max_bytes= as for the messages",
-            "Snapshot",
+            Snapshot,
         ),
     )
     def snapshot(request: Request, cid: str, limit: int | None = None, max_bytes: int | None = None):

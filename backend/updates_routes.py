@@ -12,6 +12,7 @@ import re
 from . import updates
 from . import views
 from .api_contract import ASK_REFUSED, api_v2
+from .api_answers.conversations import MessageResult
 
 
 def register(
@@ -406,7 +407,7 @@ def register(
             "Conversations",
             "replyInConversation",
             "Send a message in a conversation",
-            "MessageResult",
+            MessageResult,
             responses={"422": ASK_REFUSED},
         ),
     )

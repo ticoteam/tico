@@ -25,6 +25,7 @@ from . import visuals
 from .store import H, Problem
 from . import visual_specs
 from .api_contract import api_v2
+from .api_answers.pages import PageList, PagePublished, PageShown, PageUnlinked
 from clients import bot_files as BF
 
 CADENCES = {"none": 0, "daily": 1, "weekly": 7, "monthly": 30}
@@ -695,7 +696,7 @@ def install_pages(app, store, auth, files):
             "Pages",
             "publishPage",
             "Publish an HTML page or a new version by page id (raw or JSON); scripts and outside loads are removed",
-            "PagePublished",
+            PagePublished,
             openapi_extra=publish_doc,
         ),
     )
@@ -714,7 +715,7 @@ def install_pages(app, store, auth, files):
             "Pages",
             "listPages",
             "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it)",
-            "PageList",
+            PageList,
         ),
     )
     def listing(
@@ -748,21 +749,21 @@ def install_pages(app, store, auth, files):
 
     @app.get(
         "/api/v2/pages/{fid}",
-        **api_v2("Pages", "getPage", "One page and its status line; 404 when the caller may not read it", "PageShown"),
+        **api_v2("Pages", "getPage", "One page and its status line; 404 when the caller may not read it", PageShown),
     )
     def read(request: Request, fid: str):
         return pages.read(request.state.identity, fid)
 
     @app.post(
         "/api/v2/pages/{fid}/links",
-        **api_v2("Pages", "linkPage", "Link a page to a task, bot, person, goal or page", "PageShown"),
+        **api_v2("Pages", "linkPage", "Link a page to a task, bot, person, goal or page", PageShown),
     )
     def link_page(request: Request, fid: str, body: PageLink):
         return pages.change_link(request, fid, body.target, body.role)
 
     @app.delete(
         "/api/v2/pages/{fid}/links",
-        **api_v2("Pages", "unlinkPage", "Remove a page link, keeping at least one writer", "PageUnlinked"),
+        **api_v2("Pages", "unlinkPage", "Remove a page link, keeping at least one writer", PageUnlinked),
     )
     def unlink_page(request: Request, fid: str, target: str, role: str = "related"):
         return pages.change_link(request, fid, target, role, remove=True)
@@ -773,7 +774,7 @@ def install_pages(app, store, auth, files):
             "Pages",
             "editPage",
             "Change a page's audience, cadence, data date or replacement, or archive or restore it (the bot, owner and bot managers)",
-            "PageShown",
+            PageShown,
         ),
     )
     def edit(request: Request, fid: str, body: PageEdit):

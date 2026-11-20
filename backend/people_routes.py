@@ -20,6 +20,7 @@ from . import teammate_access
 from . import turns as turn_work
 from . import views
 from .api_contract import api_v2
+from .api_answers.conversations import ConversationList, MessagePage
 
 
 def register(app, auth, mutate, settings, store, visual_view):
@@ -161,7 +162,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             "Conversations",
             "listConversations",
             "The caller's conversations; chat_with=<bot> for that bot's chat",
-            "ConversationList",
+            ConversationList,
         ),
     )
     def conversations(request: Request, bot: str | None = None, chat_with: str | None = None):
@@ -234,7 +235,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             "Conversations",
             "listMessages",
             "The newest messages (up to 200, or limit=); before=<next_before> pages back, since=<timestamp> only newer, max_bytes= ends the page at that many bytes of messages",
-            "MessagePage",
+            MessagePage,
         ),
     )
     def messages(

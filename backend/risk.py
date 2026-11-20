@@ -34,6 +34,15 @@ from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
 from . import waiting_on as _waiting_on
 from .api_contract import api_v2, error
+from .api_answers.risk import (
+    MatterList,
+    MatterResult,
+    RiskDetail,
+    RiskLinkResult,
+    RiskList,
+    RiskObligationList,
+    RiskResult,
+)
 from .entities import store as ES
 from .models import ID, Contract
 from .slugs import slugify
@@ -945,7 +954,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     @app.get(
         "/api/v2/risks",
-        **api_v2("Risk", "listRisks", "Every risk with its level, counts, claimed and next date", "RiskList"),
+        **api_v2("Risk", "listRisks", "Every risk with its level, counts, claimed and next date", RiskList),
     )
     def list_route(request: Request, task: str | None = None) -> Any:  # pyright: ignore[reportUnusedFunction]
         """Every risk, live first. Counts, claimed totals and the next date come from the tasks the caller reads.
@@ -954,7 +963,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         with store.read() as c:
             return list_risks(auth, c, who, task)
 
-    @app.post("/api/v2/risks", **api_v2("Risk", "createRisk", "Add a risk: a tag of kind risk", "RiskResult"))
+    @app.post("/api/v2/risks", **api_v2("Risk", "createRisk", "Add a risk: a tag of kind risk", RiskResult))
     def create_route(request: Request, body: RiskCreate) -> Any:  # pyright: ignore[reportUnusedFunction]
         return mutate(request, body, lambda c: create(auth, c, request.state.identity, body))  # pyright: ignore[reportUnknownLambdaType]
 
@@ -964,7 +973,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             "Risk",
             "listMatters",
             "Matters the caller reads, newest first",
-            "MatterList",
+            MatterList,
             responses={"404": error("not_found: no such risk or product, or one the caller may not see")},
         ),
     )
@@ -999,7 +1008,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     @app.get(
         "/api/v2/risk/obligations",
-        **api_v2("Risk", "listRiskObligations", "Every risk's dates, unconfirmed first", "RiskObligationList"),
+        **api_v2("Risk", "listRiskObligations", "Every risk's dates, unconfirmed first", RiskObligationList),
     )
     def obligations_route(  # pyright: ignore[reportUnusedFunction]
         request: Request,
@@ -1022,13 +1031,13 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     @app.post(
         "/api/v2/tasks/{tid}/matter",
-        **api_v2("Risk", "setTaskMatter", "Set or clear a task's matter facts", "MatterResult"),
+        **api_v2("Risk", "setTaskMatter", "Set or clear a task's matter facts", MatterResult),
     )
     def matter_route(request: Request, tid: str, body: MatterWrite) -> Any:  # pyright: ignore[reportUnusedFunction]
         return mutate(request, body, lambda c: set_matter(auth, c, request.state.identity, tid, body))  # pyright: ignore[reportUnknownLambdaType]
 
     @app.get(
-        "/api/v2/risks/{risk_id}", **api_v2("Risk", "getRisk", "A risk, its matters, rules and sources", "RiskDetail")
+        "/api/v2/risks/{risk_id}", **api_v2("Risk", "getRisk", "A risk, its matters, rules and sources", RiskDetail)
     )
     def get_route(request: Request, risk_id: str, limit: int = LIMIT_DEFAULT, offset: int = 0) -> Any:  # pyright: ignore[reportUnusedFunction]
         who = reader(request)
@@ -1036,7 +1045,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             return detail(auth, c, who, require_risk(c, who, risk_id), limit, offset)
 
     @app.post(
-        "/api/v2/risks/{risk_id}", **api_v2("Risk", "updateRisk", "Edit a risk using its current version", "RiskResult")
+        "/api/v2/risks/{risk_id}", **api_v2("Risk", "updateRisk", "Edit a risk using its current version", RiskResult)
     )
     def update_route(request: Request, risk_id: str, body: RiskUpdate) -> Any:  # pyright: ignore[reportUnusedFunction]
         def work(c: Any) -> Any:
@@ -1047,7 +1056,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     @app.post(
         "/api/v2/risks/{risk_id}/links",
-        **api_v2("Risk", "linkRisk", "Link a rule or a document to a risk", "RiskLinkResult"),
+        **api_v2("Risk", "linkRisk", "Link a rule or a document to a risk", RiskLinkResult),
     )
     def link_route(request: Request, risk_id: str, body: RiskLink) -> Any:  # pyright: ignore[reportUnusedFunction]
         def work(c: Any) -> Any:
@@ -1059,7 +1068,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     @app.post(
         "/api/v2/risks/{risk_id}/unlink",
-        **api_v2("Risk", "unlinkRisk", "Remove a rule or document link from a risk", "RiskLinkResult"),
+        **api_v2("Risk", "unlinkRisk", "Remove a rule or document link from a risk", RiskLinkResult),
     )
     def unlink_route(request: Request, risk_id: str, body: RiskLink) -> Any:  # pyright: ignore[reportUnusedFunction]
         def work(c: Any) -> Any:
