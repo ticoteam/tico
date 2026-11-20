@@ -1,18 +1,22 @@
 import { useQueries, useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
-import { Avatar } from '@/kit/Avatar';
+import { useNavigate } from '@tanstack/react-router';
+import { useState } from 'react';
+import { Avatar, Faces } from '@/kit/Avatar';
 import { useAction } from '@/actions';
-import { directoryQuery, meQuery, type Actor } from '@/data';
+import { directoryQuery, type Actor } from '@/data';
 import { useFollow } from '@/live/follow';
-import { IconButton } from '@/kit/IconButton';
+import { Icon } from '@/kit/Icon';
 import { MenuItem } from '@/kit/Menu';
+import { Pill } from '@/kit/Pill';
+import { Row, TaskRow } from '@/kit/Row';
+import { VirtualList } from '@/kit/VirtualList';
 import { fmtMoney } from '@/lib';
 import { FiguresStrip, List, PageMore, Section } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { AddTeammate } from './AddTeammate';
 import { AccessDialog } from './dialogs';
-import { managerOf, memberIds, membersUnder, startOfWeek, subTeams } from './model';
-import { MateRow, OwnerButton, waitsOn } from './parts';
+import { managerOf, memberIds, membersUnder, startOfMonth, subTeams, teamSlug, whoHref } from './model';
+import { LONG_LIST, taskHref } from './parts';
 import {
   agentsQuery,
   allTasksQuery,
@@ -32,18 +36,24 @@ export interface TeamPageProps {
   add?: AddStep;
 }
 
-/** A team (mates.js teamPage): its manager, its teammates, the teams inside it. Its manager's chat opens beside it. */
+const face = (a: Actor) => ({ kind: a.kind, name: a.name, hue: a.hue, live: a.working });
+const MONTH = new Intl.DateTimeFormat('en-US', { month: 'short' });
+
+/** A team (threads-team pass 7, teamPage): its icon, name and faces; its figures; what its teammates are running; its
+    people, the lead marked; the teams inside it. Rows carry no mark before the title, as the sketch draws them. The
+    team's thread beside it is the shell's. */
 export function TeamPage({ group, path, add }: TeamPageProps) {
   useFollow({ allTasks: true });
-  const { data: me } = useQuery(meQuery);
   // Every member's face and status line: the whole directory.
   const { data: dir } = useSuspenseQuery(directoryQuery);
   const { data: all } = useSuspenseQuery(groupsQuery);
   const roster = useQuery(agentsQuery);
   const { data: peopleRoster } = useQuery(peopleRosterQuery);
-  const [since] = useState(() => startOfWeek(new Date()).toISOString());
+  const [since] = useState(() => startOfMonth(new Date()).toISOString());
+  const [month] = useState(() => MONTH.format(new Date()));
   const openTasks = useQuery(allTasksQuery());
   const addOpen = useAction('team.addTeammate');
+  const navigate = useNavigate();
   const reach = useQuery(teammateAccessQuery('team', group.id)).data;
   const [access, setAccess] = useState(false);
 
@@ -54,119 +64,123 @@ export function TeamPage({ group, path, add }: TeamPageProps) {
   const everyone = new Set(memberIds(under).map((k) => actorOf(k)?.id).filter((id): id is string => !!id));
   const doneCounts = useQueries({ queries: teamDoneCountQueries(everyone, since) });
   const done = doneCounts.reduce<number | undefined>((sum, { data }) => sum === undefined || !data?.counts ? undefined : sum + data.counts.total, 0);
-  const tally = (tasks: readonly OwnTask[] | undefined) => {
-    const by = new Map<string, OwnTask[]>();
-    for (const t of tasks ?? []) {
-      const who = t.owner_id ? actorOf(t.owner_id)?.id : undefined;
-      if (!who) continue;
-      const owned = by.get(who);
-      if (owned) owned.push(t);
-      else by.set(who, [t]);
-    }
-    return by;
-  };
-  const openBy = tally(openTasks.data?.tasks);
-  const openTotal = [...everyone].reduce((n, id) => n + (openBy.get(id)?.length ?? 0), 0);
+  const ownerOf = (t: OwnTask) => (t.owner_id ? actorOf(t.owner_id) : undefined);
+  // What the team is on: every open task a teammate here (or in a team inside) holds, the latest first.
+  const running = (openTasks.data?.tasks ?? [])
+    .filter((t) => everyone.has(ownerOf(t)?.id ?? ''))
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
   const paused = new Set((roster.data ?? []).filter((r: AgentRow) => r.status === 'paused').map((r) => r.slug));
   const slugs = [...everyone].map((id) => actorOf(id)?.slug).filter((slug): slug is string => !!slug);
   const spend = useQuery(monthSpendQuery(slugs)).data;
-  const seats = peopleRoster?.seats ?? [];
+  const seats = (peopleRoster?.seats ?? []).filter((x) => x.team === group.id);
 
-  const row = (a: Actor) => {
-    const mine = openBy.get(a.id) ?? [];
-    const late = mine.filter((t) => t.late).length;
+  const people = [
+    ...(manager ? [manager] : []),
+    ...memberIds(group)
+      .map(actorOf)
+      .filter((a): a is Actor => !!a && a.id !== manager?.id)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+  const inner = subTeams(all, group.id);
+  const taskRow = (t: OwnTask) => {
+    const who = ownerOf(t);
     return (
-      <MateRow
-        key={a.id}
-        actor={a}
-        needs={mine.some((t) => waitsOn(t, me?.id))}
-        pill={a.slug && paused.has(a.slug) ? 'Stopped' : late ? `${late} late` : undefined}
-        count={mine.length}
+      <TaskRow
+        key={t.id}
+        title={t.title ?? ''}
+        href={taskHref(t)}
+        target={`task:${t.number ?? t.id}`}
+        late={!!t.late}
+        avatar={who && <Avatar {...face(who)} size={22} />}
+        at={t.updated_at ?? new Date(0).toISOString()}
       />
     );
   };
-  const members = (g: Group) =>
-    memberIds(g)
-      .map(actorOf)
-      .filter((a): a is Actor => !!a && a.id !== manager?.id)
-      .sort((a, b) => a.name.localeCompare(b.name));
-  // An open seat: a dashed face and its title; nobody sits there, so nothing opens (mates.js mateRow seat).
-  const seatRows = (g: Group) =>
-    seats
-      .filter((x) => x.team === g.id)
-      .map((x) => (
-        <div key={x.id} className="row mate is-seat" title={x.title}>
-          <span className="row-mark" />
-          <Avatar kind="agent" name={x.title} initials="" size={22} className="is-seat" />
-          <span className="mate-name">{x.title}</span>
-          <span className="mate-now">Open seat</span>
-          <span className="row-pills" />
-          <span className="count" />
-        </div>
-      ));
-  const direct = members(group);
-  const open = seatRows(group);
-  const nested = (g: Group, depth = 0): ReactNode[] =>
-    subTeams(all, g.id).flatMap((s) => [
-      <Section key={s.id} name={s.name} count={members(s).length} target={`team:${s.id}`}>
-        {members(s).map(row)}
-        {seatRows(s)}
-      </Section>,
-      ...(depth < 4 ? nested(s, depth + 1) : []),
-    ]);
-  const innerSections = nested(group);
 
   return (
     <>
       <List
         title={group.name}
         path={path}
-        className="rec"
-        tabs={[
-          { label: 'Teammates', to: path },
-          { label: 'Rules', to: '/company/rules', search: { who: `group:${group.id}` } },
-        ]}
+        className="rec is-col tm-page"
+        lead={
+          <span className="tm-ic">
+            <Icon name="people" />
+          </span>
+        }
         actions={
-          <>
-            <IconButton icon="plus" label="Add a teammate" onClick={() => void addOpen.run({ step: 'pick' })} data-target="team:add" data-phone />
-            {/* On a phone the manager's face stays: it is the way to their chat there. */}
-            {manager && (
-              <span className="tm-face" data-phone>
-                <OwnerButton actor={manager.id} />
-              </span>
-            )}
-          </>
+          people.length > 0 && (
+            <span className="tm-faces" data-phone>
+              <Faces people={people.map(face)} size={16} max={5} />
+            </span>
+          )
         }
         more={
-          reach?.you?.manage ? (
-            <PageMore>
-              <MenuItem label="Access" icon="lock" onSelect={() => setAccess(true)} />
-            </PageMore>
-          ) : undefined
+          // Tico's flight to Add teammate lands on ⋯, which holds it.
+          <PageMore target="team:add">
+            <MenuItem label="Add teammate" icon="plus" onSelect={() => void addOpen.run({ step: 'pick' })} />
+            <MenuItem label="Rules" icon="rules" onSelect={() => void navigate({ to: '/company/rules', search: { who: `group:${group.id}` } })} />
+            {reach?.you?.manage && <MenuItem label="Access" icon="lock" onSelect={() => setAccess(true)} />}
+          </PageMore>
         }
-        state={manager || everyone.size || open.length || innerSections.length ? 'ready' : 'empty'}
+        state={people.length || seats.length || inner.length ? 'ready' : 'empty'}
         empty={{ title: 'No teammates yet' }}
         figures={
           <FiguresStrip
             label={`${group.name} at a glance`}
             figures={[
-              { label: 'Teammates', value: everyone.size },
-              { label: 'Open tasks', value: openTasks.data ? openTotal : '' },
-              { label: 'Done this week', value: done ?? '' },
-              { label: 'Spend this month', value: spend === undefined ? '' : fmtMoney(spend) },
+              { label: 'Open tasks', value: openTasks.data ? running.length : '' },
+              { label: `Done, ${month}`, value: done ?? '' },
+              { label: `Spend, ${month}`, value: spend === undefined ? '' : fmtMoney(spend) },
             ]}
           />
         }
         sections={
           <>
-            {manager && <Section name="Manager">{row(manager)}</Section>}
-            {direct.length + open.length > 0 && (
-              <Section name="Teammates" count={direct.length}>
-                {direct.map(row)}
-                {open}
+            {running.length > 0 && (
+              <Section name="Running">
+                {running.length <= LONG_LIST ? (
+                  running.map(taskRow)
+                ) : (
+                  <VirtualList className="tm-long" label="Running" items={running} getKey={(t) => t.id} estimateSize={34} measure renderItem={taskRow} />
+                )}
               </Section>
             )}
-            {innerSections}
+            {people.length + seats.length > 0 && (
+              <Section name="People">
+                {people.map((a) => (
+                  <Row key={a.id} className="tm-mate" title={a.name} href={whoHref(a)} target={`teammate:${a.slug ?? a.id}`}>
+                    <Avatar {...face(a)} size={22} />
+                    <span className="row-title">{a.name}</span>
+                    <span className="row-pills">{a.slug && paused.has(a.slug) && <Pill flag>Stopped</Pill>}</span>
+                    <span className="tm-role">{a.id === manager?.id ? 'Lead' : ''}</span>
+                  </Row>
+                ))}
+                {/* An open seat: a dashed face and its title; nobody sits there, so nothing opens (mates.js mateRow seat). */}
+                {seats.map((x) => (
+                  <Row key={x.id} className="tm-mate is-seat" title={x.title}>
+                    <Avatar kind="agent" name={x.title} initials="" size={22} className="is-seat" />
+                    <span className="row-title">{x.title}</span>
+                    <span className="row-pills" />
+                    <span className="tm-role">Open seat</span>
+                  </Row>
+                ))}
+              </Section>
+            )}
+            {inner.length > 0 && (
+              <Section name="Teams">
+                {inner.map((s) => (
+                  <Row key={s.id} className="tm-mate" title={s.name} href={`/team/${encodeURIComponent(teamSlug(s.name))}`} target={`team:${s.id}`}>
+                    <span className="tm-ic">
+                      <Icon name="people" />
+                    </span>
+                    <span className="row-title">{s.name}</span>
+                    <span className="row-pills" />
+                    <Faces people={memberIds(s).map(actorOf).filter((a): a is Actor => !!a).map(face)} size={16} max={4} />
+                  </Row>
+                ))}
+              </Section>
+            )}
           </>
         }
       />

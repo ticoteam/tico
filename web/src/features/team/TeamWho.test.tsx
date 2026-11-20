@@ -1,6 +1,6 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
@@ -78,8 +78,35 @@ describe('Team pages', () => {
     await screen.findByRole('heading', { name: 'Design' });
     await waitFor(() => expect(link('Ana')?.getAttribute('href')).toBe('/team/ana'));
     expect(link('Pat Doe')?.getAttribute('href')).toBe('/team/p1');
-    expect(link('Bo')?.getAttribute('href')).toBe('/team/bo');
-    expect(screen.getByText('Brand')).toBeTruthy();
+    // a team inside is one row that opens its own page; its people are on that page
+    expect(link('Brand')?.getAttribute('href')).toBe('/team/team%3ABrand');
+    expect(link('Bo')).toBeUndefined();
+  });
+
+  it('marks the lead, faces the team in its head, and runs every open task its teammates hold, the latest first, with no mark before a title', async () => {
+    queryClient.setQueryData(groupsQuery.queryKey, groups.map((g) => (g.id === 'g1' ? { ...g, lead: 'person:p1' } : g)));
+    serve((url) => {
+      if (!url.startsWith('/api/v2/tasks?') || new URLSearchParams(url.split('?')[1]).get('status') !== 'open') return;
+      const tasks = [
+        { id: 't1', number: 1, pipeline_id: 'eng', title: 'Older copy pass', owner_id: ana.id, late: true, updated_at: '2026-11-10T10:00:00Z' },
+        { id: 't2', number: 2, pipeline_id: 'eng', title: 'Brand refresh', owner_id: bo.id, turn: { state: 'person', who: pat.id }, updated_at: '2026-11-18T10:00:00Z' },
+        { id: 't3', number: 3, pipeline_id: 'eng', title: 'Someone else', owner_id: 'bot:zed', updated_at: '2026-11-19T10:00:00Z' },
+      ];
+      return { status: 200, body: { tasks } };
+    });
+    show(<TeamWho who="design" />, '/team/design');
+    const running = await screen.findByRole('region', { name: 'Running' });
+    await waitFor(() => expect(within(running).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['Brand refresh', 'Older copy pass']));
+    expect(within(running).getByRole('img', { name: 'Bo' })).toBeTruthy();
+    expect(within(running).getByText('Late')).toBeTruthy();
+    // the sketch draws nothing before a row's title: no Flow mark, even on a task that waits on you
+    expect(within(running).queryByRole('img', { name: 'Waits on you' })).toBeNull();
+    const people = screen.getByRole('region', { name: 'People' });
+    expect(within(people).queryByRole('img', { name: 'Waits on you' })).toBeNull();
+    expect(within(people).getAllByRole('link').map((a) => a.getAttribute('title'))).toEqual(['Pat Doe', 'Ana']);
+    expect(within(link('Pat Doe')!).getByText('Lead')).toBeTruthy();
+    expect(within(document.querySelector<HTMLElement>('.pk-head')!).getByRole('img', { name: 'Ana' })).toBeTruthy();
+    expect(screen.queryByRole('tab')).toBeNull();
   });
 
   it('counts completed work across every page for the team and its subteams', async () => {

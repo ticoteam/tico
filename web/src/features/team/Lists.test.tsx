@@ -305,17 +305,15 @@ describe('s639 Last run', () => {
 });
 
 describe('Phone heads', () => {
-  it('keeps the team manager’s face, which opens their chat, and Add on a phone', async () => {
+  it('keeps the team’s faces and its More, which holds Add teammate, on a phone', async () => {
     serve(() => undefined);
     show(<TeamWho who="design" />, '/team/design');
     await screen.findByRole('heading', { name: 'Design' });
-    const face = await waitFor(() => {
-      const el = screen.getAllByRole('link', { name: /Pat Doe/ }).find((a) => a.getAttribute('href')?.includes('chat='));
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
+    const head = document.querySelector<HTMLElement>('.pk-head')!;
+    const face = await waitFor(() => within(head).getByRole('img', { name: 'Pat Doe' }));
     expect(face.closest('[data-phone]')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Add a teammate' }).hasAttribute('data-phone')).toBe(true);
+    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Add teammate' })).toBeTruthy();
   });
 
   it('keeps an agent’s Settings on a phone', async () => {
