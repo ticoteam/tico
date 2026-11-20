@@ -8,6 +8,7 @@ import { run } from '@/actions/run';
 import { queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
+import { dragTo } from '@/test/drag';
 import { botAccessQuery, botsQuery, computersQuery, limitsQuery, modelsQuery, providersQuery, subscriptionsQuery } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
@@ -302,54 +303,47 @@ describe('Settings › Agents › a computer', () => {
 });
 
 describe('Settings › Agents › drag', () => {
-  const at = (el: Element | null) => {
-    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => el });
-  };
-  afterEach(() => {
-    delete (document as { elementFromPoint?: unknown }).elementFromPoint;
-  });
-  const drag = (row: Element) => {
-    fireEvent.pointerDown(row, { button: 0, pointerType: 'mouse', clientX: 10, clientY: 10 });
-    fireEvent.pointerMove(row, { pointerType: 'mouse', clientX: 30, clientY: 40 });
-    fireEvent.pointerUp(row, { pointerType: 'mouse', clientX: 30, clientY: 40 });
-  };
+  const group = (id: string) => document.querySelector(`section[data-target="group:computer:${id}"]`) as Element;
+  const row = (slug: string) => document.querySelector(`[data-target="agent:${slug}"]`) as Element;
 
   it("a row dropped on another computer's group moves there; checked rows go with it", async () => {
     byComputer();
     show(<SettingsPage section="agents" />, '/settings/agents');
     fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
     await screen.findByRole('link', { name: 'Open Spare Two' });
-    const spare = document.querySelector('section[data-target="group:computer:r2"]');
-    const beta = document.querySelector('[data-target="agent:beta"]') as Element;
-    at(spare?.querySelector('.stage-head') ?? null);
-    drag(beta);
+    dragTo(row('beta'), group('r2').querySelector('.stage-head'));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ url: '/api/v2/bots/beta/transitions', body: { kind: 'machine', runner_id: 'r2' } });
+    expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
 
     sent = [];
     fireEvent.click(screen.getByRole('checkbox', { name: 'Check Alpha Agent' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Check Beta Agent' }));
-    drag(document.querySelector('[data-target="agent:alpha"]') as Element);
+    dragTo(row('alpha'), group('r2'));
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent.map((x) => x.url).sort()).toEqual(['/api/v2/bots/alpha/transitions', '/api/v2/bots/beta/transitions']);
   });
 
-  it('a drop on "No computer", on its own group or a short press moves nothing', async () => {
+  it('a drop on "No computer", on its own group, or a drag from a control or a touch moves nothing', async () => {
     byComputer();
     show(<SettingsPage section="agents" />, '/settings/agents');
     fireEvent.click(await screen.findByRole('button', { name: 'Computer' }));
     await screen.findByRole('link', { name: 'Open Spare Two' });
-    const alpha = document.querySelector('[data-target="agent:alpha"]') as Element;
-    at(document.querySelector('section[data-target="group:computer:"]'));
-    drag(alpha);
-    at(document.querySelector('section[data-target="group:computer:r1"]'));
-    drag(alpha);
-    at(document.querySelector('section[data-target="group:computer:r2"]'));
-    fireEvent.pointerDown(alpha, { button: 0, pointerType: 'mouse', clientX: 10, clientY: 10 });
-    fireEvent.pointerMove(alpha, { pointerType: 'mouse', clientX: 12, clientY: 12 });
-    fireEvent.pointerUp(alpha);
+    const alpha = row('alpha');
+    expect(alpha.getAttribute('draggable')).toBe('true');
+    dragTo(alpha, group(''));
+    dragTo(alpha, group('r1'));
+    dragTo(alpha, group('r2'), { press: within(alpha as HTMLElement).getByRole('checkbox') });
+    dragTo(alpha, group('r2'), { pointerType: 'touch' });
     await new Promise((r) => setTimeout(r, 20));
     expect(sent).toEqual([]);
+  });
+
+  it('grouped by team, rows do not drag', async () => {
+    byComputer();
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    await screen.findByRole('link', { name: 'Alpha Agent' });
+    expect(row('alpha').getAttribute('draggable')).toBeNull();
   });
 });
 

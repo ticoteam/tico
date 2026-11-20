@@ -6,6 +6,7 @@ import { meQuery, useActor, useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { announce, useDrag } from '@/kit/Drag';
 import { Empty } from '@/kit/Empty';
 import { SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
@@ -22,7 +23,6 @@ import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
-import { useCardDrag } from './drag';
 import { DropDialog } from './DropDialog';
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
@@ -405,19 +405,36 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
       data-target={`task:${t.number ?? t.id}`}
       aria-pressed={onPick ? !!picked : undefined}
       onClick={onPick}
+      // the card's wrapper drags it, not the link (while picking nothing drags)
+      draggable={picked === undefined ? false : undefined}
     >
       {inner}
     </Link>
   );
 }
 
+/** Where a board card lands: a stage's column, or another card (its subtask or a merge). */
+const COLUMN = '.col[data-target^="stage:"]';
+const CARD = '.tk-item[data-task]';
+
 function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
   const [dropped, setDropped] = useState<{ task: string; onto: string } | null>(null);
-  const drag = useCardDrag(
-    (task, to) => void move.run({ task, to }),
-    (task, onto) => setDropped({ task, onto }),
-  );
+  // A card let go over a stage moves there; over another card it asks: a subtask or a merge (DropDialog).
+  const drag = useDrag({
+    zones: `${COLUMN}, ${CARD}`,
+    controls: '.tk-more',
+    takes: (zone, card) => zone !== card,
+    drop: (zone, card) => {
+      const task = card.getAttribute('data-task') ?? '';
+      const onto = zone.getAttribute('data-task');
+      if (onto) return setDropped({ task, onto });
+      if (zone.contains(card)) return;
+      const to = zone.getAttribute('data-target')?.slice('stage:'.length) ?? '';
+      const name = p.stages.find((s) => s.id === to)?.name;
+      void move.run({ task, to }).then((r) => r.ok && announce(`${r.did} to ${name}`));
+    },
+  });
   const groups = byStage(p.stages, rows);
   const shape = p.stages.map((s) => `${s.id}:${groups.get(s.id)?.length ?? 0}:${folds.includes(s.id) ? 1 : 0}`).join(',');
   return (
@@ -451,7 +468,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
               height={CARD_H}
               measure
               draw={(t) => (
-                <Movable key={t.id} task={t} stages={p.stages} wrap={picking ? undefined : drag(t)}>
+                <Movable key={t.id} task={t} stages={p.stages} wrap={picking ? undefined : { 'data-task': t.id, ref: drag }}>
                   <Card t={t} p={p} me={me} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
                 </Movable>
               )}

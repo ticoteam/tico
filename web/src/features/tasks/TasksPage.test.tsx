@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
 import { flowQuery, listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
@@ -183,6 +184,36 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     await act(async () => refuse());
     await waitFor(() => expect(stageOf('a1')).toBe('s1'));
     expect(await screen.findByText('Needs a review first')).toBeTruthy();
+  });
+
+  it('a card dragged onto another stage moves there and says so; onto another card it asks subtask or merge', async () => {
+    const reads: string[] = [];
+    serve((url, method) => {
+      if (method === 'GET') reads.push(url);
+      if (method === 'POST' && url.endsWith('/move')) return { status: 200, body: { task: task('a1', 7, 'Fix the export', 's2', { version: 2 }) } };
+      return { status: 404, body: {} };
+    });
+    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    const card = (title: string) => screen.getByTitle(title).closest('.tk-item') as HTMLElement;
+    await screen.findByTitle('Fix the export');
+    const column = (name: string) => screen.getByRole('region', { name });
+
+    // its own stage, or let go nowhere: nothing moves
+    dragTo(card('Fix the export'), column('Inbox'));
+    dragTo(card('Fix the export'), null);
+    expect(posts).toEqual([]);
+
+    dragTo(card('Fix the export'), column('Doing').querySelector('.col-head'));
+    await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
+    expect(await screen.findByText('Moved #7 to Doing')).toBeTruthy();
+    expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
+
+    posts = [];
+    dragTo(card('Fix the export'), screen.getByTitle('Write the notes'));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(reads.some((u) => u.startsWith('/api/v2/tasks/a1/merge?into=a2'))).toBe(true);
+    expect(posts).toEqual([]);
   });
 
   it('says so when the pipeline has nothing open, offering New task, and keeps every stage head', async () => {
