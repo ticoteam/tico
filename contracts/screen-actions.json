@@ -435,7 +435,7 @@
     },
     {
       "id": "agents.requestCloud",
-      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it",
+      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…, or `other` with its name or website): a seat holds its place, its first task waits there, and Tico support builds it",
       "kind": "change",
       "input": {
         "type": "object",
@@ -451,6 +451,16 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "a team's id"
+          },
+          "first_task": {
+            "type": "string",
+            "maxLength": 8000,
+            "description": "the first task, waiting on the seat until the agent connects"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "for `other`: the agent's name or website"
           }
         },
         "required": [
