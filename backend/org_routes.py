@@ -166,9 +166,7 @@ def register(app, auth, settings, settings_admin, store):
         # The one task its claims are limited to (POST /api/v2/bots/{bot}/control scope): its id when this reader
         # may read the task, or only that a limit is on.
         scope = rows.scopes.get(slug)
-        scoped_task = (
-            (rows.slim_tasks.get(scope) or H.task_untagged(c, scope)) if scope and rows.wants("claim_task") else None
-        )
+        scoped_task = H.task_untagged(c, scope) if scope and rows.wants("claim_task") else None
         row["claim_scoped"] = bool(scope)
         row["claim_task"] = scope if scoped_task and privacy.task_readable(c, who, scoped_task) else None
         status = rows.statuses.get(slug)

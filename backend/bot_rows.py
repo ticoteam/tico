@@ -192,7 +192,7 @@ class BotRows:
         # A bot's activity (its computer, status, queue and tasks) is read only for the bots the caller may read, and
         # not at all for an answer that leaves it out (`activity=False`: GET /api/v2/bots?fields= naming none of it).
         self.assignments, self.draining, self.scopes, self.statuses, self.status_inputs = {}, set(), {}, {}, {}
-        self.queued, self.notes, self.task_flow, self.slim_tasks = {}, {}, {}, {}
+        self.queued, self.notes, self.task_flow = {}, {}, {}
         if read and activity:
             if self.wants("assignment", "online"):
                 self.assignments = _by(
@@ -225,7 +225,6 @@ class BotRows:
                     ).fetchall()
                 tasks = {}
                 for task in map(dict, stored):
-                    self.slim_tasks[task["id"]] = task
                     tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
                 # Prime only the slim wait cache (never SELECT *), so waiting_on_many reuses these rows directly.
                 W.prime_slim_tasks(c, stored)
@@ -238,10 +237,8 @@ class BotRows:
                     ).items()
                 }
                 if self.wants("claim_task"):
-                    # Only prime tasks not already read in slim_tasks above.
-                    missing = [tid for tid in self.scopes.values() if tid not in self.slim_tasks]
-                    if missing:
-                        H.prime_tasks(c, missing, with_tags=False)
+                    # For the reader's check on each scoped task (H.task_untagged), which reads none of its tags.
+                    H.prime_tasks(c, list(self.scopes.values()), with_tags=False)
         self.goals = {}
         for part in H.chunks(slugs if activity and self.wants("goal_active") else []):
             for row in c.execute(

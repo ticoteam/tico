@@ -703,9 +703,9 @@ class Problem(Exception):
         self.extra = extra or {}
 
 
-# Match the server's worker thread capacity (64 default-executor threads in app.py, plus 40 anyio sync request threads
-# and 16 auth threads): bursts reuse warm connections instead of reopening and re-parsing the full schema.
-POOL_IDLE = 64  # read connections kept open between reads
+# The 40 request threads (anyio's default): a burst reuses warm connections instead of opening ones that parse the whole
+# schema first. Each keeps up to 16 MB of page cache (cache_size below), so this also bounds that memory.
+POOL_IDLE = 40  # read connections kept open between reads
 
 
 def _pooled(base):
