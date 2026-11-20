@@ -1,5 +1,0 @@
-{
-  "ui/tests/ask-screen-snooze.cts": {
-    "no-fixed-wait-ui": 5
-  }
-}

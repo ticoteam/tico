@@ -266,7 +266,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
 | `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `tico` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
-| `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
+| `web/`, `desktop/`, `app/` | The web app (React, served at `/`); the Electron desktop app; the older Tauri desktop shell (Rust) |
 | `setup/` | the setup wizard (`python3 -m setup`), the guided Docker install of the server and of Linux runners |
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
@@ -327,10 +327,8 @@ pip install -r backend/requirements-dev.txt
 python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to debug serially
 ```
 
-Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI is built by
-`npm run build:ui` (into `build/ui/`, which the server serves; ui/README.md), and the UI has no runtime network dependency: `marked` and the
-icon font are vendored in `ui/vendor/` with their licenses.
+The web app's checks run in `web/` after `npm ci`: `npm run typecheck`, `npm run lint` and `npx vitest run`. `npm run
+build` builds it into `build/web/`, which the server serves at `/`.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
 `python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built

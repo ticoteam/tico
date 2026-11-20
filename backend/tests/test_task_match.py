@@ -1,53 +1,14 @@
 """The Tasks page's search and filters on the server (backend/task_match.py, perf I16): a search or a filter answers
-bounded keyset pages whose rows, page after page, are exactly what the page's own match (ui/app/task-row.ts
-`taskFilterMatch`, run here in node) keeps of the whole view, in the same order; a private task is in no page and no
-`next_after`; a page starts after the last row given whatever moved meanwhile; a catch-up takes the same filters."""
+bounded keyset pages; a private task is in no page and no `next_after`; a page starts after the last row given whatever
+moved meanwhile; a catch-up takes the same filters."""
 
-import itertools
 import json
-import pathlib
-import shutil
-import subprocess
 import urllib.parse
 
 import pytest
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, post
-
-ROW_TS = pathlib.Path(__file__).resolve().parents[2] / "ui" / "app" / "task-row.ts"
-
-# The page's own match, as the browser runs it: task-row.ts with its types stripped, its clock set to the server's.
-HARNESS = r"""
-const fs = require('fs'), vm = require('vm'), {stripTypeScriptTypes} = require('module');
-const input = JSON.parse(fs.readFileSync(0, 'utf8'));
-const ctx = {console};
-vm.createContext(ctx);
-vm.runInContext(stripTypeScriptTypes(fs.readFileSync(input.file, 'utf8')), ctx);
-vm.runInContext(`Date.now = () => ${Date.parse(input.now)};`, ctx);
-ctx.cases = input.cases;
-console.log(JSON.stringify(vm.runInContext(
-  'cases.map(c => c.rows.filter(t => taskFilterMatch(t, c.q, c.filters)).map(t => t.id))', ctx)));
-"""
-
-
-def page_match(tmp_path, cases):
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node runs the page's own match")
-    harness = tmp_path / "match.js"
-    harness.write_text(HARNESS)
-    run = subprocess.run(
-        [node, str(harness)],
-        input=json.dumps({"file": str(ROW_TS), "now": H.now(), "cases": cases}),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if "stripTypeScriptTypes is not a function" in run.stderr:
-        pytest.skip("this node cannot strip TypeScript types")
-    assert run.returncode == 0, run.stderr
-    return json.loads(run.stdout)
 
 
 def product(api):
@@ -75,25 +36,6 @@ def every_page(api, query, limit, token="ana-test"):
         if not after:
             return rows, pages
         assert len(pages) < 100
-
-
-def server_query(q, f):
-    """The page's search and filters as the page sends them (ui/app/tasks-page.ts tasksNarrowQuery)."""
-    out = {}
-    if q.strip():
-        out["search"] = q
-    for k, name in (("owner", "owners"), ("stage", "stages"), ("asked_by", "requesters"), ("tag", "labels")):
-        if f.get(k):
-            out[name] = ",".join(f[k])
-    if f.get("waiting_on"):
-        out["turn"] = ",".join(f["waiting_on"])
-    if f.get("due"):
-        out["due"] = f["due"]
-    if f.get("late"):
-        out["late"] = "true"
-    if f.get("pushed"):
-        out["pushed_past"] = "true"
-    return urllib.parse.urlencode(out)
 
 
 def make_view(api):
@@ -133,38 +75,6 @@ def make_view(api):
 
 
 VIEW = "pipeline=product&status=open&snoozed=all&sort=queue"
-
-
-def cases_for(rows):
-    """Each filter alone with each value the view offers, a pair of values, and each combined with a search."""
-    of = {
-        "owner": sorted({t["owner_id"] for t in rows if t.get("owner_id")}),
-        "stage": sorted({t["stage_id"] for t in rows if t.get("stage_id")}),
-        "asked_by": sorted({t["requester_id"] for t in rows if t.get("requester_id")}),
-        "tag": sorted({label for t in rows for label in t.get("labels") or []}),
-        "waiting_on": sorted({(t.get("turn") or {}).get("who") for t in rows if (t.get("turn") or {}).get("who")}),
-    }
-    filters = [{}]
-    for k, values in of.items():
-        filters += [{k: [v]} for v in values] + [{k: values[:2]}]
-    filters += [{"due": d} for d in ("overdue", "week", "any")] + [{"late": True}, {"pushed": True}]
-    filters += [{"owner": of["owner"][:1], "tag": ["perf"]}, {"stage": ["spec"], "due": "any"}]
-    searches = ["", "latency", "LATENCY home", "#1", "1", "perf", "release", "straße", "ümlaut café", "zzqx", "ui"]
-    return [(q, f) for q, f in itertools.product(searches, filters) if q or f]
-
-
-@pytest.mark.parametrize("token", ["ana-test", "cara-test"])
-def test_each_search_and_filter_reaches_exactly_the_rows_the_page_matched_in_the_same_order(api, tmp_path, token):
-    make_view(api)
-    whole = read(api, VIEW + "&limit=500", token=token)
-    assert whole["next_after"] is None
-    cases = cases_for(whole["tasks"])
-    expected = page_match(tmp_path, [{"rows": whole["tasks"], "q": q, "filters": f} for q, f in cases])
-    assert any(expected) and not all(expected)
-    for (q, f), want in zip(cases, expected):
-        got, pages = every_page(api, VIEW + "&" + server_query(q, f), limit=3, token=token)
-        assert [t["id"] for t in got] == want, (q, f)
-        assert all(n <= 3 for n in pages)
 
 
 def test_a_private_match_is_in_no_page_and_no_more_signal(api):

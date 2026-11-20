@@ -42,7 +42,7 @@ BUNDLE_ID="team.tico.app"
 HUB_URL="${HUB_APP_URL:-${TICO_HUB_URL:-}}"
 UPDATE_URL="https://github.com/ticoteam/tico/releases/latest/download/latest.json"
 if [ -n "$HUB_URL" ]; then UPDATE_URL="${TICO_APP_BASE:-${HUB_URL%/}}/download/latest.json"; fi
-ICON_SRC="${ICON_SRC:-$HUB/ui/assets/tico/tico-1024.png}"
+ICON_SRC="${ICON_SRC:-$HUB/backend/assets/tico/tico-1024.png}"
 LOCAL_TOKEN_FILE=""
 
 json() { plutil -extract "$2" raw -o - "$1" 2>/dev/null || true; }

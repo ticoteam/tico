@@ -1,6 +1,0 @@
-/* The branch picker stays under the name on narrow screens. */
-#bot-branches{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;max-width:100%;font-size:var(--t-sm)}
-#bot-branches:empty{display:none}
-#bot-branches select{min-width:0;max-width:100%;font-size:var(--t-sm);padding:3px 6px}
-#bot-branches button{font-size:var(--t-sm);padding:3px 6px}
-#branch-editor label{display:grid;gap:6px;margin-bottom:12px}

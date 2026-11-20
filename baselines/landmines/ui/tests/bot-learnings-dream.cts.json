@@ -1,6 +1,0 @@
-{
-  "ui/tests/bot-learnings-dream.cts": {
-    "no-fixed-wait-ui": 2,
-    "no-raised-timeout": 1
-  }
-}

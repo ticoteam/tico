@@ -888,10 +888,11 @@ Native release checkouts download the matching checksummed binary. Development c
 it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
-A checkout also builds the web UI: install Node 22 and run `npm ci` once, and `python -m backend.server` runs
-`npm run build:ui` itself when the build is missing or stale, with the Node on its PATH or, for a launchd or systemd
-job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm. Without Node it refuses to start and
-says what is missing (ui/README.md). The Docker image ships the built UI.
+A checkout also builds the web app it serves at `/`: with Node 24 installed, `python -m backend.server` runs `npm ci`
+and `npm run build` in `web/` itself when `build/web` is missing or out of date, with the npm on its PATH or, for a
+launchd or systemd job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm
+(backend/web_build.py). Without one it still starts and says what to run; `/` answers 404 until the app is built. The
+Docker image ships the built app.
 
 Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already

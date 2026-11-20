@@ -1,5 +1,0 @@
-{
-  "ui/tests/flow-ping.cts": {
-    "no-fixed-wait-ui": 1
-  }
-}

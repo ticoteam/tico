@@ -1,6 +1,0 @@
-{
-  "ui/tests/ask-screen-phone-page.cts": {
-    "no-fixed-wait-ui": 1,
-    "no-raised-timeout": 1
-  }
-}

@@ -14,9 +14,9 @@ and the proof, without running anything.
 1. The plan is the spec's acceptance criteria (`tico task show` lists the Spec page under "From earlier stages"): one
    row each, with its number. Add any check the change needs that the spec did not name (another screen that uses the
    same code, a permission, a data change on a copy), and say why.
-2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico:
-   `python3 scripts/release_shots.py --base <merge base> --head <head> --version <next> --out shots/`; reuse shots
-   from the Review page when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
+2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico: the demo,
+   `python3 -m backend.demo`, with the web app built, pictures taken in Playwright; reuse shots from the Review page
+   when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
    job for a change with no screen.
 3. Each check gets a result: pass, fail, or not checked with why. A pass has its proof on the page: a screenshot with
    red numbered arrows at 390 and 1280 px, or the command as run and its real output (test names and counts, the call

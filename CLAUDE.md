@@ -1,7 +1,7 @@
 # Tico
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
-server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
+server in `backend/`, the web app in `web/` (React, built by Vite into build/web and served at `/`), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
 CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
@@ -31,35 +31,31 @@ A Tico bot working a task on this repository follows these where the rest of thi
 
 ## Tests
 `python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked
-`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cts`). In a fresh clone or worktree, a bot's
-runner included, run `scripts/dev_setup.sh` first (`--browser` readies the browser scripts: Google Chrome when it is on PATH,
-else Playwright's Chromium): runner images ship no dev tools. The browser scripts run on Google Chrome, so leave
-`TICO_BROWSER_CHANNEL` unset (Tico computers have Chrome). A computer without Chrome (rare; a person's laptop) runs
-`scripts/dev_setup.sh --browser` for Playwright's Chromium and sets `TICO_BROWSER_CHANNEL=` (empty).
-On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
-the parallel suite is the release check's job on a full-size machine. The PR checks
+`@pytest.mark.slow`; the web app's tests are `npx vitest run` in `web/` (`npm run typecheck` and `npm run lint` beside
+them). In a fresh clone or worktree, a bot's runner included, run `scripts/dev_setup.sh` first: runner images ship no
+dev tools. On a small computer (two CPUs) run the tests you changed one at a time; the parallel suite is the release
+check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the Caddy image only when it touches its own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
 checks only. A flaky test is never quarantined, skipped or retried away: a test that failed and passed on one commit is fixed at its root cause the same day, or deleted (`scripts/flake_detect.py` lists them daily in `.github/workflows/flaky-tests.yml`, which goes red on one). The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change within two levels. The queue stops at hubs such as `backend/app.py` and follows the input–hub pairs in `QUEUE_HUB_INPUTS` to their direct tests up to level three. The plan is capped at nineteen VMs and includes the smoke set when it drops tests. Release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
-and UI files outside the UI map run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
-the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
+run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`, checked by
+the static job), never the full default suite; release validation runs it. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
 ready. The PR checks and the queue fail a change when fewer than 80% of the Python statements it adds to backend/ and
 clients/ run under its selected tests (`scripts/diff_coverage.py`); a line opts out only with `# pragma: no cover - <reason>`
-on that line. A run of up to about 100 Python tests, or one to three browser scripts, may run locally under `nice -n 19`
+on that line. A run of up to about 100 Python tests may run locally under `nice -n 19`
 with `-n 2` at most and never `-m slow`; anything bigger goes to RunsOn (`scripts/remote.py`) or PR checks. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
-queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
-run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
+queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python groups are sized from the latest successful Release validation
+run's per-file timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
 downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
-on a queue run links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
-RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release train dispatches it (docs/releasing.md#the-release-train). The default Python suite runs in parallel in about a minute and the whole
-default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
-load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
-`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cts` and pytest in a
+on a queue run links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests. The manually dispatched Release validation workflow runs the full release gate across isolated
+RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release train dispatches it (docs/releasing.md#the-release-train). The default Python suite runs in parallel in about a minute; `python scripts/release_checks.py` runs it and records
+time and load. On a computer several bots share, start a full suite or a cargo build through
+`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py` and pytest in a
 bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
 "waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Release checks run off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
@@ -142,19 +138,13 @@ flight file, not the database.
 - The Python lint and type baselines are per source file: `baselines/ruff/<path>.json` and `baselines/pyright/<path>.json`. After fixing findings, run `python3 scripts/lint_baseline.py --write` (types: `scripts/check_types.sh --writebaseline`). Never commit `ruff-baseline.toml` or `.basedpyright/baseline.json`: they are generated and git-ignored. A bare `uvx ruff@0.15.9 check` reads `ruff.toml` alone and reports every finding, baselined or not; `scripts/lint.sh` is the gate that counts them against the baseline (`ruff-baseline.toml` extends `ruff.toml`, never the other way round).
 - Keep real team names, human names, domains, buckets and credentials out of the repository. Examples use
   the fictional team Acme (`acme.example`).
-- The UI loads nothing from the network: vendored libraries live in `ui/vendor/` with their licenses. Write a new
-  UI file as TypeScript (`ui/app/name.ts`, listed in index.html by that name; strict types, no `any`). `npm run build:ui`
-  builds the page and its bundle into `build/ui/`, the only UI files the server serves (`npm run watch:ui` while editing,
-  then reload; tests and `backend.server` build it when they can), and the server refuses to start on a missing or
-  stale build (ui/README.md).
-- Generated files: `ui/types/api.d.ts` is written by `scripts/check_ui_types.sh`, and the API spec is generated by
+- The web app (`web/`) builds into `build/web/` (`npm ci && npm run build` in web/; `npm run dev` serves it at
+  127.0.0.1:5173 against a server on 8765). The server serves that build at `/` (backend/web_routes.py), and `/` is a
+  404 until it is built. The icons the server's own pages use live in `backend/assets/`.
+- Generated files: `web/src/api/schema.d.ts` is written by `npm run gen:api` in web/, and the API spec is generated by
   `python3 -m backend.openapi_v2` (served at `GET /api/v2/openapi.json`). Neither is committed, so never edit or hand-merge
   them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved. A route joins the stable API on its
   own decorator, `@app.get(path, **api_v2(tag, operationId, summary, answer))` (backend/api_contract.py), which also
   takes what FastAPI cannot see in the handler (a body read by hand, extra errors, no sign-in, an optional key).
-- Every UI script is strict TypeScript, enforced by `scripts/check_ui_strict.py`: a `.js` under `ui/` fails unless it is
-  vendor code, a Node test, or in the `KEPT_JS` list (the classic scripts that stay JavaScript, each with its reason).
-  Each `.ts` must pass `ui/tsconfig.strict.json`; one with findings has a piece under `ui/baselines/strict/` that only
-  shrinks, and a new `.ts` must be at zero (a renamed `.js` may keep its count).
 - Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
   change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.

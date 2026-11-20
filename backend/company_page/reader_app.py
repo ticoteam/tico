@@ -458,7 +458,7 @@ def build(store, settings, judge=lambda: None, blobs=lambda: None):
         logo = team_logo(apple=request.url.path == "/apple-touch-icon.png")
         if logo is not None:
             return brand_icons.reply(logo, media_type, brand_icons.TEAM_CACHE)
-        data = brand_icons.read(settings, rel)
+        data = brand_icons.read(rel)
         return brand_icons.reply(data, media_type) if data is not None else not_found()
 
     def asset(request: Request):
@@ -467,7 +467,7 @@ def build(store, settings, judge=lambda: None, blobs=lambda: None):
         rel = request.path_params["path"]
         brand = brand_icons.FILES.get("/assets/" + rel)
         if brand:  # Tico's own icons, for an open or private page (no SVG otherwise: see ASSET_TYPES)
-            data = brand_icons.read(settings, brand[0]) if answering() else None
+            data = brand_icons.read(brand[0]) if answering() else None
             return brand_icons.reply(data, brand[1]) if data is not None else not_found()
         media_type = ASSET_TYPES.get(rel.rsplit(".", 1)[-1].lower()) if "." in rel else None
         if not media_type:

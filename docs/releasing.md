@@ -477,9 +477,8 @@ The release check builds and selects its candidate image before running isolatio
 python scripts/release_checks.py
 ```
 
-That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
-core browser scripts (`CORE` in `scripts/ui-tests.cts`) with the load-aware concurrency described below. The check records wall time and load; it
-takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
+That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute). The check
+records wall time and load; it takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
 GitHub release. The merge queue never runs the full default suite: an uncertain selection runs the smoke set, and known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
@@ -667,7 +666,7 @@ python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a 
 This is the full suite, run once per release. It builds the server, runner and updater images once (BuildKit cache;
 a source-only change rebuilds one layer per image), while the journey installs the previous release. After every build
 finishes, it runs every Python test except Docker isolation, the opt-in `@pytest.mark.slow` ones included (real git,
-Docker, servers and long timers), and every browser script (`node scripts/ui-tests.cts --all`). Python uses half the
+Docker, servers and long timers). Python uses half the
 CPU count in workers (at least one; six on a 12-core Mac); `TICO_PYTHON_WORKERS` overrides that default.
 The browser runner samples CPU counters over one second at startup. The idle fraction is the change
 in idle time divided by the change in total CPU time across all cores. Its job count is
@@ -731,16 +730,9 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
-**Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
-demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
-`scripts/screenshots/index.cts`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
-shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
-changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
-looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
-(`TICO_DEMO_NOW` sets the demo's "now"), so a ref compared with itself shoots no changed pair. The release train calls it
-for each candidate it ships (the `shots` job in `train.yml`), with stable's release as the base and the candidate as the
-head. The job uploads the folder as the artifact `release-shots-<version>`, and the `approval-shots` job puts its section
-on the approval issue (see [Approval](#approval)).
+**Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py`, which writes
+the approval issue's "What it looks like" section. The old web app's screenshot harness went with `ui/`, and the web app
+has none yet, so the section says there are no pictures to compare.
 
 ### Behaviour replay
 

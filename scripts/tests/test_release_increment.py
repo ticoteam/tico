@@ -439,9 +439,10 @@ def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner
 
 def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms():
     full = ri.matrix_of("")["include"]
-    assert len(full) == ri.FULL_PYTHON_SHARDS + 6
+    assert len(full) == ri.FULL_PYTHON_SHARDS + 2
     assert full[0] == {"name": "product", "part": "product", "shard": "", "workers": "2", "runner": ri.RUNNER}
-    assert full[5] == {
+    assert not [entry for entry in full if entry["part"] == "browser"]  # the old web app's browser scripts are gone
+    assert full[1] == {
         "name": "python-1",
         "part": "python",
         "shard": f"1/{ri.FULL_PYTHON_SHARDS}",

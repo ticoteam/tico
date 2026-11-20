@@ -1,6 +1,0 @@
-{
-  "ui/tests/rules-reach.cts": {
-    "no-fixed-wait-ui": 2,
-    "timing-assert": 1
-  }
-}

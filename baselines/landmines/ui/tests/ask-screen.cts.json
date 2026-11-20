@@ -1,6 +1,0 @@
-{
-  "ui/tests/ask-screen.cts": {
-    "no-fixed-wait-ui": 5,
-    "no-raised-timeout": 1
-  }
-}

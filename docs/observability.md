@@ -40,12 +40,8 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    reload open tabs to apply configuration changes immediately.
 
 No `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, or `SENTRY_PROJECT` is sent to the browser. Stack
-locations are restricted to known static filenames and line/column numbers. The application's
-bundle files (`app.bundle.<hash>.js`) are minified, and nothing is uploaded to Sentry: to read a
-frame, check out the release's commit, run `npm run build:ui`, then
-`python -m backend.ui_build --where app.bundle.<hash>.js:1:4567`, which prints the source file,
-line and column. A signed-in browser's developer tools read the same maps from the server
-(`app.bundle.<hash>.js.map`). The minified SDK bundle has no published source maps.
+locations are restricted to known static filenames and line/column numbers. The web app's files
+(`/next/assets/<name>-<hash>.js`, built from `web/`) are minified, and nothing is uploaded to Sentry.
 If upload is added later, its authentication token must remain in CI/build secrets, never in
 public config or browser assets. Release/debug mapping needs its own tested privacy policy.
 
@@ -263,8 +259,8 @@ sends (`POST /api/v2/web-timings`) count in the totals and are listed apart as `
 
 ### People's browser timings
 
-Every page measures two numbers in the person's own browser and sends them to this server, whatever the PostHog and
-Sentry settings, and to no other host (`ui/observability.ts`, `vitals`): `lcp`, how long the first screen took to draw
+The old web app measured two numbers in the person's own browser and sent them to this server, whatever the PostHog
+and Sentry settings, and to no other host; the web app at `/` sends none yet, and the route below still takes them: `lcp`, how long the first screen took to draw
 (Largest Contentful Paint; once per page load, for the screen it landed on, and only when the page was visible from the
 start), and `inp`, the slowest click or key press of each screen visit (Interaction to Next Paint, read from the
 browser's event timings). A visit ends when the person moves to another screen or hides the page; the readings go in
@@ -277,7 +273,7 @@ the click shows in its route's server p99, not in INP. Browsers without these AP
 
 Only a person's session may send (bots and runners get 403). Each reading is a metric, a screen template (`/home`,
 `/task/:task`, `/thread/:thread`: the app's screen and a placeholder for its page, never a full address or an id; the
-list is `WEB_SCREENS` in `backend/flight.py`, kept the same as `SCREENS` in `ui/observability.ts`) and a value from 0 to 60,000 ms; anything else refuses the whole request.
+list is `WEB_SCREENS` in `backend/flight.py`) and a value from 0 to 60,000 ms; anything else refuses the whole request.
 The server keeps only the value's histogram bucket per minute, metric and screen (`flight_web`): never who sent it,
 the device, the address, the element or the browser. One person sends at most 120 readings a minute; the rest are
 dropped and counted (`web.dropped`). Minutes become hours after two days and go after 14, as request rows do. The

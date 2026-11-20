@@ -40,9 +40,9 @@ PAGE_BODY = "body{display:block;min-height:0}"
 
 
 def inline_styles(data: bytes) -> bytes:
-    """The page with the shared styles in a <style> at the start of its head, read from ui/styles at publish time, so
-    the page's own styles come after them and win."""
-    root = Path(__file__).resolve().parents[1] / "ui" / "styles"
+    """The page with the shared styles in a <style> at the start of its head, read from backend/spec_styles at publish
+    time, so the page's own styles come after them and win."""
+    root = Path(__file__).resolve().parent / "spec_styles"
     css = "\n".join((root / name).read_text(encoding="utf-8") for name in STYLES) + "\n" + PAGE_BODY
     style = "<style>" + css.replace("</style", "<\\/style") + "</style>"
     text = data.decode("utf-8", "replace")

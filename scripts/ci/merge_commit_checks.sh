@@ -29,8 +29,9 @@ check python3 scripts/build_api_docs.py --check
 check python3 scripts/check_wire_contract.py
 check python3 scripts/check_test_imports.py --base "$base"
 check bash scripts/check_types.sh
+# The old web app's checks are no-ops now that ui/ is gone; they stay while the static job still lists them.
 check bash scripts/check_ui_types.sh --base "$base"
-# Biome comes from node_modules, which the plan job's install (scripts/ci_install.sh) has already made.
+# TypeScript comes from node_modules, which the plan job's install (scripts/ci_install.sh) has already made.
 [ -d node_modules ] || check npm ci --ignore-scripts --no-audit --no-fund --silent
 check bash scripts/check_ui_lint.sh --base "$base"
 check python3 scripts/check_ui_strict.py --base "$base"

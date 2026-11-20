@@ -4,48 +4,13 @@ Classes follow the settings owner's table (Appendix A of the BotOps-changes-sett
 reversible, inside the team and spends nothing new; `confirm` for spending more, people and access, sending or
 publishing outside, anything destructive, team rules and ownership (BotOps acting for a person puts them to the person
 as a Confirm card, which only their own tap runs); `person` for a sign-in, a secret value, an upload, or the person's
-own approvals and sending (only the person, in Settings). backend/tests/test_settings_catalog.py reads every write the files in
-SETTINGS_FILES make and fails when no entry, ALIASES row or NOT_SETTINGS row covers it.
+own approvals and sending (only the person, in Settings).
 """
 
 from dataclasses import replace
 
 from .page_owners import PAGES as PAGE_OWNER_PAGES
 from .settings_catalog import Setting as S
-
-SETTINGS_FILES = sorted(
-    [
-        "settings.ts",
-        "settings-access.ts",
-        "settings-bot-editor.ts",
-        "settings-bots.ts",
-        "settings-bots-choice.ts",
-        "settings-bots-tasks.ts",
-        "settings-bots-bulk.ts",
-        "settings-strategy-bot.ts",
-        "settings-company.ts",
-        "settings-devices.ts",
-        "settings-history.ts",
-        "settings-hosted.ts",
-        "settings-people.ts",
-        "settings-providers.ts",
-        "settings-recurring.ts",
-        "settings-release.ts",
-        "settings-repositories.ts",
-        "settings-storage.ts",
-        "settings-webhooks.ts",
-        "subscriptions.ts",
-        "bot-budget.ts",
-        "bot-profile.ts",
-        "usage.ts",
-        "task-pipelines.ts",
-        "tags.ts",
-        "roadmaps.ts",
-        "inboxes-texts.ts",
-        "inboxes-letters.ts",
-        "cloud-machines.ts",
-    ]
-)
 
 
 def _card(tab, card=""):

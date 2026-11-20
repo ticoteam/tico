@@ -1,6 +1,0 @@
-{
-  "ui/tests/page-chat.cts": {
-    "no-fixed-wait-ui": 2,
-    "no-raised-timeout": 2
-  }
-}

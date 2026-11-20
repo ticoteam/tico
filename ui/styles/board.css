@@ -1,7 +1,0 @@
-/* ui/styles/board.css — Page toolbars and the document viewer (the board itself is in task-list.css).
-   The cascade runs in the order index.html links these files; keep rules in order. */
-.board-tools{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin-bottom:var(--s3)}
-.board-tools .spacer{flex:1}
-.board-tools select{width:auto;min-width:150px;max-width:220px}
-.tasks-head h1{font-size:var(--t-lg);font-weight:600;margin:0 6px 0 0}
-.doc-viewer{width:min(860px,calc(100vw - 24px));max-height:92vh}

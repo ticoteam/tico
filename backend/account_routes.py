@@ -1,6 +1,5 @@
 """Account routes: onboarding, local sign-in, sign-out, the manifest, personal tokens, agent skill."""
 
-import json
 import re
 from clients.agent_skill import WHO_NEEDS_ME
 from fastapi import Request
@@ -11,6 +10,24 @@ from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PAT
 from .observability import browser_config, staff_display_name
 from .store import H, Problem, encode
 from .api_contract import api_v2
+
+# The web manifest: the app at / installs as one window, with the icons in backend/assets (backend/brand_icons.py).
+MANIFEST = {
+    "name": "Tico",
+    "short_name": "Tico",
+    "description": "Your AI assistant and team.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "theme_color": "#172221",
+    "background_color": "#172221",
+    "icons": [
+        {"src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
 
 
 def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, store):
@@ -192,10 +209,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
     @app.get("/manifest.webmanifest")
     def manifest():
         """The installed app carries this environment's own name, not the product's."""
-        try:
-            data = json.loads((settings.ui_dir / "manifest.webmanifest").read_text())
-        except (OSError, ValueError):
-            data = {"start_url": "/", "scope": "/", "display": "standalone"}
+        data = {**MANIFEST}
         data.update(
             name=settings.app_name,
             short_name=settings.app_name,

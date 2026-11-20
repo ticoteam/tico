@@ -10,8 +10,8 @@ from clients import hubcli, hubtools, remotecli, s3links
 
 VIEW = "https://d1234example.cloudfront.net"
 MAPPING = {"acme-files": VIEW}
-# The cases the UI's own linking is held to as well (ui/tests/inline-links.cts).
-VECTORS = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/support/s3-link-vectors.json").read_text())
+# The cases s3:// links are held to.
+VECTORS = json.loads((Path(__file__).resolve().parent / "fixtures" / "s3-link-vectors.json").read_text())
 
 
 def test_the_setting_maps_buckets_to_https_bases_and_ignores_bad_entries_with_a_log_line(caplog):

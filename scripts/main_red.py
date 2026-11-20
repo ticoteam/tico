@@ -378,13 +378,15 @@ def probe_commit(workdir, git, sha, tests):
         return "good", [], "defines none of the tests"
     try:
         subprocess.run(["git", "checkout", "--detach", "--force", sha], cwd=workdir, capture_output=True, check=True)
-        subprocess.run(
-            ["npm", "run", "--silent", "build:ui"],
-            cwd=workdir,
-            capture_output=True,
-            check=True,
-            timeout=BUILD_LIMIT,
-        )
+        # A commit from before the old web app (ui/) was removed serves it only once it is built.
+        if (Path(workdir) / "scripts" / "build-ui.cjs").is_file():
+            subprocess.run(
+                ["npm", "run", "--silent", "build:ui"],
+                cwd=workdir,
+                capture_output=True,
+                check=True,
+                timeout=BUILD_LIMIT,
+            )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         return "inconclusive", [], "checkout or UI build failed (%s)" % type(exc).__name__
     runs = [run_tests(workdir, present) for _ in range(REPEATS)]

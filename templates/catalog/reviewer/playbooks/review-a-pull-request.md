@@ -97,11 +97,12 @@ Every comment is polite, about the code, and specific. Never "this is wrong": sa
 
 ## 4b. Screens
 
-In the combined Review stage or the second stage of a split review, if the diff touches `ui/`, take before and after
-screenshots of the changed screens with `python3 scripts/release_shots.py --base <merge base> --head <head commit> --version
-<next release> --out <dir>`. Put each changed screen's before and after pictures in the page's "What it looks like"
-section, with red numbered arrows on what changed (the skill's "Arrows"), and also attach `manifest.json` and every
-picture it names to the task with `tico task attach <id> <file>`, one file per call. If the diff does not touch `ui/`,
+In the combined Review stage or the second stage of a split review, if the diff touches `web/`, take before and after
+screenshots of the changed screens: the demo (`python3 -m backend.demo`) at the merge base and at the head commit, with
+the web app built on each, pictures taken in Playwright at desktop 1440 px and phone 390 px. Put each changed screen's
+before and after pictures in the page's "What it looks like" section, with red numbered arrows on what changed (the
+skill's "Arrows"), and also attach every picture to the task with `tico task attach <id> <file>`, one file per call. If
+the diff does not touch `web/`,
 delete that section, attach nothing and write "No screens changed" in the opening. If the tool cannot run on this
 computer, attach nothing and say so under Not checked. Never draw a screen.
 

@@ -1,5 +1,0 @@
-{
-  "ui/tests/support/real-hub.cts": {
-    "no-raised-timeout": 1
-  }
-}

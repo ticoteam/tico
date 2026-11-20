@@ -1,6 +1,0 @@
-{
-  "ui/tests/boot-snap.cts": {
-    "no-fixed-wait-ui": 7,
-    "timing-assert": 1
-  }
-}

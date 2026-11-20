@@ -125,14 +125,6 @@ def pytest_configure(config):
     app_build.install()  # every app after a worker's first builds in half the time
     if hasattr(config, "workerinput") or config.option.pyargs:
         return  # --pyargs names modules, not paths
-    # The server serves the UI as scripts/build-ui.cjs builds it to build/ui: built here once when it is stale and this
-    # checkout can (Node and `npm ci`); otherwise the tests that load the page fail and say to run `npm run build:ui`.
-    from backend import ui_build
-
-    try:
-        ui_build.prepare()
-    except ui_build.StaleBuild:
-        pass
     base = Path(config.invocation_params.dir)
     missing = [str(arg) for arg in config.args if not (base / str(arg).split("::")[0]).exists()]
     if missing:

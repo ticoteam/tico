@@ -156,13 +156,10 @@ def definition(api, body, headers=None):
     )
 
 
-# Where the old names may still be written: the upgrade that renames them, and the UI's fallback for a roster read
-# before it.
+# Where the old names may still be written: the upgrade that renames them.
 OLD_NAME_ALLOWED = {
     "backend/strategy_bot.py",
     "backend/store.py",
-    "ui/app/notices.ts",
-    "ui/app/state.ts",
     # Written before the rename to Strategy Owner, and never changed after.
     "backend/redesign_migration.py",
     "backend/migrations/0006_drop_old_strategy_tables.sql",

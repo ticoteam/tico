@@ -1,5 +1,0 @@
-{
-  "ui/tests/support/e2e.cts": {
-    "no-fixed-wait-ui": 1
-  }
-}

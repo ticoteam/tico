@@ -91,10 +91,8 @@ if [ "${GITHUB_WORKFLOW:-}" = "Remote run" ]; then
 fi
 # The types job runs basedpyright on the venv alone.
 [ "$suite" != types ] || exit 0
-# Every suite serves the UI as scripts/build-ui.cjs builds it to build/ui with the lock's esbuild (backend/ui_build.py
-# refuses a missing or stale build).
+# The root packages: TypeScript for scripts/check_node_types.py (the merge commit checks) and Playwright for a browser VM.
 npm ci --fetch-retries=1 --no-audit --no-fund --prefer-offline
-npm run --silent build:ui
 # Python tests do not use Playwright. The browser VM also needs Python for its synthetic server.
 [ -n "$system_pid" ] || exit 0
 if ! wait "$system_pid"; then

@@ -1,6 +1,6 @@
 // Writes src/api/schema.d.ts: the person-facing API's types, from the server's OpenAPI v2 document.
-// The same generator the old app uses (scripts/gen_ui_types.py, built in-process from backend/openapi_v2.py, no server),
-// called for its text only, so nothing is read from or written to ui/. One type per component schema, plus
+// scripts/gen_ui_types.py builds the text in-process from backend/openapi_v2.py (no server);
+// this writes it here. One type per component schema, plus
 // <Op>Params, <Op>Body and <Op>Response per operation. Generated, never committed.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';

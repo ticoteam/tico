@@ -82,12 +82,6 @@ def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_m
     assert checks.selection(["docs/missing.md"])["python"] is not None
     main = checks.selection(["backend/task_engine.py"], "push")
     assert main["python"] is None and main["browser"] is None and main["caddy"]
-    ui = checks.selection(["ui/app/chat.ts"])
-    # The audited UI map's scripts run, with any core script the dependency map finds using the file.
-    assert {"chat", "imported-history"} <= set(ui["browser"]) and "--all" not in ui["browser"]
-    # A UI file the map does not list runs its linked scripts and the smoke browser scripts, never every script.
-    core = checks.selection(["ui/app/core.ts"])
-    assert "--all" not in core["browser"] and set(checks.browser_scripts([])) <= set(core["browser"])
     assert checks.selection(["runner-rs/harnesses/codex.toml"])["conformance"]
     assert checks.selection(["runner-rs/src/sessions.rs"])["conformance"]
     assert checks.selection(["backend/harness_actions.py"])["conformance"]
@@ -624,31 +618,6 @@ def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_ke
     assert [(env or {}).get("TICO_E2E_CLI_ALL") for env in envs] == ["1", "1", None]
 
 
-def test_a_ui_change_runs_the_release_only_browser_scripts_it_picks_before_it_merges(repo_map):
-    every = set(checks.runnable_scripts(ROOT))
-    assert len(every) > checks.BROWSER_ALL_OVER and "redesign-e2e-tools" in every
-
-    def light(changed, event="pull_request"):
-        return checks.narrow(checks.selection(changed, event, graph=repo_map), changed, event, graph=repo_map)
-
-    for event in ("pull_request", "merge_group"):
-        # A changed script runs itself.
-        picked = light(["ui/tests/redesign-e2e-tools.cts"], event)
-        assert picked["browser_direct"] == ["redesign-e2e-tools"] and "redesign-e2e-tools" in picked["browser"]
-        # A helper runs every script that uses it, through other helpers: real-hub.cts <- redesign-e2e.cts <- the script.
-        picked = light(["ui/tests/support/real-hub.cts"], event)
-        assert {"redesign-e2e-tools", "real-hub-smoke"} <= set(picked["browser"]) < every
-        # A helper most scripts use runs every script the release check runs.
-        assert set(light(["ui/tests/support/page.cts"], event)["browser"]) >= every
-        # UI source outside UI_MAP runs the scripts named after it, beside the smoke set.
-        assert {"tools", "bot-tools", "redesign-e2e-tools"} <= set(light(["ui/app/tools.ts"], event)["browser_direct"])
-        # And the scripts UI_ALSO adds for it: the big board's flood check for the board's live drawing.
-        assert "board-flood" in light(["ui/app/task-pipelines.ts"], event)["browser_direct"]
-        # A change outside ui/ picks none: its plan is what it was.
-        assert light(["backend/health.py"], event)["browser_direct"] == []
-    assert light(["backend/health.py"])["browser"] == []
-
-
 def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_limit(tmp_path):
     smoke_tree(tmp_path)
     source(tmp_path, "ui/tests/a.cts", "const x = require('./support/x.cts');\n")
@@ -671,55 +640,6 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert set(picked["browser_direct"]) == {Path(n).stem for n in changed} and "a" not in picked["browser"]
     picked = checks.selection([*changed, f"ui/tests/s{checks.BROWSER_ALL_OVER}.cts"], root=tmp_path, core=[])
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
-
-
-def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
-    # Diff hints find callers of changed definitions. The dependency map also links callers of the file's other globals.
-    def git(*args):
-        return subprocess.check_output(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
-        ).strip()
-
-    git("init", "-q", "-b", "main")
-    smoke_tree(tmp_path)
-    modal = (ROOT / "ui/app/task-modal.ts").read_text()
-    source(tmp_path, "ui/app/task-modal.ts", modal)
-    source(tmp_path, "ui/tests/task-code.cts", (ROOT / "ui/tests/task-code.cts").read_text())
-    source(tmp_path, "ui/tests/other.cts", "await page.evaluate(() => taskModalLoadFailed('t', null));\n")
-    git("add", "-A")
-    git("commit", "-qm", "Start")
-    base = git("rev-parse", "HEAD")
-
-    def change(old, new):
-        text = (tmp_path / "ui/app/task-modal.ts").read_text()
-        assert old in text
-        source(tmp_path, "ui/app/task-modal.ts", text.replace(old, new, 1))
-        git("commit", "-qam", "Change")
-        return checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
-
-    start = modal.index("async function taskModalOpen(")
-    body = modal.index("\n", start) + 1
-    line = modal[body : modal.index("\n", body) + 1]
-    picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
-    assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
-    assert "other" in picked["browser_direct"]
-    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
-        "ui/app/task-modal.ts": {"taskModalOpen"}
-    }
-    git("reset", "-q", "--hard", base)
-    picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
-    assert {"other", "task-code"} <= set(picked["browser_direct"])
-    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
-        "ui/app/task-modal.ts": {"taskModalLoadFailed"}
-    }
-    # A deleted UI file names its old functions: a script still calling one runs.
-    git("reset", "-q", "--hard", base)
-    git("rm", "-q", "ui/app/task-modal.ts")
-    git("commit", "-qm", "Delete")
-    picked = checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
-    assert {"task-code", "other"} <= set(picked["browser_direct"])
-    # Without a base (no diff to read), the rule picks nothing new.
-    assert "task-code" not in checks.selection(["ui/app/task-modal.ts"], root=tmp_path, core=[])["browser_direct"]
 
 
 def test_changed_definitions_maps_added_and_removed_lines_to_their_top_level_names():
@@ -1095,9 +1015,9 @@ def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_
     # Code beside a page still reaches whatever imports it.
     assert "backend/tests/test_api.py" in picked("docs/other.md", "backend/manual.py")
     assert picked("docs/removed.md") == ["backend/tests/test_manual.py"]
-    # The PR workflow runs what reads it, one short browser script and the Caddy job it alone defines.
+    # The PR workflow runs what reads it and the Caddy job it alone defines; no browser script, with no browser runner.
     workflow = checks.selection([checks.PR_WORKFLOW], root=tmp_path, core=[], added=[])
-    assert workflow["python"] == [] and workflow["browser"] == [checks.SMOKE_SCRIPT] and workflow["caddy"]
+    assert workflow["python"] == [] and workflow["browser"] == [] and workflow["caddy"]
     # A file that lists the repository reads every page.
     source(
         tmp_path,
@@ -1115,7 +1035,7 @@ def test_docs_and_workflow_edits_run_the_tests_that_read_them_not_the_suite(tmp_
     for changed in (checks.PR_WORKFLOW, "scripts/pr_checks.py", "scripts/ci_install.sh"):
         plan = checks.selection([changed], added=[])
         assert "scripts/tests/test_pr_checks.py" in plan["python"] and len(plan["python"]) < 60, changed
-    assert checks.selection(["scripts/ci_install.sh"], added=[])["browser"] == [checks.SMOKE_SCRIPT]
+    assert checks.selection(["scripts/ci_install.sh"], added=[])["browser"] == []  # the browser runner went with ui/
 
 
 def test_scripts_and_files_a_test_runs_or_reads_by_path_select_it(tmp_path):
@@ -1211,7 +1131,7 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
     assert "scripts/tests/test_pr_checks.py" in checks.selection(["ui/app/api.ts"], added=[])["python"]
 
 
-def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
+def test_groups_are_sized_to_the_job_target_and_a_browser_job_runs_exactly_its_scripts(tmp_path, monkeypatch, mapped):
     # One VM holds WORKERS x (target - setup) seconds of one-worker test time, so it is never planned past the target;
     # never 0 VMs, never past the cap.
     per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
@@ -1233,28 +1153,6 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     assert len(split) == checks.job_count(3000, "python")
     assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
     assert sorted(sum(split, [])) == sorted(counts)
-
-    names = [f"s{i}" for i in range(40)]
-    listed = []
-    monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: listed.append(args) or names)
-    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
-    monkeypatch.setattr(
-        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["ui/app/core.ts"]
-    )
-    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
-    timings = tmp_path / "durations.json"
-    timings.write_text(json.dumps({f"ui/tests/{n}.cjs": 60 for n in names}))
-    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
-    assert listed[-1] and "--all" not in listed[-1]
-    browser = [j for j in plan["matrix"]["include"] if j["suite"].startswith("browser-")]
-    assert len(browser) == checks.job_count(2400, "browser") > 1
-    assert sorted(sum([j["files"] for j in browser], [])) == sorted(names)
-    # With no measured times, each script still counts, so a first --all run is split too.
-    timings.write_text("{}")
-    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
-    assert len([j for j in plan["matrix"]["include"] if j["suite"].startswith("browser-")]) == checks.job_count(
-        40 * checks.UNTIMED_SCRIPT_SECONDS, "browser"
-    )
 
     # A browser job runs exactly its scripts at full width and records their times for the next split.
     monkeypatch.setattr(checks, "ROOT", tmp_path)
@@ -1280,12 +1178,6 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     recorded = tmp_path / "browser-1.json"
     recorded.write_text(json.dumps({"chat": 12.5, "bad": "x"}))
     assert checks.durations([], [recorded]) == {"ui/tests/chat.cjs": 12.5}
-
-
-def test_browser_listing_matches_the_runner_selection():
-    core = checks.browser_scripts([])
-    assert {"chat", checks.SMOKE_SCRIPT} <= set(core) and len(core) < len(checks.browser_scripts(["--all"]))
-    assert checks.browser_scripts(["chat"]) == ["chat"]
 
 
 def test_a_pr_merge_ref_is_checked_against_current_main_not_the_older_event_base(tmp_path, monkeypatch):
@@ -3171,9 +3063,6 @@ def light_plan(changed, event, repo_map, added):
 @pytest.mark.parametrize(
     ("changed", "test"),
     [
-        ("backend/mail.py", "ui/tests/e2e-tools.cts"),
-        ("backend/mail_actions.py", "ui/tests/redesign-e2e-automations.cts"),
-        ("backend/model_subscriptions.py", "ui/tests/computers-shared.cts"),
         ("backend/threads.py", "backend/tests/test_sql_parity.py"),
         ("templates/catalog/example/card.yaml", "backend/tests/test_recruiting.py"),
     ],
@@ -3192,20 +3081,6 @@ def test_light_plans_keep_checks_with_an_explicit_input_link(tmp_path, changed, 
     for event in checks.NARROW:
         assert name in selected(changed, event)[suite]
         assert name not in selected("backend/other.py", event)[suite]
-
-
-@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-def test_a_new_ui_file_runs_the_release_shot_table_test_even_in_a_light_plan(event, repo_map):
-    # Nov 13: #3335 added ui/app/browser-view.ts and ui/styles/browser-view.css, which no PAGES, SHARED or UNSHOWN entry
-    # named; test_release_shots.py lists every tracked ui/ file through git, the plan never picked it, and main went red.
-    added = ["ui/app/browser-view.ts", "ui/styles/browser-view.css"]
-    changed = [*added, "ui/app/tools.ts"]
-    light = light_plan(changed, event, repo_map, added=added)
-    assert checks.RELEASE_SHOTS in light["python"] and light["narrow"]["tier"][checks.RELEASE_SHOTS] == 0
-    assert (ROOT / checks.RELEASE_SHOTS).is_file()
-    # A changed (not new) ui/ file, or a new browser test, cannot change the harness's listing.
-    for changed, added in ((["ui/app/tools.ts"], []), (["ui/tests/browser-view.cts"], ["ui/tests/browser-view.cts"])):
-        assert checks.RELEASE_SHOTS not in light_plan(changed, event, repo_map, added=added)["guards"], changed
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
@@ -3228,45 +3103,6 @@ def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan
     assert checks.CLI_FIXTURES in light["python"] and light["narrow"]["tier"][checks.CLI_FIXTURES] == 0
     assert checks.CLI_FIXTURES in light["guards"] and (ROOT / checks.CLI_FIXTURES).is_file()
     assert checks.CLI_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
-
-
-@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-def test_a_growth_module_change_runs_the_growth_page_fixtures_even_in_a_light_plan(event, repo_map):
-    # Nov 19: #4489 added `sources` to the Growth read in backend/growth_core.py; its plan never ran
-    # test_growth_page_fixtures.py, which reaches the read through the API, and release validation for v0.6.110 went red.
-    changed = ["backend/growth_core.py", "backend/tests/test_growth_core.py"]
-    light = light_plan(changed, event, repo_map, added=[])
-    assert checks.GROWTH_FIXTURES in light["python"] and light["narrow"]["tier"][checks.GROWTH_FIXTURES] == 0
-    assert checks.GROWTH_FIXTURES in light["guards"] and (ROOT / checks.GROWTH_FIXTURES).is_file()
-    assert checks.GROWTH_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
-
-
-@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-@pytest.mark.parametrize(
-    "path",
-    [
-        "ui/app/sidebar.ts",
-        "ui/parts.json",
-        "ui/index.html",
-        "ui/vendor/marked.min.js",
-        "backend/ui_build.py",
-        "scripts/build-ui.cjs",
-        "package-lock.json",
-    ],
-)
-def test_a_change_that_can_grow_the_shell_runs_the_size_ceiling_even_in_a_light_plan(event, path, repo_map):
-    # P05b: between P05's two pull requests the code a cold open of Home downloads crept from 341 to 383 KB, and no
-    # check noticed. Every path that can move that number runs the ceiling, in a light plan too.
-    light = light_plan([path], event, repo_map, added=[])
-    assert checks.UI_SHELL_SIZE in light["guards"] and checks.UI_SHELL_SIZE in light["python"]
-    assert light["narrow"]["tier"][checks.UI_SHELL_SIZE] == 0 and (ROOT / checks.UI_SHELL_SIZE).is_file()
-
-
-@pytest.mark.parametrize(
-    "path", ["ui/tests/thread-redraw.cts", "ui/baselines/home.png", "ui/README.md", "backend/growth.py"]
-)
-def test_a_change_that_cannot_grow_the_shell_leaves_the_size_ceiling_out(path, repo_map):
-    assert checks.UI_SHELL_SIZE not in light_plan([path], "pull_request", repo_map, added=[])["guards"]
 
 
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():

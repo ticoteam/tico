@@ -84,12 +84,10 @@ validation, `shots/<screen>-<390|1280>.png`), and say the same width in the pict
   `--full` takes the whole page. If it is refused, the bot's **Can view the app (read only)** setting is off: an owner or
   admin turns it on (`tico bot app-view <bot> on`). Say so in the task note, and use the demo below for before.
 - **The app with the change applied** (a spec's after, a review's before and after): the repository's demo, run from a
-  branch with the change on it. In Tico's own repository one command takes both sides, at 390 px and desktop width:
-
-      python3 scripts/release_shots.py --base origin/main --head <branch> --version <next> --out shots/
-
-  It writes `<page>-<width>-before.png` and `<page>-<width>-after.png` at desktop 1440 px and phone 390 px for the
-  pages the branch's `ui/` files draw; use those names in `data-shot`.
+  branch with the change on it. In Tico's own repository, build the web app (`npm ci && npm run build` in web/), run
+  the demo (`python3 -m backend.demo --port <port>`) on each side, and take each changed page in Playwright at desktop
+  1440 px and phone 390 px. Name them `<page>-<width>-before.png` and `<page>-<width>-after.png` and use those names in
+  `data-shot`.
 
   The demo's desktop pictures are 1440 px wide; production's are 1280. A before and after pair comes from one source,
   so both sides match: for a spec, take both from the demo (before on `origin/main`, after on your branch), and name

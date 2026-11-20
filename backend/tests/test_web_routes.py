@@ -3,7 +3,7 @@ address from when it lived at /next sent on to the same page without it."""
 
 import pytest
 
-from backend import ui_build
+from backend import web_routes
 
 AUTH = {"Authorization": "Bearer ana-test"}
 PAGE = '<!doctype html><title>Tico</title><script type="module" src="/next/assets/index-1a2b3c.js"></script>'
@@ -17,6 +17,7 @@ def web(api, tmp_path):
     (root / "index.html").write_text(PAGE)
     (root / "assets" / "index-1a2b3c.js").write_text("export const ok = 1;\n")
     (root / "boot.js").write_text("document.documentElement.dataset.theme = 'light';\n")
+    (root / "sw.js").write_text("self.addEventListener('push', () => {});\n")
     (tmp_path / "build" / "secret.txt").write_text("not for the web")
     api.app.state.store.settings.web_dir = root
     return api
@@ -26,9 +27,9 @@ def test_a_built_file_is_sent_and_hashed_assets_are_kept_for_a_year(web):
     asset = web.get("/next/assets/index-1a2b3c.js", headers=AUTH)
     assert asset.status_code == 200 and asset.text == "export const ok = 1;\n"
     assert asset.headers["content-type"].startswith("text/javascript")
-    assert asset.headers["cache-control"] == ui_build.IMMUTABLE
+    assert asset.headers["cache-control"] == web_routes.IMMUTABLE
     again = web.get("/next/assets/index-1a2b3c.js", headers={**AUTH, "If-None-Match": asset.headers["etag"]})
-    assert again.status_code == 304 and again.headers["cache-control"] == ui_build.IMMUTABLE
+    assert again.status_code == 304 and again.headers["cache-control"] == web_routes.IMMUTABLE
     boot = web.get("/next/boot.js", headers=AUTH)
     assert boot.status_code == 200 and boot.headers["cache-control"] == "private, no-cache"
     # An older build's asset is gone, never the page under a script's name.
@@ -98,11 +99,19 @@ def test_a_path_outside_the_build_is_never_sent(web, tmp_path):
     assert "not for the web" not in web.get("/next/leak.txt", headers=AUTH).text
 
 
-def test_without_a_build_the_page_is_a_404_and_the_old_page_stays_at_tico_ui(api, tmp_path):
+def test_the_service_worker_installed_at_the_root_gets_the_build_s_for_its_update_check(web):
+    worker = web.get("/sw.js?v=1", headers=AUTH)
+    assert worker.status_code == 200 and worker.text == "self.addEventListener('push', () => {});\n"
+    assert worker.headers["content-type"] == "text/javascript; charset=utf-8"
+    assert worker.headers["cache-control"] == "private, no-cache"
+    assert web.get("/sw.js").status_code == 401
+
+
+def test_without_a_build_the_page_is_a_404_and_the_old_page_is_gone(api, tmp_path):
     api.app.state.store.settings.web_dir = tmp_path / "no-build"
     assert api.get("/", headers=AUTH).status_code == 404
     assert api.get("/tasks", headers=AUTH).status_code == 404
+    assert api.get("/sw.js", headers=AUTH).status_code == 404
     assert api.get("/next/tasks", headers=AUTH, follow_redirects=False).status_code == 308
-    old = api.get("/tico/ui/", headers=AUTH)
-    assert old.status_code == 200 and old.text == (ui_build.out_dir(ui_build.ROOT / "ui") / "index.html").read_text()
-    assert api.get("/sw.js", headers=AUTH).status_code == 200
+    for old in ("/tico/ui/", "/tico/ui/index.html", "/vendor/marked.min.js", "/styles/tokens.css"):
+        assert api.get(old, headers=AUTH).status_code == 404, old

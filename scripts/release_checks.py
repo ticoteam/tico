@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Release checks.
 
-    python scripts/release_checks.py            # the default Python and core browser suites, about 2 minutes
+    python scripts/release_checks.py            # the default Python suite, about 2 minutes
     python scripts/release_checks.py --release  # the release gate: every test and the whole product, under 480 s
     python scripts/release_checks.py --shard 2/3  # file group 2 of 3 of the default Python suite (a PR check job)
 
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
-it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers) and
-every browser test (`node scripts/ui-tests.cts --all`), alongside the Docker isolation tests
-and whole-product checks against the successfully built images: docker/smoke.sh,
+it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers),
+alongside the Docker isolation tests and whole-product checks against the successfully built images: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
 to the candidate, or across 0.6 prove the candidate refuses that database and upgrade a new one, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
 hop). The journey starts installing the previous release while the images build. Each check gets its own Docker names, smoke a free host port, and each compose stack its own edge network range
@@ -18,8 +17,8 @@ side by side; two release checks must not run at once, since the journey's candi
 
 `--part product|python|browser|desktop` runs one slice of the same gate so the hosted Release validation workflow can
 spread it over several VMs: `product` is the journey, image builds, smoke, side-jobs and Docker isolation; `python`
-is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by recorded time); `browser` is every browser
-test (with `--shard K/N`, the Kth of N script groups); `desktop` is the Linux desktop app's tests, its update from a company feed among them. Without `--part` the whole gate
+is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by recorded time); `browser` ran the old web
+app's browser scripts and now runs nothing; `desktop` is the Linux desktop app's tests, its update from a company feed among them. Without `--part` the whole gate
 runs on this machine, as before, with the desktop part only where the Linux app builds.
 
 `--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
@@ -84,10 +83,7 @@ def load():
 def full():
     started, initial_load = time.monotonic(), load()
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
-    for name, command in (
-        ('Python', [sys.executable, '-m', 'pytest', '-q']),
-        ('Browser', ['node', 'scripts/ui-tests.cts']),
-    ):
+    for name, command in (('Python', [sys.executable, '-m', 'pytest', '-q']),):
         before = time.monotonic()
         result = subprocess.run(command, cwd=ROOT, env=env)
         print(f'{name} checks: exit {result.returncode}, {time.monotonic() - before:.2f}s', flush=True)
@@ -539,24 +535,6 @@ def bin_shards(counts, timings, total):
     return groups, loads, unrecorded
 
 
-def browser_shard(index, total):
-    """The browser scripts of shard `index` of `total` of `ui-tests.cts --all`, grouped like the Python files: by
-    recorded seconds ('browser' in TIMINGS) where there are any, otherwise one script weighs as much as another."""
-    scripts = subprocess.run(
-        ['node', 'scripts/ui-tests.cts', '--list', '--all'], cwd=ROOT, capture_output=True, text=True, check=True
-    ).stdout.split()
-    if len(scripts) < total:
-        raise RuntimeError(f'{len(scripts)} browser scripts cannot fill {total} shards')
-    weights, _ = file_weights(dict.fromkeys(scripts, 1), recorded_timings('browser'))
-    loads, groups = [0.0] * total, [[] for _ in range(total)]
-    for name in sorted(scripts, key=lambda name: (-weights[name], name)):
-        lightest = min(range(total), key=lambda i: (loads[i], i))
-        loads[lightest] += weights[name]
-        groups[lightest].append(name)
-    print(f'Browser shard {index}/{total}: {len(groups[index - 1])} of {len(scripts)} scripts', flush=True)
-    return sorted(groups[index - 1])
-
-
 def recorded_timings(kind):
     """{test file: seconds} recorded for `kind`; empty when the file or kind is missing (shards then balance by
     test count)."""
@@ -812,18 +790,6 @@ def release(args):
             python_cmd += files
             name = f'python-{shard[0]}-of-{shard[1]}'
         checks.append(Check(name, python_cmd, logs, test_env, tests=True))
-    if runs('browser'):
-        if shard:
-            checks.append(
-                Check(
-                    f'browser-{shard[0]}-of-{shard[1]}',
-                    ['node', 'scripts/ui-tests.cts', *browser_shard(shard[0], shard[1])],
-                    logs,
-                    test_env,
-                )
-            )
-        else:
-            checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cts', '--all'], logs, test_env))
     # Its own VM in the hosted gate; a whole local gate runs it where the app can build and says when it cannot.
     if part == 'desktop' or part is None and desktop_buildable():
         checks.append(Check('desktop-update', DESKTOP_TEST, logs, test_env, tests=True))

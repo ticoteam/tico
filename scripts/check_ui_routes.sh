@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Every API path the UI's JavaScript calls must be a route the backend serves. The routes come from importing the app
-# and walking app.routes (no server, no network); the calls come from scanning ui/**/*.js and ui/**/*.ts, excluding
-# ui/vendor/ and ui/assets/. A call that matches no route is printed as file:line METHOD path and counted per file
-# against ui/routes-baseline.json, which only shrinks. Calls whose path cannot be read are skipped and counted:
-# python3 scripts/check_ui_routes.py --skipped lists them. Pass --base origin/main on a pull request so a baseline
-# that grew there fails too. Needs backend/requirements-dev.txt installed. Takes seconds.
-#   scripts/check_ui_routes.sh
-set -euo pipefail
-cd "$(dirname "$0")/.."
-python3 scripts/check_ui_routes.py "$@"
-echo "ui routes: ok"
+# The old web app (ui/) is gone, so this check of it has nothing left to read. .github/workflows/pr-checks.yml still
+# runs it as a step; delete this file with that step. The web app's own checks: npm run typecheck and npm run lint, in web/.
+echo "check_ui_routes: ui/ is gone, nothing to check"

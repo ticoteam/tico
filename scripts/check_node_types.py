@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""The TypeScript outside ui/: every .cts and .mts script Node runs under scripts/ and bench/, and the .d.ts files they
-read, type-checks strictly, with no baseline.
+"""The TypeScript outside the apps: every .cts and .mts script Node runs under scripts/, and the .d.ts files they read,
+type-checks strictly, with no baseline.
 
     python3 scripts/check_node_types.py
 
-Node strips the types, so nothing else reads them: tsc here is the only check. These scripts live here rather than in
-scripts/check_ui_strict.py, whose rules are about ui/ (its baseline, its build, its routes). The rules:
+Node strips the types, so nothing else reads them: tsc here is the only check. The rules:
 
-1. Each project (PROJECTS) extends tsconfig.node.json, the compiler options ui/tests/tsconfig.json shares too, and its
+1. Each project (PROJECTS) extends tsconfig.node.json, the shared compiler options, and its
    EFFECTIVE options (tsc --showConfig, extends followed, not the raw JSON) keep strict, noEmit, erasableSyntaxOnly (Node
    can strip every annotation) and verbatimModuleSyntax true, moduleDetection "force" (each script is its own scope), no
    strict family flag turned off, and no noCheck.
-2. Every TypeScript file outside ui/ (ui/ is scripts/check_ui_strict.py's) is in one of the projects: a new folder needs
-   its own leaf config, listed here.
+2. Every TypeScript file outside the apps (APPS) is in one of the projects: a new folder needs its own leaf config,
+   listed here.
 3. A script never uses `declare global`: a project's scripts share one program, so a global one script declares changes
    the types every other script sees. Globals are file-local
    (declare const window: Window & typeof globalThis & {...}).
@@ -29,13 +28,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# The TypeScript 6 API package also installs a compiler. Use the pinned TypeScript 7 package directly.
+# The pinned TypeScript package from the root lock (npm ci).
 TSC = ["node", str(ROOT / "node_modules/typescript/bin/tsc")]
 BASE = "tsconfig.node.json"
-PROJECTS = (
-    "scripts/tsconfig.json",
-    "bench/tsconfig.json",
-)
+PROJECTS = ("scripts/tsconfig.json",)
 REQUIRED_TRUE = ("strict", "noEmit", "erasableSyntaxOnly", "verbatimModuleSyntax")
 # The flags strict turns on: --showConfig lists each, so one turned off reads false.
 STRICT_FAMILY = (
@@ -50,9 +46,8 @@ STRICT_FAMILY = (
     "useUnknownInCatchVariables",
 )
 TS_FILE = re.compile(r"\.(ts|cts|mts|tsx)$")
-# The apps, each type-checked by its own tsconfig: ui/ by scripts/check_ui_strict.py, web/ and desktop/ by their
-# `npm run typecheck`.
-APPS = ("ui/", "web/", "desktop/")
+# The apps, each type-checked by its own tsconfig: web/ and desktop/ by their `npm run typecheck`.
+APPS = ("web/", "desktop/")
 DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)
 
 
@@ -66,7 +61,7 @@ def tsc(*args, root=None):
 
 def effective_config(config, root=None):
     """The config as tsc reads it, extends followed (tsc --showConfig): its compilerOptions, include and files. root is
-    the folder config is relative to (ROOT unless given); scripts/check_ui_strict.py reads ui/tests/tsconfig.json here."""
+    the folder config is relative to (ROOT unless given)."""
     done = tsc("-p", config, "--showConfig", root=root)
     if done.returncode != 0:
         raise ConfigError(f"{config}: tsc --showConfig exited {done.returncode}: {(done.stdout + done.stderr).strip()}")
@@ -101,7 +96,7 @@ def extends_problems(config):
         return [f"{config}: cannot be read as JSON ({error})"]
     extends = raw.get("extends")
     if not isinstance(extends, str) or ((ROOT / config).parent / extends).resolve() != (ROOT / BASE).resolve():
-        return [f'{config}: extends must name {BASE} (its options are shared with ui/tests/tsconfig.json)']
+        return [f"{config}: extends must name {BASE} (the shared options)"]
     return []
 
 
@@ -145,7 +140,7 @@ def run_project(config):
 
 def check():
     """Every problem, one line each. tsc runs only once the configs and sources pass the rules before it."""
-    problems, covered = [], set()
+    problems, covered, filled = [], set(), []
     for config in PROJECTS:
         problems += extends_problems(config)
         try:
@@ -154,7 +149,10 @@ def check():
             problems.append(str(error))
             continue
         problems += option_problems(config, effective.get("compilerOptions", {}))
-        covered |= project_files(config, effective)
+        held = project_files(config, effective)
+        covered |= held
+        if held:
+            filled.append(config)
     files = ts_files()
     problems += [
         f"{rel}: in no TypeScript project; add its folder's leaf config (extending {BASE}) to PROJECTS in"
@@ -165,7 +163,8 @@ def check():
     problems += declare_global_problems(files)
     if problems:
         return problems
-    for config in PROJECTS:
+    # A project with no script yet has nothing for tsc to check (it would only say so, TS18003).
+    for config in filled:
         code, output = run_project(config)
         if code != 0:
             problems.append(f"{config}: tsc exited {code}; fix every diagnostic (no baseline)")
