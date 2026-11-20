@@ -2801,7 +2801,7 @@ def _activity_unread(view, thread_id, message_ids):
         count += view.c.execute(
             "SELECT COUNT(*) FROM messages m LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
             f"WHERE m.id IN ({','.join('?' * len(part))}) AND m.conversation_id=? "
-            f"AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor)}) AND {threads.unread_message_sql()}",
+            f"AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor or 0)}) AND {threads.unread_message_sql()}",
             (actor, *part, thread_id, actor, actor),
         ).fetchone()[0]
     return count
