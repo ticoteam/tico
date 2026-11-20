@@ -69,6 +69,8 @@ const BOOT_ROSTER_WAIT_MS = 10000;
     const keepRoster = ([emps, people]: Awaited<typeof roster>): void => {
       bootMark('roster');
       S.emps = namedRoster(emps); setPeople(people);
+      // What drew before the roster (Thread settings' Who can read) follows it, as it follows refresh.ts's.
+      document.dispatchEvent(new CustomEvent('tico:roster'));
     };
     if (peopleData) keepRoster(peopleData);
     else void roster.then(data => {

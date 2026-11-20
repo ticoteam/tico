@@ -220,9 +220,29 @@ function threadSettingsOpen(view: ThvView): void {
     } catch (e) { if (dlg.open) status.textContent = errorMessage(e, ''); else toast(errorMessage(e, ''), true); }
     finally { b.disabled = false; }
   };
+  // The panel can open before the roster lands (boot reads it alongside the page): Who can read follows the teams
+  // when they come or change, keeping a choice not yet saved.
+  let teams = thdTeamsKey();
+  const followRoster = () => {
+    if (!dlg.open) return;
+    const fs = box.querySelector<HTMLElement>('.thd-aud'), key = thdTeamsKey();
+    if (!fs || !view.thread || key === teams) return;
+    teams = key;
+    const chosen = fs.querySelector<HTMLInputElement>('[name=audience]:checked')?.value, group = fs.querySelector<HTMLSelectElement>('[name=group]')?.value;
+    fs.outerHTML = threadAudienceHTML(view.thread, {titled: true});
+    const now = thdFind(box, '.thd-aud'), sel = now.querySelector<HTMLSelectElement>('[name=group]');
+    const radio = chosen ? now.querySelector<HTMLInputElement>(`[name=audience][value="${chosen}"]`) : null;
+    if (radio) radio.checked = true;
+    if (sel && group === '' && chosen === 'team') { sel.insertAdjacentHTML('afterbegin', '<option value="">Choose a team</option>'); sel.value = ''; }
+    else if (sel && group && [...sel.options].some(o => o.value === group)) sel.value = group;
+  };
+  document.addEventListener('tico:roster', followRoster);
+  dlg.addEventListener('close', () => document.removeEventListener('tico:roster', followRoster), {once: true});
   draw();
   dlg.showModal();
 }
+// The teams Who can read offers, as one string to tell when they change.
+const thdTeamsKey = (): string => JSON.stringify((S.orgGroups || []).map(g => [g.id, g.name]));
 // A summary of what is new here and under it, in the viewer's own Assistant DM (backend/thread_catchup.py).
 async function threadCatchUp(t: ThreadRow): Promise<void> {
   toast('Summarizing…');
