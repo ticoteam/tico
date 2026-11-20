@@ -1,7 +1,8 @@
 // A first run of the new app in a real browser, against a server already running on a rehearsal copy (e2e/hub).
-//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, dev, light (default: all)
+//   node e2e/smoke.ts <out dir> [step ...]     steps: boot, menu, sheets, keys, phone, responsive, dev, light (default: all)
 // Needs the server on 127.0.0.1:8765 and `npx vite` on 127.0.0.1:5173. Pictures hold real data: keep them local.
 /// <reference lib="dom" />
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { chromium, webkit, type Browser, type BrowserContext, type Page } from 'playwright';
 
@@ -19,11 +20,16 @@ const bad = (s: string) => {
 const ok = (s: string) => console.log(`  ✓ ${s}`);
 const check = (good: unknown, yes: string, no: string) => (good ? ok(yes) : bad(no));
 
-async function open(browser: Browser, phone = false, at = '/'): Promise<{ ctx: BrowserContext; page: Page }> {
+async function open(browser: Browser, phone = false, at = '/', readOnly = false): Promise<{ ctx: BrowserContext; page: Page }> {
   const ctx = await browser.newContext(
     phone ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : { viewport: { width: 1440, height: 900 } },
   );
   const page = await ctx.newPage();
+  if (readOnly) {
+    await page.route('**/api/**', (route) =>
+      route.request().method() === 'GET' ? route.continue() : route.fulfill({ status: 204 }),
+    );
+  }
   page.on('console', (m) => {
     if (/page-history|status of 405/.test(m.text())) return;
     if (m.type() === 'error' || m.type() === 'warning') bad(`console ${m.type()}: ${m.text().slice(0, 300)}`);
@@ -184,6 +190,48 @@ async function phone(browser: Browser, name: string) {
   await ctx.close();
 }
 
+async function responsive(browser: Browser) {
+  note('responsive controls');
+  const { ctx, page } = await open(browser, false, '/company/finance?tab=pnl', true);
+  try {
+    const head = page.locator('main .pk-head');
+    const fits = () => head.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+    await head.getByRole('group', { name: 'Basis' }).waitFor();
+    assert(await fits(), 'the P&L header overflows at 1440');
+    await page.setViewportSize({ width: 1080, height: 900 });
+    const more = head.getByRole('button', { name: 'More' });
+    await more.waitFor();
+    assert(await fits(), 'the P&L header overflows at 1080');
+    await more.click();
+    for (const name of ['Quarter', 'Cash']) {
+      assert(await page.getByRole('menuitem', { name, exact: true }).isVisible(), `${name} is missing from More`);
+    }
+    await page.keyboard.press('Escape');
+    for (const query of ['', '?view=list']) {
+      await page.goto(`${APP}/calendar${query}`);
+      await page.locator('.cal-page .pk-head').getByRole('button', { name: 'More' }).waitFor();
+      assert(await fits(), `Calendar${query} header overflows at 1080`);
+    }
+  } finally {
+    await ctx.close();
+  }
+
+  const mobile = await open(browser, true, '/flow', true);
+  try {
+    await mobile.page.locator('main a[href^="/flow/"]').first().click();
+    const back = mobile.page.getByRole('link', { name: 'Back to Flow' });
+    await back.waitFor();
+    const fits = await back.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.left >= 0 && rect.right <= innerWidth;
+    });
+    assert(fits, 'the Flow back button is clipped at 390');
+  } finally {
+    await mobile.ctx.close();
+  }
+  ok('P&L, Calendar and Flow controls fit their sheets');
+}
+
 async function dev(browser: Browser) {
   note('dev pages');
   const { ctx, page } = await open(browser, false, '/_dev/dot');
@@ -209,6 +257,7 @@ const browser = await chromium.launch();
 try {
   if (['boot', 'menu', 'sheets', 'keys'].some(want)) await desktop(browser);
   if (want('phone')) await phone(browser, 'chromium');
+  if (want('responsive')) await responsive(browser);
   if (want('dev')) await dev(browser);
   if (want('light')) await light(browser);
 } finally {

@@ -72,7 +72,9 @@ async function request<T>(method: Method, path: ApiPath, body?: unknown, opts: R
     }
     const failed = res === null ? new ApiError(0, 'network', 'The server did not answer', true) : await toError(res);
     // Offline by the browser's word: the write's own holding (data/held.ts) takes over at once.
-    const again = failed.status === 0 ? navigator.onLine !== false : failed.status === 503 && failed.retryable;
+    // A missing file needs storage to be restored. Let the viewer show the failure while other reads keep retrying through a restart.
+    const storageRead = method === 'GET' && failed.code === 'blob_storage';
+    const again = failed.status === 0 ? navigator.onLine !== false : failed.status === 503 && failed.retryable && !storageRead;
     const pause = Math.min((res && retryAfter(res)) ?? wait, RETRY_MAX_MS * 2);
     if (!resend || !again || Date.now() + pause > until) throw gaveUp(failed, resend && again);
     await sleep(pause, opts.signal);

@@ -1,5 +1,5 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MenuItem } from '@/kit/Menu';
 import { Menu, type MenuProps } from './Menu';
@@ -231,6 +231,22 @@ describe('Menu', () => {
     document.body.innerHTML = '';
     nav = within(await show({ threads: <a href="/threads/t1">Refund policy</a> }));
     expect(nav.getByRole('tab', { name: 'Threads' }).getAttribute('aria-selected')).toBe('true');
+    localStorage.clear();
+  });
+
+  it('switches conversation tabs with arrow keys and leaves one tab in the keyboard order', async () => {
+    localStorage.clear();
+    const nav = within(await show({ threads: <a href="/threads/t1">Refund policy</a> }));
+    const team = nav.getByRole('tab', { name: 'Team' });
+    const threads = nav.getByRole('tab', { name: 'Threads' });
+    expect(team.tabIndex).toBe(0);
+    expect(threads.tabIndex).toBe(-1);
+    act(() => team.focus());
+    fireEvent.keyDown(team, { key: 'ArrowRight' });
+    await waitFor(() => expect(document.activeElement).toBe(threads));
+    expect(threads.getAttribute('aria-selected')).toBe('true');
+    expect(nav.getByRole('tabpanel', { name: 'Threads' }).contains(nav.getByRole('link', { name: 'Refund policy' }))).toBe(true);
+    expect(team.tabIndex).toBe(-1);
     localStorage.clear();
   });
 

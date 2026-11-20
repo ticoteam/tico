@@ -73,6 +73,16 @@ describe('the client through a restart', () => {
     expect(keys).toHaveLength(2);
   });
 
+  it('reports an unavailable stored file after the first read', async () => {
+    answers = [
+      () => new Response(JSON.stringify({ error: { code: 'blob_storage', detail: 'Stored file is unavailable', retryable: true } }), { status: 503 }),
+      () => ok({}),
+    ];
+    await expect(api.get('/api/v2/files/f1/versions/1')).rejects.toMatchObject({ status: 503, code: 'blob_storage' });
+    expect(keys).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('stops waiting when the read is called off', async () => {
     answers = [starting];
     const stop = new AbortController();

@@ -71,6 +71,9 @@ a.call-card-t:hover{text-decoration:underline}
 .cv-step .ib{display:grid;place-items:center}
 .cal-seg{margin-right:var(--s-1)}
 .cal-page .page-head .btn-fill .ico{width:16px;height:16px;margin-left:calc(var(--s-0) * -1)}
+@container page (width < 720px){
+  :where(html:not([data-layout="cards"])) .cal-page .pk-head{height:auto;min-height:var(--head-h);flex-wrap:wrap;padding-block:var(--s-2)}
+}
 
 /* the mark of each kind, wherever a thing is one line: a meeting solid, a due date outlined, a routine a ring */
 .km{width:9px;height:9px;flex:none;display:inline-block;border-radius:var(--r-key)}

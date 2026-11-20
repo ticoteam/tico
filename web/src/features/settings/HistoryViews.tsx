@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { run } from '@/actions/run';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Segmented } from '@/kit/Segmented';
 import { VirtualList } from '@/kit/VirtualList';
@@ -45,10 +46,11 @@ export function History({ who }: { who?: HistoryWho }) {
   const last = pages.at(-1);
   const next = last?.data?.next;
   const more = () => {
-    if (!next || last?.isFetching) return;
-    if (last?.isError) void last.refetch();
-    else setCursors((c) => (c.includes(next) ? c : [...c, next]));
+    if (!next || last?.isFetching || last?.isError) return;
+    setCursors((c) => (c.includes(next) ? c : [...c, next]));
   };
+  const paging = cursors.length > 0 && last?.isPending;
+  const retry = cursors.length > 0 && last?.isError;
   const row = (it: HistoryItem) => {
     const actor = faces[it.actor];
     const name = actor?.name ?? names[it.actor] ?? it.actor;
@@ -74,10 +76,13 @@ export function History({ who }: { who?: HistoryWho }) {
         />
         {all.length > 0 && <span className="u-since">Since {fmtDate(all.at(-1)!.at)}</span>}
       </div>
-      {items.length === 0 ? (
-        all.length > 0 || pages[0]?.data ? <Empty title="Nothing yet" /> : null
-      ) : (
+      {items.length > 0 ? (
         <VirtualList className="set-vl" label="History" items={items} getKey={(it) => it.id} estimateSize={34} renderItem={row} onReachEnd={more} />
+      ) : pages[0]?.data && !next && !paging && !retry ? <Empty title="Nothing yet" /> : null}
+      {(retry || (items.length === 0 && (next || paging))) && (
+        <div className="u-tools">
+          {retry ? <Button busy={last.isFetching} onClick={() => void last.refetch()}>Try again</Button> : <Button busy={paging} onClick={more}>More</Button>}
+        </div>
       )}
     </>
   );

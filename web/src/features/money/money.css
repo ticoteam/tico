@@ -3,6 +3,13 @@
 
 /* the date range after the title, with its steps */
 .money .range{display:inline-flex;align-items:center;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm);white-space:nowrap;font-variant-numeric:tabular-nums}
+.money .pnl-head-menu{display:none}
+html[data-layout="cards"] .money .pnl-head-menu{display:inline-grid}
+/* The date range and both switches fit together only when the page has room beside the other sheets. */
+@container page (width < 640px){
+  .money .pk-acts>.pnl-head-option{display:none}
+  .money .pnl-head-menu{display:inline-grid}
+}
 
 /* meter, with a tick for where today is in the period */
 .money .meter{display:block;height:var(--s-1);border-radius:var(--r-pill);background:var(--line-strong);position:relative}

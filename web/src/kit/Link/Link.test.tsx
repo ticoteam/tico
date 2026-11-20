@@ -20,4 +20,16 @@ describe('Link', () => {
     expect(inApp.hasAttribute('data-routed')).toBe(true);
     expect(screen.getByRole('link', { name: 'Outside' }).hasAttribute('data-routed')).toBe(false);
   });
+
+  it('routes legacy hash links while leaving document anchors in place', () => {
+    setLinkComponent(Routed);
+    render(
+      <>
+        <Link href="#/settings">Settings</Link>
+        <Link href="#overview">Overview</Link>
+      </>,
+    );
+    expect(screen.getByRole('link', { name: 'Settings' }).hasAttribute('data-routed')).toBe(true);
+    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('#overview');
+  });
 });

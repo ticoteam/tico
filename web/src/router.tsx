@@ -8,23 +8,28 @@ import { PageFault } from '@/shell/PageFault';
 
 /** Where the app lived before it moved to /: a link from then (a bookmark, an agent's message, an older desktop app)
     opens the same page. The server sends these on itself (backend/web_routes.py); this covers a page served as is. */
-const OLD_BASE = '/next';
+const OLD_BASE = /^\/next(?=[/?#]|$)[/\\]*/;
+
+function movedAddress(href: string): string | null {
+  return OLD_BASE.test(href) ? href.replace(OLD_BASE, '/') : null;
+}
 
 /** The address to open at startup in place of this one, or null to keep it. An old app address (`/#/task/12`, from mail,
     a push or a bookmark) opens its page here; one with no page opens home. A skills helper's code is taken out (and held
     for the Skills page), so it never sits in the address or history. */
 export function startAddress(path: string, search: string, hash: string): string | null {
   if (hash.startsWith('#/')) return takeHelperCode(newAddressFor(hash) ?? '/');
-  const moved = path === OLD_BASE || path.startsWith(`${OLD_BASE}/`);
-  const at = (moved ? path.slice(OLD_BASE.length) || '/' : path) + search;
+  const moved = movedAddress(path);
+  const at = (moved ?? path) + search;
   const clean = takeHelperCode(at);
-  return moved || clean !== at ? clean + hash : null;
+  return moved !== null || clean !== at ? clean + hash : null;
 }
 
 /** An in-app link as the router takes it: an old app address (`/#/task/12`, `#/settings`, in a message or a server's
-    answer) is its new page's address; any other is unchanged. */
+    answer) or a page from under /next opens at its new address. */
 export function appHref(href: string): string {
-  return /^\/?#\//.test(href) ? (newAddressFor(href) ?? '/') : href;
+  const at = movedAddress(href) ?? href;
+  return /^\/?#\//.test(at) ? (newAddressFor(at) ?? '/') : at;
 }
 
 // Before the router is made (its history reads the address then), so the first render already has the new one.

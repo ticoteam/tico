@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data/query-client';
+import { keys } from '@/data/keys';
 import { FakeEventSource, frame, message, messageFrame, opening, task, taskFrame, AT } from './fake-stream';
 import { flushFrame } from './frame';
 import { type TaskList, type Timeline, patchTaskList, removeMessage, taskMatches, upsertMessage } from './patch';
@@ -88,6 +89,14 @@ describe('tasks', () => {
 });
 
 describe('read-again topics', () => {
+  it('refreshes the Company Org and Team rosters when an agent joins or leaves the org', () => {
+    const rosters = [keys.directory(), keys.groups(), keys.team.groups(), keys.team.agents()];
+    for (const key of rosters) queryClient.setQueryData(key, []);
+    FakeEventSource.last.feed(frame(901, 'setup', { seq: 901, actor: 'human:p1', at: AT, area: 'org' }));
+    flushFrame();
+    expect(rosters.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, true, true, true]);
+  });
+
   it('mark the letters list stale on a letters event', () => {
     queryClient.setQueryData(['letters'], []);
     FakeEventSource.last.feed(frame(901, 'letters', { seq: 901, actor: 'human:p1', at: AT }));

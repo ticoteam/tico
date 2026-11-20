@@ -406,7 +406,7 @@ span.li-play.is-on:hover{background:var(--well-2)}
      where Chat sits beside the pages. The answer is one slim row docked above the bar. */
   .app-task,.app-flow{display:block}
   .tv-head{padding:0 16px}
-  .tv-top{display:flex;align-items:center;height:48px;margin:0 40px 0 -12px}
+  .tv-top{display:flex;align-items:center;height:48px}
   .tv-n{margin-left:2px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
   .tv-n b{color:var(--ink)}
   .tv-more{right:4px;top:2px}
