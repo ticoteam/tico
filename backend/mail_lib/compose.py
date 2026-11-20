@@ -17,11 +17,20 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from typing import Any
 
-from icalendar import Calendar, Component, Event, vCalAddress, vUri
+from icalendar import Calendar, Component, Event, vCalAddress, vText, vUri
 
 from .calendar import meeting_url
 
 Json = dict[str, Any]
+
+
+class _Text(vText):
+    """An iCalendar TEXT value. icalendar's own encoder first reads a literal backslash-N in the value as a line break
+    ("C:\\New" would arrive as "C:" and "ew"), so the escapes are done here in RFC 5545's order: the backslash first."""
+
+    def to_ical(self) -> bytes:
+        text = str(self).replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\r", "")
+        return text.replace("\n", "\\n").encode()
 
 
 def _add(component: Component, name: str, value: object, parameters: dict[str, str] | None = None) -> None:
@@ -42,19 +51,19 @@ def with_invitation(
     _add(calendar, "prodid", "-//Tico//Calendar//EN")
     _add(calendar, "method", "REQUEST")
     invite = Event()
-    _add(invite, "uid", event.get("iCalUID") or str(event["id"]) + "@google.com")
+    _add(invite, "uid", _Text(event.get("iCalUID") or str(event["id"]) + "@google.com"))
     _add(invite, "sequence", 0)
     _add(invite, "dtstamp", start.astimezone(timezone.utc))
     _add(invite, "dtstart", start.astimezone(timezone.utc))
     _add(invite, "dtend", end.astimezone(timezone.utc))
-    _add(invite, "summary", summary)
+    _add(invite, "summary", _Text(summary))
     _add(invite, "organizer", vCalAddress("mailto:" + mailbox))
     if join:
         _add(invite, "url", vUri(join))
     if event.get("location"):
-        _add(invite, "location", str(event["location"]))
+        _add(invite, "location", _Text(event["location"]))
     if description:
-        _add(invite, "description", description)
+        _add(invite, "description", _Text(description))
     for uri in dict.fromkeys([join, *conference]):
         if uri:
             _add(invite, "conference", vUri(uri), parameters={"VALUE": "URI"})

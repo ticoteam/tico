@@ -226,12 +226,12 @@ def test_an_invitation_is_frozen_in_the_same_mime_with_its_join_link_and_escaped
     assert join.encode() in attachment(raw, frozen["attachments"][0]["part"])
 
 
-def test_a_line_break_in_an_invitation_value_cannot_add_a_property():
+def test_a_line_break_in_an_invitation_value_cannot_add_a_property_and_a_backslash_stays_one():
     start = datetime(2030, 1, 8, 10, tzinfo=TZ)
     evil = "\r\nATTENDEE:mailto:evil@x.example"
     raw = compose.with_invitation(
         compose.build(["guest@vendor.example"], "M", "x", from_addr="ana@acme.example"),
-        {"id": "e", "iCalUID": "u" + evil, "location": "Room" + evil},
+        {"id": "e", "iCalUID": "u" + evil, "location": "C:\\New" + evil},
         "ana@acme.example",
         ["guest@vendor.example"],
         start,
@@ -242,6 +242,7 @@ def test_a_line_break_in_an_invitation_value_cannot_add_a_property():
     lines = ics.replace("\r\n ", "").split("\r\n")
     assert [line for line in lines if line.startswith("ATTENDEE")] == ["ATTENDEE;RSVP=TRUE:mailto:guest@vendor.example"]
     assert "SUMMARY:Hi\\nATTENDEE:mailto:evil@x.example" in lines
+    assert "LOCATION:C:\\\\New\\nATTENDEE:mailto:evil@x.example" in lines  # not a line break before "ew"
 
 
 def test_an_invitation_with_details_needs_a_plain_text_body():
