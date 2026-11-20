@@ -258,7 +258,10 @@ def test_the_company_persons_ladder_reads_only_what_can_fall_and_keeps_every_tas
     c.execute("UPDATE visits SET level='person' WHERE id=?", (stuck["visit"]["id"],))
     kept["at a person"] = stuck["id"]
     kept["no owner"] = X.new_task(c, ANA, "Sort the inbox", "eng", assignee="bot:builder")["id"]
+    # Nobody owns it (an older task): only move() changes an owner, so its guard is opened for this write alone.
+    c.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (kept["no owner"],))
     c.execute("UPDATE tasks SET owner_id=NULL WHERE id=?", (kept["no owner"],))
+    c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
     kept["owner left"] = X.new_task(c, ANA, "Book the venue", "eng", assignee=CARA)["id"]
     asked = X.new_task(c, ANA, "Write the note", "eng", assignee="bot:builder")
     X.ok_ask(c, asked["id"], "bot:builder", BEN, "OK the note")
@@ -303,7 +306,7 @@ def test_a_planned_bots_cause_is_the_same_read_with_its_list_or_alone(c):
     setup = X.new_task(c, ANA, "Set up the bot", assignee=ANA)["id"]
     made = X.new_task(c, ANA, "Add Builder 3", assignee=ANA)["id"]
     closed = X.new_task(c, ANA, "Add Builder 4", assignee=ANA)["id"]
-    c.execute("UPDATE tasks SET status='closed' WHERE id=?", (closed,))
+    E.move(c, closed, E.CLOSED, ANA, "Not needed")
     for slug, field, task in (
         ("setting", "setup_task_id", setup),
         ("made-on", "made_on_task_id", made),
