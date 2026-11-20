@@ -5627,15 +5627,15 @@ def maybe_unread_roots(c, v):
     first reads a few hundred roots by id, not every root, and loses none unread_terms admits. The threads come from
     the index of exactly those with something unread (migration 20261120004800_unread_threads)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
-    return [
-        row[0]
-        for row in c.execute(
-            "SELECT s.root_id FROM conversations s INDEXED BY conversations_unread_threads "
-            f"WHERE {_SUBTREE_OPEN} AND s.last_unread_seq>0 AND s.last_unread_seq>:floor AND s.root_id IS NOT NULL "
-            f"UNION SELECT root_id FROM ({_to_viewer_roots(c, v)}) WHERE root_id IS NOT NULL",
-            {"me": v.actor, "floor": int(_backfill_floor(c, v) or 0)},
-        )
-    ]
+    # Two statements, not a UNION: SQLite plans the UNION's deliveries half worse than the same query alone.
+    unread = c.execute(
+        "SELECT s.root_id FROM conversations s INDEXED BY conversations_unread_threads "
+        f"WHERE {_SUBTREE_OPEN} AND s.last_unread_seq>0 AND s.last_unread_seq>? AND s.root_id IS NOT NULL",
+        (int(_backfill_floor(c, v) or 0),),
+    )
+    roots = {row[0] for row in unread}
+    roots.update(row[0] for row in c.execute(_to_viewer_roots(c, v), {"me": v.actor}) if row[0] is not None)
+    return sorted(roots)
 
 
 def _sidebar_page(c, v, cursor, limit, sort):
