@@ -665,14 +665,27 @@ ACTIONS = {
 
 # ---------------------------------------------------------------------------------------------------- turns
 def start_turn(
-    c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", label=None, run_model=None, occurrence=None
+    c,
+    auto,
+    run_id,
+    step_id,
+    who,
+    prompt,
+    assistant_bot,
+    key="0",
+    label=None,
+    run_model=None,
+    occurrence=None,
+    about=None,
 ):
     """A turn for this run alone: a new task for the named bot, filed by the automation's owner the way a routine
     files its run (backend/routines.py `open_task`), so it runs in that task's own room and never in a person's chat,
     an Assistant room or another task's session. `assistant:<person>` is the person's Assistant (its room is made on
     first use) and only the person's own automation names it (checked on save). The task's wake carries the run and
     the chain, so the turn's end resumes the run and its writes cannot start this automation again. The title is the
-    automation's name, plus the find item's title (`label`, or "item N") for a turn an item started. `key` is the
+    automation's name, plus the find item's title (`label`, or "item N") for a turn an item started; a mail's turn
+    on a task that will be private is titled by the mail instead (`about`: its sender and subject), since only that
+    task's readers, who read the bot's run of it, see the title. `key` is the
     record the turn is written to: each item of a find and each repeat of a run starts its turn from the same step,
     so the wake names the run, the step and that record, and the duplicate check compares those (backend/hubdb.py
     `task_create`), not the title, which items may share."""
@@ -694,9 +707,15 @@ def start_turn(
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
     due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
-    from . import bookkeeper
+    from . import bookkeeper, private_readers
 
     where = bookkeeper.filing(c, H.bot_actor(bot))
+    # A company-visible task's title is in every teammate's lists, where the mail is not: it keeps the automation's
+    # name, and the bot may retitle it in words the company may read.
+    if about and private_readers.will_be_private(
+        c, actor, H.bot_actor(bot), None, None, where[0] or H.GENERAL_PIPELINE
+    ):
+        title = str(about)[:300]
     # A scheduled run waits as the routine's settings say (backend/wake_presets.py); its wake names the routine, which
     # the repeat guard reads.
     release = release_of(c, auto, run_id)

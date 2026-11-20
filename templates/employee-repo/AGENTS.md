@@ -82,6 +82,8 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 
 - Read it first: `tico task show <id>` prints its version, what it waits on, what is missing to leave the stage and
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
+- A task's title names its matter ("Reply to Winberg's demand letter"), not an inbox or a kind of act. Retitle one that
+  doesn't: `tico task update <id> --title "..." --version N`, in words everyone who reads the task may see.
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
   2. Asking a person: a message on the task marked ❓, `tico task ask <id> --to <person> "<question>"`.

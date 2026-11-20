@@ -58,7 +58,7 @@ class Services:
             return None
         if "held" in self.fail:  # a webhook's screening held the text for a person: no turn is started
             return {"ref": f"held_{len(self.turns) + 1}", "held": True}
-        self.turns.append({"who": who, "prompt": prompt, "wait": wait})
+        self.turns.append({"who": who, "prompt": prompt, "wait": wait, "about": ctx.get("about")})
         return {"ref": f"msg_{len(self.turns)}"}
 
     def find(self, source, query, limit):

@@ -423,6 +423,35 @@ def test_a_filed_oks_needs_you_row_names_what_it_is_about_to_its_party_only(api)
     assert "Globex Records Office" not in cara.text and not handed[mail["requirement_id"]].get("about")
 
 
+def test_a_filed_oks_task_names_the_matter_the_asker_was_working_where_its_title_may_go(api):
+    """A row of "Mail a letter" said nothing of which matter each was for: the OK's task takes the title of the task the
+    asker was working. A private one's title goes there only when the person asked and the asker (as its owner or
+    requester, so its managers too) read it; the subject (the letter's recipient) never does. The party's Needs you
+    row still says what the OK binds beside that title."""
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        mine = H.task_create(c, "bot:ops", "Reply to Winberg's demand letter", "", "bot:ops", lint=False)["id"]
+        sealed = H.task_create(c, "human:ben", "Ben's offer letter", "", "human:ben", private=True, lint=False)["id"]
+        asked = {}
+        for n, (matter, title) in enumerate(
+            ((mine, "Mail a letter · Reply to Winberg's demand letter"), (sealed, "Mail a letter"))
+        ):
+            asked[matter] = K.ask_ok(
+                c,
+                "bot:ops",
+                "human:ben",
+                "Mail this letter?",
+                shows=[],
+                subject=f"letter:m{n}",
+                content={"recipient": {"name": "Winberg Law"}},
+                title="Mail a letter to Winberg Law",
+                matter=matter,
+            )
+            assert H.task(c, asked[matter]["task_id"])["title"] == title
+    items = {i.get("requirement_id"): i for i in get(api, "needs-you", token="ben-test")["items"]}
+    assert items[asked[mine]["requirement_id"]]["about"] == "Mail a letter to Winberg Law"
+
+
 def test_a_roadmap_oks_needs_you_row_names_the_post_by_its_public_title(api):
     """Review 1 on task #389: a roadmap OK's row said only "Publish to the roadmap". It names the public title the
     change publishes, or, for a change that keeps it (a summary only), the task's public title; never its internal

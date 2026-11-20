@@ -6,7 +6,7 @@ this cap, send this report) waits on an OK from a named person. The OK is a requ
 (`H.task_ask(kind="ok")`), and this module keeps a grant beside it (`ok_grants`): who asked, what will be done
 (`subject`, "<kind>:<id>", e.g. "email_send:<id>"), and the content asked about with its hash.
 
-    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None, parent_id=None)
+    ask_ok(conn, by, person, line, *, shows, subject, content, task_id=None, title=None, parent_id=None, matter=None)
         -> {"task_id", "requirement_id"}
     show(conn, person, requirement_id, content, *, own_click) -> shown hash      a preview was put in front of a person
     preview(conn, viewer, requirement_id, *, own_click) -> {...}                 the stored content, shown
@@ -265,10 +265,14 @@ SEES: dict[str, Callable[..., bool]] = {
     "file": _file_may_see,
 }
 
-# The title of a task filed for an OK of an OWNED kind: it names the kind of act and nothing of the subject (no
-# recipient, edition or endpoint name), since a title travels further than the task (lists, notices). An email's OK is
-# the exception: its filed task takes the asker's title (subject and first recipient, email_sending.send_title), since
-# several sends wait side by side and a person must tell them apart; the task stays private to the OK's parties.
+# The title of a task filed for an OK of an OWNED kind: the kind of act, then the matter it is for, the title of the
+# task the asker was working (`matter`) when everyone who reads the filed task reads that one too
+# ("Mail a letter · Reply to Winberg's demand letter", `_matter_title`). Never anything of the subject (no recipient,
+# edition or endpoint name): the filed task's readers (its asker's managers, the person's Assistant) are wider than
+# the OK's parties, who alone see the subject. With no matter it is the kind alone. An email's OK is the exception:
+# its filed task takes the asker's title (subject and first recipient, email_sending.send_title), under the task the
+# email is for, since several sends wait side by side and a person must tell them apart; the task stays private to
+# the OK's parties.
 FILED_TITLES: dict[str, str] = {
     "letter": "Mail a letter",
     "edition": "Publish an edition",
@@ -285,6 +289,27 @@ FILED_TITLES: dict[str, str] = {
 # Titles a filed task had for its kind alone: FILED_TITLES' and what an email's filed task was titled before it took
 # the email's own (views.needs_items says what such a task's OK is about beside it).
 KIND_TITLES: frozenset[str] = frozenset({*FILED_TITLES.values(), "Send an email"})
+
+
+def kind_titled(title: str) -> bool:
+    """Whether a filed task's title is its kind's, alone or with its matter ("Mail a letter · <matter>"): either way
+    it says nothing of what the OK binds, which its party's Needs you row says beside it (views.needs_items)."""
+    return title.split(" · ", 1)[0] in KIND_TITLES
+
+
+def _matter_title(conn: "sqlite3.Connection", by: str, person: str, task_id: str | None) -> str:
+    """The title of task `task_id` for a filed OK's title, "" when it may not go there. A company-visible task's title
+    is everyone's. A private one's goes only where every reader of the filed task reads it: the person asked, and
+    the asker as its owner or requester, which is how the asker's managers read it too."""
+    H = _h()
+    row: Row | None = H.task(conn, task_id) if task_id else None
+    if not row:
+        return ""
+    if H.task_private(conn, row) and not (
+        by in (row["owner_id"], row["requester_id"]) and H.task_private_readable(conn, person, row)
+    ):
+        return ""
+    return _clip_words(row["title"], 120)
 
 
 def _clip_words(text: object, most: int = 120) -> str:
@@ -625,12 +650,14 @@ def ask_ok(
     task_id: str | None = None,
     title: str | None = None,
     parent_id: str | None = None,
+    matter: str | None = None,
 ) -> Row:
     """Ask `person` (always a person by name) to OK `content` before `subject` is done. The OK goes on `task_id`, the
     task the work belongs to; with none, a task is filed in General first (under `parent_id`, when given, as its
-    sub-task), asked for by `by`: owned by `by` when that is a bot or a person, by `person` when it is the engine. The
-    same subject asked again with the same content is the same ask; with other content, the old ask is withdrawn and a
-    new one made (for a GENERIC subject, only the same asker's on the same task). Returns {task_id, requirement_id}."""
+    sub-task), asked for by `by`: owned by `by` when that is a bot or a person, by `person` when it is the engine, and
+    titled by FILED_TITLES with `matter`, the task the asker was working, when its title may go there. The same subject
+    asked again with the same content is the same ask; with other content, the old ask is withdrawn and a new one made
+    (for a GENERIC subject, only the same asker's on the same task). Returns {task_id, requirement_id}."""
     H = _h()
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
@@ -678,10 +705,12 @@ def ask_ok(
     if filed:
         owner = by if (is_bot(by) or is_human(by)) else target
         kind = kind_of(subject)
+        named = FILED_TITLES.get(kind)
+        about = _matter_title(conn, by, target, matter) if named else ""
         made: Row = H.task_create(
             conn,
             by,
-            FILED_TITLES.get(kind) or (title or line).strip(),
+            (f"{named} · {about}"[:300] if about else named) or (title or line).strip(),
             line.strip(),
             owner,
             parent_id=parent_id,

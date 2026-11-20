@@ -33,7 +33,8 @@ services:
   act(do, args, ctx) -> {"ok": bool, "detail": str, ...}
   start_turn(who, prompt, ctx, wait) -> {"ref": str, "turn": {bot, task, session}}, or None when the spend cap stops it
     (checked after the effect key, so a turn already started is returned, never refused); ctx["label"] is the find
-    item's part of the turn's title (`_turn_label`), None off a find
+    item's part of the turn's title (`_turn_label`), None off a find; ctx["about"] is a mail's own title
+    (`_turn_about`), which the service uses only on a task whose title only its readers see
   find(source, query, limit) -> [item, ...]
   next_batch() -> the next batch time (ISO), and now() -> now (ISO)
   checkpoint(state) -> None
@@ -41,6 +42,7 @@ services:
 
 import json
 import re
+from email.utils import parseaddr
 
 from backend import automation_flow as F
 from backend import listening_text as LT
@@ -630,6 +632,28 @@ def _turn_label(thread):
     return own or f"item {thread['item'] + 1}"
 
 
+# Re:, Fwd: and their kin at a subject's start, however many: a title names the mail, not its reply chain.
+REPLY_MARKS = re.compile(r"(?i)^\s*((re|fwd?|aw|wg|sv|tr)\s*(\[\d+\])?\s*:\s*)+")
+ABOUT_CHARS = 120
+
+
+def _turn_about(values):
+    """What one mail's turn is about, as its task's title: who it is from and its subject, Re: and Fwd: dropped
+    ("Winberg Law: Demand letter"). Every mail of an inbox shares the automation's name ("Ana's inbox"), so a list of
+    their tasks named none of them. None off a mail, or when the mail names neither sender nor subject."""
+    m = values.get("message") if isinstance(values.get("message"), dict) else None
+    if not m or m.get("source") == "slack":
+        return None
+    raw = " ".join(str(m.get("from_name") or "").split())
+    name = parseaddr(raw)[0] if "<" in raw else ("" if "@" in raw else raw)
+    sender = name.strip(" \"'") or " ".join(str(m.get("from") or "").split())
+    subject = REPLY_MARKS.sub("", " ".join(str(m.get("subject") or "").split())).strip()
+    about = ": ".join(w for w in (sender, subject) if w)
+    if not about:
+        return None
+    return about if len(about) <= ABOUT_CHARS else about[: ABOUT_CHARS - 1].rstrip() + "…"
+
+
 def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
     """Starts the step's turn. The service checks the cap (`ctx["cap"]` against what was spent, `ctx["cost"]` of it this
     run's) after its effect key: a resumed run whose turn already started gets that turn back, never its own hold's
@@ -653,6 +677,7 @@ def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
             "cost": state["cost"],
             "cap": None if cap is None else float(cap),
             "label": _turn_label(thread),
+            "about": None if thread["item"] is not None else _turn_about(values),
             "run_model": run_model or None,
         },
         wait,
