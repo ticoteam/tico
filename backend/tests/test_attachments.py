@@ -199,3 +199,41 @@ def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
             ).fetchone()[0]
             == 1
         )
+
+
+def test_a_tasks_file_list_reads_its_attachments_together_however_many_it_has(api, monkeypatch):
+    """Each attachment on a task's file list is checked (its links and the pages it may hold) from reads made for all
+    of them together: a task with ten times the attachments takes the same statements."""
+    from backend.store import H
+    from backend.tests.helpers.status_reads import page
+
+    task = upload(api, "tasks", {"title": "Photos", "body": "Look", "owner": "ops"})["task"]
+
+    def add(n, start):
+        with api.app.state.store.transaction() as c:
+            for k in range(start, start + n):
+                c.execute(
+                    "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
+                    "VALUES(?,'human:ana',?,10,?,'image/jpeg',?)",
+                    (f"photo-{k}", hashlib.sha256(str(k).encode()).hexdigest(), f"photo-{k}.jpg", H.now()),
+                )
+                c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (task["id"], f"photo-{k}"))
+
+    counts, added = {}, 0
+    for n in (5, 45):
+        add(n - added, added)
+        added = n
+        for path in (f"/api/v2/tasks/{task['id']}/files", f"/api/v2/tasks/{task['id']}/files?all=1"):
+            api.app.state.store.roster_rows.clear()
+            body, counts[(n, path)] = page(api, monkeypatch, path)
+            assert len(body["files"]) == n + 1  # the photos and the upload the task was made with
+    for path in {path for _, path in counts}:
+        assert counts[(5, path)] == counts[(45, path)], counts
+    # A photo also attached to a private task a reader may not open is left out of their list, in both forms.
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "human:ana", "Private", None, "human:ana", private=True)
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], "photo-7"))
+    for path in (f"/api/v2/tasks/{task['id']}/files", f"/api/v2/tasks/{task['id']}/files?all=1"):
+        mine = {f["id"] for f in get(api, path[len("/api/v2/") :])["files"]}
+        theirs = {f["id"] for f in get(api, path[len("/api/v2/") :], "ben-test")["files"]}
+        assert "photo-7" in mine and mine - theirs == {"photo-7"}, path

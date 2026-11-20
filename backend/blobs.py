@@ -522,6 +522,18 @@ class Blobs:
             stream = (self.directory / key).open("rb")
             stream.seek(start)
             return stream
+        except FileNotFoundError as exc:
+            if self.rehearsal and not self.bucket and not self._earlier:
+                # A rehearsal copy has no attachments (backend/devcopy.py): every file's rows are there and none of its
+                # bytes, so asking again finds nothing. Elsewhere a miss may be storage that failed to load: a 503.
+                raise Problem(
+                    "file_missing",
+                    "A rehearsal copy has no attachments: this file's bytes are on the company's server",
+                    404,
+                ) from exc
+            raise Problem(
+                "blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True
+            ) from exc
         except OSError as exc:
             raise Problem(
                 "blob_storage", "Stored file is unavailable; check S3 access and retained local copies", 503, True
