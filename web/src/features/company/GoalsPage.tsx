@@ -67,7 +67,7 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
     <List
       {...head}
       // No goals yet: the head keeps only the owner and the empty state holds Add goal (company.js goals, state empty).
-      search={!blank && <SettledSearch label="Search goals" placeholder="Search" button="Search goals" wait={0} value={find} onSettle={setFind} />}
+      search={!blank && <SettledSearch label="Search goals" placeholder="Search" wait={0} value={find} onSettle={setFind} />}
       actions={
         <>
           {!blank && add}

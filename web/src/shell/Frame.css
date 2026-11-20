@@ -20,7 +20,7 @@
 /* tucked: the card stays (its tone, its corners, its shadow), its content does not show; the edge over it opens it */
 .shell-place[data-shut]>.pane>*,.shell-place[data-shut]>.pk-panel-host>.pane>*{visibility:hidden}
 .shell-edge{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));width:var(--tuck-edge);
-  display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 0 0;border:0;border-radius:0 var(--r-pane) var(--r-pane) 0;background:none;color:var(--ink-2);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:var(--s-3);padding:var(--s-3h) 0 0;border:0;border-radius:var(--r-pane);border-top-left-radius:0;border-bottom-left-radius:0;background:none;color:var(--ink-2);cursor:pointer;
   transition:background var(--dur-fast) var(--ease)}
 .shell-edge[data-first]{border-radius:var(--r-pane)}
 .shell-edge:hover{background:var(--hover)}
@@ -29,9 +29,9 @@
 .shell-edge-mark>.ico{width:18px;height:18px;color:var(--muted)}
 .shell-edge-name{writing-mode:vertical-rl;transform:rotate(180deg);font-size:var(--t-xs);font-weight:var(--w-strong);white-space:nowrap}
 /* the menu's edge: the company's mark from its phone lip, and the Flow mark when something waits on you */
-.shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:10px}
+.shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:var(--s-2h)}
 .shell-edge-lip>:not(.co-mark,.lip-end){display:none}
-.shell-edge-lip .co-mark{width:22px;height:22px;font-size:11px;border-radius:6px}
+.shell-edge-lip .co-mark{width:22px;height:22px;font-size:var(--t-micro);border-radius:var(--r-chip)}
 .shell-edge-lip .lip-end>b{display:none}
 /* tucking moves top and bottom with the card; motion Off jumps */
 :root:not([data-motion="off"]) :is(.shell-place,.shell-edge){transition:top var(--dur) var(--ease),bottom var(--dur) var(--ease),background var(--dur-fast) var(--ease)}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fmtAge, fmtDate, fmtMoney } from './format';
+import { fmtAge, fmtDate, fmtMoney, fmtWhen } from './format';
 
 // Local times, so the cases hold in any time zone. "now" is Thu, Nov 19, 2026, 10:00 AM.
 const now = new Date(2026, 10, 19, 10, 0, 0);
@@ -18,6 +18,17 @@ describe('fmtDate (ui/app/format.ts:34 dayWords)', () => {
     ['unreadable', 'soon', ''], // format.ts:36
   ] as const)('%s', (_, value, want) => {
     expect(fmtDate(value, now)).toBe(want);
+  });
+});
+
+describe('fmtWhen', () => {
+  it.each([
+    ['a weekday, the date and the time', at(2026, 10, 10, 10, 15), 'Tue, Nov 10, 10:15 AM'],
+    ['today', at(2026, 10, 19, 15), 'Today, 3:00 PM'],
+    ['another year', at(2025, 10, 6, 9), 'Thu, Nov 6, 2025, 9:00 AM'],
+    ['unreadable', 'soon', ''],
+  ] as const)('%s', (_, value, want) => {
+    expect(plain(fmtWhen(value, now))).toBe(want);
   });
 });
 

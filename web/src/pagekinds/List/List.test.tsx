@@ -2,9 +2,17 @@ import { fireEvent, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { FilterRow, Section, SidePanel } from '@/pagekinds/_parts';
 import { expectHeadAndTabs, showPage, stateTests, TABS } from '@/pagekinds/_parts/test-page';
-import { List } from './List';
+import { List, pendingTitle } from './List';
 
 describe('List', () => {
+  it('while reading, titles a page by its own name where the address gives it', () => {
+    expect(pendingTitle('/library/docs')).toBe('Docs');
+    expect(pendingTitle('/company/risk/disputes')).toBe('Risk');
+    expect(pendingTitle('/library/d-123')).toBe('Library');
+    expect(pendingTitle('/settings/people')).toBe('Settings');
+    expect(pendingTitle('/')).toBe('Tico');
+  });
+
   it('draws the head, the tabs as links, the filter row, sections and the panel', async () => {
     const main = await showPage(
       <List

@@ -31,13 +31,25 @@ export function List({ tabs, filter, figures, sections, panel, ...page }: ListPr
   );
 }
 
+/* The pages under an area that are named by their own step (the menu's Company and Library rows): their bars carry
+   the page's name, so the title does not change when the page arrives. */
+const NAMED = new Set(['strategy', 'finance', 'growth', 'products', 'risk', 'routines', 'listening', 'rules', 'usage', 'files', 'docs', 'tools', 'skills', 'contacts']);
+const word = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The title a page has before its reads arrive: its own name where the address says it ("/library/docs" is Docs),
+    else its area's ("/settings/people" is Settings). */
+export function pendingTitle(path: string): string {
+  const [, area = '', step = ''] = path.split('/');
+  if ((area === 'company' || area === 'library') && NAMED.has(step)) return word(step);
+  return area ? word(area) : 'Tico';
+}
+
 /** The router's page while a new page's reads are on their way. The router holds the old page for 150 ms first
-    (`defaultPendingMs`), so the bars show at once here. The title is the area's name until the page knows its own. */
+    (`defaultPendingMs`), so the bars show at once here. */
 export function PagePending() {
   const path = useLocation({ select: (l) => l.pathname });
-  const area = path.split('/')[1] ?? '';
   return (
-    <Page kind="list" title={area ? area.charAt(0).toUpperCase() + area.slice(1) : 'Tico'} path={path} skeleton={null}>
+    <Page kind="list" title={pendingTitle(path)} path={path} skeleton={null}>
       <div className="pk-loading" role="status" aria-busy="true" aria-label="Loading">
         <ListSkeleton />
       </div>

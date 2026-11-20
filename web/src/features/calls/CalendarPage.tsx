@@ -228,7 +228,7 @@ export function CalendarPage() {
 /** Find a meeting: a search icon until pressed (a phone shows the field); the words go in the address a moment after
     the last key. */
 function ListFind({ q, onFind }: { q: string; onFind: (q: string) => void }) {
-  return <SettledSearch label="Find a meeting" placeholder="Find a meeting" value={q} onSettle={onFind} wait={300} button="Find a meeting" />;
+  return <SettledSearch label="Find a meeting" placeholder="Find a meeting" value={q} onSettle={onFind} wait={300} />;
 }
 
 const HAS_WORDS: Record<(typeof HAS)[number], string> = { summary: 'Has summary', recording: 'Has recording', tasks: 'Has tasks' };

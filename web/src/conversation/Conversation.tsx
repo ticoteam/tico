@@ -11,6 +11,7 @@ import { Icon, type IconName } from '@/kit/Icon';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { SheetHead } from '@/shell';
 import { dot, type DotState } from '@/tico/dot';
+import { pageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
 import { Composer } from './Composer';
 import { dayKey, dayLabel } from './dates';
@@ -104,9 +105,10 @@ function teammateHref(actor: string | undefined, a: Actor | undefined): string |
   return `/team/${encodeURIComponent(a?.kind === 'agent' && a.slug ? a.slug : actor.slice(actor.indexOf(':') + 1))}`;
 }
 
+/* the page the person is on, by its own name (its h1, as Tico's chip says it), not the window's "<name> - Tico" */
 const herePage = (): PageRef => ({
   path: typeof location === 'undefined' ? '/' : location.pathname,
-  title: typeof document === 'undefined' ? '' : document.title,
+  title: typeof document === 'undefined' ? '' : pageName(),
 });
 
 

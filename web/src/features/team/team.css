@@ -50,14 +50,15 @@
 .dream-q{display:grid;gap:var(--s-1)}
 .stage-head .row-age{margin-right:var(--s-1)}
 
-/* ---------- read: a page of text at a readable measure ---------- */
-.read>*{max-width:var(--measure)}
-.read h2{margin:calc(var(--s-6) + var(--s-0)) 0 var(--s-1h)}
-.read h2:first-child{margin-top:0}
-.read p,.read li{color:var(--ink-2);text-wrap:pretty}
-.read p+p{margin-top:var(--s-2h)}
-.read ul,.read ol{padding-left:var(--s-5);display:grid;gap:var(--s-1)}
-.read li::marker{color:var(--muted)}
+/* ---------- read: an agent's instructions, a page of text at a readable measure (only there: .read is every
+   document's too) ---------- */
+.ins-bar~.read>*{max-width:var(--measure)}
+.ins-bar~.read h2{margin:calc(var(--s-6) + var(--s-0)) 0 var(--s-1h)}
+.ins-bar~.read h2:first-child{margin-top:0}
+.ins-bar~.read :is(p,li){color:var(--ink-2);text-wrap:pretty}
+.ins-bar~.read p+p{margin-top:var(--s-2h)}
+.ins-bar~.read :is(ul,ol){padding-left:var(--s-5);display:grid;gap:var(--s-1)}
+.ins-bar~.read li::marker{color:var(--muted)}
 
 /* ---------- seg of words filling its row: the model picker's harness and effort ---------- */
 .seg.is-fill{display:flex;width:100%;background:var(--dock-field)}

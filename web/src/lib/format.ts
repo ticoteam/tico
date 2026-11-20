@@ -52,6 +52,12 @@ function timeWords(d: Date, now: Date): string {
   return `${dayWords(d, now, true)}, ${clockFormat.format(d)}`;
 }
 
+/** A full date and time, as rules.md writes one: "Tue, Nov 11, 10:15 AM", "Today, 3:00 PM"; '' for an unreadable value. */
+export function fmtWhen(value: When, now: Date = new Date()): string {
+  const d = dateOf(value);
+  return d ? timeWords(d, now) : '';
+}
+
 /**
  * How long ago, under a day ("now", "35m", "2h"); after that the date ("Nov 6"). More than a minute ahead says when
  * ("Today, 3:00 PM"); a little ahead (a clock running fast) is "now". A bare day has no time to count from: it is its day.

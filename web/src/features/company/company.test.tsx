@@ -281,7 +281,6 @@ describe('Goals', () => {
     show(<StrategyPage tab="goals" />, '/company/strategy/goals');
     await screen.findByText('Grow signups');
     // the head's search starts as a button and opens into the field
-    fireEvent.click(screen.getByRole('button', { name: 'Search goals' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Search goals' }), { target: { value: 'weekly' } });
     await waitFor(() => expect(screen.queryByText('Reach 1,000 customers')).toBeNull());
     expect(screen.getByText('Grow signups')).toBeTruthy();

@@ -22,10 +22,6 @@
 :where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick>span+.ico{position:absolute;right:calc(var(--s-3) * -1);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 :where(html:not([data-layout="cards"])) .tv .pk-where .tv-pick:is(:hover,:focus-visible,[aria-expanded="true"]) .ico{opacity:1}
 
-/* Flow's list beside an open task names a section "pipeline › stage" (the shell draws it; tasks.css has the same rule
-   for the Flow page, which this route does not load) */
-.li-sec .sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
-
 /* ---------- the head on a phone (parts.css .tv-head, t-task-details-phone-dark.png): the title wraps at 20, then the
    where line under it keeps the pipeline ("Engineering › QA"), so its chevron never stands alone. The head grows to
    hold both lines, below the status bar. */

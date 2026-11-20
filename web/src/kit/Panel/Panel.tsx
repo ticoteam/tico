@@ -5,8 +5,10 @@ import './Panel.css';
 export type PanelProps = {
   /** Names the panel for a screen reader. */
   label: string;
-  /** What sits in the head before the close button: usually `<b>` and the name. */
+  /** What starts the head: usually `<b>` and the name. */
   head: ReactNode;
+  /** Quiet buttons at the head's right, before the close button. */
+  actions?: ReactNode;
   /** `.rail-sec` sections. */
   children: ReactNode;
   /** Buttons for the whole panel. */
@@ -22,7 +24,7 @@ export type PanelProps = {
  * The side panel: its own sheet, with a head, sections and a foot. Where it sits (beside the page or over it) is the
  * shell's call. It closes with its x or Escape, and focus goes back to whatever opened it, usually a row.
  */
-export function Panel({ label, head, children, foot, onClose, x = true, className }: PanelProps) {
+export function Panel({ label, head, actions, children, foot, onClose, x = true, className }: PanelProps) {
   const sheet = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   useEffect(() => {
@@ -48,6 +50,7 @@ export function Panel({ label, head, children, foot, onClose, x = true, classNam
       <header className="side-head">
         {head}
         <span className="grow" />
+        {actions}
         {x && <IconButton icon="close" label="Close" quiet onClick={() => onClose()} />}
       </header>
       <div className="rail-body">{children}</div>

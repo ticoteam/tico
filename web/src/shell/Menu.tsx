@@ -1,5 +1,5 @@
 import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -131,8 +131,12 @@ export function Menu(p: MenuProps) {
   const openTeam = p.openTeam ?? p.teams.find(t => path.startsWith(t.to) || t.members.some(m => m === onMate))?.id;
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [closedPath, setClosedPath] = useState<string>();
-  // Your last tab stays.
+  // Your last tab stays; the Threads page with no thread open says its list is here, so it shows that tab.
   const [talk, setTalk] = usePref<MenuTalk>('menu.talk.v1', 'team');
+  const onThreads = path === '/threads' || path === '/threads/';
+  useEffect(() => {
+    if (onThreads) setTalk('threads');
+  }, [onThreads, setTalk]);
   const isOpen = (t: MenuTeam) => (t.id in shut ? !shut[t.id] : t.id === openTeam);
   const rows = ROWS.filter(r => can(r.id));
   const c = p.counts ?? {};

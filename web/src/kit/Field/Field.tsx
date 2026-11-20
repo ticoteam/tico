@@ -3,7 +3,6 @@ import { Field as BaseField } from '@base-ui/react/field';
 import { Input } from '@base-ui/react/input';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { useCards } from '@/kit/Popover';
 
 type IconName = ComponentProps<typeof Icon>['name'];
 
@@ -14,6 +13,9 @@ export type FieldProps = {
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
+  /** Saves the words on Enter or when the field is left (builder rules: text saves on Enter or blur). Enter in an `area`
+      is a new line, so there it saves on leaving only. */
+  onCommit?: (value: string) => void;
   placeholder?: string;
   /** At most four words; the field takes a heavier edge and a mark. */
   error?: string;
@@ -42,6 +44,7 @@ export function Field({
   type = 'text',
   ref,
   onValueChange,
+  onCommit,
   ...control
 }: FieldProps) {
   const own = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
@@ -69,6 +72,7 @@ export function Field({
             {...control}
             aria-label={labelHidden ? label : undefined}
             onValueChange={onValueChange ? (v) => onValueChange(v) : undefined}
+            onBlur={onCommit ? (e) => onCommit(e.currentTarget.value) : undefined}
             render={<textarea ref={(el) => void (own.current = el)} />}
           />
         ) : (
@@ -78,6 +82,14 @@ export function Field({
             type={type}
             aria-label={labelHidden ? label : undefined}
             onValueChange={onValueChange ? (v) => onValueChange(v) : undefined}
+            onBlur={onCommit ? (e) => onCommit(e.currentTarget.value) : undefined}
+            onKeyDown={
+              onCommit
+                ? (e) => {
+                    if (e.key === 'Enter') onCommit(e.currentTarget.value);
+                  }
+                : undefined
+            }
           />
         )}
         {error && <Icon name="alert" />}
@@ -153,16 +165,12 @@ export type SettledSearchProps = Omit<SearchProps, 'value' | 'onValueChange'> & 
   /** The trimmed words, once typing has paused for `wait` ms. */
   onSettle: (words: string) => void;
   wait?: number;
-  /** A page head's search: it starts as a search button with this label, and opens into the field when pressed.
-      Words in the address open it at once; a phone, where the field has its own line, always shows the field. */
-  button?: string;
 };
 
 /** A search a step behind the typing: the address (and the server) hear the words once they settle. The field follows
-    `value` when it changes from elsewhere (Back, Tico). */
-export function SettledSearch({ value, onSettle, wait = 250, button, ...rest }: SettledSearchProps) {
-  const cards = useCards();
-  const [open, setOpen] = useState(!button || !!value);
+    `value` when it changes from elsewhere (Back, Tico). In a page head it is the field itself, as every mock draws it
+    (files.js, tools.js, list.js); on a phone the head gives it its own line. */
+export function SettledSearch({ value, onSettle, wait = 250, ...rest }: SettledSearchProps) {
   const [words, setWords] = useState(value);
   const [seen, setSeen] = useState(value);
   if (seen !== value) {
@@ -176,6 +184,5 @@ export function SettledSearch({ value, onSettle, wait = 250, button, ...rest }: 
     const t = setTimeout(() => settle(next), wait);
     return () => clearTimeout(t);
   }, [words, value, wait]);
-  if (!open && !cards) return <IconButton icon="search" label={button ?? rest.label} onClick={() => setOpen(true)} />;
-  return <Search autoFocus={!!button && !cards} {...rest} value={words} onValueChange={setWords} />;
+  return <Search {...rest} value={words} onValueChange={setWords} />;
 }

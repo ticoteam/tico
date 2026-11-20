@@ -552,7 +552,7 @@ function TaskList({ open }: { open: string }) {
         </DropMenu>
         <span className="grow" />
         <Link to="/tasks" className="li-play is-on" aria-pressed aria-label="Flow" title="Flow">
-          <FlowMark size={22} />
+          <FlowMark play live />
           {flow?.count ? <b>{flow.count}</b> : null}
         </Link>
         {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}

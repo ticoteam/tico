@@ -1,8 +1,5 @@
 /* Tasks and Flow: what pages/1-tasks/list.css has that styles/ and pagekinds.css do not. Class names are the mock's. */
 
-/* pipeline, then stage: a list that crosses pipelines */
-.sec-sep{width:12px;height:12px;stroke-width:2;margin:calc(var(--s-0) / 2) var(--s-1h) 0;color:var(--faint)}
-
 /* stages with nothing in them: folded names on one line under the list */
 .stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) calc(var(--s-6) + var(--s-1));min-height:var(--row);margin-top:var(--s-2h);padding:var(--s-2h) 0 0 var(--s-8);border-top:1px solid var(--line)}
 
@@ -41,9 +38,6 @@ button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(-
 :where(html:not([data-layout="cards"])) .tasks-page .board{margin-left:calc(var(--page-x) - var(--s-3))}
 /* moved along: the earlier stages' arrow takes the left gutter, so the board steps aside for it */
 :where(html:not([data-layout="cards"])) .tasks-page .board-wrap:has(>.board-more.is-prev) .board{margin-left:var(--s-10)}
-/* a stage's name in its column head is a section name, the same weight and size as the list's (list.css .sec-name).
-   The Board kind draws the fold button without the .sec-name heading round it; until it does, the head says so here. */
-:where(html:not([data-layout="cards"])) .col-head>.sec-fold{font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
 .board-more{position:absolute;top:6px;width:32px;display:grid;justify-items:center;gap:var(--s-2);color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
 .board-more.is-next{right:8px}
 .board-more.is-prev{left:0}
