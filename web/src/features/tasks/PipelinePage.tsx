@@ -13,7 +13,7 @@ import { Select, type SelectOption } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { newId } from '@/lib';
 import { Record as RecordPage, Section, type PageState } from '@/pagekinds';
-import { OwnerButton } from './parts';
+import { Face, OwnerButton } from './parts';
 import {
   factoryChoicesQuery,
   pipelineChanged,
@@ -288,7 +288,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
                             <Icon name="chevron" />
                           </button>
                           <span className="grow" />
-                          <Switch label="Side" checked={r.side} disabled={i === 0} onCheckedChange={(side) => put(i, side ? { side, task_limit: null, owner: r.owner === 'pick' ? null : r.owner } : { side })} />
+                          {r.owner && /^(human|bot):/.test(r.owner) && <Face actor={r.owner} />}
                           <Menu trigger={<IconButton icon="more" label={`More, ${r.name || 'new stage'}`} size="sm" />}>
                             <MenuItem label="Move up" disabled={i === 0} onSelect={() => swap(i - 1, i)} />
                             <MenuItem label="Move down" disabled={i === rows.length - 1} onSelect={() => swap(i, i + 1)} />
@@ -318,6 +318,16 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
                                   value={r.task_limit ? String(r.task_limit) : ''}
                                   onValueChange={(v) => put(i, { task_limit: Number(v) > 0 ? Math.round(Number(v)) : null })}
                                 />
+                              )}
+                              {/* A side stage hangs off the line (dashed node, indented); the first stage is never one. */}
+                              {i > 0 && (
+                                <span className="ps-side">
+                                  <Switch
+                                    label="Side"
+                                    checked={r.side}
+                                    onCheckedChange={(side) => put(i, side ? { side, task_limit: null, owner: r.owner === 'pick' ? null : r.owner } : { side })}
+                                  />
+                                </span>
                               )}
                             </div>
                             {rulesOf && p && <StageRules pipeline={p.id} stage={rulesOf} leave={rec.data?.stages.find((st) => st.id === rulesOf)} />}

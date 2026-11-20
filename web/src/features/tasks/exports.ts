@@ -6,6 +6,7 @@ export type { TasksSearch, RoadmapSearch, View } from './search';
 export { TasksPage } from './TasksPage';
 export { PipelinePage } from './PipelinePage';
 export { FlowPage } from './FlowPage';
+export { FlowPending, TasksPending } from './Pending';
 export { TagsPage, TagPage } from './TagsPages';
 export { firstPipeline } from './home';
 export { RoadmapPage } from './RoadmapPage';

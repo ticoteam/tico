@@ -223,7 +223,9 @@ describe('one open task', () => {
     show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
     const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
     expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/flow/12?tab=spec');
-    expect(screen.getByRole('link', { name: 'Flow' }).getAttribute('href')).toBe('/flow');
+    // The trail is the task's pipeline, as outside Flow (more.js where); Flow's way back is the phone's row over the head.
+    expect(screen.queryByRole('link', { name: 'Flow' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to Flow' }).getAttribute('href')).toBe('/flow');
     expect(calls.filter((url) => url === 'GET /api/v2/needs-you?limit=200')).toHaveLength(1);
   });
 

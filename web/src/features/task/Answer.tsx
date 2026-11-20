@@ -83,7 +83,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const request = useAction('task.requestChanges');
   const navigate = useNavigate();
   const waiting = useQuery({ ...waitingQuery, enabled: flow });
-  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version));
+  const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r)));
   const { name, effect } = useNamed(t, r);
   const [error, setError] = useState('');
   const [asking, setAsking] = useState(false);

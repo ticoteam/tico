@@ -31,10 +31,19 @@ button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(-
 .tb-drop-line{margin:0;font-size:var(--t-sm);color:var(--muted);text-wrap:pretty}
 .tb-drop-moves{margin:0;padding-left:var(--s-5);display:grid;gap:var(--s-1);font-size:var(--t-sm);color:var(--ink-2)}
 
-.card-foot .row-age{width:32px;flex:none;line-height:var(--av-sm)}
+/* an age of a date ("Nov 16") is wider than the mock's "2d": the column grows, it never runs into the card's edge */
+.card-foot .row-age{min-width:32px;flex:none;line-height:var(--av-sm)}
 
 /* the board: whole columns only; past an edge, an arrow, how many stages lie that way, and how many wait on you */
 .board-wrap.has-more .board{margin-right:var(--s-12)}
+/* a card's text lands on the page title's axis (list.css .board): the board starts a card's padding and outline left
+   of the page margin */
+:where(html:not([data-layout="cards"])) .tasks-page .board{margin-left:calc(var(--page-x) - var(--s-3))}
+/* moved along: the earlier stages' arrow takes the left gutter, so the board steps aside for it */
+:where(html:not([data-layout="cards"])) .tasks-page .board-wrap:has(>.board-more.is-prev) .board{margin-left:var(--s-10)}
+/* a stage's name in its column head is a section name, the same weight and size as the list's (list.css .sec-name).
+   The Board kind draws the fold button without the .sec-name heading round it; until it does, the head says so here. */
+:where(html:not([data-layout="cards"])) .col-head>.sec-fold{font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
 .board-more{position:absolute;top:6px;width:32px;display:grid;justify-items:center;gap:var(--s-2);color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
 .board-more.is-next{right:8px}
 .board-more.is-prev{left:0}
@@ -79,12 +88,14 @@ html[data-layout="cards"] .tasks-page.pk-list .filter-row[data-phone]{display:fl
 .ps.is-add::before{bottom:calc(100% - var(--ctl-lg)/2)}
 .ps-node{position:absolute;left:9.5px;top:calc(var(--ctl-lg)/2 - 4.5px);width:9px;height:9px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--muted)}
 .ps-row{height:var(--ctl-lg);display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-0) 0 var(--s-2);border-radius:var(--r-row)}
-.ps-row .field{width:176px;margin-left:calc(var(--s-2h) * -1);font-weight:var(--w-strong)}
+.ps-row .field{width:auto;max-width:min(320px,60%);margin-left:calc(var(--s-2h) * -1);font-weight:var(--w-strong)}
+/* a stage's name reads as its name (more.js pipeline); it is a field only under a pointer or while typed in */
+.ps-row .field input{flex:none;width:auto;field-sizing:content;min-width:6ch}
+.ps-row .field:not(:hover,:focus-within){background:none;box-shadow:none}
 .ps-row .ib{color:var(--muted)}
 .ps-name{font-weight:var(--w-strong);white-space:nowrap}
 .ps.is-side{padding-left:calc(var(--s-12) + var(--s-1))}
 .ps.is-side>.ps-node{left:33.5px;background:none;box-shadow:none;border:1.5px dashed var(--muted)}
-.ps.is-side .field{font-weight:var(--w-text)}
 .ps.is-add>.ps-node{left:6px;top:calc(var(--ctl-lg)/2 - 8px);width:16px;height:16px;display:grid;place-items:center;box-shadow:none;color:var(--muted)}
 .ps.is-add .ps-node .ico{width:14px;height:14px;stroke-width:2}
 .ps.is-add .ps-row{width:100%;border:0;background:none;font:inherit;cursor:pointer}
@@ -107,8 +118,13 @@ html[data-layout="cards"] .tasks-page.pk-list .filter-row[data-phone]{display:fl
 html[data-layout="cards"] .pe-facts{grid-template-columns:minmax(0,1fr) 88px}
 html[data-layout="cards"] .pe-facts :is(.w-pgoal,.w-manager,.w-pname){grid-column:1/-1}
 .pe-facts .f,.ps-facts .f{justify-items:stretch}
-.ps-facts{display:grid;grid-template-columns:64px;gap:var(--s-3);align-items:end;margin-bottom:var(--s-2)}
-.ps-facts .w-goal,.ps-facts .w-owner{grid-column:1/-1}
+/* an open stage's facts on one line (more.js stage): Goal, Owner, Limit, then Side; a phone stacks Goal and Owner */
+.ps-facts{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,240px) 74px auto;gap:var(--s-3);align-items:end;margin-bottom:var(--s-2)}
+.ps-side{height:var(--ctl);display:flex;align-items:center}
+html[data-layout="cards"] .ps-facts{grid-template-columns:minmax(0,1fr) auto}
+html[data-layout="cards"] .ps-facts :is(.w-goal,.w-owner){grid-column:1/-1}
+/* open, the stage's name is a field where the name stood */
+.ps.is-open>.ps-in>.ps-row .field{width:176px;max-width:none;background:var(--surface);box-shadow:inset 0 0 0 1px var(--faint)}
 
 /* Roadmap (more.css): the track is how far a task is through its pipeline; the last column is its date */
 .row-sub{display:contents}
@@ -130,3 +146,11 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .rq-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .rq-form{display:grid;gap:var(--s-3)}
 
+
+/* Flow on a phone: a pipeline's name over its stages (list.css .pipe); the stages under it are named smaller */
+.pipe+.pipe{margin-top:var(--s-2h);padding-top:var(--s-2);border-top:1px solid var(--line)}
+.pipe-head{height:44px;display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-1) 0 var(--page-x);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
+.pipe-head h2{font-family:var(--font-text);font-size:var(--t-md);font-weight:var(--w-title);line-height:1}
+.pipe .stage+.stage{margin-top:var(--s-0);padding-top:0;border-top:0}
+.pipe .stage-head{top:44px}
+.pipe .stage-head .sec-name{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}

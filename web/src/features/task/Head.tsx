@@ -215,11 +215,11 @@ function useFlowOrder(t: TaskData, enabled = true) {
     const to = rows[i + 1] ?? rows[i - 1];
     void navigate(to ? { to: tabAddress(to, undefined, true).to as never } : { to: '/flow' as never });
   };
-  return { rows, i, next };
+  return { rows, i, next, read: waiting.isSuccess };
 }
 
 /** Flow's previous and next: the tasks that wait on the person, in Flow's order. */
-export function FlowSteps({ t }: { t: TaskData }) {
+function FlowSteps({ t }: { t: TaskData }) {
   const { rows, i } = useFlowOrder(t);
   const step = (d: number, label: string, flip: boolean) => {
     const to = i >= 0 ? rows[i + d] : undefined;
@@ -245,20 +245,30 @@ export function FlowSteps({ t }: { t: TaskData }) {
   );
 }
 
-/** A phone's row over a task in Flow (more.js tv-top, 48 high): back to Flow, how many wait, previous and next. */
-export function FlowTop({ t }: { t: TaskData }) {
-  const { rows } = useFlowOrder(t);
+/** A phone's row over a task in Flow (more.js tv-top, 48 high): back to Flow, where this task is in Flow ("1 of 7",
+    plan/approvals.html; how many wait when it is not in the list), previous and next, then the task's "⋯". */
+export function FlowTop({ t, more }: { t: TaskData; more?: ReactNode }) {
+  const { rows, i, read } = useFlowOrder(t);
   return (
     <div className="tv-top">
       <Go to="/flow" className="ib" aria-label="Back to Flow" title="Back to Flow">
         <Icon name="chevron" className="flip" />
       </Go>
-      <span className="tv-n" title={`${rows.length} wait${rows.length === 1 ? 's' : ''} on you`}>
-        <FlowMark size={18} />
-        <b>{rows.length}</b>
-      </span>
+      {read && (
+        <span className="tv-n" title={`${rows.length} wait${rows.length === 1 ? 's' : ''} on you`}>
+          <FlowMark size={18} play />
+          {i >= 0 ? (
+            <span>
+              <b>{i + 1}</b> of {rows.length}
+            </span>
+          ) : (
+            <b>{rows.length}</b>
+          )}
+        </span>
+      )}
       <span className="grow" />
       <FlowSteps t={t} />
+      {more}
     </div>
   );
 }

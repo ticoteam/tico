@@ -333,6 +333,20 @@ describe('an email waiting to send', () => {
     expect(within(box).getByText('Sends now')).toBeTruthy();
     expect(within(box).queryByText('Part of it did not load')).toBeNull();
   });
+
+  it('keeps Approve off for a stage’s own OK whose email did not load @approvals', async () => {
+    shown = task({ title: titled });
+    reply = (url) =>
+      url.endsWith('/api/v2/oks/r1')
+        ? { status: 404, body: { error: { code: 'not_found', detail: 'No such OK' } } }
+        : url.endsWith('/api/v2/email/sends/s1')
+          ? { body: { ...mail, body: '', preview_complete: false, shown_hash: null } }
+          : null;
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
+  });
 });
 
 describe('what the person needs beside the email', () => {

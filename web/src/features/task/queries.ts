@@ -93,7 +93,8 @@ export const retiredStagesQuery = (id: string) =>
     queryFn: async ({ signal }) => (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${enc(id)}`, { signal })).pipeline.stages,
   });
 
-/** The tasks that wait on the person, in Flow's order (GET /api/v2/needs-you): Flow's next and previous. */
+/** The tasks that wait on the person, in Flow's order: Flow's next and previous. The same read as Flow's list (GET
+    /api/v2/needs-you, one of the slowest), so a task opened from Flow does not read it a second time. */
 export const waitingQuery = queryOptions({
   ...flowQuery,
   select: ({ items }) => items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id })),
@@ -210,16 +211,21 @@ function sendAnswer(id: string, rid: string, value: 'ok' | 'no', note: string | 
     (GET /api/v2/oks/{rid}) gives it, or an email's (GET /api/v2/email/sends/{sid}, which the Email tab reads too).
     A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
     when part of what it shows did not load, and Approve stays off. Read again at each new version of the task, so a
-    change while it is open shows. */
-export const decisionShownQuery = (task: string, rid: string, version: number) =>
+    change while it is open shows. `send` is the email the requirement shows: a stage's own OK that shows one is as
+    complete as that email's preview, so Approve never sends an email the person could not read. */
+export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null) =>
   queryOptions({
-    queryKey: [...keys.tasks.detail(task), 'shown', rid, version] as const,
+    queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null] as const,
     queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       });
-      if (!shown) return { hash: null, complete: true };
+      if (!shown) {
+        if (!send) return { hash: null, complete: true };
+        const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
+        return { hash: null, complete: mail.preview_complete };
+      }
       if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };
       const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, shown.subject.slice(11)), staleTime: 0 });
       return { hash: mail.preview_complete ? (mail.shown_hash ?? null) : null, complete: mail.preview_complete && !!mail.shown_hash };
