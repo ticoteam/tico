@@ -1,13 +1,31 @@
 """Stored ids are made by backend/slugs.py, each caller in its own style (limit, fallback, what it does first). These
-outputs are what the callers stored before they shared the rule; a change here moves ids already in databases."""
+outputs are what the callers stored before they shared the rule; a change here moves ids already in databases. The
+lambdas repeat a call made inside a larger function; test_docs, test_triggers, test_pipeline_settings and
+test_worktrees cover those paths end to end."""
+
+import sqlite3
 
 import pytest
 
-from backend import groups, market, observability, risk, shared_bots, task_documents, tool_services
+from backend import groups, kpis, market, observability, risk, shared_bots, task_documents, tool_services
 from backend.company_file import draft
+from backend.entities import store as entities
 from backend.slugs import slugify
 
 A39 = "a" * 39 + " b"
+
+
+def _kpi_slug(name):
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE kpis (slug TEXT)")
+    return kpis._unique_slug(c, name)
+
+
+def _entity_id(name):
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE entities (id TEXT)")
+    return entities._new_entity_id(c, "company", name)
+
 
 CASES = [
     # docs.py, a doc's path from its title: casefold first, so ß is ss
@@ -16,10 +34,10 @@ CASES = [
     (lambda x: slugify(str(x).casefold(), limit=80, fallback="untitled"), "🙂", "untitled"),
     (lambda x: slugify(str(x).casefold(), limit=80, fallback="untitled"), None, "none"),
     (lambda x: slugify(str(x).casefold(), limit=80, fallback="untitled"), "x" * 79 + " y", "x" * 79),
-    # kpis.py, a KPI's slug
-    (lambda x: slugify(x, limit=60, fallback="kpi"), "Weekly Active Users (WAU)", "weekly-active-users-wau"),
-    (lambda x: slugify(x, limit=60, fallback="kpi"), "", "kpi"),
-    (lambda x: slugify(x, limit=60, fallback="kpi"), "a" * 59 + " b", "a" * 59),
+    (_kpi_slug, "Weekly Active Users (WAU)", "weekly-active-users-wau"),
+    (_kpi_slug, "", "kpi"),
+    (_kpi_slug, None, "kpi"),
+    (_kpi_slug, "a" * 59 + " b", "a" * 59),
     (market.slug, "AT&T Wireless", "at-and-t-wireless"),
     (market.slug, "  Café & Co.  ", "caf-and-co"),
     (market.slug, None, "untitled"),
@@ -30,13 +48,13 @@ CASES = [
     (tool_services.slug, "Google Workspace", "google-workspace"),
     (tool_services.slug, "!!!", "tool"),
     (tool_services.slug, "a" * 47 + " b", "a" * 47),
+    (tool_services.slug, None, "tool"),
     # pipeline_settings.py, a new stage's id
     (lambda x: slugify(x, fallback="stage"), "QA / Fixes 2", "qa-fixes-2"),
     (lambda x: slugify(x, fallback="stage"), "—", "stage"),
-    # entities/store.py, a new entity's id
-    (lambda x: slugify(str(x), fallback="entity"), "Acme, Inc.", "acme-inc"),
-    (lambda x: slugify(str(x), fallback="entity"), None, "none"),
-    (lambda x: slugify(str(x), fallback="entity"), "日本", "entity"),
+    (_entity_id, "Acme, Inc.", "company/acme-inc"),
+    (_entity_id, None, "company/none"),
+    (_entity_id, "日本", "company/entity"),
     # company_file/draft.py keeps its own copy (the package is copied as is); it must agree
     (draft.slugify, "-Head of Sales-", "head-of-sales"),
     (draft.slugify, "", "x"),

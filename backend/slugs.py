@@ -10,11 +10,11 @@ import re
 _NOT_SLUG = re.compile(r"[^a-z0-9]+")
 
 
-def slugify(text: object, *, limit: int | None = None, fallback: str = "") -> str:
+def slugify(text: str, *, limit: int | None = None, fallback: str = "") -> str:
     """`text` lower-cased, each run of anything but ASCII letters and digits one hyphen, none at either end; cut to
-    `limit` characters (no hyphen left at the cut) when given, and `fallback` when nothing is left. None and other falsy
-    values are empty: a caller that wants `str(x)` passes it."""
-    slug = _NOT_SLUG.sub("-", str(text or "").lower()).strip("-")
+    `limit` characters (no hyphen left at the cut) when given, and `fallback` when nothing is left. The caller turns its
+    value into a string first (`str(x)` or `str(x or "")`), as each did before they shared this."""
+    slug = _NOT_SLUG.sub("-", text.lower()).strip("-")
     if limit is not None:
         slug = slug[:limit].strip("-")
     return slug or fallback

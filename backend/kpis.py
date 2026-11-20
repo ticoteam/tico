@@ -583,7 +583,7 @@ def goal_link_status(conn, goal_id, at=None):
 
 # ----------------------------------------------------------------------------- writes
 def _unique_slug(conn, name):
-    base, slug, n = slugify(name, limit=60, fallback="kpi"), None, 1
+    base, slug, n = slugify(str(name or ""), limit=60, fallback="kpi"), None, 1
     slug = base
     while conn.execute("SELECT 1 FROM kpis WHERE slug=?", (slug,)).fetchone():
         n += 1

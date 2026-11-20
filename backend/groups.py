@@ -81,7 +81,7 @@ def _archived(c):
 
 
 def slug_of(text):
-    return slugify(text)[:40]
+    return slugify(str(text or ""))[:40]
 
 
 def outside(settings, slug, config, helpers=None):

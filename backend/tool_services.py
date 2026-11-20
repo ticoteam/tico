@@ -422,7 +422,7 @@ def is_tool_key(kind, env, name, source, stored, on_computers):
 
 
 def slug(text):
-    return slugify(text, limit=48, fallback="tool")
+    return slugify(str(text or ""), limit=48, fallback="tool")
 
 
 def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None, tid=None, first=None):
