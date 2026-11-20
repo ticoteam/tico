@@ -49,6 +49,9 @@ const api = {
       {cwd: path.join(ui, '..')}).toString()) as BetaFeature[];
   },
   html: pageHtml,
+  // A fixed-offset zone where it is about noon now. Fixtures dated minutes or hours before now stay on today in it; in a
+  // browser whose local time is just past midnight they fall on yesterday, under a day line the test does not expect.
+  noonZone: (): string => `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0'),
   // A path under ui/ (what follows /tico/ui/ in a URL) to the file on disk: a bundle file is in build/ui/bundle, and a
   // TypeScript file is served as its compiled JavaScript in build/ui (npm run build:ui).
   uiFile: (name: string): string => name.startsWith('app.bundle.') ? path.join(built, 'bundle', name)
