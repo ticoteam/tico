@@ -844,7 +844,23 @@ manifest, including older environment builds without an `app_kind` field, and re
 none exists. Explicitly generic manifests and updater URLs outside the hub's download-file
 route are rejected. Company installer URLs are constructed from that same hub route. Download
 storage uses the blob store's region, endpoint and bucket prefix; environment artifacts belong
-under `<prefix>/releases/app/` when a prefix is configured.
+under `<prefix>/releases/app/` when a prefix is configured. When the manifest names an installer, the fallback offers
+that file only, never the Electron app's file with the same suffix.
+
+**The Electron app** (`desktop/`) ships on the same releases, beside the Tauri app, the same way: the
+`electron-changes` job builds it with `.github/workflows/desktop.yml` when `desktop/` (tests and Markdown aside) or
+that workflow changed since the previous release, or the previous release has no `latest-mac.yml`; otherwise
+`electron-assets` carries the previous release's Electron files forward unchanged. Run the workflow from the tag with
+`desktop` checked to force a rebuild of both apps. The files are `Tico-<version>-universal.dmg` and `.zip` (one Mac
+download for both chips), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
+`Tico-<version>-x86_64.AppImage` and `Tico-<version>-amd64.deb`, their `.blockmap` files, and the update feeds
+`latest-mac.yml`, `latest.yml` and `latest-linux.yml`, uploaded last. Installed apps read the feeds from
+`https://github.com/ticoteam/tico/releases/latest/download/`, so a prerelease, or a release not yet marked latest,
+reaches no one; while the latest release has no feed yet, the app shows no update rather than an error. The Mac app is
+signed when `DESKTOP_MAC_CERT` (a base64 `.p12`) and `DESKTOP_MAC_CERT_PASSWORD` are set, and notarized when
+`DESKTOP_NOTARY_KEY` (the App Store Connect API key's `.p8` contents), `DESKTOP_NOTARY_KEY_ID` and
+`DESKTOP_NOTARY_ISSUER` are set too. Without them it is unsigned, and an unsigned Mac app cannot install its own
+updates. The Windows installer is unsigned for now.
 
 ## The Release Owner's rollout
 
