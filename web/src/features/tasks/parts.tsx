@@ -38,7 +38,7 @@ export function FlowButton({ on, count }: { on: boolean; count: number }) {
 export function Face({ actor, size = 22 }: { actor: string | null | undefined; size?: 22 | 28 }) {
   const who = useActor(actor);
   if (!actor) return null;
-  return <Avatar kind={who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? 'Teammate'} hue={who?.hue} live={who?.working} size={size} />;
+  return <Avatar kind={who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (actor.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={size} />;
 }
 
 /** The page owner's face in the head: it opens their chat beside the page (`?chat=`, the shell's). */

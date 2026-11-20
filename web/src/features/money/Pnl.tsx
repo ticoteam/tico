@@ -207,7 +207,7 @@ type By = 'vendor' | 'team' | 'teammate';
 const BY = [
   { value: 'vendor', label: 'Vendor' },
   { value: 'team', label: 'Team' },
-  { value: 'teammate', label: 'Teammate' },
+  { value: 'teammate', label: 'Person' },
 ] as const;
 const groupsOf = (d: LineDetail | undefined, by: By) => (by === 'vendor' ? d?.by_vendor : by === 'team' ? d?.by_team : d?.by_teammate) ?? [];
 const nameOf = (label: string, key: string) => (key === ' other' ? 'Other' : key === ' unattributed' ? 'Not attributed' : label);

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { ApiError } from '@/api/client';
 import type { Call } from '@/api/schema';
 import { ticoRoomQuery } from '@/conversation';
+import { useDirectory } from '@/data';
 import { desktop } from '@/desktop';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -71,7 +72,11 @@ export function CallPage({ room }: CallPageProps) {
   useJoinInSmallWindow(small, room, call.data, phase);
   const c = call.data;
   const ended = phase === 'ended' || (phase === 'idle' && c?.state === 'ended');
-  const isTico = !!c && !!ticoRoom && ticoRoom === c.thread_id;
+  // A call in Tico's own room. Tico's stage (the Dot) shows only while Tico is on it: taken out, the stage is the
+  // people actually there; brought back, it is Tico's again.
+  const inTicoRoom = !!c && !!ticoRoom && ticoRoom === c.thread_id;
+  const ticoIn = useDirectory((d) => (c?.bots ?? []).some((b) => !!d.byId[b.startsWith('bot:') ? b : `bot:${b}`]?.tico)) ?? false;
+  const isTico = inTicoRoom && ticoIn;
   const kind = small ? 'pane cw cw-small' : cards ? 'pane pc cw' : 'pane cw is-full';
 
   if (call.isError && !c) {
@@ -127,7 +132,7 @@ export function CallPage({ room }: CallPageProps) {
   return (
     <main className={kind} aria-label={c?.title || 'Call'} data-target={`page:/call/${room}`}>
       {head}
-      {ended ? <Ended room={room} small={small} meeting={c?.meeting_id} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} row={(cards || small) && !isTico} small={small} />}
+      {ended ? <Ended room={room} small={small} meeting={c?.meeting_id} /> : <Stage room={room} c={c} s={s} phase={phase} isTico={isTico} canAdd={!inTicoRoom} row={(cards || small) && !isTico} small={small} />}
       {(cards || small) && c && !ended && <CallSide room={room} />}
       {!ended && <Controls room={room} c={c} s={s} phase={phase} isTico={isTico} onBack={cards || small ? undefined : back} />}
     </main>
@@ -203,7 +208,26 @@ const TROUBLE: Partial<Record<Phase, { title: string; text?: string; icon: 'mico
   lost: { title: 'Call disconnected', icon: 'offline', act: 'Join again' },
 };
 
-function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Call | undefined; s: CallState; phase: Phase; isTico: boolean; row: boolean; small: boolean }) {
+function Stage({
+  room,
+  c,
+  s,
+  phase,
+  isTico,
+  canAdd,
+  row,
+  small,
+}: {
+  room: string;
+  c: Call | undefined;
+  s: CallState;
+  phase: Phase;
+  isTico: boolean;
+  /** People can be rung in: not in Tico's own room, which nobody else reads. */
+  canAdd: boolean;
+  row: boolean;
+  small: boolean;
+}) {
   const live = phase === 'live';
   const nameOf = useNameOf();
   const me = useMe();
@@ -212,7 +236,7 @@ function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Cal
   const ticoTalks = isTico && live && !!s.voice && s.speaking.includes(s.voice);
   const meTalks = live && !!s.me && !s.muted && s.speaking.includes(s.me);
   const voice = c?.voice?.bots[0]?.state;
-  const add = live && !isTico && c ? <AddPeople room={room} row={row} /> : null;
+  const add = live && canAdd && c ? <AddPeople room={room} row={row} /> : null;
 
   useEffect(() => {
     if (!isTico || !live) return undefined;
@@ -245,8 +269,9 @@ function Stage({ room, c, s, phase, isTico, row, small }: { room: string; c: Cal
   );
   const isMe = (id: string) => id === s.me || (!live && id === me);
 
-  // A screen or a Tico file on the stage: it takes the room, everyone small under it.
-  if (live && !isTico && c?.stage)
+  // A screen or a Tico file on the stage: it takes the room, everyone small under it, Tico's call too. My own screen
+  // shows here as soon as it goes out, before the call's stage says so.
+  if (live && c && (c.stage || s.sharing))
     return (
       <>
         <Shared c={c} s={s} who={who} me={me} />

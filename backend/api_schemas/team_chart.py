@@ -23,6 +23,10 @@ SCHEMAS.update(
                 "status": "s",
                 "access": ref("Access"),
                 "onboarding_state": "s",
+                "tico": {
+                    "type": "boolean",
+                    "description": "The company's assistant, which the apps call Tico, with Tico's face",
+                },
                 "stage": {
                     "enum": ["onboarding", "active"],
                     "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active",

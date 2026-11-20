@@ -173,8 +173,9 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
   const marks = opened?.id === id ? opened.marks : null;
 
   const items = itemsOf(rows, live, myId, id, marks);
-  const name = variant === 'tico' ? 'Tico' : (title ?? 'Teammate');
   const mate = useActor(actor);
+  // never a stand-in word for someone: their name, else what they are
+  const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
   const mateHref = teammateHref(actor, mate);
   const here = useHerePage();
   const at = page === undefined ? here : page;
@@ -365,7 +366,7 @@ export function Conversation({ id, variant, title, actor, session, page, foot, c
       </div>
     );
   if (variant === 'side') {
-    const who = whoOf({ sender_id: actor ?? '' }, variant, myId);
+    const who = whoOf({ sender_id: actor ?? '' }, variant, myId, mate?.name, mate?.tico);
     const face = <Face who={{ ...who, name }} size={28} />;
     // The face and the name go to the teammate's page; one link is read out, the face's is for the pointer.
     return (

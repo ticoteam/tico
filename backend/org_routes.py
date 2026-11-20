@@ -423,6 +423,8 @@ def register(app, auth, settings, settings_admin, store):
                     "status": bot.get("state") or "",
                     "access": level,
                     "onboarding_state": configs.get(row["id"], {}).get("onboarding_state") or "",
+                    # The company's assistant: the apps call it Tico and give it Tico's face, whatever its stored name.
+                    "tico": row["id"] == settings.assistant_bot,
                 }
                 # A bot the caller may not see is not in the chart, so those under it hang from
                 # the nearest thing above it that is: another bot, else its person or department.

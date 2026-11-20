@@ -130,7 +130,10 @@ export function prime(callId: string | null): void {
   ready = lk ? Promise.resolve(make(lk)) : loadLiveKit().then(make, () => null);
   const deviceId = savedMic();
   const md = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
-  mic = md?.getUserMedia ? md.getUserMedia({ audio: deviceId ? { deviceId } : true }) : Promise.reject(new DOMException('No microphone', 'NotFoundError'));
+  // The browser cancels the call's own voice from the microphone (a phone's speaker is loud): without it Tico hears
+  // itself, answers itself, and cuts itself off as if the person spoke.
+  const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(deviceId ? { deviceId } : {}) };
+  mic = md?.getUserMedia ? md.getUserMedia({ audio }) : Promise.reject(new DOMException('No microphone', 'NotFoundError'));
   mic.catch(() => undefined);
   set({ ...IDLE, callId, phase: 'joining', deviceId });
 }
@@ -265,15 +268,15 @@ export async function shareScreen(on: boolean): Promise<boolean> {
     await r.localParticipant.setScreenShareEnabled(false, { audio: false }).catch(() => undefined);
     return true;
   }
-  set({ sharing: true });
   try {
     await r.localParticipant.setScreenShareEnabled(true, { audio: false });
-    return true;
   } catch (e) {
-    set({ sharing: false });
     if (e instanceof DOMException && e.name === 'NotAllowedError') return false;
     throw e;
   }
+  // Only now is the track out: the stage that shows it to me (attachScreen) finds it the moment it draws.
+  if (room === r) set({ sharing: true });
+  return true;
 }
 
 /** Draw the shared screen (mine while I share, else the one coming in) in a video element; gives back its undo. */

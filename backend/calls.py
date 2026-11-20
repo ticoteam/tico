@@ -1492,10 +1492,10 @@ class Calls:
             if segmenter is None:
                 segmenter = self.buffers[key] = call_voice.Segmenter()
             segmenter.at = self.voice.clock()
-            was = segmenter.speaking
+            was, barges = segmenter.speaking, segmenter.barges
             clips = segmenter.feed(pcm, start_ms)
-            if not was and (segmenter.speaking or clips):
-                self.voice.human_speaking(call_id)
+            if segmenter.barges != barges:
+                self.voice.human_speaking(call_id)  # they have said enough to take the floor from a bot's voice
             for start, clip in clips:
                 self._submit(call_id, identity, {"pcm": clip, "start_ms": start})
             self._transcribe_early(key, segmenter)
@@ -1869,7 +1869,9 @@ class Calls:
     def _post_in_thread(self, c, row, body, notes=None):
         """One message in the call's thread, from its connector, naming the call and its meeting as the source. The
         live_meeting reference makes the meeting's own rules decide who reads the message. `notes`: the action items
-        and summary, as data under refs.call. Returns the message."""
+        and summary, as data under refs.call. It is the call's record, not something the connector said to the
+        thread's bots: like the call's card it wakes none of them (`record`, threads.quiet_notice), so a bot does not
+        start on the action items by itself. Returns the message."""
         who = self.auth.identity_for_actor(c, row["connector_actor"])
         return threads.post(
             c,
@@ -1878,7 +1880,12 @@ class Calls:
             body,
             kind="say",
             refs={
-                "call": {"id": row["id"], "meeting_id": row["live_meeting_id"], **({"notes": notes} if notes else {})},
+                "call": {
+                    "id": row["id"],
+                    "meeting_id": row["live_meeting_id"],
+                    "record": True,
+                    **({"notes": notes} if notes else {}),
+                },
                 "live_meeting": {"meeting_id": row["live_meeting_id"]},
             },
         )

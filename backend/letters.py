@@ -1357,7 +1357,7 @@ def install(app, config, store, auth, mutate):
             require_admin(auth, request.state.identity)
             teammate = H.resolve_bot(c, grantee_id) if grantee_type == "bot" else H.human(c, grantee_id)
             if not teammate:
-                raise Problem("not_found", "Teammate not found", 404)
+                raise Problem("not_found", "No such person or agent", 404)
             ident = teammate["id"]
             exists = c.execute(
                 "SELECT 1 FROM letter_outbox_grants WHERE outbox_id=? AND grantee_type=? AND grantee_id=?",

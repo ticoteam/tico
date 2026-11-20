@@ -130,6 +130,17 @@ def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_
         "Action items: Acme launch call\n- Schedule the reliability review with Ops"
     ]
     assert _restricted(meet, "Call transcript") == [1] and _restricted(meet, "Action items") == [1]
+    # The call's record, not words to its bots: neither starts a bot on the action items by itself.
+    with meet.app.state.store.read() as c:
+        records = [
+            H.message(c, row[0])
+            for row in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND (body LIKE 'Call transcript%' OR body LIKE "
+                "'Action items:%')",
+                (cid,),
+            )
+        ]
+    assert len(records) == 2 and all(threads.quiet_notice(m) for m in records)
     assert room not in fake_rtc.rooms and not live_media.running(call_id)
     assert get(meet, f"calls/{call_id}")["state"] == "ended"
 

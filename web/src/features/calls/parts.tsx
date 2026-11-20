@@ -8,6 +8,7 @@ import { isCallWindow, useCallWindow } from '@/desktop';
 import { Avatar, Faces, type AvatarSize } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { toast } from '@/kit/Toast';
+import { Dot } from '@/tico/dot';
 import { joinOf } from './model';
 import { isActive, levelOf, useCall, type CallState } from './session';
 
@@ -57,7 +58,8 @@ const kindOf = (actor: string) => (actor.startsWith('bot:') ? 'agent' : 'person'
 
 const namesOf = (d: Directory) => Object.fromEntries(Object.entries(d.byId).map(([k, a]) => [k, a.name]));
 
-/** A name for any actor id, from the directory. Only the names are read, so a status line does not redraw it. */
+/** A name for any actor id, from the directory (where Tico's own agent is Tico). Only the names are read, so a status
+    line does not redraw it. */
 export function useNameOf(): (actor: string) => string {
   const names = useDirectory(namesOf);
   return (actor) => names?.[actor] ?? bare(actor);
@@ -76,10 +78,16 @@ export const LiveMark = () => (
 /** Someone in a call at any size: a face, a still ring while they speak, a mark when muted (calls.css .face). */
 export function Face({ actor, size, speaking, muted }: { actor: string; size: number; speaking?: boolean; muted?: boolean }) {
   const a = useActor(actor);
+  const tico = !!a?.tico;
   const style = { '--f': `${size}px`, '--x': `${size}px` } as CSSProperties;
   return (
     <span className={speaking ? 'face is-speaking' : 'face'} style={style}>
-      <Avatar kind={a?.kind ?? kindOf(actor)} name={a?.name ?? bare(actor)} hue={a?.hue} size={36} className="av-x" />
+      {tico ? (
+        // Tico's own agent wears Tico's face, the Dot, as it does in Tico's chat (conversation Face)
+        <Avatar kind="agent" name="Tico" size={36} className="av-x" dot={<Dot size={Math.round(size * 0.86)} still />} />
+      ) : (
+        <Avatar kind={a?.kind ?? kindOf(actor)} name={a?.name ?? bare(actor)} hue={a?.hue} size={36} className="av-x" />
+      )}
       {muted && (
         <i className="face-muted" aria-label="Muted">
           <Icon name="micoff" />

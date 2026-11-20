@@ -181,7 +181,8 @@ A Google Meet call still opens Meet in a tab of its own.
    stored (up to 45 seconds). A Tico that restarts while a call is `ending` ends it on the sweep. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
    close, the sweep retries it, and the transcript and action items wait until it does. If speech was transcribed, these messages are posted to
    the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
-   it, and each is marked `restricted`:
+   it, and each is marked `restricted`. Like the call's card, they are the call's record (`refs.call.record`) and wake
+   no bot in the thread: a bot does not start on the action items by itself.
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
    - `Action items: <title>` with one `- ` line per item, or `No action items were found.`, then `Summary:` and 3 to 5
@@ -246,13 +247,22 @@ and resumes it on the same computer after a restart. If Codex cannot resume the 
 with a transcript recap. Each bot uses its own model at medium effort. Claude Code uses its Concise output style and
 Codex is prompted for one or two short sentences. Follow-up tasks use the bot’s usual settings.
 
-The bot answers in plain spoken sentences, in about 80 words or fewer. It uses what it knows and its call notes.
-The bot can use its usual tools and permissions. People read the transcript and chat through the call thread's
-access rules. At 30 seconds from the time it heard a question, the call skips an unanswered turn and shows
+The bot answers in plain spoken sentences, in about 80 words or fewer, and says each thing once (a sentence a reply
+already said, such as an answer restated after a tool call, is not spoken again). It uses what it knows and its call
+notes, and may read to answer. On a call it answers and discusses: it starts no work on its own (no tasks, messages,
+edits or settings changes) unless the person clearly asks for that one action, and then it says in one short sentence
+what it will do and waits for their yes. People read the transcript and chat through the call thread's access rules.
+
+**Taking turns.** A person who says 300 ms of speech over a bot's voice has the floor (barge-in): the voice stops at its
+next frame, what the bot has not said yet is never said, its turn ends `interrupted` and its resident session drops
+the rest, and what the person says is asked as soon as they pause. A bot still thinking, with nothing to say yet, is
+not cut off. The browser asks for echo cancellation, noise suppression and gain control on the microphone. An
+utterance whose words are nearly all words a bot began saying in the last 20 seconds (at least three words, 80% of
+them) is the bot's voice heard back through a speaker: it is never asked, so a bot does not answer itself. At 30 seconds from the time it heard a question, the call skips an unanswered turn and shows
 `<bot> couldn't answer in time`.
 
-**Follow-ups.** If the bot needs to look something up or do work, it can say “Let me check” and use
-`tico call follow-up --call <id> "<what to find out or do>"`. The task runs on its normal model with its normal
+**Follow-ups.** When the person asks the bot to look into something it cannot answer now, it confirms, uses
+`tico call follow-up --call <id> "<what they asked for>"` and says “I'll look into it.” The task runs on its normal model with its normal
 tools and permissions. It keeps a link to the call and a few recent transcript lines, and the call's thread members
 can read it. Someone in the call can also file one for an attached bot with `--bot <slug>`. The answer goes back to
 the thread with a task link. If the requester marks the task done with a note, the thread credits them for the answer.

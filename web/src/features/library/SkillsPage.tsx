@@ -100,6 +100,8 @@ const findsSkill = (s: { name: string; description: string | null }, fn: string 
 
 /** A skill's install or use as a directory id: agents are `bot:<id>`, people `human:<id>`. */
 export const actorOf = (a: { type: string; id: string }) => `${a.type === 'Bot' ? 'bot' : 'human'}:${a.id}`;
+/** What someone is, when their name is not known. */
+const kindWord = (actor: string) => (actor.startsWith('bot:') ? 'Agent' : 'Person');
 
 export function SkillsPage({ search }: { search: SkillsSearch }) {
   const router = useRouter();
@@ -412,7 +414,7 @@ function SkillPage({ name }: { name: string }) {
           {removable.length > 0 && (
             <MenuSub label="Remove from">
               {removable.map((i) => (
-                <MenuItem key={i.id} label={i.target.name ?? 'Teammate'} onSelect={() => setRemoving({ id: i.id, who: i.target.name ?? 'Teammate' })} />
+                <MenuItem key={i.id} label={i.target.name ?? kindWord(actorOf(i.target))} onSelect={() => setRemoving({ id: i.id, who: i.target.name ?? kindWord(actorOf(i.target)) })} />
               ))}
             </MenuSub>
           )}
@@ -455,7 +457,7 @@ function SkillPage({ name }: { name: string }) {
                 {holders.map((i) => (
                   <span key={i.id} className="sp-who">
                     <Face actor={actorOf(i.target)} name={i.target.name} />
-                    <span>{i.target.name ?? 'Teammate'}</span>
+                    <span>{i.target.name ?? kindWord(actorOf(i.target))}</span>
                     <em>{coverage.get(i.id)?.uses_30d ?? ''}</em>
                   </span>
                 ))}
@@ -468,7 +470,7 @@ function SkillPage({ name }: { name: string }) {
                   const inner = (
                     <>
                       <Face actor={actorOf(r.actor)} name={r.actor.name} />
-                      <span>{r.actor.name ?? 'Teammate'}</span>
+                      <span>{r.actor.name ?? kindWord(actorOf(r.actor))}</span>
                       <em>
                         <Ago at={r.used_at} />
                       </em>
@@ -668,7 +670,7 @@ function ProposalPage({ id }: { id: string }) {
                 {skill.on.map((a) => (
                   <span key={actorOf(a)} className="sp-who">
                     <Face actor={actorOf(a)} name={a.name} />
-                    <span>{a.name ?? 'Teammate'}</span>
+                    <span>{a.name ?? kindWord(actorOf(a))}</span>
                     <em />
                   </span>
                 ))}

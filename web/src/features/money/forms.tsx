@@ -55,11 +55,11 @@ export function ViewAsDialog({ onOpenChange }: { onOpenChange: Open }) {
       title="View as"
       submit="View"
       onOpenChange={onOpenChange}
-      onSubmit={() => (who ? void ask.go('finance.viewAs', { teammate: who }) : ask.setError('Pick a teammate'))}
+      onSubmit={() => (who ? void ask.go('finance.viewAs', { teammate: who }) : ask.setError('Pick someone'))}
       busy={ask.busy}
       error={ask.error}
     >
-      <Select label="Teammate" options={options} value={who} onValueChange={setPick} />
+      <Select label="Who" options={options} value={who} onValueChange={setPick} />
     </Ask>
   );
 }
@@ -238,7 +238,7 @@ function Shares({ rows, onChange }: { rows: readonly ShareRow[]; onChange: (rows
     <div className="shares" role="group" aria-label="Split">
       {rows.map((r, i) => (
         <div key={i} className="share-row">
-          <Select label="Teammate or team" labelHidden options={[...gone, ...options]} value={r.who || null} placeholder="Teammate or team" onValueChange={(v) => set(i, { who: v })} />
+          <Select label="Person or team" labelHidden options={[...gone, ...options]} value={r.who || null} placeholder="Person or team" onValueChange={(v) => set(i, { who: v })} />
           <Field label="Share, %" labelHidden value={r.pct} onValueChange={(v) => set(i, { pct: v })} placeholder="%" wide={false} autoComplete="off" />
           <IconButton icon="close" label="Remove this share" size="sm" quiet onClick={() => onChange(rows.filter((_, k) => k !== i))} />
         </div>

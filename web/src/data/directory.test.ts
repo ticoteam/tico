@@ -24,6 +24,13 @@ const org = {
 const dir = () => buildDirectory(org, [{ bot: 'builder', state: 'running', focus: 'Fixing the login page' }]);
 
 describe('directory', () => {
+  it('the company’s assistant is Tico, whatever its stored name', () => {
+    const withTico = { ...org, bots: [...org.bots, { id: 'assistant', display_name: 'Assistant', status: 'active', org_parent: '', access, tico: true }] } as GetOrgResponse;
+    const d = buildDirectory(withTico, []);
+    expect(d.byId['bot:assistant']).toMatchObject({ kind: 'agent', name: 'Tico', tico: true });
+    expect(d.byId['bot:builder']?.tico).toBeUndefined();
+  });
+
   it('names people and agents, with team names and status lines', () => {
     const d = dir();
     expect(d.byId['human:p1']).toMatchObject({ kind: 'person', name: 'Dana Whit', title: 'Founder', team: 'Engineering' });

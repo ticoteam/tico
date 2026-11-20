@@ -133,7 +133,8 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const gm = { id: 'bot:gm', name: 'Growth Manager', kind: 'bot' };
   const fin = { id: 'bot:fin', name: 'Finance', kind: 'bot' };
-  queryClient.setQueryData(['directory'], { actors: [gm, fin], byId: { 'bot:gm': gm, 'bot:fin': fin } });
+  const tico = { id: 'bot:b1', name: 'Tico', kind: 'agent', tico: true };
+  queryClient.setQueryData(['directory'], { actors: [gm, fin, tico], byId: { 'bot:gm': gm, 'bot:fin': fin, 'bot:b1': tico } });
   queryClient.setQueryData(ticoRoomQuery.queryKey, 'th-tico');
   queryClient.setQueryData(callQuery(ROOM).queryKey, call());
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
@@ -297,6 +298,47 @@ describe('Call window', () => {
     // The voice is not a face of its own.
     expect(callState().others).toEqual([]);
     expect(callState().voice).toBe(voice.identity);
+  });
+
+  it('Tico taken out of its call: the stage is who is there, and the Dot is back when Tico is', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
+    show();
+    await joined();
+    expect(document.querySelector('.tc-orb .dot')).toBeTruthy();
+    act(() => void queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: [] })));
+    await waitFor(() => expect(document.querySelector('.tc-orb')).toBeNull());
+    expect(screen.getAllByText('You').length).toBeGreaterThan(0);
+    // nobody else reads Tico's room: there is no one to ring in
+    expect(screen.queryByRole('button', { name: 'Add people or agents' })).toBeNull();
+    act(() => void queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] })));
+    await waitFor(() => expect(document.querySelector('.tc-orb .dot')).toBeTruthy());
+  });
+
+  it('Tico on a call is Tico: its name in the caption, its face the Dot', async () => {
+    queryClient.setQueryData(
+      callQuery(ROOM).queryKey,
+      call({ thread_id: 'th-tico', bots: ['b1'], voice: { bots: [{ slug: 'b1', state: 'speaking', caption: 'The ads start Monday.' }], note: null } }),
+    );
+    show();
+    await joined();
+    const said = await screen.findByText('The ads start Monday.');
+    expect(said.querySelector('b')?.textContent).toBe('Tico');
+    expect(screen.queryByText(/Assistant/)).toBeNull();
+  });
+
+  it('my own shared screen shows on the stage, in Tico’s call too, once it is out', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
+    show();
+    await joined();
+    let out: (v?: unknown) => void = () => {};
+    (room().localParticipant.setScreenShareEnabled as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((r) => (out = r)));
+    void run('calls.share', { id: ROOM, on: true }, { via: 'click' });
+    await waitFor(() => expect(room().localParticipant.setScreenShareEnabled.mock.calls.length).toBe(1));
+    expect(callState().sharing).toBe(false); // the picker is open: nothing is out yet
+    act(() => out());
+    expect(await screen.findByLabelText('Shared screen')).toBeTruthy();
+    expect(screen.getAllByText('You').length).toBeGreaterThan(0);
+    expect(callState().sharing).toBe(true);
   });
 
   it('the server closing the room ends the call rather than losing it', async () => {

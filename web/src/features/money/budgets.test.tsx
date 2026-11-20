@@ -486,7 +486,7 @@ describe('Access @s413 @s475', () => {
     show('/company/finance?tab=access');
     fireEvent.click(await screen.findByRole('button', { name: 'Give access' }));
     const dialog = await screen.findByRole('dialog', { name: 'Give access' });
-    await pick(within(dialog).getByRole('combobox', { name: 'Teammate' }), /^lee$/);
+    await pick(within(dialog).getByRole('combobox', { name: 'Who' }), /^lee$/);
     await pick(within(dialog).getByRole('combobox', { name: 'What' }), /^P&L$/);
     await pick(within(dialog).getByRole('combobox', { name: 'Whose' }), /^Sales$/);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Give access' }));
