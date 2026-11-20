@@ -17,7 +17,7 @@ reads the TypedDict only to write the document (api_contract.api_v2 passes it as
 import ast
 import inspect
 import textwrap
-from typing import Annotated, Any, TypedDict, is_typeddict
+from typing import Annotated, Any, is_typeddict
 
 from pydantic import ConfigDict, GetJsonSchemaHandler, WithJsonSchema, with_config
 
@@ -30,6 +30,8 @@ def _tidy(node: JsonSchema) -> None:
     generated types and tests/helpers/openapi_v2.conforms read): no generated titles, a nullable scalar as a type list,
     a nullable object or reference as oneOf with null. Does not follow $ref: each answer tidies its own."""
     node.pop("title", None)
+    if "const" in node:
+        node["enum"] = [node.pop("const")]  # Literal["risk"]: one value, spelled as the contract spells several
     if node.get("type") == "object" and node.get("additionalProperties") is True and "properties" not in node:
         del node["additionalProperties"]  # dict[str, Any]: any object, as {"type": "object"} says already
     if node.get("type") == "array" and node.get("items") == {}:
@@ -114,43 +116,9 @@ ONE_OF = OneOf()
 DateTime = Annotated[str, WithJsonSchema({"type": "string", "format": "date-time"})]
 
 
-# Answers still declared by hand in backend/api_schemas/, which a moved answer refers to. Each is an empty open TypedDict
-# here, marked so openapi_v2.spec() puts the hand-written schema of that name in the document in its place. When the
-# tag that owns one moves, its real TypedDict replaces it (the migration plan is in the pull request that started this).
+# An answer that refers to one still declared by hand in backend/api_schemas/ names a stand-in: an empty open TypedDict
+# of the same name, marked so openapi_v2.spec() puts the hand-written schema of that name in the document in its place.
+# When the tag that owns one moves, its real TypedDict replaces the stand-in (the migration plan is in the pull request
+# that started this). None is needed now: every answer moved so far refers only to moved ones.
 HAND_WRITTEN = "x-tico-hand-written"
 hand_written = with_config(ConfigDict(extra="allow", json_schema_extra={HAND_WRITTEN: True}))
-
-
-@hand_written
-class Matter(TypedDict):
-    """backend/api_schemas/risk.py"""
-
-
-@hand_written
-class Message(TypedDict):
-    """backend/api_schemas/conversations.py"""
-
-
-@hand_written
-class MessageSource(TypedDict):
-    """backend/api_schemas/conversations.py"""
-
-
-@hand_written
-class PageLinkView(TypedDict):
-    """backend/api_schemas/pages.py"""
-
-
-@hand_written
-class PageWriter(TypedDict):
-    """backend/api_schemas/pages.py"""
-
-
-@hand_written
-class SentAs(TypedDict):
-    """backend/api_schemas/conversations.py"""
-
-
-@hand_written
-class Tag(TypedDict):
-    """backend/api_schemas/tags.py"""

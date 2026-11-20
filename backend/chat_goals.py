@@ -11,6 +11,7 @@ from .store import H, Problem, bot_readiness, readiness_document, encode
 from . import bot_settings as BS
 from . import read_cache
 from .api_contract import api_v2
+from .api_answers.conversations import ChatGoalResult
 
 TICO_COMMANDS = [
     {
@@ -266,7 +267,7 @@ def task_goal_ended(c, goal, task_id, status, note):
 def install(app, store, auth, mutate, send):
     @app.get(
         "/api/v2/conversations/{cid}/goal",
-        **api_v2("Conversations", "getChatGoal", "Read the pinned goal and commands", "ChatGoalResult"),
+        **api_v2("Conversations", "getChatGoal", "Read the pinned goal and commands", ChatGoalResult),
     )
     def read(request: Request, cid: str):
         with store.read() as c:
@@ -278,7 +279,7 @@ def install(app, store, auth, mutate, send):
 
     @app.post(
         "/api/v2/conversations/{cid}/goal",
-        **api_v2("Conversations", "setChatGoal", "Set, edit, pause, resume or clear a native goal", "ChatGoalResult"),
+        **api_v2("Conversations", "setChatGoal", "Set, edit, pause, resume or clear a native goal", ChatGoalResult),
     )
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):

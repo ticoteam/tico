@@ -12,7 +12,7 @@ from jsonschema.exceptions import SchemaError
 from typing_extensions import TypeAliasType
 
 from backend import openapi_v2
-from backend.api_answers._base import ONE_OF, DateTime, Tag, answer
+from backend.api_answers._base import ONE_OF, DateTime, answer, hand_written
 from backend.finance import actions as FA
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
 from backend.tests.helpers.credentials import setup as setup_vault
@@ -181,6 +181,11 @@ def test_a_route_says_what_fastapi_cannot_see():
     assert gone["description"] == "not_found"
 
 
+@hand_written
+class Bot(TypedDict):
+    """A stand-in: backend/api_schemas/bots.py declares Bot by hand until the Bots tag moves."""
+
+
 @answer
 class ThingKid(TypedDict):
     name: str
@@ -192,7 +197,7 @@ class Thing(TypedDict):
     owner_id: str | None
     at: NotRequired[DateTime | None]
     """When it happened"""
-    tag: Tag | None
+    bot: Bot | None
     kids: list[ThingKid]
 
 
@@ -225,13 +230,13 @@ def test_a_typeddict_answer_is_written_by_fastapi_in_the_contracts_spelling():
             "id": {"type": "string"},
             "owner_id": {"type": ["string", "null"]},
             "at": {"type": ["string", "null"], "format": "date-time", "description": "When it happened"},
-            "tag": {"oneOf": [{"$ref": "#/components/schemas/Tag"}, {"type": "null"}]},
+            "bot": {"oneOf": [{"$ref": "#/components/schemas/Bot"}, {"type": "null"}]},
             "kids": {"type": "array", "items": {"$ref": "#/components/schemas/ThingKid"}},
         },
-        "required": ["id", "kids", "owner_id", "tag"],
+        "required": ["bot", "id", "kids", "owner_id"],
         "additionalProperties": True,
     }
-    assert schemas["ThingKid"]["required"] == ["name"] and schemas["Tag"] == openapi_v2.SCHEMAS["Tag"]
+    assert schemas["ThingKid"]["required"] == ["name"] and schemas["Bot"] == openapi_v2.SCHEMAS["Bot"]
 
     @app.get("/api/v2/thing-kids", **api_v2("Tasks", "listThingKids", "A bare list", list[ThingKid]))
     def kids():
@@ -253,7 +258,7 @@ def test_a_typeddict_answer_is_written_by_fastapi_in_the_contracts_spelling():
 
 def test_the_contracts_spelling_never_narrows_or_breaks_a_schema():
     """A nullable scalar collapses to a type list and a value-or-null to oneOf; anything else keeps anyOf, which a
-    rewrite to oneOf would narrow, and a type list never names one type twice."""
+    rewrite to oneOf would narrow, and a type list never names one type twice. A single literal is an enum of one."""
     from backend.api_answers._base import _tidy
 
     cases = [
@@ -269,6 +274,11 @@ def test_the_contracts_spelling_never_narrows_or_breaks_a_schema():
         (
             {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "string"}]},
             {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "string"}]},
+        ),
+        ({"const": "risk", "type": "string"}, {"enum": ["risk"], "type": "string"}),  # Literal["risk"]
+        (
+            {"anyOf": [{"const": "risk", "type": "string"}, {"type": "null"}]},
+            {"oneOf": [{"enum": ["risk"], "type": "string"}, {"type": "null"}]},
         ),
     ]
     for given, spelled in cases:
@@ -290,11 +300,11 @@ def test_a_typeddict_answer_never_touches_the_wire(api):
         for route in api.app.routes
         if isinstance((getattr(route, "responses", None) or {}).get(200, {}).get("model"), type)
     ]
-    assert len(declared) >= 63  # Tasks, Products and Webhooks
+    assert len(declared) >= 93  # Tasks, Products, Webhooks, Conversations, Pages, Tags and Risk
     assert all(route.response_model is None and route.response_field is None for route in declared)
 
     app = FastAPI()
-    loose = {"z": 1, "owner_id": None, "id": "t1"}  # a field the answer does not name, first; `kids` and `tag` missing
+    loose = {"z": 1, "owner_id": None, "id": "t1"}  # a field the answer does not name, first; `kids` and `bot` missing
 
     @app.get("/api/v2/things/{tid}", **api_v2("Tasks", "getThing", "One thing", Thing))
     def thing(tid: str) -> Thing:  # an annotation FastAPI would otherwise take as the response model

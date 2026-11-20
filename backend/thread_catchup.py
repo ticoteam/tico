@@ -22,6 +22,7 @@ import logging
 from . import hubdb as H
 from . import sources as SRC
 from .api_contract import api_v2
+from .api_answers.conversations import CatchUpResult
 
 LOG = logging.getLogger("tico.thread_catchup")
 SCOPES = ("subtree", "thread")
@@ -215,7 +216,7 @@ def install(app, store, auth, mutate):
             "Conversations",
             "catchUpThread",
             "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your Assistant DM; the newest 40 messages at most. Nothing new posts nothing",
-            "CatchUpResult",
+            CatchUpResult,
         ),
     )
     def catch_up(request: Request, thread_id: str, body: CatchUp):

@@ -22,6 +22,7 @@ from . import updates
 from .store import encode
 from . import updates_routes
 from .api_contract import ASK_REFUSED
+from .api_answers.conversations import ChatResult, Message
 
 import asyncio
 import json
@@ -1663,7 +1664,7 @@ def register_messages(
             "Conversations",
             "sendMessage",
             "Send a message to a person or bot",
-            "Message",
+            Message,
             responses={"422": ASK_REFUSED},
         ),
     )
@@ -1821,7 +1822,7 @@ def register_messages(
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/messages/{mid}", **api_v2("Conversations", "getMessage", "One message", "Message"))
+    @app.get("/api/v2/messages/{mid}", **api_v2("Conversations", "getMessage", "One message", Message))
     def message(request: Request, mid: str):
         with store.read() as c:
             row = H.message(c, mid)
@@ -1842,7 +1843,7 @@ def register_messages(
 
     @app.post(
         "/api/v2/chat/{bot}",
-        **api_v2("Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", "ChatResult"),
+        **api_v2("Conversations", "chatWithBot", "Send a message to a bot (opens the chat if needed)", ChatResult),
     )
     def chat(request: Request, bot: str, body: M.ChatCreate):
         who = request.state.identity

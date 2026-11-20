@@ -14,6 +14,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Literal
 
 TICO_ACTOR = "keeper"
 ASSISTANT_FOR = "assistant-for"  # refs.source of a Tico message the Assistant wrote for a person
@@ -34,7 +35,8 @@ BUILTINS = {
 # A task.create event's `via` that says a bot filed the task on a person's rights: that bot (hubdb.FLEET_MAINTAINER).
 FILED_VIA = {"botops": "bot:botops"}
 
-KINDS = ("person", "bot", "assistant_for", "task_update", "builtin", "automation", "system")
+# The kinds of source a line may have: the API's MessageSource.kind (backend/api_answers/conversations.py).
+SourceKind = Literal["person", "bot", "assistant_for", "task_update", "builtin", "automation", "system"]
 
 _scope = ContextVar("tico_source_scope", default=None)
 _assistant = {"name": ASSISTANT_DEFAULT}

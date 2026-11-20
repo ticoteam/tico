@@ -6,11 +6,14 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from pydantic import Field
-from typing_extensions import TypeAliasType
 
 from ..hubdb import LinkKind
 from ..task_documents import NAMES as DOCUMENT_NAMES
-from ._base import ONE_OF, DateTime, Matter, Message, MessageSource, PageLinkView, PageWriter, SentAs, Tag, answer
+from ._base import DateTime, answer
+from .conversations import Message, MessageSource, ReviewAnswer, SentAs, TaskReviewAskView
+from .pages import PageLinkView, PageWriter
+from .risk import Matter
+from .tags import Tag
 
 
 # A task is a title and a chat: its request is the first message on its chat, on a full read only. `from` is a Python
@@ -552,33 +555,6 @@ class TaskDetail(TypedDict):
     comment_delivery: NotRequired[CommentDelivery | None]
     actors: NotRequired[dict[str, str]]
     """On reads: display names for every actor id in the answer, {"human:ana": "Ana Alvarez"}"""
-
-
-@answer
-class TaskReviewAskView(TypedDict):
-    questions: list[Any]
-    who: str | None
-    by: str
-
-
-@answer
-class ReviewAskAnswer(TypedDict):
-    target: dict[str, Any]
-    answers: dict[str, Any]
-    other: str | None
-    dismiss: bool
-    by: str
-    at: str
-
-
-@answer
-class ReviewTextAnswer(TypedDict):
-    by: str
-    text: str
-    at: str
-
-
-ReviewAnswer = TypeAliasType("ReviewAnswer", Annotated[ReviewAskAnswer | ReviewTextAnswer, ONE_OF])
 
 
 @answer
