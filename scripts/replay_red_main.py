@@ -21,11 +21,6 @@ class Replay:
     def __init__(self, root=checks.ROOT, graph=None):
         self.root = root
         self.graph = graph or checks.DependencyMap(root)
-        try:
-            self.core = checks.browser_scripts([], root)
-        except (OSError, subprocess.CalledProcessError, RuntimeError):
-            # The browser runner went with the old web app (ui/): selection falls back as it does without one.
-            self.core = None
         self.timings = checks.committed_timings(root)
         self.counts = Counter()
         self.definitions = defaultdict(set)
@@ -57,7 +52,7 @@ class Replay:
 
     def plan(self, changed, event="pull_request", added=None):
         # Cases have no A/M status, so retain selection's conservative default; merge costs supply git's additions.
-        picked = checks.selection(changed, event=event, root=self.root, graph=self.graph, core=self.core, added=added)
+        picked = checks.selection(changed, event=event, root=self.root, graph=self.graph, added=added)
         picked = checks.narrow(picked, changed, event, root=self.root, graph=self.graph, added=added)
         record = picked.get("narrow")
         if record:
@@ -85,7 +80,8 @@ class Replay:
         if match:
             path = self.resolve(match[0])
             if path:
-                return ("file" if checks.is_check(path) else "unsupported", path)
+                # A browser script (the old web app's ui/tests/*.cts) no longer runs in the PR or queue checks.
+                return ("file" if checks.is_test(path) else "unsupported", path)
             return "missing", match[0]
         name = description.split()[0].split("[")[0]
         paths = self.definitions.get(name, ())
@@ -149,7 +145,7 @@ class Replay:
             batch=batch,
             moved=moved,
             gone=gone,
-            selected={event: dict(python=len(p["python"]), browser=len(p["browser"])) for event, p in plans.items()},
+            selected={event: dict(python=len(p["python"])) for event, p in plans.items()},
         )
 
     def selected(self, kind, target, picked):
@@ -162,9 +158,6 @@ class Replay:
                 pass
             elif kind == "static":
                 caught, reason = True, "static job: " + target
-            elif target.startswith("ui/tests/"):
-                caught = Path(target).stem in picked["browser"]
-                reason = "browser selected" if caught else "browser not linked"
             else:
                 caught = target in picked["python"] or (
                     picked["contracts"] and target in checks.contract_files(picked["sweeps"])
@@ -215,7 +208,6 @@ def main():
     report(rows)
     costs = []
     if args.cost:
-        browser_timings = json.loads((replay.root / checks.TIMINGS_FILE).read_text()).get("browser", {})
         main_ref = subprocess.check_output(
             ["git", "for-each-ref", "--count=1", "--format=%(refname)", "refs/heads/main", "refs/remotes/origin/main"],
             cwd=replay.root,
@@ -233,27 +225,15 @@ def main():
                 ["git", "diff", "--name-only", "--diff-filter=A", sha + "^1", sha], cwd=replay.root, text=True
             ).splitlines()
             plan = replay.plan(changed, added=[replay.resolve(p) or p for p in added])
-            browser_seconds = checks.weights(
-                dict.fromkeys(plan["browser"], 1), browser_timings, checks.UNTIMED_SCRIPT_SECONDS
-            )
             cost = dict(
                 sha=sha,
                 python=len(plan["python"]),
-                browser=len(plan["browser"]),
                 python_seconds=plan.get("narrow", {}).get("selected_seconds", 0),
-                browser_seconds=sum(browser_seconds.values()),
             )
             costs.append(cost)
-            print(
-                f"cost {sha[:10]} Python {cost['python']:4} ({cost['python_seconds']:7.1f}s)"
-                f" browser {cost['browser']:3} ({cost['browser_seconds']:7.1f}s)"
-            )
+            print(f"cost {sha[:10]} Python {cost['python']:4} ({cost['python_seconds']:7.1f}s)")
         python_mean = mean(c["python_seconds"] for c in costs)
-        browser_mean = mean(c["browser_seconds"] for c in costs)
-        print(
-            f"Mean over {len(costs)} merges: {python_mean + browser_mean:.1f}s "
-            f"(Python {python_mean:.1f}s, browser {browser_mean:.1f}s), one-worker estimates"
-        )
+        print(f"Mean over {len(costs)} merges: {python_mean:.1f}s (Python), one-worker estimates")
     if args.json:
         args.json.write_text(json.dumps(dict(cases=rows, costs=costs), indent=2) + "\n")
     print(f"Elapsed {time.monotonic() - start:.1f}s; graph built once; no tests collected or run.")

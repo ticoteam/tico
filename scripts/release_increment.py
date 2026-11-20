@@ -7,8 +7,7 @@ validated, and the day's other candidates run only what their diff from it selec
 with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the train
 waits, and a person runs Release train by hand to validate again (a manual run dispatches as it does today). Once the
 full run is a day old, the train may dispatch one again. A candidate after the anchor runs only what its diff from the
-anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set,
-the product part (the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
+anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the product part (the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
 a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
 incremental, of a commit main still contains) supersedes it. A red that only its infrastructure failed (a Spot VM taken, a registry pull refused or rate limited, a
@@ -46,17 +45,13 @@ IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed pa
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
 MATRIX_KEYS = ("name", "part", "shard", "workers", "runner", "binaries")
-JOB_NAME = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
+JOB_NAME = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product|desktop")
 TOKEN_PYTEST = re.compile(r"\bFAILED (\S+?)::")
-TOKEN_BROWSER = re.compile(r"\bFAIL +(?:\S*/)?([\w.-]+)\.cjs\b")
 
 
 def failure_tokens(text):
-    """The tests a gate log names as failed: pytest files (`backend/tests/test_x.py`) and browser scripts
-    (`ui/tests/x.cjs`). Empty when the log names none."""
-    tokens = {match.group(1) for match in TOKEN_PYTEST.finditer(text or "")}
-    tokens |= {f"ui/tests/{match.group(1)}.cjs" for match in TOKEN_BROWSER.finditer(text or "")}
-    return tokens
+    """The tests a gate log names as failed: pytest files (`backend/tests/test_x.py`). Empty when the log names none."""
+    return {match.group(1) for match in TOKEN_PYTEST.finditer(text or "")}
 
 
 def failed_tokens(jobs):
@@ -68,7 +63,7 @@ def failed_tokens(jobs):
             continue
         if name in (PRODUCT, DESKTOP):
             tokens.add(name)
-        elif re.fullmatch(r"(python|browser)-\d+", name):
+        elif re.fullmatch(r"python-\d+", name):
             found = failure_tokens(log)
             if not found:
                 return None
@@ -94,7 +89,7 @@ INFRASTRUCTURE = (
 )
 # A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
 CONSEQUENCE = re.compile(r"An image build did not succeed")
-GATE_JOB = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
+GATE_JOB = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product|desktop")
 
 
 def infrastructure_cause(messages):
@@ -265,9 +260,8 @@ def red_rule(red, head, since_red):
 
 
 def selection_tokens(selected, changed):
-    """What a selection runs, as the same tokens failure_tokens reads from a log. Smoke scripts are not included: they
-    run on every incremental validation, so they cannot be the commit that fixes a failure."""
-    tokens = set(selected["python"]) | {f"ui/tests/{name}.cjs" for name in selected["browser"]}
+    """What a selection runs, as the same tokens failure_tokens reads from a log."""
+    tokens = set(selected["python"])
     if selected.get("contracts"):
         tokens |= set(pr_checks.CONTRACT_TESTS)
     if selected.get("conformance"):
@@ -281,14 +275,14 @@ def selection_tokens(selected, changed):
 
 def load_tables(path, root):
     """The measured seconds the groups balance with (scripts/test-timings.json): `seconds` for python files (the default
-    run's and the release gate's), `browser` for scripts, and `slow_only` the python files the release gate collects
-    only because every one of their tests is slow. A file the default table lacks is not slow-only by that alone: the
-    default table is recorded from older runs."""
+    run's and the release gate's), and `slow_only` the python files the release gate collects only because every one of
+    their tests is slow. A file the default table lacks is not slow-only by that alone: the default table is recorded
+    from older runs."""
     table = json.loads(Path(path).read_text())
-    default, release, browser = (dict(table.get(key, {})) for key in ("default", "release", "browser"))
+    default, release = (dict(table.get(key, {})) for key in ("default", "release"))
     only_release = set(release) - set(default)
     slow_only = {name for name in only_release if slow_marks(Path(root) / name)[1]}
-    return {"seconds": {**release, **default}, "browser": browser, "slow_only": slow_only}
+    return {"seconds": {**release, **default}, "slow_only": slow_only}
 
 
 def _is_slow_mark(node):
@@ -358,13 +352,12 @@ def plan_for(
     changed,
     carried,
     exists,
-    smoke_browser,
     tables,
     has_slow=lambda path: False,
     previous_changed=False,
     native=None,
 ):
-    """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
+    """The incremental plan: what the selection runs and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
     tree (a deleted test is not run). Returns the plan; `jobs` lists the gate's VMs in the shape ci.yml's matrix takes.
     `has_slow(path)` tells whether a test file marks slow tests: a carried file that does runs them in the contracts lane.
@@ -374,7 +367,6 @@ def plan_for(
     carried = set(carried or ())
     slow_only = tables["slow_only"]
     python = set(selected["python"])
-    browser = set(selected["browser"]) | set(smoke_browser)
     conformance = bool(selected.get("conformance"))
     contracts = bool(selected.get("contracts"))
     dropped = []
@@ -382,15 +374,13 @@ def plan_for(
     for token in sorted(carried):
         if token in (PRODUCT, DESKTOP):
             continue
-        if token.startswith("ui/tests/") and token.endswith(".cjs"):
-            browser.add(token[len("ui/tests/") : -len(".cjs")])
-        elif token == pr_checks.CONFORMANCE:
+        if token == pr_checks.CONFORMANCE:
             conformance = True
         elif token.endswith(".py") and exists(token):
             python.add(token)
             carried_python.add(token)
         else:
-            dropped.append(token)  # a test file that is gone since: nothing to run
+            dropped.append(token)  # a test file that is gone since, or no Python file: nothing to run
     python = sorted(name for name in python if exists(name))
     # The python lane runs `-m "not slow"`, so every file with a slow test runs those in the contracts lane (-m slow)
     # as well; a file whose tests are all slow runs only there.
@@ -400,7 +390,6 @@ def plan_for(
         | {n for n in carried_python if has_slow(n)}
     )
     python = [name for name in python if name not in slow_only]
-    browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
     product = (
         bool(selected.get("caddy"))
         or any(name.startswith(PRODUCT_INPUTS) for name in changed)
@@ -410,7 +399,6 @@ def plan_for(
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     jobs = build_jobs(
         python,
-        browser,
         contract_files,
         conformance,
         selected.get("rust") or [],
@@ -421,7 +409,6 @@ def plan_for(
     )
     return {
         "python": python,
-        "browser": browser,
         "contracts": contract_files,
         "conformance": conformance,
         "product": product,
@@ -444,7 +431,7 @@ def warn(lines):
         print(line, file=sys.stderr)
 
 
-def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables, native=None):
+def build_jobs(python, contract_files, conformance, rust, product, desktop, tables, native=None):
     """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them.
 
     Only a VM holding a file that runs the native binaries (`native(files)`, release_checks.native_test_files) waits
@@ -468,19 +455,6 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
         jobs += [
             job(f"python-{i}", "python", files, seconds=load, **binaries(files))
             for i, (files, load) in enumerate(packed, 1)
-        ]
-    if browser:
-        split, loads = pr_checks.groups(
-            Counter(dict.fromkeys(browser, 1)),
-            tables["browser"],
-            kind="browser",
-            fallback=pr_checks.UNTIMED_SCRIPT_SECONDS,
-        )
-        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["browser"], pr_checks.JOB_SECONDS, "browser"))
-        jobs += [
-            job(f"browser-{i}", "browser", files, workers="2", binaries="no", seconds=load)
-            for i, (files, load) in enumerate(zip(split, loads, strict=True), 1)
-            if files
         ]
     if conformance:
         jobs.append(job("conformance", "python", [pr_checks.CONFORMANCE], crates=list(rust)))
@@ -540,12 +514,7 @@ def matrix_of(plan_text):
     if not isinstance(jobs, list) or not jobs:
         raise ValueError("an incremental plan lists no VMs")
     for entry in jobs:
-        if not JOB_NAME.fullmatch(entry.get("name", "")) or entry.get("part") not in (
-            "python",
-            "browser",
-            "product",
-            "desktop",
-        ):
+        if not JOB_NAME.fullmatch(entry.get("name", "")) or entry.get("part") not in ("python", "product", "desktop"):
             raise ValueError("an incremental plan names an unknown VM: %r" % (entry.get("name"),))
     return {"include": [{key: entry[key] for key in MATRIX_KEYS if key in entry} for entry in jobs]}
 
@@ -594,14 +563,12 @@ class Checkout:
         commit missing from the checkout). `previous_changed`: the candidate's previous release is not the anchor's
         (plan_for runs the product part)."""
         changed, selected = self.selected(base, head)
-        _, smoke_browser = pr_checks.smoke(self.root)
         tables = load_tables(self.root / "scripts" / "test-timings.json", self.root)
         plan = plan_for(
             selected,
             changed,
             carried,
             lambda path: (self.root / path).is_file(),
-            smoke_browser,
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,

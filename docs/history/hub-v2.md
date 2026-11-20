@@ -44,7 +44,7 @@ must match. Keep it simple: the main complaint about the Issue system was that i
 | `dispatcher/keeper.py`, `scripts/keeper.sh`, `scripts/hub.sh` (install/status/restart) | the always-on host: runtime daemons, threads, mailbox loop, schedules, status, recovery, limits, backup. launchd `team.tico.keeper`. |
 | `dispatcher/hosts/codex.py`, `dispatcher/hosts/grok.py`, `dispatcher/hosts/base.py` | runtime hosts behind one interface. |
 | `dispatcher/hubserver.py` | new `/api/v2/...` routes over hub.db; SSE stream for deltas. |
-| `ui/index.html` | chat over messages; status on hover; Needs you from tasks; tasks tab. |
+| `ui/index.html` (the old web app, since removed) | chat over messages; status on hover; Needs you from tasks; tasks tab. |
 | `docs/history/hub-v2.md` (this), `docs/history/architecture.md` (one section), `templates/employee-repo/AGENT.md` (the `hub` CLI paragraph) |
 | tests: `dispatcher/test_hubdb.py`, `test_hubcli.py`, `test_keeper.py`, `test_hosts.py`, `test_hubserver_v2.py` |
 
@@ -277,7 +277,7 @@ in `coo/inbox/<task-id>/` and their `s3://` URIs in the body — the COO routes 
 child tasks. A specific bot in the picker gets a hub task when the keeper hosts it and a GitHub
 Issue otherwise; the reply carries `task` or `issue` accordingly (`docs/meetings.md`).
 
-## 8. UI (ui/index.html)
+## 8. UI (ui/index.html, the old web app, since removed)
 - **Chat** with a keeper-hosted bot uses `/api/v2/chat/<bot>` and the SSE stream; the thread
   view lists `messages` (sender chip, time), streams the reply, and shows `hub` actions the bot
   took (task created, approval requested) as small cards. Bots on the dispatcher keep the old

@@ -23,10 +23,6 @@ else:
     import flake_detect
 
 ROOT = Path(__file__).resolve().parents[1]
-# Browser scripts a UI file runs instead of (UI_MAP) or as well as (UI_ALSO) what the rules pick for it. Empty since the
-# old web app (ui/) and its browser scripts went; the web app's tests run in web/.
-UI_MAP: dict[str, list[str]] = {}
-UI_ALSO: dict[str, list[str]] = {}
 # Checks whose inputs arrive through an HTTP request or catalog discovery.
 CHECK_ALSO = {
     "backend/threads.py": ("backend/tests/test_sql_parity.py",),
@@ -42,20 +38,6 @@ def additional_checks(names, root):
         for test in tests
         if (root / test).is_file()
     }
-
-
-def browser_script(root, stem):
-    """The file a browser script name runs, ui/tests/<stem>.cjs or .cts; None when neither exists."""
-    for suffix in (".cjs", ".cts"):
-        path = root / "ui/tests" / f"{stem}{suffix}"
-        if path.is_file():
-            return path
-    return None
-
-
-def ui_map_key(name):
-    """The UI_MAP key for a ui/ file. A script converted to TypeScript (ui/app/x.ts) keeps the entry its .js name has."""
-    return name[:-3] + ".js" if name.startswith("ui/") and name.endswith(".ts") else name
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
@@ -168,7 +150,7 @@ RUST_INPUTS = {
 # over more, shorter VMs rather than packing them into a few long ones. MAX_JOBS is a runaway guard, not a capacity limit.
 WORKERS = 4
 JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 330))
-SETUP_SECONDS = {"python": 150, "browser": 120}  # measured boot, checkout, free disk and warm install
+SETUP_SECONDS = {"python": 150}  # measured boot, checkout, free disk and warm install
 MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 40))
 # The planner never stretches a plan past its target: MAX_JOB_SECONDS equals JOB_SECONDS, so every VM is planned at the
 # target and CEILING only reports the job count. A full queue group needs about 36 Python VMs at this target (the
@@ -181,23 +163,12 @@ CEILING = {"pull_request": 30, "merge_group": 30}
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
 # tests spread across the workers.
 PYTEST_FLAGS = ("--api-database-snapshots", "--maxschedchunk=2")
-UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
 
 
 def is_test(name):
     """A file pytest collects by name (pytest's default python_files); prepare() keeps the ones in the default run."""
     base = Path(name).name
     return base.endswith(".py") and (base.startswith("test_") or base.endswith("_test.py"))
-
-
-def is_script_name(name):
-    """A browser script name: ui/tests/<name>.cjs (JavaScript) or <name>.cts (TypeScript). A .d.cts is a declaration file."""
-    return name.endswith((".cjs", ".cts")) and not name.endswith(".d.cts")
-
-
-def is_check(name):
-    """A Python test file or a browser script (ui/tests/*.cjs or *.cts)."""
-    return is_test(name) or (str(Path(name).parent) == "ui/tests" and is_script_name(name))
 
 
 def dotted_name(node):
@@ -223,7 +194,7 @@ def git_files(root):
 TOKEN = re.compile(r"[\w.\-/]+")
 IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
 CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts", ".cts"}
-JS_SOURCES = CODE - {".py", ".sh", ".bash"}  # browser and Node code: no Python imports by bare name
+JS_SOURCES = CODE - {".py", ".sh", ".bash"}  # JavaScript and TypeScript: no Python imports by bare name
 JS_COMMENTS = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/|'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`")
 
 
@@ -371,7 +342,6 @@ class DependencyMap:
         self.names = {}  # Python file -> its identifiers and strings (fixture names it uses)
         self.imports = {}  # Python file -> the dotted names it imports (for a gone file's importers, named_by)
         self.commands = defaultdict(set)  # literal CLI command or MCP tool name -> defining modules
-        self.js_imports = defaultdict(set)
         self.command_sweeps = set()
         self._tokens = None  # built on first use by tokens()
         # Every scan needs `bare` (from all files' imports) first, so the Python files are parsed twice, one tree alive
@@ -393,61 +363,12 @@ class DependencyMap:
         for path in self.files:
             if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
                 self.text(path)
-        self.ui_links()
         self.command_links()
         self.run_by, self.read_by = defaultdict(set), defaultdict(set)
         for edges, reverse in ((self.runs, self.run_by), (self.reads, self.read_by)):
             for path, targets in edges.items():
                 for target in targets - {path}:
                     reverse[target].add(path)
-
-    def ui_links(self):
-        """Classic UI scripts share globals rather than imports. Link browser checks to the globals and DOM
-        selectors they exercise, including CSS selectors; do not propagate selector edges between app modules."""
-        owners = defaultdict(set)
-        sources = {}
-        for path in self.files:
-            if not path.startswith("ui/") or path.startswith(("ui/tests/", "ui/vendor/", "ui/types/")):
-                continue
-            if Path(path).suffix not in {".ts", ".js", ".css"}:
-                continue
-            text = self.source_text(path)
-            if text is None:
-                continue
-            if not path.endswith(".css"):
-                text = without_js_comments(text)
-            sources[path] = ui_selectors(text)
-            if not path.endswith(".css"):
-                for match in re.finditer(r"^" + TOP_LEVEL.pattern, text, re.MULTILINE):
-                    name = match[1] or match[2]
-                    if len(name) > 3:
-                        owners[name].add(path)
-        selectors = defaultdict(set)
-        for path, tokens in sources.items():
-            for token in tokens:
-                selectors[token].add(path)
-        for path in self.files:
-            if not is_browser(path):
-                continue
-            text = self.source_text(path)
-            if text is None:
-                continue
-            text = without_js_comments(text)
-            for token in ui_selectors(text):
-                self.runs[path] |= selectors.get(token, set())
-            for token in set(re.findall(r"[A-Za-z_$][\w$]*", text)):
-                if len(owners.get(token, ())) == 1:
-                    self.runs[path] |= owners[token]
-            # Source guards recursively walk a literal folder through a local helper, such as walk('ui').
-            helpers = set()
-            for call in re.finditer(r"\breaddirSync\s*\(", text):
-                window = text[max(0, call.start() - 300) : call.start()].rsplit(";", 1)[-1]
-                bindings = re.findall(r"\bconst\s+(\w+)\s*=", window)
-                if bindings:
-                    helpers.add(bindings[-1])
-            for helper, folder in re.findall(r"\b(\w+)\(\s*['\"]([^'\"]+)['\"]", text):
-                if helper in helpers and (self.root / folder).is_dir():
-                    self.reads[path].add(folder.rstrip("/") + "/")
 
     def command_links(self):
         """A test naming a command uses its implementation, even through the CLI parser or MCP registry."""
@@ -464,21 +385,6 @@ class DependencyMap:
     def command_sweeps_for(self, name):
         """Direct selection edges for changed or gone command modules, excluded from import traversal and hub counts."""
         return self.command_sweeps if name.startswith(CLI_COMMANDS) and name.endswith(".py") else set()
-
-    def ui_users(self, name):
-        """Browser consumers through UI imports and test helpers, stopping before backend application imports."""
-        pending, seen, found = [name], {name}, set()
-        while pending:
-            current = pending.pop()
-            for user in self.run_by.get(current, ()):
-                if user in seen:
-                    continue
-                seen.add(user)
-                if is_browser(user):
-                    found.add(Path(user).stem)
-                elif user.startswith("ui/") and current in self.js_imports.get(user, ()):
-                    pending.append(user)
-        return found
 
     def parse(self, path):
         """The file's syntax tree, or None for one that cannot be read or parsed (it then reaches everything)."""
@@ -557,7 +463,7 @@ class DependencyMap:
 
     def paths_of(self, node):
         """The literal paths an expression names: `ROOT / "docs" / "api.md"` -> docs/api.md, a name bound to one,
-        Path("ui", "app"); the literal parts up to the first computed one."""
+        Path("web", "src"); the literal parts up to the first computed one."""
         if isinstance(node, ast.Name):
             return set(self.values.get(node.id, ()))
         if isinstance(node, ast.Call) and dotted_name(node.func).rsplit(".", 1)[-1] in (
@@ -867,7 +773,6 @@ class DependencyMap:
                 for candidate in candidates:
                     if candidate in self.tracked:
                         self.runs[path].add(candidate)
-                        self.js_imports[path].add(candidate)
                         break
         for token in TOKEN.findall(text):
             self.path(token, self.runs[path], self.reads[path])
@@ -875,7 +780,7 @@ class DependencyMap:
                 self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
             # A sys.path module (`python -m hubcli.x`) is named bare only from a shell script: in JavaScript or
             # TypeScript `run.closest` is a variable, and read as `import run` it ran every run.py (#3335's
-            # e2e/website-tools/run.py, since renamed, reached the conftest, so every UI file selected the whole suite).
+            # e2e/website-tools/run.py, since renamed, reached the conftest, so every web file selected the whole suite).
             if IDENTIFIER.match(token) and "." in token:
                 self.runs[path] |= self.module(token, bare=Path(path).suffix not in JS_SOURCES)
 
@@ -938,7 +843,7 @@ class DependencyMap:
         return users
 
     def listed_by(self, name, added):
-        """The files whose listing of a folder holds a changed file: `ui/*.ts` lists ui/app/x.js too only when recursive
+        """The files whose listing of a folder holds a changed file: `web/*.ts` lists web/src/x.ts too only when recursive
         (`rglob`, `**`), and a listing that uses only names sees it only when it is new."""
         folder = str(Path(name).parent)
         return {
@@ -997,7 +902,7 @@ class DependencyMap:
 
     def read_by_tests(self, changed, added=None, via=None):
         """For data that only code reads (read_only below): the files that read a changed one, and of the checks, the
-        tests and browser scripts among those readers and the ones that run a reader directly. Not everything that
+        tests among those readers and the ones that run a reader directly. Not everything that
         imports a reader: backend/manual.py reads docs/ and backend.app imports it, which would make every page edit
         run the suite. A test that sees such a file only through the app must name its path or folder literally. Files
         that depend on everything (they list the repository) read it too. A reader reached only through a conftest
@@ -1011,8 +916,8 @@ class DependencyMap:
                 via.add(name)
         out |= readers
         for reader in readers:
-            if not is_check(reader):
-                out |= {user for user in self.run_by.get(reader, ()) if is_check(user)}
+            if not is_test(reader):
+                out |= {user for user in self.run_by.get(reader, ()) if is_test(user)}
                 if via is not None and self.fixture_users(reader, False):
                     via.add(reader)
         return out
@@ -1021,15 +926,12 @@ class DependencyMap:
 # Changes that steer every test rather than particular ones: dependency pins and pytest's own configuration (conftest
 # hooks and autouse fixtures, pytest.ini).
 FULL_SUITE = ("pytest.ini", "package.json", "package-lock.json", ".gitignore")
-# How the checks run: the workflow, its installer and the browser system packages. A change runs the tests that read or
-# run them (the selector's own tests among them) and one short core browser script, so both kinds of check VM boot,
-# install and run under the changed setup; a workflow change also builds the Caddy image, whose job only it defines.
-# The selector, scripts/pr_checks.py, is code: its tests run like any other module's.
+# How the checks run: the workflow. A change runs the tests that read it (the selector's own tests among them), and a
+# workflow change also builds the Caddy image, whose job only it defines. The selector, scripts/pr_checks.py, is code:
+# its tests run like any other module's.
 PR_WORKFLOW = ".github/workflows/pr-checks.yml"
-CI_INPUTS = (PR_WORKFLOW, "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
-SMOKE_SCRIPT = "sign-in-redirect"
-# The smoke set (scripts/queue-smoke.json, checked by smoke_check): a few Python test files and the core browser scripts,
-# each kind measured to fit one VM. An uncertain pull request or queue group runs it, so nothing widens to the full suite.
+# The smoke set (scripts/queue-smoke.json, checked by smoke_check): a few Python test files, measured to fit one VM. An
+# uncertain pull request or queue group runs it, so nothing widens to the full suite.
 SMOKE_FILE = "scripts/queue-smoke.json"
 # A changed conftest runs the tests below it while there are at most this many; more, and the smoke set runs instead.
 CONFTEST_BELOW_LIMIT = 25
@@ -1038,184 +940,6 @@ CONFTEST_BELOW_LIMIT = 25
 # that skips the job runs those checks itself (image_checks).
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
-UI_RUNNER = "scripts/ui-tests.cts"
-# Browser scripts that only the release check runs (outside CORE) can break with a ui/ change. Rule 6 picks, for each
-# changed ui/ path: a changed script itself; for a shared helper (ui/tests/support/), every script that runs it, directly
-# or through other helpers; for UI source outside UI_MAP, the scripts named after it (ui/app/tools.ts: tools, bot-tools,
-# redesign-e2e-tools; its stem as whole words of the script's name). The page loads every UI file, so no map from a
-# source file to the scripts that can see it is sound: the name match is a cheap best effort beside the smoke set, and
-# the release check still runs the rest. Rule 6 also reads the diff: a script that names a top-level function or const
-# whose definition changed (task-code.cts calls taskModalOpen in ui/app/task-modal.ts) runs. When rule 6 picks more
-# than BROWSER_ALL_OVER scripts (a rename across many scripts, a helper most scripts run), the change runs every script
-# the release check runs, about four VMs.
-SUPPORT = "ui/tests/support/"
-BROWSER_ALL_OVER = 40
-# The phone dead-end scripts (release-only) fail when a KNOWN break stops happening, so a fix in the app's own files
-# (ui/app/, ui/styles/) breaks them until their KNOWN line goes. Rule 6 runs all of them for such a change, and for their
-# rules file; no other change runs them, and the smoke set does not carry them.
-PHONE_SCOPE = ("ui/app/", "ui/styles/", "ui/tests/support/phone-rules.cts")
-PHONE_PREFIX = "phone-dead-ends-"
-
-
-def runnable_scripts(root=ROOT):
-    """Every script `ui-tests.cts --all` runs (the release check's list), or, without the runner, every script file."""
-    try:
-        return browser_scripts(["--all"], root)
-    except (OSError, subprocess.CalledProcessError, RuntimeError):
-        folder = root / "ui/tests"
-        return sorted(p.name.rsplit(".", 1)[0] for p in folder.glob("*.c[jt]s") if is_script_name(p.name))
-
-
-def support_scripts(root, files, name):
-    """The browser scripts that use a ui/tests/support file, directly or through other support files: a file uses a
-    helper whose file name it names (`require('./support/page.cts')`, `'ui/tests/support/real_hub_server.py'`). The
-    tracked live paths are scanned too when the changed helper has gone; its users still name its path."""
-    folder = [f for f in files if f.startswith("ui/tests/")]
-    helpers = defaultdict(set)  # file name -> the support files with that name
-    for path in [*(f for f in folder if f.startswith(SUPPORT)), name]:
-        helpers[Path(path).name].add(path)
-    users = defaultdict(set)  # support file -> the ui/tests files that name it
-    for path in folder:
-        try:
-            text = (root / path).read_text(errors="replace")
-        except OSError:
-            continue
-        for token in set(TOKEN.findall(text)):
-            for helper in helpers.get(token.rsplit("/", 1)[-1], ()):
-                if helper != path:
-                    users[helper].add(path)
-    pending, seen, scripts = [name], {name}, set()
-    while pending:
-        for user in users.get(pending.pop(), ()):
-            if user in seen:
-                continue
-            seen.add(user)
-            if is_browser(user):
-                scripts.add(Path(user).stem)
-            elif user.startswith(SUPPORT):
-                pending.append(user)
-    return scripts
-
-
-def named_after(name, scripts):
-    """The scripts whose name holds a UI source file's stem as whole words: ui/app/settings-bots.ts names
-    settings-bots-search-bulk, not settings."""
-    words = Path(name).name.split(".")[0].split("-")
-    found = set()
-    for script in scripts:
-        parts = script.split("-")
-        if any(parts[i : i + len(words)] == words for i in range(len(parts) - len(words) + 1)):
-            found.add(script)
-    return found
-
-
-# A top-level definition in a classic UI script: a function, const, let, var or class at column 0.
-TOP_LEVEL = re.compile(
-    r"(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var|class)\s+([A-Za-z_$][\w$]*))"
-)
-
-
-def ui_selectors(text):
-    """Stable DOM anchors shared by markup, CSS and browser locators; omit generic classes and hex colors."""
-    found = set(re.findall(r"[.#][A-Za-z_][\w-]*", text))
-    found = {s for s in found if "-" in s and not re.fullmatch(r"#[a-fA-F0-9]+", s)}
-    found.update("[" + a + "]" for a in re.findall(r"\b(data-[\w-]+)(?=[=\]\s])", text))
-    for kind, value in re.findall(r"\b(id|class)=[\"']([^\"']+)[\"']", text):
-        found.update(
-            ("#" if kind == "id" else ".") + word
-            for word in value.split()
-            if re.fullmatch(r"[\w-]+", word) and "-" in word
-        )
-    return found
-
-
-HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
-
-
-def top_level_spans(text):
-    """(name, first line, last line) of each top-level definition in a UI script. A definition starts at column 0 and
-    runs until the next line that starts at column 0 with anything but a closing bracket (its `}` stays inside it)."""
-    spans, current, lines = [], None, text.splitlines()
-    for number, line in enumerate(lines, 1):
-        if not line or line[0].isspace() or line[0] in "})]":
-            continue
-        if current:
-            spans.append((*current, number - 1))
-            current = None
-        match = TOP_LEVEL.match(line)
-        if match:
-            current = (match.group(1) or match.group(2), number)
-    if current:
-        spans.append((*current, len(lines)))
-    return spans
-
-
-def hunk_names(diff, old, new):
-    """The top-level names whose definitions a `git diff -U0` of one file touches: removed lines name the old file's
-    definitions, added lines the new file's."""
-    names = set()
-    sides = [(top_level_spans(old), []), (top_level_spans(new), [])]
-    for match in HUNK.finditer(diff):
-        for side, (start, count) in enumerate(((match[1], match[2]), (match[3], match[4]))):
-            first, size = int(start), 1 if count is None else int(count)
-            if size:
-                sides[side][1].append((first, first + size - 1))
-    for spans, ranges in sides:
-        for name, first, last in spans:
-            if any(a <= last and first <= b for a, b in ranges):
-                names.add(name)
-    return names
-
-
-def changed_definitions(base, head, names, root=ROOT):
-    """{UI source file: the top-level names whose definitions the diff from base's merge point to head changes}, for
-    the ui/ source files in `names` (not tests or vendored code). Git failing names nothing."""
-    out = {}
-    sources = [
-        n
-        for n in names
-        if n.startswith("ui/") and not n.startswith(("ui/tests/", "ui/vendor/")) and n.endswith((".ts", ".js"))
-    ]
-    if not base or not sources:
-        return out
-    try:
-        ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
-    except (subprocess.CalledProcessError, OSError):
-        return out
-    for path in sources:
-
-        def show(rev, path=path):
-            done = subprocess.run(
-                ["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, text=True, check=False
-            )
-            return done.stdout if done.returncode == 0 else ""
-
-        try:
-            diff = subprocess.check_output(
-                ["git", "diff", "-U0", "--no-renames", ancestor, head, "--", path], cwd=root, text=True
-            )
-            found = hunk_names(diff, show(ancestor), show(head))
-        except (subprocess.CalledProcessError, OSError):
-            continue
-        if found:
-            out[path] = found
-    return out
-
-
-def callers(root, defined, scripts):
-    """The browser scripts among `scripts` that name any of `defined` (top-level UI names) as a whole word."""
-    if not defined:
-        return set()
-    pattern = re.compile(r"(?<![\w$])(?:" + "|".join(sorted(map(re.escape, defined))) + r")(?![\w$])")
-    found = set()
-    for script in scripts:
-        path = browser_script(root, script)
-        try:
-            if path and pattern.search(path.read_text(errors="replace")):
-                found.add(script)
-        except OSError:
-            continue
-    return found
 
 
 # Data folders that one tool owns. A changed, added or deleted file under one of these folders runs exactly the tests
@@ -1223,8 +947,7 @@ def callers(root, defined, scripts):
 # unknown folder, and those reach conftest: one baseline piece selected 930 Python tests. The gates do not depend on
 # this table. The static job in .github/workflows/pr-checks.yml runs scripts/lint.sh (ruff against its baseline) and
 # scripts/check_types.sh (basedpyright against its baseline) on every pull request that is not a draft, and on every
-# merge group. A draft skips the static job until it is marked ready. The table chooses only the tests. No ui/ folder
-# has an owner yet, so none is listed.
+# merge group. A draft skips the static job until it is marked ready. The table chooses only the tests.
 OWNED_DATA = {
     # The advisory gate's inventories and dispositions, and its pre-#4077 fixture (scripts/osv_gate.py).
     "scripts/advisories/": ("scripts/tests/test_osv_gate.py",),
@@ -1268,14 +991,10 @@ def pinned(name):
     return name in FULL_SUITE or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None
 
 
-def is_browser(name):
-    return Path(name).parent == Path("ui/tests") and is_script_name(name)
-
-
 def smoke(root=ROOT):
-    """The smoke set's Python test files and browser scripts (SMOKE_FILE): what an uncertain change runs."""
+    """The smoke set's Python test files (SMOKE_FILE): what an uncertain change runs."""
     data = json.loads((root / SMOKE_FILE).read_text())
-    return sorted(e["file"] for e in data["python"]), sorted(e["script"] for e in data.get("browser", []))
+    return sorted(e["file"] for e in data["python"])
 
 
 def name_status(text):
@@ -1295,19 +1014,6 @@ def name_status(text):
     return out
 
 
-def pure_ui_rename(old, new, similarity):
-    """A ui/ file moved to the same name with another extension (.js to .ts) and no other change. Only its new path is
-    selected: nothing loads the old name any more, so it is not a gone file."""
-    return (
-        similarity == 100
-        and old.startswith("ui/")
-        and new.startswith("ui/")
-        and Path(old).with_suffix("") == Path(new).with_suffix("")
-        and Path(old).suffix != Path(new).suffix
-    )
-
-
-SCRIPT_MOUNTS = (("/tico/ui/", ""), ("/vendor/", "vendor/"))
 SCRIPT_SRC = re.compile(r"""<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 
 
@@ -1321,12 +1027,6 @@ def script_srcs(path, diff):
         for src in SCRIPT_SRC.findall(line):
             src = src.split("?", 1)[0].split("#", 1)[0]
             if src and not src.startswith("//") and not re.match(r"[a-z][a-z0-9+.-]*:", src, re.IGNORECASE):
-                # The page names its scripts by URL: /tico/ui/x is ui/x and /vendor/x is ui/vendor/x
-                # (scripts/build-ui.cjs); a relative name sits beside the page.
-                for mount, there in SCRIPT_MOUNTS:
-                    if src.startswith(mount):
-                        src = there + src[len(mount) :]
-                        break
                 out.add(os.path.normpath(os.path.join(folder, src.lstrip("/"))))
     return sorted(out)
 
@@ -1349,39 +1049,28 @@ def script_changes(base, head, changed, root=ROOT):
     return sorted(found)
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None, head="HEAD"):
-    """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
-    script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
-    from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, head="HEAD"):
+    """The checks a change runs. A pull request or merge queue group never runs the full default suite (release
+    validation does). Main and scheduled runs keep the full suite (python None). A rule that departs from the measured
+    dependency map says so in `uncertain`, and `reason` names the rules that applied (rules 4 and 6, for the old web
+    app's browser scripts, went with it):
 
     0. A file under an OWNED_DATA folder runs the tests listed for that folder, and no other test.
-    1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
-       import or read it directly. Data that code reads (docs, GitHub files) runs the tests that read it.
-       A gone file that code other than a check names or reads adds the smoke set.
-    2. A pin (FULL_SUITE, requirements*.txt) runs the tests and browser scripts that read it directly, and the smoke set.
+    1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests that name, import or read it
+       directly. Data that code reads (docs, GitHub files) runs the tests that read it.
+       A gone file that code other than a test names or reads adds the smoke set.
+    2. A pin (FULL_SUITE, requirements*.txt) runs the tests that read it directly, and the smoke set.
        A conftest that changed or was deleted runs the tests below it while there are at most CONFTEST_BELOW_LIMIT (and the
        tests that use its fixtures), else the smoke set. A conftest that a change only reaches, through code it runs or
        reads, adds the smoke set; the tests below it are not reached through it.
-    3. A Python file the map cannot parse, or does not know, runs the checks that name its path, else the smoke set.
-    4. A ui/ file, or the browser runner, outside UI_MAP runs the browser scripts the map links to it, the tests that read
-       it directly or run a module that lists its folder (a test that globs ui/*.ts is reached through the module it
-       runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
-       a missing one runs the smoke set's browser scripts instead.
+    3. A Python file the map cannot parse, or does not know, runs the tests that name its path, else the smoke set.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
-    6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
-       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, the scripts
-       that name a top-level function or const whose definition the diff from `base` to `head` changes in a UI source
-       file (changed_definitions), the scripts UI_ALSO lists for a UI file, and every phone-dead-ends-* script for a
-       change under PHONE_SCOPE. More than BROWSER_ALL_OVER of these hints runs every release script. Computed
-       consumers of a UI file's globals, selectors and imports are added exactly, without widening to all scripts.
-       `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES.
-    10. Inputs in CHECK_ALSO run the tests and browser scripts that exercise them through HTTP or catalog discovery.
+    10. Inputs in CHECK_ALSO run the tests that exercise them through HTTP or catalog discovery.
 
-    `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
-    scripts/ui-tests.cts).
+    `added` names the new files (None: any changed file may be new).
     """
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -1392,11 +1081,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if event not in ("pull_request", "merge_group"):
         return {
             "python": None,
-            "browser": None,
             "caddy": True,
             "contracts": True,
             "sweeps": sorted(CONTENT_SWEEPS),
-            "browser_direct": [],
             "rust": rust,
             "conformance": runner,
             "reason": "main runs the full default suite",
@@ -1406,16 +1093,14 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     sweeps = content_sweeps(changed)
     guards = set()
 
-    def plan(python=(), browser=(), caddy=False, contracts=False, reason=None, direct=()):
+    def plan(python=(), caddy=False, contracts=False, reason=None):
         return {
-            "python": sorted(p for p in python if is_test(p) and not p.startswith("ui/")),
-            "browser": sorted(browser),
+            "python": sorted(p for p in python if is_test(p)),
             "conformance": runner,
             "rust": rust,
             "caddy": caddy,
             "contracts": contracts or bool(sweeps),
             "sweeps": sweeps,
-            "browser_direct": sorted(direct),
             "guards": sorted(guards),
             "reason": reason or "; ".join(dict.fromkeys(["measured dependency map", *notes])),
             "uncertain": uncertain,
@@ -1423,7 +1108,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
 
     if not changed:
         uncertain.append("empty diff: nothing to map")
-        return plan(*smoke(root), reason="empty diff: smoke set")
+        return plan(smoke(root), reason="empty diff: smoke set")
     names = [n for n in changed if not unread(n)]
     owned = [n for n in names if owned_data(n)]  # OWNED_DATA first: these never reach the generic data path
     owned_tests = {test for n in owned for test in owned_data(n)[1]}
@@ -1436,8 +1121,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     added = set(names) if added is None else set(added)
     live = [n for n in names if (root / n).is_file()]
     gone = [n for n in names if n not in live]
-    python, browser, seeds, touched = set(), set(), set(live), set()
-    smoke_python = smoke_browser = False
+    python, seeds, touched = set(), set(live), set()
+    smoke_python = False
     via = set()  # files that reach tests only through a conftest fixture (rule 2)
     for name in gone:  # rule 1
         uncertain.append(f"rule 1: {name} is gone")
@@ -1446,11 +1131,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             touched |= found
         else:
             found = graph.named_by(name) | graph.readers(name, added)
-            if any(not is_check(p) for p in found):
-                smoke_python = smoke_browser = True
-                uncertain.append(f"rule 1: {name} is named or read by code that is not a check: smoke set")
+            if any(not is_test(p) for p in found):
+                smoke_python = True
+                uncertain.append(f"rule 1: {name} is named or read by code that is not a test: smoke set")
         python |= {p for p in found if is_test(p)}
-        browser |= {Path(p).stem for p in found if is_browser(p)}
     if gone:
         notes.append("rule 1: gone files")
     data = [n for n in live if read_only(n) and not graph.code(n)]
@@ -1465,86 +1149,33 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             python |= below
             uncertain.append(f"rule 2: conftest {name} runs the {len(below)} tests below it")
         else:
-            smoke_python = smoke_browser = True
+            smoke_python = True
             uncertain.append(f"rule 2: conftest {name} has {len(below)} tests below it: smoke set")
     pins = [n for n in names if pinned(n)]
     seeds -= set(pins)
     for name in pins:  # rule 2: a pin
         direct = graph.readers(name, added)
         python |= {p for p in direct if is_test(p)}
-        browser |= {Path(p).stem for p in direct if is_browser(p)}
-        smoke_python = smoke_browser = True
-        uncertain.append(f"rule 2: pin {name}: the tests and browser scripts that read it, and the smoke set")
+        smoke_python = True
+        uncertain.append(f"rule 2: pin {name}: the tests that read it, and the smoke set")
     if conftests or pins:
         notes.append("rule 2: conftest or pin")
     unknown = [n for n in live if n in graph.unparsed or n not in graph.files]
     seeds -= set(unknown)
     for name in unknown:  # rule 3
-        direct = {t for t in graph.named_by(name) if is_check(t)}
-        python |= {t for t in direct if is_test(t)}
-        browser |= {Path(t).stem for t in direct if is_browser(t)}
+        direct = {t for t in graph.named_by(name) if is_test(t)}
+        python |= direct
         if direct:
-            uncertain.append(f"rule 3: unknown {name} names {len(direct)} check(s)")
+            uncertain.append(f"rule 3: unknown {name} names {len(direct)} test(s)")
         else:
-            smoke_python = smoke_browser = True
+            smoke_python = True
             uncertain.append(f"rule 3: unknown {name}: smoke set")
     if unknown:
         notes.append("rule 3: unknown files")
-    unmapped = [n for n in live if ui_map_key(n) not in UI_MAP and (n.startswith("ui/") or n == UI_RUNNER)]
-    seeds -= set(unmapped)
-    for name in live:  # rule 4: a UI_MAP file runs its mapped scripts
-        if ui_map_key(name) in UI_MAP:
-            scripts = UI_MAP[ui_map_key(name)]
-            missing = [s for s in scripts if browser_script(root, s) is None]
-            browser |= set(scripts) - set(missing)
-            if missing:
-                smoke_browser = True
-                uncertain.append(f"rule 4: {name} maps to missing {', '.join(missing)}: smoke browser scripts")
-    for name in unmapped:  # rule 4: a UI file the map does not list
-        linked = set(graph.run_by.get(name, ())) | graph.readers(name, added)
-        browser |= {Path(p).stem for p in linked if is_browser(p)}
-        python |= {p for p in linked if is_test(p)}
-        # A module that lists the folder (scripts/build-icon-font.py globs ui/*.ts) reaches the tests that run it.
-        python |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ()) if is_test(t)}
-        if is_browser(name):  # a changed browser script runs itself: it is the check that changed
-            browser.add(Path(name).stem)
-        smoke_browser = True
-        uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
-        notes.append("rule 4: ui outside UI_MAP")
-    direct, linked_scripts = set(), set()
-    if any(n.startswith("ui/") for n in names):  # rule 6
-        runnable = set(runnable_scripts(root))
-        phone = {s for s in runnable if s.startswith(PHONE_PREFIX)}
-        for name in names:
-            if name.startswith(PHONE_SCOPE):
-                direct |= phone
-            if name.startswith("ui/") and not name.startswith("ui/tests/"):
-                linked_scripts |= graph.ui_users(name) & runnable
-            direct |= set(UI_ALSO.get(ui_map_key(name), ())) & runnable
-            if is_browser(name) and name in live:
-                direct.add(Path(name).stem)
-            elif name.startswith(SUPPORT):
-                direct |= support_scripts(root, graph.files, name) & runnable
-            elif (
-                name.startswith("ui/")
-                and not name.startswith(("ui/tests/", "ui/vendor/"))
-                and ui_map_key(name) not in UI_MAP
-            ):
-                direct |= named_after(name, runnable)
-        defined = changed_definitions(base, head, names, root)  # a deleted file's old functions too
-        direct |= callers(root, set().union(*defined.values()), runnable)
-        if len(direct) > BROWSER_ALL_OVER:
-            uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")
-            direct |= runnable
-        direct |= linked_scripts
-        if direct:
-            notes.append("rule 6: browser scripts the release check runs")
     extra_checks = additional_checks(names, root)
     if extra_checks:
         notes.append("rule 10: HTTP and catalog checks")
         python |= {p for p in extra_checks if is_test(p)}
-        direct |= {Path(p).stem for p in extra_checks if is_browser(p)}
-    browser |= direct
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1557,24 +1188,13 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         )
     reached = sorted(c for c in touched if Path(c).name == "conftest.py" and c not in names)
     for conftest in reached:  # rule 2: a conftest reached through code a change runs or reads, not changed itself
-        smoke_python = smoke_browser = True
+        smoke_python = True
         uncertain.append(f"rule 2: {conftest} is reached, not changed: direct readers and smoke set")
     if reached:
         notes.append("rule 2: reached conftest")
     python |= {p for p in touched if is_test(p)}
-    scripts = {Path(p).stem for p in touched if is_browser(p)}
-    if core is None:
-        try:
-            core = browser_scripts([], root)
-        except (OSError, subprocess.CalledProcessError, RuntimeError):
-            core = scripts
-    browser |= scripts & set(core)
-    if smoke_python or smoke_browser:
-        smoke_tests, smoke_scripts = smoke(root)
-        if smoke_python:
-            python |= set(smoke_tests)
-        if smoke_browser:
-            browser |= set(smoke_scripts)
+    if smoke_python:
+        python |= set(smoke(root))
     if owned:
         python |= owned_tests
         notes.append(owned_reason(owned))
@@ -1589,39 +1209,36 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             guards |= cli_guards
             notes.append("rule 9: a CLI command change runs the CLI spec and frozen command-line tests")
     python |= guards
-    if any(n in CI_INPUTS for n in names) and not browser and (root / UI_RUNNER).is_file():
-        browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
-    return plan(python, browser, caddy=caddy, contracts=contracts, direct=direct)
+    return plan(python, caddy=caddy, contracts=contracts)
 
 
 def changed_files(base, head="HEAD", root=ROOT, only=None):
     """The paths a pull request or queue group changes, from base's merge point to head. Renames are found (-M): a moved
-    file lists its new path and its old one, which is gone (rule 1), except a pure ui/ rename (pure_ui_rename), which
-    lists only its new path. `only="A"` lists the files it adds: the new paths of added and renamed files. Git failing
-    gives an empty list, which selection runs as the smoke set."""
+    file lists its new path and its old one, which is gone (rule 1). `only="A"` lists the files it adds: the new paths
+    of added and renamed files. Git failing gives an empty list, which selection runs as the smoke set."""
     try:
         ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
         raw = subprocess.check_output(["git", "diff", "--name-status", "-M", "-z", ancestor, head], cwd=root)
     except (subprocess.CalledProcessError, OSError):
         return []
     out = set()
-    for status, path, old, similarity in name_status(raw.decode()):
+    for status, path, old, _similarity in name_status(raw.decode()):
         if only == "A":
             if status in ("A", "R"):
                 out.add(path)
             continue
         out.add(path)
-        if old is not None and not pure_ui_rename(old, path, similarity):
+        if old is not None:
             out.add(old)
     return sorted(out)
 
 
 def smoke_check(root=ROOT):
-    """Problems with SMOKE_FILE, for the static job: an unreadable file; an entry whose test file or core browser script
-    is missing; an entry with no measured time or no one-line reason; a repeat; a kind whose total needs more than one VM;
-    or a UI_MAP or UI_ALSO script that is missing. An empty list means the set is sound."""
+    """Problems with SMOKE_FILE, for the static job: an unreadable file; an entry whose test file is missing; an entry
+    with no measured time or no one-line reason; a repeat; or a total that needs more than one VM. An empty list means
+    the set is sound."""
     try:
         data = json.loads((root / SMOKE_FILE).read_text())
     except (OSError, ValueError) as error:
@@ -1629,51 +1246,34 @@ def smoke_check(root=ROOT):
     if not isinstance(data, dict):
         return [f"{SMOKE_FILE}: not a JSON object"]
     problems = []
-    core = None
-    # The browser smoke set went with the old web app (ui/): a browser entry is checked only when one is there.
-    kinds = (("python", "file"), ("browser", "script")) if "browser" in data else (("python", "file"),)
-    if "browser" in data:
-        try:
-            core = set(browser_scripts([], root))
-        except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
-            problems.append(f"cannot list the core browser scripts: {error}")
-    for kind, key in kinds:
-        entries = data.get(kind)
-        if not isinstance(entries, list) or not entries:
-            problems.append(f"{kind}: no entries")
+    entries = data.get("python")
+    if not isinstance(entries, list) or not entries:
+        return ["python: no entries"]
+    names, total = [], 0.0
+    for entry in entries:
+        name = entry.get("file") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name:
+            problems.append("python: an entry has no file")
             continue
-        names, total = [], 0.0
-        for entry in entries:
-            name = entry.get(key) if isinstance(entry, dict) else None
-            if not isinstance(name, str) or not name:
-                problems.append(f"{kind}: an entry has no {key}")
-                continue
-            names.append(name)
-            seconds, reason = entry.get("seconds"), entry.get("reason")
-            if (
-                isinstance(seconds, bool)
-                or not isinstance(seconds, (int, float))
-                or not math.isfinite(seconds)
-                or seconds <= 0
-            ):
-                problems.append(f"{kind} {name}: no measured seconds")
-            else:
-                total += seconds
-            if not isinstance(reason, str) or not reason.strip() or "\n" in reason:
-                problems.append(f"{kind} {name}: needs a one-line reason")
-            if kind == "python" and (not is_test(name) or not (root / name).is_file()):
-                problems.append(f"python {name}: no such test file")
-            if kind == "browser" and (browser_script(root, name) is None or (core is not None and name not in core)):
-                problems.append(f"browser {name}: no such core script")
-        if len(set(names)) != len(names):
-            problems.append(f"{kind}: an entry is repeated")
-        if job_count(total, kind) != 1:
-            problems.append(f"{kind} smoke set takes {total:.0f}s: more than one VM")
-    for table, entries in (("UI_MAP", UI_MAP), ("UI_ALSO", UI_ALSO)):
-        for name, scripts in entries.items():
-            for script in scripts:
-                if browser_script(root, script) is None:
-                    problems.append(f"{table} {name} names a missing script: {script}")
+        names.append(name)
+        seconds, reason = entry.get("seconds"), entry.get("reason")
+        if (
+            isinstance(seconds, bool)
+            or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds)
+            or seconds <= 0
+        ):
+            problems.append(f"python {name}: no measured seconds")
+        else:
+            total += seconds
+        if not isinstance(reason, str) or not reason.strip() or "\n" in reason:
+            problems.append(f"python {name}: needs a one-line reason")
+        if not is_test(name) or not (root / name).is_file():
+            problems.append(f"python {name}: no such test file")
+    if len(set(names)) != len(names):
+        problems.append("python: an entry is repeated")
+    if job_count(total, "python") != 1:
+        problems.append(f"python smoke set takes {total:.0f}s: more than one VM")
     return problems
 
 
@@ -1803,30 +1403,16 @@ def groups(counts, timings, total=None, kind="python", fallback=1.0, target=JOB_
     return [sorted(g) for g in out], loads
 
 
-def size_groups(counts, timings, browser=None, fixed=0, ceiling=CEILING["pull_request"], cap=MAX_JOB_SECONDS):
-    """The Python and browser VM groups of a plan at the smallest target that keeps its test jobs within `ceiling`.
-    `browser` is (the scripts as a Counter, their measured times), `fixed` the jobs that always run (conformance and
-    contracts). The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS up to `cap`; past that the plan keeps
-    the cap's VMs, and its count may exceed the ceiling."""
+def size_groups(counts, timings, fixed=0, ceiling=CEILING["pull_request"], cap=MAX_JOB_SECONDS):
+    """The Python VM groups of a plan at the smallest target that keeps its test jobs within `ceiling`. `fixed` is the
+    jobs that always run (conformance and contracts). The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS
+    up to `cap`; past that the plan keeps the cap's VMs, and its count may exceed the ceiling."""
     target = JOB_SECONDS
     while True:
         split, loads = groups(counts, timings, target=target)
-        if browser:
-            browser_split, browser_loads = groups(
-                browser[0], browser[1], kind="browser", fallback=UNTIMED_SCRIPT_SECONDS, target=target
-            )
-        else:
-            browser_split, browser_loads = [], []
-        tests = sum(1 for group in split + browser_split if group) + fixed
+        tests = sum(1 for group in split if group) + fixed
         if tests <= ceiling or target >= cap:
-            return {
-                "split": split,
-                "loads": loads,
-                "browser": browser_split,
-                "browser_loads": browser_loads,
-                "target": target,
-                "tests": tests,
-            }
+            return {"split": split, "loads": loads, "target": target, "tests": tests}
         target = min(cap, target + TARGET_STEP_SECONDS)
 
 
@@ -1868,7 +1454,7 @@ QUEUE_JOB_PATHS = {
     ),
     "desktop": re.compile(r"app/"),
     "advisories": re.compile(
-        r"(.*/)?(requirements[^/]*\.txt|package-lock\.json|Cargo\.lock)$|(templates/employee-repo/)?ui/vendor/"
+        r"(.*/)?(requirements[^/]*\.txt|package-lock\.json|Cargo\.lock)$|templates/employee-repo/ui/vendor/"
         r"|scripts/advisories/|scripts/tests/fixtures/advisories/|scripts/osv_gate\.py$|scripts/pinned_tool\.sh$"
     ),
 }
@@ -1898,9 +1484,9 @@ def queue_jobs(changed):
 # test files first, then the smoke set, then tests linked to a specific changed file (non-hub links first), then the
 # nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
 # (narrow.left_transitive, narrow.left_over_budget), and narrow.dropped gives each left file its reason (depth or
-# budget), level and seconds. A light pull request also runs the browser
-# scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
-# them, the contracts, the static checks on its merge commit and the Rust and desktop jobs as they were.
+# budget), level and seconds. A light pull request also runs the Caddy job only when the change touches its own inputs
+# directly; a queue group keeps it, the contracts, the static checks on its merge commit and the Rust and desktop jobs
+# as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
 # hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.
@@ -1968,12 +1554,10 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
             first |= {p for p in below if len(below) <= CONFTEST_BELOW_LIMIT or fixtures & graph.names.get(p, set())}
         if read_only(name) and not graph.code(name):
             first |= graph.read_by_tests([name], added)
-        if name.startswith("ui/") or name == UI_RUNNER:
-            first |= {t for lister in graph.listed_by(name, added) for t in graph.run_by.get(lister, ())}
         if not (root / name).is_file():
             first |= graph.named_by(name)
         elif name in graph.unparsed or name not in graph.files:
-            first |= {t for t in graph.named_by(name) if is_check(t)}
+            first |= {t for t in graph.named_by(name) if is_test(t)}
     # A file that lists the repository or imports a computed name (DependencyMap.everything) reads every file directly.
     first |= graph.everything
     frontier = first - set(level)
@@ -1983,7 +1567,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         found = set()
         for name in frontier:
             users = set(graph.run_by.get(name, ()))
-            if is_browser(name) or is_hub(users):
+            if is_hub(users):
                 continue
             found |= users
         frontier = found - set(level)
@@ -2035,7 +1619,7 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
             stem = Path(name).stem
             linked.update(graph.by_base.get(f"test_{stem}.py", ()))
             linked.update(graph.by_base.get(f"{stem}_test.py", ()))
-    smoke_tests, smoke_scripts = smoke(root)
+    smoke_tests = smoke(root)
     full = set(picked["python"])
     # Schema and other guard checks run like changed tests; their repository-wide reads exceed the depth limit.
     upgrade = set(picked.get("guards", ())) & full
@@ -2068,16 +1652,6 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         "level": {p: level[p] for p in python if p in level},
     }
     if event == "pull_request":
-        direct = {Path(p).stem for p in level if is_browser(p)}
-        direct |= {s for n in names if ui_map_key(n) in UI_MAP for s in UI_MAP[ui_map_key(n)]}
-        direct |= set(picked.get("browser_direct", ()))
-        if any(n.startswith("ui/") or n == UI_RUNNER or pinned(n) for n in names):
-            direct |= set(smoke_scripts)
-        browser = set(picked["browser"]) & direct
-        if any(n in CI_INPUTS for n in names) and not browser and (root / UI_RUNNER).is_file():
-            browser.add(SMOKE_SCRIPT)
-        out["browser"] = sorted(browser)
-        record["browser_left"] = sorted(set(picked["browser"]) - browser)
         out["caddy"] = picked["caddy"] and (
             any(n.startswith(CADDY_INPUTS) for n in names)
             or PR_WORKFLOW in names
@@ -2185,8 +1759,6 @@ def narrow_summary(record):
     lines.append(f"- {len(record['left_transitive'])} test files reached only through more levels")
     lines.append(f"- {len(over)} test files over the time budget" + (":" if over else ""))
     lines += ["  " + dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "budget"]
-    if record.get("browser_left"):
-        lines.append(f"- browser scripts not touched directly: {', '.join(record['browser_left'])}")
     if record["left_transitive"]:
         lines += ["", "<details><summary>Reached only through more levels</summary>", ""]
         lines += [dropped_line(entry, record["depth"]) for entry in dropped if entry["reason"] == "depth"]
@@ -2242,20 +1814,11 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
     if record is not None:
         counts, timings = cap_light(record, counts, timings)
         picked["python"] = sorted(counts)
-    browser = None
-    # The core scripts (None) came from the old web app's runner, which went with ui/: there are none to list.
-    no_core = picked["browser"] is None and not (ROOT / UI_RUNNER).is_file()
-    if picked["browser"] != [] and not no_core:
-        scripts = browser_scripts(picked["browser"] or [])
-        # Timings are keyed by script stem (the runner writes stems), so a .cts script keeps its .cjs-shaped key.
-        browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
-        browser = (Counter(dict.fromkeys(scripts, 1)), browser_times)
     fixed = int(bool(picked["conformance"])) + int(bool(picked["contracts"]))
     ceiling = CEILING["merge_group" if event == "merge_group" else "pull_request"]
     sized = size_groups(
         counts,
         timings,
-        browser=browser,
         fixed=fixed,
         ceiling=ceiling,
         cap=QUEUE_MAX_JOB_SECONDS if event == "merge_group" else MAX_JOB_SECONDS,
@@ -2267,12 +1830,6 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
     for line in overrun_warnings(loads, SETUP_SECONDS["python"], target, "Python"):
         print(line)
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
-    if browser:
-        browser_split = sized["browser"]
-        for line in overrun_warnings(sized["browser_loads"], SETUP_SECONDS["browser"], target, "browser"):
-            print(line)
-        jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
-        loads += sized["browser_loads"]
     if picked["conformance"]:
         # Always full history: runner-rs's updater test (follow.rs) reads main's parser from origin/main and falls back
         # to the checkout's own copy without it, so a one-commit checkout would quietly stop checking compatibility.
@@ -2339,16 +1896,6 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False, pr
     return plan
 
 
-def browser_scripts(args, root=ROOT):
-    """The browser scripts these ui-tests.cts arguments run (CORE for none), by name."""
-    out = subprocess.run(
-        ["node", "scripts/ui-tests.cts", "--list", *args], cwd=root, capture_output=True, text=True, check=True
-    ).stdout.split()
-    if not out:
-        raise RuntimeError(f"Browser selection {args} listed no scripts")
-    return out
-
-
 def coverage_config(suite, root=ROOT):
     """The coverage config for a measured job: tests and migrations are left out of the data, the sources come from --cov.
     `patch = subprocess` measures the Python children tests start (the CLI tests run clients/ that way); pytest-cov 7
@@ -2357,19 +1904,6 @@ def coverage_config(suite, root=ROOT):
     path.parent.mkdir(exist_ok=True)
     path.write_text("[run]\npatch = subprocess\nomit =\n    */tests/*\n    */migrations/*\n")
     return path
-
-
-def browser_attempt(command, root, env):
-    """Stream the browser log and collect the script names from its failure lines."""
-    failed = []
-    with subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, text=True, errors="replace") as process:
-        assert process.stdout is not None
-        for line in process.stdout:
-            print(line, end="", flush=True)
-            match = re.match(r"^FAIL  ([\w.-]+\.(?:cts|cjs))(?=\s|$)", line)
-            if match:
-                failed.append(match[1])
-        return process.wait(), failed
 
 
 def pytest_command(workers, report):
@@ -2439,8 +1973,8 @@ def check_base_failures(root, suite, retry_report, remaining):
 def run(plan_path, suite, root=None, retry=False):
     """Runs one suite of a plan from `root`'s checkout: the merge queue's VMs, and the release gate's incremental ones.
     `root` defaults to ROOT as it is when the suite runs (a default argument would freeze the import-time value).
-    `retry` (PR checks and the merge queue only, never release validation): Python and browser legs retry up to five
-    failures once and record each that then passed as flaky (flaky-<suite>.json, which the queue-flaky artifact carries
+    `retry` (PR checks and the merge queue only, never release validation): Python legs retry up to five failures once
+    and record each that then passed as flaky (flaky-<suite>.json, which the queue-flaky artifact carries
     to scripts/flake_detect.py and the Release Owner). A flaky test is fixed at its root cause the same day or deleted;
     nothing quarantines it."""
     root = ROOT if root is None else Path(root)
@@ -2454,7 +1988,7 @@ def run(plan_path, suite, root=None, retry=False):
     else:
         from diff_coverage import extract
     if suite == "selection":
-        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
+        if plan["python"] != [] or plan["caddy"] or plan["conformance"] or plan["contracts"]:
             raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
         print("Documentation-only change: no affected tests")
         return 0
@@ -2463,70 +1997,48 @@ def run(plan_path, suite, root=None, retry=False):
     report = results / f"{suite}.xml"
     retry_report = results / f"{suite}-retry.xml"
     flaky_report = results / f"flaky-{suite}.json"
-    browser_failures = results / f"failed-{suite}.txt"
-    browser = suite.startswith("browser-")
     slow = suite == "conformance" or suite.split("-")[0] == "contracts"
-    measured = bool(plan.get("coverage", {}).get("lines")) and not browser
+    measured = bool(plan.get("coverage", {}).get("lines"))
     data = results / f"coverage-{suite}.data"
     env = None
-    if browser:
-        if not files:
-            raise RuntimeError("A browser check requires an explicit nonempty script list")
-        browser_command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS)]
-        command = [*browser_command, *files]
-        # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cts); this interpreter has the
-        # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
-        env = {
-            **os.environ,
-            "TICO_UI_TIMINGS": str(results / f"{suite}.json"),
-            "TICO_PYTHON": sys.executable,
-        }
-    else:
-        if not files or any(not (root / f).is_file() for f in files):
-            raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report.relative_to(root))
-        if slow:
-            command += ["-m", "slow"]
-            # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
-            # incremental release plan, the plan's `sweeps` do.
-            extra = job.get("env") or sweep_env(files, plan.get("sweeps") or ())
-            if extra:
-                env = {**os.environ, **extra}
-                print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
-        if measured:
-            # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
-            command += [
-                "--cov=backend",
-                "--cov=clients",
-                f"--cov-config={coverage_config(suite, root)}",
-                "--cov-report=",
-            ]
-            # On top of any environment the job already set (a content sweep's, above).
-            env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
-        command += files
-        print("Test files: " + " ".join(files), flush=True)  # flake_detect.test_files: what a rerun ran again
+    if not files or any(not (root / f).is_file() for f in files):
+        raise RuntimeError("Python check requires an explicit nonempty existing file list")
+    command = pytest_command(os.environ.get("TICO_PYTEST_WORKERS", str(WORKERS)), report.relative_to(root))
+    if slow:
+        command += ["-m", "slow"]
+        # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
+        # incremental release plan, the plan's `sweeps` do.
+        extra = job.get("env") or sweep_env(files, plan.get("sweeps") or ())
+        if extra:
+            env = {**os.environ, **extra}
+            print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
+    if measured:
+        # One data file per job, recording only the plan's statement files; extract() keeps the lines that ran.
+        command += [
+            "--cov=backend",
+            "--cov=clients",
+            f"--cov-config={coverage_config(suite, root)}",
+            "--cov-report=",
+        ]
+        # On top of any environment the job already set (a content sweep's, above).
+        env = {**(env or os.environ), "COVERAGE_FILE": str(data), "COVERAGE_CORE": "sysmon"}
+    command += files
+    print("Test files: " + " ".join(files), flush=True)  # flake_detect.test_files: what a rerun ran again
     rust = cargo_tests(job.get("crates", [])) if suite == "conformance" else 0
-    failed = []
     if retry:
         for path in (
             report,
             retry_report,
             flaky_report,
-            browser_failures,
             results / f"{suite}-base.xml",
             results / f"base-broken-{suite}.json",
         ):
             path.unlink(missing_ok=True)
-    if browser and retry:
-        status, failed = browser_attempt(command, root, env)
-        if status and failed:
-            browser_failures.write_text("\n".join(failed) + "\n")
-    else:
-        status = subprocess.run(command, cwd=root, env=env).returncode
+    status = subprocess.run(command, cwd=root, env=env).returncode
     if measured:
         extract(plan, data, results / f"coverage-{suite}.json")
         data.unlink(missing_ok=True)
-    if status == 0 and not browser:
+    if status == 0:
         cases = list(ET.parse(report).iter("testcase"))
         # A test that ran: no skipped element, or an xfail (an expected failure ran), which JUnit writes as one.
         ran = [t for t in cases if t.find("skipped") is None or t.find("skipped").get("type") == "pytest.xfail"]
@@ -2534,46 +2046,34 @@ def run(plan_path, suite, root=None, retry=False):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     if not retry or slow or rust or status != 1:
         return status or rust
-    if not browser:
-        failed = list(
-            dict.fromkeys(
-                flake_detect.nodeid_of(case.get("classname", ""), case.get("name", ""))
-                for case in junit_failures(report)
-            )
+    failed = list(
+        dict.fromkeys(
+            flake_detect.nodeid_of(case.get("classname", ""), case.get("name", "")) for case in junit_failures(report)
         )
-        # Collection errors can have JUnit cases without a test node id.
-        if any("::" not in test for test in failed):
-            return status
+    )
+    # Collection errors can have JUnit cases without a test node id.
+    if any("::" not in test for test in failed):
+        return status
     if not 0 < len(failed) <= flake_detect.MAX_FAILURES_PER_JOB:
         return status
     commit = None
-    if browser:
-        # Checking browser failures against the base would need a UI build of the base.
-        retry_env = {**env, "TICO_UI_TIMINGS": str(results / f"{suite}-retry.json")}
-        retry_status, remaining = browser_attempt([*browser_command, *failed], root, retry_env)
-        if retry_status:
-            if remaining:
-                browser_failures.write_text("\n".join(remaining) + "\n")
+    again = [*pytest_command("0", retry_report.relative_to(root)), *failed]
+    retry_status = subprocess.run(again, cwd=root, env=None, check=False).returncode
+    if retry_status not in (0, 1):
+        return retry_status
+    try:
+        passed = flake_detect.passed_tests(retry_report.read_bytes())
+    except (ET.ParseError, OSError):
+        return retry_status or status
+    if retry_status:
+        commit = check_base_failures(root, suite, retry_report, set(failed) - passed)
+        if commit is None:
             return retry_status
-        browser_failures.unlink(missing_ok=True)
-    else:
-        again = [*pytest_command("0", retry_report.relative_to(root)), *failed]
-        retry_status = subprocess.run(again, cwd=root, env=None, check=False).returncode
-        if retry_status not in (0, 1):
-            return retry_status
-        try:
-            passed = flake_detect.passed_tests(retry_report.read_bytes())
-        except (ET.ParseError, OSError):
-            return retry_status or status
-        if retry_status:
-            commit = check_base_failures(root, suite, retry_report, set(failed) - passed)
-            if commit is None:
-                return retry_status
-            failed = [test for test in failed if test in passed]
-            if not failed:
-                return 0
-        elif not passed.issuperset(failed):
-            return status
+        failed = [test for test in failed if test in passed]
+        if not failed:
+            return 0
+    elif not passed.issuperset(failed):
+        return status
     commit = commit or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     flaky_report.write_text(json.dumps({"suite": suite, "tests": failed, "commit": commit}) + "\n")
     for test in failed:
@@ -2601,7 +2101,7 @@ def cargo_tests(crates):
     return 1 if failed else 0
 
 
-def durations(paths, browser_paths=()):
+def durations(paths):
     measured = Counter()
     for path in paths:
         for test in ET.parse(path).iter("testcase"):
@@ -2609,11 +2109,6 @@ def durations(paths, browser_paths=()):
             seconds = float(test.get("time", "0"))
             if name and math.isfinite(seconds) and seconds >= 0:
                 measured[name] += seconds
-    # Browser scripts are keyed by path, like Python files, so one timings file serves both splits.
-    for path in browser_paths:
-        for name, seconds in json.loads(Path(path).read_text()).items():
-            if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
-                measured[f"ui/tests/{name}.cjs"] += seconds
     return dict(measured)
 
 
@@ -2778,8 +2273,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
 
     A draft pull request runs no CI, so a builder pushes freely, runs this once at the head it wants reviewed and marks
     the pull request ready (`--ready` does that after a pass). The selection is the plan's: the branch's own change
-    against `base`, as a pull_request event. The Python files, the contract tests and the browser scripts run through
-    scripts/heavy.sh (the computer's shared slots, or a RunsOn VM with TICO_HEAVY_REMOTE=1). What only CI runs (the
+    against `base`, as a pull_request event. The Python files and the contract tests run through scripts/heavy.sh (the computer's shared slots, or a RunsOn VM with TICO_HEAVY_REMOTE=1). What only CI runs (the
     Rust conformance job) is named, not run. The last line is a receipt naming the full head
     sha and the result, which the review gate accepts on the ticket (backend/test_receipts.py).
 
@@ -2842,7 +2336,6 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
         counts = collected(python, root)
         if counts is not None:  # a collection that failed caps nothing: when unsure, run more
             python = sorted(cap_light(record, counts)[0])
-    browser = browser_scripts(picked["browser"], root) if picked["browser"] else []
     # On a RunsOn VM (scripts/heavy.sh with TICO_HEAVY_REMOTE=1) the venv is python3 on its PATH, not this path.
     remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
     interpreter = "python3" if remote else sys.executable
@@ -2857,13 +2350,6 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
         files = contract_files(sweeps)
         legs.append(("the contract tests", pytest_leg(interpreter, jobs, "contracts", ["-m", "slow", *files])))
         leg_env["the contract tests"] = sweep_env(files, sweeps)
-    if browser:
-        legs.append(
-            (
-                f"{len(browser)} browser script{'s' * (len(browser) != 1)}",
-                ["node", UI_RUNNER, "-j", str(jobs), *browser],
-            )
-        )
     ci_only = ["conformance"] if picked["conformance"] else []
     scope = "the whole pull request selection" if full else "the light pull request plan"
     print(f"Selected for {head[:12]} against {base} ({scope}): {picked.get('reason', '')}", flush=True)
@@ -2925,7 +2411,7 @@ def main():
         "local", help="run the tests a pull request's checks would select, here, and print a receipt for its head"
     )
     mine.add_argument("--base", default=LOCAL_BASE)
-    mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers and browser scripts at once")
+    mine.add_argument("--jobs", type=int, default=LOCAL_JOBS, help="pytest workers")
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
     mine.add_argument(
         "--full", action="store_true", help="run the whole pull_request selection, not the light plan's narrowed one"
@@ -2934,9 +2420,7 @@ def main():
         "junit-ran", allow_abbrev=False, help="exit 1 unless a pytest JUnit report holds a test that was not skipped"
     )
     ran.add_argument("report")
-    failed = sub.add_parser(
-        "failed", allow_abbrev=False, help="print the first failing tests or browser scripts reported in a folder"
-    )
+    failed = sub.add_parser("failed", allow_abbrev=False, help="print the first failing tests reported in a folder")
     failed.add_argument("folder")
     sub.add_parser("durations", allow_abbrev=False)
     sub.add_parser("flaky", allow_abbrev=False, help="combine the legs' successful retries into flaky.json")
@@ -2970,18 +2454,13 @@ def main():
         folder = Path(args.folder)
         reports = sorted(path for path in folder.glob("*.xml") if not path.stem.endswith("-base"))
         failed = junit_failed(path for path in reports if path.stem.endswith("-retry")) or junit_failed(reports)
-        if not failed:
-            failed = [
-                name for path in sorted(folder.glob("failed-browser-*.txt")) for name in path.read_text().splitlines()
-            ]
         print(", ".join(failed))
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready, full=args.full)
     elif args.action == "durations":
         results = Path("ci-results")
         measured = durations(
-            (path for path in results.glob("python-*.xml") if not path.stem.endswith(("-retry", "-base"))),
-            (path for path in results.glob("browser-*.json") if not path.stem.endswith("-retry")),
+            path for path in results.glob("python-*.xml") if not path.stem.endswith(("-retry", "-base"))
         )
         if not measured:
             raise RuntimeError("No Python timings were collected")

@@ -1233,7 +1233,6 @@
   "scripts/tests/test_baseline_files.py": 0.05,
   "scripts/tests/test_build_versions.py": 0.01,
   "scripts/tests/test_check_migration_order.py": 0.24,
-  "scripts/tests/test_check_ui_strict.py": 0.06,
   "scripts/tests/test_dependency_locks.py": 0.09,
   "scripts/tests/test_flake_detect.py": 1.0,
   "scripts/tests/test_freeze_guard.py": 1.34,

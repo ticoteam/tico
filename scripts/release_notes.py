@@ -9,7 +9,7 @@ only; release_train loads this file by path, because the Actions checkout is spa
 
 A pull request is in the notes when a commit in the range names it (a merge commit's subject, or a squash commit's
 "(#N)") and that commit is the pull request's merge commit. A "(#N)" that names no pull request here (a commit on a
-branch citing a ticket) is skipped: `api.get` raises an error whose `status` is 404 for it. Order: high risk, then user-facing (ui/, clients/, app/),
+branch citing a ticket) is skipped: `api.get` raises an error whose `status` is 404 for it. Order: high risk, then user-facing (web/, clients/, app/),
 then backend, then internal, which prints one line each. A block gives the Spec, the demo steps and the risk when they
 are given (one line when none are), the checks only when one failed or none ran, the reviews and receipts, and the
 areas its files touch.
@@ -47,7 +47,7 @@ FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_requir
 NONE_RECORDED = "none recorded"  # checks_of's answer for a head commit with no check runs
 NOTHING_GIVEN = "No spec, demo steps or risk given."
 AREAS = (
-    ("ui/", "ui"),
+    ("web/", "web"),
     ("clients/", "clients"),
     ("app/", "app"),
     ("backend/", "backend"),
@@ -58,7 +58,7 @@ AREAS = (
     ("scripts/", "scripts"),
     (".github/", "ci"),
 )
-USER_AREAS = frozenset({"ui", "clients", "app"})
+USER_AREAS = frozenset({"web", "clients", "app"})
 BACKEND_AREAS = frozenset({"backend", "runner", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
 HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]

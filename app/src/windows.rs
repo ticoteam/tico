@@ -351,7 +351,7 @@ fn build_main(app: &App) -> tauri::Result<Window> {
         // Where a first launch opens; a saved frame replaces it.
         .center()
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
-        // The hub page's own dark background (ui/styles/tokens.css --g0), behind a page that has not painted yet.
+        // The hub page's own dark background, behind a page that has not painted yet.
         .background_color(tauri::window::Color(0x13, 0x14, 0x13, 0xff))
         .visible(false);
     // The native title bar drags the window on every page, including sign-in pages that are
@@ -511,123 +511,74 @@ pub(crate) fn opening_page(
         .unwrap_or(usual)
 }
 
-/// Where a page at `url` is in the web app on `hub`, to open there next time: `Some(Some(place))` at a route (the
-/// hub's own address with the route `route_of` keeps, and nothing else of `url`), `Some(None)` at the web app's start,
-/// and `None` anywhere else, which leaves the last place as it was: another origin (a sign-in provider, Cloudflare
-/// Access), any other path on the hub (its sign-in, its API), or a hash `route_of` refuses. Used both when a place is
-/// saved and when one is read back from orgs.json.
+/// Where a page at `url` is in the web app on `hub`, to open there next time: `Some(Some(place))` on one of its pages
+/// (the hub's own origin with the page's path and the query `route_of` keeps, and nothing else of `url`),
+/// `Some(None)` at the web app's start, and `None` anywhere else, which leaves the last place as it was: another origin
+/// (a sign-in provider, Cloudflare Access), a path on the hub that is no page of the web app (its sign-in, its API), an
+/// address with a hash (an old app address the web app has yet to replace, or a token a sign-in hands back), or one
+/// `route_of` refuses. Used both when a place is saved and when one is read back from orgs.json.
 pub(crate) fn place_of(hub: &url::Url, url: &url::Url) -> Option<Option<url::Url>> {
     if url.origin() != hub.origin()
-        || url.path() != hub.path()
         || !url.username().is_empty()
         || url.password().is_some()
+        || url.fragment().is_some()
     {
         return None;
     }
-    let Some(fragment) = url
-        .fragment()
-        .filter(|fragment| !fragment.is_empty() && *fragment != "/")
-    else {
-        return Some(None);
-    };
-    let route = route_of(fragment)?;
+    let base = hub.path().trim_end_matches('/');
+    let path = url.path().strip_prefix(base)?;
+    if !(path.is_empty() || path.starts_with('/')) {
+        return None;
+    }
+    let route = route_of(&format!("{path}?{}", url.query().unwrap_or("")))?;
     if route == "/" {
         return Some(None);
     }
+    let (path, query) = route.split_once('?').unwrap_or((&route, ""));
     let mut place = hub.clone();
-    place.set_query(None);
-    place.set_fragment(Some(&route));
+    place.set_path(&format!("{base}{path}"));
+    place.set_query((!query.is_empty()).then_some(query));
+    place.set_fragment(None);
     Some(Some(place))
 }
 
-/// The view settings of a route's query (`#/...?name=value`) that a place keeps, as the web app's pages read them
-/// (ui/app): Mail's mailbox and open thread, Messaging's bot and source, Tasks' and Files' filters, Finance's account
-/// and P&L filter, Rules, Replay, Updates, Meetings, Threads and the rest. Anything else is dropped, including the
-/// one-time ones: a books connect's result (`books`, `reason`), a bot hand-off (`recruit`), a meeting window
-/// (`window`), Granola's connect (`connect`), an update link's whole-org visit (`scope`), and old addresses that only
-/// redirect (`live`, `approval`, `with`, `show`).
-const PLACE_PARAMS: &[&str] = &[
-    // shared
-    "view",
-    "kind",
-    "type",
-    "q",
-    "who",
-    "item",
-    "m",
-    "focus",
-    "from",
-    "to",
-    "day",
-    "month",
-    "place",
-    "collection",
-    // Mail and Messaging
-    "mailbox",
-    "thread",
-    "tbox",
-    "label",
-    "attach",
-    "bot",
-    "source",
-    // Tasks and Files
-    "owner",
-    "tag",
-    "team",
-    "side",
-    "asked",
-    "due",
-    "need",
-    "parent",
-    "pr",
-    "repo",
-    "requester",
-    "status",
-    "task",
-    "days",
-    "pinned",
-    "archived",
-    "issues",
-    // Finance
-    "account_id",
-    "view_as",
-    "teams",
-    "teammates",
-    "unattributed",
-    // Rules, Replay, Updates, Meetings, Strategy and the rest
-    "rule",
-    "party",
-    "person",
-    "speed",
-    "update",
-    "meeting",
-    "recording",
-    "kpi",
-    "night",
-    "edition",
-    "s",
+/// The web app's pages, by an address's first segment (web/src/routes): an address on one is a place. A call
+/// (`/call/<room>`) is joined, never returned to, so it is none.
+const APP_PAGES: &[&str] = &[
+    "calendar", "company", "flow", "learned", "library", "roadmap", "settings", "tags", "task",
+    "tasks", "team", "threads", "updates",
 ];
 
-/// Words that mark a credential, in a route's path, or a query name or value, anywhere: a place with one is refused.
+/// The one-time words of a page's query, which a place drops: home's first-run step (`setup`). Each page keeps the
+/// rest of its query (its own validateSearch reads only what it knows).
+const ONE_TIME_PARAMS: &[&str] = &["setup"];
+
+/// Words that mark a credential, in an address's path, or a query name or value, anywhere: a place with one is refused.
 const CREDENTIAL_WORDS: &[&str] = &[
     "token", "secret", "password", "passwd", "key", "code", "sig", "auth", "session",
 ];
 
-/// The route a hash (`fragment`, as the address holds it) keeps as a place, or `None` to refuse it. Decoded first
-/// (until it stops changing, three rounds at most), so no escape hides a word: a path of plain segments only
-/// (`[A-Za-z0-9._~:@-]`), and in its query only the view settings in `PLACE_PARAMS`, the rest dropped. Any credential
+/// The route an address (`path?query`, its path from the hub's own) keeps as a place, or `None` to refuse it. Decoded
+/// first (until it stops changing, three rounds at most), so no escape hides a word: the start (`/`), or a path on one
+/// of `APP_PAGES` of plain segments only (`[A-Za-z0-9._~:@-]`), with its query less `ONE_TIME_PARAMS`. Any credential
 /// word refuses the whole place.
-pub(crate) fn route_of(fragment: &str) -> Option<String> {
+pub(crate) fn route_of(address: &str) -> Option<String> {
     fn credential(text: &str) -> bool {
         let text = text.to_ascii_lowercase();
         CREDENTIAL_WORDS.iter().any(|word| text.contains(word))
     }
-    if fragment.len() > 2000 || credential(&decoded(fragment)?) {
+    if address.len() > 2000 || credential(&decoded(address)?) {
         return None;
     }
-    let (path, query) = fragment.split_once('?').unwrap_or((fragment, ""));
+    let (path, query) = address.split_once('?').unwrap_or((address, ""));
     let path = decoded(path)?;
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path
+    };
     let segments = path.strip_prefix('/')?;
+    let segments = segments.strip_suffix('/').unwrap_or(segments);
     let plain = |segment: &str| {
         !segment.is_empty()
             && segment != "."
@@ -636,7 +587,11 @@ pub(crate) fn route_of(fragment: &str) -> Option<String> {
                 b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b':' | b'@' | b'-')
             })
     };
-    if !(segments.is_empty() || segments.split('/').all(plain)) || credential(&path) {
+    if segments.is_empty() {
+        return Some("/".into());
+    }
+    let page = segments.split('/').next().unwrap_or_default();
+    if !APP_PAGES.contains(&page) || !segments.split('/').all(plain) || credential(&path) {
         return None;
     }
     let mut kept = url::form_urlencoded::Serializer::new(String::new());
@@ -650,15 +605,15 @@ pub(crate) fn route_of(fragment: &str) -> Option<String> {
         if credential(&name) || credential(&value) {
             return None;
         }
-        if PLACE_PARAMS.contains(&name.as_str()) {
+        if !ONE_TIME_PARAMS.contains(&name.as_str()) {
             kept.append_pair(&name, &value);
         }
     }
     let query = kept.finish();
     Some(if query.is_empty() {
-        path
+        format!("/{segments}")
     } else {
-        format!("{path}?{query}")
+        format!("/{segments}?{query}")
     })
 }
 
@@ -1151,7 +1106,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
 }
 
 /// What the page on screen runs as a switch away begins: its own leave (`window.ticoPageHidden`, which ends a call
-/// and a join on its way: ui/app/thread-call.ts), and media it was playing pauses: it is no longer on screen. Only
+/// and a join on its way), and media it was playing pauses: it is no longer on screen. Only
 /// for a clean leave: whether the page is then kept is `keeps`, which does not trust the page.
 const HIDE_PAGE: &str = "try { window.ticoPageHidden && window.ticoPageHidden(); } catch (e) {}\n\
     document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} });";
@@ -2240,159 +2195,116 @@ mod page_tests {
     }
 
     #[test]
-    fn only_a_route_on_the_orgs_own_hub_is_remembered_as_its_place() {
+    fn only_a_page_on_the_orgs_own_hub_is_remembered_as_its_place() {
         let hub = url::Url::parse("https://team.example.com/").unwrap();
         let place = |url: &str| place_of(&hub, &url::Url::parse(url).unwrap());
+        let kept = |url: &str| place(url).flatten().map(|place| place.to_string());
         assert_eq!(
-            place("https://team.example.com/#/threads/t_1")
-                .flatten()
-                .unwrap()
-                .as_str(),
-            "https://team.example.com/#/threads/t_1"
+            kept("https://team.example.com/threads/t_1").as_deref(),
+            Some("https://team.example.com/threads/t_1")
         );
-        // Nothing of the address but the route is kept.
         assert_eq!(
-            place("https://team.example.com/?message=m_1&task=k_2#/task/k_2")
-                .flatten()
-                .unwrap()
-                .as_str(),
-            "https://team.example.com/#/task/k_2"
+            kept("https://team.example.com/tasks/product/12/").as_deref(),
+            Some("https://team.example.com/tasks/product/12")
+        );
+        // A page keeps its query, all but the one-time words.
+        assert_eq!(
+            kept("https://team.example.com/company/strategy/goals?panel=goal:g_12&setup=1")
+                .as_deref(),
+            Some("https://team.example.com/company/strategy/goals?panel=goal%3Ag_12")
+        );
+        assert_eq!(
+            kept("https://team.example.com/library/docs?q=road%20map&who=me").as_deref(),
+            Some("https://team.example.com/library/docs?q=road+map&who=me")
         );
         // The web app's start clears the place.
         assert_eq!(place("https://team.example.com/"), Some(None));
-        assert_eq!(place("https://team.example.com/#/"), Some(None));
+        assert_eq!(place("https://team.example.com/?setup=agents"), Some(None));
         // Anywhere else leaves the last place as it was.
         for other in [
             "https://team.example.com/auth/login",
-            "https://team.example.com/auth/login#/threads/t_1",
             "https://team.example.com/api/v2/local-signin?token=t&next=%2F",
             "https://team.example.com/cdn-cgi/access/login/team.example.com",
+            "https://team.example.com/assets/icon-192.png",
+            "https://team.example.com/call/r_1",
             "https://team.cloudflareaccess.com/cdn-cgi/access/login/team.example.com",
-            "https://accounts.google.com/ServiceLogin#/x",
-            "http://team.example.com/#/threads/t_1",
-            "https://team.example.com:8443/#/threads/t_1",
-            "https://other.example.com/#/threads/t_1",
-            "https://user:pass@team.example.com/#/threads/t_1",
+            "https://accounts.google.com/threads/t_1",
+            "http://team.example.com/threads/t_1",
+            "https://team.example.com:8443/threads/t_1",
+            "https://other.example.com/threads/t_1",
+            "https://user:pass@team.example.com/threads/t_1",
             "https://team.example.com/#access_token=abc",
-            "https://team.example.com/#/invite?token=abc",
+            "https://team.example.com/#/threads/t_1",
+            "https://team.example.com/threads/t_1#x",
             "about:blank",
         ] {
             assert_eq!(place(other), None, "{other}");
         }
         // No escape hides a credential, however many times it is encoded.
         for hidden in [
-            "https://team.example.com/#/threads/t_1?access_%74oken=secret",
-            "https://team.example.com/#/threads/t_1?access_%2574oken=x",
-            "https://team.example.com/#/threads/t_1?access_%252574oken=x",
-            "https://team.example.com/#/threads/t_1?view=%2573ecret",
-            "https://team.example.com/#/%61uth/callback",
-            "https://team.example.com/#/threads/t_1?q=my+password",
-            "https://team.example.com/#/threads/%2e%2e/x",
-            "https://team.example.com/#/threads/t 1",
-            "https://team.example.com/#/a//b",
+            "https://team.example.com/threads/t_1?access_%74oken=secret",
+            "https://team.example.com/threads/t_1?access_%2574oken=x",
+            "https://team.example.com/threads/t_1?access_%252574oken=x",
+            "https://team.example.com/threads/t_1?view=%2573ecret",
+            "https://team.example.com/settings/%61uth",
+            "https://team.example.com/threads/t_1?q=my+password",
+            "https://team.example.com/threads/%2e%2e/x",
+            "https://team.example.com/threads/t%201",
+            "https://team.example.com/threads//b",
         ] {
             assert_eq!(place(hidden), None, "{hidden}");
         }
-        // Four rounds of encoding are more than a route ever needs: refused.
+        // Four rounds of encoding are more than an address ever needs: refused.
         assert_eq!(route_of("/threads/t_1?q=%25252541"), None);
         assert_eq!(
             route_of("/threads/t_1?q=%252541").as_deref(),
             Some("/threads/t_1?q=A")
         );
-        // The view settings a route uses survive; anything else is dropped, not the whole place.
-        assert_eq!(
-            place("https://team.example.com/#/updates?kind=weekly&view=archive")
-                .flatten()
-                .unwrap()
-                .as_str(),
-            "https://team.example.com/#/updates?kind=weekly&view=archive"
-        );
-        assert_eq!(
-            place("https://team.example.com/#/finance/sources?books=ok&reason=x&month=2026-10")
-                .flatten()
-                .unwrap()
-                .as_str(),
-            "https://team.example.com/#/finance/sources?month=2026-10"
-        );
-        assert_eq!(route_of("/meetings?window=1").as_deref(), Some("/meetings"));
-        assert_eq!(
-            route_of("/library?q=road%20map&who=me").as_deref(),
-            Some("/library?q=road+map&who=me")
-        );
-        assert_eq!(
-            place("https://team.example.com/#/?window=1"),
-            Some(None),
-            "a start with nothing kept is the start"
-        );
-        // Each page's own view settings come back with it: Mail's open thread, Messaging's bot, Tasks' filters.
-        for route in [
-            "/mail?mailbox=inbox_1&thread=thread_1&tbox=inbox_1",
-            "/messaging?bot=ops&source=slack",
-            "/tasks?owner=bot:ops&status=open&view=board&type=video",
-            "/rules/due?due=d_1",
-            "/library/files?bot=ops&pinned=1",
-            "/finance/books?account_id=a_1&teams=t_1&teams=t_2&unattributed=true",
-            "/updates?day=2026-11-03&update=u_1",
-        ] {
-            assert_eq!(
-                route_of(route)
-                    .as_deref()
-                    .map(|kept| kept.replace("%3A", ":"))
-                    .as_deref(),
-                Some(route),
-                "{route}"
-            );
-        }
-        // One-time ones go: a whole-org visit, Granola's connect, an old redirect.
-        assert_eq!(
-            route_of("/updates?update=u_1&scope=all").as_deref(),
-            Some("/updates?update=u_1")
-        );
-        assert_eq!(
-            route_of("/meetings?connect=granola&meeting=r_1").as_deref(),
-            Some("/meetings?meeting=r_1")
-        );
-        assert_eq!(
-            route_of("/threads?with=human:bea").as_deref(),
-            Some("/threads")
-        );
         // A hand-edited orgs.json gets the same check when the place is read back.
-        let hub_text = Some("https://team.example.com/#/threads/t_1?access_%74oken=secret");
+        let hub_text = Some("https://team.example.com/threads/t_1?access_%74oken=secret");
         assert_eq!(opening_page(hub.clone(), &hub, false, hub_text), hub);
         assert_eq!(
             opening_page(
                 hub.clone(),
                 &hub,
                 false,
-                Some("https://team.example.com/#/updates?view=archive&x=1")
+                Some("https://team.example.com/updates/week?setup=1&open=u_1")
             )
             .as_str(),
-            "https://team.example.com/#/updates?view=archive"
+            "https://team.example.com/updates/week?open=u_1"
         );
-        // A hub under a path: only its own address, with a route.
-        let prefixed = url::Url::parse("https://team.example.com/tico/").unwrap();
-        assert!(place_of(
-            &prefixed,
-            &url::Url::parse("https://team.example.com/tico/#/inbox").unwrap()
-        )
-        .flatten()
-        .is_some());
+        // A place saved by an older app, as an old hash address, opens the usual first page.
         assert_eq!(
-            place_of(
-                &prefixed,
-                &url::Url::parse("https://team.example.com/#/inbox").unwrap()
+            opening_page(
+                hub.clone(),
+                &hub,
+                false,
+                Some("https://team.example.com/#/threads/t_1")
             ),
-            None
+            hub
         );
+        // A hub under a path: only its own pages.
+        let prefixed = url::Url::parse("https://team.example.com/tico/").unwrap();
+        let under = |url: &str| place_of(&prefixed, &url::Url::parse(url).unwrap());
+        assert_eq!(
+            under("https://team.example.com/tico/threads")
+                .flatten()
+                .map(|place| place.to_string())
+                .as_deref(),
+            Some("https://team.example.com/tico/threads")
+        );
+        assert_eq!(under("https://team.example.com/tico/"), Some(None));
+        assert_eq!(under("https://team.example.com/threads"), None);
+        assert_eq!(under("https://team.example.com/ticothreads"), None);
     }
 
     #[test]
     fn a_new_page_opens_where_the_org_last_was_unless_it_needs_its_sign_in() {
         let hub = url::Url::parse("https://team.example.com/").unwrap();
-        let last = Some("https://team.example.com/#/threads/t_1");
+        let last = Some("https://team.example.com/threads/t_1");
         assert_eq!(
             opening_page(hub.clone(), &hub, false, last).as_str(),
-            "https://team.example.com/#/threads/t_1"
+            "https://team.example.com/threads/t_1"
         );
         assert_eq!(
             opening_page(hub.clone(), &hub, true, last).as_str(),
@@ -2402,7 +2314,7 @@ mod page_tests {
         assert_eq!(opening_page(hub.clone(), &hub, false, None), hub);
         // A place that is not one (orgs.json is only a file) opens the usual first page.
         for bad in [
-            "https://evil.example/#/threads/t_1",
+            "https://evil.example/threads/t_1",
             "https://team.example.com/auth/login",
             "not a url",
         ] {
@@ -2421,7 +2333,7 @@ mod page_tests {
                 local.clone(),
                 &local_hub,
                 false,
-                Some("http://localhost:8765/#/inbox")
+                Some("http://localhost:8765/threads")
             ),
             local
         );
@@ -3391,8 +3303,8 @@ mod new_window_tests {
     }
 }
 
-/// One ordinary, resizable window per meeting, showing only that meeting (`&window=1`); asking again for the same
-/// one brings it to the front. It belongs to the org that asked: it follows that org's address and data store.
+/// One ordinary, resizable window per meeting, at the old address of that meeting (`#/meetings?meeting=<id>`, which
+/// the web app opens in the Calendar's meeting panel); asking again for the same one brings it to the front. It belongs to the org that asked: it follows that org's address and data store.
 pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     let fragment = format!("/meetings?meeting={id}&window=1");
     open_page_window(
@@ -3406,9 +3318,10 @@ pub(crate) fn open_meeting_window(app: &App, home: &Home, id: &str) {
     );
 }
 
-/// A call's meeting window (`#/call/<id>`, ui/app/call-window.ts): small, the size of a phone, until someone shares
-/// their screen and the page asks to grow (`callWindowSize`). One per call, like a
-/// meeting's. `join`: it joins the call as it opens (`?join=1`); a plain open shows Join.
+/// A call's meeting window (`#/call/<id>`, an old address the web app opens at its call page): small, the size of a
+/// phone, until someone shares their screen and the page asks to grow (`callWindowSize`). One per call, like a
+/// meeting's. `join` adds `?join=1`, which the old web app read to join as the window opened; the web app's call page
+/// waits for Join.
 pub(crate) fn open_call_window(app: &App, home: &Home, id: &str, join: bool) {
     let fragment = format!("/call/{id}{}", if join { "?join=1" } else { "" });
     if grant(app, call_capability(&home.hub, &home.id)).is_err() {
@@ -3716,7 +3629,7 @@ mod window_state_tests {
 }
 
 // Search from the View menu (⌘K): bring the window forward, then the page opens
-// its own search dialog (`window.ticoSearch` in ui/app/search.ts). The menu accelerator takes
+// its own search dialog (`window.ticoSearch`, which the old web app defined). The menu accelerator takes
 // ⌘K before the webview sees it, so the page's own shortcut still works everywhere else.
 pub(crate) fn open_search(app: &App) {
     show_window(app);

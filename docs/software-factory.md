@@ -97,8 +97,7 @@ result and proof), the release report for a batch (a changelog for customers wit
 we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
 and what to decide in two or three lines, then real
 screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
-never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
-(`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
+never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo. The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
 the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Feature Owner
 does the checking itself; a person never does. Existing bots take the skill and their playbooks at their next template
 refresh ([Bots follow their template](updates.md#bots-follow-their-template)).

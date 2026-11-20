@@ -124,7 +124,7 @@ def in_checkout(arg):
 def portable(command):
     """A local interpreter path (a venv's python, a node install) becomes the VM's own interpreter of that name, and a
     path inside this checkout becomes relative to it: the VM runs the command from its own checkout, somewhere else.
-    ui-tests.cts and release_checks.py re-run themselves through heavy.sh by their absolute path."""
+    release_checks.py re-runs itself through heavy.sh by its absolute path."""
     if not command:
         return []
     first = command[0]
@@ -136,16 +136,11 @@ def portable(command):
 
 
 def setup_for(command):
-    """The least setup that runs this command: browsers for the UI scripts, Rust for cargo, both for a release check
-    (the default release check is pytest and then the UI scripts; --release adds cargo)."""
+    """The least setup that runs this command: npm and Playwright for a Node command, Rust for cargo and for a release
+    check with --release (it builds the release binaries)."""
     text = ' '.join(command)
-    browser = any(word in text for word in ('ui-tests', 'playwright', 'npm ', 'npx ', '.cjs', '.cts'))
-    rust = 'cargo' in text
-    if 'release_checks.py' in text:
-        if '--release' in text:
-            browser = rust = True
-        elif '--shard' not in text and '--record-timings' not in text:
-            browser = True
+    browser = any(word in text for word in ('playwright', 'npm ', 'npx '))
+    rust = 'cargo' in text or ('release_checks.py' in text and '--release' in text)
     return 'all' if browser and rust else 'browser' if browser else 'rust' if rust else 'python'
 
 

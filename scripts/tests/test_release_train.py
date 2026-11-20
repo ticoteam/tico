@@ -1540,11 +1540,9 @@ def test_a_newer_canary_release_keeps_a_protected_records_title_and_closes_it_si
     assert "NOTES v0.5.199..%s" % C in newer["body"] and "/approve" in newer["body"]
 
 
-def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkeypatch, tmp_path):
+def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkeypatch):
     gh = publishes(FakeGitHub())
     monkeypatch.setattr(rt.release_notes, "build", lambda api, base, head: HIGH_RISK_NOTES + "\n@octocat\n")
-    shots = tmp_path / "shots.md"
-    shots.write_text("A picture of the candidate\n")
     for patch, sha, previous in [(201, B, "v0.5.200"), (202, C, "v0.5.201"), (203, D, "v0.5.202")]:
         version = "v0.5.%d" % patch
         if sha not in gh.order:
@@ -1560,9 +1558,7 @@ def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkey
         assert "@octocat" not in issue["body"]
         if patch == 201:
             issue["labels"].append({"name": "release-owner"})
-            assert rt.cmd_shots_into_approval(gh, version, str(shots)) == 0
         else:
-            assert "A picture of the candidate" in issue["body"]
             assert {label["name"] for label in issue["labels"]} == {rt.APPROVAL_LABEL, "release-owner"}
         assert any("Promote: holding %s" % version in line and "not approved yet" in line for line in rt.LOG)
     assert installs["updated"] == [("canary", "0.5.%d" % patch) for patch in (201, 202, 203)]
@@ -1572,9 +1568,6 @@ def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkey
     rt.promote(gh, AUTO)
     assert installs["updated"][-1] == ("stable", "0.5.203")
     assert issue["state"] == "closed" and gh.comments == []
-    shots.write_text("An older release's late picture\n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.202", str(shots)) == 0
-    assert "An older release's late picture" not in issue["body"]
 
 
 @pytest.mark.parametrize("held", [False, True], ids=["reused-record", "separate-record"])
@@ -1998,68 +1991,18 @@ def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(insta
     assert any("stable's release cannot be read (stable is down)" in line for line in rt.LOG)
 
 
-def test_the_pictures_replace_the_pending_line_and_the_same_pictures_again_change_nothing(tmp_path, monkeypatch):
+def test_putting_pictures_on_an_approval_changes_nothing_now_releases_have_none(tmp_path, monkeypatch):
     gh = FakeGitHub()
     issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
-    shots = tmp_path / "release-shots.md"
-    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert "What it looks like" not in issue["body"]
     body = issue["body"]
-    assert rt.SHOTS_PENDING not in body and "| before | after |" in body
-    assert body.count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in body and rt.APPROVE_FOOTER in body
     edits = []
-    monkeypatch.setattr(gh, "edit", lambda number, text: edits.append(number))
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
-    assert edits == []
-
-
-def test_reopening_an_approval_keeps_the_pictures_already_on_it(tmp_path):
-    gh = FakeGitHub()
-    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
-    shots = tmp_path / "release-shots.md"
-    shots.write_text("## What it looks like\n\n| before | after |\n| --- | --- |\n| ![a](a.png) | ![b](b.png) |\n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
-    gh.close(issue["number"])
-    # A republish or a retry of the same version reopens the same record: its pictures stay, and nothing goes pending.
-    again, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
-    assert again is issue and issue["state"] == "open"
-    assert "| before | after |" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
-    assert issue["body"].count(rt.SHOTS_START) == 1 and "NOTES v0.5.199..%s" % C in issue["body"]
-
-
-def test_missing_pictures_put_the_failure_and_the_run_that_tried_on_the_issue(tmp_path, monkeypatch):
-    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.example")
-    monkeypatch.setenv("GITHUB_REPOSITORY", "ticoteam/tico")
-    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
-    gh = FakeGitHub()
-    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "missing.md")) == 0
-    assert "could not be made" in issue["body"] and rt.SHOTS_PENDING not in issue["body"]
-    assert "https://github.example/ticoteam/tico/actions/runs/4242" in issue["body"]
-    assert any("not made: see the run" in line for line in rt.LOG)
-    # An empty file is no pictures either, and the failure is not put on the issue twice.
-    (tmp_path / "empty.md").write_text("  \n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(tmp_path / "empty.md")) == 0
-    assert issue["body"].count("could not be made") == 1
-
-
-def test_a_closed_approval_keeps_its_state_when_its_pictures_go_in(tmp_path):
-    gh = FakeGitHub()
-    issue = approval_for(gh, "v0.5.201")
-    gh.close(issue["number"])
-    shots = tmp_path / "release-shots.md"
-    shots.write_text("## What it looks like\n\npictures of the change\n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
-    assert issue["state"] == "closed" and "pictures of the change" in issue["body"]
-
-
-def test_pictures_without_an_approval_record_fail_loudly(tmp_path):
-    gh = FakeGitHub()
+    monkeypatch.setattr(gh, "edit", lambda *args, **kwargs: edits.append(args))
     shots = tmp_path / "release-shots.md"
     shots.write_text("## What it looks like\n\npictures\n")
-    with pytest.raises(rt.Fail, match="no approval record for v0.5.201"):
-        rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots))
-    assert gh.comments == [] and gh.created == []
+    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
+    assert rt.cmd_shots_into_approval(gh, "v0.5.202", str(tmp_path / "missing.md")) == 0
+    assert edits == [] and issue["body"] == body
 
 
 def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_failures():

@@ -87,7 +87,7 @@ list|add|update|remove` and `tico pin add|update|remove`, the `tico_card_*` and 
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
 `month` and `months` for its picker; `GET /api/v2/cards/choices?place=growth` adds the growth templates, the metrics and
 the live channels, and `?place=person:me` adds the Floor. Tests: `backend/tests/test_cards.py`,
-`backend/tests/test_my_dashboard.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cts`.
+`backend/tests/test_my_dashboard.py`, `backend/tests/test_growth_cards.py`.
 
 ## Floor
 
@@ -113,4 +113,4 @@ company's person and whoever reads one of its tasks, and every count is of tasks
 see is counted but not named. Pipelines in no factory are drawn last in a hall named Other, once one of them holds an
 open task you may read; it has no page and no org chart. Retired pipelines are left out. Data: `GET /api/v2/company/floor` (`backend/company_floor.py`), read again when a task moves or your Needs you
 changes; each changed line is redrawn in place. Tests: `backend/tests/test_company_floor.py`,
-`ui/tests/company-floor.cts`.
+`web/src/features/company/company.test.tsx`.

@@ -112,7 +112,7 @@ The train validates a head in one of two ways. A **full** validation is the whol
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
   merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
-  left out), the browser smoke set, the
+  left out), the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -143,10 +143,7 @@ The train validates a head in one of two ways. A **full** validation is the whol
   validation selects from the anchor before it, which still covers its diff. A full validation runs every part.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane (which also runs the content sweeps a change reaches, see the selection rules below), and `alone` tests
-  never do. A UI script runs when its own files or helpers change, its name matches the changed UI file, or a `UI_MAP`
-  entry selects it:
-  `ui/tests/task-code.cts` has no entry for the UI files it covers, so a change to them does not select it. The measured
-  UI test map (#2897, `ci/ui-test-map`) closes that gap; until it lands, the next full validation is the check.
+  never do.
 - **Not changed.** Hotfixes, approval, promotion, the `release-train` issue and the concurrency group.
   `release.yml` accepts an incremental run's title for the tag, because the title starts the same way.
 
@@ -167,7 +164,7 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
 
 - **The issue.** Each candidate the canary takes gets an open issue, `Release vX.Y.Z: awaiting approval`, labelled
   `release-approval`. Its body is the release notes, built by `scripts/release_notes.py`: every pull request merged
-  since the release stable runs. High-risk pull requests come first, then user-facing ones (`ui/`, `clients/`, `app/`),
+  since the release stable runs. High-risk pull requests come first, then user-facing ones (`web/`, `clients/`, `app/`),
   then backend ones (`backend/`, `runner-rs/`, `templates/`), then the internal ones, one line each. The
   first line counts the blocks by group. A block gives the pull request's Spec, its demo steps (written for the Acme
   Lights demo company) and its risk when it has them, and says so in one line when it has none of the three. It also
@@ -209,11 +206,6 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
   canary update failed is closed too, as not on the canary: there is nothing to approve.
 - **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
   read-only. It needs `GITHUB_TOKEN`.
-- **Pictures.** A candidate the canary runs also gets a "What it looks like" section above its notes: before and after
-  pictures of the pages it changes (see [Before and after screenshots](#before-you-tag)). They are made after the train job
-  and the canary update, so neither waits for them, and approval does not wait for them either. The issue says the
-  pictures are on their way until they arrive, and says so with the run's link when they could not be made. Hotfixes get
-  no pictures.
 
 ### A release that did not publish
 
@@ -425,17 +417,11 @@ files, folders it lists or globs). The Caddy image job runs only when a change r
 `backend/caddy_assets.py`; otherwise the plan compiles the changed files and runs the Dockerfile's import check itself.
 A `docs/` page or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
 the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
-`scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
-a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
+`scripts/ci_install.sh`, the browser system packages) runs the tests that read it, and a workflow change also builds
+the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
 run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
 while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
-the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. Browser scripts the release
-check runs are picked by path too (rule 6, `browser_direct`), on a ready pull request and in the queue: a changed
-`ui/tests/*.cts` script, every script that uses a changed `ui/tests/support/` helper (through other helpers too), and,
-for UI source with no `UI_MAP` entry, the scripts named after the file (`ui/app/tools.ts` runs `tools`, `bot-tools`,
-`redesign-e2e-tools` and the rest). Any change under `ui/app/` or `ui/styles/`, or to `ui/tests/support/phone-rules.cts`, also picks
-the five `phone-dead-ends-*` scripts. More than 40 picked runs every script the release check runs, in shards. A change to
+the Rust runner and all its fake harnesses. A change to
 what a slow content sweep reads runs that sweep in the contracts job (rule 7, `CONTENT_SWEEPS`): `templates/`, `skills/`,
 `clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
 (`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.
@@ -452,12 +438,12 @@ change on the merged result, and Release validation runs the whole gate on each 
 Python jobs install no npm packages, browsers or apt packages. The browser job caches both browser binaries and
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
-one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script
+one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python groups so each VM
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file
 timings averaged over the last three green queue groups (each group's **PR job timings** job saves them as its
 `queue-timings` artifact: the same hosted runners and pytest flags), over the committed table
 (`scripts/test-timings.json`), with collected test counts until timings exist. New files use the observed
-seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
+seconds per test. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
 time from a parameter, a subprocess's own reads) must name that file or folder literally, or the change will not
@@ -481,7 +467,7 @@ That is the default suite: pytest in parallel without the tests marked `@pytest.
 records wall time and load; it takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
 number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
 GitHub release. The merge queue never runs the full default suite: an uncertain selection runs the smoke set, and known mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
-slow tests and every browser script, and release candidate validation covers that full suite.
+slow tests, and release candidate validation covers that full suite.
 
 ## Merge queue
 
@@ -490,7 +476,7 @@ then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request 
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
-- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python tests, and every other
   job a queue group runs under the same conditions (the Caddy image, Rust lint, and the desktop app
   when the change reaches them), on each push, so a failure shows before the change is enqueued.
   The plan decides which of those the change reaches, so a job it does not reach starts no VM. The timing receipt,
@@ -501,12 +487,12 @@ checks on that merge commit, and moves main only when they pass.
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
-- **Flaky tests**. PR checks and queue groups retry up to five failed tests per Python or browser leg once
+- **Flaky tests**. PR checks and queue groups retry up to five failed tests per Python leg once
   (`scripts/pr_checks.py run --retry`). When all pass on retry, the leg passes and logs each flake. A Python leg also
   passes if all remaining failures match on the base commit. Release validation and main-red track those failures.
   Queue groups save retry passes in the `queue-flaky` artifact and hand them to the Release Owner (below).
   `.github/workflows/flaky-tests.yml` reads these artifacts and PR-check runs daily (`scripts/flake_detect.py`): its
-  job summary lists each Python or browser test that failed and passed on the same commit, with the commit and the
+  job summary lists each Python test that failed and passed on the same commit, with the commit and the
   runs, and the run fails when it finds one. Nothing quarantines a test: a flaky test is fixed at its root cause the
   same day, or deleted. Release validation runs without retries.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
@@ -668,21 +654,6 @@ a source-only change rebuilds one layer per image), while the journey installs t
 finishes, it runs every Python test except Docker isolation, the opt-in `@pytest.mark.slow` ones included (real git,
 Docker, servers and long timers). Python uses half the
 CPU count in workers (at least one; six on a 12-core Mac); `TICO_PYTHON_WORKERS` overrides that default.
-The browser runner samples CPU counters over one second at startup. The idle fraction is the change
-in idle time divided by the change in total CPU time across all cores. Its job count is
-`clamp(floor(cores * idleFraction), 1, 4)`, and every child gets the same `TICO_UI_SLOWDOWN`:
-`clamp(1 / max(idleFraction * 2, 0.25), 1, 4)`. It prints jobs, slowdown, cores and idle percentage
-before running scripts. On macOS, load average can stay high while several cores are idle.
-Explicit `TICO_UI_JOBS` (or `-j N` when invoking the browser runner) and `TICO_UI_SLOWDOWN` win;
-the release coordinator passes those overrides through without forcing four jobs. On a 12-core Mac
-at 30% idle, the defaults are three jobs and slowdown 1.67; at 50% idle, four jobs and slowdown one.
-If CPU counters do not advance or the core count changes during sampling, it conservatively uses
-one job and slowdown four. The selected settings stay fixed for that run.
-Shared browser support applies `30000 * slowdown` milliseconds to context/page action and navigation
-timeouts, including popups. `ui/tests/support/load.cts` exports `SLOWDOWN`, `t(ms)` (rounded scaled
-milliseconds), and `applyTimeouts(contextOrPage)` for scripts' explicit waits. Direct script runs
-default to slowdown one unless the environment sets it. Explicit per-script timeout options still
-override the shared defaults; those waits should use `t(...)` and wait on conditions.
 Successful builds also start the following checks against the candidate
 at the same time, each with its own Docker names; the journey proceeds once those images are ready:
 
@@ -730,9 +701,8 @@ script does what the installer does after its preflight (checksummed bundle, `.e
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
 rollback step: it runs on the candidate's updater.
 
-**Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py`, which writes
-the approval issue's "What it looks like" section. The old web app's screenshot harness went with `ui/`, and the web app
-has none yet, so the section says there are no pictures to compare.
+**No screenshots.** A release has no before and after pictures. `.github/workflows/release-shots.yml` and train.yml's
+shots jobs still run, and do nothing, until they are removed.
 
 ### Behaviour replay
 
@@ -802,7 +772,7 @@ workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The ap
 (v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
 
 The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
-`app/src/testdata/` and Markdown docs anywhere under `app/`. Changes to shipped Rust code, `ui/app`, configuration, icons, dependencies, packaging
+`app/src/testdata/` and Markdown docs anywhere under `app/`. Changes to shipped Rust code, configuration, icons, dependencies, packaging
 or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
 override also forces a build.
 

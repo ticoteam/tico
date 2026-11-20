@@ -6,7 +6,8 @@ a proposal. None of the ruff changes below is made. When a rule is built, add it
 in `../LESSONS.md` `encoded`.
 
 Counts are `git grep -E` line counts on `origin/main` at that commit, with the pattern shown. "Python test files"
-means `**/tests/**/*.py`, `**/test_*.py` and `**/conftest.py` (1,515 files). `ui/tests` has 409 files. Generate the
+means `**/tests/**/*.py`, `**/test_*.py` and `**/conftest.py` (1,515 files). `ui/tests` had 409 files (the old web app's browser scripts, removed since in #4660, so the
+rules over `ui/tests` have nothing left to read). Generate the
 baseline from the script on the day it merges; do not copy these numbers into it.
 
 ## How `scripts/landmines.py` works
@@ -84,7 +85,6 @@ Checks on `origin/main` that already enforce a lesson. Do not duplicate them in 
 | `scripts/ci/merge_commit_checks.sh` | Static checks run again on the merge commit that lands | L19 |
 | `scripts/remote.py` exit codes | 75 when never dispatched, 76 when there is no result | L16 |
 | `scripts/diff_coverage.py` (`bare_pragmas`) | An added `# pragma: no cover` needs a reason of 3 words or more. Added lines only. | owner ruling |
-| `scripts/check_ui_strict.py` | No `@ts-ignore` in strict UI files | owner ruling |
 | `scripts/check_test_imports.py` | A test file does not import another test file | - |
 | `scripts/pytest_warning_ignores.py` | The `ignore:` lines in `pytest.ini` do not grow | - |
 | `scripts/gates/verifier_count.py` | Reports new skips, new suppressions, deleted tests and raised baselines. It does not block. | L12 |
