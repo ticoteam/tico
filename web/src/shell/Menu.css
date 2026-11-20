@@ -69,11 +69,14 @@ button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:p
 .head-ic{width:22px;display:grid;place-items:center;color:var(--muted);flex:none}
 .head-ic .ico{width:16px;height:16px}
 
-/* Tico's Catch up chip, over its box */
+/* Tico's chips, over its box: what to ask about the open page. They go while the person types. */
+.qchips{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.chat-foot:has(.composer.is-typing) .qchips{display:none}
 .qchip{align-self:start;display:inline-flex;align-items:center;gap:var(--s-1h);height:30px;padding:0 var(--s-3);border:0;border-radius:var(--r-pill);background:var(--well-2);color:var(--ink-2);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .qchip .ico{width:14px;height:14px;color:var(--muted)}
 .qchip:hover{color:var(--ink)}
 .qchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+:root[data-layout="cards"] .qchip{height:var(--ctl-sm);padding:0 var(--s-4);font-size:var(--t-md)}
 .phone .cat>[role="tab"]{font-size:var(--t-md)}
 /* on a phone the whole card scrolls: the list is not a scroller of its own */
 .m-scroll .ca{flex:none}
