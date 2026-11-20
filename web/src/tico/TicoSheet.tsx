@@ -17,6 +17,7 @@ import { TicoChips } from './Chips';
 import { IntroPin } from './Intro';
 import { okCard } from './OkCard';
 import { ticoPowerQuery, useTicoPower } from './power';
+import { useTicoName } from './look';
 import { TicoOff } from './TicoOff';
 import { Tracker } from './Tracker';
 
@@ -41,6 +42,8 @@ export function TicoSheet() {
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   // On a phone the bar draws Tico's one Dot: the head has none of its own.
   const phone = usePhoneCards();
+  // your own name for it (Settings > Account > Your assistant)
+  const tico = useTicoName();
   const owed = useSetupOwed();
   const setupLines = useSetupTranscript();
   // A failed read (most often a release's restart) says why, and is read again (both halves of it) once the stream is
@@ -51,7 +54,7 @@ export function TicoSheet() {
     if (powerRead.isError) void powerRead.refetch();
   };
   const failed = faulted ? (powerRead.isError ? [room, powerRead] : [room]) : [];
-  const fault = useReadFault('Tico', failed, room.isSuccess);
+  const fault = useReadFault(tico, failed, room.isSuccess);
   // Try again only when reading again by itself would not fix it (a refusal, a stopped company)
   const stuck = failed.some((r) => !passing(r.error));
   // On a phone, going live from a setup file puts Tico's card down so Tasks shows (the shell brings it up for setup).
@@ -62,8 +65,8 @@ export function TicoSheet() {
     wasOwed.current = owed;
   }, [owed, setupLines, tuck]);
   return (
-    <Sheet kind="tico" label="Tico">
-      <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
+    <Sheet kind="tico" label={tico}>
+      <SheetHead kind="tico" title={tico} lead={phone ? undefined : <Dot size={TICO_MARK} />}>
         {!owed && power?.available !== false && power?.bot && room.data && <AssistantCall thread={room.data} bot={power.bot} />}
         <IconButton icon="search" label="Search" onClick={() => openSearch()} />
       </SheetHead>
@@ -108,10 +111,10 @@ export function TicoSheet() {
         </div>
       ) : room.data === null ? (
         <div className="chat-body">
-          <Fault label="Tico has no chat yet" />
+          <Fault label={`${tico} has no chat yet`} />
         </div>
       ) : (
-        <MessageBones label="Loading Tico" />
+        <MessageBones label={`Loading ${tico}`} />
       )}
     </Sheet>
   );

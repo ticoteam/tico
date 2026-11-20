@@ -338,3 +338,9 @@ html[data-layout="cards"] .provider-usage{grid-area:use}
 html[data-layout="cards"] .provider-badge{grid-area:badge;justify-self:end}
 html[data-layout="cards"] .provider-agents{grid-area:agents;justify-self:end}
 html[data-layout="cards"] .provider-more{grid-area:more}
+
+/* Your assistant: each color and sprite a still Dot; the chosen one ringed in ink (Assistant.tsx) */
+.set-looks{display:flex;flex-wrap:wrap;gap:var(--s-1h)}
+.set-look{display:inline-grid;place-items:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer}
+.set-look:hover{background:var(--hover)}
+.set-look[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--ink)}

@@ -15,6 +15,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import { DidLine } from '@/kit/DidLine';
 import { Dot } from '@/tico/dot';
+import { useTicoName } from '@/tico/look';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
@@ -46,14 +47,14 @@ const hueOf = (s: string) => {
 
 
 /**
- * Who said it. Tico's own sheet speaks as Tico. A name is what the message carries, else `known` (the directory's name
+ * Who said it. Tico's own sheet speaks as Tico, by the name you gave it (`tico`). A name is what the message carries, else `known` (the directory's name
  * for the sender, which a row from the stream or a reply being written needs), else the agent's slug in words.
  */
-export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant: Variant, me: string | undefined, known?: string): Who {
+export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant: Variant, me: string | undefined, known?: string, tico = 'Tico'): Who {
   const actor = m.sender_id ?? '';
   if (actor && actor === me) return { name: 'You', kind: 'person', hue: hueOf(actor) };
   if (actor.startsWith('bot:') || actor === 'keeper') {
-    if (variant === 'tico' || actor === 'keeper') return { name: 'Tico', kind: 'tico', hue: 0 };
+    if (variant === 'tico' || actor === 'keeper') return { name: tico, kind: 'tico', hue: 0 };
     return { name: m.sender_name || known || agentWords(actor), kind: 'agent', hue: hueOf(actor) };
   }
   return { name: m.sender_name || known || 'Person', kind: 'person', hue: hueOf(actor) };
@@ -350,6 +351,7 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
   const [reading, setReading] = useState(false);
   const [full, setFull] = useState(false);
   const known = useActor(m.sender_name ? undefined : m.sender_id)?.name;
+  const tico = useTicoName();
   const text = m.deleted ? 'Deleted' : (m.body ?? '');
   const shown = m.deleted ? null : card?.(m);
   // What Copy takes: the words as written, not a card drawn in their place.
@@ -366,7 +368,7 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
     <>
       {pics.viewer}
       {place && <SlackThread place={place} m={m} onClose={() => setReading(false)} />}
-      {full && <Reading text={text} title={whoOf(m, variant, me, known).name} onClose={() => setFull(false)} />}
+      {full && <Reading text={text} title={whoOf(m, variant, me, known, tico).name} onClose={() => setFull(false)} />}
     </>
   );
   if (m.pending || (me && m.sender_id === me)) {
@@ -409,7 +411,7 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
       </>
     );
   }
-  const who = whoOf(m, variant, me, known);
+  const who = whoOf(m, variant, me, known, tico);
   const aid = typeof m.refs?.action === 'string' ? m.refs.action : null;
   return (
     <>
@@ -450,7 +452,7 @@ function doingWords(r: LiveRun): string {
 /** A reply being written: its text so far, or what it is doing, with the typing dots; from the moment the agent got
     the message (`doing: 'wait'`). Heard once, when posted; a screen reader is told only that the agent got it. */
 export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; text: string }) {
-  const who = whoOf({ sender_id: r.bot }, variant, undefined, useActor(r.bot)?.name);
+  const who = whoOf({ sender_id: r.bot }, variant, undefined, useActor(r.bot)?.name, useTicoName());
   const dots = (
     <span className="typing">
       <i />

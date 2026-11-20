@@ -27,6 +27,7 @@ import { installConversationLive, isDmChanged, markRead, rowsOf, sendMessage, ti
 import { useReplying, type Answering, type ShownIn } from './replying';
 import { ReplyBox } from './ReplyBox';
 import type { ChatMessage, Variant } from './types';
+import { useTicoName } from '@/tico/look';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
 const READ_PX = 24;
@@ -42,7 +43,7 @@ const frame = () => new Promise((r) => requestAnimationFrame(() => r(null)));
 export interface ConversationProps {
   id: string;
   variant: Variant;
-  /** Who it is with: the head of a second chat and the box's "Message …". Tico's sheet says "Tico". */
+  /** Who it is with: the head of a second chat and the box's "Message …". Tico's sheet says your name for it (tico/look.ts). */
   title?: string;
   /** The face in a second chat's head (bot:<id> or human:<id>). */
   actor?: string;
@@ -296,8 +297,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   const items = itemsOf(rows, answering, myId, id, marks, comments, inline);
   const mate = useActor(actor);
+  const tico = useTicoName();
   // never a stand-in word for someone: their name, else what they are
-  const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
+  const name = variant === 'tico' ? tico : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
   const here = useHerePage();
   const at = from === undefined ? here : from;
   // the Agent bar's box keeps its draft by its agent, not by the thread it shows (which may change under it)

@@ -74,6 +74,7 @@ import {
 import { usePhoneCards } from '@/shell/phone';
 import { PageIntro, TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
+import { useLookOnPage } from '@/tico/look';
 import { pageName, usePageName } from '@/tico/pageName';
 import { chatAddress, closeTask, notePlace, openOf, pageSearch } from '@/lib';
 
@@ -208,6 +209,7 @@ function App() {
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
   useInitialReleaseRefresh(signedIn);
+  useLookOnPage(signedIn);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
