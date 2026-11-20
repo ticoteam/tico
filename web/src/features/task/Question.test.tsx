@@ -31,7 +31,7 @@ const sent: { url: string; body: Record<string, unknown> }[] = [];
 const reads: string[] = [];
 let reply: (url: string, method: string) => Reply | null = () => null;
 
-const question = (more: Partial<TaskQuestion> = {}): TaskQuestion => ({
+const question = (more: Partial<TaskQuestion & { detail: string | null }> = {}): TaskQuestion & { detail: string | null } => ({
   parent: { id: 'p9', number: 35, title: 'Credentials for agents' },
   asker: 'bot:gm',
   person: 'human:me',
@@ -43,6 +43,7 @@ const question = (more: Partial<TaskQuestion> = {}): TaskQuestion => ({
   answered_by: null,
   answer_message_id: null,
   answer_text: null,
+  detail: 'One shared key is simplest; separate keys let us cut one off.',
   ...more,
 });
 
@@ -52,7 +53,6 @@ const task = (q: TaskQuestion, more: Partial<TaskData> = {}): TaskData =>
     number: 40,
     version: 1,
     title: 'Share an AWS key with 35 agents?',
-    body: 'One shared key is simplest; separate keys let us cut one off.',
     status: 'open',
     pipeline_id: 'p1',
     pipeline: { id: 'p1', name: 'General' },

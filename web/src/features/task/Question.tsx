@@ -21,6 +21,10 @@ import { type TaskData } from './queries';
    chat, on a phone at the bottom of every tab. Only that box answers. Any other task shows its description at the top,
    and the questions asked on it, each a row to its own task. */
 
+/** A question as the task read gives it, with its detail: the rest of the ask after its first line (the task's own
+    body is not sent for a question). The schema does not name `detail` yet. */
+type Asked = TaskQuestion & { detail?: string | null };
+
 /** Whether the reader answers this task's question now: it is open and asks them. Their chat's message box gives way
     to the answer box then. */
 export function answersHere(t: TaskData, me: string | undefined): boolean {
@@ -43,9 +47,9 @@ export function TaskLead({ t }: { t: TaskData }) {
   );
 }
 
-function QuestionCard({ t, q }: { t: TaskData; q: TaskQuestion }) {
+function QuestionCard({ t, q }: { t: TaskData; q: Asked }) {
   const me = useQuery(meQuery).data?.id;
-  const body = (t.body ?? '').trim();
+  const detail = (q.detail ?? '').trim();
   // A task deleted, or one the reader may not open, is not named.
   const on = q.parent;
   return (
@@ -65,7 +69,7 @@ function QuestionCard({ t, q }: { t: TaskData; q: TaskQuestion }) {
           )}
         </span>
       </p>
-      {body && <p className="qn-body">{body}</p>}
+      {detail && <p className="qn-body">{detail}</p>}
       {q.state === 'answered' ? (
         <Answered q={q} />
       ) : q.state === 'withdrawn' ? (
