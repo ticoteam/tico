@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetGroups, centsOf, funnelSteps, pnlRange, stepRange } from './model';
+import { axis, budgetGroups, centsOf, count, funnelSteps, loudHealth, pnlRange, stepRange } from './model';
 import { readState } from './parts';
 import type { Budget } from './queries';
 import { panelOf, validateFinanceSearch } from './search';
@@ -43,5 +43,39 @@ describe('money model', () => {
     const q = { isPending: true, isError: false, error: null };
     expect(readState({ ...q, fetchStatus: 'fetching' })).toBe('loading');
     expect(readState({ ...q, fetchStatus: 'paused' })).toBe('fault');
+  });
+
+  it('names the fresh Growth sources quietly and a stale one out loud, by name @s400', () => {
+    const h = {
+      basis: 'customers' as const,
+      unknown_share: 0,
+      stale_sources: ['source:2'],
+      reconciled: 'not_reconciled' as const,
+      sources: [
+        { source: 'source:1', name: 'Payments', as_of: '2026-11-18', pushed_at: '2026-11-19T10:00:00Z', stale: false },
+        { source: 'source:2', name: 'Ad sheet', as_of: '2026-10-01', pushed_at: null, stale: true },
+      ],
+    };
+    expect(loudHealth(h)).toEqual(['Stale: Ad sheet']);
+  });
+});
+
+describe('a count chart’s axis', () => {
+  const labels = (values: number[]) => axis(values, true).ticks.map((t) => count(t));
+
+  it('never prints the same label twice when every month is 0', () => {
+    expect(labels([0, 0, 0])).toEqual(['0', '1']);
+  });
+
+  it('steps by whole numbers for small counts', () => {
+    for (const values of [[0, 1], [0, 2], [1, 3], [0, 7], [2, 9, 4]]) {
+      const ticks = axis(values, true).ticks;
+      expect(ticks.every((t) => Number.isInteger(t))).toBe(true);
+      expect(new Set(labels(values)).size).toBe(ticks.length);
+    }
+  });
+
+  it('keeps fine steps for shares, which are not counts', () => {
+    expect(axis([0, 0, 0]).ticks).toEqual([0, 0.5, 1]);
   });
 });

@@ -1,5 +1,4 @@
-// Tier 2 gaps of the Tasks track: Tags (New tag, search) and a tag (Edit, More, Filter and New task). Made-up rows
-// only.
+// Tags (the list, New tag, search) and a tag (its tasks, Edit, More, Filter and New task). Made-up rows only.
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, type AnyRouter } from '@tanstack/react-router';
@@ -61,13 +60,17 @@ const tag = (id: string, key: string, extra: Record<string, unknown> = {}) => ({
 const ENG: Pipeline = {
   id: 'eng',
   name: 'Engineering',
-  stages: [{ id: 'build', name: 'Build' }],
+  stages: [
+    { id: 'build', name: 'Build' },
+    { id: 'qa', name: 'QA' },
+  ],
   owner: null,
   done: { id: 'done', name: 'Done' },
   closed: { id: 'closed', name: 'Closed' },
   mayChange: true,
   preset: 'engineering',
 };
+const BUGS: Pipeline = { ...ENG, id: 'bugs', name: 'Bugs', stages: [{ id: 'new', name: 'New' }], preset: 'bugs' };
 const task = (id: string, number: number, title: string, extra: Partial<TaskItem> = {}): TaskItem => ({
   id,
   number,
@@ -96,14 +99,26 @@ beforeEach(() => {
   queryClient.setQueryData(['directory'], { actors: [ana], byId: { [ana.id]: ana } });
   queryClient.setQueryData(pipelinesQuery.queryKey, [ENG]);
 });
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
-
-/* ---------------------------------------------------------------- Tags */
+afterEach(() => vi.unstubAllGlobals());
 
 describe('Tags @s3', () => {
+  it('lists every tag, most recently used first; a tag opens its page', async () => {
+    serve();
+    queryClient.setQueryData(tagsQuery.queryKey, [tag('t1', 'checkout'), tag('t2', 'shipping', { updated_at: '2030-02-01T00:00:00Z', created_at: '2030-02-01T00:00:00Z' })]);
+    show(<TagsPage />, '/tags');
+    const table = await screen.findByRole('table', { name: 'Tags' });
+    const links = within(table).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toEqual(['shipping', 'checkout']);
+    expect(links[0]!.getAttribute('href')).toBe('/tags/t2');
+  });
+
+  it('reads tags without templates, and says so when there are none', async () => {
+    serve(() => ({ status: 200, body: { tags: [tag('tp', 'release', { is_template: true })] } }));
+    show(<TagsPage />, '/tags');
+    expect(await screen.findByText('No tags yet')).toBeTruthy();
+    expect(sent.map((s) => s.url)).toEqual(['/api/v2/tags?is_template=false']);
+  });
+
   it('makes a new tag from the head +, its key made from the name, and opens it @s3', async () => {
     serve((url, method) => (method === 'POST' && url === '/api/v2/tags' ? { status: 200, body: { tag: tag('t7', 'launch-week', { label: 'Launch week' }) } } : undefined));
     queryClient.setQueryData(tagsQuery.queryKey, [tag('t1', 'bug')]);
@@ -131,9 +146,33 @@ describe('Tags @s3', () => {
   });
 });
 
-/* ---------------------------------------------------------------- a tag */
-
 describe('A tag @s4', () => {
+  it('groups its open tasks by pipeline, each with its stage, and draws Done shut', async () => {
+    serve();
+    queryClient.setQueryData(pipelinesQuery.queryKey, [ENG, BUGS]);
+    seedTag(tag('t1', 'bug'), [
+      task('a', 7, 'Checkout fails on one browser', { stage_id: 'qa' }),
+      task('b', 8, 'Map tiles fail to load', { pipeline_id: 'bugs', stage_id: 'new' }),
+      task('c', 3, 'Old label typo', { stage_id: 'done', status: 'done' }),
+    ]);
+    show(<TagPage tag="t1" />, '/tags/t1');
+    expect(await screen.findByRole('heading', { level: 1, name: 'bug' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Tags' }).getAttribute('href')).toBe('/tags');
+    const eng = screen.getByRole('region', { name: 'Engineering' });
+    const row = within(eng).getByTitle('Checkout fails on one browser');
+    expect(row.getAttribute('href')).toBe('/tasks/eng/7');
+    expect(within(row).getByText('QA')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Bugs' })).getByTitle('Map tiles fail to load')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Done' })).queryByTitle('Old label typo')).toBeNull();
+  });
+
+  it('a tag on nothing says so', async () => {
+    serve();
+    seedTag(tag('t9', 'wholesale'));
+    show(<TagPage tag="t9" />, '/tags/t9');
+    expect(await screen.findByText('Nothing tagged wholesale')).toBeTruthy();
+  });
+
   it('edits its name and notes from "⋯" Edit @s4', async () => {
     serve((url, method) => (method === 'POST' && url === '/api/v2/tags/t1' ? { status: 200, body: { tag: tag('t1', 'bug', { label: 'Bugs', version: 2 }) } } : undefined));
     seedTag(tag('t1', 'bug'), [task('a', 7, 'Fix the cart')]);
@@ -173,7 +212,7 @@ describe('A tag @s4', () => {
     await waitFor(() => expect(posted('/api/v2/tasks')?.body).toEqual({ title: 'Check the refund', pipeline: 'eng', labels: ['bug'] }));
   });
 
-  it("narrows its tasks to an owner from the address, with a chip that clears it @s4", async () => {
+  it('narrows its tasks to an owner from the address, with a chip that clears it @s4', async () => {
     serve();
     seedTag(tag('t1', 'bug'), [task('a', 7, 'Fix the cart', { owner_id: 'human:ana' }), task('b', 8, 'Fix the map')]);
     show(<TagPage tag="t1" />, '/tags/t1?owner=human:ana');

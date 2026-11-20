@@ -114,7 +114,7 @@ afterEach(() => {
 });
 
 describe("A computer's screen", () => {
-  it('watches first, takes control in a new session, and keeps the ticket out of the cache and the address', async () => {
+  it('watches first, view only, takes control in a new session, and keeps the ticket out of the cache and the address @s685', async () => {
     serve(screenServer);
     const router = show(<TeamWho who="ana" tab="screen" />, '/team/ana?tab=screen');
     await waitFor(() => expect(fake.viewers).toHaveLength(1));
@@ -125,6 +125,7 @@ describe("A computer's screen", () => {
     expect(await screen.findByText('View only')).toBeTruthy();
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(TICKET);
     expect(router.state.location.href).not.toContain(TICKET);
+    expect(screen.getByRole('button', { name: 'Control' }).getAttribute('aria-pressed')).toBe('false');
 
     fireEvent.click(screen.getByRole('button', { name: 'Control' }));
     await waitFor(() => expect(fake.viewers).toHaveLength(2));

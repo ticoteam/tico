@@ -278,4 +278,32 @@ describe('Requesters @s36', () => {
     expect(await screen.findByText('Only the owner can do that')).toBeTruthy();
     expect(await screen.findByTitle('Ada Example')).toBeTruthy();
   });
+
+  it("changes an outside requester's details in place; who they are is fixed once added", async () => {
+    serve((_url, method) => (method === 'POST' ? { status: 200, body: {} } : { status: 200, body: { requesters: [person('r1', 'Ada Example')], next_offset: null, my_requester_id: null } }));
+    seedRequesters([person('r1', 'Ada Example', { email: 'ada@example.com' })]);
+    show(<RequestersDialog task="t1" title="Bulk orders" onClose={() => {}} />, '/roadmap?requesters=t1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Ada Example' }));
+    expect(screen.getByRole('dialog', { name: 'Edit requester' })).toBeTruthy();
+    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('ada@example.com');
+    fireEvent.change(screen.getByLabelText('Organization'), { target: { value: 'Example Co' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Important' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // back on the list at once, the change shown before the server answers
+    expect(await screen.findByText('Important, Example Co')).toBeTruthy();
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toMatchObject({ url: '/api/v2/tasks/t1/requesters/r1', body: { name: 'Ada Example', email: 'ada@example.com', organization: 'Example Co', important: true, source: 'manual' } });
+  });
+
+  it('a teammate requester has no contact fields or source to fill', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    const ana = { id: 'human:ana', kind: 'person', name: 'Ana Ruiz' };
+    queryClient.setQueryData(['directory'], { actors: [ana], byId: { [ana.id]: ana } });
+    seedRequesters([person('r2', '', { kind: 'teammate', actor: 'human:ana' })]);
+    show(<RequestersDialog task="t1" title="Bulk orders" onClose={() => {}} />, '/roadmap?requesters=t1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Ana Ruiz' }));
+    expect(screen.queryByLabelText('Email')).toBeNull();
+    expect(screen.queryByLabelText('Source')).toBeNull();
+    expect(screen.getByLabelText('Organization')).toBeTruthy();
+  });
 });

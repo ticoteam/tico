@@ -5,23 +5,25 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
-import { queryClient } from '@/data';
+import { queryClient, type Actor } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import './actions';
 import { FinancePage } from './Finance';
 import { asOfDay, compareDay } from './ledger';
 import { dayOf } from './model';
-import { cardsQuery } from './queries';
+import { accessQuery, cardsQuery } from './queries';
 import { validateFinanceSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
-/* Finance's books tabs: bills, invoices, entries, cards and the balance sheet, each record beside its list.
-   Made-up figures and names only. */
+/* Finance's books tabs: bills, invoices, entries, cards, attribution and the balance sheet, each record beside its
+   list; importing history; viewing as a teammate. Made-up figures and names only. */
 
 type Posted = Record<string, unknown>;
 const OWNER = { can_edit_defaults: false, teammates: [{ teammate: 'human:me', kind: 'human', default: 'everything', rights: [] }] };
 
-/** Answers reads by `reads`, in order; records each POST and answers it by `decide` (a dry run, then the send). */
+/** Answers reads by `reads`, in order (the access list is the owner's unless given); records each POST and answers it
+    by `decide` (a dry run, then the send). */
 function serve(reads: [string | RegExp, unknown][], decide: (body: Posted) => unknown = () => ({ status: 'committed' })) {
   const posted: Posted[] = [];
   const got: string[] = [];
@@ -34,9 +36,9 @@ function serve(reads: [string | RegExp, unknown][], decide: (body: Posted) => un
       return json({ kind: body.kind, ...(decide(body) as object) });
     }
     got.push(u);
-    if (u.endsWith('/finance/access')) return json(OWNER);
     const hit = reads.find(([k]) => (typeof k === 'string' ? u.includes(k) : k.test(u)));
-    return hit ? json(hit[1]) : json({}, 404);
+    if (hit) return json(hit[1]);
+    return u.endsWith('/finance/access') ? json(OWNER) : json({}, 404);
   });
   return { posted, got };
 }
@@ -75,13 +77,31 @@ const doc = (o: Record<string, unknown>) => ({
   ...o,
 });
 
+const person = (id: string, name: string): Actor => ({ id, kind: 'person', name });
+function directory(...actors: Actor[]) {
+  queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
+}
+const team = () => directory(person('human:me', 'Me'), person('human:sam', 'Sam'), person('human:kim', 'Kim'), person('human:lee', 'Lee'));
+
+/** The owner; Sam sees his own expenses (a P&L), Kim only her budgets (no P&L). */
+const TEAM = {
+  can_view_as: true,
+  can_edit_defaults: false,
+  teams: [],
+  teammates: [
+    { teammate: 'human:me', kind: 'person', default: 'everything', rights: [] },
+    { teammate: 'human:sam', kind: 'person', default: 'own_expenses', rights: [] },
+    { teammate: 'human:kim', kind: 'person', default: 'none', rights: [], budgets: 1 },
+  ],
+};
+
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
 });
 beforeEach(() => {
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-  queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+  directory();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -377,6 +397,100 @@ describe('Balance sheet @s408', () => {
     expect(text.split('\n')[0]).toBe(`Section,Code,Account,2026-10-31,${today}`);
     expect(text).toContain('Assets,1000,Checking,3000.00,5000.00');
     click.mockRestore();
+  });
+});
+
+describe('Attribution rule @s459', () => {
+  it('a new rule names a vendor and its split, and is saved', async () => {
+    team();
+    const { posted } = serve([
+      ['/finance/access', TEAM],
+      ['/finance/attribution-rules', { can_change: true, rules: [] }],
+      ['/finance/contacts', { contacts: [{ id: 'v1', name: 'Paper Co' }] }],
+    ]);
+    show('/company/finance?tab=attribution');
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add rule' }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: 'New rule' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Paper to Sam' } });
+    await pick(within(dialog).getByRole('combobox', { name: 'Match' }), /^Paper Co$/);
+    await pick(within(dialog).getByRole('combobox', { name: 'Teammate or team' }), /^Sam$/);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Share, %' }), { target: { value: '100' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(posted).toEqual([
+        {
+          kind: 'attribution_rule_set',
+          payload: { name: 'Paper to Sam', match: { kind: 'vendor', id: 'v1' }, splits: [{ teammate: 'human:sam', share_bps: 10000 }], enabled: true },
+        },
+      ]),
+    );
+  });
+});
+
+describe('Import history @s465', () => {
+  it('a sheet is mapped to the chart, previewed as a dry run, then imported', async () => {
+    const { posted } = serve(
+      [
+        ['/finance/balance-sheet', { as_of: '2026-10-31', assets: [], liabilities: [], equity: [] }],
+        ['/finance/chart', { accounts: [{ id: 'acc_sw', number: '6100', name: 'Software', type: 'expense', subtype: '' }] }],
+      ],
+      (b) => (b.dry_run ? { status: 'committed', impact: { months: 1, rows: 1, accounts: [{ code: '6100', name: 'Software', total: 1250 }] } } : { status: 'committed' }),
+    );
+    show('/company/finance?tab=balance');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Import history' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Import history' });
+    const file = new File(['month,line,amount\n2026-01,Software,12.50\n'], 'history.csv', { type: 'text/csv' });
+    fireEvent.change(within(dialog).getByLabelText('Sheet file'), { target: { files: [file] } });
+    expect((await within(dialog).findByRole('combobox', { name: 'Software' })).textContent).toContain('6100 Software');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Import' }));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    const payload = { csv: 'month,line,amount\n2026-01,Software,1250\n', basis: 'accrual', mapping: { Software: 'acc_sw' } };
+    expect(posted[0]).toEqual({ kind: 'import_raw_totals', payload, dry_run: true });
+    expect(posted[1]).toEqual({ kind: 'import_raw_totals', payload });
+  });
+
+  it('is open to Tico: a posted month can be undone, and a non-owner’s import waits for the owner', async () => {
+    const { posted } = serve([]);
+    show('/company/finance?tab=balance');
+    const r = await run('finance.importHistory', { csv: 'month,line,amount\n2026-01,Sales,100', basis: 'accrual', mapping: { Sales: 'acc_1' } }, { via: 'tico' });
+    expect(r).toMatchObject({ ok: true });
+    expect(posted.map((p) => p.kind)).toEqual(['import_raw_totals']);
+  });
+});
+
+describe('View as @s456', () => {
+  beforeEach(() => {
+    team();
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
+  });
+
+  it('View on Access lands on the teammate’s P&L, not on Access', async () => {
+    serve([['/finance/access', TEAM]]);
+    const router = show('/company/finance?tab=access');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'View as' }));
+    const dialog = await screen.findByRole('dialog', { name: 'View as' });
+    await pick(within(dialog).getByRole('combobox', { name: 'Teammate' }), /^Sam$/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'View' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ as: 'human:sam', tab: 'pnl' }));
+  });
+
+  it('a teammate with no P&L lands on their first page', async () => {
+    serve([['/finance/access', TEAM]]);
+    const router = show('/company/finance?tab=access');
+    queryClient.setQueryData(accessQuery.queryKey, TEAM as never);
+    expect(await run('finance.viewAs', { teammate: 'human:kim' }, { via: 'click' })).toMatchObject({ ok: true });
+    await waitFor(() => expect(router.state.location.search).toEqual({ as: 'human:kim' }));
+  });
+
+  it('a page closed to the teammate still offers Stop', async () => {
+    serve([['/finance/access', TEAM]]);
+    const router = show('/company/finance?tab=access&as=human:sam');
+    expect(await screen.findByText("You don't have access to this page")).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'Stop' }));
+    await waitFor(() => expect((router.state.location.search as { as?: string }).as).toBeUndefined());
   });
 });
 

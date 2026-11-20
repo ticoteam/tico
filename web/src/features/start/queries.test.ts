@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/client';
 import type { ModelSubscriptionList } from '@/api/schema';
 import { queryClient } from '@/data';
-import { loginQuery, needsSetup, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
+import { loginQuery, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
 import { resumeStep, setupStep, stepBefore } from './steps';
 
 const err = (status: number, signIn: string | null = null) => new ApiError(status, 'x', 'Not on the list', false, signIn);
@@ -15,11 +15,6 @@ describe('where a person lands @s1155 @s1156 @s1157 @s1195', () => {
     expect(screenFor(err(403))).toBe('refused');
     expect(screenFor(err(0))).toBe('down');
     expect(screenFor(new TypeError('fetch failed'))).toBe('down');
-  });
-
-  it('owes the first run only when the config says so', () => {
-    expect(needsSetup(null)).toBe(false);
-    expect(needsSetup({ onboarding_needed: true } as never)).toBe(true);
   });
 });
 

@@ -1,10 +1,41 @@
-import { createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { queryClient } from '@/data';
+import { arrangementFor } from '@/shell/arrangement';
+import { Frame } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
+import { MenuLip } from './MenuLip';
 import { PhoneCards } from './PhoneCards';
 
-vi.mock('@/tico/dot', () => ({ Dot: () => null }));
+vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
+vi.mock('@/motion', () => ({ motionLevel: () => 'off' }));
+
+const width = (w: number) =>
+  act(() => {
+    Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+  });
+afterEach(() => {
+  queryClient.clear();
+  width(1440);
+});
+
+/** The frame as the root draws it, on a phone, at an address. */
+function onPhone(node: () => ReactNode, at: string) {
+  width(390);
+  const root = createRootRoute({ component: node });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return router;
+}
 
 const cards = (extra: { chat?: boolean } = {}) => (
   <PhoneCards
@@ -181,5 +212,134 @@ describe('the lips drawn down by a scroll', () => {
     await waitFor(() => expect(drawn()).toBe('1'));
     fireEvent.click(screen.getByRole('button', { name: 'Open thread' }));
     await waitFor(() => expect(drawn()).toBe('0'));
+  });
+});
+
+/* The shell as the root draws it on a phone: the arrangement from the address, a task's chat with an open task. */
+function PhoneShell() {
+  const path = useLocation({ select: (l) => l.pathname });
+  const search = useLocation({ select: (l) => l.search as Record<string, unknown> });
+  const arr = arrangementFor(path, search);
+  return (
+    <Frame
+      arrangement={arr}
+      tico={<p>Tico</p>}
+      menu={<nav aria-label="Main" />}
+      page={
+        <Sheet kind="page" label="Page">
+          <h1>{arr === 'task' ? 'Fix the export' : 'Tasks'}</h1>
+          <button type="button">Stage</button>
+        </Sheet>
+      }
+      chat={arr === 'task' || arr === 'chat' ? <Sheet kind="chat" label="Chat" /> : undefined}
+    />
+  );
+}
+
+describe('phone: a task’s chat and an agent’s chat belong to the page', () => {
+  it('a task opened by its own address shows its head; the chat waits as a lip until it is raised', async () => {
+    onPhone(PhoneShell, '/tasks/eng/t1');
+    expect(await screen.findByRole('heading', { name: 'Fix the export' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+    const lip = screen.getByRole('button', { name: 'Open Chat' });
+    expect(lip.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(lip);
+    expect(screen.getByRole('dialog', { name: 'Chat' })).toBeTruthy();
+  });
+
+  it('opening a task from its list keeps the chat tucked', async () => {
+    const router = onPhone(PhoneShell, '/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Tasks' })).toBeTruthy();
+    await act(() => router.navigate({ to: '/tasks/eng/t1' as never }));
+    expect(await screen.findByRole('heading', { name: 'Fix the export' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('an address that names the chat opens with it raised', async () => {
+    onPhone(PhoneShell, '/tasks/eng/t1?chat=task');
+    expect(await screen.findByRole('dialog', { name: 'Chat' })).toBeTruthy();
+  });
+
+  it('a page with a second chat in its address still opens on the chat (A1)', async () => {
+    onPhone(PhoneShell, '/roadmap?chat=agent:builder');
+    expect(await screen.findByRole('dialog', { name: 'Chat' })).toBeTruthy();
+  });
+
+  it('an agent’s own page opens on the page, its chat a lip', async () => {
+    onPhone(
+      () => (
+        <Frame
+          arrangement="agent"
+          tico={<p>Tico</p>}
+          menu={<nav aria-label="Main" />}
+          page={<Sheet kind="chat" label="Chat with Birch Builder" />}
+          widgets={
+            <Sheet kind="page" label="Birch Builder">
+              <h1>Birch Builder</h1>
+            </Sheet>
+          }
+        />
+      ),
+      '/team/builder',
+    );
+    expect(await screen.findByRole('heading', { name: 'Birch Builder' })).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Chat' }).closest('[inert]')).toBeNull();
+  });
+});
+
+describe('phone: a card out of view takes no focus', () => {
+  const chatLip = () => document.querySelector<HTMLElement>('.ly-chat > .lip');
+
+  it('with no chat open, the chat card and its lip are inert', () => {
+    render(cards());
+    expect(chatLip()?.closest('[inert]')?.classList.contains('ly-chat')).toBe(true);
+  });
+
+  it('an open chat’s lip can be focused, until the menu comes up over it', () => {
+    render(cards({ chat: true }));
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Finance Owner' }), { key: 'Escape' });
+    expect(chatLip()?.closest('[inert]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Menu' }));
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeTruthy();
+    expect(chatLip()?.closest('[inert]')).not.toBeNull();
+  });
+});
+
+describe("The phone's menu lip @s1191", () => {
+  const withLip = (lip: ReactNode) =>
+    onPhone(
+      () => (
+        <Frame
+          arrangement="page"
+          tico={<p>Tico</p>}
+          menu={<nav aria-label="Main" />}
+          page={
+            <Sheet kind="page" label="Finance">
+              <h1>Finance</h1>
+            </Sheet>
+          }
+          lips={{ menu: lip }}
+        />
+      ),
+      '/company/finance',
+    );
+
+  it('shows the company, the page behind and what waits on you in Flow, passed through the frame', async () => {
+    withLip(<MenuLip company="Fernhill" flow={4} />);
+    const lip = await screen.findByRole('button', { name: 'Open Menu' });
+    expect(within(lip).getByText('Fernhill')).toBeTruthy();
+    expect(within(lip).getByText('F')).toBeTruthy();
+    expect(await within(lip).findByText('Finance')).toBeTruthy();
+    expect(within(lip).getByRole('img', { name: 'Waits on you' })).toBeTruthy();
+    expect(within(lip).getByText('4')).toBeTruthy();
+  });
+
+  it('leaves the count out when nothing waits on you', async () => {
+    withLip(<MenuLip company="Fernhill" />);
+    const lip = await screen.findByRole('button', { name: 'Open Menu' });
+    expect(within(lip).getByText('Fernhill')).toBeTruthy();
+    expect(within(lip).queryByRole('img', { name: 'Waits on you' })).toBeNull();
   });
 });

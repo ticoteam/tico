@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('s622 Decisions', () => {
+describe('Decisions @s622', () => {
   it('reads decisions.md newest first, an undated entry kept with the one above it', () => {
     const rows = decisionsOf(DECISIONS);
     expect(rows.map((r) => r.title)).toEqual([
@@ -108,6 +108,16 @@ describe('s622 Decisions', () => {
     expect(within(section).getByText('Keep the weekly digest short')).toBeTruthy();
   });
 
+  it('past 20, "N more" opens the rest', async () => {
+    const lines = Array.from({ length: 22 }, (_, i) => `- 2026-10-${String(i + 1).padStart(2, '0')} Decision ${i + 1}`);
+    serve((url) => (url.includes('/bots/ana/memory') ? { status: 200, body: { documents: { 'memory/decisions.md': ['# Decisions', ...lines].join('\n') } } } : undefined));
+    show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
+    const section = await screen.findByRole('region', { name: 'Decisions' });
+    expect(section.querySelectorAll('.row')).toHaveLength(20);
+    fireEvent.click(within(section).getByRole('button', { name: '2 more' }));
+    expect(section.querySelectorAll('.row')).toHaveLength(22);
+  });
+
   it('shows no Decisions section when the file is empty', async () => {
     serve(() => undefined);
     show(<TeamWho who="ana" tab="settings" />, '/team/ana?tab=settings');
@@ -116,7 +126,7 @@ describe('s622 Decisions', () => {
   });
 });
 
-describe('s623 Dream', () => {
+describe('Dream @s623', () => {
   it('splits numbered questions and numbers the reply to match', () => {
     const cards = dreamCards('Two things:\n1. Keep the old notes?\n2) Merge the duplicates?');
     expect(cards.map((c) => c.n)).toEqual(['1', '2']);
@@ -137,6 +147,14 @@ describe('s623 Dream', () => {
     const section = await screen.findByRole('region', { name: 'Dream' });
     expect(within(section).getByText('Falling asleep')).toBeTruthy();
     await waitFor(() => expect(sent.some((s) => s.method === 'POST' && s.url.endsWith('/api/v2/bots/ana/dream'))).toBe(true));
+  });
+
+  it('asks one question with one answer box', async () => {
+    serve((url) => (url.includes('/bots/ana/dream') ? { status: 200, body: { dream: dreaming({ state: 'asking', questions: { mine: true, requirement_id: 'r1', task_id: 't9', text: '1. Keep the old notes?' } }) } } : undefined));
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Dream' });
+    expect(await within(section).findByText('A few questions')).toBeTruthy();
+    expect(within(section).getByLabelText('Your answer')).toBeTruthy();
   });
 
   it('answers its questions as one numbered reply on the dream task', async () => {

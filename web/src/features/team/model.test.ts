@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Actor, Directory } from '@/data';
-import { computerStatus, GB, historyOf, managerOf, membersUnder, modelLine, resolveWho, runFigures, startOfWeek, teamSlug, whoHref } from './model';
+import { computerStatus, GB, historyOf, instructionsChange, managerOf, membersUnder, modelLine, resolveWho, runFigures, startOfWeek, teamSlug, whoHref } from './model';
 import type { AgentRow, Group, PersonRow } from './queries';
 
 const ana: Actor = { id: 'bot:0190-ana', kind: 'agent', name: 'Ana', slug: 'ana' };
@@ -92,5 +92,11 @@ describe('team model', () => {
       'Disk 60 of 100 GB',
     ]);
     expect(computerStatus({ online: false, last_seen_at: '2026-11-19T10:41:00Z' }, () => '10:41 AM')).toEqual(['Offline since 10:41 AM']);
+  });
+
+  it('words a change to the instructions as the one stretch that differs @s617', () => {
+    expect(instructionsChange('A\n\nB', 'A\n\nB')).toBeNull();
+    expect(instructionsChange('A\n\nB', 'A\n\nB\n\nC')).toBe('Add this after the paragraph that starts "B":\n\nC');
+    expect(instructionsChange('A\n\nB\n\nC', 'A\n\nC')).toBe('Remove this:\n\nB');
   });
 });

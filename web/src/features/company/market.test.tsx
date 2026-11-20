@@ -4,34 +4,21 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import { run } from '@/actions';
-// eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
-import { bind } from '@/actions/bind';
-import type { FactoryMap, KpiDetail } from '@/api/schema';
-import { factoryGroups, moveTargets } from './OrgPage';
 import {
-  accessQuery,
-  factoriesQuery,
-  groupsQuery,
   listeningStatsQuery,
-  kpiQuery,
-  goalsTreeQuery,
   marketBriefingQuery,
   marketCountQuery,
   marketSetupQuery,
   marketSpendQuery,
-  placedKpisQuery,
   valueChainQuery,
   type ListeningStats,
   type MarketBriefing,
   type MarketSetupState,
   type MarketSpend,
-  type PlacedKpi,
-  type Team,
 } from './queries';
 import { StrategyPage } from './StrategyPage';
 
-/* Market's rows and panels, a KPI's place in the KPI tree, and a teammate's sheet on Org. Sample data only. */
+/* Strategy's Market tab: its figures, rows and panels, its definition and its set-up. Sample data only. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 const toasts = vi.hoisted(() => vi.fn());
@@ -75,19 +62,19 @@ function show(node: ReactNode, at: string) {
   );
 }
 const href = (el: HTMLElement) => decodeURIComponent(el.closest('a')?.getAttribute('href') ?? '');
-async function pick(box: HTMLElement, name: RegExp) {
-  fireEvent.click(box);
-  const option = await screen.findByRole('option', { name });
-  fireEvent.pointerDown(option, { pointerType: 'mouse' });
-  fireEvent.click(option);
-}
-
-// ---------------------------------------------------------------- Market
 
 const spend: MarketSpend = {
   name: 'Dog grooming in Ohio',
   year: 2026,
-  definition: { description: 'What Ohio dog owners spend on grooming', year: 2026, geography: 'Ohio', currency: 'USD', includes: ['Mobile grooming'], excludes: ['Pet food'] },
+  definition: {
+    description: 'What Ohio dog owners spend on grooming',
+    year: 2026,
+    geography: 'Ohio',
+    currency: 'USD',
+    includes: ['Mobile grooming'],
+    excludes: ['Pet food'],
+    params: { vans_per_city: 12, avg_visit_price: { value: 80, judgement: true } },
+  },
   total: { spend_usd: 48_000_000 },
   segments: [
     {
@@ -95,7 +82,7 @@ const spend: MarketSpend = {
       name: 'Mobile grooming',
       summary: 'Vans that come to the house.',
       size: { id: 'z1', spend_usd: 12_000_000, low_usd: 9_000_000, high_usd: 15_000_000, growth_pct: 6.5, confidence: 'medium', accepted: false },
-      estimates: [{ id: 'z1', method: 'bottom_up', status: 'proposed', spend_usd: 12_000_000, low_usd: 9_000_000, high_usd: 15_000_000, arithmetic: '4,000 vans x $3,000', params: { vans: 4000 } }],
+      estimates: [{ id: 'z1', method: 'bottom_up', status: 'proposed', spend_usd: 12_000_000, low_usd: 9_000_000, high_usd: 15_000_000, arithmetic: '4,000 vans x $3,000', params: { vans_per_city: 4000 } }],
       players: [{ entity_id: 'e1', name: 'Groomly', figures: [{ metric: 'revenue', value: 3_000_000, kind: 'reported' }] }],
     },
     { id: 's2', name: 'Salons' },
@@ -157,20 +144,32 @@ describe('Market: what buyers say @s326', () => {
   });
 });
 
-describe('Market @s325 @s357 @s360 @s361', () => {
-  it('lists segments, changes, the value chain in order and the organizations, each opening its panel', async () => {
+describe('Market @s302 @s319 @s320 @s324 @s325 @s357 @s360 @s361', () => {
+  it('sizes the market on top, then lists segments, changes, the value chain in order and the organizations, each opening its panel', async () => {
     serve(nothing);
     market();
     show(<StrategyPage tab="market" />, at());
     expect(href(await screen.findByRole('link', { name: 'Mobile grooming' }))).toBe('/company/strategy/market?panel=segment:s1');
-    expect(within(screen.getByRole('table', { name: 'Segments' })).getByText('Not sized')).toBeTruthy();
-    expect(href(screen.getByText('Groomly raised prices'))).toBe('/company/strategy/market?panel=briefing');
+    // where the money goes: the market's yearly spend, then each segment's
+    const figures = screen.getByRole('group', { name: 'Market figures' });
+    expect(figures.textContent).toContain('$48M');
+    expect(figures.textContent).toContain('Dog grooming in Ohio');
+    const segs = screen.getByRole('table', { name: 'Segments' });
+    expect(within(segs).getByText('$12M')).toBeTruthy();
+    expect(within(segs).getByText('6.5%')).toBeTruthy();
+    expect(within(segs).getByText('Not sized')).toBeTruthy();
+    expect(href(within(screen.getByRole('region', { name: 'Changes' })).getByText('Groomly raised prices'))).toBe('/company/strategy/market?panel=briefing');
     const layers = within(screen.getByRole('region', { name: 'How it reaches buyers' })).getAllByRole('listitem');
     expect(layers.map((l) => l.getAttribute('aria-label'))).toEqual(['Suppliers', 'Us and rivals']);
     const groomly = within(layers[1]!).getByRole('link');
     expect(href(groomly)).toBe('/company/strategy/market?panel=player:e1');
     expect(groomly.textContent).toContain('$3M');
-    expect(href(within(screen.getByRole('table', { name: 'Organizations' })).getByText('Groomly'))).toBe('/company/strategy/market?panel=player:e1');
+    // who we are up against: each organization with what it sells and its figure, opening its note
+    const orgs = screen.getByRole('table', { name: 'Organizations' });
+    const row = within(orgs).getByText('Groomly').closest('tr')!;
+    expect(row.textContent).toContain('Mobile grooming');
+    expect(row.textContent).toContain('$3M');
+    expect(href(within(orgs).getByText('Groomly'))).toBe('/company/strategy/market?panel=player:e1');
     expect(document.querySelector('a[href*="map"]')).toBeNull();
   });
 
@@ -214,15 +213,16 @@ describe('Market @s325 @s357 @s360 @s361', () => {
     expect(within(panel).getByRole('button', { name: 'Accept' })).toBeTruthy();
   });
 
-  it('saves a parameter for the owner', async () => {
+  it('saves a parameter for the owner, its field named in words', async () => {
     const sent = serve((_url, method) => (method === 'POST' ? { status: 200, body: {} } : nothing()));
     queryClient.setQueryData(['me'], owner);
     market();
     show(<StrategyPage tab="market" search={{ panel: 'segment:s1' }} />, at('segment:s1'));
     const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans' }), { target: { value: '5000' } });
+    expect(within(panel).queryByText('vans_per_city')).toBeNull();
+    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans per city' }), { target: { value: '5000' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/market/sizes/z1/params', method: 'POST', body: { params: { vans: 5000 } } }]));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/market/sizes/z1/params', method: 'POST', body: { params: { vans_per_city: 5000 } } }]));
   });
 
   it("takes back a parameter the server refuses, saying why", async () => {
@@ -231,10 +231,10 @@ describe('Market @s325 @s357 @s360 @s361', () => {
     market();
     show(<StrategyPage tab="market" search={{ panel: 'segment:s1' }} />, at('segment:s1'));
     const panel = await screen.findByRole('complementary', { name: 'Mobile grooming' });
-    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans' }), { target: { value: '5000' } });
+    fireEvent.change(within(panel).getByRole('spinbutton', { name: 'Vans per city' }), { target: { value: '5000' } });
     fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toasts).toHaveBeenCalledWith({ text: 'Not allowed', kind: 'failed' }));
-    expect(queryClient.getQueryData<MarketSpend>(marketSpendQuery.queryKey)?.segments?.[0]?.estimates?.[0]?.params).toEqual({ vans: 4000 });
+    expect(queryClient.getQueryData<MarketSpend>(marketSpendQuery.queryKey)?.segments?.[0]?.estimates?.[0]?.params).toEqual({ vans_per_city: 4000 });
   });
 
   it('reads the week’s briefing in full, with the bets it touches', async () => {
@@ -274,7 +274,7 @@ describe('Market @s325 @s357 @s360 @s361', () => {
 });
 
 describe('Market definition @s358 @s359', () => {
-  it('shows what a sized market counts', async () => {
+  it('shows what a sized market counts, its shared parameters in words, never their keys', async () => {
     serve(nothing);
     market();
     show(<StrategyPage tab="market" search={{ panel: 'definition' }} />, at('definition'));
@@ -282,6 +282,10 @@ describe('Market definition @s358 @s359', () => {
     expect(within(panel).getByText('What Ohio dog owners spend on grooming')).toBeTruthy();
     expect(within(panel).getByText('Ohio')).toBeTruthy();
     expect(within(panel).getByRole('region', { name: 'Includes' }).textContent).toContain('Mobile grooming');
+    const shared = within(panel).getByRole('region', { name: 'Shared parameters' });
+    expect(within(shared).getByText('Vans per city')).toBeTruthy();
+    expect(within(shared).getByText('Avg visit price')).toBeTruthy();
+    expect(shared.textContent).not.toContain('_');
     expect(within(panel).queryByRole('button', { name: 'Update' })).toBeNull();
   });
 
@@ -361,210 +365,5 @@ describe('Market set-up @s329', () => {
     show(<StrategyPage tab="market" />, at());
     fireEvent.click(await screen.findByRole('button', { name: 'Start research' }));
     await waitFor(() => expect(toasts).toHaveBeenCalledWith({ text: 'The Librarian is not running yet', kind: 'failed' }));
-  });
-});
-
-// ---------------------------------------------------------------- a KPI's place
-
-describe('KPI place @s367', () => {
-  const placed: PlacedKpi[] = [
-    { id: 'k1', name: 'Weekly signups', parent_kpi_id: null, growth_role: null, may_edit: true },
-    { id: 'k2', name: 'Paying customers', parent_kpi_id: null, growth_role: 'north_star', may_edit: true },
-    { id: 'k3', name: 'Trial starts', parent_kpi_id: 'k1', growth_role: 'input', may_edit: true },
-  ];
-  const seed = () => {
-    queryClient.setQueryData(goalsTreeQuery.queryKey, { goals: [], other_kpis: [], owners: {}, proposals: [], unaligned: {} });
-    queryClient.setQueryData(placedKpisQuery.queryKey, placed);
-  };
-
-  it('offers Place in the KPI’s menu', async () => {
-    serve(nothing);
-    seed();
-    const detail = { kpi: { id: 'k1', name: 'Weekly signups', unit: '', latest: null, owner_id: 'bot:growth', status: 'none' }, readings: [], links: [], may_edit: true, may_log: false } as unknown as KpiDetail;
-    queryClient.setQueryData(kpiQuery('k1').queryKey, detail);
-    show(<StrategyPage tab="goals" search={{ panel: 'kpi:k1' }} />, '/company/strategy/goals?panel=kpi:k1');
-    const panel = await screen.findByRole('complementary', { name: 'Weekly signups' });
-    fireEvent.click(within(panel).getByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'Place in tree' })).toBeTruthy();
-  });
-
-  it('saves what it feeds and its role, never offering itself or a KPI under it', async () => {
-    const sent = serve((_url, method) => (method === 'POST' ? { status: 200, body: {} } : nothing()));
-    seed();
-    show(<StrategyPage tab="goals" search={{ panel: 'kpi-place:k1' }} />, '/company/strategy/goals?panel=kpi-place:k1');
-    const panel = await screen.findByRole('complementary', { name: 'Weekly signups' });
-    fireEvent.click(within(panel).getByRole('combobox', { name: 'Feeds' }));
-    expect(await screen.findByRole('option', { name: /Paying customers/ })).toBeTruthy();
-    expect(screen.queryByRole('option', { name: /Trial starts/ })).toBeNull();
-    expect(screen.queryByRole('option', { name: /Weekly signups/ })).toBeNull();
-    const option = screen.getByRole('option', { name: /Paying customers/ });
-    fireEvent.pointerDown(option, { pointerType: 'mouse' });
-    fireEvent.click(option);
-    await pick(within(panel).getByRole('combobox', { name: 'Role' }), /Input/);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/kpis/k1', method: 'POST', body: { parent_kpi_id: 'k2', growth_role: 'input' } }]));
-  });
-
-  it('takes a refused place back, saying why', async () => {
-    serve((_url, method) => (method === 'POST' ? refused(403, 'forbidden') : nothing()));
-    seed();
-    show(<StrategyPage tab="goals" search={{ panel: 'kpi-place:k1' }} />, '/company/strategy/goals?panel=kpi-place:k1');
-    const panel = await screen.findByRole('complementary', { name: 'Weekly signups' });
-    await pick(within(panel).getByRole('combobox', { name: 'Role' }), /North Star/);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(toasts).toHaveBeenCalledWith({ text: 'Not allowed', kind: 'failed' }));
-    expect(queryClient.getQueryData<PlacedKpi[]>(placedKpisQuery.queryKey)?.find((k) => k.id === 'k2')?.growth_role).toBe('north_star');
-  });
-
-  it('says so when the KPI tree does not load', async () => {
-    serve(nothing);
-    queryClient.setQueryData(goalsTreeQuery.queryKey, { goals: [], other_kpis: [], owners: {}, proposals: [], unaligned: {} });
-    show(<StrategyPage tab="goals" search={{ panel: 'kpi-place:k1' }} />, '/company/strategy/goals?panel=kpi-place:k1');
-    expect(await screen.findByText('The KPI tree did not load')).toBeTruthy();
-  });
-});
-
-// ---------------------------------------------------------------- a teammate's sheet on Org
-
-describe('Org teammate sheet @s362', () => {
-  const g = (id: string, name: string, over: Partial<Team> = {}): Team => ({ id, name, parent: '', order: 0, people: [], bots: [], bot_slugs: [], ...over });
-  const groups: Team[] = [
-    g('sales', 'Sales', { order: 1, people: ['ana'], lead: 'person:me' }),
-    g('east', 'East', { parent: 'sales', order: 2 }),
-    g('ops', 'Ops', { order: 3, bots: ['builder'], bot_slugs: ['builder'] }),
-    g('built-in', 'General', { order: 4, bots: ['librarian'], bot_slugs: ['librarian'] }),
-  ];
-  const ana = { id: 'human:ana', kind: 'person', name: 'Ana Ruiz', slug: null };
-  const seed = () => {
-    queryClient.setQueryData(['directory'], { actors: [ana], byId: { 'human:ana': ana } });
-    queryClient.setQueryData(groupsQuery.queryKey, groups);
-  };
-
-  it('opens a teammate from the chart', async () => {
-    serve(nothing);
-    seed();
-    show(<StrategyPage tab="org" />, '/company/strategy/org');
-    expect(href(await screen.findByText('Ana Ruiz'))).toBe('/company/strategy/org?panel=mate:human:ana');
-  });
-
-  it('moves a teammate for the owner, at once', async () => {
-    const sent = serve((_url, method) => (method === 'PATCH' ? { status: 200, body: groups[2] } : nothing()));
-    queryClient.setQueryData(['me'], owner);
-    seed();
-    show(<StrategyPage tab="org" search={{ panel: 'mate:human:ana' }} />, '/company/strategy/org?panel=mate:human:ana');
-    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
-    expect(panel.querySelector('.fact-v')?.textContent).toBe('Sales');
-    expect(href(within(panel).getByText('Open'))).toBe('/team/ana');
-    await pick(within(panel).getByRole('combobox', { name: 'Move to' }), /Ops/);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Move' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/groups/ops', method: 'PATCH', body: { add: { people: ['ana'] } } }]));
-    expect(queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((x) => x.id === 'ops')?.people).toEqual(['ana']);
-  });
-
-  it('takes a refused move back, saying why', async () => {
-    serve((_url, method) => (method === 'PATCH' ? refused(403, 'forbidden') : nothing()));
-    queryClient.setQueryData(['me'], owner);
-    seed();
-    show(<StrategyPage tab="org" search={{ panel: 'mate:human:ana' }} />, '/company/strategy/org?panel=mate:human:ana');
-    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
-    await pick(within(panel).getByRole('combobox', { name: 'Move to' }), /No group/);
-    fireEvent.click(within(panel).getByRole('button', { name: 'Move' }));
-    await waitFor(() => expect(toasts).toHaveBeenCalledWith({ text: 'Not allowed', kind: 'failed' }));
-    expect(queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((x) => x.id === 'sales')?.people).toEqual(['ana']);
-  });
-
-  it('lets a lead move only within what it leads, and nobody move a built-in agent', () => {
-    const lead = { id: 'human:me', role: 'person' };
-    expect(moveTargets(lead, 'human:ana', 'sales', groups).map((t) => t.value)).toEqual(['sales', 'east']);
-    expect(moveTargets(lead, 'bot:builder', 'ops', groups)).toEqual([]);
-    expect(moveTargets({ id: 'human:me', role: 'owner' }, 'bot:librarian', 'built-in', groups)).toEqual([]);
-    expect(moveTargets({ id: 'human:me', role: 'owner' }, 'bot:builder', 'ops', groups)[0]).toEqual({ value: '', label: 'No group' });
-  });
-
-  it('offers a call for an agent, and no Move to a teammate who may not move them', async () => {
-    serve(nothing);
-    seed();
-    queryClient.setQueryData(['directory'], { actors: [], byId: {} });
-    show(<StrategyPage tab="org" search={{ panel: 'mate:bot:builder' }} />, '/company/strategy/org?panel=mate:bot:builder');
-    const panel = await screen.findByRole('complementary', { name: 'builder' });
-    expect(within(panel).getByRole('button', { name: 'Call builder' })).toBeTruthy();
-    expect(within(panel).queryByRole('button', { name: 'Move' })).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------- the factories on Org
-
-describe('Org factories @s265', () => {
-  const map: FactoryMap = {
-    factories: [{ id: 'f1', name: 'Grooming', goal: '', manager_id: null, done: 0 }],
-    pipelines: [
-      { id: 'p2', name: 'Book', factory_id: 'f1', files_into: [], mark: null, open: 1 },
-      { id: 'p1', name: 'Leads', factory_id: 'f1', files_into: ['p2'], mark: null, open: 2 },
-      { id: 'p3', name: 'Hiring', factory_id: null, files_into: [], mark: null, open: 0 },
-    ],
-  };
-  const org = (m: FactoryMap | null = map) => {
-    queryClient.setQueryData(groupsQuery.queryKey, [{ id: 'ops', name: 'Ops', parent: '', order: 0, people: [], bots: [], bot_slugs: [] }]);
-    queryClient.setQueryData(factoriesQuery.queryKey, m);
-  };
-  const ORG = '/company/strategy/org';
-
-  it('lists each factory with its pipelines in the order work moves, each opening its tasks', async () => {
-    serve(nothing);
-    org();
-    show(<StrategyPage tab="org" />, ORG);
-    const sec = await screen.findByRole('region', { name: 'Factories' });
-    const grooming = within(sec).getByRole('listitem', { name: 'Grooming' });
-    expect(within(grooming).getAllByRole('link').map((a) => a.textContent)).toEqual(['Leads', 'Book']);
-    expect(href(within(grooming).getByText('Leads'))).toBe('/tasks/p1');
-    expect(href(within(sec).getByText('Hiring'))).toBe('/tasks/p3');
-  });
-
-  it('leaves the section out with no factory, and offers no New factory to a member', async () => {
-    serve(nothing);
-    org({ factories: [], pipelines: map.pipelines });
-    show(<StrategyPage tab="org" />, ORG);
-    await screen.findByRole('region', { name: 'Ops' });
-    expect(screen.queryByRole('region', { name: 'Factories' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
-    expect(factoryGroups(null)).toEqual([]);
-  });
-
-  it('lets an Admin make a factory from the ⋯, shown at once', async () => {
-    const made = { ...map, factories: [...map.factories, { id: 'f2', name: 'Sales', goal: '', manager_id: null, done: 0 }] };
-    const sent = serve((url, method) =>
-      method === 'POST' ? { status: 200, body: { factory: { id: 'f2', name: 'Sales', goal: '' } } } : url.includes('/api/v2/factories') ? { status: 200, body: made } : nothing(),
-    );
-    org();
-    queryClient.setQueryData(accessQuery.queryKey, { you: 'admin', owner: null });
-    show(<StrategyPage tab="org" search={{ panel: 'factory-new' }} />, `${ORG}?panel=factory-new`);
-    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
-    expect(await screen.findByRole('menuitem', { name: 'New factory' })).toBeTruthy();
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
-    const panel = await screen.findByRole('complementary', { name: 'New factory' });
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Sales' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/factories', method: 'POST', body: { name: 'Sales' } }]));
-    expect(await screen.findByRole('listitem', { name: 'Sales' })).toBeTruthy();
-  });
-
-  it('says why a taken name is refused and takes the factory back', async () => {
-    serve((url, method) => (method === 'POST' ? refused(409, 'factory_name') : url.includes('/api/v2/factories') ? { status: 200, body: map } : nothing()));
-    queryClient.setQueryData(['me'], owner);
-    org();
-    show(<StrategyPage tab="org" search={{ panel: 'factory-new' }} />, `${ORG}?panel=factory-new`);
-    const panel = await screen.findByRole('complementary', { name: 'New factory' });
-    fireEvent.change(within(panel).getByRole('textbox', { name: 'Name' }), { target: { value: 'Grooming' } });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(toasts).toHaveBeenCalled());
-    expect(queryClient.getQueryData<FactoryMap>(factoriesQuery.queryKey)?.factories.map((f) => f.name)).toEqual(['Grooming']);
-  });
-
-  it('refuses Tico: a factory cannot be removed once made', async () => {
-    const sent = serve(nothing);
-    queryClient.setQueryData(['me'], owner);
-    bind({ router: createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: [ORG] }) }) });
-    expect(await run('org.newFactory', { name: 'Sales' }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(sent).toEqual([]);
   });
 });

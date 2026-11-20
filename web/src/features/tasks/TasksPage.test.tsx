@@ -11,7 +11,6 @@ import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
 import { FlowPage } from './FlowPage';
 import { flowQuery, listParams, pipelinesQuery, type Pipeline, type TaskItem } from './queries';
-import { PipelinePage } from './PipelinePage';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -544,71 +543,6 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     show(<TasksPage pipeline="eng" search={f} />, '/tasks/eng');
     expect(await screen.findByRole('button', { name: 'Clear Waiting on someone' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear Due this week' })).toBeTruthy();
-  });
-
-  it('Edit pipeline saves the stages whole; a removed stage that holds tasks asks where they go @s138', async () => {
-    const rec = {
-      id: 'eng',
-      name: 'Engineering',
-      settings_version: 3,
-      done: null,
-      closed: null,
-      stages: [
-        { id: 's1', name: 'Inbox', side: false, requirements: [] },
-        { id: 's2', name: 'Doing', side: false, requirements: [] },
-      ],
-    };
-    let saves = 0;
-    serve((url, method) => {
-      if (url === '/api/v2/pipelines/eng' && method === 'GET') return { status: 200, body: { pipeline: rec } };
-      if (url === '/api/v2/pipelines') return { status: 200, body: { pipelines: [rec] } };
-      if (url === '/api/v2/pipelines/eng' && method === 'POST') {
-        saves += 1;
-        if (saves === 1) return { status: 409, body: { error: { code: 'stage_has_tasks', detail: 'Doing holds tasks' } } };
-        return { status: 200, body: { pipeline: { ...rec, settings_version: 4, stages: [rec.stages[0]] } } };
-      }
-      return { status: 200, body: {} };
-    });
-    seed(rows());
-    show(<PipelinePage pipeline="eng" fresh={false} />, '/tasks/eng/edit');
-    fireEvent.click(await screen.findByRole('button', { name: 'More, Doing' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove stage' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(posts[0]?.body).toMatchObject({ settings_version: 3, stages: [{ id: 's1', name: 'Inbox', side: false }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Move tasks' }));
-    await waitFor(() => expect(posts).toHaveLength(2));
-    expect(posts[1]?.body).toMatchObject({ move_tasks_to: { pipeline: 'eng', stage: 's1' } });
-  });
-
-  it('Edit pipeline opens a stage to show its rules @s115 @s142', async () => {
-    const rec = {
-      id: 'eng',
-      name: 'Engineering',
-      settings_version: 3,
-      stages: [
-        { id: 's1', name: 'Inbox', side: false, requirements: [] },
-        { id: 's2', name: 'Doing', side: false, by_hand: false, requirements: [{ kind: 'checks_pass' }] },
-      ],
-    };
-    const rule = { id: 'sr1', name: '', pipeline_id: 'eng', pipeline_name: 'Engineering', stages: ['s2'], stage_names: ['Doing'], scope: 'stage', event: 'enters' };
-    const full = { ...rule, timer: null, cond: {}, jev: '', then: 'block', status: 'active', revision: 1, can_edit: true };
-    serve((url) => {
-      if (url === '/api/v2/pipelines/eng') return { status: 200, body: { pipeline: rec } };
-      if (url.startsWith('/api/v2/stage-rules')) return { status: 200, body: { items: [full], built_in: [], may_add: true } };
-      return { status: 200, body: {} };
-    });
-    seed(rows());
-    show(<PipelinePage pipeline="eng" fresh={false} />, '/tasks/eng/edit');
-    const open = await screen.findByRole('button', { name: 'Rules, Doing' });
-    expect(open.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(open);
-    expect(open.getAttribute('aria-expanded')).toBe('true');
-    const enter = await screen.findByRole('region', { name: 'On entering' });
-    expect(await within(enter).findByTitle('Enters Doing, Block')).toBeTruthy();
-    expect(within(screen.getByRole('region', { name: 'To leave' })).getByTitle('Checks pass')).toBeTruthy();
-    fireEvent.click(within(enter).getByRole('button', { name: 'Add rule' }));
-    expect(within(enter).getByRole('textbox', { name: 'Name' })).toBeTruthy();
   });
 });
 

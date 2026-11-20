@@ -20,16 +20,20 @@ beforeAll(() => {
 
 type Reply = { status: number; body: unknown };
 let sent: { url: string; method: string; body: unknown }[] = [];
+let reads: string[] = [];
 function serve(reply: (url: string, method: string) => Reply | undefined) {
   sent = [];
+  reads = [];
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     const method = init?.method ?? 'GET';
-    if (method !== 'GET') sent.push({ url: u, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (method === 'GET') reads.push(u);
+    else sent.push({ url: u, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const r = reply(u, method) ?? fallback(u);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
+const ok = (body: unknown = {}): Reply => ({ status: 200, body });
 const fallback = (url: string): Reply => {
   if (url.includes('/api/v2/groups')) return { status: 200, body: groups };
   if (url.includes('/api/employees')) return { status: 200, body: roster };
@@ -64,7 +68,7 @@ const launch: TaskTab = { name: 'Launch', show_count: true, conditions: [{ field
 const layout = (tabs: TaskTab[], canEdit = true) => ({ status: 200, body: { bot: '0190-ana', tabs, widgets: [], saved: true, can_edit: canEdit } });
 const task = (id: string, title: string) => ({ id, number: null, title, status: 'open', pipeline_id: null, updated_at: '2026-11-18T10:00:00Z' });
 
-/** Ana's page, her lists as `tabs`, the Launch list (c2) holding two tasks; a PUT answers `put` when given. */
+/** Ana's page, her lists as `tabs`, the Launch list (c2) showing two of its five tasks; a PUT answers `put` when given. */
 function lists(tabs: TaskTab[], put?: (body: { tabs: TaskTab[] }) => Reply, canEdit = true) {
   let now = tabs;
   serve((url, method) => {
@@ -76,7 +80,7 @@ function lists(tabs: TaskTab[], put?: (body: { tabs: TaskTab[] }) => Reply, canE
     }
     if (url.endsWith('/bots/ana/task-tabs')) return layout(now, canEdit);
     if (url.includes('/task-tabs/tasks?tab=c2'))
-      return { status: 200, body: { tabs: [{ key: 'c2', name: 'Launch', count: 2, ids: ['t2', 't1'] }], tasks: [task('t1', 'Draft the post'), task('t2', 'Pick the date')] } };
+      return { status: 200, body: { tabs: [{ key: 'c2', name: 'Launch', count: 5, ids: ['t2', 't1'] }], tasks: [task('t1', 'Draft the post'), task('t2', 'Pick the date')] } };
     if (url.includes('/task-tabs/tasks')) return { status: 200, body: { tabs: [], tasks: [] } };
     return undefined;
   });
@@ -94,7 +98,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('s611 s653 Its own lists', () => {
+describe('Its own lists @s611 @s653', () => {
   it('writes a row the way the server stores it, and back', () => {
     expect(rowOf({ field: 'status', value: 'open,done' })).toEqual({ field: 'status', value: ['open', 'done'] });
     expect(rowOf({ field: 'created_within', value: '7' })).toEqual({ field: 'created_within', value: 7 });
@@ -103,13 +107,32 @@ describe('s611 s653 Its own lists', () => {
     expect(lineOf({ field: 'status', value: ['open', 'closed'] })).toEqual({ field: 'status', value: 'open,closed' });
   });
 
-  it('shows each of its own lists as a section, newest first; the defaults are not repeated', async () => {
+  it('shows each of its own lists as a section, newest first, with the count; the defaults are not repeated', async () => {
     lists([...defaults, launch]);
     const section = await screen.findByRole('region', { name: 'Launch' });
     await waitFor(() => expect(section.querySelectorAll('.row')).toHaveLength(2));
     expect(section.querySelectorAll('.row-title')[0]?.textContent).toBe('Pick the date');
+    expect(within(section).getByText('3 more')).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Done recently' })).toBeNull();
+  });
+
+  it('"N more" reads the next page from its next and shows it under the first', async () => {
+    const tabs: TaskTab[] = [{ name: 'Launch', show_count: true, conditions: [{ field: 'label', value: 'launch' }] }];
+    serve((url) => {
+      if (url.endsWith('/bots/ana/task-tabs')) return layout(tabs);
+      if (url.includes('/task-tabs/tasks?tab=c0&before='))
+        return ok({ tabs: [{ key: 'c0', name: 'Launch', count: 3, ids: ['t3'], next: null }], tasks: [task('t3', 'Book the room')] });
+      if (url.includes('/task-tabs/tasks?tab=c0'))
+        return ok({ tabs: [{ key: 'c0', name: 'Launch', count: 3, ids: ['t1', 't2'], next: '2026-11-01|t2' }], tasks: [task('t1', 'Draft the post'), task('t2', 'Pick the date')] });
+      return undefined;
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Launch' });
+    fireEvent.click(await within(section).findByRole('button', { name: '1 more' }));
+    expect(await within(section).findByText('Book the room')).toBeTruthy();
+    expect(reads.some((u) => u.includes('before=2026-11-01%7Ct2'))).toBe(true);
+    expect(within(section).queryByText('1 more')).toBeNull();
   });
 
   it('has no list controls for someone who may not change them', async () => {
@@ -214,7 +237,7 @@ const file = (over: Partial<AgentFile>): AgentFile =>
     ...over,
   }) as AgentFile;
 
-describe('s614 Files', () => {
+describe('Files @s614', () => {
   it('names a stored file by its own name and opens it over the page; a link opens at its provider over https', () => {
     expect(fileName(file({}))).toBe('plan.md');
     expect(fileOpen(file({}))).toEqual({ href: '/api/v2/files/f1', view: true });
@@ -251,6 +274,20 @@ describe('s614 Files', () => {
     fireEvent.click(within(section).getByRole('button', { name: 'Less' }));
     expect(section.querySelectorAll('.row')).toHaveLength(3);
   });
+
+  it('searches its files on the server', async () => {
+    serve((url) => {
+      if (!url.includes('/bots/ana/files')) return undefined;
+      const list = url.includes('q=') ? [file({ id: 'f9', title: 'note-9.md', name: 'note-9.md' })] : ['a', 'b', 'c', 'd'].map((x, i) => file({ id: `f${i}`, title: `${x}.md`, name: `${x}.md` }));
+      return ok({ bot: '0190-ana', files: list, total: list.length, has_more: false, next_cursor: null });
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Files' });
+    fireEvent.click(within(section).getByRole('button', { name: 'Search files' }));
+    fireEvent.change(within(section).getByRole('textbox', { name: 'Search files' }), { target: { value: 'notes' } });
+    expect(await within(section).findByTitle('note-9.md')).toBeTruthy();
+    expect(reads.some((u) => u.includes('/bots/ana/files') && u.includes('q=notes'))).toBe(true);
+  });
 });
 
 const stopped: LastStop = {
@@ -263,7 +300,7 @@ const stopped: LastStop = {
   text: 'Last run stopped partway.',
 };
 
-describe('s639 Last run', () => {
+describe('Last run @s639', () => {
   it('says whether anything is needed in the old words', () => {
     expect(needed({ ...stopped, needs_person: false, tone: 'soft', action: null }, true)).toBe('No. Nothing was lost.');
     expect(needed(stopped, true)).toBe('Yes: say whether to try it again or let it go.');
@@ -300,6 +337,29 @@ describe('s639 Last run', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Last run' }));
     const dialog = await screen.findByRole('dialog', { name: 'Last run' });
     expect(within(dialog).getByText('No. Nothing was lost.')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Review' })).toBeNull();
+  });
+
+  it('opens from the head’s More too, where a narrow page hides the pill', async () => {
+    const early = { tone: 'soft', needs_person: false, reason: 'It ran out of time', text: 'Stopped early' };
+    serve((url) => (url.includes('/api/v2/status') ? ok({ status: { state: 'idle', last_stop: early } }) : undefined));
+    show(<TeamWho who="ana" />, '/team/ana');
+    expect(await screen.findByRole('button', { name: /Last run/ })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'More' })[0]!);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Last run' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Last run' });
+    expect(within(dialog).getByText('Is anything needed?')).toBeTruthy();
+    expect(within(dialog).getByText('No. Nothing was lost.')).toBeTruthy();
+  });
+
+  it('tells someone who does not manage the agent that a manager decides, with no Review', async () => {
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...roster[0]!, can_manage: false }]);
+    serve((url) => (url.includes('/api/v2/status?bot=ana') ? ok({ status: { state: 'crashed', last_stop: stopped } }) : undefined));
+    show(<TeamWho who="ana" />, '/team/ana');
+    fireEvent.click(await screen.findByRole('button', { name: 'Stopped' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Last run' });
+    expect(within(dialog).getByText('The run ended with an error before it finished.')).toBeTruthy();
+    expect(within(dialog).getByText('Yes: a person who manages this agent decides whether to try it again.')).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: 'Review' })).toBeNull();
   });
 });

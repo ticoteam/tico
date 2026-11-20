@@ -14,19 +14,19 @@ import { validateFinanceSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
-// Made-up figures and names only.
+/* Finance's tabs, budgets, sources and access. Made-up figures and names only. */
 type Reply = { status: number; body: unknown };
 const ok = (body: unknown): Reply => ({ status: 200, body });
 const gets: string[] = [];
 const posted: Record<string, unknown>[] = [];
-/** Answers each read from `reply`; every write is kept and committed. */
-function serve(reply: (url: string) => Reply) {
+/** Answers each read from `reply`; every write is kept and answered by `write` (by default, committed). */
+function serve(reply: (url: string) => Reply, write: (body: Record<string, unknown>) => Reply | Promise<Reply> = (body) => ok({ kind: body.kind, status: 'committed' })) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
     let r: Reply;
     if (init?.method === 'POST') {
       posted.push(body);
-      r = ok({ kind: body.kind, status: 'committed' });
+      r = await write(body);
     } else {
       gets.push(String(url));
       r = reply(String(url));
@@ -53,6 +53,7 @@ async function pick(box: HTMLElement, name: RegExp) {
   fireEvent.pointerDown(option, { pointerType: 'mouse' });
   fireEvent.click(option);
 }
+const searchOf = (href: string | null) => Object.fromEntries(new URL(href ?? '', 'http://x').searchParams);
 const tabNames = async () => within(await screen.findByRole('navigation', { name: 'Finance pages' })).getAllByRole('link').map((a) => a.textContent);
 
 const ym = budgetDay().slice(0, 7);
@@ -319,6 +320,96 @@ describe('Budgets @s404 @s462 @s463', () => {
     // Stopping a budget lifts its cap: the person's own press.
     expect(await run('budget.removeRow', { budget: 'b1' }, { via: 'tico' })).toMatchObject({ ok: false });
     expect(posted).toHaveLength(1);
+  });
+
+  const budget: Budget = { id: 'b1', name: 'Tools', account_id: 'acc_soft', parent_id: null, period: 'month', active: true, state: { amount: 50000, actual: 20000 } };
+  const seed = (rows: Pnl['rows'] = []) => {
+    queryClient.setQueryData(budgetsKey(budgetDay()), { budgets: [budget] });
+    queryClient.setQueryData(pnlQuery({ ...monthSpan(ym), period: 'month', basis: 'accrual' }).queryKey, PNL(rows));
+  };
+
+  it('a new amount shows at once and is taken back when refused', async () => {
+    let refuse!: () => void;
+    serve(
+      (url) => (url.includes('budget_vs_actual') ? ok({ columns: [], budgets: [] }) : (access(url) ?? ok({}))),
+      () => new Promise<Reply>((r) => (refuse = () => r(ok({ status: 'refused', code: 'over_limit', reason: 'Over the limit' })))),
+    );
+    seed();
+    show('/company/finance?tab=budgets&panel=budget:b1');
+
+    const row = (await screen.findByRole('link', { name: 'Tools' })).closest('tr')!;
+    expect(searchOf(row.querySelector('a')!.getAttribute('href'))).toEqual({ tab: 'budgets', panel: 'budget:b1' });
+    const field = await screen.findByRole('textbox', { name: /^Budget for / });
+    fireEvent.change(field, { target: { value: '900' } });
+    fireEvent.submit(field.closest('form')!);
+
+    await waitFor(() => expect(within(row).getByText('$900')).toBeTruthy());
+    expect(within(screen.getByRole('complementary', { name: 'Tools' })).getByText('$700')).toBeTruthy();
+    refuse();
+    await waitFor(() => expect(within(row).getByText('$500')).toBeTruthy());
+    expect(within(row).queryByText('$900')).toBeNull();
+    expect(await screen.findByText("Couldn't save")).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500');
+  });
+
+  it('a change pressed again after a lost answer sends the same key; after a refusal, a new one', async () => {
+    const sent: (string | null)[] = [];
+    const answers: ('lost' | 'refused')[] = ['lost', 'refused', 'lost'];
+    let release = () => {};
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
+      if (init?.method === 'POST') {
+        sent.push(new Headers(init.headers).get('Idempotency-Key'));
+        // Each answer waits for the test, so the change shows first.
+        await new Promise<void>((r) => (release = r));
+        // A gateway's 502: the answer is lost, and the client does not send it again on its own (only a 503 or a drop).
+        if (answers[sent.length - 1] === 'lost') return new Response('Bad gateway', { status: 502 });
+        return json({ kind: 'budget_update', status: 'refused', code: 'over_limit', reason: 'Over the limit' });
+      }
+      if (String(url).includes('budget_vs_actual')) return json({ columns: [], budgets: [] });
+      if (String(url).endsWith('/finance/access')) return json(OWNER);
+      return json({});
+    });
+    seed();
+    show('/company/finance?tab=budgets&panel=budget:b1');
+    const press = async (n: number) => {
+      const field = await screen.findByRole('textbox', { name: /^Budget for / });
+      await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
+      fireEvent.change(field, { target: { value: '900' } });
+      fireEvent.submit(field.closest('form')!);
+      await waitFor(() => expect(sent).toHaveLength(n));
+      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('900'));
+      release();
+      await waitFor(() => expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).value).toBe('500'));
+    };
+    await press(1);
+    await press(2);
+    expect(sent[1]).toBe(sent[0]);
+    await press(3);
+    expect(sent[2]).not.toBe(sent[1]);
+  });
+
+  it('read as a teammate, a budget is read only', async () => {
+    serve((url) => {
+      if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });
+      if (url.includes('/finance/budgets')) return ok({ budgets: [budget] });
+      if (url.endsWith('/finance/access'))
+        return ok({
+          can_view_as: true,
+          teammates: [
+            { teammate: 'human:me', kind: 'human', default: 'everything', rights: [] },
+            { teammate: 'human:lee', kind: 'human', default: 'team_expenses', rights: ['finance.budgets'] },
+          ],
+        });
+      return ok({});
+    });
+    seed();
+    show('/company/finance?tab=budgets&panel=budget:b1&as=human:lee');
+    expect(await screen.findByRole('complementary', { name: 'Tools' })).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryData(['finance', 'access'])).toBeTruthy());
+    expect((screen.getByRole('textbox', { name: /^Budget for / }) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New budget' })).toBeNull();
   });
 });
 
