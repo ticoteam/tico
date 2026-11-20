@@ -786,6 +786,7 @@ a sub-thread shows its root's.
 | `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "unread": [item], "dms": {actor: unread}, "next_cursor"}` |
 | `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
 | `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "new_count_partial": false, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
+| `GET /api/v2/threads/catch-up/count` | `thread_rail.catch_up_count(c, viewer)` → `{"count": 7, "ids": [root id]}`: Catch up's `count` and the roots it counts, in its order (the rail's `catch_up` and `catch_up_ids`), with no card or message to show |
 
 Rail. Candidates are open roots the viewer reads (`readable_sql`, then `thread_readable`) with audience company, team
 or members, or a DM with two or more others (`_dm_members`); never a 1:1 DM, a Home, a task's thread or a meeting. The

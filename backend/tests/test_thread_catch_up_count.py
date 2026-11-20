@@ -88,27 +88,32 @@ def test_the_count_is_the_rails_and_catch_ups_as_tasks_finish_revive_and_reopen(
 
 
 ORDER = "SELECT id, activity FROM (SELECT r.id"  # the walk's ordering of a phase's roots
+BATCH = "SELECT * FROM conversations WHERE id IN"  # a batch's rows, read whole
 
 
-def test_catch_up_orders_each_phases_roots_once_however_many_batches_it_reads(api):
-    """250 threads with something new for Ben fill three of the walk's batches (a few mention him): one Catch up load
-    orders the mentions' phase and the rest's once each, and its pages list each thread once."""
+def test_catch_up_orders_each_phases_roots_once_however_many_batches_it_reads(api, monkeypatch):
+    """120 threads with something new for Ben, a few mentioning him, read 20 roots a batch: the badge's walk reads the
+    rest's phase in several batches and orders it, and the mentions' phase, once each. Catch up's pages go on from
+    their cursor and list every thread once, the badge's first, in its order."""
     made = []
-    for n in range(250):
+    for n in range(120):
         thread = new_thread(api, f"Topic {n}")
-        say(api, thread["id"], "@ben look" if n % 50 == 0 else "Numbers are in")
+        say(api, thread["id"], "@ben look" if n % 40 == 0 else "Numbers are in")
         made.append(thread["id"])
-    assert thread_rail.CATCH_UP_BATCH < len(made) < thread_rail.CATCH_UP_SCAN
+    monkeypatch.setattr(thread_rail, "CATCH_UP_BATCH", 20)
     alone, statements = traced(api, lambda: get(api, "threads/catch-up/count", "ben-test"))
-    assert alone["count"] == thread_rail.CATCH_UP_SHOWN
-    orders = [s for s in statements if ORDER in s]
-    assert len(orders) == 2, len(orders)  # one a phase: mentions, then the rest
-    page, statements = traced(api, lambda: get(api, "threads/catch-up?limit=50", "ben-test"))
-    assert len([s for s in statements if ORDER in s]) == 2
-    # Past the first batches: a page from the cursor orders from there, once a phase it still has.
-    cursor = page["next_cursor"]
-    assert cursor
-    later, statements = traced(api, lambda: get(api, f"threads/catch-up?limit=50&cursor={cursor}", "ben-test"))
-    assert later["items"] and len([s for s in statements if ORDER in s]) <= 4  # its page's walk and the count's
-    shown = [i["thread"]["id"] for i in page["items"] + later["items"]]
-    assert len(shown) == len(set(shown)) and set(shown) <= set(made)
+    assert alone["count"] == thread_rail.CATCH_UP_SHOWN and set(alone["ids"]) <= set(made)
+    assert len([s for s in statements if ORDER in s]) == 2  # one a phase: mentions, then the rest
+    assert len([s for s in statements if BATCH in s]) >= 5  # 99 roots, 20 a batch
+    shown, cursor = [], None
+    while True:
+        query = "threads/catch-up?limit=30" + (f"&cursor={cursor}" if cursor else "")
+        page, statements = traced(api, lambda q=query: get(api, q, "ben-test"))
+        # The page's walk orders each phase it has left once; one from a cursor walks again from the start for the count.
+        assert len([s for s in statements if ORDER in s]) <= (2 if cursor is None else 4)
+        shown += [i["thread"]["id"] for i in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    # Pages go past the badge's 99, each thread once; the badge's are their first.
+    assert sorted(shown) == sorted(made) and shown[: len(alone["ids"])] == alone["ids"]

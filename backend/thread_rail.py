@@ -1022,7 +1022,8 @@ def _first(items, n):
 
 def catch_up_count(c, v):
     """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids): the sidebar's badge, and the
-    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN and reads no message text."""
+    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN, and reads a message whole only where the walk's
+    per-message check needs it: no card, thread view or message to show."""
     v = _viewer(v)
     found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN)
     return len(found), [it["row"]["id"] for it in found]
