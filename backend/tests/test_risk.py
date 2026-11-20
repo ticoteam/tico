@@ -225,6 +225,68 @@ def test_a_matter_through_its_tasks_life_and_the_risk_it_carries(api):
     assert (back["claim"], back["party"], back["party_entity_id"]) == ("Deposit", None, None)
 
 
+def test_a_matters_not_before_and_due_by_are_its_own_and_show_on_the_calendar(api):
+    """A subpoena's "produce no earlier than Nov 19, 10 AM" is not a deadline: it is stored and shown as not before."""
+    post(api, "risks", {"label": "Customer theft claims"})
+    found = task(api, "Murphy subpoena")
+    label(api, found["id"], [RISK])
+    # A time with no offset is the company's (America/Los_Angeles); a bare day stays a day.
+    body = {
+        "kind": "request",
+        "starts_at": "2026-11-19T10:00",
+        "due_at": "2026-11-26",
+        "dates_label": " Produce  records",
+    }
+    set_ = matter(api, found["id"], body)["matter"]
+    assert (set_["starts_at"], set_["due_at"], set_["dates_label"]) == (
+        "2026-11-19T18:00:00Z",
+        "2026-11-26",
+        "Produce records",
+    )
+    assert get(api, "tasks/" + found["id"])["task"]["matter"]["starts_at"] == "2026-11-19T18:00:00Z"
+    row = get(api, "matters?task=" + found["id"])["matters"][0]["matter"]
+    assert (row["starts_at"], row["due_at"]) == ("2026-11-19T18:00:00Z", "2026-11-26")
+    # Not before after due by is refused, a day included whole; an unreadable date names its field.
+    bad = matter(api, found["id"], {"version": 1, "starts_at": "2026-11-27"}, expected=422)["error"]["detail"]
+    assert "starts_at" in bad
+    matter(api, found["id"], {"version": 1, "starts_at": "2026-11-26T23:00-08:00"})  # 11 PM on the day due: in time
+    assert "due_at" in matter(api, found["id"], {"version": 2, "due_at": "next week"}, expected=422)["error"]["detail"]
+    matter(api, found["id"], {"version": 2, "starts_at": "2026-11-19T10:00:00-08:00"})
+    # The calendar of the person who asked for it shows both: the time as an instant, the day as all-day.
+    with api.app.state.store.read() as c:
+        moved = c.execute(
+            "SELECT count(*) FROM changes WHERE topic='calendar' AND subject_id=?", ("matter:" + found["id"],)
+        )
+        assert moved.fetchone()[0] == 3  # each write that moved a date; the refused ones none
+    window = "calendar/events?from=2026-11-16T00:00:00Z&to=2026-11-30T00:00:00Z&kinds=due"
+    shown = {o["occurrence_id"]: o for o in get(api, window)["occurrences"]}
+    start = shown["due:matter:" + found["id"] + ":not_before"]
+    due = shown["due:matter:" + found["id"] + ":due_by"]
+    assert (start["title"], start["start"], start["end"], start["all_day"], start["bound"]) == (
+        "Not before: Produce records",
+        "2026-11-19T18:00:00Z",
+        "2026-11-19T18:00:00Z",
+        False,
+        "not_before",
+    )
+    assert (due["title"], due["start"], due["end"], due["all_day"], due["bound"]) == (
+        "Due: Produce records",
+        "2026-11-26",
+        "2026-11-27",
+        True,
+        "due_by",
+    )
+    assert start["links"]["task"] == due["links"]["task"] == found["id"]
+    # A window that ends before the instant leaves it out; clearing a date takes it off; a closed matter shows none.
+    early = "calendar/events?from=2026-11-16T00:00:00Z&to=2026-11-19T18:00:00Z&kinds=due"
+    assert not [o for o in get(api, early)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
+    matter(api, found["id"], {"version": 3, "starts_at": None})
+    ids = [o["occurrence_id"] for o in get(api, window)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
+    assert ids == ["due:matter:" + found["id"] + ":due_by"]
+    post(api, f"tasks/{found['id']}/done", {"note": "Produced."})
+    assert not [o for o in get(api, window)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
+
+
 def test_the_audit_feed_shows_a_matters_facts_only_to_a_reader_of_its_task(api):
     from backend import audit_log
 
@@ -364,7 +426,9 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     made = post(api, "risks", {"label": "Customer theft claims"})
     found = task(api, "Theft claim")
     label(api, found["id"], [RISK])
-    set_ = matter(api, found["id"], {"kind": "dispute", "amount": 900, "currency": "USD"})
+    set_ = matter(
+        api, found["id"], {"kind": "dispute", "amount": 900, "currency": "USD", "due_at": "2026-12-01T17:00:00Z"}
+    )
     # A date of the matter, marked with proof, and one still unconfirmed.
     with api.app.state.store.transaction() as c:
         ts = H.now()
@@ -421,7 +485,7 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused):
             H.tag_create(c, ANA, "acme-other", kind="contract")  # a kind is '' or risk
-    for name in ("20261119025516_risks_and_matters", "20261119034134_rule_due_proof"):
+    for name in ("20261119025516_risks_and_matters", "20261119034134_rule_due_proof", "20261120060550_matter_dates"):
         with api.app.state.store.transaction() as c:
             import_module("backend.migrations." + name).up(c)
             assert c.execute("SELECT kind FROM tags WHERE key=?", (RISK,)).fetchone()[0] == "risk"

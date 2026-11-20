@@ -24,6 +24,7 @@ occurrence_id   string, stable per instance:
                   google:<google calendar id>:<google event id>    (Google instance ids already carry the start)
                   run:<attempt id> | runs:<bot id>:<start ISO>      (a grouped block, see dense runs)
                   auto:<automation id>:<start ISO> | due:task:<id> | due:kpi:<id> | away:<absence id>
+                  due:matter:<task id>:not_before | due:matter:<task id>:due_by
 event_id        the series or single event id (tico id, google event id or recurringEventId); null for derived
 calendar        {ref, type: human|bot|shared|google, id, name}
 home            google | tico | derived
@@ -42,6 +43,7 @@ open_url        Google's htmlLink with authuser for home google, else null
 links           {thread, meeting, task, automation, attempt}: ids or null
 can             {join: bool, edit: bool}
 planned         derived runs only: true for a scheduled automation that has not run yet
+bound           a matter's dates only: not_before (the earliest its step may be done, never a deadline) or due_by
 count           grouped runs only: how many runs the block holds; `children` lists their occurrence_ids
 sequence        tico events: the event's sequence (send it back as expected_sequence on edits)
 ```
@@ -141,6 +143,9 @@ version is news. A listing saves its page each write and goes on from it in the 
   more than hourly collapses to one all-day pill per day; bots that are away are skipped.
 - `due(c, owners: list[tuple[str,str]], start_utc, end_utc) -> list[dict]`: open tasks' `due_at` owned by those
   teammates and `goal_kpis.deadline`, all-day.
+- `matter_dates(c, owners, start_utc, end_utc) -> list[dict]`: open matters' `starts_at` ("Not before: <label>") and
+  `due_at` ("Due: <label>") on the calendar of the task's owner, else its requester; a day is all-day, a time an instant
+  (start = end). A change to them is a `calendar` row of kind `due`.
 - `group_runs(occurrences, min_minutes=10) -> list[dict]`: runs ≥ min stay; shorter ones that touch or overlap
   become one `runs:` block with `count` and `children`.
 - `month_counts(c, bot_ids, start_utc, end_utc) -> list[{bot_id, date, count}]`.

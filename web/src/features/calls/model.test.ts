@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CalendarOccurrence } from '@/api/schema';
-import { calendarSearch, dayKey, hoursFor, joinOf, onDay, place, rangeOf, rangeWords, step, type Placed } from './model';
+import { calendarSearch, dayKey, hoursFor, joinOf, kindWords, onDay, place, rangeOf, rangeWords, step, tip, type Placed } from './model';
 
 const d = (s: string) => {
   const [y, m, day] = s.split('-').map(Number);
@@ -145,5 +145,25 @@ describe('joining', () => {
     expect(joinOf(occ({ meeting_url: 'https://meet.google.com/abc-defg-hij' }))).toEqual({ url: 'https://meet.google.com/abc-defg-hij' });
     expect(joinOf(occ({ can: { edit: true, join: true }, event_id: id.replace(/-/g, '') }))).toEqual({ call: id });
     expect(joinOf(occ({}))).toBeNull();
+  });
+});
+
+describe("a matter's dates", () => {
+  const matter = (bound: 'not_before' | 'due_by', p: Partial<CalendarOccurrence>) =>
+    occ({ home: 'derived', kind: 'due', bound, occurrence_id: `due:matter:t1:${bound}`, links: { attempt: null, automation: null, meeting: null, task: 't1', thread: null }, ...p });
+
+  it('a not before at a time is a moment on its day, never called a due date', () => {
+    const o = matter('not_before', { title: 'Not before: Produce records', start: at('2026-11-19', 10), end: at('2026-11-19', 10) });
+    expect(kindWords(o)).toBe('Not before');
+    expect(tip(o)).toBe('Not before: Produce records, Thu, Nov 19, 10:00 AM');
+    const [placed] = onDay([o], d('2026-11-19'));
+    expect(placed?.s).toBe(600);
+    expect(onDay([o], d('2026-11-20'))).toHaveLength(0);
+  });
+
+  it('a due by on a day is an all-day due date', () => {
+    const o = matter('due_by', { title: 'Due: Produce records', all_day: true, start: '2026-11-26', end: '2026-11-27' });
+    expect(kindWords(o)).toBe('Due date');
+    expect(onDay([o], d('2026-11-26'))).toEqual([{ o, s: null, e: null }]);
   });
 });

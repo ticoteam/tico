@@ -662,7 +662,8 @@ import { setMatter, type MatterFacts } from './queries';
 const fact = (max: number) => z.optional(z.nullable(z.string().check(z.maxLength(max))));
 
 /** A matter's facts, each saved as it changes: kind, side, party, amount claimed (cents) and its currency, claim,
-    forum, product. Null clears one. Ordinary work on a task, so Tico may do it too. */
+    forum, product, and its dates: not before (never a deadline), due by and what they are for. Null clears one.
+    Ordinary work on a task, so Tico may do it too. */
 export const riskSetMatter = defineAction({
   id: 'risk.setMatter',
   title: "Change a matter's facts",
@@ -680,6 +681,9 @@ export const riskSetMatter = defineAction({
     forum: fact(200),
     product: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(256)))),
     product_name: z.optional(z.string().check(z.maxLength(300))),
+    starts_at: z.optional(z.nullable(z.string().check(z.maxLength(40), z.describe('not before: a day 2026-11-19, or a time')))),
+    due_at: z.optional(z.nullable(z.string().check(z.maxLength(40), z.describe('due by: a day 2026-11-26, or a time')))),
+    dates_label: fact(120),
   }),
   run: (_ctx, { task, version, party, party_name, product, product_name, currency, ...rest }) => {
     const facts = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)) as MatterFacts;

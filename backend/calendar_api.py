@@ -881,6 +881,7 @@ def _gather(
         if "due" in kinds:
             owners = [(cal["type"], cal["id"]) for cal in cals if cal["type"] in ("human", "bot")]
             found += cast("list[Row]", derived.due(c, owners, start, end))
+            found += cast("list[Row]", derived.matter_dates(c, owners, start, end))
         month_counts: list[Row] | None = None
         if "run" in kinds:
             # Only a bot in view brings its runs: a person's calendar no longer adds the bots that report to them.

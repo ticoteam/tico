@@ -59,6 +59,12 @@ class Matter(TypedDict):
     claim: str
     side: Literal["theirs", "ours"]
     forum: str
+    starts_at: str | None
+    """Not before: the earliest its step may be done, never a deadline. A day (YYYY-MM-DD) or a UTC time (YYYY-MM-DDTHH:MM:SSZ)"""
+    due_at: str | None
+    """Due by: the deadline, a day or a UTC time"""
+    dates_label: str
+    """What the dates are for, such as Produce records"""
     place_id: str | None
     place: MatterRecord | None
     """A Directory record, null when the reader may not see it"""

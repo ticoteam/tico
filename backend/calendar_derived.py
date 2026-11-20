@@ -505,6 +505,70 @@ def due(
     return sorted(out, key=lambda occ: (str(occ["start"]), str(occ["occurrence_id"])))
 
 
+# What each matter date is called on the calendar (backend/risk.py): not before is never a deadline.
+MATTER_BOUNDS = (("starts_at", "not_before", "Not before"), ("due_at", "due_by", "Due"))
+
+
+def matter_dates(
+    c: sqlite3.Connection, owners: list[tuple[str, str]], start_utc: datetime, end_utc: datetime
+) -> list[dict[str, object]]:
+    """The dates of open matters (backend/risk.py: `matters.starts_at`, `matters.due_at`) whose task one of `owners` owns
+    or asked for, as `due` occurrences with `bound` not_before or due_by: "Not before: Produce records" and "Due: Produce
+    records" (the task's title when the dates have no label). A day is an all-day pill; a time is an instant
+    (start = end). Each sits on its task owner's calendar when the owner is in view, else on its requester's."""
+    actors = sorted({f"{kind}:{ident}" for kind, ident in owners if kind in ("human", "bot") and ident})
+    lo, hi = _utc(start_utc), _utc(end_utc)
+    if not actors or lo >= hi:
+        return []
+    first, last = (lo.date() - timedelta(days=1)).isoformat(), hi.date().isoformat()
+    marks = _marks(actors)
+    names: dict[str, str] = {}
+    out: list[dict[str, object]] = []
+    for row in _rows(
+        c,
+        "SELECT m.task_id, m.starts_at, m.due_at, m.dates_label, t.title, t.owner_id, t.requester_id, t.private "
+        "FROM matters m JOIN tasks t ON t.id = m.task_id "
+        f"WHERE t.status='open' AND (t.owner_id IN ({marks}) OR t.requester_id IN ({marks})) "
+        "AND (substr(m.starts_at,1,10) BETWEEN ? AND ? OR substr(m.due_at,1,10) BETWEEN ? AND ?)",
+        (*actors, *actors, first, last, first, last),
+    ):
+        actor = str(row["owner_id"] if row["owner_id"] in actors else row["requester_id"])
+        if actor not in names:
+            names[actor] = _name_of(c, actor)
+        kind, _, ident = actor.partition(":")
+        what = " ".join(str(row["dates_label"] or row["title"] or "").split()) or "Matter"
+        task_id = str(row["task_id"])
+        for column, bound, word in MATTER_BOUNDS:
+            value = row[column]
+            if not isinstance(value, str) or not value:
+                continue
+            if len(value) == 10:
+                day = _day(value)
+                if day is None or not _day_overlaps(day, lo, hi):
+                    continue
+                start, end, all_day = day.isoformat(), (day + timedelta(days=1)).isoformat(), True
+            else:
+                at = _parse(value)
+                if at is None or not lo <= at < hi:
+                    continue
+                start = end = _iso(at)
+                all_day = False
+            occ = _occurrence(
+                f"due:matter:{task_id}:{bound}",
+                "due",
+                _calendar(kind, ident, names[actor]),
+                start=start,
+                end=end,
+                title=f"{word}: {what}",
+                all_day=all_day,
+                visibility="private" if row["private"] == 1 else "public",
+                links={"task": task_id},
+            )
+            occ["bound"] = bound
+            out.append(occ)
+    return sorted(out, key=lambda occ: (str(occ["start"]), str(occ["occurrence_id"])))
+
+
 def _span(occ: dict[str, object]) -> tuple[datetime, datetime] | None:
     start, end = _parse(occ.get("start")), _parse(occ.get("end"))
     return (start, end) if start is not None and end is not None else None

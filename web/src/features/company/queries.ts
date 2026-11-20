@@ -969,7 +969,7 @@ export function decideBrandProposal(id: string, decision: 'confirm' | 'reject') 
 // ---------------------------------------------------------------- a matter's own facts, edited in place
 
 /** The facts a change sets (null clears one), as POST /api/v2/tasks/{tid}/matter takes them. */
-export type MatterFacts = Pick<MatterWrite, 'kind' | 'side' | 'party_entity_id' | 'amount' | 'currency' | 'claim' | 'forum' | 'product_id'>;
+export type MatterFacts = Pick<MatterWrite, 'kind' | 'side' | 'party_entity_id' | 'amount' | 'currency' | 'claim' | 'forum' | 'product_id' | 'starts_at' | 'due_at' | 'dates_label'>;
 
 /** Contacts a matter's party may be: people, then organizations, by name (GET /api/v2/entities/find/{type}). */
 export const partySearchQuery = (text: string) =>
