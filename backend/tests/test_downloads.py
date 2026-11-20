@@ -138,36 +138,118 @@ def test_bucket_version_selection(bucket_version, github_expected):
     assert bool(requests) == github_expected
 
 
-def test_github_release_offers_the_manifests_installers_not_the_electron_apps():
-    # The same release carries the Electron app's Tico-<version>-... files, with the same suffixes, listed after.
+def github_downloads(release, value):
+    def get(request):
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json=release)
+        assert value is not None, "no latest.json on this release"
+        return httpx.Response(200, json=value)
+
+    downloads = Downloads(
+        SimpleNamespace(blob_bucket="", runner_url="https://runner.example.com", public_url=""),
+        None,
+        httpx.MockTransport(get),
+    )
+    downloads.version = "0.3.7"
+    return downloads
+
+
+def with_assets(release, base, names):
+    release["assets"] += [{"name": name, "browser_download_url": base + name, "size": 1} for name in names]
+
+
+ELECTRON = ["Tico-0.3.6-arm64.dmg", "Tico-0.3.6-setup.exe", "Tico-0.3.6-x86_64.AppImage", "Tico-0.3.6-amd64.deb"]
+# Files beside the installers that share a prefix but are not ones: the updater's zip, blockmaps, feeds.
+ELECTRON_OTHER = [
+    "Tico-0.3.6-arm64.zip",
+    "Tico-0.3.6-arm64.dmg.blockmap",
+    "Tico-0.3.6-setup.exe.blockmap",
+    "latest-mac.yml",
+]
+
+
+def test_github_release_offers_the_electron_apps_installers_over_tauris(api):
+    # The Electron app may be carried forward from an earlier release, so its version is its own.
     base, release, value = github_fixture()
-    electron = [
-        "Tico-0.3.7-arm64.dmg",
-        "Tico-0.3.7-setup.exe",
-        "Tico-0.3.7-x86_64.AppImage",
-        "Tico-0.3.7-amd64.deb",
-    ]
-    release["assets"] += [{"name": name, "browser_download_url": base + name, "size": 1} for name in electron]
+    with_assets(release, base, ELECTRON + ELECTRON_OTHER)
     value["installers"] = {
-        "mac": {"file": "Tico_universal.dmg", "signed": True},
+        "mac": {"file": "Tico_universal.dmg", "signed": True, "notarized": True},
         "windows": {"file": "Tico_x64-setup.exe"},
         "linux": {"file": "Tico.AppImage"},
         "linux_deb": {"file": "Tico.deb"},
     }
-    downloads = Downloads(
-        SimpleNamespace(blob_bucket="", runner_url="https://runner.example.com", public_url=""),
-        None,
-        httpx.MockTransport(lambda r: httpx.Response(200, json=release if r.url.host == "api.github.com" else value)),
-    )
-    downloads.version = "0.3.7"
-    installers = downloads.manifest()["installers"]
-    assert {os_name: entry["file"] for os_name, entry in installers.items()} == {
-        "mac": "Tico_universal.dmg",
-        "windows": "Tico_x64-setup.exe",
-        "linux": "Tico.AppImage",
-        "linux_deb": "Tico.deb",
+    downloads = github_downloads(release, value)
+    manifest = downloads.manifest()
+    assert {os_name: entry["file"] for os_name, entry in manifest["installers"].items()} == {
+        "mac": "Tico-0.3.6-arm64.dmg",
+        "windows": "Tico-0.3.6-setup.exe",
+        "linux": "Tico-0.3.6-x86_64.AppImage",
+        "linux_deb": "Tico-0.3.6-amd64.deb",
     }
-    assert installers["mac"]["signed"] is True
+    # The Tauri updater feed's own fields are untouched.
+    assert manifest["version"] == "0.3.7" and manifest["platforms"] == value["platforms"]
+    # Electron's signing is recorded nowhere on the release: never claimed.
+    assert downloads.installer("mac") == {
+        "version": "0.3.6",
+        "file": "Tico-0.3.6-arm64.dmg",
+        "bytes": 1,
+        "app_kind": "generic",
+        "notarized": False,
+        "signed": False,
+        "url": base + "Tico-0.3.6-arm64.dmg",
+    }
+
+    built = api.app.state.downloads
+    built.bucket, built.version, built._github_transport = "", "0.3.7", downloads._github_transport
+    response = api.get("/download/windows", follow_redirects=False)
+    assert response.status_code == 302 and response.headers["location"] == base + "Tico-0.3.6-setup.exe"
+    described = api.get("/api/download/linux", headers=headers()).json()
+    assert described["file"] == "Tico-0.3.6-x86_64.AppImage" and described["version"] == "0.3.6"
+    assert api.get("/download/latest.json").status_code == 404  # the updater feed stays bucket-only
+
+
+def test_github_release_with_a_universal_electron_mac_build_offers_it():
+    base, release, value = github_fixture()
+    with_assets(release, base, ["Tico-0.6.145-universal.dmg"])
+    installers = github_downloads(release, value).manifest()["installers"]
+    assert installers["mac"]["file"] == "Tico-0.6.145-universal.dmg" and installers["mac"]["signed"] is False
+    # Systems with no Electron file keep Tauri's.
+    assert installers["windows"]["file"] == "Tico_x64-setup.exe"
+    assert installers["linux"]["file"] == "Tico.AppImage" and installers["linux_deb"]["file"] == "Tico.deb"
+
+
+def test_github_release_prefers_the_apple_chip_build_and_reads_prerelease_names():
+    base, release, value = github_fixture()
+    with_assets(release, base, ["Tico-0.3.7-rc.2-universal.dmg", "Tico-0.3.7-rc.2-arm64.dmg"])
+    assert github_downloads(release, value).manifest()["installers"]["mac"]["file"] == "Tico-0.3.7-rc.2-arm64.dmg"
+
+
+def test_github_release_without_tauris_manifest_still_offers_the_electron_app():
+    base, release, _ = github_fixture()
+    release["assets"] = [{"name": n, "browser_download_url": base + n, "size": 1} for n in ELECTRON + ELECTRON_OTHER]
+    downloads = github_downloads(release, None)
+    manifest = downloads.manifest()
+    assert manifest["platforms"] == {} and manifest["app_kind"] == "generic"
+    assert downloads.installer("mac")["file"] == "Tico-0.3.6-arm64.dmg"
+    assert downloads.installer("mac")["version"] == "0.3.6"
+
+
+def test_github_release_with_neither_app_is_unavailable():
+    base, release, _ = github_fixture()
+    release["assets"] = [{"name": n, "browser_download_url": base + n, "size": 1} for n in ELECTRON_OTHER]
+    downloads = github_downloads(release, None)
+    assert downloads.manifest() is None and downloads.installer("mac") is None
+
+
+def test_company_installers_name_no_version_of_their_own(api):
+    s3 = FakeS3()
+    manifest = {**MANIFEST, "installers": {"mac": {**MANIFEST["installers"]["mac"], "version": "9.9.9"}}}
+    s3.keys["releases/app/latest.json"] = json.dumps(manifest).encode()
+    built = api.app.state.downloads
+    built.bucket, built.base, built._s3, built._manifest = "b", "https://runner.test", s3, (0.0, None)
+    described = api.get("/api/download/mac", headers=headers()).json()
+    assert described["version"] == "2.1.0"
+    assert described["url"] == "https://runner.test/download/file/2.1.0/Tico_2.1.0_universal.dmg"
 
 
 def test_github_failure_is_unavailable_and_cached(api, failure="offline"):
