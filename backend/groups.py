@@ -19,7 +19,6 @@ reports to its person and is in no group. The company file puts the Finance Owne
 """
 
 import json
-import re
 
 from . import access as Access
 from . import hubdb as H
@@ -27,6 +26,7 @@ from . import models as M
 from . import people as P
 from . import task_caps
 from .store import Problem, encode
+from .slugs import slugify
 from . import bot_settings as BS
 from .api_contract import api_v2
 
@@ -81,7 +81,7 @@ def _archived(c):
 
 
 def slug_of(text):
-    return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:40]
+    return slugify(str(text or ""))[:40]
 
 
 def outside(settings, slug, config, helpers=None):

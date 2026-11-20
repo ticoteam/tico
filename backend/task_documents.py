@@ -17,6 +17,7 @@ from clients import bot_files as BF
 
 from . import read_cache
 from .store import H, Problem
+from .slugs import slugify
 
 # The names a stage approves; spelled as here whatever case or dashes a writer uses.
 NAMES: tuple[str, ...] = BF.DOCUMENTS
@@ -63,7 +64,7 @@ def named(c: Any, task_id: str, name: str) -> str:
 
 def file_name(name: str) -> str:
     """The name its versions carry in the task's files: `qa-report.html`."""
-    return (re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "document") + ".html"
+    return slugify(name, fallback="document") + ".html"
 
 
 def clean(text: str | None) -> bytes:

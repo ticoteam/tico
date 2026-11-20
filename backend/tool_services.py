@@ -22,6 +22,8 @@ stored key is a tool's and how its tool is made, shared by the data migration (o
 import base64
 import re
 
+from .slugs import slugify
+
 AUTH_SCHEME = re.compile(r"^(bearer|basic_user|basic_password|header:[A-Za-z0-9-]{1,60}|query:[A-Za-z0-9_.-]{1,60})$")
 
 
@@ -420,7 +422,7 @@ def is_tool_key(kind, env, name, source, stored, on_computers):
 
 
 def slug(text):
-    return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:48].strip("-") or "tool"
+    return slugify(str(text or ""), limit=48, fallback="tool")
 
 
 def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None, tid=None, first=None):

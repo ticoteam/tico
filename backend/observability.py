@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .config import DEFAULT_COMPANY_NAME, ROOT
+from .slugs import slugify
 
 ENVIRONMENTS = frozenset({"development", "staging", "production", "test"})
 POSTHOG_HOSTS = frozenset({"https://us.i.posthog.com", "https://eu.i.posthog.com"})
@@ -113,7 +114,7 @@ RUNNER_HOURLY = 20
 
 def instance(value):
     """The install's name as a short lowercase slug (`acme-co`), so one Sentry project can tell installs apart."""
-    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:64] if isinstance(value, str) else ""
+    return slugify(value)[:64] if isinstance(value, str) else ""
 
 
 def route(request):

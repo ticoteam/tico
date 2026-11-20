@@ -1,13 +1,13 @@
 """Branches share their original's definition and repository, with personal work and computers."""
 
 import json
-import re
 from types import SimpleNamespace
 
 from .store import H, Problem, encode, repo_url
 from . import profiles
 from . import bot_settings as BS
 from . import read_cache
+from .slugs import slugify
 
 # What a branch takes from its original at every claim. Everything else (its name, its person,
 # its computer) is the branch's own.
@@ -116,7 +116,7 @@ def model_bot(c, bot):
 
 
 def copy_slug(source, person):
-    slug = re.sub(r"[^a-z0-9]+", "-", f"{source}-{person}".lower()).strip("-")
+    slug = slugify(f"{source}-{person}")
     if len(slug) > 80:
         raise Problem("slug", "That bot and person make a name longer than 80 characters", 422)
     return slug

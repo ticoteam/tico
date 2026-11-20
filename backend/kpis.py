@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from . import hubdb as H
+from .slugs import slugify
 
 CADENCES = {"daily": 1, "weekly": 7, "monthly": 30}  # days in a period
 DIRECTIONS = ("up", "down", "range")
@@ -62,11 +63,6 @@ def _dt(value):
 def now():
     """The hub's clock (`hubdb.now`), as a datetime: what "today" is for freshness and pace."""
     return _dt(H.now())
-
-
-def slugify(text):
-    slug = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:60].strip("-")
-    return slug or "kpi"
 
 
 SYMBOLS = ("%", "pp", "$", "€", "£")  # written against the number: 52%, $1,200
@@ -587,7 +583,7 @@ def goal_link_status(conn, goal_id, at=None):
 
 # ----------------------------------------------------------------------------- writes
 def _unique_slug(conn, name):
-    base, slug, n = slugify(name), None, 1
+    base, slug, n = slugify(str(name or ""), limit=60, fallback="kpi"), None, 1
     slug = base
     while conn.execute("SELECT 1 FROM kpis WHERE slug=?", (slug,)).fetchone():
         n += 1
