@@ -1580,6 +1580,46 @@ def _db(c, now):
     }
 
 
+# GET /api/v2/system/update/speed: each route's requests and p95 since this server took its release, its first
+# SPEED_WARMUP seconds (cold caches, every open page reloading) left out, against the last hour it ran the `base` release
+# (default the one before). Route templates and timings only, never who made a request. The release train compares
+# the two (scripts/release_train.py `speed_check`).
+SPEED_PATH = "/api/v2/system/update/speed"
+SPEED_BEFORE = 3600
+SPEED_WARMUP = 120
+SPEED_ROUTES = 10_000  # every route: a cut per window would drop a route from one side of the comparison
+
+
+def speed(c, since, end, now, warmup=SPEED_WARMUP):
+    """[{route, before: {n, p95}, after: {n, p95}}]: the hour before `end` (only minutes wholly before it) against
+    `since` + `warmup` to `now` (epoch seconds), busiest after first."""
+    windows = {
+        "before": _requests(c, end - SPEED_BEFORE, end - 59, SPEED_ROUTES)["routes"],
+        "after": _requests(c, since + warmup, now + 60, SPEED_ROUTES)["routes"],
+    }
+    out = {}
+    for name, rows in windows.items():
+        for r in rows:
+            out.setdefault(r["route"], {"route": r["route"], "before": {"n": 0, "p95": 0}, "after": {"n": 0, "p95": 0}})
+            out[r["route"]][name] = {"n": r["n"], "p95": r["p95"]}
+    return sorted(out.values(), key=lambda r: (-r["after"]["n"], r["route"]))
+
+
+def speed_windows(history, base=None):
+    """(since, end, base) from the release history ({version, since} each, oldest first): when the current release
+    started, and when the server last stopped running `base` (default the release before), or None when it never ran
+    it here."""
+    stamps = [hubdb.parse_ts(h.get("since")) for h in history]
+    if not history or stamps[-1] is None:
+        return None
+    since = int(stamps[-1].timestamp())
+    for i in range(len(history) - 2, -1, -1):
+        ended = stamps[i + 1]
+        if (base is None or history[i].get("version") == base) and ended is not None:
+            return since, int(ended.timestamp()), history[i].get("version")
+    return None
+
+
 def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25, caller=None):
     """The last `minutes`, or with `since` the minutes from `since` up to `until` (epoch seconds, `until` excluded): a
     load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
@@ -1670,6 +1710,31 @@ def install(app, store, auth):
             for row in out.get("slow") or []:
                 row.pop("actor", None)
         return out
+
+    @app.get(SPEED_PATH)
+    def update_speed(request: Request, base: str | None = None):
+        """How this server's routes answer since it took its release, against the last hour it ran `base` (`speed`):
+        an `update` service key (the release train, docs/service-keys.md), the owner and the admins."""
+        from . import releases
+
+        who = request.state.identity
+        if not (who.role == "service" and who.scope == "update"):
+            auth.domain(who)
+            if not auth.bot_admin(who) or who.role not in ("owner", "human"):
+                raise Problem("forbidden", "Only an owner, an admin or an update key reads the release's speed", 403)
+        now = int(time.time())
+        with store.read() as c:
+            found = speed_windows(releases.history(c), base.strip().removeprefix("v") if base else None)
+            if found is None:
+                return {"release": releases.version(), "since": None, "now": now, "base": None, "routes": []}
+            since, end, ran = found
+            return {
+                "release": releases.version(),
+                "since": since,
+                "now": now,
+                "base": ran,
+                "routes": speed(c, since, end, now),
+            }
 
     # On app.state so a test can hold the minute still (backend/tests/test_web_timings.py).
     allowance = app.state.web_allowance = WebAllowance()

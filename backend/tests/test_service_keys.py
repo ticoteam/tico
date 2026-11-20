@@ -179,3 +179,54 @@ def test_a_later_call_reopens_reassigns_edits_and_closes_through_the_task_calls(
         assert not SK._apply(c, call(owner="human:cara"), H.task(c, task_id), "", "Billing")  # nothing differs
         assert SK._apply(c, call(close=True, note="Done in billing."), H.task(c, task_id), "", "Billing")
         assert H.task(c, task_id)["status"] == "closed"
+
+
+def test_an_update_key_reads_each_routes_speed_since_the_release_and_no_other_metrics(api, monkeypatch):
+    import json
+    import time
+
+    from backend import flight
+
+    monkeypatch.setenv("TICO_VERSION", "0.2.0")
+    now = int(time.time())
+    since = (now - 30 * 60) // 60 * 60 + 25  # mid-minute, as a start is
+    with api.app.state.store.transaction() as c:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(since)) + ".000000Z"
+        history = [{"version": "0.1.0", "since": "2026-01-01T00:00:00Z"}, {"version": "0.2.0", "since": stamp}]
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('release-history',?)", (json.dumps(history),))
+        # Before the release (in its last hour), the minute it started in (part old, part new: in neither window), in its
+        # warm-up (left out), and after it.
+        for at, ms in ((since - 600, 100.0), (since, 7000.0), (since + 60, 9000.0), (since + 600, 400.0)):
+            hist = {}
+            for _ in range(40):
+                flight._add(hist, ms)
+            c.execute(
+                "INSERT INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (at // 60 * 60, 60, "GET /api/v2/tasks", "human", 40, 0, 1, ms * 40, ms, ms, ms, json.dumps(hist)),
+            )
+    key = {"Authorization": "Bearer " + post(api, "service-keys", {"label": "Release bot", "scope": "update"})["key"]}
+    got = api.get(flight.SPEED_PATH, headers=key)
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["release"] == "0.2.0" and body["since"] == since and body["base"] == "0.1.0"
+    (row,) = body["routes"]
+    assert row == {
+        "route": "GET /api/v2/tasks",  # route templates and timings, never who asked
+        "before": {"n": 40, "p95": row["before"]["p95"]},
+        "after": {"n": 40, "p95": row["after"]["p95"]},
+    }
+    assert 100 <= row["before"]["p95"] < 130 and 400 <= row["after"]["p95"] < 500
+    assert api.get(flight.SPEED_PATH + "?base=v0.1.0", headers=key).json()["base"] == "0.1.0"
+    assert api.get(flight.SPEED_PATH + "?base=0.0.9", headers=key).json() == {
+        "release": "0.2.0",
+        "since": None,
+        "now": api.get(flight.SPEED_PATH + "?base=0.0.9", headers=key).json()["now"],
+        "base": None,
+        "routes": [],
+    }
+    assert api.get("/api/v2/system/metrics", headers=key).status_code == 403
+    tasks_key = {"Authorization": "Bearer " + post(api, "service-keys", {"label": "Billing"})["key"]}
+    assert api.get(flight.SPEED_PATH, headers=tasks_key).status_code == 403
+    assert api.get(flight.SPEED_PATH, headers=headers("cara-test")).status_code == 403
+    for admin in ("ana-test", "ben-test"):
+        assert api.get(flight.SPEED_PATH, headers=headers(admin)).status_code == 200
