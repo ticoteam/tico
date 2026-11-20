@@ -1,4 +1,4 @@
-"""Request-local provenance for SQL and fleet reads; never cached across requests.
+"""Request-local provenance for SQL and fleet reads; no decision is cached across requests.
 
 Unrelated historical blobs are not loaded. Small source maps are loaded only when a
 query touches that kind of content, and recursive lookups have bounded LRU caches.
@@ -7,6 +7,7 @@ query touches that kind of content, and recursive lookups have bounded LRU cache
 from collections import defaultdict
 from functools import cached_property, lru_cache
 import re
+from types import MappingProxyType
 
 from .store import H, Problem
 from . import row_clock
@@ -16,6 +17,29 @@ from .live_privacy import ROOM_PREFIX, Sources as MeetingSources
 
 TASK_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TASK_IDS = re.compile("(?=(" + TASK_ID.pattern + "))")
+
+
+_ROOM_INDEX: list = [None]
+
+
+def _room_index(task_ids, rooms):
+    """(rooms naming a task that does not exist, {task id: its rooms}) for one shared (task ids, room map) pair: the
+    request-independent half of `_plain_room`. Kept for the last pair seen, so a request reuses it until a task or a
+    room is added or removed (row_clock.refs hands every request the same objects until then)."""
+    hit = _ROOM_INDEX[0]
+    if hit is not None and hit[0] is task_ids and hit[1] is rooms:
+        return hit[2], hit[3]
+    unknown, by_task = set(), defaultdict(list)
+    for cid, ref in rooms.items():
+        tid = H._task_ref(ref)
+        if tid:
+            if tid in task_ids:
+                by_task[tid].append(cid)
+            else:
+                unknown.add(cid)
+    unknown, by_task = frozenset(unknown), MappingProxyType({tid: tuple(cids) for tid, cids in by_task.items()})
+    _ROOM_INDEX[0] = (task_ids, rooms, unknown, by_task)
+    return unknown, by_task
 
 
 class ReadIndex:
@@ -77,6 +101,24 @@ class ReadIndex:
                         (H.TICO_ACTOR,),
                     )
                 )
+
+    CACHES = (
+        "message_sources",
+        "target_message",
+        "attempt_sources",
+        "attempt",
+        "plain_room",
+        "conversation",
+        "direct_message",
+        "direct_parent",
+        "string_sources",
+    )
+
+    def release(self):
+        """Empty this snapshot's caches now. Each wraps a bound method of this index, a cycle that otherwise holds every
+        cached row until the cyclic collector runs."""
+        for name in self.CACHES:
+            getattr(self, name).cache_clear()
 
     @cached_property
     def task_ids(self):
@@ -153,8 +195,16 @@ class ReadIndex:
 
     def unreadable_rooms(self):
         """Rooms whose plain messages a caller may not read: an unreadable meeting room, or a room of a denied or
-        unknown task. Small, unlike the rooms themselves."""
-        return {cid for cid in self.conversation_tasks if not self._plain_room(cid)}
+        unknown task. Small, unlike the rooms themselves. The same answer as `_plain_room` for each room, read from a
+        room index shared while the task ids and room map are (row_clock.refs): no Python step per room per request."""
+        if self.meeting_rooms is None:
+            return {cid for cid in self.conversation_tasks if not self._plain_room(cid)}
+        unknown, by_task = _room_index(self.task_ids, self.conversation_tasks)
+        out = set(unknown)
+        for tid in self.denied:
+            out.update(by_task.get(tid, ()))
+        out.update(cid for cid in self.meeting_rooms if cid in self.conversation_tasks and not self.conversation(cid))
+        return out
 
     def attempts(self):
         if self._attempts is None:
