@@ -528,6 +528,42 @@ class CommentDelivery(TypedDict):
 # The task's own read declares its chat and its links here, not on the shared Task: the old app's task types extend Task
 # with their own spellings of both, which a declaration there would contradict.
 @answer
+class TaskQuestionParent(TypedDict):
+    id: str
+    number: int | None
+    title: str
+
+
+@answer
+class TaskQuestion(TypedDict):
+    """A question task's question (backend/questions.py)."""
+
+    parent: TaskQuestionParent | None
+    """The task it was asked on; null to a reader who may not read that task"""
+    asker: str
+    person: str
+    round: int
+    link_url: str | None
+    state: str
+    """open, answered or withdrawn"""
+    ended_reason: str | None
+    """answered, withdrawn, parent_ended, parent_moved, asker_gone or person_gone; null while open"""
+    answered_at: DateTime | None
+    answered_by: str | None
+    answer_message_id: str | None
+    answer_text: str | None
+
+
+@answer
+class TaskQuestionRow(TypedDict):
+    task_id: str
+    number: int | None
+    title: str
+    person: str
+    state: str
+
+
+@answer
 class TaskDetailTask(TaskFields):
     stage_since: DateTime | None
     """On the task's own read, when it entered its current open visit, or null if it has none. On a list row, when it entered its stage, falling back to when it was filed."""
@@ -535,6 +571,10 @@ class TaskDetailTask(TaskFields):
     """The task's chat: the conversation its request, comments and bot replies are in (this read carries its messages). Null for a task with no chat"""
     links: list[TaskLinkView]
     """What the task points to, oldest first: pull requests, issues, docs, pages, checkouts and sessions, each with its whole record"""
+    question: NotRequired[TaskQuestion]
+    """On a question task (backend/questions.py): its question and how it stands"""
+    questions: NotRequired[list[TaskQuestionRow]]
+    """The open questions asked on this task, oldest first, those the reader may read"""
 
 
 @answer
@@ -632,10 +672,33 @@ class TaskComments(TypedDict):
 
 
 @answer
+class QuestionAsked(TypedDict):
+    """A question filed as a task under the task it was asked on (backend/questions.py)."""
+
+    task_id: str
+    parent_id: str
+    asker: str
+    person: str
+    round: int
+    link_url: str | None
+    state: str
+    """open, answered or withdrawn"""
+
+
+@answer
+class QuestionResult(TypedDict):
+    """A question task after an answer, a withdrawal or a Give to (backend/questions.py)."""
+
+    question: QuestionAsked
+
+
+@answer
 class CommentResult(TypedDict):
     comment: Message
     comments: list[Message]
     woke: bool
+    question_task: NotRequired[QuestionAsked]
+    """With the company's questions_as_tasks on, a bot's question: the task it was filed as, `comment` its words there"""
     delivered: NotRequired[bool]
     warning: NotRequired[str]
     held: NotRequired[str]

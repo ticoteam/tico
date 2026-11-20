@@ -105,6 +105,13 @@ def main(argv=None):
     )
     p.add_argument("database", type=Path)
     p.add_argument("action", choices=("show", "on", "off", "reset-id", "payload"))
+    p = sub.add_parser(
+        "questions",
+        help="Questions as tasks (backend/questions.py): show the company switch, turn it on or off, or turn each open "
+        "task ❓ into a question (backfill: retryable, prints counts before and after and what it skipped)",
+    )
+    p.add_argument("database", type=Path)
+    p.add_argument("action", choices=("show", "on", "off", "backfill"))
     p = sub.add_parser("import-history")
     p.add_argument("database", type=Path)
     p.add_argument("--runtime", type=Path, required=True)
@@ -199,6 +206,17 @@ def main(argv=None):
         report = {"database": str(args.database), "bots": len(entries)}
         with store.read() as c:
             report["bots_by_operator"] = bots_by_operator(c)
+    elif args.command == "questions":
+        from . import questions
+
+        store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
+        with store.transaction() as c:
+            if args.action in ("on", "off"):
+                questions.set_enabled(c, args.action == "on", H.TICO_ACTOR)
+            if args.action == "backfill" and not questions.enabled(c):
+                raise SystemExit("Turn questions on first: python -m backend.manage questions DATABASE on")
+            report = questions.backfill(c) if args.action == "backfill" else {}
+            report["on"] = questions.enabled(c)
     elif args.command == "hosting-enrollment":
         from .hosting_enrollment import enrollment
 

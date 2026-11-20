@@ -11,6 +11,7 @@ from . import counsel
 from . import delivery
 from . import org_rule_check
 from . import question_marks
+from . import questions
 from . import task_privacy as privacy
 from . import teammate_access
 from . import visuals
@@ -117,7 +118,10 @@ def register(
             way, defer_for = "defer", delivery.NEVER
         else:
             way, defer_for = comment_way_for(c, who, row)
-        if answers:
+        # The person's reply on their own open question (backend/questions.py) is their answer: it wakes the bot that
+        # asked on the task it asked on, once, and never on the question itself.
+        answering = H.is_human(who.actor) and questions.is_open_for(c, task_id, who.actor)
+        if answers or answering:
             way, defer_for = "defer", delivery.NEVER
         # A Defer never the reader did not choose (none named, or a defer with no deadline) binds the bots only:
         # people following are notified as their level says (threads.plan).
@@ -162,6 +166,8 @@ def register(
             to=asker,
         )
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
+        if answering:
+            questions.replied(c, task_id, who.actor, msg, getattr(who, "via", None) or None)
         if answers and asker:
             # The asker's own delivery was deferred with the rest: its run starts now and carries it.
             delivery.now(c, asker, row["conversation_id"])
@@ -348,7 +354,7 @@ def register(
         )
 
         def write(c):
-            done = question_write(c, who, tid, text, to, rc)
+            done = question_write(c, who, tid, text, to, rc, link=body.link)
             if body.not_known and (done.get("comment") or {}).get("id"):
                 # Counted: Tico's answer did not cover it (Tasks spec criterion 12).
                 H.history_event(c, "task", auth.resolve_task(c, who, tid), who.actor, "ask_not_known", data={"to": to})
@@ -359,15 +365,44 @@ def register(
     # An older client's question on the asks route is asked here (task_moves_routes.task_ask).
     app.state.task_question = task_question
 
-    def question_write(c, who, tid, text, to, rc, ingest=None):
+    def question_write(c, who, tid, text, to, rc, ingest=None, link=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
-        transaction. Held by a rule, nothing is written and nothing is marked."""
+        transaction. Held by a rule, nothing is written and nothing is marked. With the company's questions_as_tasks
+        on, the question is a task filed under this one instead (`question_task_write`); `link` goes on it."""
+        if questions.enabled(c):
+            return question_task_write(c, who, tid, text, to, rc, link)
+        if link:
+            text = f"{text}\n\n{link}"  # a ❓ has no link of its own: it is in its words
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):
             return done
         mark = question_marks.mark(c, who.actor, said["id"], to)
         return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
+
+    def question_task_write(c, who, tid, text, to, rc, link):
+        """A bot's question filed as a task under the task (backend/questions.py), after the org rule check the ❓ would
+        have had (its `kind:ask`, with the person in its audience): held, nothing is filed. The answer carries the
+        question's opening message as `comment`, as a ❓'s does, and the question as `question_task`."""
+        task_id = auth.resolve_task(c, who, tid)
+        row = auth.task(c, who, task_id)
+        audience = rule_comment_audience(c, who, row, text, to) if rc is not None else None
+        replay = {"task": task_id, "body": M.TaskComment(text=text).model_dump(mode="json", by_alias=True), "to": to}
+        rule = org_rule_check.apply(c, rc, text, {**replay, **({"link": link} if link else {})}, audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
+        if rule and rule.get("held"):
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
+        asked = questions.ask(c, who.actor, task_id, to, org_rule_check.warned_text(rule, text), link_url=link)
+        said = visual_view(c, who, H.task_comments(c, asked["task_id"], actor=privacy.actor(who)))
+        mine = [m for m in said if m.get("sender_id") == who.actor]
+        return {
+            "comment": mine[-1] if mine else None,
+            "comments": said,
+            "woke": False,
+            "question_task": asked,
+            **org_rule_check.answer(rule),
+        }
 
     def rule_question_audience(c, bot, replay):
         row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
@@ -376,7 +411,9 @@ def register(
     @org_rule_check.replayer("question", audience=rule_question_audience)
     def rule_replay_question(c, bot, hold, replay, ingest, gate=None):
         text = replay["body"].get("text") or ""
-        return question_write(c, bot, replay["task"], text, replay["to"], org_rule_check.decided(gate), ingest)
+        return question_write(
+            c, bot, replay["task"], text, replay["to"], org_rule_check.decided(gate), ingest, replay.get("link")
+        )
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

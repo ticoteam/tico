@@ -592,6 +592,7 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
         "not_known": {"type": "boolean", "description": "Ask even if Tico answered"},
+        "link": _s("A question: where the person does what you ask, an https:// address", maxLength=2000),
         "requirement": _s("With withdraw: the OK's requirement id, if several"),
         "why": _s("With withdraw: why"),
         "version": VERSION,
@@ -612,6 +613,8 @@ def task_ask(api, args):
         question = {"to": args["to"], "text": args["line"]}
         if args.get("not_known"):
             question["not_known"] = True  # past Tico's own answer (backend/ask_known.py)
+        if args.get("link"):
+            question["link"] = args["link"]  # "Open ↗" on the question (backend/questions.py)
         return api.post(f"tasks/{args['id']}/questions", question, key=_key(args))
     if args.get("kind") != "ok" and not args.get("subject"):
         raise ValueError(QUESTION_INSTEAD)
