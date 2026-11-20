@@ -206,10 +206,11 @@ def has_fts(c):
 
 
 def parse_for_search(c, rowid, title, path, body):
-    """Stores what search ranks a doc by: manual.page_text less the doc's own body, name and title. A change to what it
-    stores needs a migration that sets docs.search_parse to NULL; the next start parses every live doc again."""
+    """Stores what search ranks a doc by: its manual.page_text words, title words and sections (each a span of the
+    body and its words). A change to what it stores needs a migration that sets docs.search_parse to NULL: the next start parses
+    every live doc again."""
     page = manual.page_text(path, body, title)
-    parse = json.dumps({"title_words": page["title_words"], "sections": page["sections"]}, ensure_ascii=False)
+    parse = json.dumps({k: page[k] for k in ("title_words", "words", "sections")}, ensure_ascii=False)
     c.execute("UPDATE docs SET search_parse=? WHERE rowid=?", (parse, rowid))
 
 
@@ -227,8 +228,8 @@ def unindex(c, rowid):
 
 
 def ensure_schema(c, settings=None):
-    """The full-text index (rebuilt when it is behind the rows) and the one-time move of the old linked sources and
-    approved repositories into linked docs. Safe to run at every start."""
+    """Each live doc's stored parse where it has none, the full-text index (rebuilt when it is behind the rows) and the
+    one-time move of the old linked sources and approved repositories into linked docs. Safe to run at every start."""
     from .flight import begin
 
     done = begin(c)
@@ -1062,17 +1063,18 @@ class Docs:
                 score += 100 * sum(weights[t] for t in tokens if manual._has(page["title_words"], t))
             elif row["path"].startswith("_librarian/"):
                 score *= 0.2
-            found = {
-                "type": "internal",
-                "id": row["id"],
-                "path": row["path"],
-                "title": row["title"],
-                "section": section["heading"],
-                "anchor": section["anchor"],
-                "excerpt": row["body"][section["start"] : section["end"]],  # the excerpt made for the results kept
-                "score": round(score, 3),
-            }
-            out.append(found)
+            out.append(
+                {
+                    "type": "internal",
+                    "id": row["id"],
+                    "path": row["path"],
+                    "title": row["title"],
+                    "section": section["heading"],
+                    "anchor": section["anchor"],
+                    "excerpt": row["body"][section["start"] : section["end"]],  # made an excerpt once kept, below
+                    "score": round(score, 3),
+                }
+            )
         out = sorted(out, key=lambda r: -r["score"])[:limit]
         return [{**r, "excerpt": manual._excerpt(" ".join(r["excerpt"].split()), tokens)} for r in out]
 

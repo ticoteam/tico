@@ -167,6 +167,7 @@ def best_section(page, wanted, weights=None):
     weights = weights or query_weights(wanted)
     best = None
     terms = [(t, " " + _stem(t), _stem(t)) for t in wanted]  # `_has` of each term is `key in` a vocabulary
+    terms = [term for term in terms if term[1] in page["words"]]  # one no word of the page has can match no section
     titled = {t: key in page["title_words"] for t, key, _ in terms}
     folded = page["folded"]
     spans = len(folded) == len(page["body"])  # casefold kept each character one character, so the spans fit it
@@ -227,10 +228,11 @@ def search(q, limit=20):
         best = best_section(page, wanted, weights)
         if best:
             row = result(page, best[1], version, best[0])
-            row["section"] = best[1]["heading"]
-            row["excerpt"] = _excerpt(section_text(page, best[1]), wanted)
+            row["section"], row["excerpt"] = best[1]["heading"], (page, best[1])  # made an excerpt once kept, below
             found.append(row)
     found.sort(key=lambda r: (-r["score"], r["path"]))
+    for row in found[:limit]:
+        row["excerpt"] = _excerpt(section_text(*row["excerpt"]), wanted)
     return found[:limit]
 
 
