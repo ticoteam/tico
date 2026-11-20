@@ -30,6 +30,7 @@ BUDGETS = {
     "GET /api/status": 54,  # 45
     "GET /api/v2/usage?group=bot": 21,  # 17 (255 before one snapshot and one spend read for every bot)
     "GET /api/v2/usage?group=day": 16,  # 13
+    "GET /api/v2/threads?sort=recent&limit=50": 54,  # 45 (200 before the rooms' provenance was read together)
     "GET /api/v2/events (until its first read)": 173,  # 144
     "POST /api/v2/runners/heartbeat": 82,  # 68
     "POST /api/v2/jobs/claim": 33,  # 27
@@ -181,6 +182,7 @@ def requests(api, made):
         "GET /api/status": (nothing, get("/api/status")),
         "GET /api/v2/usage?group=bot": (nothing, get("/api/v2/usage?group=bot")),
         "GET /api/v2/usage?group=day": (nothing, get("/api/v2/usage?group=day")),
+        "GET /api/v2/threads?sort=recent&limit=50": (nothing, get("/api/v2/threads?sort=recent&limit=50")),
         "GET /api/v2/events (until its first read)": (
             lambda: after.update(seq=latest_change(api) - 1),
             lambda: stream_setup(api, after["seq"]),
