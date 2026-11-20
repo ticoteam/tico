@@ -241,8 +241,15 @@ export function PdfSign({
     if (t === 'signature' && !signature) return setDrawing(true);
     setTool(tool === t ? null : t);
   };
+  // A tap places, on its release: a finger that moves is scrolling the pages (the browser then cancels the pointer).
+  const tap = useRef<{ id: number; x: number; y: number } | null>(null);
+  const press = (e: PointerEvent<HTMLDivElement>) => {
+    tap.current = e.target === e.currentTarget ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
+  };
   const place = (n: number, shown: { width: number; height: number }) => (e: PointerEvent<HTMLDivElement>) => {
-    if (e.target !== e.currentTarget) return;
+    const t = tap.current;
+    tap.current = null;
+    if (!t || t.id !== e.pointerId || Math.hypot(e.clientX - t.x, e.clientY - t.y) > 8) return;
     if (!tool || !shown.width || !shown.height) return setOn(null);
     const box = e.currentTarget.getBoundingClientRect();
     const w = FIRST_WIDTH[tool];
@@ -304,7 +311,7 @@ export function PdfSign({
                 zoom={zoom}
                 label={`${title}, signing`}
                 overlay={(n, shown) => (
-                  <div className={tool ? 'sg-layer is-armed' : 'sg-layer'} data-page={n} onPointerDown={place(n, shown)}>
+                  <div className={tool ? 'sg-layer is-armed' : 'sg-layer'} data-page={n} onPointerDown={press} onPointerUp={place(n, shown)} onPointerCancel={() => (tap.current = null)}>
                     {marks
                       .filter((m) => m.page === n)
                       .map((m) => (

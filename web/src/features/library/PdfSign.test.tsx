@@ -40,6 +40,12 @@ vi.mock('signature_pad', () => ({
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgAAIAAAUAAWJFJs0AAAAASUVORK5CYII=';
 const pngBytes = () => Uint8Array.from(atob(PNG.split(',')[1] ?? ''), (c) => c.charCodeAt(0));
 
+/** A tap: down and up in one place (a finger that moves is scrolling). */
+function tapAt(el: HTMLElement, clientX: number, clientY: number) {
+  fireEvent.pointerDown(el, { pointerId: 1, clientX, clientY });
+  fireEvent.pointerUp(el, { pointerId: 1, clientX, clientY });
+}
+
 async function letter(pages = 1, turn = 0) {
   const pdf = await PDFDocument.create();
   for (let i = 0; i < pages; i++) pdf.addPage([612, 792]).setRotation(degrees(turn));
@@ -139,10 +145,10 @@ describe('signing a task’s PDF', () => {
     // A tap on the page places the armed mark there.
     const page = () => mode.querySelector<HTMLElement>('.sg-layer[data-page="1"]');
     await waitFor(() => expect(page()).not.toBeNull());
-    fireEvent.pointerDown(page() as HTMLElement, { clientX: 200, clientY: 300 });
+    tapAt(page() as HTMLElement, 200, 300);
     expect(await within(mode).findByRole('group', { name: 'Signature' })).toBeTruthy();
     fireEvent.click(within(mode).getByRole('button', { name: 'Date' }));
-    fireEvent.pointerDown(page() as HTMLElement, { clientX: 500, clientY: 320 });
+    tapAt(page() as HTMLElement, 500, 320);
     const date = within(mode).getByRole('textbox', { name: 'Date' }) as HTMLInputElement;
     expect(date.value).toMatch(/^[A-Z][a-z]+ \d{1,2}, \d{4}$/);
 
