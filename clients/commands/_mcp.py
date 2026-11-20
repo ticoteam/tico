@@ -71,7 +71,22 @@ def as_json_integers(value, schema):
     return value
 
 
+def json_equal(a, b):
+    """JSON's equality, which Python's == is not: true is not 1, and 1.0 is 1."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(map(json_equal, a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
+    return type(a) is type(b) and a == b
+
+
 def argument_error(value, schema, path="arguments"):
+    """The first way `value` breaks `schema`, read as JSON Schema 2020-12 (MCP's dialect when a schema names none),
+    or None. Standard library only, as clients/ is; a test holds it to jsonschema on every schema Tico ships."""
     types = {
         "object": dict,
         "array": list,
@@ -94,7 +109,7 @@ def argument_error(value, schema, path="arguments"):
             return misses[0]
     if kinds and not any(is_kind(k) for k in kinds):
         return f"{path}: expected {' or '.join(kinds)}"
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(json_equal(value, option) for option in schema["enum"]):
         return f"{path}: use one of {', '.join(str(v) for v in schema['enum'])}"
     if isinstance(value, dict):
         props = schema.get("properties", {})
