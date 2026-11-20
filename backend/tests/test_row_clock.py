@@ -1,6 +1,9 @@
 """Shared neutral reads (backend/row_clock.py): the private parties and the access registry rows are read once per
 change, never once per request, and a write that is not yet committed shares nothing."""
 
+import sqlite3
+import threading
+
 import pytest
 
 from backend import row_clock
@@ -204,3 +207,101 @@ def _an_uncommitted_task_is_never_shared(store):
         )
     ids = index_request(store)[0][0]
     assert "real" in ids and "ghost" not in ids
+
+
+class _Waits(threading.Event):
+    """A flight's done event that counts the readers waiting on it."""
+
+    seen = threading.Condition()
+    waiting = 0
+
+    def wait(self, timeout=None):
+        with _Waits.seen:
+            _Waits.waiting += 1
+            _Waits.seen.notify_all()
+        return super().wait(timeout)
+
+
+def _cold_misses(store, monkeypatch, readers, fail_first=False):
+    """`readers` requests that miss the parties cache together, while the first one's read is held open until the
+    rest are waiting: (each request's rows or exception, the number of reads that ran)."""
+    real, release, reads = row_clock._rows, threading.Event(), []
+
+    def held(c, statement):
+        reads.append(statement)
+        if len(reads) == 1:
+            assert release.wait(30), "the waiters never arrived"
+            if fail_first:
+                raise sqlite3.OperationalError("interrupted")
+        return real(c, statement)
+
+    class Flight(row_clock._Flight):
+        def __init__(self):
+            super().__init__()
+            self.done = _Waits()
+
+    monkeypatch.setattr(row_clock, "_rows", held)
+    monkeypatch.setattr(row_clock, "_Flight", Flight)
+    _Waits.waiting = 0
+    out = [None] * readers
+
+    def one(n):
+        try:
+            out[n] = request(store, row_clock.parties)
+        except sqlite3.OperationalError as e:
+            out[n] = e
+
+    threads = [threading.Thread(target=one, args=(n,)) for n in range(readers)]
+    for t in threads:
+        t.start()
+    with _Waits.seen:
+        assert _Waits.seen.wait_for(lambda: _Waits.waiting >= readers - 1, 30)
+    release.set()
+    for t in threads:
+        t.join(30)
+    return out, len(reads)
+
+
+def test_cold_readers_at_one_clock_read_once_and_a_failed_read_leaves_its_waiters_to_read(store, monkeypatch):
+    # Readers that miss together at one clock share one read of the rows, the same rows object each.
+    store.row_cache = row_clock.Cache()
+    out, reads = _cold_misses(store, monkeypatch, 6)
+    assert reads == 1 and all(rows is out[0] for rows in out) and {r["id"] for r in out[0]} == {"secret"}
+    assert not store.row_cache.building
+
+    # The first read fails: that request alone sees the error, and one waiter reads in its place for the rest.
+    store.row_cache = row_clock.Cache()
+    out, reads = _cold_misses(store, monkeypatch, 6, fail_first=True)
+    failed = [r for r in out if isinstance(r, Exception)]
+    assert len(failed) == 1 and reads == 2
+    assert all({r["id"] for r in rows} == {"secret"} for rows in out if rows not in failed)
+    assert not store.row_cache.building
+
+
+def test_a_read_at_an_older_clock_never_replaces_a_newer_entry(store):
+    store.row_cache = row_clock.Cache()
+    with store.read() as c:
+        clock = c.execute("SELECT value FROM row_clock WHERE name='parties'").fetchone()[0]
+    newer = ({"id": "from-a-later-snapshot"},)
+    store.row_cache.values["parties"] = (clock + 1, newer)
+    # This snapshot's clock is older than the published entry: it reads its own rows and leaves the entry alone.
+    assert {r["id"] for r in request(store, row_clock.parties)} == {"secret"}
+    assert store.row_cache.values["parties"] == (clock + 1, newer)
+
+
+def test_rows_read_outside_a_snapshot_after_a_change_are_not_shared_as_the_older_clock(store, monkeypatch):
+    # Outside a transaction the clock and the rows are two reads. A change that commits between them is in the rows
+    # but not the clock: those rows must not be kept, or handed to a reader, as the older clock's.
+    store.row_cache = row_clock.Cache()
+    real = row_clock._rows
+
+    def changed_first(c, statement):
+        with store.transaction() as w:
+            w.execute("UPDATE tasks SET requester_id='bot:later' WHERE id='secret'")
+        return real(c, statement)
+
+    monkeypatch.setattr(row_clock, "_rows", changed_first)
+    with store.read() as c:
+        assert not c.in_transaction
+        assert parties(c)["secret"]["requester_id"] == "bot:later"
+    assert "parties" not in store.row_cache.values and not store.row_cache.building

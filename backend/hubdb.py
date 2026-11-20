@@ -7055,9 +7055,14 @@ def labels_in_use(conn, visible="1"):
 # (most recently finished first, id). Row values compare left to right as the ORDER BY sorts. created_at is a nullable
 # column: a missing date is '' here, which sorts where NULL does (before every date ascending, after every date
 # descending), so a row with none is still reached and its key still round-trips as a string.
+# When a finished task finished: its first time set, or '' (never NULL), the archive's order and its index's
+# (tasks_finished_time) word for word.
+FINISHED_WHEN = "COALESCE(done_at,closed_at,updated_at,created_at,'')"
 KEYSET_SQL = {
     "queue": "((rank IS NULL), COALESCE(rank, 0), COALESCE(created_at, ''), id) > (?, ?, ?, ?)",
-    "finished": "(COALESCE(done_at,closed_at,updated_at,created_at,''), id) < (?, ?)",
+    # The second term holds no row the first does not: it is the range SQLite seeks in the index, which it does not do
+    # for the pair, so a deep page starts at its place instead of walking every row before it.
+    "finished": f"({FINISHED_WHEN}, id) < (?, ?) AND {FINISHED_WHEN} <= ?",
 }
 
 
@@ -7164,10 +7169,14 @@ def tasks(
         else:
             where.append(f"status IN ({','.join('?' * len(wanted))})")
             args += wanted
+            if order == "finished" and set(wanted) <= {"done", "closed"}:
+                # The same rows, in the words of tasks_finished_time's WHERE: SQLite uses a partial index only for a
+                # query that names its condition, and a bound status never does.
+                where.append("status IN ('done','closed')")
     if order == "queue":
         ordering = "(rank IS NULL), rank, created_at, id"
     elif order == "finished":
-        ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
+        ordering = f"{FINISHED_WHEN} DESC, id DESC"  # most recently done first
     else:
         raise ValueError("task order is queue or finished")
     if per_stage:
@@ -7179,7 +7188,7 @@ def tasks(
     if after is not None:
         # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
         where.append(KEYSET_SQL[order])
-        args += list(after)
+        args += list(after) if order == "queue" else [*after, after[0]]
     if where:
         sql += " WHERE " + " AND ".join(where)
     if keys_only:

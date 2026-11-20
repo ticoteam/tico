@@ -10,7 +10,7 @@ connection later reuses (roster_clock, provenance_clock.cached).
 """
 
 import sqlite3
-from threading import Lock
+from threading import Event, Lock
 from types import MappingProxyType
 
 # tasks_private_status holds these columns (and two more) under this WHERE, word for word: the read never touches a body.
@@ -26,10 +26,19 @@ ROOM_TASKS = "SELECT id,task_id FROM conversations INDEXED BY conversations_id_t
 
 
 class Cache:
-    """{name: (clock, rows)} for one Store, replaced when its database file is replaced."""
+    """{name: (clock, rows)} for one Store, replaced when its database file is replaced. `building` holds the read in
+    progress per (name, clock): readers that miss at the same clock wait for it instead of each reading the same rows
+    (tens of thousands of task ids at TIDY's size) at once."""
 
     def __init__(self):
-        self.values, self.lock = {}, Lock()
+        self.values, self.lock, self.building = {}, Lock(), {}
+
+
+class _Flight:
+    """One build of a name at a clock, which the readers that missed at that clock wait on."""
+
+    def __init__(self):
+        self.done, self.found, self.ok = Event(), None, False
 
 
 def ensure(c):
@@ -67,6 +76,10 @@ def ensure(c):
         c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {action}; END")
 
 
+def _clock(c, name):
+    return c.execute("SELECT value FROM row_clock WHERE name=?", (name,)).fetchone()[0]
+
+
 def _shared(c, name, statement, build):
     cache = getattr(c, "row_cache", None)
     if (
@@ -76,18 +89,39 @@ def _shared(c, name, statement, build):
     ):
         return build(c, statement)
     try:
-        clock = c.execute("SELECT value FROM row_clock WHERE name=?", (name,)).fetchone()[0]
+        clock = _clock(c, name)
     except (sqlite3.OperationalError, TypeError):
         # Not made yet (a file opened before Store.initialize): read without sharing.
         return build(c, statement)
-    with cache.lock:
-        hit = cache.values.get(name)
-    if hit is not None and hit[0] == clock:
-        return hit[1]
-    found = build(c, statement)
-    with cache.lock:
-        cache.values[name] = (clock, found)
-    return found
+    key = (name, clock)
+    while True:
+        with cache.lock:
+            hit = cache.values.get(name)
+            if hit is not None and hit[0] == clock:
+                return hit[1]
+            flight = cache.building.get(key)
+            if flight is None:
+                flight = cache.building[key] = _Flight()
+                break
+        flight.done.wait()
+        if flight.ok:
+            # The same clock is the same committed rows, so the leader's read is this reader's too.
+            return flight.found
+        # The leader's read failed or was not this clock's: one of its waiters reads next, the others wait for it.
+    try:
+        flight.found = build(c, statement)
+        # Outside a snapshot the clock and the rows are two reads: the rows are this clock's only if no change
+        # committed between them, as the counters only go up. Otherwise this reader keeps its rows and shares none.
+        flight.ok = c.in_transaction or _clock(c, name) == clock
+    finally:
+        with cache.lock:
+            del cache.building[key]
+            # The counters only go up: a slow read at an older clock never replaces a newer one's entry.
+            current = cache.values.get(name)
+            if flight.ok and (current is None or current[0] < clock):
+                cache.values[name] = (clock, flight.found)
+        flight.done.set()
+    return flight.found
 
 
 def _rows(c, statement):
