@@ -40,6 +40,9 @@ import type {
   FileSearch,
   GetGoalsNeedsYouResponse,
   Matter,
+  MatterDate,
+  MatterDateResult,
+  MatterDateWrite,
   MatterResult,
   MatterWrite,
   RepositoryList,
@@ -987,8 +990,26 @@ export const partySearchQuery = (text: string) =>
     staleTime: 30_000,
   });
 
-/** One matter's facts, shown at once wherever the matter is listed (the open list, Disputes, its risk's page, a
-    product's matters) and taken back if refused. `names` carries the party's or product's name for the first paint. */
+/** A change to one matter, in every list that shows it (the open list, Disputes, its risk's page, a product's matters). */
+function eachMatter(task: string, cur: unknown, m: (x: Matter | null) => Matter | null): unknown {
+  const row = (r: MatterRow): MatterRow => (r.task.id === task ? { ...r, matter: m(r.matter) } : r);
+  if (Array.isArray(cur)) return (cur as MatterRow[]).map((r) => (r && typeof r === 'object' && 'task' in r ? row(r) : r));
+  if (cur && typeof cur === 'object' && Array.isArray((cur as { matters?: unknown }).matters)) return { ...cur, matters: (cur as { matters: MatterRow[] }).matters.map(row) };
+  return cur;
+}
+
+/** The risk keys a matter shows under. */
+function matterKeys() {
+  const found = queryClient
+    .getQueryCache()
+    .findAll({ queryKey: ['risks'] })
+    .map((q) => q.queryKey)
+    .filter((k) => k[1] === 'matters' || k[1] === 'detail');
+  return found.length ? found : [['risks', 'matters', 'open']];
+}
+
+/** One matter's facts, shown at once wherever the matter is listed and taken back if refused. `names` carries the
+    party's or product's name for the first paint. */
 export function setMatter(task: string, facts: MatterFacts, version: number | undefined, names: { party?: string; product?: string } = {}) {
   const patch = (m: Matter | null): Matter | null => {
     if (!m) return m;
@@ -997,21 +1018,75 @@ export function setMatter(task: string, facts: MatterFacts, version: number | un
     if ('product_id' in facts) next.product = facts.product_id ? { id: facts.product_id, name: names.product ?? m.product?.name ?? '' } : null;
     return next;
   };
-  const row = (r: MatterRow, m: (x: Matter | null) => Matter | null): MatterRow => (r.task.id === task ? { ...r, matter: m(r.matter) } : r);
-  const each = (cur: unknown, m: (x: Matter | null) => Matter | null): unknown => {
-    if (Array.isArray(cur)) return (cur as MatterRow[]).map((r) => (r && typeof r === 'object' && 'task' in r ? row(r, m) : r));
-    if (cur && typeof cur === 'object' && Array.isArray((cur as { matters?: unknown }).matters)) return { ...cur, matters: (cur as { matters: MatterRow[] }).matters.map((r) => row(r, m)) };
-    return cur;
-  };
-  const keys = queryClient
-    .getQueryCache()
-    .findAll({ queryKey: ['risks'] })
-    .map((q) => q.queryKey)
-    .filter((k) => k[1] === 'matters' || k[1] === 'detail');
   return write<MatterResult>({
-    key: keys.length ? keys : [['risks', 'matters', 'open']],
-    optimistic: (cur: unknown) => each(cur, patch),
+    key: matterKeys(),
+    optimistic: (cur: unknown) => eachMatter(task, cur, patch),
     send: (idempotencyKey) => api.post<MatterResult>(`/api/v2/tasks/${enc(task)}/matter`, { ...facts, ...(version != null && { version }) }, { idempotencyKey }),
-    settle: (cur: unknown, r) => (r.matter ? each(cur, () => r.matter) : cur),
+    settle: (cur: unknown, r) => (r.matter ? eachMatter(task, cur, () => r.matter) : cur),
+  });
+}
+
+// ---------------------------------------------------------------- a matter's key dates
+
+/** What a key date write sets (null clears a date), as POST /api/v2/tasks/{tid}/matter/dates[/{id}] takes it. */
+export type MatterDateFacts = Pick<MatterDateWrite, 'label' | 'starts_at' | 'due_at' | 'done'>;
+
+/** When a date is due or may start, as an instant: a time as itself, a day from its start (or its end, for a due by). */
+export function dateInstant(value: string, end = false): number {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split('-').map(Number) as [number, number, number];
+    return end ? new Date(y, m - 1, d + 1).getTime() - 1 : new Date(y, m - 1, d).getTime();
+  }
+  return new Date(value).getTime();
+}
+
+/** By date, as the server orders them: due by, else not before. */
+const byDate = (a: MatterDate, b: MatterDate) => dateInstant(a.due_at || a.starts_at || '') - dateInstant(b.due_at || b.starts_at || '');
+
+const settleDate = (task: string) => (cur: unknown, r: MatterDateResult) => (r.matter ? eachMatter(task, cur, () => r.matter) : cur);
+
+/** A key date added to a matter, shown at once by date. */
+export function addMatterDate(task: string, facts: MatterDateFacts) {
+  const now = new Date().toISOString();
+  const made: MatterDate = {
+    id: tmpId(),
+    label: facts.label?.trim() ?? '',
+    starts_at: facts.starts_at ?? null,
+    due_at: facts.due_at ?? null,
+    done_at: facts.done ? now : null,
+    primary: false,
+    created_by_id: '',
+    created_at: now,
+    updated_by_id: '',
+    updated_at: now,
+  };
+  return write<MatterDateResult>({
+    key: matterKeys(),
+    optimistic: (cur: unknown) => eachMatter(task, cur, (m) => (m ? { ...m, dates: [...(m.dates ?? []), { ...made, primary: !m.dates?.length }].sort(byDate) } : m)),
+    send: (idempotencyKey) => api.post<MatterDateResult>(`/api/v2/tasks/${enc(task)}/matter/dates`, facts, { idempotencyKey }),
+    settle: settleDate(task),
+  });
+}
+
+/** A key date changed, or marked done (it leaves the calendar) or open again. */
+export function changeMatterDate(task: string, date: string, facts: MatterDateFacts) {
+  const { done, ...rest } = facts;
+  const patch = (d: MatterDate): MatterDate => ({ ...d, ...rest, ...(done !== undefined && done !== null && { done_at: done ? (d.done_at ?? new Date().toISOString()) : null }) }) as MatterDate;
+  return write<MatterDateResult>({
+    key: matterKeys(),
+    optimistic: (cur: unknown) => eachMatter(task, cur, (m) => (m ? { ...m, dates: (m.dates ?? []).map((d) => (d.id === date ? patch(d) : d)).sort(byDate) } : m)),
+    send: (idempotencyKey) => api.post<MatterDateResult>(`/api/v2/tasks/${enc(task)}/matter/dates/${enc(date)}`, facts, { idempotencyKey }),
+    settle: settleDate(task),
+  });
+}
+
+/** A key date taken off its matter, once the server has. */
+export function removeMatterDate(task: string, date: string) {
+  return write<MatterDateResult>({
+    key: matterKeys(),
+    optimistic: (cur: unknown) => eachMatter(task, cur, (m) => (m ? { ...m, dates: (m.dates ?? []).filter((d) => d.id !== date) } : m)),
+    send: (idempotencyKey) => api.delete<MatterDateResult>(`/api/v2/tasks/${enc(task)}/matter/dates/${enc(date)}`, { idempotencyKey }),
+    settle: settleDate(task),
+    wait: true,
   });
 }

@@ -48,6 +48,25 @@ class MatterRecord(TypedDict):
 
 
 @answer
+class MatterDate(TypedDict):
+    id: str
+    label: str
+    """What it is for, such as Hearing"""
+    starts_at: str | None
+    """Not before: the earliest its step may be done, never a deadline. A day (YYYY-MM-DD) or a UTC time (YYYY-MM-DDTHH:MM:SSZ)"""
+    due_at: str | None
+    """Due by: the deadline, a day or a UTC time"""
+    done_at: str | None
+    """When it was marked done; a done date leaves the calendar"""
+    primary: bool
+    """The matter's first date: its starts_at, due_at and dates_label show this one"""
+    created_by_id: str
+    created_at: str
+    updated_by_id: str
+    updated_at: str
+
+
+@answer
 class Matter(TypedDict):
     task_id: str
     kind: Literal["dispute", "request", "notice", "incident"]
@@ -60,11 +79,13 @@ class Matter(TypedDict):
     side: Literal["theirs", "ours"]
     forum: str
     starts_at: str | None
-    """Not before: the earliest its step may be done, never a deadline. A day (YYYY-MM-DD) or a UTC time (YYYY-MM-DDTHH:MM:SSZ)"""
+    """Its first key date's not before (see dates)"""
     due_at: str | None
-    """Due by: the deadline, a day or a UTC time"""
+    """Its first key date's due by"""
     dates_label: str
     """What the dates are for, such as Produce records"""
+    dates: list[MatterDate]
+    """Its key dates, by date (due by, else not before)"""
     place_id: str | None
     place: MatterRecord | None
     """A Directory record, null when the reader may not see it"""
@@ -213,6 +234,20 @@ class MatterList(TypedDict):
 class MatterResult(TypedDict):
     task_id: str
     matter: Matter | None
+
+
+@answer
+class MatterDateResult(TypedDict):
+    task_id: str
+    date_id: str
+    """The date added, changed or removed"""
+    matter: Matter | None
+
+
+@answer
+class MatterDateList(TypedDict):
+    task_id: str
+    dates: list[MatterDate]
 
 
 @answer

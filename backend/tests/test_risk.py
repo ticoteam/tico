@@ -260,8 +260,16 @@ def test_a_matters_not_before_and_due_by_are_its_own_and_show_on_the_calendar(ap
         assert moved.fetchone()[0] == 3  # each write that moved a date; the refused ones none
     window = "calendar/events?from=2026-11-16T00:00:00Z&to=2026-11-30T00:00:00Z&kinds=due"
     shown = {o["occurrence_id"]: o for o in get(api, window)["occurrences"]}
-    start = shown["due:matter:" + found["id"] + ":not_before"]
-    due = shown["due:matter:" + found["id"] + ":due_by"]
+    # The pair is the matter's first key date.
+    (first,) = set_["dates"]
+    assert (first["label"], first["starts_at"], first["due_at"], first["primary"]) == (
+        "Produce records",
+        "2026-11-19T18:00:00Z",
+        "2026-11-26",
+        True,
+    )
+    at = f"due:matter:{found['id']}:{first['id']}:"
+    start, due = shown[at + "not_before"], shown[at + "due_by"]
     assert (start["title"], start["start"], start["end"], start["all_day"], start["bound"]) == (
         "Not before: Produce records",
         "2026-11-19T18:00:00Z",
@@ -282,9 +290,157 @@ def test_a_matters_not_before_and_due_by_are_its_own_and_show_on_the_calendar(ap
     assert not [o for o in get(api, early)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
     matter(api, found["id"], {"version": 3, "starts_at": None})
     ids = [o["occurrence_id"] for o in get(api, window)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
-    assert ids == ["due:matter:" + found["id"] + ":due_by"]
+    assert ids == [at + "due_by"]
     post(api, f"tasks/{found['id']}/done", {"note": "Produced."})
     assert not [o for o in get(api, window)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
+
+
+def dates_of(api, task_id, token="ana-test"):
+    return get(api, f"tasks/{task_id}/matter/dates", token=token)["dates"]
+
+
+def add_date(api, task_id, body, token="ana-test", expected=200):
+    return post(api, f"tasks/{task_id}/matter/dates", body, token=token, expected=expected)
+
+
+def change_date(api, task_id, date_id, body, token="ana-test", expected=200):
+    return post(api, f"tasks/{task_id}/matter/dates/{date_id}", body, token=token, expected=expected)
+
+
+def remove_date(api, task_id, date_id, token="ana-test", expected=200):
+    r = api.delete(f"/api/v2/tasks/{task_id}/matter/dates/{date_id}", headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def matter_occurrences(api, window):
+    return [o for o in get(api, window)["occurrences"] if o["occurrence_id"].startswith("due:matter:")]
+
+
+def test_a_matter_holds_several_key_dates_each_on_the_calendar_until_done(api):
+    """An arbitration has the claimant's discovery, our written discovery and a hearing: three dates on one matter."""
+    post(api, "risks", {"label": "Customer theft claims"})
+    found = task(api, "Murphy arbitration")
+    tid = found["id"]
+    label(api, tid, [RISK])
+    add_date(api, tid, {"label": "Hearing", "due_at": "2026-12-15"}, expected=422)  # no matter (kind) yet
+    matter(api, tid, {"kind": "dispute", "forum": "AAA"})
+    first = add_date(api, tid, {"label": " Claimant's  discovery", "due_at": "2026-12-01"})
+    assert first["matter"]["version"] == 2
+    assert (first["matter"]["due_at"], first["matter"]["dates_label"]) == ("2026-12-01", "Claimant's discovery")
+    hearing = add_date(api, tid, {"label": "Hearing", "due_at": "2026-12-15T09:00"})  # the company's 9 AM
+    ours = add_date(api, tid, {"label": "Our written discovery", "due_at": "2026-12-08", "version": 3})
+    # A date needs one of the two, in order; a stale version is refused.
+    add_date(api, tid, {"label": "Nothing"}, expected=422)
+    add_date(api, tid, {"label": "Backwards", "starts_at": "2026-12-09", "due_at": "2026-12-08"}, expected=422)
+    add_date(api, tid, {"label": "Stale", "due_at": "2026-12-09", "version": 1}, expected=409)
+    # By date, not as added; the first added is the matter's own pair and stays it.
+    listed = dates_of(api, tid)
+    assert [(d["label"], d["due_at"], d["primary"]) for d in listed] == [
+        ("Claimant's discovery", "2026-12-01", True),
+        ("Our written discovery", "2026-12-08", False),
+        ("Hearing", "2026-12-15T17:00:00Z", False),
+    ]
+    assert get(api, "tasks/" + tid)["task"]["matter"]["dates"] == listed
+    assert get(api, "matters?task=" + tid)["matters"][0]["matter"]["dates"] == listed
+    window = "calendar/events?from=2026-11-30T00:00:00Z&to=2026-12-20T00:00:00Z&kinds=due"
+    shown = {o["occurrence_id"]: o for o in matter_occurrences(api, window)}
+    assert sorted((o["title"], o["start"], o["bound"]) for o in shown.values()) == [
+        ("Due: Claimant's discovery", "2026-12-01", "due_by"),
+        ("Due: Hearing", "2026-12-15T17:00:00Z", "due_by"),
+        ("Due: Our written discovery", "2026-12-08", "due_by"),
+    ]
+    assert {o["links"]["task"] for o in shown.values()} == {tid}
+    # Done: off the calendar, still listed with when; done again keeps that time; reopened, it is back.
+    done = change_date(api, tid, first["date_id"], {"done": True})["matter"]["dates"][0]
+    assert done["done_at"] and done["primary"]
+    assert len(matter_occurrences(api, window)) == 2
+    again = change_date(api, tid, first["date_id"], {"done": True})["matter"]["dates"][0]
+    assert again["done_at"] == done["done_at"]
+    change_date(api, tid, first["date_id"], {"done": False})
+    assert len(matter_occurrences(api, window)) == 3
+    # A change sets only what it names; not before after due by is refused against the stored due by.
+    moved = change_date(api, tid, ours["date_id"], {"starts_at": "2026-12-02", "label": "Written discovery + notice"})
+    row = next(d for d in moved["matter"]["dates"] if d["id"] == ours["date_id"])
+    assert (row["label"], row["starts_at"], row["due_at"]) == ("Written discovery + notice", "2026-12-02", "2026-12-08")
+    change_date(api, tid, ours["date_id"], {"starts_at": "2026-12-10"}, expected=422)
+    change_date(api, tid, ours["date_id"], {"due_at": None, "starts_at": None}, expected=422)
+    change_date(api, tid, ours["date_id"], {}, expected=422)
+    titles = sorted(o["title"] for o in matter_occurrences(api, window))
+    assert titles == [
+        "Due: Claimant's discovery",
+        "Due: Hearing",
+        "Due: Written discovery + notice",
+        "Not before: Written discovery + notice",
+    ]
+    # Removing the first date makes the next oldest the matter's pair; an unknown id, or another matter's, is 404.
+    other = task(api, "Other claim")
+    label(api, other["id"], [RISK])
+    matter(api, other["id"], {"kind": "notice"})
+    change_date(api, other["id"], hearing["date_id"], {"done": True}, expected=404)
+    remove_date(api, other["id"], hearing["date_id"], expected=404)
+    gone = remove_date(api, tid, first["date_id"])
+    assert gone["date_id"] == first["date_id"]
+    assert (gone["matter"]["due_at"], gone["matter"]["dates_label"]) == ("2026-12-15T17:00:00Z", "Hearing")
+    assert [d["primary"] for d in gone["matter"]["dates"]] == [False, True]
+    remove_date(api, tid, first["date_id"], expected=404)
+    # The matter's own pair, as older clients send it, edits that first date.
+    version = gone["matter"]["version"]
+    paired = matter(api, tid, {"version": version, "due_at": "2026-12-16T09:00", "dates_label": "Hearing (moved)"})
+    hearing_row = next(d for d in paired["matter"]["dates"] if d["id"] == hearing["date_id"])
+    assert (hearing_row["label"], hearing_row["due_at"]) == ("Hearing (moved)", "2026-12-16T17:00:00Z")
+    # Whoever may not change the task may not change its dates; one who cannot read it is told it is not there.
+    add_date(api, tid, {"label": "Mine", "due_at": "2026-12-09"}, token="priya-test", expected=403)
+    hidden = task(api, "Private claim", private=True)
+    label(api, hidden["id"], [RISK])
+    add_date(api, hidden["id"], {"label": "Mine", "due_at": "2026-12-09"}, token="priya-test", expected=404)
+    get(api, f"tasks/{hidden['id']}/matter/dates", token="priya-test", expected=404)
+    # Every write that changed a date is a calendar row; clearing the matter takes its dates with it.
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT count(*) FROM changes WHERE topic='calendar' AND subject_id=?", ("matter:" + tid,))
+        assert rows.fetchone()[0] == 8  # marking a done date done again changed nothing
+    assert matter(api, tid, {"clear": True})["matter"] is None
+    assert dates_of(api, tid) == []
+    assert matter_occurrences(api, window) == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM matter_dates WHERE task_id=?", (tid,)).fetchone()[0] == 0
+
+
+def test_the_key_dates_migration_moves_each_pair_and_runs_where_matters_is_not_there_yet(api):
+    import sqlite3
+    from importlib import import_module
+
+    migration = import_module("backend.migrations.20261120093702_matter_key_dates")
+    post(api, "risks", {"label": "Customer theft claims"})
+    paired, bare = task(api, "LAPD subpoena"), task(api, "No dates")
+    for found in (paired, bare):
+        label(api, found["id"], [RISK])
+    matter(
+        api,
+        paired["id"],
+        {"kind": "request", "starts_at": "2026-11-19T10:00", "due_at": "2026-11-18T15:00"},
+        expected=422,
+    )
+    body = {"kind": "request", "starts_at": "2026-11-19T10:00", "due_at": "2026-11-26", "dates_label": "Produce"}
+    matter(api, paired["id"], body)
+    matter(api, bare["id"], {"kind": "notice"})
+    # As a company had it before: the pair on the matter, no key dates.
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM matter_dates")
+        migration.up(c)
+        migration.up(c)
+        rows = [tuple(r) for r in c.execute("SELECT task_id, label, starts_at, due_at, done_at FROM matter_dates")]
+    assert rows == [(paired["id"], "Produce", "2026-11-19T18:00:00Z", "2026-11-26", None)]
+    assert [d["primary"] for d in dates_of(api, paired["id"])] == [True]
+    # Pending files run in any order: before `matters`, or before its date columns, it makes the table alone.
+    for matters in (None, "CREATE TABLE matters (task_id TEXT PRIMARY KEY, kind TEXT)"):
+        db = sqlite3.connect(":memory:")
+        db.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY)")
+        if matters:
+            db.execute(matters)
+        migration.up(db)
+        migration.up(db)
+        assert db.execute("SELECT count(*) FROM matter_dates").fetchone()[0] == 0
 
 
 def test_the_audit_feed_shows_a_matters_facts_only_to_a_reader_of_its_task(api):
@@ -447,6 +603,7 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
         dated = post(api, "rules/rule_court/due", {**body, "basis": "order", "task_id": found["id"]})
     post(api, f"rule-due/{dated['id']}/satisfied", {"proof": {"kind": "link", "ref": "https://aaa.example/r"}})
     obligations = get(api, "risk/obligations?group=unconfirmed")
+    added = add_date(api, found["id"], {"label": "Hearing", "starts_at": "2026-12-14", "due_at": "2026-12-15T09:00"})
     assert [(o["title"], o["mark"]) for o in obligations["obligations"]] == [("Murphy discovery", None)]
     assert get(api, "risks/" + RISK)["risk"]["unconfirmed"] == 1
     document = get(api, "openapi.json")
@@ -466,6 +623,10 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
         "setTaskMatter",
         "listMatters",
         "listRiskObligations",
+        "listMatterDates",
+        "addMatterDate",
+        "updateMatterDate",
+        "removeMatterDate",
     }
     for operation, answer in (
         ("createRisk", made),
@@ -474,6 +635,10 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
         ("getRisk", get(api, "risks/" + RISK)),
         ("listMatters", get(api, "matters")),
         ("listRiskObligations", obligations),
+        ("addMatterDate", added),
+        ("updateMatterDate", change_date(api, found["id"], added["date_id"], {"done": True})),
+        ("listMatterDates", get(api, f"tasks/{found['id']}/matter/dates")),
+        ("removeMatterDate", remove_date(api, found["id"], added["date_id"])),
     ):
         assert conforms(answer, shape[operation], document) is None, (
             operation,
@@ -485,7 +650,12 @@ def test_the_answers_match_the_contract_and_the_migration_runs_again(api):
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused):
             H.tag_create(c, ANA, "acme-other", kind="contract")  # a kind is '' or risk
-    for name in ("20261119025516_risks_and_matters", "20261119034134_rule_due_proof", "20261120060550_matter_dates"):
+    for name in (
+        "20261119025516_risks_and_matters",
+        "20261119034134_rule_due_proof",
+        "20261120060550_matter_dates",
+        "20261120093702_matter_key_dates",
+    ):
         with api.app.state.store.transaction() as c:
             import_module("backend.migrations." + name).up(c)
             assert c.execute("SELECT kind FROM tags WHERE key=?", (RISK,)).fetchone()[0] == "risk"

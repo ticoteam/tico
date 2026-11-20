@@ -657,12 +657,12 @@ export const brandDecide = defineAction({
 
 // ---------------------------------------------------------------- a matter's own facts
 
-import { setMatter, type MatterFacts } from './queries';
+import { addMatterDate, changeMatterDate, removeMatterDate, setMatter, type MatterFacts } from './queries';
 
 const fact = (max: number) => z.optional(z.nullable(z.string().check(z.maxLength(max))));
 
 /** A matter's facts, each saved as it changes: kind, side, party, amount claimed (cents) and its currency, claim,
-    forum, product, and its dates: not before (never a deadline), due by and what they are for. Null clears one.
+    forum, product, and its first date's not before (never a deadline), due by and what they are for. Null clears one.
     Ordinary work on a task, so Tico may do it too. */
 export const riskSetMatter = defineAction({
   id: 'risk.setMatter',
@@ -693,5 +693,53 @@ export const riskSetMatter = defineAction({
     return setMatter(task, facts, version, { party: party_name, product: product_name });
   },
   did: () => 'Saved',
+  target: ({ task }) => ({ kind: 'matter', id: task }),
+});
+
+const when = (what: string) => z.optional(z.nullable(z.string().check(z.maxLength(40), z.describe(what))));
+
+/** A matter's key date (a hearing, discovery due): what it is for, not before (never a deadline) and due by, at least
+    one of the two. Ordinary work on a task, so Tico may do it too. */
+export const riskAddDate = defineAction({
+  id: 'risk.addDate',
+  title: 'Add a date to a matter',
+  kind: 'change',
+  input: z.strictObject({
+    task: id,
+    label: z.optional(z.string().check(z.maxLength(120))),
+    starts_at: when('not before: a day 2026-12-08, or a time'),
+    due_at: when('due by: a day 2026-12-15, or a time'),
+  }),
+  can: (_ctx, i) => !!(i.starts_at || i.due_at),
+  run: (_ctx, { task, ...facts }) => addMatterDate(task, facts),
+  did: ({ label }) => (label?.trim() ? `Added ${label.trim()}` : 'Added the date'),
+  target: ({ task }) => ({ kind: 'matter', id: task }),
+});
+
+/** A matter's key date changed, or marked done (off the calendar) or open again. Null clears a date. */
+export const riskChangeDate = defineAction({
+  id: 'risk.changeDate',
+  title: "Change a matter's date, or mark it done",
+  kind: 'change',
+  input: z.strictObject({
+    task: id,
+    date: id,
+    label: z.optional(z.string().check(z.maxLength(120))),
+    starts_at: when('not before: a day 2026-12-08, or a time'),
+    due_at: when('due by: a day 2026-12-15, or a time'),
+    done: z.optional(z.boolean()),
+  }),
+  run: (_ctx, { task, date, ...facts }) => changeMatterDate(task, date, Object.fromEntries(Object.entries(facts).filter(([, v]) => v !== undefined))),
+  did: ({ done }) => (done === true ? 'Marked it done' : done === false ? 'Opened it again' : 'Saved'),
+  target: ({ task }) => ({ kind: 'matter', id: task }),
+});
+
+export const riskRemoveDate = defineAction({
+  id: 'risk.removeDate',
+  title: "Remove a matter's date",
+  kind: 'change',
+  input: z.strictObject({ task: id, date: id }),
+  run: (_ctx, { task, date }) => removeMatterDate(task, date),
+  did: () => 'Removed the date',
   target: ({ task }) => ({ kind: 'matter', id: task }),
 });

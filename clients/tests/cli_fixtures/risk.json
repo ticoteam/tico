@@ -362,6 +362,212 @@
  {
   "argv": [
    "risk",
+   "matter",
+   "D18450",
+   "--add-date",
+   "Hearing",
+   "--due-by",
+   "2026-12-15T09:00"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "add_date": "Hearing",
+     "clear": false,
+     "due_by": "2026-12-15T09:00",
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter/dates",
+    {
+     "due_at": "2026-12-15T09:00",
+     "label": "Hearing"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--kind",
+   "dispute",
+   "--add-date",
+   "Discovery",
+   "--due-by",
+   "2026-12-01"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "add_date": "Discovery",
+     "clear": false,
+     "due_by": "2026-12-01",
+     "kind": "dispute",
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter",
+    {
+     "kind": "dispute"
+    }
+   ],
+   [
+    "POST",
+    "tasks/D18450/matter/dates",
+    {
+     "due_at": "2026-12-01",
+     "label": "Discovery"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--date-id",
+   "md_1",
+   "--done"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "date_id": "md_1",
+     "done": true,
+     "operation_id": null,
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter/dates/md_1",
+    {
+     "done": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--date-id",
+   "md_1",
+   "--not-done",
+   "--due-by",
+   "2026-12-16",
+   "--unset",
+   "not_before"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "date_id": "md_1",
+     "done": false,
+     "due_by": "2026-12-16",
+     "operation_id": null,
+     "task": "D18450",
+     "unset": [
+      "not_before"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "tasks/D18450/matter/dates/md_1",
+    {
+     "due_at": "2026-12-16",
+     "starts_at": null,
+     "done": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--remove-date",
+   "md_1"
+  ],
+  "tools": [
+   [
+    "tico_risk_matter",
+    {
+     "clear": false,
+     "operation_id": null,
+     "remove_date": "md_1",
+     "task": "D18450"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "tasks/D18450/matter/dates/md_1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "risk",
+   "matter",
+   "D18450",
+   "--add-date",
+   "Hearing",
+   "--remove-date",
+   "md_1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico risk matter: error: argument --remove-date: not allowed with argument --add-date",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "risk",
    "matters",
    "--kind",
    "dispute",
