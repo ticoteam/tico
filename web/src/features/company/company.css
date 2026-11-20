@@ -39,6 +39,7 @@
 /* ---------- a panel: a stage, a goal, a KPI, a product, a matter ---------- */
 .pnl .rail-sec h3{display:flex;align-items:center;justify-content:space-between}
 .pnl .rail-sec h3>span{font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted);font-variant-numeric:tabular-nums}
+.pnl .rail-sec h3 .sec-fold{height:24px}
 .pnl .rail-sec h3 .ib{margin:calc(-1 * var(--s-2)) calc(-1 * var(--s-1h)) calc(-1 * var(--s-2)) 0}
 .pnl .pt-title .pill{display:inline-block;margin-left:var(--s-2);vertical-align:1px;font-weight:var(--w-text)}
 .pnl .fact-clip{display:inline-flex;align-items:center;gap:calc(var(--s-1h) + 1px);min-width:0;white-space:nowrap}
@@ -93,13 +94,11 @@
 .pnl .fac-form{display:grid;gap:var(--s-4)}
 
 /* a record in the panel: fields that save at once, sections with a count */
-.pnl .rec-flds{padding:var(--s-2) 0 var(--s-2h);border-bottom:1px solid var(--line)}
+.pnl .rec-flds{padding:var(--s-2) var(--s-4) var(--s-2h);border-bottom:1px solid var(--line)}
 .pnl .fld{height:32px}
 .pnl .fld>span:first-child{flex:none}
 .pnl .fld .fact-v{min-width:0}
 .pnl .fld .fact-v>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.pnl .rec-head{height:32px;display:flex;align-items:center;gap:var(--s-2)}
-.pnl .rec-head h3{margin:0}
 .pnl .rail-sec.is-shut{padding-bottom:var(--s-2)}
 .pnl .lk{display:flex;align-items:center;gap:var(--s-2)}
 .pnl .lk .row-title{flex:1}
@@ -113,7 +112,11 @@
 /* ---------- Strategy: a page the Strategy owner keeps ---------- */
 .co .read-by{display:flex;align-items:center;gap:var(--s-2);height:28px;margin-bottom:var(--s-3h);font-size:var(--t-sm);color:var(--muted)}
 .co .read-by b{color:var(--ink);font-weight:var(--w-strong)}
-.co .read-lead{font-size:var(--t-md);font-weight:var(--w-text);line-height:1.6;color:var(--ink)}
+/* the page's text: section names bigger than the text under them, reading text at the reading size (company.css .read) */
+.co .read h2{font-family:var(--font-text);font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink);margin:calc(var(--s-6) + var(--s-1)) 0 var(--s-2)}
+.co .read h2 .sec-fold{height:26px}
+.co .read p{font-size:var(--t-base);font-weight:var(--w-text);line-height:var(--lh-read);color:var(--ink-2);text-wrap:pretty}
+.co .read p+p{margin-top:var(--s-2h)}
 .co .bets{list-style:none;margin:0;padding:0;counter-reset:bet}
 .co .bet{display:grid;grid-template-columns:20px minmax(0,1fr) auto var(--av-sm);column-gap:var(--s-2h);align-items:start;padding:var(--s-2) 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh-read)}
 .co .bet:first-child{border-top:0}
@@ -132,6 +135,12 @@
 /* ---------- versions: the pick in the head; who wrote a suggestion and when ---------- */
 .co .ver-pick{gap:var(--s-1);font-variant-numeric:tabular-nums}
 .co .ver-pick .ico{width:14px;height:14px;color:var(--muted)}
+.co .ver-pick.is-inline{display:inline-flex;align-items:center;height:22px;margin:0 calc(-1 * var(--s-1));padding:0 var(--s-1);border:0;border-radius:var(--r-row);background:none;color:inherit;font:inherit;transition:background var(--dur-fast) var(--ease)}
+.co .ver-pick.is-inline:hover{background:var(--hover);color:var(--ink)}
+.co .ver-pick.is-inline .ico{width:12px;height:12px}
+/* Market's sections run the page's width, one under the other (company.js marketBody) */
+.co-market .pk-widgets{grid-template-columns:minmax(0,1fr)}
+.co-market .pk-figs{padding-top:calc(var(--s-4) + var(--s-0))}
 .co .chg-by{display:flex;align-items:center;gap:var(--s-1h);margin-top:var(--s-1h);color:var(--muted);font-size:var(--t-xs);line-height:var(--lh-meta)}
 .co .chg-by time{font-variant-numeric:tabular-nums}
 
@@ -208,6 +217,7 @@
 .co .oc-node{display:flex;align-items:center;gap:var(--s-3);height:40px;padding-left:calc(var(--s-10) + var(--s-1))}
 .co .oc-face{display:grid;flex:none;width:var(--av-lg);height:var(--av-lg);border-radius:var(--r-ctl)}
 .co .oc-id{min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.co .oc-id .sec-fold{height:22px}
 .co .oc-id h2{font-size:var(--t-sec);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
 .co .oc-sub h3{font-size:var(--t-base);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
 .co .oc-who{display:flex;align-items:center;gap:var(--s-2);font-size:var(--t-sm);line-height:18px;color:var(--ink-2)}
@@ -215,6 +225,8 @@
 .co .oc-kids{position:relative;margin-left:calc(var(--s-18) + var(--s-1));padding-top:var(--s-3h)}
 .co .oc-kids::before{left:-14px;top:6px;width:1px;height:8px}
 .co .oc-kids.has-subs{padding-top:var(--s-1h)}
+/* a team with no lead: the elbow reaches its name, and its trunk drops from under the name's first letters */
+.co .no-lead>.oc-kids{margin-left:calc(var(--s-12) + var(--s-4))}
 .co .oc-kids.has-subs::before{display:none}
 .co .oc-sub{position:relative;height:36px;display:flex;align-items:center}
 .co .oc-sub::before{left:-14px;top:0;bottom:0;width:1px}
@@ -229,7 +241,7 @@
 .co .oc-mate:hover .oc-in{background:var(--hover)}
 .co .oc-mate.is-open .oc-in{background:var(--selected)}
 .co .oc-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-@container pg (min-width:800px){
+@container page (min-width:800px){
   .co .oc-row{grid-template-columns:repeat(4,minmax(0,1fr))}
   .co .oc-mate:nth-child(n)::before{left:calc(14px - 100% - var(--og));width:calc(100% + var(--og) + 1px)}
   .co .oc-mate:nth-child(4n+1)::before{left:-14px;width:29px}
@@ -277,12 +289,38 @@
 /* ---------- the records table: a mark column on the left ---------- */
 .co .table td a{color:inherit}
 .co .table th.num,.co .table td.num{text-align:right}
-.co .table th.t-mark,.co .table td.t-mark{width:28px;padding:0 0 0 var(--s-3)}
+.co .table th.t-mark,.co .table td.t-mark{width:calc(var(--page-x) - var(--s-2));padding:0 0 0 var(--s-3)}
+/* fixed columns (records.js productCols, disputesPage): the name takes what is left and cuts with an ellipsis */
+.co .table:has(th.t-name){table-layout:fixed}
+.co .table:has(th.t-name) td{overflow:hidden;text-overflow:ellipsis}
+.co .table .c-kind,.co .table .c-status{width:80px}
+.co .table .c-tax,.co .table .c-amt{width:112px}
+.co .table .c-agr{width:148px}
+.co .table .c-owner{width:176px}
+.co .table .c-risk{width:128px}
+.co .table .c-forum{width:116px}
+.co .table .c-stage{width:132px}
+.co .table .c-next{width:72px}
+.co .table th.t-who{width:44px}
+.co .table td .pill{margin-left:var(--s-2);vertical-align:1px}
+.co .who-cell{display:flex;align-items:center;gap:var(--s-2);min-width:0}
+.co .who-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* a named group inside one table: Open, Closed (records.css tr.is-group) */
+.co .table tr.is-group td{height:42px;vertical-align:bottom;padding-bottom:var(--s-1h);border-bottom:1px solid var(--line)}
+.co .table tr.is-group td.t-name{overflow:visible}
+.co .table tr.is-group .sec-name{display:inline-flex;vertical-align:bottom}
+.co .table tr.is-group td.num{padding-bottom:var(--s-2h);color:var(--ink-2)}
+/* a narrower sheet (a chat or a panel beside it) drops Tax kind, Forum, Next and the owner's name */
+@container page (max-width:760px){
+  .co .table .c-tax,.co .table .c-forum,.co .table .c-next{display:none}
+  .co .table .c-owner{width:44px}
+  .co .who-name{display:none}
+}
 /* the name column (records.css .t-title, renamed: .t-title is the page title's type step in styles/type.css) */
 .co .table th.t-name,.co .table td.t-name{padding-left:var(--s-2)}
 .co .table td.t-words{color:var(--ink-2)}
 .co .table td.is-none{color:var(--muted)}
-.co .table td.t-who{width:44px;padding-right:var(--s-1)}
+.co .table td.t-who{padding-right:var(--s-1)}
 .co .table td.num .av{margin:0}
 .co .table tr.is-quiet td{color:var(--muted)}
 
@@ -327,7 +365,7 @@
 .co .rk-text p{max-width:var(--measure);font-size:var(--t-base);line-height:var(--lh-read);font-feature-settings:"ss09";color:var(--ink-2);text-wrap:pretty}
 
 /* ---------- a narrower sheet: a chat or a panel open beside it ---------- */
-@container pg (max-width:760px){
+@container page (max-width:760px){
   .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-2)}
   .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0;margin-bottom:calc(-1 * var(--s-3h))}
 }
@@ -335,7 +373,7 @@
 :where(html[data-layout="cards"]){
   .co .goal-lead{grid-template-columns:minmax(0,1fr);row-gap:var(--s-3h)}
   .co .hall{grid-template-columns:minmax(0,1fr);padding:var(--s-3) 0 var(--s-1h)}
-  .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-0)}
+  .co .hall-head{flex-direction:row;justify-content:space-between;align-items:center;padding:0 0 var(--s-2)}
   /* The name takes its own line over the row, so the stage line gets the width between the two rates. The line is a
      size container: the first and last stage names each keep to half of it and end in an ellipsis; a stage's stacks
      keep to that stage. */

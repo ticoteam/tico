@@ -176,12 +176,38 @@ describe('Brand @s307', () => {
     expect(await screen.findByRole('button', { name: 'Edit' })).toBeTruthy();
   });
 
+  it('draws the book in its own look: colours as swatches, what we say and never say, and its version', async () => {
+    serve(nothing);
+    const body = {
+      name: 'Fieldkit Co',
+      visual: { colors: [{ name: 'Moss (buttons)', hex: '#2F4A36' }, { name: 'Cream', hex: '#F6F1E7' }], fonts: ['Georgia'] },
+      examples: [
+        { text: 'Plant these on Saturday.', verdict: 'on' as const },
+        { text: 'Unlock your green thumb', verdict: 'off' as const },
+      ],
+      voice: [{ trait: 'Plain', do: 'Say it plainly.', dont: "Don't hype it" }],
+    };
+    queryClient.setQueryData(brandQuery.queryKey, book({ published: { n: 2, body, published_at: '2026-11-18T10:00:00Z', published_by: 'human:me' } }));
+    show(strategy('brand'), '/company/strategy/brand');
+    await screen.findByTitle('Brand book');
+    const doc = frame();
+    expect(doc).toContain('Brand book, v2');
+    expect(doc).toContain('#2F4A36');
+    expect(doc).toContain('<b>Moss</b><span>buttons</span>');
+    expect(doc).toContain('We never say');
+    expect(doc).toContain('<s>Unlock your green thumb</s>');
+    // one stop at a sentence's end, never two
+    expect(doc).toContain('Say it plainly.<i>');
+    expect(doc).not.toContain('..');
+  });
+
   it('says so when there is no book yet, offering Edit to an editor', async () => {
     serve(nothing);
     queryClient.setQueryData(brandQuery.queryKey, { published: null, draft: null, versions: [], may_edit: true } as Brand);
     show(strategy('brand'), '/company/strategy/brand');
     expect(await screen.findByText('No brand book yet')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'Edit' }).length).toBeGreaterThan(0);
+    // one Edit, in the empty state; the head does not repeat it
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(1);
   });
 });
 
@@ -445,11 +471,14 @@ describe('Risk as Disputes @n:re:disputes', () => {
       next_offset: null,
     });
     show(riskPage('disputes'), '/company/risk/disputes');
-    const open = await screen.findByRole('table', { name: 'Open disputes' });
+    const open = await screen.findByRole('rowgroup', { name: 'Open disputes' });
     const row = within(open).getByText('Refund dispute A').closest('tr')!;
     for (const said of ['Chargebacks', '$412', 'Stripe', 'Evidence']) expect(row.textContent).toContain(said);
     expect(href(within(open).getByText('Refund dispute A'))).toBe('/company/risk/disputes?panel=matter:t1');
-    expect(within(screen.getByRole('table', { name: 'Closed disputes' })).getByText('Refund dispute B')).toBeTruthy();
+    expect(within(screen.getByRole('rowgroup', { name: 'Closed disputes' })).getByText('Refund dispute B')).toBeTruthy();
+    // a group's name folds its rows; the head row stays
+    fireEvent.click(screen.getByRole('button', { name: /Closed/ }));
+    expect(within(screen.getByRole('rowgroup', { name: 'Closed disputes' })).queryByText('Refund dispute B')).toBeNull();
     expect(within(screen.getByRole('group', { name: 'Show' })).getByRole('button', { name: 'Disputes' }).getAttribute('aria-pressed')).toBe('true');
   });
 });

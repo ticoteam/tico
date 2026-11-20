@@ -280,9 +280,11 @@ describe('Goals', () => {
     queryClient.setQueryData(goalsTreeQuery.queryKey, tree);
     show(<StrategyPage tab="goals" />, '/company/strategy/goals');
     await screen.findByText('Grow signups');
+    // the head's search starts as a button and opens into the field
+    fireEvent.click(screen.getByRole('button', { name: 'Search goals' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Search goals' }), { target: { value: 'weekly' } });
+    await waitFor(() => expect(screen.queryByText('Reach 1,000 customers')).toBeNull());
     expect(screen.getByText('Grow signups')).toBeTruthy();
-    expect(screen.queryByText('Reach 1,000 customers')).toBeNull();
   });
 
   it('opens a goal from a teammate page in its panel: owner, KPIs and check-ins @s311 @s363 @s365 @s664', async () => {

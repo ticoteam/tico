@@ -5,7 +5,7 @@ import { configQuery, useActor, useActors } from '@/data';
 import { Button } from '@/kit/Button';
 import { LineChart } from '@/kit/Chart';
 import { DatePick } from '@/kit/DatePick';
-import { Field, Search } from '@/kit/Field';
+import { Field, SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -13,8 +13,8 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
-import { List, RecordPanel, Section, SidePanel, type PageTab } from '@/pagekinds';
-import { amount, Face, Go, NameOf, PageOwner, PanelLink, Trend, useDo } from './parts';
+import { List, RecordPanel, SidePanel, type PageTab } from '@/pagekinds';
+import { amount, Face, Go, NameOf, PageOwner, PanelLink, PanelSection, Trend, useDo } from './parts';
 import {
   goalNeedsQuery,
   goalQuery,
@@ -58,21 +58,23 @@ export function GoalsPage({ head, search }: { head: Head; search: GoalsSearch })
   const words = find.trim().toLowerCase();
   const shown = words ? goals.filter((g) => [g.title, ...g.kpis.map((k) => k.name)].some((t) => t.toLowerCase().includes(words))) : goals;
   const add = (
-    <Button variant={panel ? 'plain' : 'primary'} icon="plus" onClick={() => void open.run({ panel: 'goal-new' })}>
+    <Button variant={panel ? 'plain' : 'primary'} onClick={() => void open.run({ panel: 'goal-new' })}>
       Add goal
     </Button>
   );
+  const blank = !goals.length && !needs.length;
   return (
     <List
       {...head}
-      search={<Search label="Search goals" placeholder="Search" value={find} onValueChange={setFind} />}
+      // No goals yet: the head keeps only the owner and the empty state holds Add goal (company.js goals, state empty).
+      search={!blank && <SettledSearch label="Search goals" placeholder="Search" button="Search goals" wait={0} value={find} onSettle={setFind} />}
       actions={
         <>
-          {add}
+          {!blank && add}
           <PageOwner page="goals" />
         </>
       }
-      state={goals.length || needs.length ? 'ready' : 'empty'}
+      state={blank ? 'empty' : 'ready'}
       empty={{ title: 'No goals yet', action: add }}
       sections={
         <>
@@ -326,7 +328,7 @@ function GoalPanel({ gid }: { gid: string }) {
       }
       sections={
         <>
-          <Section name="KPIs" count={kpis.length + newKpis.length} target={`goal:${gid}:kpis`}>
+          <PanelSection name="KPIs" count={kpis.length + newKpis.length} target={`goal:${gid}:kpis`}>
             {kpis.map((k) => (
               <KpiWithAsks key={k.id} asks={onKpi(k.id)}>
                 <PanelLink panel={`kpi:${k.id}`} className="kr" data-target={`kpi:${k.id}`}>
@@ -369,16 +371,16 @@ function GoalPanel({ gid }: { gid: string }) {
               <Icon name="plus" />
               Add KPI
             </PanelLink>
-          </Section>
+          </PanelSection>
           {checkins.length > 0 && (
-            <Section name="Check-ins" count={checkins.length} target={`goal:${gid}:checkins`}>
+            <PanelSection name="Check-ins" count={checkins.length} target={`goal:${gid}:checkins`}>
               {checkins.map((c, i) => (
                 <div key={i} className="checkin">
                   <span className="row-age">{fmtDate(c.created_at)}</span>
                   <p>{c.body}</p>
                 </div>
               ))}
-            </Section>
+            </PanelSection>
           )}
         </>
       }

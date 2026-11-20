@@ -72,11 +72,11 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   const ref = panel.slice(at + 1);
   // Never set up: nothing in the market, nothing sized and no briefing yet.
   const blank = count.data === 0 && !segs.length && !items.length;
-  const none = <span className="none">None yet</span>;
-  // The mock's four figures. Reachable and Our share are left out until the server has numbers for them.
+  // The mock's four figures. Reachable and Our share are left out until the server has numbers for them; a figure with
+  // nothing behind it (a market not sized, no buyer posts read) is left out too.
   const figures: Figure[] = [
-    { label: 'Market', value: total != null ? usdShort(total) : none, sub: spend.data?.name ?? undefined, target: 'figure:market' },
-    { label: 'Buyer posts', value: daily.length ? sum(daily.find((d) => d.day === today)?.sources) : none, sub: daily.length ? 'today' : undefined, target: 'figure:posts' },
+    ...(total ? [{ label: 'Market', value: usdShort(total), sub: spend.data?.name ?? undefined, target: 'figure:market' }] : []),
+    ...(daily.length ? [{ label: 'Buyer posts', value: sum(daily.find((d) => d.day === today)?.sources), sub: 'today', target: 'figure:posts' }] : []),
   ];
   const pending = (spend.isPending && brief.isPending) || (blank && owner && setup.isPending);
   const failed = spend.isError && brief.isError;
@@ -85,6 +85,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
   return (
     <Dashboard
       {...head}
+      className={`${head.className} co-market`}
       actions={<PageOwner page="strategy" />}
       more={
         <PageMore target="market:more">
@@ -94,7 +95,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
       state={state}
       onRetry={() => void Promise.all([spend.refetch(), brief.refetch()])}
       empty={{ title: 'Nothing here yet' }}
-      figures={!blank && <FiguresStrip figures={figures} label="Market figures" />}
+      figures={!blank && figures.length > 0 && <FiguresStrip figures={figures} label="Market figures" />}
       chart={!blank && daily.length > 1 && <PostsChart daily={daily} />}
       widgets={
         blank ? (
@@ -176,6 +177,9 @@ function money(m: MarketSpend | undefined): Map<string, number> {
 // ---------------------------------------------------------------- segments: what each spends
 
 function Segments({ segs, open }: { segs: MarketSegment[]; open?: string }) {
+  const grows = (s: MarketSegment) => typeof s.size?.growth_pct === 'number' && Number.isFinite(s.size.growth_pct);
+  // Growth is a column only when some segment has a number for it.
+  const growth = segs.some(grows);
   return (
     <Section name="Segments" count={segs.length} target="market:segments">
       <Table label="Segments">
@@ -183,13 +187,12 @@ function Segments({ segs, open }: { segs: MarketSegment[]; open?: string }) {
           <tr>
             <Th>Segment</Th>
             <Th num>Spend</Th>
-            <Th num>Growth</Th>
+            {growth && <Th num>Growth</Th>}
           </tr>
         </thead>
         <tbody>
           {segs.map((s) => {
             const usd = spendOf(s);
-            const growth = s.size?.growth_pct;
             return (
               <Tr key={s.id} linked selected={s.id === open} className={s.self ? 'is-us' : undefined}>
                 <Td>
@@ -198,7 +201,7 @@ function Segments({ segs, open }: { segs: MarketSegment[]; open?: string }) {
                   </PanelLink>
                 </Td>
                 <Td num>{usd != null ? usdShort(usd) : <span className="none">Not sized</span>}</Td>
-                <Td num>{typeof growth === 'number' && Number.isFinite(growth) ? `${trim(growth)}%` : ''}</Td>
+                {growth && <Td num>{grows(s) ? `${trim(s.size?.growth_pct ?? 0)}%` : ''}</Td>}
               </Tr>
             );
           })}

@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { refusal as shared, useAction, type Result } from '@/actions';
 import { ApiError } from '@/api/client';
 import { useActor } from '@/data';
 import { Avatar, type AvatarSize } from '@/kit/Avatar';
 import { OwnerButton } from '@/kit/OwnerButton';
+import { FoldButton } from '@/kit/SectionHead';
 import { toast, type ToastInput } from '@/kit/Toast';
 import { chatAddress } from '@/lib';
 import type { PageState } from '@/pagekinds';
@@ -41,6 +42,21 @@ export function Go({ to, search, className, title, children, ...rest }: { to: st
     <Link to={to as never} search={search as never} className={className} title={title} {...rest}>
       {children}
     </Link>
+  );
+}
+
+/** A section of a panel (company.js pnlSec): its name, bigger than its rows, folds it; a muted count follows, and quiet
+    buttons sit at its right. Folded, its rows are not drawn. */
+export function PanelSection({ name, count, actions, target, children }: { name: string; count?: number; actions?: ReactNode; target?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className={open ? 'rail-sec' : 'rail-sec is-shut'} aria-label={name} data-target={target}>
+      <h3>
+        <FoldButton name={name} count={count} open={open} onToggle={() => setOpen(!open)} />
+        {actions}
+      </h3>
+      {open && children}
+    </section>
   );
 }
 
