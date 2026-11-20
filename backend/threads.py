@@ -4150,7 +4150,7 @@ def task_open_sql(c, v, r="r", revived=frozenset(), *, per_row=False):
 def task_hidden(c, v, root_id):
     """Whether the rail leaves this root out for its task: finished, and no post the viewer reads since. One root, so its
     readable checks are per row: building the list of every readable thread and task cost more than the rest of a
-    thread's view (TIDY, Nov 19: 19k conversations)."""
+    thread's view (13 ms each at 19k conversations)."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     revived = revived_roots(c, v, [root_id], per_row=True)
     row = c.execute(

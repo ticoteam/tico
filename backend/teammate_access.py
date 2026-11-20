@@ -460,9 +460,11 @@ def levels_many(c, viewer, targets, auth=None):
     ctx = _Context(c, viewer, auth)
     bots = [ident for kind, ident in parsed.values() if kind == "bot"]
     bot_out = bot_levels(c, viewer, bots, auth=auth, ctx=ctx) if bots else {}
-    # Each bot's owners for the manage rule, in one read (a fleet-wide page asked them once a bot).
+    # Each bot's owners for the manage rule, in one read (a fleet-wide page asked them once a bot): only a person
+    # who is not an admin reaches that rule (Auth.bot_manager).
+    owners_read = role == "human" and not ctx.admin
     configs = {}
-    for part in H.chunks(bots):
+    for part in H.chunks(bots if owners_read else []):
         configs.update(
             (r["bot"], r)
             for r in c.execute(
@@ -472,7 +474,7 @@ def levels_many(c, viewer, targets, auth=None):
     out = {}
     for target, (kind, ident) in parsed.items():
         if kind == "bot":
-            manage = _bot_manage(c, viewer, ident, ctx, config=configs.get(ident))
+            manage = _bot_manage(c, viewer, ident, ctx, config=configs.get(ident) if owners_read else False)
             levels = dict(FULL) if manage else {**bot_out[ident], "manage": False}
         elif kind == "human":
             levels = _human_levels(ctx, ident)
