@@ -111,6 +111,10 @@
 .modal.fv-dialog .fv-desk,.modal.fv-dialog .fv-frame{margin:0}
 .modal.fv-dialog .modal-row{align-items:center}
 .lib.fv-embed{flex:1;min-height:0;display:flex;flex-direction:column}
+/* in the full-screen layer (kit/Viewer) the file is the whole sheet: no desk margin round it */
+.vw-body>.lib.fv-embed{height:100%}
+.vw-body .lib .fv-desk,.vw-body .lib .fv-frame{margin:0;border-radius:0;box-shadow:none}
+.vw-body .lib .fv-main{padding:var(--s-4) var(--s-6)}
 /* a PDF (PdfView): PDF.js's pages as one scroll on the desk, each a sheet as wide as the frame (wider when zoomed in,
    centred while it fits); the page count, zoom and Expand float at the corner clear of the scroll bar. Over the window
    the scroll fills the scrim under one bar on the scrim's ink, as a picture's does (kit/PictureViewer) */

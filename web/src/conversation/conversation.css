@@ -128,3 +128,57 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .kcard .kfiles .file .ico{width:14px;height:14px;flex:none}
 .kcard .kfiles .file em{flex:none;white-space:nowrap}
 .kcard .kfiles .file.is-more{color:var(--muted)}
+
+/* ---------- what a message holds besides words (thread-content.html) ---------- */
+/* A link as a chip in the line: what it points at, by its mark and name. The app's pages, its files and a bare web
+   address get one; words someone chose stay an underlined link. */
+.lchip{display:inline;margin:0 calc(var(--s-0) / 2);padding:var(--s-0) var(--s-1h);border-radius:var(--r-chip);background:var(--well);color:var(--ink);font-size:var(--t-sm);text-decoration:none;-webkit-box-decoration-break:clone;box-decoration-break:clone;transition:background var(--dur-fast) var(--ease)}
+.lchip:hover{background:var(--well-2)}
+.lchip .ico{display:inline-block;width:13px;height:13px;margin-right:var(--s-1);vertical-align:-2px;color:var(--muted)}
+.lchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.bubble .lchip{background:var(--well-2)}
+
+/* under the words: pictures, files, and pages small and live */
+.mshelf{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-top:var(--s-2)}
+.mshelf .file{margin-top:0;max-width:100%}
+.mshelf .file>span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mshelf .file .ico,.mshelf .file em{flex:none}
+.mine-col .mshelf{justify-content:flex-end}
+
+/* one picture at its own shape, two to four as tiles, past four a count on the last */
+.pics{display:grid;gap:var(--s-1);width:min(100%,360px)}
+.pics.is-2,.pics.is-3,.pics.is-4{grid-template-columns:1fr 1fr}
+.pic{position:relative;display:block;padding:0;border:0;background:var(--well);border-radius:var(--r-block);overflow:hidden;cursor:zoom-in}
+.pic img{display:block;width:100%;height:100%;object-fit:cover}
+.pics.is-1 .pic{justify-self:start;max-width:100%;background:none}
+.pics.is-1 .pic img{width:auto;max-width:100%;max-height:280px;object-fit:contain;border-radius:var(--r-block);box-shadow:var(--lift-paper)}
+.pics:not(.is-1) .pic{aspect-ratio:4/3}
+.pics.is-3 .pic:first-child{grid-row:span 2;aspect-ratio:auto}
+.pic-more{position:absolute;inset:0;display:grid;place-items:center;background:var(--scrim);color:var(--on-scrim);font-size:var(--t-md);font-weight:var(--w-strong)}
+.pic:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+
+/* a page small and live: its own drawing at a quarter, in a sandbox, under a one-line foot */
+.pcard{position:relative;display:grid;width:min(100%,360px);border-radius:var(--r-card);overflow:hidden;box-shadow:inset 0 0 0 1px var(--line-strong);background:var(--surface)}
+.pcard-view{position:relative;display:block;aspect-ratio:16/10;overflow:hidden;background:var(--sheet);border-bottom:1px solid var(--line)}
+.pcard-view iframe{position:absolute;top:0;left:0;width:400%;height:400%;border:0;transform:scale(.25);transform-origin:0 0;pointer-events:none;background:var(--sheet)}
+.pcard-none{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint)}
+.pcard-none .ico{width:28px;height:28px}
+.pcard-none.is-loading{background:var(--well)}
+.pcard-foot{display:flex;align-items:center;gap:var(--s-2);height:36px;padding:0 var(--s-3);font-size:var(--t-sm);color:var(--ink)}
+.pcard-foot>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pcard-foot .ico{width:14px;height:14px;flex:none;color:var(--muted)}
+.pcard-foot .ico.end{color:var(--faint);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.pcard-hit{position:absolute;inset:0;padding:0;border:0;background:none;cursor:zoom-in;border-radius:var(--r-card)}
+.pcard:hover .pcard-none{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint)}
+.pcard-none .ico{width:28px;height:28px}
+.pcard-none.is-loading{background:var(--well)}
+.pcard-foot{background:var(--hover)}
+.pcard:hover .pcard-foot .ico.end{opacity:1}
+.pcard-hit:focus-visible{outline:var(--focus-ring);outline-offset:calc(var(--focus-gap) * -1)}
+@media (hover:none){.pcard-foot .ico.end{opacity:1}}
+
+/* a long message read full screen (kit/Viewer): the same message, at a reading measure */
+.msg.msg-read{max-width:var(--measure);margin:0 auto;padding:var(--s-6)}
+:where(html[data-layout="cards"]){
+  .msg.msg-read{padding:var(--s-4)}
+}

@@ -272,6 +272,30 @@ describe('a file from a task or a chat', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('from a chat, any file opens full screen over the page and stays on the page', async () => {
+    serve();
+    queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+    const router = at('/tasks', <FileViewerHost />);
+    await act(async () => void (await run('files.preview', { file: 'f1' }, { via: 'click' })));
+    const dialog = await screen.findByRole('dialog', { name: file().title });
+    expect(within(dialog).getByRole('link', { name: 'Open in Files' }).getAttribute('href')).toBe('/library/files?file=f1');
+    expect(router.state.location.pathname).toBe('/tasks');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it("from a chat, a message's own file opens full screen from its address", async () => {
+    serve();
+    at('/tasks', <FileViewerHost />);
+    const held = { url: '/api/v2/files/a1', mime: 'application/zip', name: 'beds.zip' };
+    await act(async () => void (await run('files.preview', { file: 'a1', held }, { via: 'click' })));
+    const dialog = await screen.findByRole('dialog', { name: 'beds.zip' });
+    expect(within(dialog).getByText('ZIP')).toBeTruthy();
+    expect(within(dialog).getAllByRole('link', { name: 'Download' })[0]?.getAttribute('href')).toBe('/api/v2/files/a1');
+    expect(within(dialog).queryByRole('link', { name: 'Open in Files' })).toBeNull();
+    await act(async () => void (await run('files.preview', { file: null }, { via: 'click' })));
+  });
+
   it('a picture shows full size over the page, and closes @s77', async () => {
     serve();
     queryClient.setQueryData(fileQuery('f2').queryKey, file({ id: 'f2', title: 'Shelf photo', name: 'shelf.png', mime: 'image/png', library_kind: 'image' }) as never);

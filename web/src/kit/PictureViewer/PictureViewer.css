@@ -1,14 +1,3 @@
-/* A picture full size over the page. The mocks draw no viewer: it is the scrim and dialog motion (Dialog.css) with the
-   picture as the dialog's whole face and one bar of controls under it, on the scrim's own ink. */
-.pv-viewport{padding:var(--s-6)}
-.pv{display:flex;flex-direction:column;align-items:center;gap:var(--s-2);max-width:100%;max-height:100%;outline:0;transition:opacity var(--dur-enter) var(--ease)}
-.pv[data-starting-style],.pv[data-ending-style]{opacity:0}
-.pv-img{display:block;min-height:0;max-width:100%;max-height:calc(100dvh - var(--s-6) * 2 - var(--s-10));object-fit:contain;border-radius:var(--r-block)}
-.pv-bar{width:100%;display:flex;align-items:center;gap:var(--s-2);color:var(--on-scrim);font-size:var(--t-sm)}
-.pv-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.pv-n{flex:none;font-variant-numeric:tabular-nums}
-.pv-bar .ib{color:var(--on-scrim)}
-:where(html[data-layout="cards"]){
-  .pv-viewport{padding:var(--s-4);place-items:center}
-  .pv-img{max-height:calc(100dvh - var(--s-4) * 2 - var(--s-10))}
-}
+/* A picture full size, bare on the full-screen layer's dim (kit/Viewer): as large as the layer lets it be, never
+   larger than itself. */
+.pv-img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r-block)}

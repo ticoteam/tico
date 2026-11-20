@@ -285,7 +285,11 @@ describe('Message', () => {
     const link = screen.getByRole('link', { name: /brief\.pdf/ });
     expect(link.getAttribute('href')).toBe('/api/v2/files/f1');
     expect(fireEvent.click(link)).toBe(false);
-    expect(ran).toHaveBeenCalledExactlyOnceWith('files.view', { file: 'f1' }, { via: 'click' });
+    expect(ran).toHaveBeenCalledExactlyOnceWith(
+      'files.preview',
+      { file: 'f1', held: { url: '/api/v2/files/f1', mime: 'application/pdf', name: 'brief.pdf' } },
+      { via: 'click' },
+    );
     expect(fireEvent.click(link, { metaKey: true })).toBe(true);
     expect(fireEvent.click(link, { button: 1 })).toBe(true);
     expect(ran).toHaveBeenCalledTimes(1);

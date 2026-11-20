@@ -1,13 +1,13 @@
-import { Dialog as BaseDialog } from '@base-ui/react/dialog';
 import type { KeyboardEvent } from 'react';
-import { IconButton } from '@/kit/IconButton';
 import { Icon } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
+import { Viewer } from '@/kit/Viewer';
 import './PictureViewer.css';
 
 export interface Picture {
   /** Only the app's own `/api/` addresses are drawn; anything else is left out. */
   src: string;
-  /** Read aloud, and shown under the picture. */
+  /** Read aloud, and shown over the picture. */
   name: string;
   /** Where Download fetches the full file; `src` when left out. */
   download?: string;
@@ -26,8 +26,8 @@ const OWN = /^\/api\//i;
 export const ownPictures = (list: Picture[]) => list.filter((p) => OWN.test(p.src));
 
 /**
- * A picture full size over the page (a chat's, a task's): Escape or a click on the dim closes it, the arrow keys walk
- * the set it was opened from, Download saves the file. Focus stays inside while it is open and goes back after.
+ * A picture full size over the page (a chat's, a task's), in the full-screen layer (kit/Viewer) bare on its dim: the
+ * arrow keys and buttons walk the set it was opened from, Download saves the file, Escape or a click on the dim closes.
  */
 export function PictureViewer({ pictures, at, onAtChange }: PictureViewerProps) {
   const list = ownPictures(pictures);
@@ -45,32 +45,26 @@ export function PictureViewer({ pictures, at, onAtChange }: PictureViewerProps) 
     e.preventDefault();
   };
   return (
-    <BaseDialog.Root open={!!p} onOpenChange={(open) => !open && onAtChange(null)}>
-      <BaseDialog.Portal>
-        <BaseDialog.Backdrop className="scrim kit-scrim pv-scrim" />
-        <BaseDialog.Viewport className="scrim kit-viewport pv-viewport" onClick={(e) => e.target === e.currentTarget && onAtChange(null)}>
-          <BaseDialog.Popup className="pv" onKeyDown={onKeyDown} aria-label={p?.name ?? 'Picture'}>
-            {p && <img className="pv-img" src={p.src} alt={p.name} />}
-            <div className="pv-bar">
-              <span className="pv-name">{p?.name}</span>
-              {many && (
-                <span className="pv-n">
-                  {i + 1} of {list.length}
-                </span>
-              )}
-              <span className="grow" />
-              {many && <IconButton icon="chevron" className="flip" label="Previous" onClick={() => step(-1)} />}
-              {many && <IconButton icon="chevron" label="Next" onClick={() => step(1)} />}
-              {p && (
-                <a className="ib" href={p.download ?? p.src} download={p.name} aria-label="Download" title="Download">
-                  <Icon name="download" />
-                </a>
-              )}
-              <BaseDialog.Close render={<IconButton icon="close" label="Close" />} />
-            </div>
-          </BaseDialog.Popup>
-        </BaseDialog.Viewport>
-      </BaseDialog.Portal>
-    </BaseDialog.Root>
+    <Viewer
+      open={!!p}
+      onClose={() => onAtChange(null)}
+      title={p?.name ?? 'Picture'}
+      meta={many ? `${i + 1} of ${list.length}` : undefined}
+      look="bare"
+      onKeyDown={onKeyDown}
+      actions={
+        <>
+          {many && <IconButton icon="chevron" className="flip" label="Previous" onClick={() => step(-1)} />}
+          {many && <IconButton icon="chevron" label="Next" onClick={() => step(1)} />}
+          {p && (
+            <a className="ib" href={p.download ?? p.src} download={p.name} aria-label="Download" title="Download">
+              <Icon name="download" />
+            </a>
+          )}
+        </>
+      }
+    >
+      {p && <img className="pv-img" src={p.src} alt={p.name} />}
+    </Viewer>
   );
 }

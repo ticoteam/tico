@@ -12,6 +12,9 @@ export interface Attachment {
   name?: string;
   title?: string;
   content_type?: string;
+  /** Where its bytes are (`/api/v2/files/<id>…`). */
+  url?: string;
+  size?: number;
 }
 
 /** What a message's `refs` holds that this module reads; the server sends more. */
