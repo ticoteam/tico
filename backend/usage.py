@@ -10,6 +10,7 @@ Who sees what: the owner and the bot administrators see every bot; anyone else s
 run or own. A bot's own credentials see nothing here.
 """
 
+import json
 import re
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -317,16 +318,31 @@ def query(c, key, join, slugs, first, last, filters=None):
     (backend/demo_billing.py) sums the same runs the usage page does."""
     if not slugs:
         return []
+    where, args = runs_in(slugs, first, last, filters)
+    return c.execute(f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE {where} GROUP BY k", args).fetchall()
+
+
+def runs_in(slugs, first, last, filters=None):
+    """The WHERE clause over RUNS (as `t`) and its arguments: the finished runs that started in the window on these bots,
+    with these dimension filters."""
     marks = ",".join("?" * len(slugs))
-    sql = (
-        f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
-        f"AND t.started_at < ? AND t.bot IN ({marks})"
-    )
+    sql = f"t.finished_at IS NOT NULL AND t.started_at >= ? AND t.started_at < ? AND t.bot IN ({marks})"
     args = [stamp(instant(first)), stamp(instant(last, end=True)), *sorted(slugs)]
     for dimension, value in (filters or {}).items():
         sql += f" AND {DIMENSIONS[dimension]} = ?"
         args.append("" if value == "__unknown__" else value)
-    return c.execute(sql + " GROUP BY k", args).fetchall()
+    return sql, args
+
+
+def dimension_values(c, slugs, first, last):
+    """{dimension: its values among the window's runs on these bots}, each list in the order `query` groups them (text
+    by its bytes, which is Python's order for str), from one read: the filter menus need the values, not their sums."""
+    if not slugs:
+        return {key: [] for key in DIMENSIONS}
+    where, args = runs_in(slugs, first, last)
+    columns = ", ".join(f"json_group_array(DISTINCT {expression})" for expression in DIMENSIONS.values())
+    row = c.execute(f"SELECT {columns} FROM {RUNS} t WHERE {where}", args).fetchone()
+    return {key: sorted(json.loads(values)) for key, values in zip(DIMENSIONS, row, strict=True)}
 
 
 def install(app, store, auth, mutate, settings):
@@ -395,6 +411,7 @@ def install(app, store, auth, mutate, settings):
         """A bot's limits as its row shows them: the effective caps and where they came from, the period's spend
         against them, and whether the caller may change them. A hold by a pool names the pool, and its amounts only
         to someone who sees every bot."""
+        spent = usage_limits.spent_now(c, bot=bot, default=default)  # first: one read of every window's spend
         found = usage_limits.state(c, bot, default=default)
         if found["blocked_by"] and found["blocked_by"]["scope"] != "bot" and not auth.bot_admin(who):
             found["blocked_by"] = {k: v for k, v in found["blocked_by"].items() if k not in ("spent", "limit")}
@@ -406,7 +423,7 @@ def install(app, store, auth, mutate, settings):
             **{"own_" + key: mine[key] for key in usage_limits.KEYS},
             "may_edit": bot in allowed,
             **pools,
-            "spent": usage_limits.spent_now(c, bot=bot, default=default),
+            "spent": spent,
         }
 
     def pool_views(c, default, led=None):
@@ -630,7 +647,8 @@ def install(app, store, auth, mutate, settings):
             raise Problem("group", "group must be one of: " + ", ".join(GROUPS), 422)
         first, last = window(start, end, None if bot else group)
         filters = {key: request.query_params[key] for key in DIMENSIONS if request.query_params.get(key)}
-        with store.read() as c:
+        # One snapshot: the budget nodes, roster and spend each bot's limit reads are read once for every row.
+        with store.read_transaction() as c:
             allowed = usage_bots(c, auth, who)
             people, configs = views.roster(c), views.entries(c, settings.github_owner)
             depts = {slug: P.team_of(slug, configs, people) or "" for slug in allowed}
@@ -757,7 +775,7 @@ def install(app, store, auth, mutate, settings):
                 )
             if group == "task":
                 rows = rows[:TOP_TASKS]
-            dimensions = {key: query(c, expression, "", slugs, first, last) for key, expression in DIMENSIONS.items()}
+            dimensions = dimension_values(c, slugs, first, last)
             return {
                 **base,
                 "group": group,
@@ -766,9 +784,7 @@ def install(app, store, auth, mutate, settings):
                 "rows": rows,
                 "departments": sorted({d for d in depts.values() if d}),
                 "dimension_labels": {
-                    "subscription": {
-                        r["k"] or "__unknown__": usage_label(c, r["k"] or "") for r in dimensions["subscription"]
-                    }
+                    "subscription": {k or "__unknown__": usage_label(c, k) for k in dimensions["subscription"]}
                 },
-                "dimensions": {key: [r["k"] or "__unknown__" for r in values] for key, values in dimensions.items()},
+                "dimensions": {key: [k or "__unknown__" for k in values] for key, values in dimensions.items()},
             }

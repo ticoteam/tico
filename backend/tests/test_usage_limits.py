@@ -259,3 +259,48 @@ def test_a_hold_counts_live_runs_once_even_when_claims_repeat(api, monkeypatch, 
     logs = [r for r in caplog.records if r.name == "backend.usage_limits"]
     assert len(logs) == 1 and logs[0].args[-3:] == (5, 1, 2)
     assert len([q for q in queries if "SELECT count(*) FROM attempts WHERE state" in q]) == 1
+
+
+def test_one_read_of_every_window_reads_what_each_window_reads_alone(api):
+    """usage_limits.prime_spent fills the windows' spend from one scan; each must equal by_bot's own read of it: runs on
+    a window's edges, an unpriced run record from before usage facts, and subscription runs counted or not."""
+    from datetime import datetime, timezone
+
+    from backend import usage_limits as U
+
+    at = datetime(2026, 11, 18, 15, 10, tzinfo=timezone.utc)
+    facts = [  # (bot, started_at, nanodollars, billing)
+        ("ops", "2026-11-18T15:00:00", 1_000_000_000, "api"),  # the half hour's first instant
+        ("ops", "2026-11-18T14:59:59.999999", 2_000_000_000, "api"),  # the hour before it, same day
+        ("ops", "2026-11-18T00:00:00", 3_000_000_000, "subscription"),  # the day's start
+        ("ops", "2026-11-16T00:00:00", 4_000_000_000, "api"),  # Monday: this week
+        ("ops", "2026-11-15T23:59:59", 5_000_000_000, "api"),  # Sunday: last week, this month
+        ("ops", "2026-10-31T23:59:59", 6_000_000_000, "api"),  # last month
+        ("qa", "2026-10-31T23:59:59", 7_000_000_000, "api"),  # last month only: in no window
+        ("dev", "2026-11-01T00:00:00", None, "api"),  # unpriced, on the month's first instant
+    ]
+    with api.app.state.store.transaction() as c:
+        for k, (bot, started, cost, billing) in enumerate(facts):
+            c.execute(
+                "INSERT INTO usage_facts(source,run_id,bot_id,billing,cost_nano,started_at,metered_at,created_at) "
+                "VALUES('estimate',?,?,?,?,?,?,?)",
+                (f"parity-{k}", bot, billing, cost, started, started, started),
+            )
+        c.execute(  # a run record with no usage facts, as runs before them have
+            "INSERT INTO attempts(id,bot_id,created_at,settled_at,state,lane,est_cost_usd,billing) "
+            "VALUES('parity-old','dev','2026-11-18T15:20:00','2026-11-18T15:25:00','completed','main',0.5,'api')"
+        )
+    windows = [U.bounds(at)[name][1:] for name, _ in U.PERIODS]
+    with api.app.state.store.read_transaction() as c:
+        for subscription in (True, False):
+            primed = U.Default(U.company(c))
+            U.prime_spent(c, windows, subscription, primed)
+            for start, end in windows:
+                assert U.by_bot(c, start, end, subscription, primed) == U.by_bot(c, start, end, subscription), (
+                    start,
+                    end,
+                    subscription,
+                )
+            assert U.by_bot(c, *windows[0], subscription, primed) == {"ops": 1.0, "dev": 0.5}
+            month = U.by_bot(c, *windows[4], subscription, primed)
+            assert month == {"ops": 15.0 if subscription else 12.0, "dev": 0.5}  # qa ran in no window

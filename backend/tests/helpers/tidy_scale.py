@@ -27,6 +27,8 @@ FOLLOWERS = 30000
 THREADS = 100
 RUNNERS = 10
 WORKTREES = 300
+USAGE_FACTS = 7500  # a week of model runs' estimates, twice TIDY's (3.7k on Nov 19), over USAGE_BOTS bots
+USAGE_BOTS = 114
 ROOM_MESSAGES = 3  # each finished task's room gets this many posts until MESSAGES is reached
 # The two triggers that let a task change status or stage only through the engine (task_engine.enter and move): the
 # copies below are made finished and in place, as a company years old has them, so these are lifted while they are.
@@ -247,6 +249,40 @@ def runners_side(c, bots):
     return links, "scale-attempt"
 
 
+def usage(c):
+    """USAGE_FACTS finished runs' estimates over the week before now, nearly all on sign-ins as TIDY's are, four in
+    five on a task: what GET /api/v2/usage sums."""
+    rng = random.Random(23)
+    bots = [row[0] for row in c.execute("SELECT id FROM bots ORDER BY id LIMIT ?", (USAGE_BOTS,))]
+    tasks = [row[0] for row in c.execute("SELECT id FROM tasks ORDER BY rowid LIMIT 3000")]
+    now = H.now()
+    rows = []
+    for i in range(USAGE_FACTS):
+        at = H.shift(now, hours=-rng.uniform(0, 7 * 24))
+        rows.append(
+            (
+                f"scale-run-{i:05d}",
+                rng.choice(bots),
+                rng.choice(tasks) if rng.random() < 0.8 else None,
+                rng.choice(("claude-opus-5-5", "claude-haiku-5-5", "gpt-6.2")),
+                rng.choice(("high", "medium", None)),
+                rng.choice(("default", "work")),
+                "subscription" if rng.random() < 0.97 else "api",
+                rng.randrange(10_000),
+                rng.randrange(100_000),
+                rng.randrange(5_000),
+                rng.randrange(10**9),
+                at,
+            )
+        )
+    c.executemany(
+        "INSERT INTO usage_facts(source,run_id,position,bot_id,task_id,provider,model,harness,effort,profile,billing,"
+        "input_tokens,cached_tokens,output_tokens,cost_nano,started_at,metered_at,created_at) "
+        "VALUES('estimate',?,0,?,?,'anthropic',?,'claude-code',?,?,?,?,?,?,?,?,?,?)",
+        [(*row, row[-1], row[-1]) for row in rows],
+    )
+
+
 def build(api):
     """Seed the company into the app's database; returns what the runner routes need: {"links", "attempt", "bots"}."""
     store = api.app.state.store
@@ -273,11 +309,12 @@ def build(api):
     holds.seed(api)
     with store.transaction() as c:
         links, attempt = runners_side(c, overload.BOTS)
+        usage(c)
     return {"links": links, "attempt": attempt, "bots": overload.BOTS}
 
 
 def counts(c):
     return {
         t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-        for t in ("bots", "runners", "tasks", "conversations", "messages", "thread_followers")
+        for t in ("bots", "runners", "tasks", "conversations", "messages", "thread_followers", "usage_facts")
     } | {"open_tasks": c.execute("SELECT count(*) FROM tasks WHERE status='open'").fetchone()[0]}
