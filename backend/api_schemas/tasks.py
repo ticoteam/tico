@@ -647,7 +647,18 @@ SCHEMAS.update(
     }
 )
 
-SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
+SCHEMAS["Task"]["properties"]["tags"] = {
+    **items(ref("Tag")),
+    "description": "The task's tags. On a list row (GET /api/v2/tasks, a tag's tasks, the live stream) each is only its "
+    "id, key, label, kind, owner and metadata, the same on every task it is on; the task's own read and "
+    "GET /api/v2/tags/{id} carry the whole tag",
+}
+SCHEMAS["Task"]["properties"]["attachments"] = {
+    "type": "array",
+    "items": obj({"id": "s", "name": "s", "size": "i", "content_type": "s", "url": "s"}, required=["id", "name"]),
+    "description": "Files attached when the task was made. A list row leaves out each one's url, "
+    "/api/v2/files/{id}; the task's own read has it",
+}
 
 # A task's documents (backend/task_documents.py), on GET /api/v2/tasks/{id} only: newest change first, each version
 # readable at /api/v2/files/{file_id}?v=<n>; `created` is when the document first appeared, the order its tabs keep. Written with POST /api/v2/tasks/{id}/files and `document`.

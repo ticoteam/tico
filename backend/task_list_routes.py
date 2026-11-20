@@ -538,6 +538,11 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             return {"labels": keys, "tags": tags}
 
 
+# A tag on a list row: what a chip shows (its label, metadata) and who owns its area. The task's own read and
+# GET /api/v2/tags/{id} carry the rest (its notes, writers, template and dates), the same for every task it is on.
+LIST_TAG_FIELDS = ("id", "key", "label", "kind", "owner", "metadata")
+
+
 def readers(auth):
 
     # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
@@ -642,7 +647,7 @@ def readers(auth):
         were read on `c` under `visible_sql`, the reader's rule, as every list does."""
         if not rows:
             return []
-        H.hydrate_task_tags(c, rows)
+        H.hydrate_task_tags(c, [row for row in rows if "tags" not in row])  # H.tasks' rows have theirs
         ids = [row["id"] for row in rows]
         from . import task_engine
         from .roadmaps import stats, EMPTY_STATS
@@ -701,12 +706,13 @@ def readers(auth):
             )
 
         attachments = {tid: [] for tid in ids}
-        from .blobs import brief
-
+        # Each without its URL, /api/v2/files/<id> (the task's own read has it): a task can carry hundreds.
         for asset in c.execute(
-            f"SELECT a.task_id,b.* FROM task_assets a JOIN blobs b ON b.id=a.blob_id WHERE a.task_id IN ({marks})", ids
+            f"SELECT a.task_id,b.id,b.name,b.size,b.content_type FROM task_assets a JOIN blobs b ON b.id=a.blob_id "
+            f"WHERE a.task_id IN ({marks})",
+            ids,
         ):
-            attachments[asset["task_id"]].append(brief(asset))
+            attachments[asset["task_id"]].append({k: asset[k] for k in ("id", "name", "size", "content_type")})
 
         origins = {}
         for event in c.execute(
@@ -729,6 +735,8 @@ def readers(auth):
         for row in rows:
             value = plain_view(row, c)
             value.pop("checkpoint", None)  # up to a page of text per task; the full task view carries it
+            # Each tag by what a row shows of it; the whole tag is at GET /api/v2/tags/{id} and on the task's own read.
+            value["tags"] = [{k: tag[k] for k in LIST_TAG_FIELDS} for tag in value["tags"]]
             value.update(
                 {
                     "parent_id": parents.get(row["id"]),

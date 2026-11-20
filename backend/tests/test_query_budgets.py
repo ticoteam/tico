@@ -25,6 +25,8 @@ BUDGETS = {
     "GET /api/v2/bots": 95,  # 79
     "GET /api/v2/places/person:me": 357,  # 297
     "GET /api/v2/tasks?status=open&limit=500": 114,  # 95
+    "GET /api/v2/tasks?status=open&limit=500&counts=stage&brief=true": 120,  # 100: the board
+    "GET /api/v2/tasks?owner=bot:bot001&status=open&brief=true&limit=200": 94,  # 78: a bot's open tasks
     "GET /api/status": 54,  # 45
     "GET /api/v2/usage?group=bot": 21,  # 17 (255 before one snapshot and one spend read for every bot)
     "GET /api/v2/usage?group=day": 16,  # 13
@@ -164,6 +166,14 @@ def requests(api, made):
         "GET /api/v2/bots": (nothing, get("/api/v2/bots")),
         "GET /api/v2/places/person:me": (nothing, get("/api/v2/places/person:me")),
         "GET /api/v2/tasks?status=open&limit=500": (nothing, get("/api/v2/tasks?status=open&limit=500")),
+        "GET /api/v2/tasks?status=open&limit=500&counts=stage&brief=true": (
+            nothing,
+            get("/api/v2/tasks?status=open&limit=500&counts=stage&brief=true"),
+        ),
+        "GET /api/v2/tasks?owner=bot:bot001&status=open&brief=true&limit=200": (
+            nothing,
+            get("/api/v2/tasks?owner=bot:bot001&status=open&brief=true&limit=200"),
+        ),
         "GET /api/status": (nothing, get("/api/status")),
         "GET /api/v2/usage?group=bot": (nothing, get("/api/v2/usage?group=bot")),
         "GET /api/v2/usage?group=day": (nothing, get("/api/v2/usage?group=day")),
