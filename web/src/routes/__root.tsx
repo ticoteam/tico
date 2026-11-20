@@ -262,7 +262,7 @@ function App() {
         </Later>
         <Frame
           arrangement={callChat ? 'chat' : arrangement}
-          tico={<TicoSheet foot={<CatchUpChip />} />}
+          tico={<TicoSheet />}
           menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : null} />}
           page={page}
           chat={chat}
@@ -387,29 +387,6 @@ function AppMenu({ note }: { note: ReactNode }) {
         <MessagePick open={messaging} onOpenChange={setMessaging} />
       </Later>
     </>
-  );
-}
-
-/* Tico's chip over its box (plan/threads-team.html "Catch up"): while something is new, one tap asks Tico to catch
-   you up, through Tico's own chat. It goes once pressed, until something else comes in. */
-const CATCH_UP = 'Catch me up';
-function CatchUpChip() {
-  // The menu reads the same feed once the first page has opened; the chip waits with it.
-  const { data } = useQuery({ ...catchUpQuery, enabled: usePageOpened() });
-  const [asked, setAsked] = useState<number | null>(null);
-  if (!data?.count || asked === data.count) return null;
-  return (
-    <button
-      type="button"
-      className="qchip"
-      onClick={() => {
-        setAsked(data.count);
-        void run('tico.ask', { text: CATCH_UP }, { via: 'click' });
-      }}
-    >
-      <Icon name="archive" />
-      Catch up
-    </button>
   );
 }
 
