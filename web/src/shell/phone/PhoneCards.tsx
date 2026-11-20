@@ -413,6 +413,15 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
     tuck();
   };
 
+  // a page opened from the chat (an approval card, plan/layers.html): the chat tucks and the page comes forward. Its own
+  // entry stays, so Back (the page's ✕ or back arrow) brings the chat up again.
+  const onChatClick = (e: MouseEvent<HTMLDivElement>) => {
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
+    if (!a || a.target || a.origin !== location.origin) return;
+    navigating.current = true;
+    tuck();
+  };
+
   const cls = ['phone', second && 'has-chat', peeking && 'is-peek', handleMode && 'is-handle', back && 'is-back', second === 'call' && 'is-call'].filter(Boolean).join(' ');
   const nubOn = handleMode && slotOf(card) !== 'tico';
   // a card that cannot be seen takes no focus: focusing it would scroll the stack and strand the cards mid-screen.
@@ -445,7 +454,7 @@ export function PhoneCards({ page, tico, menu, chat, call, lips = {}, lipActs = 
           {lip}
         </button>
         {act && <div className="lip-act">{act}</div>}
-        <div className="full" id={`${id}-${s}`} inert={!up} onClickCapture={s === 'menu' ? onMenuClick : undefined}>
+        <div className="full" id={`${id}-${s}`} inert={!up} onClickCapture={s === 'menu' ? onMenuClick : s === 'chat' && second === 'chat' ? onChatClick : undefined}>
           {full}
         </div>
       </section>

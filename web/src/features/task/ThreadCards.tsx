@@ -4,6 +4,7 @@ import { useActor } from '@/data';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
+import { besideThread } from '@/lib';
 import { flowQuery } from '@/features/tasks/routing';
 import { decisionOf, personOf, sendTitle, tabAddress } from './model';
 import { addressesOf, emailSendQuery, taskDetailQuery, type EmailFile, type TaskData } from './queries';
@@ -22,6 +23,8 @@ interface Approval {
   task: string;
   /** The email it shows: its send's id. */
   send: string | null;
+  /** The thread the card sits in, as the shell's `?chat=`: what it opens comes beside that thread (plan/layers.html). */
+  chat?: string;
 }
 
 const approvalOf = (m: ChatMessage): Approval | null => (m.kind === 'approval' ? ((m.refs?.approval as Approval | undefined) ?? null) : null);
@@ -32,8 +35,9 @@ const emailIn = (shows: readonly string[]) => shows.find((x) => x.startsWith('em
 export type ApprovalScope = { agent: string | undefined } | { task: TaskData | undefined };
 
 /** Each open approval in scope that waits on the viewer, as a row for the conversation's `extra`, once what it shows is
-    read (so a card never draws half, and an email already sent or canceled never flashes). */
-export function useApprovalCards(scope: ApprovalScope): ChatMessage[] {
+    read (so a card never draws half, and an email already sent or canceled never flashes). `chat`: the thread the
+    cards sit in (a `?chat=` address), so what one opens comes beside it; left out, it opens as a page of its own. */
+export function useApprovalCards(scope: ApprovalScope, chat?: string): ChatMessage[] {
   // An agent by its slug (`bot:<slug>`, a chat address) is the same agent as by its id, which an ask names.
   const named = 'agent' in scope ? scope.agent : undefined;
   const agent = useActor(named)?.id ?? named;
@@ -75,7 +79,7 @@ export function useApprovalCards(scope: ApprovalScope): ChatMessage[] {
       created_at: it.since,
       kind: 'approval',
       body: `Approve: ${it.title}`,
-      refs: { approval: { task: it.id, send } },
+      refs: { approval: { task: it.id, send, chat } },
     };
     return [row];
   });
@@ -87,15 +91,15 @@ export function approvalCard(m: ChatMessage) {
   return a ? <ApprovalCard {...a} /> : null;
 }
 
-function ApprovalCard({ task, send }: Approval) {
+function ApprovalCard({ task, send, chat }: Approval) {
   const sub = useQuery(taskDetailQuery(task)).data;
   if (!sub) return null;
-  return send ? <EmailCard sub={sub} send={send} /> : <Card to={tabAddress(sub, undefined, false).to} what={sub.title} />;
+  return send ? <EmailCard sub={sub} send={send} chat={chat} /> : <Card to={tabAddress(sub, undefined, false).to} chat={chat} what={sub.title} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, its files as chips. It opens on the case's
     Email tab, or on the Send task's own page when the case has more than one email (the tab would be a guess). */
-function EmailCard({ sub, send }: { sub: TaskData; send: string }) {
+function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: string }) {
   const mail = useQuery(emailSendQuery(sub.id, send)).data;
   const matter = useMatterOf(sub, send);
   const held = useQuery({ ...taskDetailQuery(matter?.id), retry: false }).data;
@@ -104,15 +108,15 @@ function EmailCard({ sub, send }: { sub: TaskData; send: string }) {
   const title = sendTitle(sub.title);
   const address = (mail && addressesOf(mail).to[0]) ?? title?.to;
   const what = matter?.title ?? title?.subject ?? sub.title;
-  return <Card to={to} what={address ? `${what}, to ${personOf(address)}` : what} files={mail?.files ?? []} />;
+  return <Card to={to} chat={chat} what={address ? `${what}, to ${personOf(address)}` : what} files={mail?.files ?? []} />;
 }
 
 const typeOf = (f: EmailFile) => (f.type?.split('/')[1] ?? f.name.split('.').pop() ?? '').toUpperCase();
 
-function Card({ to, what, files = [] }: { to: string; what: string; files?: EmailFile[] }) {
+function Card({ to, chat, what, files = [] }: { to: string; chat?: string; what: string; files?: EmailFile[] }) {
   const more = files.length - CHIPS;
   return (
-    <Link className="kcard is-link" href={to} data-target={`approval:${to}`}>
+    <Link className="kcard is-link" href={besideThread(to, chat)} data-target={`approval:${to}`}>
       <span className="kh">
         <FlowMark size={10} />
         Approve

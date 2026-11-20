@@ -76,8 +76,8 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 /** The rows a thread gets, drawn as the conversation draws them: each through `approvalCard`. */
-function Thread({ scope }: { scope: ApprovalScope }) {
-  const rows = useApprovalCards(scope);
+function Thread({ scope, chat }: { scope: ApprovalScope; chat?: string }) {
+  const rows = useApprovalCards(scope, chat);
   return (
     <div role="log">
       {rows.map((m) => (
@@ -89,10 +89,10 @@ function Thread({ scope }: { scope: ApprovalScope }) {
   );
 }
 
-const show = (scope: ApprovalScope) =>
+const show = (scope: ApprovalScope, chat?: string) =>
   render(
     <QueryClientProvider client={queryClient}>
-      <Thread scope={scope} />
+      <Thread scope={scope} chat={chat} />
     </QueryClientProvider>,
   );
 
@@ -108,6 +108,13 @@ describe('an approval waiting, as a card in the agent’s thread @approvals', ()
     // At the time it was asked, from the agent.
     expect(card.parentElement?.dataset.at).toBe('2026-11-19T09:00:00Z');
     expect(card.parentElement?.dataset.from).toBe('bot:lo');
+  });
+
+  it('opens the case beside the thread it sits in, with a way back (plan/layers.html)', async () => {
+    show({ agent: 'bot:lo' }, 'agent:lo');
+    const card = await screen.findByRole('link', { name: /Approve/ });
+    expect(card.getAttribute('href')).toBe('/task/m1?chat=agent%3Alo&via=thread');
+    expect(card.dataset.target).toBe('approval:/task/m1');
   });
 
   it('has no Approve of its own: nothing decides from the thread', async () => {

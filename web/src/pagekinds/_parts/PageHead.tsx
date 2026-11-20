@@ -1,4 +1,4 @@
-import { Link, type LinkProps } from '@tanstack/react-router';
+import { Link, useLocation, useRouter, type LinkProps } from '@tanstack/react-router';
 import { Fragment, useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -11,14 +11,29 @@ export type PageHeadProps = HeadProps;
 
 const to = (path: string) => path as LinkProps['to'];
 
+type AppRouter = ReturnType<typeof useRouter>;
+
+/** Close an artifact opened from a thread (plan/layers.html): back, when the step before is in the app; else the page's
+    parent (`up`), the thread still beside it. */
+function closeArtifact(router: AppRouter, up: string | undefined) {
+  if (router.history.canGoBack()) return router.history.back();
+  const chat = (router.state.location.search as Record<string, unknown>).chat;
+  const u = new URL(up ?? '/', location.origin);
+  const search = { ...router.options.parseSearch(u.search), ...(typeof chat === 'string' && chat ? { chat } : {}) };
+  void router.navigate({ to: u.pathname as never, search: search as never });
+}
+
 /**
  * The page's head, one height on every page (`--head-h`). The trail stands before the title at the title's size, muted,
  * a chevron between ("Docs › Returns and refunds", every mock's `.crumb`); the title holds only the name. A task's
  * trail (`sub`) stays in its small where line. Then the controls, "⋯" last, then a button for each sheet the frame
- * tucked behind the page.
+ * tucked behind the page, then ✕ when the page was opened from a thread (`close`).
  */
-export function PageHead({ title, path, crumb, lead, after, actions, search, more, onRename, sub, size, top }: PageHeadProps) {
+export function PageHead({ title, path, crumb, lead, after, actions, search, more, onRename, sub, size, top, close }: PageHeadProps) {
   const sheet = useSheet();
+  const router = useRouter();
+  const opened = useLocation({ select: (l) => (l.search as Record<string, unknown>).via === 'thread' });
+  const closes = close ?? opened;
   const big = size === 'large' ? 't-figure' : undefined;
   const back = crumb?.at(-1);
   const [renaming, setRenaming] = useState(false);
@@ -37,11 +52,16 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
   );
   const head = (
     <header className="page-head pk-head">
-      {back && (
+      {/* a phone's back: to the thread the page was opened from, else up the trail */}
+      {closes ? (
+        <button type="button" className="ib back pk-back" onClick={() => closeArtifact(router, back?.to)} aria-label="Back" title="Back">
+          <Icon name="chevron" className="flip" />
+        </button>
+      ) : back ? (
         <Link className="ib back pk-back" to={to(back.to)} aria-label={`Back to ${back.label}`} title={`Back to ${back.label}`}>
           <Icon name="chevron" className="flip" />
         </Link>
-      )}
+      ) : null}
       {lead}
       <div className={trail && !sub ? 'pk-title has-crumb' : 'pk-title'}>
         {sub ? (
@@ -92,6 +112,7 @@ export function PageHead({ title, path, crumb, lead, after, actions, search, mor
       {sheet.tucked.map((t) => (
         <IconButton key={t.id} icon="panel" label={t.label} quiet onClick={t.open} />
       ))}
+      {closes && <IconButton icon="close" label="Close" quiet className="pk-close" onClick={() => closeArtifact(router, back?.to)} />}
     </header>
   );
   return top ? (
