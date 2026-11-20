@@ -21,7 +21,12 @@ class Replay:
     def __init__(self, root=checks.ROOT, graph=None):
         self.root = root
         self.graph = graph or checks.DependencyMap(root)
-        self.core = checks.browser_scripts([], root)
+        # The browser smoke set went with the old web app (ui/, scripts/ui-tests.cts): with no runner to list it, a
+        # case's browser scripts are its own, as in checks.selection.
+        try:
+            self.core = checks.browser_scripts([], root)
+        except (OSError, subprocess.CalledProcessError, RuntimeError):
+            self.core = []
         self.timings = checks.committed_timings(root)
         self.counts = Counter()
         self.definitions = defaultdict(set)
