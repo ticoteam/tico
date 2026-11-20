@@ -3,34 +3,60 @@
 > **Beta** on Mac: the Mac app stays Beta until it is signed ([#45](https://github.com/ticoteam/tico/issues/45)); the Windows and Linux apps are not Beta. See [Beta features](support.md#beta-features).
 
 Download **Tico** from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
+The same app connects to any Tico server and holds several companies, each with its own sign-in.
 A company with its own app offers it in its Tico menu ([below](#your-companys-app)).
-The same app connects to any Tico server.
 
-On macOS, open `Tico-<version>-arm64.dmg` and drag Tico to Applications. The Mac build is
-Apple-chip only. On Windows, run the `-setup.exe` installer. On Linux, make the `.AppImage`
-executable and open it, or install the `.deb` package. A Mac build without Apple signing and
-notarization may need **Open Anyway** in System Settings > Privacy & Security on its first launch.
+## Install
 
-In the Mac app, the first launch shows **Sign in to Tico**. Click it, and a window opens at
-[app.tico.dev](https://app.tico.dev/), the account page. Sign in there. The list shows each Tico
-server that has your email address among its people: tick the ones you want, then click **Add**.
-Tico adds each one as an organization, opens the first of them, and closes the sign-in window.
-To use another account, click **Use another account** on that page. Closing the window without
-**Add** adds nothing. If the list is empty, or your server is not on Tico sign-in (a server behind
-Cloudflare Access, for example), click **Use a server address** under the button instead.
+| Computer | File | How |
+| --- | --- | --- |
+| Mac with an Apple chip (M1 or later), macOS 14 or later | `Tico-<version>-arm64.dmg` | Open it and drag Tico to Applications. |
+| Windows, x64 or Arm | `Tico-<version>-setup.exe` | Run it. It installs for your Windows account and opens Tico. |
+| Linux, x86-64 | `Tico-<version>-x86_64.AppImage` or `Tico-<version>-amd64.deb` | Make the AppImage executable (`chmod +x`) and open it, or install the package (`sudo apt install ./Tico-<version>-amd64.deb`). |
 
-On Windows and Linux, and in the Mac app after **Use a server address**, the first launch asks for
-the **Server** address, for example `https://tico.example.com`. Enter your team's address and click
-**Connect**. Tico checks that the server is reachable and answers its `/healthz` check as Tico, saves
-the address in the app's config folder, then opens your Team. Sign in as you would in a browser.
-HTTPS is required; `http://localhost` and `http://127.0.0.1` are allowed for a server on your
-Computer. A failed check shows an error below the field.
+There is no build for Intel Macs.
 
-In the Mac app, choose **Add Organization…** from Tico's menu to add another organization. It opens
-the same sign-in screen. On Windows and Linux, use **Change server…** in the app's menu to connect
-to another server. The app saves the address and restarts automatically to replace its native
-permissions. Only the selected server's origin can use native IPC; Access and external sign-in pages
-that remain in the window receive no native permissions.
+The Mac app is signed but not notarized, so macOS may refuse to open it the first time. Click **Done**, open
+System Settings > Privacy & Security, click **Open Anyway** beside the message about Tico, and confirm. Later
+launches open normally.
+
+The Windows installer is not signed, so Microsoft Defender SmartScreen may show **Windows protected your PC**. Click
+**More info**, then **Run anyway**.
+
+## First launch
+
+If this computer has the [older desktop app](#the-older-desktop-app), the new app starts with its list of companies.
+Open each one and sign in once: sign-ins do not carry over.
+
+Otherwise the first launch shows **Add company**. Enter your company's server address, for example
+`acme.tico.team` or `https://tico.example.com`, and click **Add**; Tico opens it, and you sign in as you would in a
+browser. HTTPS is required; `http://localhost` and `http://127.0.0.1` are allowed for a server on your computer. On
+Tico Cloud, click **Sign in to Tico** instead: sign in in the window that opens, then tick the companies you want and
+add them.
+
+To add another company later, choose **Company > Add company…** in the app's menu.
+
+## Updates
+
+The app checks the latest GitHub release for a new version when it starts, every six hours, and from
+**Check for updates…** in the app's menu (the **Tico** menu on a Mac, **File** on Windows and Linux). It downloads a
+new version in the background and installs it when you quit, or at once with **Restart to update** in Settings >
+General > Tico (not during a call). The pages themselves come from your server and change when it
+updates.
+
+## The older desktop app
+
+Before the current app, Tico's desktop app was a different program (`app/` in the repository, files named
+`Tico_<version>_...` on each release, such as `Tico_<version>_universal.dmg`). Releases still carry it until installed
+copies have moved over. Inside it, the menu shows **A new Tico desktop app is ready.** with a **Download** link for
+your computer. Install the new app as above:
+
+- On a Mac, both apps are called Tico, so dragging the new one to Applications replaces the older one (Finder asks
+  first).
+- On Windows and Linux the two install separately. Remove the older one when you no longer use it.
+
+The new app keeps no sign-in from the older one: sign in to each company again. The rest of this section, and the
+sections after it, describe the older app.
 
 The app can keep [signed visuals](visuals.md) inline when the selected server uses
 a separate HTTPS address for them. After sign-in, the server supplies that address
@@ -72,7 +98,7 @@ kept. **Show the app's log** at the foot of Help opens it in Finder; a Support r
 last 200 lines with @diagnostics, redacted like the rest of the bundle.
 Your team may also offer its own app.
 
-## Switch between organizations
+### Switch between organizations (older app)
 
 The generic Mac app can hold several organizations, each with its own sign-in. Once you have added more than one (see the first launch above), **Switch organization** appears in the account menu. It lists your organizations with a check mark on the open one; choose one to show its page. Switching needs no restart and no new sign-in.
 
@@ -112,8 +138,9 @@ Download your company's app from your own Tico page. It has your team's name and
 your Team directly, and updates itself from your server. Each company has a stable bundle ID,
 so its app can coexist with another company's app and the generic Tico app. The download API
 `GET /api/download/{mac|windows|linux}` returns `app_kind: company` or `generic`; a frontend
-can show **Download Mac app** (or Windows, Linux) for a company build. The web app offers only a
-company build; the generic app stays on the GitHub release page.
+can show **Download Mac app** (or Windows, Linux) for a company build. Without a company build, the
+answer is the generic app from the server's own GitHub release: the current app's installer when the
+release has it, otherwise the older app's.
 
 If an older company app does not update itself, sign in to your team's Tico page, download the
 company app again and install it over the existing copy. Keep the app's saved data; its stable
