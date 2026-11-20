@@ -20,9 +20,9 @@ place, without calling `/start-place` or acknowledging the same start again.
 
 ## Supported skew
 
-A runner and a server work together when each is on the current or the previous minor release, in either direction:
-a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,
-0.6.21) pauses any runner below it, so the supported window starts at 0.6.21, and the kept release copy is
+A runner and a server work together, in either direction, when both are on the floor or later: today 0.6.21 through
+the current release. The server's floor (`MIN_RUNNER_RELEASE`, 0.6.21) pauses any runner below it, a runner makes no
+allowance for a hub below it, and the kept release copy is
 `contracts/runner/releases/0.6.21`. `scripts/check_wire_contract.py` checks the current contract against each kept
 release copy in both directions and fails on any break.
 

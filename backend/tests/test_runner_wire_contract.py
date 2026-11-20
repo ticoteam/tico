@@ -361,6 +361,9 @@ def test_an_old_runners_requests_still_drive_this_server(api):
         aid = ""
         for name, case in TURN:
             recorded = json.loads((path / W.FIXTURES / ("%s.%s.json" % (name, case))).read_text())
+            if name == "heartbeat":
+                # The copy's own recording may predate its release; the computer replaying it runs that release.
+                recorded["request"]["release"] = path.name
             if name == "claim":
                 post(api, "chat/ops", {"text": "Please summarize the current work."})
             response = api.post(
