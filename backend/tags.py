@@ -88,9 +88,7 @@ def install(app, store, auth, mutate, task_views):
 
         return mutate(request, body, work)
 
-    @app.post(
-        "/api/v2/tags/{tag_id}", **api_v2("Tags", "updateTag", "Edit a tag using its current version", TagResult)
-    )
+    @app.post("/api/v2/tags/{tag_id}", **api_v2("Tags", "updateTag", "Edit a tag using its current version", TagResult))
     def update_tag(request: Request, tag_id: str, body: TagUpdate):
         def work(c):
             who = request.state.identity

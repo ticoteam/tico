@@ -34,7 +34,15 @@ from . import task_privacy as _privacy
 from . import teammate_access as _teammate_access
 from . import waiting_on as _waiting_on
 from .api_contract import api_v2, error
-from .api_answers.risk import MatterList, MatterResult, RiskDetail, RiskLinkResult, RiskList, RiskObligationList, RiskResult
+from .api_answers.risk import (
+    MatterList,
+    MatterResult,
+    RiskDetail,
+    RiskLinkResult,
+    RiskList,
+    RiskObligationList,
+    RiskResult,
+)
 from .entities import store as ES
 from .models import ID, Contract
 from .slugs import slugify
