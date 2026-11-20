@@ -42,6 +42,7 @@ from backend.tests.helpers.api_app import api_client
 WARM = float(os.environ.get("WARM", 60))
 WINDOW = float(os.environ.get("WINDOW", 330))
 SAMPLES = int(os.environ.get("SAMPLES", 5))
+GAP = float(os.environ.get("GAP", 2))
 CONFIG, IMPORTERS = "GET /api/v2/config", "GET /api/v2/runners/importers"
 
 
@@ -60,6 +61,25 @@ class Counting:
     def since(self, route, at):
         with self.lock:
             return [t for r, t in self.seen if r == route and t > at]
+
+
+def listen(url, token, heard):
+    """A second stream with the computer's token: when each `runner` hint reaches it, as (kind, time)."""
+    import http.client
+
+    conn = http.client.HTTPConnection(url.removeprefix("http://"), timeout=600)
+    conn.request("GET", "/api/v2/runners/me/events", headers={"Authorization": "Bearer " + token})
+    response = conn.getresponse()
+    event = ""
+    while True:
+        line = response.readline()
+        if not line:
+            return
+        text = line.decode().strip()
+        if text.startswith("event:"):
+            event = text[6:].strip()
+        elif text.startswith("data:") and event == "runner":
+            heard.append((json.loads(text[5:]).get("kind"), time.monotonic()))
 
 
 def next_read(hub, route, after, limit):
@@ -118,6 +138,8 @@ def measure(label, binary):
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+        heard = []
+        threading.Thread(target=listen, args=(url, computer["token"], heard), daemon=True).start()
         time.sleep(WARM)
         began = time.monotonic()
         time.sleep(WINDOW)
@@ -135,8 +157,8 @@ def measure(label, binary):
             at = time.monotonic()  # committed: a read from here on sees the change
             took = next_read(hub, IMPORTERS, at, 70)
             moves.append(took) if took is not None else late.append("importers")
-            time.sleep(2)
-        flips = []
+            time.sleep(GAP)
+        flips, hints = [], []
         for n in range(SAMPLES):
             with store.transaction() as c:
                 record = gateway_connection._row(c)
@@ -148,8 +170,13 @@ def measure(label, binary):
             at = time.monotonic()
             took = next_read(hub, CONFIG, at, 70)
             flips.append(took) if took is not None else late.append("config")
-            time.sleep(2)
-        for name, values in (("importer moved -> GET runners/importers", moves), ("Gateway flip -> GET config", flips)):
+            hints.extend([t - at for kind, t in list(heard) if kind == "config" and t > at][:1])
+            time.sleep(GAP)
+        for name, values in (
+            ("importer moved -> GET runners/importers", moves),
+            ("Gateway flip -> GET config", flips),
+            ("Gateway flip -> config hint on a stream", hints),
+        ):
             if values:
                 print(
                     f"  {name:45s} median {statistics.median(values) * 1000:8.0f} ms"
