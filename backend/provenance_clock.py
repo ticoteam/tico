@@ -8,7 +8,8 @@ This is an invalidation clock, never a permission cache.
 # Sources used by task_privacy.attempt_tasks/message_tasks/references. Over-invalidation is
 # intentional: e.g. any new task may turn a formerly unresolved structured reference into a task.
 SOURCES = {
-    'attempts': ('id', 'bot_id', 'job_id', 'state'),
+    # task_id: the task a run works on is one it carries (task_privacy.RUN_TASK_SQL).
+    'attempts': ('id', 'bot_id', 'job_id', 'state', 'task_id'),
     'attempt_inputs': ('attempt_id', 'message_id'),
     'jobs': ('id', 'message_id'),
     'messages': ('id', 'conversation_id', 'refs', 'in_reply_to', 'sender_id', 'recipient_id'),
@@ -35,8 +36,8 @@ def ensure(c):
                     )
                 )
                 condition = f'({condition}) AND ({relevant})'
-            # Upgrade existing clocks when meeting provenance adds source columns.
-            suffix = '_v2' if operation == 'UPDATE' and table in {'messages', 'conversations'} else ''
+            # Upgrade existing clocks when meeting provenance, or a run's own task, adds source columns.
+            suffix = '_v2' if operation == 'UPDATE' and table in {'messages', 'conversations', 'attempts'} else ''
             if suffix:
                 c.execute(f'DROP TRIGGER IF EXISTS provenance_{table}_{operation.lower()}')
             c.execute(
