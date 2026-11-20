@@ -5,84 +5,21 @@ import { Checkbox } from '@/kit/Checkbox';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Menu } from '@/kit/Menu';
-import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { SidePanel } from '@/pagekinds';
-import { ACTS, actKey, actLine, ARG, argOf, condsWords, destName, llmModes, OPS, Q_MIN, TRIGGER_FIELDS, type Act, type Board, type Part } from './board';
+import { ACTS, actKey, ARG, argOf, destName, llmModes, OPS, Q_MIN, TRIGGER_FIELDS, type Act, type Board, type Part } from './board';
 import { press, RemoveItem, useConfirmRemove, Verb } from './parts';
 import type { Routine } from './types';
 
-/* The inbox board (automations-flow.ts auBoard, auItemEditor): rules → questions → LLM → destinations, each a dense
-   row that opens its editor in the panel. Saving puts the one item back into the flow (`routines.saveBoardItem`);
-   colors are left out (greys only). */
+/* One part of the inbox board in the panel (automations-flow.ts auItemEditor): a rule, a question, a destination or the
+   LLM; the board itself is drawn on the automation's page (FlowView.tsx). Saving puts the one item back into the flow
+   (`automations.saveBoardItem`); colors are left out (greys only). */
 
 export interface ItemRef {
   part: Part;
   /** Which one; none adds a new one. */
   at?: number;
-}
-
-const MODES: Record<string, string> = { sort: 'Sort', draft: 'Sort + draft', reply: 'Sort + reply' };
-
-/** A person's or agent's name for an owner or agent argument in any id form. */
-function useNamer() {
-  const actors = useActors();
-  const by = new Map<string, string>();
-  for (const a of actors) {
-    by.set(a.id, a.name);
-    by.set(a.id.replace(/^human:/, 'person:'), a.name);
-    if (a.slug) by.set(`bot:${a.slug}`, a.name);
-  }
-  return (id: string) => by.get(id) ?? id.replace(/^\w+:/, '');
-}
-
-const chainWords = (then: Act[] | undefined, name: (id: string) => string) => (then ?? []).map((x) => actLine(x, name)).join(', ');
-
-export function BoardView({ routine, board, onOpen }: { routine: Routine; board: Board; onOpen: (it: ItemRef) => void }) {
-  const name = useNamer();
-  const can = !!routine.can_edit && !routine.readonly;
-  const dest = (id: string | undefined) => (id ? destName(id, board.dests) : '');
-  const item = (key: string, title: string, sub: string, it: ItemRef) => (
-    <Row key={key} className="brow" title={title} target={`board:${routine.id}:${it.part}:${it.at ?? 0}`}>
-      {can ? (
-        <button type="button" className="row-title row-open" onClick={() => onOpen(it)}>
-          {title}
-        </button>
-      ) : (
-        <span className="row-title">{title}</span>
-      )}
-      <span className="row-sub">{sub}</span>
-    </Row>
-  );
-  const head = (title: string, add?: { label: string; it: ItemRef }) => (
-    <h3 className="rr-head">
-      {title}
-      {can && add && <Verb onClick={() => onOpen(add.it)}>{add.label}</Verb>}
-    </h3>
-  );
-  return (
-    <>
-      <section className="rail-sec">
-        {head('Rules', { label: 'Add rule', it: { part: 'rule' } })}
-        {board.rules.map((r, i) =>
-          item(`r${i}`, condsWords(r), [chainWords(r.then, name), r.to ? `→ ${dest(r.to)}` : r.next === 'rule' ? 'Moves on' : 'Ends'].filter(Boolean).join(' · '), { part: 'rule', at: i }),
-        )}
-      </section>
-      <section className="rail-sec">
-        {head('Questions', { label: 'Add question', it: { part: 'question' } })}
-        {board.questions.map((q, i) => item(`q${q.id}`, q.text, [chainWords(q.then, name), q.to ? `→ ${dest(q.to)}` : 'Ends'].filter(Boolean).join(' · '), { part: 'question', at: i }))}
-      </section>
-      <section className="rail-sec">
-        {head('LLM')}
-        {item('llm', MODES[board.llm.mode] ?? 'Sort', board.llm.to.map(dest).join(', '), { part: 'llm' })}
-      </section>
-      <section className="rail-sec">
-        {head('Destinations', { label: 'Add destination', it: { part: 'destination' } })}
-        {board.dests.map((d, i) => item(`d${d.id}`, d.name || d.id, chainWords(d.then, name) || 'Do nothing', { part: 'destination', at: i }))}
-      </section>
-    </>
-  );
 }
 
 // ---------------------------------------------------------------- one item's editor
@@ -159,13 +96,13 @@ export function BoardItemEditor({ routine, board, it, onDone, onClose }: { routi
   };
   const save = async () => {
     setBusy(true);
-    const ok = await press('routines.saveBoardItem', input());
+    const ok = await press('automations.saveBoardItem', input());
     setBusy(false);
     if (ok) onDone();
   };
   const drop = () =>
     remove.confirm(`this ${TITLE[it.part].toLowerCase()}`, () => {
-      void press('routines.removeBoardItem', { routine: routine.id, part: it.part, at: it.at }).then((ok) => ok && onDone());
+      void press('automations.removeBoardItem', { routine: routine.id, part: it.part, at: it.at }).then((ok) => ok && onDone());
     });
 
   const destOptions = board.dests.map((d) => ({ value: `to:${d.id}`, label: `Go to ${d.name || d.id}` }));

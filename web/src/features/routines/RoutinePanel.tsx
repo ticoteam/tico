@@ -5,111 +5,23 @@ import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
-import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
-import { fmtDate, fmtMoney } from '@/lib';
 import { SidePanel } from '@/pagekinds';
-import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
-import { routineBoard, takesTemplate } from './board';
-import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
-import { ApplyTemplate } from './Templates';
+import { press, pressOut, useName, Verb, Word } from './parts';
+import { versionsQuery } from './queries';
 import type { Routine, Trigger, Version } from './types';
-import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
+import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
 
-/* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
-   the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
-   versions (the old app's Test run and Versions). */
-
-export function RoutinePanel({ id, onClose }: { id: string; onClose: () => void }) {
-  if (id === 'new') return <RoutineEditor onDone={onClose} onClose={onClose} />;
-  return <RoutineView id={id} onClose={onClose} />;
-}
+/* A new agent routine in the panel (`?panel=routine:new`): a name, the agent, when it runs and its instruction. And the
+   pieces an automation's page opens: a test run with sample input, its versions and proposals, the run guard's hold,
+   its spend limit and the schedule picker. */
 
 const stepOf = (r: Routine | undefined) => r?.steps?.find((s) => s.type === 'bot_turn');
 
-function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
-  const listed = useQuery(routinesQuery).data?.find((r) => r.id === id);
-  const one = useQuery({ ...routineQuery(id), enabled: !listed && !id.startsWith('tmp:') });
-  const r = listed ?? one.data;
-  const [editing, setEditing] = useState(false);
-  const [limiting, setLimiting] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [versions, setVersions] = useState(false);
-  const [item, setItem] = useState<ItemRef | null>(null);
-  const [applying, setApplying] = useState(false);
-  const remove = useConfirmRemove();
-  if (!r) {
-    return (
-      <SidePanel className="rr" title="Routine" onClose={onClose}>
-        <PanelRead q={one} what="This routine" />
-      </SidePanel>
-    );
-  }
-  if (editing) return <RoutineEditor routine={r} onDone={() => setEditing(false)} onClose={onClose} />;
-  if (versions) return <Versions routine={r} onDone={() => setVersions(false)} onClose={onClose} />;
-  const board = routineBoard(r);
-  if (board && item) return <BoardItemEditor key={`${item.part}:${item.at ?? ''}`} routine={r} board={board} it={item} onDone={() => setItem(null)} onClose={onClose} />;
-  const on = r.enabled !== false && !r.paused;
-  const step = stepOf(r);
-  const tmp = r.id.startsWith('tmp:');
-  return (
-    <SidePanel
-      className="rr"
-      title={r.name || 'Routine'}
-      target={`routine:${r.id}`}
-      onClose={onClose}
-      actions={
-        <>
-          <HeadSwitch
-            label={on ? 'On' : 'Paused'}
-            checked={on}
-            disabled={r.can_pause === false || tmp}
-            onChange={(next) => void press(next ? 'routines.resume' : 'routines.pause', { routine: r.id })}
-          />
-          <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
-            {/* an inbox board is edited a part at a time, in the board below */}
-            {!board && <MenuItem label="Edit" icon="edit" disabled={!r.can_edit} onSelect={() => setEditing(true)} />}
-            <MenuItem label="Test run" icon="play" disabled={r.readonly || !r.can_edit} onSelect={() => setTesting(true)} />
-            <MenuItem label="Versions" icon="clock" onSelect={() => setVersions(true)} />
-            {takesTemplate(r) && <MenuItem label="Apply template" icon="mail" onSelect={() => setApplying(true)} />}
-            <RemoveItem disabled={!r.can_edit} onSelect={() => remove.confirm(r.name || 'this routine', () => void press('routines.remove', { routine: r.id }))} />
-          </Menu>
-        </>
-      }
-    >
-      <section className="rail-sec">
-        <Facts label="About">
-          <LabelValue label="Trigger">{triggerWords(r.trigger)}</LabelValue>
-          <LabelValue label="Does">
-            <Face id={step?.bot ?? r.owner_id} />
-            <Runner id={step?.bot ?? r.owner_id} />
-          </LabelValue>
-          <LabelValue label="Limit">
-            <span>{r.spend_cap?.per_30m != null ? `${fmtMoney(r.spend_cap.per_30m, { cents: true })} each 30 minutes` : "Agent's limit"}</span>
-            {r.can_edit && !tmp && !limiting && <Verb onClick={() => setLimiting(true)}>Change</Verb>}
-          </LabelValue>
-          {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
-        </Facts>
-        {limiting && <LimitEditor routine={r} onDone={() => setLimiting(false)} />}
-        {r.hold && <HoldLine routine={r} held={r.hold.held} dropped={r.hold.dropped} />}
-      </section>
-      {step?.prompt && (
-        <section className="rail-sec">
-          <h3>Instruction</h3>
-          <p className="inst t-read">{step.prompt}</p>
-        </section>
-      )}
-      {board && <BoardView routine={r} board={board} onOpen={setItem} />}
-      {!tmp && <Runs id={r.id} />}
-      {remove.node}
-      {testing && <TestRun routine={r} onClose={() => setTesting(false)} />}
-      {applying && <ApplyTemplate routine={r} onClose={() => setApplying(false)} />}
-    </SidePanel>
-  );
+export function RoutinePanel({ id, onClose }: { id: string; onClose: () => void }) {
+  return <RoutineEditor key={id} onDone={onClose} onClose={onClose} />;
 }
 
 /** What its trigger hands a run, as JSON to edit (automations-editors.ts auSample); a schedule hands nothing. A due
@@ -136,13 +48,13 @@ export function sampleFor(t: Trigger, nextDue?: string | null): string {
 }
 
 /** Run it once with sample input standing in for its trigger. A sample its filters drop makes no run, and says so. */
-function TestRun({ routine, onClose }: { routine: Routine; onClose: () => void }) {
+export function TestRun({ routine, onClose }: { routine: Routine; onClose: () => void }) {
   const [text, setText] = useState(() => sampleFor(routine.trigger, routine.next_due_at));
   const [dropped, setDropped] = useState(false);
   const [busy, setBusy] = useState(false);
   const go = async () => {
     setBusy(true);
-    const r = await pressOut<{ dropped: boolean }>('routines.testRun', { routine: routine.id, ...(text.trim() ? { sample: text } : {}) });
+    const r = await pressOut<{ dropped: boolean }>('automations.testRun', { routine: routine.id, ...(text.trim() ? { sample: text } : {}) });
     setBusy(false);
     if (r?.out?.dropped) setDropped(true);
     else if (r) onClose();
@@ -183,7 +95,7 @@ function TestRun({ routine, onClose }: { routine: Routine; onClose: () => void }
 
 /** Its versions, newest first, with an agent's proposals above them: any but the current one restores as a new
    version; a proposal is turned on or discarded. */
-function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () => void; onClose: () => void }) {
+export function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () => void; onClose: () => void }) {
   const q = useQuery(versionsQuery(routine.id));
   const all = q.data ?? [];
   const proposed = all.filter((v) => v.status === 'pending');
@@ -211,8 +123,8 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
                 <Verb onClick={() => setDiff(diff === v.n ? null : v.n)}>{diff === v.n ? 'Hide diff' : 'View diff'}</Verb>
                 {can && (
                   <>
-                    <Verb onClick={() => void press('routines.restoreVersion', { routine: routine.id, n: v.n })}>Turn on</Verb>
-                    <Verb onClick={() => void press('routines.discardVersion', { routine: routine.id, n: v.n })}>Discard</Verb>
+                    <Verb onClick={() => void press('automations.restoreVersion', { routine: routine.id, n: v.n })}>Turn on</Verb>
+                    <Verb onClick={() => void press('automations.discardVersion', { routine: routine.id, n: v.n })}>Discard</Verb>
                   </>
                 )}
               </VersionRow>
@@ -229,7 +141,7 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
             {v.n === routine.version ? (
               <span className="row-age">Current</span>
             ) : (
-              can && <Verb onClick={() => void press('routines.restoreVersion', { routine: routine.id, n: v.n })}>Restore</Verb>
+              can && <Verb onClick={() => void press('automations.restoreVersion', { routine: routine.id, n: v.n })}>Restore</Verb>
             )}
           </VersionRow>
         ))}
@@ -270,9 +182,9 @@ function VersionRow({ v, children }: { v: Version; children: ReactNode }) {
 }
 
 /** The run guard held its runs: how many, and Release or Drop for whoever may change it (Drop asks first). */
-function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; dropped: number }) {
+export function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; dropped: number }) {
   const [asking, setAsking] = useState(false);
-  const end = (action: 'release' | 'drop') => press('routines.endHold', { routine: routine.id, action });
+  const end = (action: 'release' | 'drop') => press('automations.endHold', { routine: routine.id, action });
   return (
     <div className="rr-field" data-target={`hold:${routine.id}`}>
       <Word icon="pause">On hold</Word>
@@ -310,12 +222,12 @@ function HoldLine({ routine, held, dropped }: { routine: Routine; held: number; 
 }
 
 /** Its spend limit, as the old app's editor: dollars each 30 minutes, blank for the agent's own limit. */
-function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void }) {
+export function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void }) {
   const [value, setValue] = useState(routine.spend_cap?.per_30m != null ? String(routine.spend_cap.per_30m) : '');
   const typed = value.trim() === '' ? null : Number(value);
   const bad = typed !== null && !(typed >= 0);
   const save = async (per30m: number | null) => {
-    if (await press('routines.setLimit', { routine: routine.id, per30m })) onDone();
+    if (await press('automations.setLimit', { routine: routine.id, per30m })) onDone();
   };
   return (
     <div className="rr-form">
@@ -339,39 +251,6 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
         </Button>
       </div>
     </div>
-  );
-}
-
-function Runner({ id }: { id: string | null | undefined }) {
-  const name = useName(id);
-  return <span>{name || 'An agent'}</span>;
-}
-
-function Runs({ id }: { id: string }) {
-  const runs = useQuery(runsQuery(id));
-  const list = runs.data ?? [];
-  return (
-    <section className="rail-sec">
-      <h3>
-        Last runs
-        <Verb onClick={() => void press('routines.runNow', { routine: id })} target={`routine-runs:${id}`}>
-          Run now
-        </Verb>
-      </h3>
-      {runs.isError && <Word>Runs did not load</Word>}
-      {list.map((run) => {
-        const at = run.started_at ?? run.finished_at;
-        const what = run.error || run.summary || runWords(run.status);
-        const href = runLink(run);
-        return (
-          <Row key={run.id} className="prun" title={what} href={href} target={`run:${run.id}`}>
-            <span className="run-at">{at ? fmtDate(at) : ''}</span>
-            <span className="row-sub">{what}</span>
-            {run.status === 'failed' ? <Word>Failed</Word> : <span className="row-age">{run.cost ? fmtMoney(run.cost, { cents: true }) : ''}</span>}
-          </Row>
-        );
-      })}
-    </section>
   );
 }
 
@@ -411,7 +290,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
     const when = fixed ? {} : start === 'schedule' ? { cron: scheduleCron(sched) } : { event };
     const input = { name: name.trim(), agent, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...when };
     setBusy(true);
-    const ok = await press(routine ? 'routines.update' : 'routines.create', routine ? { routine: routine.id, ...input } : input);
+    const ok = await press(routine ? 'automations.update' : 'automations.create', routine ? { routine: routine.id, ...input } : input);
     setBusy(false);
     if (ok && routine) onDone();
   };
@@ -460,7 +339,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   );
 }
 
-function ScheduleFields({ value, onChange }: { value: ReturnType<typeof parseSchedule>; onChange: (s: ReturnType<typeof parseSchedule>) => void }) {
+export function ScheduleFields({ value, onChange }: { value: ReturnType<typeof parseSchedule>; onChange: (s: ReturnType<typeof parseSchedule>) => void }) {
   const set = (patch: Partial<typeof value>) => {
     const next = { ...value, ...patch };
     onChange({ ...next, cron: scheduleCron(next) });

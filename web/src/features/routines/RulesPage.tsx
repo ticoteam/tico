@@ -6,7 +6,7 @@ import { Dialog } from '@/kit/Dialog';
 import { MenuItem } from '@/kit/Menu';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
 import { List, PageMore, Section, type PageTab } from '@/pagekinds';
-import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
+import { automationHref, hasWho, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
 import { Find, press, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
 import { ReadDocument } from './ReadDocument';
@@ -440,8 +440,7 @@ function AutoRuleRow({ id, name, on, r, wake }: { id: string; name: string; on: 
     <RuleRow
       how={wake ? 'wake' : 'auto'}
       parts={when ? [when, then] : [agentWords(name), then]}
-      to={ROUTINES}
-      search={{ panel: `routine:${id}` }}
+      to={automationHref(id)}
       off={!on}
       word={r?.last_run?.status === 'failed' ? 'Failed' : undefined}
       cols={{ who: true, at: true }}

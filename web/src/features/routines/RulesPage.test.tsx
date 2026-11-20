@@ -353,7 +353,7 @@ describe('Rules: Wakes, Routines on tasks and Built in', () => {
     queryClient.setQueryData(routinesQuery.queryKey, [routine({ id: 'r2', name: 'Wake support', trigger: { type: 'event', name: 'message.created' } as Routine['trigger'] })]);
     show('/company/rules?tab=wakes');
     const row = await screen.findByTitle(/, Wake /);
-    expect(href(row)).toBe('/company/routines?panel=routine:r2');
+    expect(href(row)).toBe('/company/automations/r2');
   });
 
   it('Routines on tasks: under the pipeline its filter names, off ones marked, opening the routine @s522', async () => {
@@ -365,7 +365,7 @@ describe('Rules: Wakes, Routines on tasks and Built in', () => {
     show('/company/rules?tab=on-tasks');
     const row = within(await screen.findByRole('region', { name: 'Content' })).getByTitle(/Run Price check$/);
     expect(row.className).toContain('is-off');
-    expect(href(row)).toBe('/company/routines?panel=routine:r3');
+    expect(href(row)).toBe('/company/automations/r3');
   });
 
   it('Built in: what always applies, with nothing to change @s523', async () => {

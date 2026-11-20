@@ -19,7 +19,7 @@ describe('routines search', () => {
     queryClient.setQueryData(stageRulesQuery('active').queryKey, { items: [{ id: 's1', name: 'Frost gate' }], built_in: [], may_add: true } as never);
     const hits = await routinesSearch.find('frost', sig());
     expect(hits.map((h) => [h.title, h.meta, h.run])).toEqual([
-      ['Frost check', 'Routine', { id: 'routines.open', input: { routine: 'r1' } }],
+      ['Frost check', 'Automation', { id: 'automations.open', input: { routine: 'r1' } }],
       ['Warn before a frost', 'Rule', { id: 'rules.open', input: { rule: 'o1', kind: 'org' } }],
       ['Frost notes go to buyers', 'Rule', { id: 'rules.open', input: { rule: 'o2', kind: 'org', tab: 'outside' } }],
       ['Frost gate', 'Rule', { id: 'rules.open', input: { rule: 's1', kind: 'stage' } }],

@@ -58,8 +58,6 @@
 .rr .field.is-num input{font-variant-numeric:tabular-nums}
 
 /* ---------- routine, webhook, watch and match rows ---------- */
-.rr .auto{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr) calc(var(--s-18) - var(--s-0)) var(--av-sm) var(--av-lg);column-gap:var(--s-3);padding-left:var(--s-8)}
-.rr .auto-lock{justify-content:center;color:var(--faint)}
 .rr .hook{grid-template-columns:minmax(0,.9fr) minmax(0,1fr) calc(var(--s-18) + var(--s-3)) var(--s-18) var(--tap) var(--ctl-sm);column-gap:var(--s-3);padding:0 var(--s-0) 0 var(--s-8)}
 .rr .hook .row-title{color:inherit;text-decoration:none}
 .rr .hook .row-title::before{content:"";position:absolute;inset:0;border-radius:inherit}
@@ -97,11 +95,6 @@
 /* a kept call's headers and body, as sent (Payload) */
 .rr-pre{margin:var(--s-1) 0 0;font-family:var(--font-code);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
 
-/* a row whose title opens an editor in place: the title is a button that covers the row */
-.rr .row-open{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.rr .row-open::before{content:"";position:absolute;inset:0;border-radius:inherit}
-/* the inbox board: one line per rule, question, the LLM and each destination */
-.rr .brow{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);column-gap:var(--s-3);margin:0 calc(-1 * var(--s-2))}
 .rr .rr-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
 .rr .rr-more{display:flex;justify-content:center;padding:var(--s-2) 0 var(--s-3)}
 /* a section past 100 rows scrolls on its own and draws only what shows */
@@ -162,8 +155,6 @@
   .rr :is(.auto,.watch,.hook,.set,.rr-none){padding-left:var(--s-2)}
   .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
   .rr :is(.auto,.watch,.hook) .row-sub{display:none}
-  .rr .brow{grid-template-columns:minmax(0,1fr)}
-  .rr .brow .row-sub{display:none}
   .rr-line{flex-wrap:wrap}
   .rr .watch{grid-template-columns:minmax(0,1fr) calc(var(--s-8) * 2) var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
   .rr .hook{grid-template-columns:minmax(0,1fr) auto calc(var(--s-8) * 2) var(--s-10);column-gap:var(--s-2h);padding-right:var(--s-2)}

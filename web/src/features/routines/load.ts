@@ -1,8 +1,9 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
+import { EDIT, ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
+import type { AutomationSearch } from './AutomationPage';
 import type { ListeningSearch } from './ListeningPage';
-import { allRunsQuery, dueQuery, holdsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, sourcesQuery, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
-import type { RoutinesSearch } from './RoutinesPage';
+import { allRunsQuery, dueQuery, holdsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routineQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, sourcesQuery, stageRulesQuery, statsQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
+import type { RoutinesSearch } from './AutomationsPage';
 import type { RulesSearch } from './RulesPage';
 
 /* What the Routines, Rules and Listening addresses hold, and what each page reads before it draws. The router parses
@@ -21,9 +22,9 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
   if (out.tab === 'runs') {
     const status = RUN_STATUSES.find((x) => x === raw.status);
     if (status) out.status = status;
-    const range = RUN_RANGES.find((x) => x === raw.range);
-    if (range) out.range = range;
   }
+  const range = out.tab === 'webhooks' ? undefined : RUN_RANGES.find((x) => x === raw.range);
+  if (range) out.range = range;
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
   if (!out.tab) {
@@ -32,6 +33,14 @@ export function validateRoutinesSearch(raw: Record<string, unknown>): RoutinesSe
     const state = ROUTINE_STATES.find((x) => x === raw.state);
     if (state) out.state = state;
   }
+  return out;
+}
+
+export function validateAutomationSearch(raw: Record<string, unknown>): AutomationSearch {
+  const out: AutomationSearch = {};
+  if (raw.view === 'runs') out.view = 'runs';
+  const edit = text(raw.edit);
+  if (edit && EDIT.test(edit) && !out.view) out.edit = edit;
   return out;
 }
 
@@ -63,9 +72,20 @@ export function validateListeningSearch(raw: Record<string, unknown>): Listening
 /* Each page's first read is awaited: one that fails is the router's fault, with Try again. What only fills in a part
    of the page is started, not awaited. */
 export function loadRoutines(qc: QueryClient, search: RoutinesSearch): Promise<unknown> {
-  if (search.tab === 'runs') return qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status));
+  if (search.tab === 'runs') {
+    void qc.prefetchQuery(routinesQuery);
+    void qc.prefetchQuery(statsQuery(search.range ?? RUNS_RANGE));
+    return qc.ensureInfiniteQueryData(allRunsQuery(search.range ?? RUNS_RANGE, search.status));
+  }
   if (search.tab === 'webhooks') return qc.ensureQueryData(hooksQuery);
+  void qc.prefetchQuery(statsQuery(search.range ?? RUNS_RANGE));
   return qc.ensureQueryData(routinesQuery);
+}
+
+/** One automation: drawn from the list when it is there, its own read behind it. */
+export function loadAutomation(qc: QueryClient, id: string): Promise<unknown> {
+  void qc.prefetchQuery(routinesQuery);
+  return qc.prefetchQuery(routineQuery(id));
 }
 
 export function loadRules(qc: QueryClient, search: RulesSearch): Promise<unknown> {

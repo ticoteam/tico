@@ -139,11 +139,11 @@ export function EventPanel({
               <span>Task</span>
             </Link>
           )}
-          {/* a routine's run: the routine itself, its last runs in its panel (the old card's Automation and Last run) */}
+          {/* a routine's run: the automation itself, its runs on its page (the old card's Automation and Last run) */}
           {o.links.automation && (
-            <Link to="/company/routines" search={{ panel: `routine:${o.links.automation}` }} className="rail-row call-rail">
+            <Link to="/company/automations/$id" params={{ id: o.links.automation }} search={{ view: 'runs' }} className="rail-row call-rail">
               <Icon name="clock" />
-              <span>Routine</span>
+              <span>Automation</span>
             </Link>
           )}
           {o.open_url && (

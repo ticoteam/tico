@@ -12,7 +12,7 @@ import { Menu } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { SidePanel } from '@/pagekinds';
-import { ROUTINES } from './actions';
+import { automationHref } from './actions';
 import { useNamer } from './CompanyRules';
 import { Face, PanelRead, press, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { dueOneQuery, orgRulesQuery } from './queries';
@@ -94,7 +94,7 @@ function DueView({ id, onClose }: { id: string; onClose: () => void }) {
           <LabelValue label="Routine">
             <span>{d.task_days == null ? 'None' : `A task ${d.task_days} days before`}</span>
             {d.task_days != null && d.routine_id && (
-              <Link className="verb" to={ROUTINES} search={{ panel: `routine:${d.routine_id}` }}>
+              <Link className="verb" to={automationHref(d.routine_id)}>
                 Open
               </Link>
             )}

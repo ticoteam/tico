@@ -1,15 +1,10 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { RoutinesPage } from '@/features/routines/exports';
-import { loadRoutines, validateRoutinesSearch } from '@/features/routines/routing';
+import { createFileRoute, redirect } from '@tanstack/react-router';
+import { validateRoutinesSearch } from '@/features/routines/routing';
 
-/** Routines: `?tab=webhooks`; one routine, a built-in one or a webhook opens in `?panel=`. */
+/** Routines is Automations again: the old address and its search go there. */
 export const Route = createFileRoute('/company/routines')({
   validateSearch: validateRoutinesSearch,
-  loaderDeps: ({ search: { tab, status, range } }) => ({ tab, status, range }),
-  loader: ({ context, deps }) => loadRoutines(context.queryClient, deps),
-  component: Page,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/company/automations', search, replace: true });
+  },
 });
-
-function Page() {
-  return <RoutinesPage search={Route.useSearch()} />;
-}
