@@ -50,36 +50,40 @@ def _vocabulary(text):
 
 
 def page_text(name, text, title=None):
+    """A page's sections, each its heading, anchor, span of `text` (`section_text`) and word vocabularies."""
     provided_title = title
-    title, sections, current, in_code = (
+    title, sections, current, in_code, at = (
         title or name.replace("-", " ").title(),
         [],
-        {"heading": "", "anchor": "", "lines": []},
+        {"heading": "", "anchor": "", "start": 0, "filled": False},
         False,
+        0,
     )
-    for line in text.splitlines():
+    for raw in text.splitlines(keepends=True):
+        line, at = raw.splitlines()[0], at + len(raw)
         if line.lstrip().startswith("```"):
             in_code = not in_code
         m = None if in_code else HEADING.match(line)
         if m:
-            if m.group(1) == "#" and not sections and not any(current["lines"]):
+            if m.group(1) == "#" and not sections and not current["filled"]:
                 title, current["heading"] = provided_title or m.group(2), m.group(2)
-                current["anchor"] = slug(m.group(2))
+                current.update(anchor=slug(m.group(2)), start=at)  # only empty lines came before
                 continue
-            sections.append(current)
-            current = {"heading": m.group(2), "anchor": slug(m.group(2)), "lines": []}
+            sections.append({**current, "end": at - len(raw)})
+            current = {"heading": m.group(2), "anchor": slug(m.group(2)), "start": at, "filled": False}
         else:
-            current["lines"].append(line)
-    sections.append(current)
+            current["filled"] = current["filled"] or bool(line)
+    sections.append({**current, "end": at})
     out = []
     for s in sections:
-        body = " ".join(" ".join(s["lines"]).split())
+        body = " ".join(text[s["start"] : s["end"]].split())
         if s["heading"] or body:
             out.append(
                 {
                     "heading": s["heading"],
                     "anchor": s["anchor"],
-                    "body": body,
+                    "start": s["start"],
+                    "end": s["end"],
                     "words": _vocabulary(s["heading"] + " " + body),
                     "head_words": _vocabulary(s["heading"]),
                 }
@@ -93,6 +97,11 @@ def page_text(name, text, title=None):
         "title_words": title_words,
         "words": _vocabulary(title_words + "".join(s["words"] for s in out)),  # the page's, for query_weights
     }
+
+
+def section_text(page, section):
+    """A section's text from its page's body, each run of whitespace one space."""
+    return " ".join(page["body"][section["start"] : section["end"]].split())
 
 
 def pages():
@@ -161,7 +170,7 @@ def best_section(page, wanted, weights=None):
         have = [t for t in wanted if titled[t] or _has(section["words"], t)]
         if not have:
             continue
-        body = section["body"].casefold()
+        body = page["body"][section["start"] : section["end"]].casefold()  # as section_text has it, for count
         score = sum(
             weights[t] * (10 + 5 * titled[t] + 15 * _has(section["head_words"], t) + min(body.count(_stem(t)), 5))
             for t in have
@@ -212,7 +221,7 @@ def search(q, limit=20):
         if best:
             row = result(page, best[1], version, best[0])
             row["section"] = best[1]["heading"]
-            row["excerpt"] = _excerpt(best[1]["body"], wanted)
+            row["excerpt"] = _excerpt(section_text(page, best[1]), wanted)
             found.append(row)
     found.sort(key=lambda r: (-r["score"], r["path"]))
     return found[:limit]

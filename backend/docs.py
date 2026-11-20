@@ -1041,13 +1041,16 @@ class Docs:
         weights = manual.query_weights(tokens)
         # All candidate titles use one glossary snapshot, rather than restatting every manual file per row.
         glossary = manual.pages().get('glossary', {}).get('body', '')
-        sql, params = "SELECT id,path,title,search_parse FROM docs WHERE archived=0 AND search_parse IS NOT NULL", ()
+        sql, params = (
+            "SELECT id,path,title,body,search_parse FROM docs WHERE archived=0 AND search_parse IS NOT NULL",
+            (),
+        )
         if has_fts(c):
             expression = " OR ".join('"' + manual._stem(token) + '"*' for token in tokens)
             sql += " AND rowid IN (SELECT rowid FROM docs_fts WHERE docs_fts MATCH ?)"
             params = (expression,)
         for row in c.execute(sql, params):
-            page = json.loads(row["search_parse"])
+            page = {**json.loads(row["search_parse"]), "body": row["body"]}
             best = manual.best_section(page, tokens, weights)
             if not best:
                 continue
@@ -1067,7 +1070,7 @@ class Docs:
                     "title": row["title"],
                     "section": section["heading"],
                     "anchor": section["anchor"],
-                    "excerpt": manual._excerpt(section["body"], tokens),
+                    "excerpt": manual._excerpt(manual.section_text(page, section), tokens),
                     "score": round(score, 3),
                 }
             )
