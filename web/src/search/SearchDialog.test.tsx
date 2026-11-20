@@ -4,12 +4,19 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
+import { people as directory } from './people';
+import * as providersModule from './providers';
+import { defineSearch, type SearchProvider } from './providers';
 import * as results from './results';
 import type { Group } from './results';
 import { SearchDialog } from './SearchDialog';
 import { closeSearch, openSearch } from './state';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+vi.mock('./providers', async (importOriginal) => {
+  const original = await importOriginal<typeof providersModule>();
+  return { ...original, loadProviders: vi.fn(original.loadProviders) };
+});
 vi.mock('./results', async (importOriginal) => {
   const original = await importOriginal<typeof results>();
   return { ...original, gather: vi.fn(original.gather) };
@@ -78,6 +85,35 @@ describe('Search @s1209', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(screen.getByRole('combobox', { name: 'Search' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /QA Owner/ })).toBeNull();
+  });
+
+  it('adds a late provider group without redrawing the groups on screen', async () => {
+    // The features' providers load while People shows. Asked again, People's directory read is slow this time, and a
+    // feature that searches its cache answers first: its group joins, and People stays as it was until it answers.
+    const tasks = defineSearch({
+      group: 'Tasks',
+      order: 10,
+      find: (q) => [{ key: 'task:1', title: `${q} task`, run: { id: 'shell.goTo', input: { to: '/task/1' } } }],
+    });
+    let answer!: () => void;
+    const slowPeople = defineSearch({
+      ...directory,
+      find: (q, signal) => new Promise<void>((resolve) => (answer = resolve)).then(() => directory.find(q, signal)),
+    });
+    let load!: (all: SearchProvider[]) => void;
+    vi.mocked(providersModule.loadProviders).mockReturnValueOnce(new Promise((resolve) => (load = resolve)));
+    render(<SearchDialog />);
+    act(() => openSearch('QA'));
+    const people = await screen.findByRole('group', { name: 'People' });
+    const groups = () => screen.getAllByRole('group').map((g) => g.getAttribute('aria-label'));
+    await act(async () => load([tasks, slowPeople, ...providersModule.providers.filter((p) => p.group !== 'People')]));
+    await screen.findByRole('group', { name: 'Tasks' });
+    expect(groups()).toEqual(['Tasks', 'People']);
+    expect(people.isConnected).toBe(true);
+    await act(async () => answer());
+    expect(groups()).toEqual(['Tasks', 'People']);
+    expect(people.isConnected).toBe(true);
+    expect(within(people).getByRole('option', { name: /QA Owner/ })).toBeTruthy();
   });
 
   it('keeps the selected person when a higher-ranked result arrives', async () => {

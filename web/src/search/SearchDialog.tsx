@@ -1,5 +1,5 @@
 import { Dialog } from '@base-ui/react/dialog';
-import { useEffect, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { ctxFor, registry, run } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
@@ -35,6 +35,8 @@ function dropAt(): CSSProperties {
 function Palette({ opened }: { opened: string }) {
   const [q, setQ] = useState(opened);
   const [results, setResults] = useState<{ query: string; groups: Group[] }>({ query: opened, groups: [] });
+  // What is on screen, for asking again when the features' providers load: their groups add to it, nothing redraws.
+  const shown = useRef(results);
   const [selected, setSelected] = useState<string | null>();
   const [at] = useState(dropAt);
 
@@ -58,9 +60,11 @@ function Palette({ opened }: { opened: string }) {
     const stop = new AbortController();
     const show = (g: Group[]) => {
       if (stop.signal.aborted) return;
-      setResults({ query: q, groups: g });
+      shown.current = { query: q, groups: g };
+      setResults(shown.current);
     };
-    void gather(q, from, registry.values(), ctxFor('search'), stop.signal, show).then(show);
+    const prior = shown.current.query === q ? shown.current.groups : [];
+    void gather(q, from, registry.values(), ctxFor('search'), stop.signal, show, prior).then(show);
     return () => stop.abort();
   }, [q, from]);
 

@@ -35,7 +35,7 @@ export default defineConfig(
       ...ban(),
     },
   },
-  { files: ['scripts/**', 'vite.config.ts', '*.config.js', 'e2e/**', 'parity/**'], languageOptions: { globals: globals.node } },
+  { files: ['scripts/**', 'vite.config.ts', '*.config.js', 'e2e/**'], languageOptions: { globals: globals.node } },
   { files: ['public/boot.js'], languageOptions: { sourceType: 'script' } },
   { files: ['public/sw.js'], languageOptions: { sourceType: 'script', globals: globals.serviceworker } },
 
