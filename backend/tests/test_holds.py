@@ -251,9 +251,9 @@ def test_a_bot_on_a_login_another_bot_met_the_limit_on_shows_the_limit(api, monk
 
 
 def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone(api, monkeypatch):
-    # A page (Needs you, the Floor) asks holds.why of every bot in one snapshot while a login is held. From the third
-    # bot, what cooling_off reads is read once for all of them (execution.cooling_off_loads), and each bot's answer is
-    # the one it gets asked alone. A write in the same transaction drops what was read: the next answer reads again.
+    # A page (Needs you, the Floor) asks holds.why of every bot in one snapshot while a login is held. What
+    # cooling_off reads is read once for all of them (execution.cooling_off_loads), and each bot's answer is the one
+    # it gets asked alone. A write in the same transaction drops what was read: the next answer reads again.
     machine, rig = _start(api, monkeypatch)
     store = api.app.state.store
     extra = [f"helper{n}" for n in range(6)]
@@ -270,7 +270,7 @@ def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone
     bots = ["ops", *extra]
     alone = {}
     for slug in bots:
-        with store.read_transaction() as c:
+        with store.read() as c:  # outside a snapshot: no loads, each bot judged from its own rows
             alone[slug] = holds.why(c, slug, kinds=holds.STOPS)
     assert alone == {**{slug: holds.USAGE_LIMIT for slug in bots[:5]}, **{slug: None for slug in extra[4:]}}
     with store.read_transaction() as c:
@@ -279,9 +279,9 @@ def test_a_page_asking_every_bot_reads_their_rows_once_and_answers_as_each_alone
         together = {slug: holds.why(c, slug, kinds=holds.STOPS) for slug in bots}
         c.set_trace_callback(None)
     assert together == alone
-    # The first two bots read their own computer and configuration; the rest come from one read of every bot's.
+    # No bot reads its own computer or configuration: one read of every bot's answers them all.
     one_bot = [s for s in seen if s.startswith((execution.PLACE_SQL[:-1], BS.ONE_SQL[:-1]))]  # the trace has values
-    assert len(one_bot) == 4, one_bot
+    assert not one_bot, one_bot
     with store.transaction() as c:
         assert [holds.why(c, slug, kinds=holds.STOPS) for slug in bots[:3]] == [holds.USAGE_LIMIT] * 3
         login_holds.clear(c, rig["runner_id"], "", "fake")
