@@ -24,20 +24,18 @@ class Replay:
         self.timings = checks.committed_timings(root)
         self.counts = Counter()
         self.definitions = defaultdict(set)
+        self.slow = defaultdict(
+            set
+        )  # test file -> its slow test functions, which only the contracts job's -m slow runs
         # Static collection is sufficient for budget estimates; importing tests would start application fixtures.
         for path in self.graph.files:
             if not checks.is_test(path) or (tree := self.graph.parse(path)) is None:
                 continue
-            module_slow = any(
-                isinstance(n, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets)
-                and "pytest.mark.slow" in ast.unparse(n.value)
-                for n in tree.body
-            )
+            self.slow[path] = checks.slow_tests(tree)
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
                     self.definitions[node.name].add(path)
-                    if not module_slow and not any("pytest.mark.slow" in ast.unparse(d) for d in node.decorator_list):
+                    if node.name not in self.slow[path]:
                         self.counts[path] += 1
 
     def resolve(self, path):
@@ -127,7 +125,8 @@ class Replay:
         plans = {event: self.plan(sorted(set(changed)), event) for event in checks.NARROW} if changed else {}
         results = []
         for description, (kind, target) in zip(case["failing_tests"], targets, strict=True):
-            stages = {event: self.selected(kind, target, picked) for event, picked in plans.items()}
+            slow = self.is_slow(description, kind, target)
+            stages = {event: self.selected(kind, target, picked, slow) for event, picked in plans.items()}
             results.append(
                 dict(test=description, target=target, caught=any(s["caught"] for s in stages.values()), stages=stages)
             )
@@ -148,7 +147,15 @@ class Replay:
             selected={event: dict(python=len(p["python"])) for event, p in plans.items()},
         )
 
-    def selected(self, kind, target, picked):
+    def is_slow(self, description, kind, target):
+        """Whether a failing test names a slow test function of its file (`path::name[param]` or `name ...`): only the
+        contracts job runs it, so the file in the default Python jobs does not catch it."""
+        if kind != "file":
+            return False
+        name = description.split("::", 1)[1] if "::" in description else description.split()[0]
+        return name.split("[")[0] in self.slow.get(target, ())
+
+    def selected(self, kind, target, picked, slow=False):
         caught = False
         reason = "target no longer resolves to a runnable check"
         if picked:
@@ -159,12 +166,14 @@ class Replay:
             elif kind == "static":
                 caught, reason = True, "static job: " + target
             else:
-                caught = target in picked["python"] or (
+                caught = (not slow and target in picked["python"]) or (
                     picked["contracts"] and target in checks.contract_files(picked["sweeps"])
                 )
                 reason = (
                     "Python/contracts selected"
                     if caught
+                    else "slow test: the contracts job does not run its file"
+                    if slow and target in picked["python"]
                     else (
                         "time budget"
                         if target in picked.get("narrow", {}).get("left_over_budget", ())

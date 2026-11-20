@@ -109,6 +109,62 @@ CONTENT_SWEEPS = {
 }
 
 
+# Release-only script tests a change turns on (rules 11 and 12), in the contracts job with -m slow like CONTENT_SWEEPS:
+# - #4672's review fix changed .github/workflows/release.yml (all three Electron feeds) and test_release_workflow.py,
+#   which reads it, was in its plan; its feed tests are marked slow, so the plan ran none of them and release validation
+#   failed three of them (fixed by #4683). A changed or deleted workflow turns on the slow tests of the SCRIPT_TESTS
+#   files that name it.
+# - d2f26f0d (Remove the old web app) deleted ui/ and 1,271 files; test_pr_checks.py's install test (build:ui) and
+#   test_replay_red_main.py's replay (scripts/ui-tests.cts) are slow and failed at release (#4679, 3035ce8b). A deleted
+#   top-level folder, or more than LARGE_DELETION gone files, runs every SCRIPT_TESTS file, slow tests included.
+SCRIPT_TESTS = "scripts/tests/"
+WORKFLOW = re.compile(r"\.github/workflows/[^/]+\.ya?ml")
+LARGE_DELETION = 100
+
+
+def slow_tests(tree):
+    """The test functions of a parsed test module that pytest -m slow runs: those marked slow, or every one when the
+    module's pytestmark is."""
+    module = any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)
+        and "pytest.mark.slow" in ast.unparse(node.value)
+        for node in tree.body
+    )
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test_")
+        and (module or any("pytest.mark.slow" in ast.unparse(d) for d in node.decorator_list))
+    }
+
+
+def script_tests(root):
+    """The SCRIPT_TESTS files pytest collects."""
+    folder = root / SCRIPT_TESTS
+    return (
+        sorted(p.relative_to(root).as_posix() for p in folder.rglob("*.py") if is_test(p.name))
+        if folder.is_dir()
+        else []
+    )
+
+
+def large_deletion(changed, root):
+    """What makes a change a large deletion (rule 12), or None: a gone top-level folder, or more than LARGE_DELETION
+    gone files. It reads every changed path, owned data and unread ones included, before any rule filters them."""
+    gone = [n for n in changed if not (root / n).is_file()]
+    folders = sorted({n.split("/", 1)[0] for n in gone if "/" in n and not (root / n.split("/", 1)[0]).exists()})
+    if folders:
+        return f"top-level folder {', '.join(folders)} gone"
+    return f"{len(gone)} files gone" if len(gone) > LARGE_DELETION else None
+
+
+def with_slow(files, root, graph):
+    """Those of `files` that hold a slow test."""
+    return {f for f in files if (root / f).is_file() and (tree := graph.parse(f)) is not None and slow_tests(tree)}
+
+
 def content_sweeps(names):
     """The CONTENT_SWEEPS test files the changed (or gone) paths turn on."""
     return sorted(test for test, (paths, _) in CONTENT_SWEEPS.items() if any(n.startswith(paths) for n in names))
@@ -1069,6 +1125,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES.
     10. Inputs in CHECK_ALSO run the tests that exercise them through HTTP or catalog discovery.
+    11. A changed or gone workflow (WORKFLOW) runs the SCRIPT_TESTS files that name it as guards, and turns on their
+        slow tests in the contracts job (`sweeps`).
+    12. A gone top-level folder, or more than LARGE_DELETION gone files, runs every SCRIPT_TESTS file as a guard, and
+        turns on the slow tests of those that have them (`sweeps`).
 
     `added` names the new files (None: any changed file may be new).
     """
@@ -1109,11 +1169,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if not changed:
         uncertain.append("empty diff: nothing to map")
         return plan(smoke(root), reason="empty diff: smoke set")
+    large = large_deletion(changed, root)  # rule 12 counts every gone path, owned data and unread ones included
     names = [n for n in changed if not unread(n)]
     owned = [n for n in names if owned_data(n)]  # OWNED_DATA first: these never reach the generic data path
     owned_tests = {test for n in owned for test in owned_data(n)[1]}
     names = [n for n in names if n not in owned]
-    if not names:
+    if not names and not large:
         if owned:
             return plan(owned_tests, reason=owned_reason(owned))
         return plan(reason="documentation that no test or script reads")
@@ -1208,6 +1269,24 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         if cli_guards:
             guards |= cli_guards
             notes.append("rule 9: a CLI command change runs the CLI spec and frozen command-line tests")
+    script_sweeps = set()
+    workflows = [n for n in names if WORKFLOW.fullmatch(n)]
+    for name in workflows:  # rule 11
+        readers = {
+            t for t in graph.named_by(name) if t.startswith(SCRIPT_TESTS) and is_test(t) and (root / t).is_file()
+        }
+        guards |= readers
+        script_sweeps |= with_slow(readers, root, graph)
+    if workflows:
+        notes.append("rule 11: a workflow runs the script tests that name it, slow tests included")
+    if large:  # rule 12
+        everything = script_tests(root)
+        guards |= set(everything)
+        script_sweeps |= with_slow(everything, root, graph)
+        notes.append(f"rule 12: {large}: every script test, slow tests included")
+        uncertain.append(f"rule 12: {large}: every script test runs, slow tests included")
+    if script_sweeps:
+        sweeps = sorted(set(sweeps) | script_sweeps)
     python |= guards
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
