@@ -45,6 +45,12 @@ export function whereOf(s: Send, approved: boolean): SendWhere | null {
   }
 }
 
+/** Where a send is for its quiet line (a card, the Email tab): a canceled send says nothing there. An agent cancels one
+    to rewrite it; nothing failed, so "Not sent" would read as a fault. */
+function lineWhere(s: Send, approved: boolean): SendWhere | null {
+  return s.state === 'canceled' ? null : whereOf(s, approved);
+}
+
 /** "1:58" until it goes; null once the window is over. */
 export function countdown(until: number | null, now: number): string | null {
   if (until === null) return null;
@@ -110,14 +116,14 @@ function SendLine({ w, className }: { w: SendWhere | null; className: string }) 
 /** One quiet line for a send the person approved, or that has left its OK behind: nothing while it waits on an OK. */
 export function SendMark({ send, approved = false, className = 'send-mark' }: { send: string; approved?: boolean; className?: string }) {
   const q = useQuery(sendStateQuery(send, approved));
-  return <SendLine w={q.data ? whereOf(q.data, approved) : null} className={className} />;
+  return <SendLine w={q.data ? lineWhere(q.data, approved) : null} className={className} />;
 }
 
 /** Where a task row's send is (`email_send`: the newest send that belongs to the task or whose OK sits on it), for its
-    card: nothing while it waits on an OK, nor a day after it ended. */
+    card: nothing while it waits on an OK, once it was canceled, nor a day after it ended. */
 export function rowWhere(s: TaskEmailSend | null | undefined, now = Date.now()): SendWhere | null {
   if (!s) return null;
-  const w = whereOf(s, false);
+  const w = lineWhere(s, false);
   const ended = s.finished_at ? Date.parse(s.finished_at) : NaN;
   return w && w.kind !== 'sending' && Number.isFinite(ended) && now - ended > RECENT_MS ? null : w;
 }
