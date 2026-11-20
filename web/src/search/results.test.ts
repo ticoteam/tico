@@ -1,8 +1,8 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as z from 'zod/mini';
 import type { AnyAction, Ctx } from '@/actions';
 // The pieces, not the index, so this test does not load the whole registry.
-import { s } from '@/actions/schema';
 import { defineAction } from '@/actions/types';
 import { defineSearch } from './providers';
 import { actionHits, gather, highlight, readRecent, remember, REMOTE_WAIT_MS, type Group } from './results';
@@ -12,14 +12,14 @@ const goTo = defineAction({
   id: 'shell.goTo',
   title: 'Go to a page',
   kind: 'view',
-  input: s.object({ to: s.string() }),
+  input: z.strictObject({ to: z.string() }),
   run: () => {},
   offer: () => [
     { input: { to: '/company/finance' }, title: 'Company, Finance' },
     { input: { to: '/settings' }, title: 'Settings' },
   ],
 }) as AnyAction;
-const close = defineAction({ id: 'shell.closeChat', title: 'Close the second chat', kind: 'view', input: s.object({}), can: () => false, run: () => {} }) as AnyAction;
+const close = defineAction({ id: 'shell.closeChat', title: 'Close the second chat', kind: 'view', input: z.strictObject({}), can: () => false, run: () => {} }) as AnyAction;
 const tasks = defineSearch({
   group: 'Tasks',
   order: 1,

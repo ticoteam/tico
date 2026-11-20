@@ -5,6 +5,7 @@ import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { flight, waitForTarget, wash } from '@/motion';
 import { bound } from './bind';
+import { parseInput } from './input';
 import { registry } from './registry';
 import type { AnyAction, Ctx, Result, Target, Via } from './types';
 
@@ -31,7 +32,7 @@ export async function runIn(
   const a = actions.get(id);
   if (!a) return { ok: false, error: `unknown_action: ${id}` };
   if (via === 'tico' && a.tico === false) return { ok: false, error: 'not_allowed' };
-  const parsed = a.input.parse(raw);
+  const parsed = parseInput(a.input, raw);
   if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
   if (!router) return { ok: false, error: 'not_ready: the app is still starting' };
   const input = parsed.value;
@@ -67,7 +68,7 @@ export async function showIn(
   const a = actions.get(id);
   if (!a) return { ok: false, error: `unknown_action: ${id}` };
   if (a.tico === false) return { ok: false, error: 'not_allowed' };
-  const parsed = a.input.parse(raw);
+  const parsed = parseInput(a.input, raw);
   if (!parsed.ok) return { ok: false, error: `bad_input: ${parsed.error}` };
   if (!router) return { ok: false, error: 'not_ready: the app is still starting' };
   try {
@@ -169,7 +170,7 @@ export function useAction(id: string, input?: unknown) {
   const a = registry.get(id);
   let can = !!a;
   if (a && input !== undefined) {
-    const parsed = a.input.parse(input);
+    const parsed = parseInput(a.input, input);
     can = parsed.ok && allowed(a, { router, queryClient, via: 'click' }, parsed.value);
   }
   const press = async (i: unknown = input, via: Via = 'click'): Promise<Result> => {

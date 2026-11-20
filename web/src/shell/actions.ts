@@ -1,4 +1,5 @@
-import { defineAction, run, s } from '@/actions';
+import * as z from 'zod/mini';
+import { defineAction, run } from '@/actions';
 import { directoryQuery, meQuery } from '@/data';
 import { teamSlug } from '@/features/team/routing';
 import { companiesBridge } from './companies';
@@ -15,7 +16,7 @@ export const addTeammate = defineAction({
   id: 'shell.addTeammate',
   title: 'Add a teammate',
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: async ({ router, queryClient, via }) => {
     const dir = queryClient.getQueryData(directoryQuery.queryKey);
     const me = queryClient.getQueryData(meQuery.queryKey);
@@ -37,7 +38,7 @@ export const switchCompany = defineAction({
   id: 'shell.switchCompany',
   title: 'Switch to another company',
   kind: 'view',
-  input: s.object({ id: s.string({ min: 1, max: 200, what: "a company's id from the desktop app's list" }) }),
+  input: z.strictObject({ id: z.string().check(z.minLength(1), z.maxLength(200), z.describe("a company's id from the desktop app's list")) }),
   can: () => !!companiesBridge(),
   run: async (_ctx, { id }) => {
     const b = companiesBridge();
@@ -53,7 +54,7 @@ export const addCompany = defineAction({
   title: 'Add a company',
   kind: 'view',
   tico: false,
-  input: s.object({}),
+  input: z.strictObject({}),
   can: () => !!companiesBridge(),
   run: async () => {
     const b = companiesBridge();
@@ -70,7 +71,7 @@ export const openCallInWindow = defineAction({
   title: 'Open the call in its own window',
   kind: 'view',
   tico: false,
-  input: s.object({ id: s.string({ min: 1, max: 200, what: 'a call id' }) }),
+  input: z.strictObject({ id: z.string().check(z.minLength(1), z.maxLength(200), z.describe('a call id')) }),
   can: () => !!desktop(),
   run: async ({ router, via }, { id }) => {
     await run('calls.leave', {}, { via });

@@ -1,5 +1,5 @@
 import * as base from './base';
-import type { JsonSchema } from './schema';
+import { inputJson, type JsonSchema } from './input';
 import { isAction, type AnyAction } from './types';
 
 /** Every action in the app, by id: the base set, each shared part's `src/<part>/actions.ts` (conversation, …) and each
@@ -53,6 +53,6 @@ export interface CatalogEntry {
 export function actionsCatalog(from: ReadonlyMap<string, AnyAction> = registry): CatalogEntry[] {
   return [...from.values()]
     .filter((a) => a.tico !== false)
-    .map((a) => ({ id: a.id, title: a.title, kind: a.kind, input: a.input.json() }))
+    .map((a) => ({ id: a.id, title: a.title, kind: a.kind, input: inputJson(a.input) }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }

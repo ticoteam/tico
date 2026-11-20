@@ -1,14 +1,14 @@
 import type { AnyRouter } from '@tanstack/react-router';
+import * as z from 'zod/mini';
 import { openSearch } from '@/search';
 import { resetSheetSizes } from '@/shell';
 import { bound } from './bind';
 import * as copy from './copy';
-import { s } from './schema';
 import { defineAction } from './types';
 
 /* The base set every page shares. Navigation pushes (Back undoes Tico's moves); filters replace (architecture.md 3). */
 
-const path = s.string({ min: 1, max: 300, pattern: /^\/[A-Za-z0-9\-._~%/]*$/, what: 'a path inside the app, like /tasks/engineering' });
+const path = z.string().check(z.minLength(1), z.maxLength(300), z.regex(/^\/[A-Za-z0-9\-._~%/]*$/), z.describe('a path inside the app, like /tasks/engineering'));
 
 /** The address without the app's base, so targets and areas read the same before and after the switch. */
 const here = (router: AnyRouter) => router.state.location.pathname.replace(/^\/next(?=\/|$)/, '') || '/';
@@ -18,7 +18,7 @@ export const goTo = defineAction({
   id: 'shell.goTo',
   title: copy.goTo,
   kind: 'view',
-  input: s.object({ to: path }),
+  input: z.strictObject({ to: path }),
   run: ({ router }, { to }) => router.navigate({ to }),
   show: ({ router }, { to }) => router.navigate({ to }),
   did: ({ to }) => copy.didGoTo(nameOf(to)),
@@ -27,17 +27,13 @@ export const goTo = defineAction({
   // No search rows of its own: search's Pages group offers the menu's pages.
 });
 
-const chat = s.string({
-  max: 200,
-  pattern: /^(agent|person|thread):[^\s]+$/,
-  what: 'agent:<slug>, person:<id> or thread:<id>',
-});
+const chat = z.string().check(z.maxLength(200), z.regex(/^(agent|person|thread):[^\s]+$/), z.describe('agent:<slug>, person:<id> or thread:<id>'));
 
 export const openChat = defineAction({
   id: 'shell.openChat',
   title: copy.openChat,
   kind: 'view',
-  input: s.object({ chat }),
+  input: z.strictObject({ chat }),
   run: ({ router }, { chat }) =>
     router.navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, chat }) }),
   show: ({ router }, { chat }) =>
@@ -50,21 +46,21 @@ export const closeChat = defineAction({
   id: 'shell.closeChat',
   title: copy.closeChat,
   kind: 'view',
-  input: s.object({}),
+  input: z.strictObject({}),
   can: ({ router }) => !!(router.state.location.search as Record<string, unknown>).chat,
   run: ({ router }) =>
     router.navigate({ to: '.', search: ({ chat: _, ...rest }: Record<string, unknown>) => rest }),
   did: () => copy.didCloseChat,
 });
 
-const sheet = s.oneOf(['tico', 'menu', 'list', 'widgets', 'side'] as const);
+const sheet = z.enum(['tico', 'menu', 'list', 'widgets', 'side'] as const);
 
 /** `folded` left out flips it, which is what the keys do. Never touches history. */
 export const fold = defineAction({
   id: 'shell.fold',
   title: copy.fold,
   kind: 'view',
-  input: s.object({ sheet, folded: s.optional(s.boolean()) }),
+  input: z.strictObject({ sheet, folded: z.optional(z.boolean()) }),
   run: (_ctx, { sheet, folded }) => {
     if (!bound.fold) throw new Error('the sheets are not drawn yet');
     bound.fold(sheet, folded);
@@ -79,7 +75,7 @@ export const resetSizes = defineAction({
   id: 'shell.resetSizes',
   title: copy.resetSizes,
   kind: 'change',
-  input: s.object({}),
+  input: z.strictObject({}),
   run: () => resetSheetSizes(),
   did: () => copy.didResetSizes,
   target: () => ({ kind: 'setting', id: 'sizes' }),
@@ -89,7 +85,7 @@ export const openTask = defineAction({
   id: 'task.open',
   title: copy.openTask,
   kind: 'view',
-  input: s.object({ task: s.number({ int: true, min: 1 }), pipeline: s.optional(s.string({ min: 1, max: 100 })) }),
+  input: z.strictObject({ task: z.int().check(z.minimum(1)), pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
   run: ({ router }, { task, pipeline }) =>
     // Without a pipeline the deep-link route finds it and redirects with replace (architecture.md 3).
     router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` }),
@@ -104,7 +100,7 @@ export const filter = defineAction({
   id: 'page.filter',
   title: copy.filter,
   kind: 'view',
-  input: s.object({ search: s.record(s.nullable(s.string({ max: 200 }))) }),
+  input: z.strictObject({ search: z.record(z.string(), z.nullable(z.string().check(z.maxLength(200)))) }),
   run: async ({ router }, { search }) => {
     const area = here(router).split('/')[1] || 'page';
     await router.navigate({
@@ -129,7 +125,7 @@ export const search = defineAction({
   id: 'search.open',
   title: copy.search,
   kind: 'view',
-  input: s.object({ q: s.optional(s.string({ max: 200 })) }),
+  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))) }),
   run: (_ctx, { q }) => openSearch(q),
   did: ({ q }) => copy.didSearch(q),
   target: () => ({ kind: 'search', id: 'field' }),

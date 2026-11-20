@@ -8,7 +8,7 @@ import { threadsSearch } from './search';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
-const valid = (h: SearchHit) => registry.get(h.run.id)?.input.parse(h.run.input).ok;
+const valid = (h: SearchHit) => registry.get(h.run.id)?.input.safeParse(h.run.input).success;
 const pal: Actor = { id: 'human:2', kind: 'person', name: 'Robin Frost', hue: 5 };
 const rows = [
   { id: 'th1', title: 'Seed order', audience: 'company', last_message_at: '2026-01-02T10:00:00Z' },

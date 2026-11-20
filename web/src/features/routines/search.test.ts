@@ -24,7 +24,7 @@ describe('routines search', () => {
       ['Frost notes go to buyers', 'Rule', { id: 'rules.open', input: { rule: 'o2', kind: 'org', tab: 'outside' } }],
       ['Frost gate', 'Rule', { id: 'rules.open', input: { rule: 's1', kind: 'stage' } }],
     ]);
-    expect(hits.every((h) => registry.get(h.run.id)?.input.parse(h.run.input).ok)).toBe(true);
+    expect(hits.every((h) => registry.get(h.run.id)?.input.safeParse(h.run.input).success)).toBe(true);
     expect(await routinesSearch.find('', sig())).toEqual([]);
   });
 });
