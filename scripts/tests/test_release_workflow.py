@@ -305,7 +305,11 @@ def test_a_new_electron_build_keeps_the_earlier_blockmaps_and_uploads_its_feeds_
     steps = _electron_asset_steps()
     names = list(steps)
     keep = steps["Keep the earlier versions' blockmaps"]
-    assert names.index("actions/download-artifact") < names.index(keep["name"]) < names.index("Add the Electron files to the release")
+    assert (
+        names.index("actions/download-artifact")
+        < names.index(keep["name"])
+        < names.index("Add the Electron files to the release")
+    )
     assert "outputs.build == 'true'" in keep["if"] and "outputs.previous != ''" in keep["if"]
     assert "--skip-existing" in keep["run"] and "--clobber" not in keep["run"]
     assert "--pattern '*.blockmap'" in steps["Carry the previous release's Electron files forward"]["run"]
