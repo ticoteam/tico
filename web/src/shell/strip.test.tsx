@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Frame, foldSheet } from './Frame';
 import { Sheet } from './Sheet';
 
-/* Tico's folded strip: the whole column is one button that opens Tico, and a fold the person asks for runs fast. */
+/* Tico drawn in to its edge: the edge is one button that opens Tico, and a fold the person asks for runs fast. */
 const level = vi.hoisted(() => ({ now: 'off' as 'off' | 'more' }));
 vi.mock('@/motion', () => ({ motionLevel: () => level.now }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dw" aria-hidden="true" /> }));
@@ -31,26 +31,30 @@ afterEach(() => {
   delete (Element.prototype as { animate?: unknown }).animate;
 });
 
-describe('Tico folded', () => {
+describe('Tico drawn in to its edge', () => {
   it('is one button, Open Tico, with the Dot drawn inside it; pressing anywhere on it opens Tico', () => {
     render(<Frame {...slots} arrangement="page" />);
     act(() => foldSheet('tico', true));
-    expect(ticoWidth()).toBe('56');
+    expect(screen.queryByRole('separator', { name: 'Resize Tico' })).toBeNull();
 
-    const strip = screen.getByRole('button', { name: 'Open Tico' });
-    expect(strip.tagName).toBe('BUTTON'); // a native button: Enter and Space press it
+    const edge = screen.getByRole('button', { name: 'Open Tico' });
+    expect(edge.tagName).toBe('BUTTON'); // a native button: Enter and Space press it
     expect(screen.getAllByRole('button', { name: 'Open Tico' })).toHaveLength(1);
-    expect(within(strip).queryAllByRole('button')).toHaveLength(0); // nothing pressable of its own inside
-    const dot = strip.querySelector('.dw');
+    expect(within(edge).queryAllByRole('button')).toHaveLength(0); // nothing pressable of its own inside
+    const dot = edge.querySelector('.dw');
     expect(dot?.getAttribute('aria-hidden')).toBe('true');
-    expect(screen.getByRole('complementary', { name: 'Tico' }).contains(strip)).toBe(true);
+    // Tico's sheet stays drawn under its edge, out of reach until it opens; it never moves above the menu
+    const place = document.querySelector<HTMLElement>('[data-sheet="tico"]')!;
+    expect(place.hasAttribute('inert')).toBe(true);
+    expect(Number(place.style.zIndex)).toBeGreaterThan(Number(document.querySelector<HTMLElement>('[data-sheet="menu"]')!.style.zIndex));
 
-    fireEvent.click(dot as Element); // a press on the Dot, or anywhere in the column, opens it
+    fireEvent.click(dot as Element); // a press on the Dot, or anywhere on the edge, opens it
     expect(ticoWidth()).toBe('300');
     expect(screen.queryByRole('button', { name: 'Open Tico' })).toBeNull();
+    expect(place.hasAttribute('inert')).toBe(false);
   });
 
-  it('folds and opens about three times faster than a change of arrangement (200ms, not 620)', () => {
+  it('draws in and opens about three times faster than a change of arrangement (200ms, not 620)', () => {
     level.now = 'more';
     const calls: { keys: Keyframe[]; opts: KeyframeAnimationOptions }[] = [];
     Element.prototype.animate = function (keys: Keyframe[], opts: KeyframeAnimationOptions) {

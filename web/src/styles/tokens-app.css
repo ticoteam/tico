@@ -25,14 +25,11 @@
 }
 :root[data-motion="off"]{--card-dur:1ms}
 
-/* The phone's cards (B/phone/phone.css): their tones, the shadow cast up from a card, and how far the page behind dims. */
+/* The phone's cards (B/phone/phone.css): the shadow cast up from a card, and how far the page behind dims. Their tones
+   are the desktop's layers (tokens.css, elevation: --surface-tico, --surface-nav, --surface-chat). */
 :root,[data-theme="light"]{
-  --phone-tico:#FFFFFF;--phone-menu:#F6F6F6;--phone-chat:#EFEFEF;
   --phone-up:rgba(0,0,0,.16);--phone-dim:.21;
 }
 [data-theme="dark"]{
-  --phone-tico:var(--raised);
-  --phone-menu:color-mix(in srgb,var(--raised) 58%,var(--sheet));
-  --phone-chat:color-mix(in srgb,var(--raised) 26%,var(--sheet));
   --phone-up:rgba(0,0,0,.6);--phone-dim:.64;
 }

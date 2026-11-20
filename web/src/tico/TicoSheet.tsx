@@ -4,14 +4,14 @@ import type { ReactNode } from 'react';
 import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
-import { Sheet, SheetHead } from '@/shell';
+import { Sheet, SheetHead, TICO_MARK } from '@/shell';
 import { Dot } from '@/tico/dot';
 import { usePageName } from './pageName';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
 
 /* Tico's sheet (system/shell.js ticoPane): the head with the Dot, then Tico's own chat and its composer. The Dot follows
-   Tico's runs in the room (Conversation sets it). Folded, the frame draws the Dot alone (Frame's TicoStrip). While
+   Tico's runs in the room (Conversation sets it). Tucked, the frame draws its edge with the Dot. While
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. `foot` sits over its box (the
    root's Catch up chip). */
 export function TicoSheet({ foot }: { foot?: ReactNode }) {
@@ -22,7 +22,7 @@ export function TicoSheet({ foot }: { foot?: ReactNode }) {
   const name = usePageName();
   return (
     <Sheet kind="tico" label="Tico">
-      <SheetHead kind="tico" title="Tico" lead={<Dot size={30} />} />
+      <SheetHead kind="tico" title="Tico" lead={<Dot size={TICO_MARK} />} />
       {power?.available === false ? (
         <TicoOff canTurnOn={power.can_turn_on} />
       ) : room.data ? (

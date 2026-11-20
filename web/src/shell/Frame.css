@@ -4,13 +4,37 @@
 /* the window: a call's bar on top while a call is on (and not on its page), the frame takes the rest */
 .shell-col{display:flex;flex-direction:column;height:100dvh;background:var(--ground)}
 .shell-col>.shell-frame{flex:1;min-height:0;height:auto}
-.shell-place{position:absolute;top:var(--gap-pane);bottom:var(--gap-pane);display:flex}
+/* Layers (plan/layers.html): the order never changes, so each place's z-index is its place in the row (Frame sets it).
+   A card under its left neighbour sits --tuck-step shorter, top and bottom, for each step under. */
+.shell-place{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));display:flex}
 .shell-place>.pane{flex:1;min-width:0}
 /* the page's side panel is drawn into a host the frame holds (pagekinds PanelHost): the host and its pane fill the place */
 .shell-place>.pk-panel-host{flex:1;min-width:0;display:flex}
 .pk-panel-host>.pane{flex:1;min-width:0}
-.shell-place.is-over{z-index:var(--z-pop)}
-.shell-place.is-over>.pane{box-shadow:var(--lift-3)}       /* laid over the stretching sheet, or opened over its neighbours for now */
+/* a page's panel is something you work on: the artifact layer's tone and lift, like the page (plan/layers.html) */
+.shell-place[data-sheet="panel"]>.pane,.shell-place[data-sheet="panel"]>.pk-panel-host>.pane{--surface:var(--surface-page);--lift-here:var(--lift-page);box-shadow:var(--lift-here)}
+/* the card above casts a side shadow on the card under it */
+.shell-place[data-cast]>.pane,.shell-place[data-cast]>.pk-panel-host>.pane{box-shadow:var(--lift-here,none),var(--lift-tuck)}
+/* an open sheet after an edge starts under it: its corners hide there, its content starts where it shows */
+.shell-place[data-under]>.pane,.shell-place[data-under]>.pk-panel-host>.pane{border-left:var(--under) solid transparent}
+/* tucked: the card stays (its tone, its corners, its shadow), its content does not show; the edge over it opens it */
+.shell-place[data-shut]>.pane>*,.shell-place[data-shut]>.pk-panel-host>.pane>*{visibility:hidden}
+.shell-edge{position:absolute;top:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));bottom:calc(var(--gap-pane) + var(--depth,0) * var(--tuck-step));width:var(--tuck-edge);
+  display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 0 0;border:0;border-radius:0 var(--r-pane) var(--r-pane) 0;background:none;color:var(--ink-2);cursor:pointer;
+  transition:background var(--dur-fast) var(--ease)}
+.shell-edge[data-first]{border-radius:var(--r-pane)}
+.shell-edge:hover{background:var(--hover)}
+.shell-edge:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
+.shell-edge-mark{display:grid;place-items:center;min-height:24px}
+.shell-edge-mark>.ico{width:18px;height:18px;color:var(--muted)}
+.shell-edge-name{writing-mode:vertical-rl;transform:rotate(180deg);font-size:var(--t-xs);font-weight:var(--w-strong);white-space:nowrap}
+/* the menu's edge: the company's mark from its phone lip, and the Flow mark when something waits on you */
+.shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:10px}
+.shell-edge-lip>:not(.co-mark,.lip-end){display:none}
+.shell-edge-lip .co-mark{width:22px;height:22px;font-size:11px;border-radius:6px}
+.shell-edge-lip .lip-end>b{display:none}
+/* tucking moves top and bottom with the card; motion Off jumps */
+:root:not([data-motion="off"]) :is(.shell-place,.shell-edge){transition:top var(--dur) var(--ease),bottom var(--dur) var(--ease),background var(--dur-fast) var(--ease)}
 .shell-place.is-moving{will-change:transform}
 
 /* an open task's list: a section head a pipeline and stage (pages/1-tasks/more.css) */
