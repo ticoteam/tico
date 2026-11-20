@@ -369,6 +369,18 @@ def row(c, sid):
     return H._one(c, f"SELECT * FROM {SUBS} WHERE id=?", (sid,)) if _present(c) else None
 
 
+# The computers' grants as _given reads them: the FROM and WHERE, with `{runners}` an extra filter on g.runner_id.
+_GIVEN_FROM = (
+    "FROM computer_subscriptions g "
+    "LEFT JOIN model_subscriptions s ON s.id=g.subscription_id "
+    "LEFT JOIN claude_logins l ON l.subscription_id=s.id WHERE (s.id IS NOT NULL OR g.person<>'') "
+    # A computer's key follows its login: not while a person cleared it or signed it out there
+    # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
+    f"AND NOT ({KEPT_KEY.format('s.')} AND EXISTS (SELECT 1 FROM model_login_cleared m "
+    "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile=''))"
+)
+
+
 def _given(c):
     """{(runner_id, runtime): subscription (no value)} for every computer given one, read once per snapshot: the claim
     asks for every bot on every poll, and most installs have none. A computer given a person's plans (`person`) names
@@ -380,55 +392,87 @@ def _given(c):
     values = read_cache.cache(c)
     if values is not None and "model_subscriptions.given" in values:
         return values["model_subscriptions.given"]
-    found = {}
-    if _present(c):
-        people = set()
-        for r in c.execute(
-            "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-            "s.status,l.access_expires_at AS access_expires_at FROM computer_subscriptions g "
-            "LEFT JOIN model_subscriptions s ON s.id=g.subscription_id "
-            "LEFT JOIN claude_logins l ON l.subscription_id=s.id WHERE (s.id IS NOT NULL OR g.person<>'') "
-            # A computer's key follows its login: not while a person cleared it or signed it out there
-            # (backend/model_login.py model_login_cleared), as GET runner-model-credentials does (`keys_for`).
-            f"AND NOT ({KEPT_KEY.format('s.')} AND EXISTS (SELECT 1 FROM model_login_cleared m "
-            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile=''))"
-        ):
-            sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
-            if r["person"]:
-                sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
-                people.add(r["person"])
-            found[(r["runner_id"], r["runtime"])] = sub
-        if people:
-            members = {}
-            for m in c.execute(
-                "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,"
-                "l.access_expires_at AS access_expires_at FROM model_subscriptions s "
-                "LEFT JOIN claude_logins l ON l.subscription_id=s.id "
-                f"WHERE s.owner_id IN ({','.join('?' * len(people))}) ORDER BY s.created_at, s.id",
-                sorted(people),
-            ):
-                runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
-                if owned(m["kind"]):
-                    members.setdefault((m["owner_id"], runtime), []).append(
-                        {
-                            k: m[k]
-                            for k in (
-                                "id",
-                                "name",
-                                "kind",
-                                "revision",
-                                "status",
-                                "status_at",
-                                "created_at",
-                                "access_expires_at",
-                            )
-                        }
-                    )
-            for (_, runtime), sub in found.items():
-                if sub.get("person"):
-                    sub["members"] = members.get((sub["person"], runtime), [])
+    found = _given_rows(c) if _present(c) else {}
     if values is not None:
         values["model_subscriptions.given"] = found
+    return found
+
+
+def given_of(c, runner_ids):
+    """_given for these computers only: the same entries for their keys, and a mapping that reads the whole of _given
+    for any other key, an iteration or its length (claim_loads.Part). A claim's check of one job reads only its
+    computer's grants under the write lock, not every computer's."""
+    from . import read_cache
+    from .claim_loads import Part
+
+    values = read_cache.cache(c)
+    if values is not None and "model_subscriptions.given" in values:
+        return values["model_subscriptions.given"]
+    wanted = set(runner_ids)
+    if not _present(c):
+        return {}
+    return Part(
+        _given_rows(c, sorted(wanted)) if wanted else {},
+        lambda key: isinstance(key, tuple) and len(key) == 2 and key[0] in wanted,
+        lambda: _given(c),
+        lambda: c.execute("SELECT 1 " + _GIVEN_FROM + " LIMIT 1").fetchone() is not None,
+    )
+
+
+def _keys_of(given, runner_id):
+    """The (runner_id, runtime) keys `given` holds for this computer, in its order, without reading every computer's
+    when `given` is a claim's narrow read that holds this one's (given_of)."""
+    from .claim_loads import Part
+
+    keys = given.rows if isinstance(given, Part) and given.inside((runner_id, "")) else given
+    return [key for key in keys if key[0] == runner_id]
+
+
+def _given_rows(c, runner_ids=None):
+    """_given's entries, for every computer or (`runner_ids`) for these."""
+    found = {}
+    people = set()
+    # The whole read scans the grants in table order: a few computers' are read in that order too.
+    only = f" AND g.runner_id IN ({','.join('?' * len(runner_ids))}) ORDER BY g.rowid" if runner_ids is not None else ""
+    for r in c.execute(
+        "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
+        "s.status,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only,
+        list(runner_ids or ()),
+    ):
+        sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
+        if r["person"]:
+            sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
+            people.add(r["person"])
+        found[(r["runner_id"], r["runtime"])] = sub
+    if people:
+        members = {}
+        for m in c.execute(
+            "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,"
+            "l.access_expires_at AS access_expires_at FROM model_subscriptions s "
+            "LEFT JOIN claude_logins l ON l.subscription_id=s.id "
+            f"WHERE s.owner_id IN ({','.join('?' * len(people))}) ORDER BY s.created_at, s.id",
+            sorted(people),
+        ):
+            runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
+            if owned(m["kind"]):
+                members.setdefault((m["owner_id"], runtime), []).append(
+                    {
+                        k: m[k]
+                        for k in (
+                            "id",
+                            "name",
+                            "kind",
+                            "revision",
+                            "status",
+                            "status_at",
+                            "created_at",
+                            "access_expires_at",
+                        )
+                    }
+                )
+        for (_, runtime), sub in found.items():
+            if sub.get("person"):
+                sub["members"] = members.get((sub["person"], runtime), [])
     return found
 
 
@@ -2273,7 +2317,7 @@ def for_claim(c, runner, config, loads=None, bot=""):
     runtimes = turn_runtimes(config, record)
     # A plan login the computer keeps in a home (a ChatGPT login) also signs its CLI in for the turn's own commands:
     # a bot on Claude runs `codex exec` on it (runner-rs/src/model_subscriptions.rs `for_shell`).
-    shell = [rt for (rid, rt) in given if rid == runner["id"] and rt in RUNTIMES and rt not in runtimes]
+    shell = [rt for (rid, rt) in _keys_of(given, runner["id"]) if rt in RUNTIMES and rt not in runtimes]
     for runtime in [*runtimes, *shell]:
         if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
             continue  # a subscription authenticates a CLI; it cannot install one

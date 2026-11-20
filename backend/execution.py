@@ -4577,9 +4577,16 @@ class Execution:
             (who.runner_id, only, only, job_id if job_id is not None else H.now()),
         ).fetchall()
         # What the per-bot checks read for every one of these bots, in fixed set queries, before the first check
-        # (claim_loads). No queued bot, no reads.
+        # (claim_loads). No queued bot, no reads. The recheck of one job (under the write lock) reads only its bot's
+        # holds and this computer's grants, not every open hold and every computer's.
         loads = (
-            claim_loads.read(c, self.store.settings, {runner["id"]: runner}, [row["bot"] for row in assigned])
+            claim_loads.read(
+                c,
+                self.store.settings,
+                {runner["id"]: runner},
+                [row["bot"] for row in assigned],
+                narrow=job_id is not None,
+            )
             if assigned
             else None
         )
