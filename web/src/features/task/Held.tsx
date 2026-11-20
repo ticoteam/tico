@@ -97,8 +97,9 @@ function HeldBox({ t, summary, flow }: { t: TaskData; summary: Hold; flow: boole
   const text = textOf(h);
   const part = partOf(h, text);
   const rule = ruleOf(h);
-  // Send anyway only over what the person read: the whole text loaded, none of it cut, and a nonce for them.
-  const whole = !!opened.data && !!text && !h.text_cut;
+  // Send anyway only over what the person read: the whole text loaded, none of it cut, none of it left out of their
+  // copy (`partial`), and a nonce for them.
+  const whole = !!opened.data && !!text && !h.text_cut && !h.partial;
   const sendable = whole && h.can_send && !!h.nonce;
 
   const nextUp = () => {
@@ -159,6 +160,7 @@ function HeldBox({ t, summary, flow }: { t: TaskData; summary: Hold; flow: boole
           <div className="hold-text is-bones" aria-busy="true" />
         )}
         {!!h.text_cut && <p className="hold-note">Too long to show in full</p>}
+        {!!opened.data?.partial && <p className="hold-note">Someone who can read all of it must send it.</p>}
         {h.why && <p className="hold-why">{h.why}</p>}
         {rule && (
           <p className="hold-rule">

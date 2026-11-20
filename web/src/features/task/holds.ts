@@ -51,6 +51,9 @@ export interface Hold {
   /** Send anyway's one-shot key, given to a reviewer while it is held. */
   nonce?: string;
   part_pending?: boolean;
+  /** This reader's copy leaves out words they may not read (a private task's): someone who can read all of it sends
+      it. What was left out, and how much, is never said. */
+  partial?: boolean;
 }
 
 /** A review task's holds, any state, as summaries (the first page: a review groups one rule's holds for one person). */

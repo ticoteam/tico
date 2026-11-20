@@ -225,6 +225,34 @@ describe('Send anyway is only drawn over what the person can read', () => {
     expect(within(box).queryByRole('button', { name: 'Send anyway' })).toBeNull();
   });
 
+  it('not over a copy that leaves out words the person may not read: someone who can must send it', async () => {
+    detail = { h1: opened({ partial: true, can_send: false, nonce: undefined }) };
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await loaded();
+    expect(within(box).getByText('Someone who can read all of it must send it.')).toBeTruthy();
+    expect(within(box).queryByRole('button', { name: 'Send anyway' })).toBeNull();
+    expect(within(box).getByRole('button', { name: 'Keep blocked' })).toBeTruthy();
+  });
+
+  it('not over a partial copy even with a nonce; the server’s own refusal of one is said in the box', async () => {
+    detail = { h1: opened({ partial: true }) };
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await loaded();
+    expect(within(box).queryByRole('button', { name: 'Send anyway' })).toBeNull();
+  });
+
+  it('a send the server refuses as partial says so and stays held', async () => {
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/rule-holds/h1/send')
+        ? { status: 409, body: { error: { code: 'partial', detail: 'Someone who can read all of it must send it.' } } }
+        : null;
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const box = await loaded();
+    fireEvent.click(within(box).getByRole('button', { name: 'Send anyway' }));
+    expect((await within(box).findByRole('alert')).textContent).toBe('Someone who can read all of it must send it.');
+    expect(within(box).getByText('Message to Ana Ruiz')).toBeTruthy();
+  });
+
   it('not for a reader the server gives no nonce', async () => {
     detail = { h1: opened({ can_send: false, nonce: undefined }) };
     show(<TaskChat task="12" />, '/tasks/p1/12');
