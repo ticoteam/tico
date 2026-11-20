@@ -1,6 +1,7 @@
 """A fictional company the size and shape of the hosted TIDY one on Nov 19, for backend/tests/test_query_budgets.py.
 
-TIDY then: 18.5k tasks (94% finished), 19k conversations, 40k messages, 30k followers, 170 bots over 10 computers. Its
+TIDY then: 18.5k tasks (94% finished), 19k conversations, 40k messages, 30k followers, 170 bots over 10 computers;
+its open tasks with three tags each, 2.8k attachments, relations and roles (`board`). Its
 reads ran 200 to 700 statements a page, one or a few per row, which cost nothing on a test's few rows and seconds there.
 
 The shapes come from the benches that measured those reads (bench/perf-hub-overload.py, perf-status-health.py,
@@ -283,6 +284,52 @@ def usage(c):
     )
 
 
+def board(c):
+    """What TIDY's open tasks carry on Nov 19: 206 tags, three on each open task; 2,800 attachments on 290 open tasks,
+    one with 263; 1,500 relations between tasks and 2,100 people in roles on them."""
+    import hashlib
+
+    rng = random.Random(11)
+    now = H.now()
+    opened = [row[0] for row in c.execute("SELECT id FROM tasks WHERE status='open' ORDER BY rowid")]
+    every = [row[0] for row in c.execute("SELECT id FROM tasks ORDER BY rowid")]
+    tags = [f"scale-tag-{k:03d}" for k in range(206)]
+    c.executemany(
+        "INSERT INTO tags(id,key,label,owner,created_at,updated_at) VALUES(?,?,?,'human:ana',?,?)",
+        [(tag, f"area-{k}", f"Area {k}", now, now) for k, tag in enumerate(tags)],
+    )
+    c.executemany(
+        "INSERT INTO task_tags(task_id,tag_id) VALUES(?,?)", [(t, tag) for t in opened for tag in rng.sample(tags, 3)]
+    )
+    blobs, k = [], 0
+    for task_id, n in zip(rng.sample(opened, 290), [263, 176, 107, 70, 67] + [8] * 285, strict=True):
+        for _ in range(n):
+            digest = hashlib.sha256(f"scale-asset-{k}".encode()).hexdigest()
+            blobs.append((task_id, f"scale-asset-{k:05d}", digest, 1000 + k, f"photo-{k}.jpg"))
+            k += 1
+    c.executemany(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,'human:ana',?,?,?,'image/jpeg',?)",
+        [(bid, digest, size, name, now) for _, bid, digest, size, name in blobs],
+    )
+    c.executemany("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", [(t, bid) for t, bid, *_ in blobs])
+    pairs = set()
+    for kind in ["related"] * 680 + ["follow_up"] * 453 + ["parent"] * 265 + ["depends_on"] * 112:
+        a, b = rng.choice(opened), rng.choice(every)
+        if a != b:
+            pairs.add((a, b, kind) if rng.random() < 0.5 else (b, a, kind))
+    c.executemany(
+        "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,?,'human:ana',?)",
+        [(*pair, now) for pair in sorted(pairs)],
+    )
+    c.executemany(
+        "INSERT OR IGNORE INTO task_roles(task_id,role,actor,added_by,created_at) VALUES(?,?,?,'human:ana',?)",
+        [
+            (rng.choice(opened), rng.choice(("reviewer", "watcher")), rng.choice(("human:ben", "human:cara")), now)
+            for _ in range(2100)
+        ],
+    )
+
+
 def build(api):
     """Seed the company into the app's database; returns what the runner routes need: {"links", "attempt", "bots"}."""
     store = api.app.state.store
@@ -310,6 +357,7 @@ def build(api):
     with store.transaction() as c:
         links, attempt = runners_side(c, overload.BOTS)
         usage(c)
+        board(c)
     return {"links": links, "attempt": attempt, "bots": overload.BOTS}
 
 

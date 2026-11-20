@@ -26,6 +26,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING
 
+import orjson
 from fastapi.responses import Response
 
 from . import events as E
@@ -66,7 +67,13 @@ def cursor(c, visible_sql):
 
 
 def etag(*parts):
-    return 'W/"' + hashlib.sha256(json.dumps(parts, default=str, sort_keys=True).encode()).hexdigest()[:24] + '"'
+    """A weak validator of these parts: a hash of their JSON with sorted keys, encoded by orjson (a page of 500 tasks
+    is a few ms, not the 50 the json module takes), or by json for a value orjson refuses (an int past 64 bits)."""
+    try:
+        text = orjson.dumps(parts, default=str, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
+    except TypeError:
+        text = json.dumps(parts, default=str, sort_keys=True).encode()
+    return 'W/"' + hashlib.sha256(text).hexdigest()[:24] + '"'
 
 
 def fresh(request, tag):
