@@ -1506,7 +1506,7 @@ class Calls:
     def speech_pending(self, call_id):
         """A person is speaking or what they said has not yet reached the question router."""
         with self.lock:
-            return bool(self.pending.get(call_id)) or any(
+            return any(not future.done() for future in self.pending.get(call_id, ())) or any(
                 cid == call_id and segmenter.speaking for (cid, _), segmenter in self.buffers.items()
             )
 
