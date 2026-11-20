@@ -51,12 +51,15 @@ export const rename = defineAction({
   target: (i) => ({ kind: 'task-title', id: i.task }),
 });
 
+/** To a stage, or next, done, closed or reopen. Reopening (and moving a finished task back to work) needs a `why`. */
 export const move = defineAction({
   id: 'task.move',
   title: 'Move a task',
   kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)) }),
-  run: (_ctx, i) => said(moveTask(i.task, i.to)),
+  input: z
+    .strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)), why: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))) })
+    .check(z.refine((i) => i.to !== 'reopen' || !!i.why?.trim(), { message: 'is needed to reopen a task', path: ['why'] })),
+  run: (_ctx, i) => said(moveTask(i.task, i.to, i.why?.trim() || undefined)),
   did: (i) => (i.to === 'closed' ? 'Closed' : i.to === 'reopen' ? 'Reopened' : 'Moved'),
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
@@ -134,16 +137,6 @@ export const snooze = defineAction({
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 
-export const setParent = defineAction({
-  id: 'task.setParent',
-  title: 'Put a task under another',
-  kind: 'change',
-  input: z.strictObject({ task, parent: other }),
-  run: (_ctx, i) => said(setTaskParent(i.task, i.parent)),
-  did: () => 'Moved it under the task',
-  target: (i) => ({ kind: 'task-parent', id: i.task }),
-});
-
 /** related; depends_on: it is blocked by the other; blocks: the other is blocked by it. */
 export const relate = defineAction({
   id: 'task.relate',
@@ -155,14 +148,26 @@ export const relate = defineAction({
   target: (i) => ({ kind: 'task-relations', id: i.task }),
 });
 
+/** A subtask under `task`: an existing task (`subtask`, its number or id) goes under it, or a new one is filed there
+    (`title`, and its `owner`). One of the two, not both. */
 export const subtask = defineAction({
   id: 'task.subtask',
   title: 'Add a subtask',
   kind: 'change',
-  input: z.strictObject({ task, title: z.string().check(z.minLength(1), z.maxLength(300)), owner: z.optional(z.string().check(z.minLength(1), z.maxLength(200))) }),
-  run: (_ctx, i) => said(addSubtask(i.task, i.title.trim(), i.owner)),
-  did: () => 'Added a subtask',
-  target: (i) => ({ kind: 'task-subtasks', id: i.task }),
+  input: z
+    .strictObject({
+      task: other,
+      subtask: z.optional(other.check(z.describe('an existing task to put under it: its number or id'))),
+      title: z.optional(z.string().check(z.minLength(1), z.maxLength(300), z.describe('a new subtask to file under it'))),
+      owner: z.optional(z.string().check(z.minLength(1), z.maxLength(200))),
+    })
+    .check(
+      z.refine((i) => (i.subtask === undefined) !== (i.title === undefined), { message: 'give subtask (a task to put under it) or title (a new one), not both' }),
+      z.refine((i) => i.subtask === undefined || i.owner === undefined, { message: 'is only for a new subtask (title)', path: ['owner'] }),
+    ),
+  run: (_ctx, i) => said(i.subtask !== undefined ? setTaskParent(i.subtask, i.task) : addSubtask(i.task, (i.title ?? '').trim(), i.owner)),
+  did: (i) => (i.subtask !== undefined ? 'Moved it under the task' : 'Added a subtask'),
+  target: (i) => (i.subtask !== undefined ? { kind: 'task-parent', id: i.subtask } : { kind: 'task-subtasks', id: i.task }),
 });
 
 export const ask = defineAction({
@@ -379,17 +384,6 @@ export const follow = defineAction({
   run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following })),
   did: (i) => (i.following ? 'Following' : 'Unfollowed'),
   target: (i) => ({ kind: 'task-followers', id: i.task }),
-});
-
-/** Open again a finished task, with why (docs/dev/pipelines-v3.md C24). */
-export const reopen = defineAction({
-  id: 'task.reopen',
-  title: 'Reopen a task',
-  kind: 'change',
-  input: z.strictObject({ task, why: z.string().check(z.minLength(1), z.maxLength(2000)) }),
-  run: (_ctx, i) => said(moveTask(i.task, 'reopen', i.why.trim())),
-  did: () => 'Reopened',
-  target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 
 /** To another pipeline, at its `stage` (its first when left out). On the task's page, the address follows it there. */

@@ -5632,6 +5632,41 @@
           "product_name": {
             "type": "string",
             "maxLength": 300
+          },
+          "starts_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "not before: a day 2026-11-19, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "due by: a day 2026-11-26, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dates_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9346,6 +9381,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 100
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
           }
         },
         "required": [
@@ -9586,31 +9626,6 @@
       }
     },
     {
-      "id": "task.reopen",
-      "title": "Reopen a task",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "why": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          }
-        },
-        "required": [
-          "task",
-          "why"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "task.setDue",
       "title": "Set when a task is due",
       "kind": "change",
@@ -9670,31 +9685,6 @@
         "required": [
           "task",
           "human"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "task.setParent",
-      "title": "Put a task under another",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "parent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "task",
-          "parent"
         ],
         "additionalProperties": false
       }
@@ -9962,12 +9952,19 @@
           "task": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 100
+            "maxLength": 200
+          },
+          "subtask": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "an existing task to put under it: its number or id"
           },
           "title": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 300
+            "maxLength": 300,
+            "description": "a new subtask to file under it"
           },
           "owner": {
             "type": "string",
@@ -9976,8 +9973,7 @@
           }
         },
         "required": [
-          "task",
-          "title"
+          "task"
         ],
         "additionalProperties": false
       }
@@ -10391,33 +10387,6 @@
             ]
           }
         },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "tasks.makeSubtask",
-      "title": "Make a task a subtask of another",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "task": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          },
-          "parent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "a task id"
-          }
-        },
-        "required": [
-          "task",
-          "parent"
-        ],
         "additionalProperties": false
       }
     },

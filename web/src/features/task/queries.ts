@@ -258,10 +258,20 @@ const reread = (id: string) => queryClient.invalidateQueries({ queryKey: keys.ta
 /** A task as a person names it: its number (412, #412) or its id. */
 const named = (other: string) => refOf(other.trim().replace(/^#/, ''));
 
-/** Put the task under `parent` as its subtask. */
+/** The task a person named (its number or id) read again, wherever this view holds it. */
+const rereadNamed = (other: string) => {
+  const ref = other.trim().replace(/^#/, '');
+  return queryClient.invalidateQueries({
+    queryKey: ['tasks', 'detail'],
+    predicate: (q) => q.queryKey[2] === ref || String((q.state.data as TaskData | undefined)?.number ?? '') === ref,
+  });
+};
+
+/** Put a task (as a person names it) under `parent` as its subtask: both are read again, the one for its parent, the
+    other for its subtasks. */
 export async function setTaskParent(id: string, parent: string) {
-  const r = await api.post<TaskResult>(`${taskPath(id)}/parent`, { parent: named(parent) });
-  await reread(id);
+  const r = await api.post<TaskResult>(`${taskPath(named(id))}/parent`, { parent: named(parent) });
+  await Promise.all([reread(r.task.id), rereadNamed(parent)]);
   return r;
 }
 
@@ -279,8 +289,8 @@ export async function relateTask(id: string, other: string, kind: RelationKind, 
 
 /** A new task filed under this one, given to this one's owner until someone gives it on. */
 export async function addSubtask(id: string, title: string, owner?: string | null) {
-  const r = await api.post<TaskResult>('/api/v2/tasks', { title, parent: id, ...(owner && { owner }) });
-  await reread(id);
+  const r = await api.post<TaskResult>('/api/v2/tasks', { title, parent: named(id), ...(owner && { owner }) });
+  await rereadNamed(id);
   return r;
 }
 

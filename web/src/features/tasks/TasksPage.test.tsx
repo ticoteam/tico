@@ -188,14 +188,12 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(await screen.findByText('Needs a review first')).toBeTruthy();
   });
 
-  it('a card dragged onto another stage moves there and says so; onto another card it asks subtask or merge', async () => {
-    const reads: string[] = [];
+  it('a card dragged onto another stage moves there and says so; onto another card it only moves', async () => {
     serve((url, method) => {
-      if (method === 'GET') reads.push(url);
       if (method === 'POST' && url.endsWith('/move')) return { status: 200, body: { task: task('a1', 7, 'Fix the export', 's2', { version: 2 }) } };
       return { status: 404, body: {} };
     });
-    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2'), task('a3', 9, 'Plan the week', 's1')]);
     show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
     const card = (title: string) => screen.getByTitle(title).closest('.tk-item') as HTMLElement;
     await screen.findByTitle('Fix the export');
@@ -211,11 +209,12 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(await screen.findByText('Moved #7 to Doing')).toBeTruthy();
     expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
 
+    // over another card it lands in that card's column: a move, never a subtask or a merge
     posts = [];
-    dragTo(card('Fix the export'), screen.getByTitle('Write the notes'));
-    expect(await screen.findByRole('dialog')).toBeTruthy();
-    expect(reads.some((u) => u.startsWith('/api/v2/tasks/a1/merge?into=a2'))).toBe(true);
-    expect(posts).toEqual([]);
+    dragTo(card('Plan the week'), screen.getByTitle('Write the notes'));
+    await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a3/move', body: { to: 's2', version: 1 } }]));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
   });
 
   it('says so when the pipeline has nothing open, offering New task, and keeps every stage head', async () => {

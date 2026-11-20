@@ -19,13 +19,6 @@ button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(-
 .tk-item:hover>.row{--surface:var(--hover);background:var(--hover)}
 .tk-item>.tk-more:not(:hover){background:var(--surface)}
 .col[data-drop]{border-radius:var(--r-ctl);background:var(--well)}
-/* over another card: a subtask or a merge (the drop dialog) */
-.tk-item[data-drop]>.card{--surface:var(--selected);background:var(--selected)}
-.tb-drop{display:grid;gap:var(--s-4)}
-.tb-drop-titles{display:grid;gap:var(--s-1);margin:0}
-.tb-drop-titles>span+span{color:var(--muted)}
-.tb-drop-line{margin:0;font-size:var(--t-sm);color:var(--muted);text-wrap:pretty}
-.tb-drop-moves{margin:0;padding-left:var(--s-5);display:grid;gap:var(--s-1);font-size:var(--t-sm);color:var(--ink-2)}
 
 /* an age of a date ("Nov 16") is wider than the mock's "2d": the column grows, it never runs into the card's edge */
 .card-foot .row-age{min-width:32px;flex:none;line-height:var(--av-sm)}

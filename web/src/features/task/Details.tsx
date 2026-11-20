@@ -355,9 +355,10 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
         </Kv>
         <EditKv
           k="Part of"
+          label="Part of"
           target={`task-parent:${t.id}`}
           value={t.parent ? <span>{t.parent.title}</span> : <small>None</small>}
-          edit={(done) => <Inline label="Part of" placeholder="Task number" onSave={(parent) => saved('task.setParent', { task: t.id, parent })} onEnd={done} />}
+          edit={(done) => <Inline label="Part of" placeholder="Task number" onSave={(parent) => saved('task.subtask', { task: parent, subtask: t.id })} onEnd={done} />}
         />
         <SizeFact t={t} />
         <EditKv
