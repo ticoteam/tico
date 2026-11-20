@@ -309,13 +309,86 @@ describe('phone: a card out of view takes no focus', () => {
     expect(chatLip()?.closest('[inert]')?.classList.contains('ly-chat')).toBe(true);
   });
 
-  it('an open chat’s lip can be focused, until the menu comes up over it', () => {
+  it('an open chat’s lip can be focused, and still can with the menu up: it peeks above it', () => {
     render(cards({ chat: true }));
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Finance Owner' }), { key: 'Escape' });
     expect(chatLip()?.closest('[inert]')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open Menu' }));
     expect(screen.getByRole('dialog', { name: 'Menu' })).toBeTruthy();
-    expect(chatLip()?.closest('[inert]')).not.toBeNull();
+    expect(chatLip()?.closest('[inert]')).toBeNull();
+    expect(chatLip()?.closest('.ly')?.classList.contains('is-behind')).toBe(true);
+  });
+});
+
+describe('phone: the cards behind a raised one peek above it', () => {
+  const phone = () => document.querySelector<HTMLElement>('.phone')!;
+  const ly = (s: string) => document.querySelector<HTMLElement>(`.phone > .ly-${s}`)!;
+
+  it('with Tico up, the menu and an open chat stay in the stack behind it, in order, and a tap on one brings it forward', () => {
+    render(cards({ chat: true }));
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Finance Owner' }), { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
+    expect(phone().dataset.card).toBe('tico-half');
+    for (const s of ['menu', 'chat']) {
+      expect(ly(s).classList.contains('is-behind')).toBe(true);
+      expect(ly(s).closest('[inert]')).toBeNull();
+      // a peek is a tap target, not a way into the card: what is inside stays out of reach until it comes forward
+      expect(ly(s).querySelector(':scope > .full')?.hasAttribute('inert')).toBe(true);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Open Menu' }));
+    expect(phone().dataset.card).toBe('menu');
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeTruthy();
+    expect(ly('tico').classList.contains('is-behind')).toBe(false); // Tico is in front of the menu: its lip, not a peek
+    expect(ly('chat').classList.contains('is-behind')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Finance Owner' }));
+    expect(phone().dataset.card).toBe('chat');
+    expect(document.querySelectorAll('.phone > .ly.is-behind')).toHaveLength(0); // the chat is the back card
+  });
+
+  it('with no chat open, only the menu peeks behind Tico', () => {
+    render(cards());
+    fireEvent.click(screen.getByRole('button', { name: 'Open Tico' }));
+    expect(ly('menu').classList.contains('is-behind')).toBe(true);
+    expect(ly('chat').classList.contains('is-behind')).toBe(false);
+    expect(ly('chat').hasAttribute('inert')).toBe(true);
+  });
+
+  it('a page that holds the bottom (a handle) still shows the peeks once Tico is raised from it', () => {
+    render(<PhoneCards page={<h1>Fix the export</h1>} tico={<p>Tico's chat</p>} menu={<p>Menu</p>} handle />);
+    expect(ly('menu').hasAttribute('inert')).toBe(true);
+    fireEvent.click(document.querySelector<HTMLElement>('.phone > .nub')!);
+    expect(phone().dataset.card).toBe('tico-half');
+    expect(ly('menu').classList.contains('is-behind')).toBe(true);
+    expect(ly('menu').hasAttribute('inert')).toBe(false);
+  });
+
+  // jsdom lays nothing out, so the geometry is held by its rules
+  it('a peek shows 20-50% of the company mark, and the lips a scroll draws down stop at the same peek', () => {
+    const peek = Number(/--peek:(\d+)px/.exec(rule('.phone'))?.[1]);
+    // the menu's lip is 40px with its 20px mark in the middle: the mark starts 10px down
+    const shown = (peek - 10) / 20;
+    expect(shown).toBeGreaterThanOrEqual(0.2);
+    expect(shown).toBeLessThanOrEqual(0.5);
+    expect(rule('.phone')).toContain('--drawM:calc((var(--lipM) - var(--peek)) * var(--c))');
+    // and the mark stays while the words fade
+    expect(phoneCss).toContain('.phone>.ly-menu>.lip>:not(.co-mark)');
+  });
+
+  it('a raised card stands below the peeks behind it, and its content still ends at the bottom of the screen', () => {
+    expect(rule('.phone.has-chat')).toContain('--behind:calc(var(--peek) * 2)');
+    expect(rule('.phone[data-card="tico"]')).toContain('--at:var(--behind)');
+    expect(rule('.phone[data-card^="tico"]>.ly-tico')).toContain('--ty:var(--at)');
+    expect(rule('.phone>.ly-menu.is-behind')).toContain('--ty:calc(var(--at) - var(--peek))');
+    expect(rule('.phone[data-card^="tico"]>.ly-chat.is-behind')).toContain('--ty:calc(var(--at) - var(--peek) * 2)');
+    expect(rule('.phone[data-card="tico"] .ly-tico>.full')).toContain('--vis:calc(100% - var(--at))');
+    expect(rule('.phone[data-card="menu"] .ly-menu>.full')).toContain('height:calc(100% - var(--at))');
+    // moves are transform only
+    expect(rule('.phone>.ly')).toContain('transition:transform var(--card-dur) var(--card-ease)');
+  });
+
+  it('while typing, the cards in front go under the keyboard and the peeks behind stay, clear of the box', () => {
+    expect(rule('.phone[data-typing]>.ly:not(.is-up):not(.is-behind)')).toContain('--ty:calc(100% + 48px)');
+    expect(rule('.phone[data-typing="tico"][data-card="tico"]>.ly-tico>.full')).toContain('--vis:calc(100% - var(--at) - var(--kb))');
   });
 });
 
