@@ -540,6 +540,8 @@ class TaskQuestion(TypedDict):
 
     parent: TaskQuestionParent | None
     """The task it was asked on; null to a reader who may not read that task"""
+    detail: str
+    """What it says past its title: the question task's description"""
     asker: str
     person: str
     round: int

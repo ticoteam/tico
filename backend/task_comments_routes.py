@@ -348,7 +348,8 @@ def register(
             who,
             "question",
             checked,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), checked, to),
+            # Who it reaches is read from its words alone, as its Send anyway replay reads it: never from the link.
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
@@ -393,7 +394,7 @@ def register(
         if thread and who.role == "bot":
             reach.check_post(c, who, thread, [a for a, _ in threads.mentions(c, thread, text, author=who.actor)], None)
         checked = f"{text}\n\n{link}" if link else text
-        audience = rule_comment_audience(c, who, row, checked, to) if rc is not None else None
+        audience = rule_comment_audience(c, who, row, text, to) if rc is not None else None
         replay = {"task": task_id, "body": M.TaskComment(text=text).model_dump(mode="json", by_alias=True), "to": to}
         rule = org_rule_check.apply(
             c, rc, checked, {**replay, **({"link": link} if link else {})}, audience_now=audience
