@@ -38,8 +38,10 @@ export function cronWords(expr: string): string {
     if (/^\d+$/.test(mi) && /^\*\/\d+$/.test(hr)) return `every ${hr.slice(2)} hours` + (+mi ? ` at :${mi.padStart(2, '0')}` : '');
   }
   if (!/^\d+$/.test(mi) || mon !== '*') return expr;
-  const clock = (h: number) => `${h % 12 || 12}${+mi ? ':' + mi.padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`;
-  const times = hr.split(',').every((h) => /^\d+$/.test(h)) ? hr.split(',').map((h) => clock(+h)).join(' and ') : null;
+  // "7:00 AM"; several read "1:30 AM, 9:30 AM and 5:30 PM" (rules.md: times like 10:15 AM)
+  const clock = (h: number) => `${h % 12 || 12}:${mi.padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+  const all = hr.split(',').every((h) => /^\d+$/.test(h)) ? hr.split(',').map((h) => clock(+h)) : null;
+  const times = all && (all.length > 1 ? `${all.slice(0, -1).join(', ')} and ${all.at(-1)}` : all[0]);
   if (!times) return expr;
   const days = (d: string) =>
     d
@@ -49,6 +51,7 @@ export function cronWords(expr: string): string {
   let when: string;
   if (dom === '*' && dow === '*') when = 'every day';
   else if (dom === '*' && dow === '1-5') when = 'weekdays';
+  else if (dom === '*' && /^\d$/.test(dow)) when = `every ${LONG_DAYS[+dow % 7]}`;
   else if (dom === '*' && /^[\d,-]+$/.test(dow)) when = days(dow).join(', ');
   else if (dow === '*' && /^\*\/(\d+)$/.test(dom)) when = `every ${dom.slice(2)} days`;
   else if (dom === '1-7' && /^\d$/.test(dow)) when = `first ${DAYS[+dow]} of the month`;
@@ -63,7 +66,7 @@ export function scheduleWords(cron: string): string {
   const [mi = '', hr = '', dom = '', mon = '', dow = ''] = f;
   if (f.length === 5 && dom === '*' && mon === '*' && /^[\d,-]+$/.test(dow) && /^(\*|\*\/\d+)$/.test(hr) && /^(\d+|\*\/\d+)$/.test(mi)) {
     const each = cronWords(`${mi} ${hr} * * *`);
-    const days = cronWords(`0 0 * * ${dow}`).replace(/ at 12 AM$/, '');
+    const days = cronWords(`0 0 * * ${dow}`).replace(/ at 12:00 AM$/, '').replace(/^every /, '');
     if (each !== `${mi} ${hr} * * *` && !days.includes('*')) return `${each}, ${days}`;
   }
   return cronWords(cron);

@@ -67,11 +67,12 @@ function Watches({ q }: { q?: string }) {
       className="rr"
       state={all.length ? 'ready' : 'empty'}
       empty={{ title: 'No watches yet', action: add }}
-      search={<Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
+      // With none yet, the head keeps only the owner: the empty state holds the one Add watch.
+      search={all.length > 0 && <Find label="Search watches" value={q} onFind={(words) => void press('listening.list', { q: words })} />}
       actions={
         <>
           <PageOwner page="listening" />
-          {add}
+          {all.length > 0 && add}
           <AddWatch open={adding} onOpenChange={setAdding} />
         </>
       }

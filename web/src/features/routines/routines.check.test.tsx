@@ -89,7 +89,7 @@ describe('One routine', () => {
     openRoutine({ can_edit: false });
     const p = await panel();
     expect(within(p).getByText('Trigger')).toBeTruthy();
-    expect(within(p).getByText('Every day at 7 AM')).toBeTruthy();
+    expect(within(p).getByText('Every day at 7:00 AM')).toBeTruthy();
     expect(within(p).getByText('Does')).toBeTruthy();
     expect(within(p).getByText('Limit')).toBeTruthy();
     expect(within(p).getByText('Post the numbers.')).toBeTruthy();

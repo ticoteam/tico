@@ -1120,16 +1120,14 @@ describe('the head, and sections whose read fails', () => {
   });
 
 describe('Tools head', () => {
-  it('keeps Filter and the ⋯ on a phone; Add tool and the settings pages are in the ⋯', async () => {
+  it('keeps Filter, Add and the ⋯ on a phone; the settings pages are in the ⋯', async () => {
     document.documentElement.dataset.layout = 'cards';
     serve();
     tools([indexRow({ id: 'api:a1', name: 'Sample API' })]);
     const router = at('/library/tools', <ToolsPage search={{}} />);
     const head = (await screen.findByRole('heading', { name: 'Tools' })).closest('header') as HTMLElement;
-    expect(controls(head)).toEqual(['Filter tools']);
-    expect(within(head).queryByRole('button', { name: 'Add tool' })).toBeNull();
-    fireEvent.click(within(head).getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Add tool' }));
+    expect(controls(head)).toEqual(['Filter tools', 'Add tool']);
+    fireEvent.click(within(head).getByRole('button', { name: 'Add tool' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'API' }));
     expect(await screen.findByRole('dialog', { name: 'Add API' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
