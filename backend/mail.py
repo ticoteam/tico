@@ -245,14 +245,19 @@ class DraftBody(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
     to: list[str] = Field(default_factory=list, max_length=50)
     cc: list[str] = Field(default_factory=list, max_length=50)
+    bcc: list[str] = Field(default_factory=list, max_length=50)  # blind copies: the send gate counts and shows them
     subject: str = Field(default="", max_length=900)
     # The email text; a forward may have none (the forwarded message follows it).
     body: str = Field(default="", max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)  # a thread id: the reply answers its newest message from others
     reply_all: bool = False  # with reply_to: to the sender and everyone else on the message, the mailbox left out
     forward: str = Field(default="", max_length=200)  # a message id: forwarded with its files, after the text
+    html: bool = False  # the body is Markdown, sent as HTML with the text as written beside it
+    signature: bool = False  # the mailbox's Gmail signature under the text
     # Tico files to attach, in order: FILE (its current version) or FILE@N, each one the caller may download.
     attachments: list[str] = Field(default_factory=list, max_length=ATTACHMENTS_MAX)
+    # Attachments of other emails in this mailbox, in order: MESSAGE/REF (refs from `tico email attachments`).
+    email_attachments: list[str] = Field(default_factory=list, max_length=ATTACHMENTS_MAX)
     operation_id: str = Field(default="", max_length=200)
 
 
@@ -260,10 +265,13 @@ class LintBody(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
     to: list[str] = Field(default_factory=list, max_length=50)
     cc: list[str] = Field(default_factory=list, max_length=50)
+    bcc: list[str] = Field(default_factory=list, max_length=50)
     subject: str = Field(default="", max_length=900)
     body: str = Field(min_length=1, max_length=mail_compose.BODY_MAX)
     reply_to: str = Field(default="", max_length=200)
     reply_all: bool = False
+    html: bool = False
+    signature: bool = False
 
 
 class DraftUpdateBody(Contract):
@@ -272,10 +280,15 @@ class DraftUpdateBody(Contract):
     mailbox: str = Field(min_length=3, max_length=320)
     to: list[str] | None = Field(default=None, max_length=50)
     cc: list[str] | None = Field(default=None, max_length=50)
+    bcc: list[str] | None = Field(default=None, max_length=50)
     subject: str | None = Field(default=None, max_length=900)
     body: str | None = Field(default=None, min_length=1, max_length=mail_compose.BODY_MAX)
-    # Tico files that replace the draft's files, in order (FILE or FILE@N); [] takes them all off.
+    html: bool = False  # with body: it is Markdown, and replaces the draft's text and HTML both
+    signature: bool = False  # with body: the mailbox's Gmail signature under it
+    # Tico files and other emails' attachments (MESSAGE/REF) that together replace the draft's files, in order; [] for
+    # both takes them all off.
     attachments: list[str] | None = Field(default=None, max_length=ATTACHMENTS_MAX)
+    email_attachments: list[str] | None = Field(default=None, max_length=ATTACHMENTS_MAX)
     # The draft's message id the caller last saw: a draft changed since (by Gmail, a person or another edit) is
     # refused, not overwritten.
     message: str = Field(default="", max_length=200)
@@ -292,6 +305,14 @@ def stale(addr, did, expected, current):
             409,
             extra={"draft": did, "message": current},
         )
+
+
+class AttachmentFileBody(Contract):
+    mailbox: str = Field(min_length=3, max_length=320)
+    name: str = Field(default="", max_length=255)  # the file's name in Tico; the attachment's own when left out
+    title: str = Field(default="", max_length=300)
+    task: str = Field(default="", max_length=100)
+    scope: str = Field(default="", max_length=100)
 
 
 class MailboxBody(Contract):
@@ -341,12 +362,13 @@ def read_draft(c, addr, ident):
     return found
 
 
-def edited_draft(raw, to=None, cc=None, subject=None, text=None, files=None):
-    """A draft's MIME (base64url) with only the fields given changed, in place: every other header (Bcc, In-Reply-To,
+def edited_draft(raw, to=None, cc=None, subject=None, text=None, files=None, bcc=None, html=""):
+    """A draft's MIME (base64url) with only the fields given changed, in place: every other header (In-Reply-To,
     References...) and part (an HTML version, a forwarded message, inline images) stays byte for byte as it was.
-    `files` replaces the draft's attachments. New words for a draft whose text has an HTML version are refused: Tico
-    cannot change the HTML to match, and dropping it would lose the draft's formatting. The Message-ID is removed for
-    the caller to set. Returns the email.message.EmailMessage."""
+    `files` replaces the draft's attachments. New words with `html` replace the text and HTML both
+    (multipart/alternative); new words alone for a draft whose text has an HTML version are refused: Tico cannot
+    change the HTML to match, and dropping it would lose the draft's formatting. The Message-ID is removed for the
+    caller to set. Returns the email.message.EmailMessage."""
     from email import policy
     from email.parser import BytesParser
 
@@ -361,16 +383,20 @@ def edited_draft(raw, to=None, cc=None, subject=None, text=None, files=None):
         put("To", ", ".join(to))
     if cc is not None:
         put("Cc", ", ".join(cc))
+    if bcc is not None:
+        put("Bcc", ", ".join(bcc))
     if subject is not None:
         put("Subject", subject[: mail_compose.SUBJECT_MAX])
     del msg["Message-ID"]
-    if text is not None:
+    if text is not None and html:
+        _new_body(msg, text, html)
+    elif text is not None:
         plain = msg.get_body(preferencelist=("plain",))
         if plain is None or msg.get_body(preferencelist=("html",)) is not None:
             raise Problem(
                 "body",
-                "This draft's text has an HTML version Tico cannot change to match. Change its words in Gmail, or "
-                "draft it again with `tico email draft` and discard this one",
+                "This draft's text has an HTML version Tico cannot change to match. Give the new words with --html "
+                "to replace both, change them in Gmail, or draft it again with `tico email draft` and discard this one",
                 422,
             )
         plain.set_content(text)
@@ -384,6 +410,46 @@ def edited_draft(raw, to=None, cc=None, subject=None, text=None, files=None):
                 maintype, subtype = "application", "octet-stream"
             msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
     return msg
+
+
+def _new_body(msg, text, html):
+    """The draft's body replaced by `text` and `html` as multipart/alternative, its headers and files kept. A body with
+    inline images (multipart/related) is refused: the new HTML could not name them."""
+    from email.message import MIMEPart
+
+    refused = Problem(
+        "body",
+        "This draft's body has parts Tico cannot replace (inline images). Change it in Gmail, or draft it again with "
+        "`tico email draft` and discard this one",
+        422,
+    )
+    kind = msg.get_content_type()
+    if kind in ("text/plain", "text/html", "multipart/alternative"):
+        if kind == "multipart/alternative" and any(p.is_multipart() for p in msg.iter_parts()):
+            raise refused
+        msg.clear_content()
+        msg.set_content(text)
+        msg.add_alternative(html, subtype="html")
+        return
+    if kind != "multipart/mixed":
+        raise refused
+    parts = list(msg.iter_parts())
+    at = next(
+        (
+            i
+            for i, part in enumerate(parts)
+            if part.get_content_disposition() != "attachment"
+            and part.get_content_type() in ("text/plain", "text/html", "multipart/alternative")
+        ),
+        None,
+    )
+    if at is None or any(p.is_multipart() for p in parts[at].iter_parts()):
+        raise refused
+    body = MIMEPart(policy=msg.policy)
+    body.set_content(text)
+    body.add_alternative(html, subtype="html")
+    parts[at] = body
+    msg.set_payload(parts)
 
 
 def header_addresses(msg, name):
@@ -435,38 +501,134 @@ def compose(c, who, addr, body, mid, files=(), original=None):
         raise Problem("forward", "A forward is a new email: give forward or reply_to, not both", 422)
     if body.reply_all and not body.reply_to:
         raise Problem("reply_all", "reply_all answers a thread: give reply_to too", 422)
+    if not forward_id and not body.body.strip():
+        raise Problem("body", "Give the email text", 422)
+    style = written(c, addr, body)
+    bcc = mail_compose.addresses(body.bcc)
     if forward_id:
         source, carried = forwarded(c, addr, forward_id)
         raw, thread, to, subject = mail_compose.forward(
-            addr, source, body.body, body.to, mid, cc=body.cc, attachments=[*carried, *files]
+            addr, source, body.body, body.to, mid, cc=body.cc, attachments=[*carried, *files], bcc=bcc, **style
         )
         return raw, thread, to, subject, None
-    if not body.body.strip():
-        raise Problem("body", "Give the email text", 422)
     original = original or answered(c, addr, body)
     if original:
         to, cc = recipients(addr, body, original)
-        raw, thread, to, subject = mail_compose.reply(addr, original, body.body, mid, to=to, cc=cc, attachments=files)
+        raw, thread, to, subject = mail_compose.reply(
+            addr, original, body.body, mid, to=to, cc=cc, attachments=files, bcc=bcc, **style
+        )
         return raw, thread, to, subject, original
     to = mail_compose.addresses(body.to)
     if not to:
         raise Problem("to", "A new email needs a recipient: --to, or --reply-to a thread", 422)
+    text, html = mail_compose.bodies(body.body, **style)
     raw = mail_compose.build(
         to,
         body.subject,
-        body.body,
+        text,
         from_addr=addr,
         message_id=mid,
         cc=mail_compose.addresses(body.cc),
+        bcc=bcc,
         attachments=files,
+        html=html,
     )
     return raw, "", to, body.subject, None
+
+
+def written(c, addr, body):
+    """How the email is written, as mail_compose takes it: {markdown, signature}, the mailbox's Gmail signature read
+    from Gmail when asked for. Asked for with none set in Gmail is refused, never silently left off."""
+    signature = gmail_live.signature(c, addr) if body.signature else ""
+    if body.signature and not signature:
+        raise Problem("signature", f"{addr} has no Gmail signature: set one in Gmail, or leave out signature", 422)
+    return {"markdown": body.html, "signature": signature}
 
 
 def message_attachments(c, addr, mid):
     from .mail_lib import gmail as gm
 
     return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
+
+
+def attachment_bytes(c, addr, mid, ref, cap=None):
+    """One attachment of message `mid` by its ref (a1): (its listing, its bytes), at most `cap` bytes
+    (gmail_live.ATTACHMENT_MAX_BYTES). Not found, too large or unreadable is a Problem saying so."""
+    from .mail_lib import Failure
+    from .mail_lib import gmail as gm
+
+    cap = cap or gmail_live.ATTACHMENT_MAX_BYTES
+    if not gm.valid_attachment_ref(ref):
+        raise Problem("ref", "An attachment reference looks like a1: list them with `tico email attachments`", 422)
+    item = next((a for a in message_attachments(c, addr, mid) if a["ref"] == ref), None)
+    if item is None:
+        raise Problem("not_found", f"Message {mid} has no attachment {ref}", 404)
+    if item["size"] > cap:
+        raise Problem("too_large", f"The attachment is over {cap // (1024 * 1024)} MB; open it in Gmail", 413)
+    if item["inline"]:
+        encoded, size = item["_data"], item["size"]
+    elif item["attachment_id"]:
+        fetched = gmail_live.attachment(c, addr, mid, item["attachment_id"])
+        encoded, size = fetched["data"], max(item["size"], fetched["size"])
+    else:
+        raise Problem("not_found", f"Attachment {ref} has no data Gmail can give; open it in Gmail", 404)
+    try:
+        return item, gm.attachment_bytes(encoded, size, limit=cap)
+    except Failure as bad:
+        raise Problem("attachment", bad.msg, 502) from bad
+
+
+def email_files(c, addr, refs, room):
+    """Attachments of emails in mailbox `addr` for a draft: (metadata [{ref, name, content_type, size, digest}],
+    [(name, type, bytes)]). `refs` are MESSAGE/REF; their sizes together are checked against `room` (bytes) before any
+    is read."""
+    wanted = []
+    for given in refs or ():
+        mid, slash, part = str(given).strip().rpartition("/")
+        if not slash or not mid or not part:
+            raise Problem("email_attachments", f"{given} is not MESSAGE/REF, such as 18c2f0a1b2c3d4e5/a1", 422)
+        wanted.append((mid, part))
+    if not wanted:
+        return [], []
+    listed = {
+        mid: {a["ref"]: a for a in message_attachments(c, addr, mid)} for mid in dict.fromkeys(m for m, _ in wanted)
+    }
+    declared = sum(int((listed[mid].get(part) or {}).get("size") or 0) for mid, part in wanted)
+    if declared > room:
+        raise Problem(
+            "attachments",
+            f"These files are {declared / mail_compose.MB:.1f} MB; an email through Tico carries about "
+            f"{mail_compose.RAW_MAX * 3 // 4 // mail_compose.MB} MB of files. Attach fewer, or share a link",
+            413,
+        )
+    found, files = [], []
+    for mid, part in wanted:
+        item, data = attachment_bytes(c, addr, mid, part)
+        kind = item["type"] or "application/octet-stream"
+        found.append(
+            {
+                "ref": f"{mid}/{part}",
+                "name": item["name"],
+                "content_type": kind,
+                "size": len(data),
+                "digest": hashlib.sha256(data).hexdigest(),
+            }
+        )
+        files.append((item["name"], kind, data))
+    return found, files
+
+
+def read_audit(c, who, addr, found, why):
+    """Each other email's attachment a draft carries is read from the mailbox: audited as its download is."""
+    for f in found:
+        mid, _, ref = f["ref"].rpartition("/")
+        H.event(
+            c,
+            who.actor,
+            "mail.read",
+            mid,
+            {"mailbox": addr, "kind": "attachment", "ref": ref, "bytes": f["size"], "for": why},
+        )
 
 
 def forwarded(c, addr, mid):
@@ -833,9 +995,11 @@ def install_mail(app, store, auth):
     def draft(request: Request, body: DraftBody):
         """A Gmail draft in a mailbox the caller may write drafts in: a new email, or a reply in a thread. The same
         draft asked again (the same words and files, or the same operation_id) finds the first one. `attachments` are
-        Tico files the caller may download, sent as they are now (multipart/mixed). A bot's own draft meets the
-        lint (an error refuses it) and the second reviewer, whose verdict comes back; who receives it, and whether it is
-        sent at all, is the send gate's to decide when it is sent."""
+        Tico files the caller may download, `email_attachments` other emails' attachments in this mailbox, sent as they
+        are now (multipart/mixed). `bcc` is kept in the draft: the send gate counts it and shows it before an OK.
+        `html` sends the body (Markdown) as HTML too; `signature` adds the mailbox's Gmail one. A bot's own draft meets
+        the lint (an error refuses it) and the second reviewer, whose verdict comes back; who receives it, and whether
+        it is sent at all, is the send gate's to decide when it is sent."""
         from . import email_sending as ES
         from .email_content import snapshot
 
@@ -854,10 +1018,22 @@ def install_mail(app, store, auth):
         # newer message in the thread are another draft, never the old one with its old recipients. A new email
         # without files keeps the key it always had.
         found, files = attachment_files(store, app, auth, who, body.attachments)
+        room = mail_compose.RAW_MAX * 3 // 4 - sum(int(f["size"] or 0) for f in found)
+        with store.read() as c:
+            mailed, mail_files = email_files(c, addr, body.email_attachments, room)
         attached = [json.dumps([[f["ref"], f["digest"]] for f in found])] if found else []
         answers = ["answers:" + original["id"], *recipients(addr, body, original)] if original else []
         # A reply to all and a forward are other drafts than the same words as a plain reply or a new email.
         kind = (["reply_all"] if body.reply_all else []) + (["forward:" + body.forward] if body.forward else [])
+        # So are a Bcc, HTML, a signature and other emails' files; a draft with none of them keeps the key it had.
+        more = {
+            "bcc": mail_compose.addresses(body.bcc),
+            "html": body.html,
+            "signature": body.signature,
+            "email_attachments": [[f["ref"], f["digest"]] for f in mailed],
+        }
+        more = {k: v for k, v in more.items() if v}
+        kind += [json.dumps(more, sort_keys=True)] if more else []
         key = mail_compose.key(
             who.actor,
             addr,
@@ -873,7 +1049,7 @@ def install_mail(app, store, auth):
         )
         mid = mail_compose.message_id("draft", key, addr)
         with store.read() as c:
-            raw, thread, to, subject, original = compose(c, who, addr, body, mid, files, original)
+            raw, thread, to, subject, original = compose(c, who, addr, body, mid, [*files, *mail_files], original)
             snap = snapshot(raw, addr)
             review = bot_checks(c, bot, addr, snap, thread, original["id"] if original else "")
         made = mail_compose.ensure_draft(store, addr, raw, thread, mid)
@@ -888,6 +1064,7 @@ def install_mail(app, store, auth):
         # The verdict a bot's draft got, with its reason, is kept beside the draft: what the bot was told can be read back.
         said = {"review": _verdict(verdict), "review_reason": checked.get("review_reason", "")} if bot else {}
         with store.transaction() as c:
+            read_audit(c, who, addr, mailed, "draft")
             H.event(
                 c,
                 who.actor,
@@ -903,11 +1080,16 @@ def install_mail(app, store, auth):
             # Whom the draft goes to, read from its MIME: what a send of it freezes.
             "to": to,
             "cc": cc,
+            "bcc": snap["recipient_headers"]["bcc"],
             "subject": subject,
-            "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in found],
+            "attachments": [{k: f[k] for k in ("ref", "name", "content_type", "size")} for f in [*found, *mailed]],
             # A forward carries the forwarded message's files first, then the ones named here.
             **(
-                {"forwarded": [a["name"] for a in snap["attachments"][: len(snap["attachments"]) - len(found)]]}
+                {
+                    "forwarded": [
+                        a["name"] for a in snap["attachments"][: len(snap["attachments"]) - len(found) - len(mailed)]
+                    ]
+                }
                 if body.forward
                 else {}
             ),
@@ -920,10 +1102,11 @@ def install_mail(app, store, auth):
 
     @app.patch("/api/v2/mail/drafts/{draft_id}")
     def update_draft(request: Request, draft_id: str, body: DraftUpdateBody):
-        """Change a draft in place, keeping its draft id (Gmail gives its message a new id): any of to, cc, subject,
-        body and files. Everything else in it (Bcc, its thread headers, an HTML version, a forwarded message) stays as
-        it was; new words for a draft with an HTML version are refused rather than dropping it. Named by its message id,
-        or with `message`, a draft changed since is refused (409). A retry under the same Idempotency-Key answers the
+        """Change a draft in place, keeping its draft id (Gmail gives its message a new id): any of to, cc, bcc,
+        subject, body (with html and signature) and files (Tico files and other emails' attachments, which together
+        replace the draft's). Everything else in it (its thread headers, an HTML version, a forwarded message) stays as
+        it was; new words without html for a draft with an HTML version are refused rather than dropping it. Named by
+        its message id, or with `message`, a draft changed since is refused (409). A retry under the same Idempotency-Key answers the
         first change, never writing it again. A bot's draft (an Assistant's included) meets the lint and the second
         reviewer again, as a new one does."""
         from . import email_sending as ES
@@ -935,6 +1118,8 @@ def install_mail(app, store, auth):
         bot = writing_bot(who)
         ident = str(draft_id or "").strip()
         key = request.headers.get("idempotency-key")
+        if (body.html or body.signature) and body.body is None:
+            raise Problem("body", "html and signature go with a new body", 422)
 
         def access(c):
             require_mailbox(c, who, addr)
@@ -957,13 +1142,22 @@ def install_mail(app, store, auth):
         expected = body.message or (ident if ident == found["message"] else "")
         stale(addr, found["id"], expected, current["message"])
         listed, files = attachment_files(store, app, auth, who, body.attachments or [])
+        room = mail_compose.RAW_MAX * 3 // 4 - sum(int(f["size"] or 0) for f in listed)
+        text, html = body.body, ""
+        with store.read() as c:
+            mailed, mail_files = email_files(c, addr, body.email_attachments, room)
+            if body.body is not None:
+                text, html = mail_compose.bodies(body.body, **written(c, addr, body))
+        replaced = body.attachments is not None or body.email_attachments is not None
         msg = edited_draft(
             current["raw"],
             to=mail_compose.addresses(body.to) if body.to is not None else None,
             cc=mail_compose.addresses(body.cc) if body.cc is not None else None,
+            bcc=mail_compose.addresses(body.bcc) if body.bcc is not None else None,
             subject=body.subject,
-            text=body.body,
-            files=files if body.attachments is not None else None,
+            text=text,
+            html=html,
+            files=[*files, *mail_files] if replaced else None,
         )
         if not header_addresses(msg, "To") + header_addresses(msg, "Cc") + header_addresses(msg, "Bcc"):
             raise Problem("to", "A draft needs a recipient: --to", 422)
@@ -996,6 +1190,7 @@ def install_mail(app, store, auth):
             "thread": made["thread"] or thread,
             "to": snap["recipient_headers"]["to"],
             "cc": snap["recipient_headers"]["cc"],
+            "bcc": snap["recipient_headers"]["bcc"],
             "subject": snap["subject"],
             "attachments": [
                 {"name": a["name"], "content_type": a["type"], "size": a["size"]} for a in snap["attachments"]
@@ -1011,6 +1206,7 @@ def install_mail(app, store, auth):
                 "INSERT INTO mail_drafts(message_id,mailbox,claimed_at,draft_id,message,thread) VALUES(?,?,?,?,?,?)",
                 (mid, addr, H.now(), made["id"], made["message"], made["thread"]),
             )
+            read_audit(c, who, addr, mailed, "draft")
             H.event(
                 c,
                 who.actor,
@@ -1087,33 +1283,12 @@ def install_mail(app, store, auth):
     def attachment(request: Request, msg_id: str, ref: str, mailbox: str = ""):
         """One attachment's bytes (base64), at most gmail_live.ATTACHMENT_MAX_BYTES; `tico email attachment` writes
         them to a private file."""
-        from .mail_lib import Failure
-        from .mail_lib import gmail as gm
-
         who = request.state.identity
         reader(who)
         mid = str(msg_id or "").strip()
-        if not gm.valid_attachment_ref(ref):
-            raise Problem("ref", "An attachment reference looks like a1: list them with `tico email attachments`", 422)
-        cap = gmail_live.ATTACHMENT_MAX_BYTES
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            item = next((a for a in _attachments(c, addr, mid) if a["ref"] == ref), None)
-            if item is None:
-                raise Problem("not_found", f"Message {mid} has no attachment {ref}", 404)
-            if item["size"] > cap:
-                raise Problem("too_large", f"The attachment is over {cap // (1024 * 1024)} MB; open it in Gmail", 413)
-            if item["inline"]:
-                encoded, size = item["_data"], item["size"]
-            elif item["attachment_id"]:
-                fetched = gmail_live.attachment(c, addr, mid, item["attachment_id"])
-                encoded, size = fetched["data"], max(item["size"], fetched["size"])
-            else:
-                raise Problem("not_found", f"Attachment {ref} has no data Gmail can give; open it in Gmail", 404)
-        try:
-            data = gm.attachment_bytes(encoded, size, limit=cap)
-        except Failure as bad:
-            raise Problem("attachment", bad.msg, 502) from bad
+            item, data = attachment_bytes(c, addr, mid, ref)
         with store.transaction() as c:
             H.event(
                 c,
@@ -1131,6 +1306,28 @@ def install_mail(app, store, auth):
             "size": len(data),
             "data": base64.b64encode(data).decode(),
         }
+
+    @app.post("/api/v2/mail/messages/{msg_id}/attachments/{ref}/file")
+    def attachment_to_file(request: Request, msg_id: str, ref: str, body: AttachmentFileBody):
+        """One attachment saved into Tico Files as the caller's file, as `tico file publish` publishes one (the same
+        name, scope and task rules; a retry with the same Idempotency-Key finds it). Read from Gmail, audited."""
+        who = request.state.identity
+        reader(who)
+        mid = str(msg_id or "").strip()
+        with store.read() as c:
+            addr, _ = require_mailbox(c, who, body.mailbox)
+            item, data = attachment_bytes(c, addr, mid, ref)
+        fields = {k: v for k, v in {"title": body.title, "task": body.task, "scope": body.scope}.items() if v}
+        made = app.state.files.publish(request, who, {**fields, "name": body.name or item["name"]}, data)
+        with store.transaction() as c:
+            H.event(
+                c,
+                who.actor,
+                "mail.read",
+                mid,
+                {"mailbox": addr, "kind": "attachment", "ref": ref, "bytes": len(data), "file": made["file"]["id"]},
+            )
+        return {"mailbox": addr, "message_id": mid, "ref": ref, **made}
 
     @app.post("/api/v2/mail/messages/{msg_id}/unsubscribe")
     def unsubscribe(request: Request, msg_id: str, body: MailboxBody):

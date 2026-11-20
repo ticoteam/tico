@@ -1043,3 +1043,145 @@ def test_a_forward_carries_the_whole_text_and_refuses_a_file_it_cannot_read(api,
     )
     assert refused.status_code == 502 and "scan.pdf" in refused.json()["error"]["detail"]
     assert box.drafts(BOX) == drafts
+
+
+# ------------------------------------------------------------------- bcc, other emails' files, Files, HTML, signature
+def with_invoice(box):
+    """m1 carries invoice.pdf, as Gmail lists an attachment: by its attachment id, the bytes fetched on their own."""
+    box.box(BOX)["messages"]["m1"]["payload"]["parts"].append(
+        {"filename": "invoice.pdf", "mimeType": "application/pdf", "body": {"attachmentId": "att1", "size": 5}}
+    )
+    box.box(BOX)["attachments"][("m1", "att1")] = b"%PDF1"
+
+
+def parsed(mime):
+    from email import policy
+    from email.parser import BytesParser
+
+    return BytesParser(policy=policy.default).parsebytes(mime)
+
+
+NEW = {"mailbox": BOX, "to": [SENDER], "subject": "Books", "body": "For the books."}
+
+
+def test_bcc_is_written_shown_before_the_ok_and_counts_for_the_ask_rules(api, box):
+    autonomous(api)
+    plain = post(api, "mail/drafts", NEW)
+    assert post(api, "email/sends", {"mailbox": BOX, "draft_id": plain["draft"]})["send"]["state"] == "pending"
+    made = post(api, "mail/drafts", {**NEW, "bcc": ["Auditor@Outside.example"]})
+    assert made["bcc"] == ["auditor@outside.example"] and made["draft"] != plain["draft"]
+    assert parsed(box.drafts(BOX)[made["draft"]])["Bcc"] == "auditor@outside.example"
+    queued = post(api, "email/sends", {"mailbox": BOX, "draft_id": made["draft"]})["send"]
+    assert queued["state"] == "waiting_approval" and "auditor@outside.example" in queued["recipients"]
+    shown = get(api, f"email/sends/{queued['id']}")
+    assert (shown["to"], shown["cc"], shown["bcc"]) == ([SENDER], [], ["auditor@outside.example"])
+    lint = post(api, "mail/lint", {**NEW, "bcc": ["auditor@outside.example"]})
+    assert "errors" in lint and "warnings" in lint
+
+
+def test_another_emails_attachment_goes_on_a_draft_and_is_audited(api, box):
+    with_invoice(box)
+    made = post(api, "mail/drafts", {**NEW, "email_attachments": ["m1/a1"]})
+    assert [(f["ref"], f["name"], f["size"]) for f in made["attachments"]] == [("m1/a1", "invoice.pdf", 5)]
+    assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("invoice.pdf", b"%PDF1")]
+    assert post(api, "mail/drafts", {**NEW, "email_attachments": ["m1/a1"]})["draft"] == made["draft"]
+    assert post(api, "mail/drafts", NEW)["draft"] != made["draft"]  # without it, another draft
+    post(api, "mail/drafts", {**NEW, "email_attachments": ["m1"]}, expected=422)
+    post(api, "mail/drafts", {**NEW, "email_attachments": ["m1/a9"]}, expected=404)
+    with api.app.state.store.read() as c:
+        rows = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='mail.read'")]
+    assert [(r["kind"], r["ref"], r.get("for")) for r in rows if r.get("for")] == [("attachment", "a1", "draft")] * 2
+
+
+def test_an_attachment_is_saved_into_tico_files_as_the_bots_file(api, box):
+    with_invoice(box)
+    token = as_bot(api, "ops")
+    path = "mail/messages/m1/attachments/a1/file"
+    post(api, path, {"mailbox": BOX}, token, expected=403)  # a bot reads only a mailbox it was given
+    grant(api, "ops", "read")
+    made = post(api, path, {"mailbox": BOX, "name": "2026-11-invoice.pdf", "scope": "bot"}, token)
+    assert made["file"]["title"] == "2026-11-invoice.pdf" and made["ref"] == "a1" and made["created"]
+    download = api.get(f"/api/v2/files/{made['file']['id']}", headers=headers(token), follow_redirects=True)
+    assert download.status_code == 200 and download.content == b"%PDF1"
+    post(api, "mail/messages/m1/attachments/a9/file", {"mailbox": BOX}, token, expected=404)
+
+
+def test_an_html_email_with_the_gmail_signature_stays_fully_reviewable(api, box):
+    from backend.email_content import snapshot
+
+    post(api, "mail/drafts", {**NEW, "signature": True}, expected=422)  # no Gmail signature set yet
+    box.box(BOX)["signature"] = '<div style="color:red">Ana Lee<br><img src="https://x.example/l.png" alt="Acme"></div>'
+    body = {**NEW, "body": "**Paid** today, see [the ledger](https://acme.example/l).\n\n- one\n- two", "html": True}
+    made = post(api, "mail/drafts", {**body, "signature": True})
+    mime = box.drafts(BOX)[made["draft"]]
+    msg = parsed(mime)
+    assert msg.get_content_type() == "multipart/alternative"
+    text, html = msg.get_body(("plain",)).get_content(), msg.get_body(("html",)).get_content()
+    assert text.startswith("**Paid** today") and "\n-- \nAna Lee" in text
+    assert "<strong>Paid</strong>" in html and '<a href="https://acme.example/l">' in html and "<li>one</li>" in html
+    assert "Ana Lee<br>Acme" in html and "style" not in html and "<img" not in html
+    assert snapshot(base64.urlsafe_b64encode(mime).decode(), BOX)["classification_complete"]
+
+
+def test_a_draft_change_sets_bcc_other_emails_files_and_new_html(api, box):
+    with_invoice(box)
+    made = post(api, "mail/drafts", {**REPLY, "body": "Thanks.", "html": True})
+    url = f"/api/v2/mail/drafts/{made['draft']}"
+    alone = api.patch(url, json={"mailbox": BOX, "html": True}, headers=headers())
+    assert alone.status_code == 422  # html goes with a new body
+    words = api.patch(url, json={"mailbox": BOX, "body": "Paid."}, headers=headers())
+    assert words.status_code == 422 and "--html" in words.json()["error"]["detail"]  # would drop its HTML
+    patch = {"mailbox": BOX, "body": "**Paid** today.", "html": True, "bcc": ["files@acme.example"]}
+    changed = api.patch(url, json={**patch, "email_attachments": ["m1/a1"]}, headers=headers())
+    assert changed.status_code == 200, changed.text
+    out = changed.json()
+    assert out["bcc"] == ["files@acme.example"] and [a["name"] for a in out["attachments"]] == ["invoice.pdf"]
+    msg = parsed(box.drafts(BOX)[made["draft"]])
+    assert msg.get_content_type() == "multipart/mixed" and msg["In-Reply-To"] == "<inv-4471@vendor.example>"
+    assert "<strong>Paid</strong>" in msg.get_body(("html",)).get_content()
+    assert msg.get_body(("plain",)).get_content().strip() == "**Paid** today."
+    assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("invoice.pdf", b"%PDF1")]
+    # The words again with html, in a draft with files: its files stay, its body is replaced.
+    again = api.patch(url, json={"mailbox": BOX, "body": "Paid _today_.", "html": True}, headers=headers())
+    assert again.status_code == 200, again.text
+    msg = parsed(box.drafts(BOX)[made["draft"]])
+    assert "<em>today</em>" in msg.get_body(("html",)).get_content() and msg["Bcc"] == "files@acme.example"
+    assert files_of(box.drafts(BOX)[made["draft"]])[1] == [("invoice.pdf", b"%PDF1")]
+    off = api.patch(url, json={"mailbox": BOX, "bcc": [], "email_attachments": []}, headers=headers())
+    assert off.status_code == 200 and off.json()["bcc"] == [] and off.json()["attachments"] == []
+
+
+def test_the_cli_drafts_with_bcc_html_and_another_emails_file(api, box, monkeypatch, capsys):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import hubcli, remotecli
+
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "ana-test")
+    monkeypatch.setattr(remotecli, "Client", lambda url, token, **kwargs: Client(api, token))
+    with_invoice(box)
+    capsys.readouterr()
+
+    def tico(*argv):
+        assert hubcli.main(["email", *argv]) == 0
+        return json.loads(capsys.readouterr().out)
+
+    made = tico(
+        "draft",
+        BOX,
+        "--to",
+        SENDER,
+        "--subject",
+        "Copy",
+        "--body",
+        "**Attached.**",
+        "--html",
+        "--bcc",
+        "files@acme.example",
+        "--attach-email",
+        "m1/a1",
+    )
+    assert made["bcc"] == ["files@acme.example"] and [a["ref"] for a in made["attachments"]] == ["m1/a1"]
+    assert "<strong>Attached.</strong>" in parsed(box.drafts(BOX)[made["draft"]]).get_body(("html",)).get_content()
+    changed = tico("draft-update", BOX, made["draft"], "--bcc", "x@acme.example")
+    assert changed["bcc"] == ["x@acme.example"] and [a["name"] for a in changed["attachments"]] == ["invoice.pdf"]
+    assert "errors" in tico("lint", BOX, "--to", SENDER, "--bcc", "x@acme.example", "--body", "Hi.")

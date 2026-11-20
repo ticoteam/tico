@@ -29,7 +29,7 @@ def gmail_read_timeout(method, path, default):
     route = path.split("?", 1)[0]
     if method == "POST" and (
         route in ("/api/v2/mail/messages/organize", "/api/v2/mail/drafts", "/api/v2/email/sends")
-        or re.fullmatch(r"/api/v2/mail/messages/[^/]+/unsubscribe", route)
+        or re.fullmatch(r"/api/v2/mail/messages/[^/]+/(?:unsubscribe|attachments/[^/]+/file)", route)
     ):
         return max(default, 90)
     if method in ("PATCH", "DELETE") and re.fullmatch(r"/api/v2/mail/drafts/[^/]+", route):

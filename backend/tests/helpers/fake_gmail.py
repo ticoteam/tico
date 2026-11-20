@@ -4,7 +4,8 @@
 reaches Google or needs a key. `put_mail` (backend/tests/helpers/mail_api.py) puts a message here. A search understands
 the terms Tico writes: words, `from:`, `to:`, `cc:`, `in:sent`, `label:`, `after:`, `before:`, `rfc822msgid:` and one
 `{a b}` group of alternatives. Drafts (`drafts`, found by `rfc822msgid:`), a message's raw bytes (`raws`), its
-attachments and `messages/send` (`sent`) are kept here too; a large draft or send arrives as a multipart upload.
+attachments and `messages/send` (`sent`) are kept here too; a large draft or send arrives as a multipart upload. A
+mailbox's Gmail signature is its box's `signature`.
 """
 
 import base64
@@ -301,6 +302,8 @@ class FakeGmail:
             return 200, {"history": rows, "historyId": str(self.history_id(mailbox))}
         if tail == "drafts" or tail.startswith("drafts/"):
             return self._draft_call(mailbox, box, tail, query, data, method)
+        if tail.startswith("settings/sendAs/"):  # a mailbox's Gmail signature is its box's `signature`
+            return 200, {"sendAsEmail": tail.split("/", 2)[2], "signature": box.get("signature", "")}
         if tail == "labels" and data is not None:
             return 200, {"id": self.label(mailbox, data["name"]), "name": data["name"], "type": "user"}
         if tail == "messages/batchModify":

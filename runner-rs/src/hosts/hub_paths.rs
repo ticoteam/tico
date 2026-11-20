@@ -312,6 +312,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "email",
     "email archive",
     "email attachment",
+    "email attachment-file",
     "email attachments",
     "email cancel",
     "email discard",

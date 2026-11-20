@@ -147,12 +147,24 @@ tico email draft ana@acme.example --to ava@creator.example \
 tico email draft ana@acme.example --reply-to 18f2c9a3b4d5e6f7 --body-file out/reply.txt
 tico email draft ana@acme.example --to records@city.example --subject "Records request" \
   --body-file out/request.txt --attach out/request.pdf --attach file-0123456789abcdef01234567
+tico email draft ana@acme.example --to ava@creator.example --subject "Your invoice" --body-file out/ava.md \
+  --html --signature --bcc files@acme.example --attach-email 18f2c9a3b4d5e6f7/a1
 tico email discard ana@acme.example r-882...
 ```
 
 `--reply-to <thread>` answers the thread's last sender, takes the subject from the thread and keeps
 `In-Reply-To` and `References`, so the message lands in the conversation instead of starting a
 new one. `--cc` adds copies; Tico decides whether an outside Cc needs a person.
+
+`--bcc` (repeatable, also on `reply`, `forward`, `lint` and `draft-update`) adds blind copies. A Bcc is a recipient
+like any other for the send gate: it counts for a new address, an outside copy and many recipients, and the person who
+OKs the send sees To, Cc and Bcc each on their own line.
+
+`--html` sends the body as HTML: it is read as Markdown (paragraphs, **bold**, *italic*, links, lists, quotes, code)
+and goes as `multipart/alternative`, the Markdown text as the text part. `--signature` adds the mailbox's Gmail
+signature (Gmail **Settings > Signature**): in an HTML email a plain copy of it (its text, emphasis and links; an image
+becomes its alt text), in a text email its text after `-- `. Without a signature in Gmail it is refused. Both keep to
+the plain markup the send gate reads in full, so an HTML email is not held only for being HTML.
 
 The lint refuses a draft with an error: rewrite it once, and never route around it. The answer carries the draft id,
 the thread and the second reviewer's verdict (`review`) with its reason (`review_reason`). Running the same draft again **finds the same Gmail draft** instead of
@@ -164,6 +176,12 @@ publish` does, and a Tico file id (`FILE` or `FILE@N`) is used as it is. Over MC
 You may attach only files you may open; any other is not found. The draft carries each file's bytes as they are now,
 so a changed file or another set of files is a new draft. An email is at most 24 MB with its files encoded (about
 18 MB of files); a bigger one is refused.
+
+`--attach-email MESSAGE/REF` (repeatable, also on `reply`, `forward` and `draft-update`) adds another email's
+attachment from the same mailbox, with the ref `tico email attachments` lists (`a1`); it is read from Gmail as it is now
+and audited as a download. Over MCP it is `email_attachments`. `tico email attachment-file <address> <message-id> <ref>
+[--name N]` saves one attachment into Tico Files as your file instead, under the same rules as `tico file publish` (a
+bot's own).
 
 Attachments use the shared sending policy, whose attachment prompt is on by default. The server freezes and hashes
 every attachment, including unnamed inline parts. An OK binds that exact snapshot; changed files need a new send and OK.
@@ -177,8 +195,10 @@ tico email draft-show ana@acme.example r-882...                  # headers, body
 tico email draft-update ana@acme.example r-882... --body-file out/reply.txt
 ```
 
-`draft-update` changes a draft in place and keeps its draft id: `--to`, `--cc`, `--subject`, the body and `--attach`
-(which replaces the draft's files); whatever you leave out stays as the draft has it, and a reply stays in its thread.
+`draft-update` changes a draft in place and keeps its draft id: `--to`, `--cc`, `--bcc`, `--subject`, the body (with
+`--html` and `--signature`; new words for a draft that has an HTML version need `--html`) and `--attach` with
+`--attach-email` (which together replace the draft's files); whatever you leave out stays as the draft has it, and a
+reply stays in its thread.
 It meets the lint and the second reviewer again, as a new draft does. `tico email message` given a draft id opens the
 draft.
 

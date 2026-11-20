@@ -17,8 +17,9 @@ from contextlib import AbstractContextManager
 from email.message import EmailMessage
 from typing import Any, cast
 
-from . import gmail_live
+from . import gmail_live, mail_html
 from .email_content import MAX_RAW
+from .mail_lib.gmail import strip_html
 from .store import Problem, Store
 
 Conn = sqlite3.Connection
@@ -77,12 +78,16 @@ def build(
     from_addr: str,
     message_id: str,
     cc: Sequence[str] = (),
+    bcc: Sequence[str] = (),
     in_reply_to: str = "",
     references: str = "",
     attachments: Sequence[Attachment] = (),
+    html: str = "",
 ) -> str:
-    """Plain-text MIME, base64url without padding (the Gmail API's raw); with `attachments`, multipart/mixed: the
-    text, then each file in order. An email over RAW_MAX (its files base64-encoded) is refused."""
+    """Plain-text MIME, base64url without padding (the Gmail API's raw); with `html`, multipart/alternative: the text,
+    then the HTML. With `attachments`, multipart/mixed: the body, then each file in order. Bcc stays in the MIME: Gmail
+    delivers to it and takes it off what the others receive, and the send gate counts it and shows it before an OK.
+    An email over RAW_MAX (its files base64-encoded) is refused."""
     if len(body or "") > BODY_MAX:
         raise Problem("body", f"The email body is over {BODY_MAX:,} characters", 422)
     msg = EmailMessage()
@@ -90,6 +95,8 @@ def build(
     msg["To"] = ", ".join(to)
     if cc:
         msg["Cc"] = ", ".join(cc)
+    if bcc:
+        msg["Bcc"] = ", ".join(bcc)
     msg["Subject"] = str(subject or "")[:SUBJECT_MAX]
     msg["Message-ID"] = message_id
     if in_reply_to:
@@ -97,6 +104,8 @@ def build(
     if references:
         msg["References"] = references
     msg.set_content(body or "")
+    if html:
+        msg.add_alternative(html, subtype="html")
     for name, content_type, data in attachments:
         maintype, _, subtype = (content_type or "").partition("/")
         if not maintype or not subtype:
@@ -114,6 +123,22 @@ def build(
     return base64.urlsafe_b64encode(mime).decode().rstrip("=")
 
 
+def bodies(note: str, *, markdown: bool = False, signature: str = "", quoted: str = "") -> tuple[str, str]:
+    """(text, HTML or "") of an email: what was written, the mailbox's Gmail signature (its HTML) under it, then
+    `quoted` (a forwarded message, as text). With `markdown` the note is Markdown, sent as HTML beside the text as
+    written. Without a signature or anything quoted the text is the note, exactly."""
+    signed = strip_html(signature) if signature else ""
+    text = (note.rstrip() + "\n\n-- \n" + signed if signed else note) + quoted
+    if not markdown:
+        return text, ""
+    parts = [mail_html.markdown(note)]
+    if signature:
+        parts.append("<br>\n<div>" + mail_html.clean(signature) + "</div>")
+    if quoted:
+        parts.append("<div>" + mail_html.preformatted(quoted) + "</div>")
+    return text, "<div>" + "\n".join(parts) + "</div>"
+
+
 def _header(item: Json, name: str) -> str:
     headers: Json = item.get("headers") or {}
     return str(headers.get(name) or "").strip()
@@ -127,9 +152,13 @@ def reply(
     to: object = (),
     cc: object = (),
     attachments: Sequence[Attachment] = (),
+    *,
+    bcc: object = (),
+    markdown: bool = False,
+    signature: str = "",
 ) -> tuple[str, str, list[str], str]:
     """A reply to `original` (a normalized Gmail message): (raw, thread id, recipients, subject). It goes to the
-    message's sender unless `to` names others."""
+    message's sender unless `to` names others. `markdown` and `signature` are as `bodies` takes them."""
     if not str(body or "").strip():
         raise Problem("body", "A reply needs a body", 422)
     to = addresses(to) or addresses([original.get("from")])
@@ -138,16 +167,19 @@ def reply(
     answered = _header(original, "message-id")
     refs = " ".join(x for x in (_header(original, "references"), answered) if x)
     subject = reply_subject(original.get("subject"))
+    text, html = bodies(body, markdown=markdown, signature=signature)
     raw = build(
         to,
         subject,
-        body,
+        text,
         from_addr=mailbox,
         message_id=mid,
         cc=addresses(cc),
+        bcc=addresses(bcc),
         in_reply_to=answered,
         references=refs,
         attachments=attachments,
+        html=html,
     )
     return raw, str(original.get("thread_id") or ""), to, subject
 
@@ -160,22 +192,37 @@ def forward(
     mid: str,
     cc: object = (),
     attachments: Sequence[Attachment] = (),
+    *,
+    bcc: object = (),
+    markdown: bool = False,
+    signature: str = "",
 ) -> tuple[str, str, list[str], str]:
     """`original` forwarded to `to` with `note` first: a new message, outside the original's thread, carrying
-    `attachments` (the original's files, then any added)."""
+    `attachments` (the original's files, then any added). `markdown` and `signature` are as `bodies` takes them."""
     to = addresses(to)
     if not to:
         raise Problem("to", "A forward needs `to`", 422)
     subject = "Fwd: " + FWD_PREFIX.sub("", RE_PREFIX.sub("", str(original.get("subject") or ""))).strip()
     recipients: list[Any] = original.get("to") or []
-    body = str(note or "") + FORWARDED.format(
+    quoted = FORWARDED.format(
         from_header=original.get("from_header") or original.get("from") or "",
         date=original.get("date") or "",
         subject=original.get("subject") or "",
         to=", ".join(recipients),
         body=original.get("body") or "",
     )
-    raw = build(to, subject, body, from_addr=mailbox, message_id=mid, cc=addresses(cc), attachments=attachments)
+    text, html = bodies(str(note or ""), markdown=markdown, signature=signature, quoted=quoted)
+    raw = build(
+        to,
+        subject,
+        text,
+        from_addr=mailbox,
+        message_id=mid,
+        cc=addresses(cc),
+        bcc=addresses(bcc),
+        attachments=attachments,
+        html=html,
+    )
     return raw, "", to, subject
 
 

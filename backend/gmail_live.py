@@ -634,6 +634,13 @@ def draft_find(c, mailbox, message_id):
     return _draft(rows[0]) if rows else None
 
 
+def signature(c, mailbox):
+    """The HTML signature Gmail adds for the mailbox's own address (Settings > Signature), or "" when it has none."""
+    found = _get(mailbox, "settings/sendAs/" + urllib.parse.quote(mailbox, safe=""), _token(c, mailbox))
+    value = found.get("signature") if isinstance(found, dict) else None
+    return value.strip() if isinstance(value, str) else ""
+
+
 def draft_get(c, mailbox, draft_id):
     """The draft with this id as {id, message, thread}, or None when Gmail has no draft by that id (a message id
     Gmail refuses as a draft id included)."""
