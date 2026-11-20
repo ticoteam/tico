@@ -6,7 +6,7 @@ import { loadThreads, threadsSearch } from '@/features/threads/routing';
 export const Route = createFileRoute('/threads/$thread')({
   validateSearch: threadsSearch,
   loaderDeps: ({ search }) => ({ q: search.q }),
-  loader: ({ params, deps: { q }, context: { queryClient } }) => loadThreads(queryClient, { q, thread: params.thread }),
+  loader: ({ params, deps: { q }, context: { queryClient }, preload }) => loadThreads(queryClient, { q, thread: params.thread, preload }),
   component: ThreadRoute,
 });
 
