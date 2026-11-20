@@ -406,8 +406,17 @@ def test_one_persons_streams_of_a_round_build_each_topic_once_and_read_what_each
     )
     topics = {"topics": ("tasks", "threads", "runs", "bots", "messages")}
     ana, ben = who(api, "ana-test"), who(api, "ben-test")
-    got = round_of(api, *[(ana, after, topics, lambda: None)] * 5, (ben, after, topics, lambda: None))
-    assert all(not isinstance(result, Exception) for result in got), got
+    auth = api.app.state.auth
+
+    def step(person):
+        return lambda c, snapshot, at: E.read_in(
+            c, snapshot, auth, person, at, task_views=no_views, task_view=None, **topics
+        )
+
+    # All six in one round, as when they are due together (round_of may split them over two).
+    jobs = [E._Poll(lambda: None, step(person), after, ()) for person in [ana] * 5 + [ben]]
+    E.Rounds(api.app.state.store)._round(jobs)
+    got = [job.future.result() for job in jobs]
     for name in ("_tasks", "_threads", "_runs"):
         assert calls.count(name) == 2, calls  # once for Ana's five streams, once for Ben's
     assert len(steps) == len(set(steps)) == 2  # each run step read once for both people

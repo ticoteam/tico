@@ -3170,13 +3170,14 @@ class _Snapshot:
         """{id: attempt_events row} of these run steps, each read once in this snapshot."""
         wanted = [ref for ref in dict.fromkeys(str(ref) for ref in refs) if ref not in self.steps]
         for part in H.chunks(wanted):
-            self.steps.update({ref: None for ref in part})
-            self.steps.update(
+            found = dict.fromkeys(part)
+            found.update(
                 (str(e["id"]), e)
                 for e in self.c.execute(
                     "SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(part)) + ")", part
                 )
             )
+            self.steps.update(found)  # only once read whole: a failed read leaves nothing half-known
         return {str(ref): self.steps.get(str(ref)) for ref in refs}
 
     def mine(self, who):
@@ -3283,23 +3284,24 @@ def _within_budget(c, rows, sizes=None):
         return rows
     # `sizes`: the snapshot's, so a round sizes each step once for all its streams.
     sizes = {} if sizes is None else sizes
-    looked, spent = 0, 0
+    at, spent = -1, 0  # `at`: this row's place among the outputs
     for n, row in enumerate(rows):
         spent += ROW_BYTES
         if row["topic"] == "runs" and row["kind"] == "output":
-            ref = str(row["ref"])
-            if ref not in sizes and looked < len(outputs):
-                part = [out for out in outputs[looked : looked + SIZE_CHUNK] if out not in sizes]
-                looked += SIZE_CHUNK
-                sizes.update({ref: None for ref in part})
-                sizes.update(
-                    (str(found[0]), found[1])
-                    for found in c.execute(
+            at += 1
+            ref = outputs[at]
+            if ref not in sizes:  # it and the next unsized ones, SIZE_CHUNK at a time, as far as the budget goes
+                part = [out for out in dict.fromkeys(outputs[at:]) if out not in sizes][:SIZE_CHUNK]
+                found = dict.fromkeys(part)
+                found.update(
+                    (str(size[0]), size[1])
+                    for size in c.execute(
                         "SELECT id, length(CAST(payload AS BLOB)) FROM attempt_events WHERE id IN (%s)"
                         % ",".join("?" * len(part)),
                         part,
                     )
                 )
+                sizes.update(found)  # only once read whole: a failed read leaves nothing half-known
             spent += sizes.get(ref) or 0
         if n and spent > READ_BYTES:
             return rows[:n]
@@ -3470,7 +3472,7 @@ def read_in(
             view,
             "tasks",
             by_topic["tasks"],
-            (task_views, tasks, parties),
+            (task_views, tuple(tasks), tuple(parties)),
             lambda: _tasks(view, by_topic["tasks"], task_views, tasks, parties),
         )
     if by_topic.get("messages"):
@@ -3491,7 +3493,7 @@ def read_in(
             view,
             "threads",
             by_topic["threads"],
-            threads_scope,
+            tuple(threads_scope),
             lambda: _threads(view, by_topic["threads"], threads_scope),
         )
     if by_topic.get("letters"):
@@ -3558,6 +3560,10 @@ def _alike(view, topic, rows, key, build):
     times. The entries are shared, so read_in builds each one's event once too (`alike_ids`): never change one."""
     memo = view.mine.setdefault("alike", {})
     held = (topic, tuple(row["seq"] for row in rows), key)
+    try:
+        hash(held)
+    except TypeError:  # a caller's own unhashable filter: built for this stream alone
+        return [(topic, row, entry) for row, entry in build()]
     if held not in memo:
         memo[held] = [(topic, row, entry) for row, entry in build()]
         view.mine.setdefault("alike_ids", set()).update(id(entry) for _, _, entry in memo[held])
@@ -3619,10 +3625,9 @@ class SignIn:
     next poll, and at the next keepalive at the latest (a quiet stream's check is never skipped that long). A refused
     check raises Problem and is never remembered."""
 
-    def __init__(self, auth, headers, who, clock=time.monotonic, checked=False):
+    def __init__(self, auth, headers, who, clock=time.monotonic):
         self.auth, self.headers, self.who, self.clock = auth, headers, who, clock
-        # `checked`: these headers were just authenticated (the request's own sign-in), which answers like any check.
-        self.checked_at = clock() if checked else None
+        self.checked_at = None
         self.lock = threading.Lock()
 
     def __call__(self):
@@ -3815,7 +3820,7 @@ def install(app, store, auth, task_views, task_view):
         if output not in (None, "", "full", "compact"):
             raise Problem("validation", "output is full or compact", 422)
 
-        sign_in = SignIn(auth, request.headers, who, checked=True)  # the request's sign-in, just now
+        sign_in = SignIn(auth, request.headers, who)
         watch = Watch(store, auth, who, meetings, tasks)
 
         def check():
@@ -3887,6 +3892,16 @@ def install(app, store, auth, task_views, task_view):
                         **({"needs_version": held["version"]} if held else {}),
                     },
                 )
+                # The stream's first check, here rather than inside its first round: a burst of reconnecting streams
+                # checks its sign-ins side by side, not one after another on the round's one thread, and the round's
+                # own check of each then falls inside SIGN_IN_RECHECK_SECONDS. A refusal ends it as the round's would.
+                try:
+                    await asyncio.to_thread(check)
+                except Problem:
+                    for topic, data in watch.drain():
+                        yield _frame(None, topic, data)
+                    yield "event: expired\ndata: {}\n\n"
+                    return
                 deadline = time.monotonic() + LIFETIME_SECONDS
                 quiet_since = time.monotonic()
                 due = True  # the first read catches up from `after`

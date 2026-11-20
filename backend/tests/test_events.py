@@ -412,18 +412,6 @@ def test_a_streams_sign_in_is_checked_once_across_a_burst_of_polls_and_again_aft
     assert auth.calls == 2
 
 
-def test_a_stream_opened_on_a_sign_in_just_checked_asks_again_only_after_the_window():
-    """A stream's first polls ride on its request's own sign-in, as on any check inside the window: after a release
-    every reconnecting stream's first round would otherwise authenticate each one again, one after another."""
-    now, auth = [100.0], CountingAuth()
-    check = E.SignIn(auth, {}, Identity("human:ben", "human"), clock=lambda: now[0], checked=True)
-    check()
-    assert auth.calls == 0
-    now[0] += E.SIGN_IN_RECHECK_SECONDS
-    check()
-    assert auth.calls == 1
-
-
 def test_a_stream_following_no_meeting_or_task_checks_its_follows_without_a_connection():
     class NoStore:
         def read(self):
