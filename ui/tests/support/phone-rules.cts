@@ -278,6 +278,15 @@ const computers = async (page: Page, hub: Hub) => {
     throw new Error(`Settings > Computers never drew ${row} for the agent the hub seeded`);
   });
 };
+// Settings > Models draws Subscriptions, Tico Gateway and Defaults from three reads, each over its loading rows. Until
+// the ones above have answered, the Defaults Save sits higher than it will, under the tab bar on a phone: rule 7 would
+// read that moment, not the screen. Wait until no section on the pane is still loading.
+const models = async (page: Page) => {
+  await go(page, '#/settings/models');
+  await page.waitForFunction(() => !document.querySelector('#settings-models [aria-busy="true"]'), null, {timeout: t(20000)}).catch(() => {
+    throw new Error('Settings > Models still shows loading rows after 20 s');
+  });
+};
 const openDialogs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('dialog[open]')].map(d => d.id || d.className));
 
 interface Screen { name: string; open: (page: Page, hub: Hub) => Promise<boolean | void>; modalFrom?: string }
@@ -332,7 +341,7 @@ const SCREENS: Screen[] = [
   {name: 'Tools > GitHub', open: page => go(page, '#/tools/github')},
   {name: 'Settings > Computers', open: computers},
   {name: 'Add computer', open: async (page, hub) => { await computers(page, hub); return tapFirst(page, ['button:has-text("Add computer")', '[data-machine-add]']); }},
-  {name: 'Settings > Models', open: page => go(page, '#/settings/models')},
+  {name: 'Settings > Models', open: page => models(page)},
   {name: 'Settings > Billing', open: page => go(page, '#/settings/billing')},
   {name: 'Finance', open: page => go(page, '#/finance')},
   {name: 'Assistant', open: page => go(page, '#/assistant')},
