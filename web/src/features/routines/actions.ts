@@ -420,12 +420,16 @@ export type RoutineState = (typeof ROUTINE_STATES)[number];
 
 export const listRoutines = defineAction({
   id: 'routines.list',
-  title: 'Search or filter the routines',
+  title: 'Search or filter the routines, or search the incoming webhooks (tab: webhooks)',
   kind: 'view',
-  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))), state: z.optional(z.enum(ROUTINE_STATES)) }),
-  run: ({ router }, i) => go(router, ROUTINES, { q: i.q?.trim() || undefined, state: i.state }),
-  did: () => 'Listed the routines',
-  target: () => ({ kind: 'tab', id: 'routines' }),
+  input: z.strictObject({
+    q: z.optional(z.string().check(z.maxLength(200))),
+    state: z.optional(z.enum(ROUTINE_STATES)),
+    tab: z.optional(z.enum(['webhooks'] as const)),
+  }),
+  run: ({ router }, i) => go(router, ROUTINES, { tab: i.tab, q: i.q?.trim() || undefined, state: i.tab ? undefined : i.state }),
+  did: (i) => (i.tab ? 'Listed the webhooks' : 'Listed the routines'),
+  target: (i) => ({ kind: 'tab', id: i.tab ?? 'routines' }),
 });
 
 // ---------------------------------------------------------------- the board, inboxes and templates

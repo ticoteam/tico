@@ -528,8 +528,32 @@ describe('Webhooks', () => {
     expect(href(within(row).getByRole('link', { name: 'Shop orders' }))).toBe('/company/routines?tab=webhooks&panel=hook:h1');
     expect(screen.getByRole('button', { name: 'Add webhook' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Outgoing' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
     expect(sent.reads.some((u) => u.includes('/api/v2/webhooks'))).toBe(false);
+  });
+
+  it('searches them by name or what they start, keeping the words in the address and on a row', async () => {
+    record();
+    queryClient.setQueryData(hooksQuery.queryKey, [hook, { ...hook, id: 'h2', name: 'Returns portal' }]);
+    const router = show('/company/routines?tab=webhooks');
+    expect(await screen.findByRole('textbox', { name: 'Search webhooks' })).toBeTruthy();
+    expect(validateRoutinesSearch({ tab: 'webhooks', q: 'returns', state: 'off' })).toEqual({ tab: 'webhooks', q: 'returns' });
+    expect((await run('routines.list', { tab: 'webhooks', q: 'returns' }, { via: 'click' })).ok).toBe(true);
+    await waitFor(() => expect(screen.queryByTitle('Shop orders')).toBeNull());
+    expect(router.state.location.search).toMatchObject({ tab: 'webhooks', q: 'returns' });
+    expect(href(within(screen.getByTitle('Returns portal')).getByRole('link', { name: 'Returns portal' }))).toBe('/company/routines?tab=webhooks&q=returns&panel=hook:h2');
+    await run('routines.list', { tab: 'webhooks', q: 'nothing like it' }, { via: 'click' });
+    expect(await screen.findByText('No matches')).toBeTruthy();
+  });
+
+  it('keeps Outgoing webhooks and New inbox under its ⋯', async () => {
+    record();
+    queryClient.setQueryData(hooksQuery.queryKey, [hook]);
+    const router = show('/company/routines?tab=webhooks');
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'New inbox' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Outgoing webhooks' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/library/tools'));
+    expect(router.state.location.search).toMatchObject({ kind: 'webhook' });
   });
 
   it('one webhook: how it is signed, its calls with why one was refused, its ⋯, and a rename @s536', async () => {

@@ -196,6 +196,9 @@
 .lib .dl.is-cut::before{content:"\2212";color:var(--muted)}
 
 /* Connect Claude Code: the one command to run, then the code the computer shows */
+/* Edit a skill: the text is the dialog's body, wide enough to read and scrolling inside its field */
+html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
+.modal.sk-edit .field.is-area textarea{max-height:50dvh;overflow-y:auto}
 .modal .connect-cmd{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-1) var(--s-1) var(--s-1) var(--s-3);border-radius:var(--r-ctl);background:var(--well)}
 .modal .connect-cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;scrollbar-width:none;color:var(--ink)}
 .modal .connect-dev{display:grid;gap:var(--s-2)}

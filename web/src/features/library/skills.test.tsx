@@ -620,6 +620,77 @@ describe('propose a new skill', () => {
   });
 });
 
+describe('propose a change to a skill', () => {
+  const WAS = '---\ndescription: Sort new mail\n---\n\n# Steps\nRead each new letter first.';
+  const NOW = WAS.replace('Read each new letter first.', 'Read each new letter, oldest first.');
+  const proposal = { ...pending, id: 'skp_9', base_version: 2, note: 'Oldest first' };
+  const seedTriage = () => {
+    queryClient.setQueryData(skillQuery('triage').queryKey, {
+      skill: { id: 's1', name: 'triage', description: 'Sort new mail', latest: v(2) },
+      versions: [v(2), v(1)],
+      installs: [],
+    } as never);
+    queryClient.setQueryData(skillTextQuery('triage', 2).queryKey, {
+      ...v(2),
+      files: [
+        { path: 'SKILL.md', content: WAS },
+        { path: 'reference/teams.md', content: 'Sales, Support' },
+      ],
+    } as never);
+    queryClient.setQueryData(skillUsageQuery.queryKey, []);
+    queryClient.setQueryData(proposalsQuery.queryKey, []);
+  };
+  const reply = (url: string, method: string) => {
+    if (method === 'POST' && url === '/api/v2/skills/proposals') return { proposal };
+    if (url === '/api/v2/skills/proposals/skp_9') return { proposal, files: [], diff: '', stale: false, screening: null };
+    if (url.startsWith('/api/v2/skills/proposals')) return { proposals: [proposal] };
+    return {};
+  };
+
+  it('Edit on a skill sends its whole folder with the SKILL.md changed, from its latest version, and opens the proposal', async () => {
+    const sent = serve(reply);
+    seedTriage();
+    const router = at('/library/skills?skill=triage', <Skills />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit triage' });
+    const propose = within(dialog).getByRole('button', { name: 'Propose' });
+    expect(within(dialog).getByLabelText('Text')).toHaveProperty('value', WAS);
+    expect(propose).toHaveProperty('disabled', true);
+    fireEvent.change(within(dialog).getByLabelText('Text'), { target: { value: NOW } });
+    fireEvent.change(within(dialog).getByLabelText('Note'), { target: { value: ' Oldest first ' } });
+    fireEvent.click(propose);
+    await waitFor(() => expect(router.state.location.search).toEqual({ proposal: 'skp_9' }));
+    expect(writes(sent)).toEqual([
+      {
+        url: '/api/v2/skills/proposals',
+        method: 'POST',
+        body: {
+          name: 'triage',
+          files: [
+            { path: 'SKILL.md', content: NOW },
+            { path: 'reference/teams.md', content: 'Sales, Support' },
+          ],
+          note: 'Oldest first',
+          base_version: 2,
+        },
+      },
+    ]);
+  });
+
+  it('Tico may propose one too; a shipped skill is sent from the files Tico ships, with no base version', async () => {
+    const sent = serve(reply);
+    queryClient.setQueryData(skillQuery('triage').queryKey, {
+      skill: { id: null, name: 'triage', description: 'Sort new mail', latest: null },
+      versions: [],
+      installs: [],
+      shipped: { files: [{ path: 'SKILL.md', content: WAS }], bots: [] },
+    } as never);
+    at('/library/skills');
+    expect(await tico('skills.edit', { name: 'triage', text: NOW })).toMatchObject({ ok: true, did: 'Proposed a change to triage' });
+    expect(writes(sent)).toEqual([{ url: '/api/v2/skills/proposals', method: 'POST', body: { name: 'triage', files: [{ path: 'SKILL.md', content: NOW }] } }]);
+  });
+});
+
 describe('connect Claude Code', () => {
   it('Connect Claude Code shows the one line to run, and copies it @s830', async () => {
     serve();
