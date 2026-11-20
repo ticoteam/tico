@@ -11,15 +11,13 @@ Occurrences come out in the contract's shape; nothing outside this module knows 
 import importlib
 import json
 import sqlite3
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from collections.abc import Callable
 from datetime import date, datetime, timezone
 from typing import Any, NoReturn, cast
 
-from . import google_connect, google_tokens, google_workspace
+from . import google_connect, google_tokens, google_workspace, outbound_http
 from .mail_lib.calendar import meeting_url as _meeting_url
 from .store import Problem
 
@@ -77,26 +75,26 @@ def gcal_call(url: str, *, token: str, method: str = "GET", data: Json | None = 
     """(status, JSON object), or status 0 when Google cannot answer. Tests replace this function.
 
     A refusal answers {"reason": <Google's reason word>} only, so no Google text reaches a caller."""
-    request = urllib.request.Request(
-        url, method=method, headers={"Accept": "application/json", "Authorization": "Bearer " + token}
-    )
+    headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
+    body = None
     if data is not None:
-        request.data = json.dumps(data).encode()
-        request.add_header("Content-Type", "application/json")
+        body = json.dumps(data).encode()
+        headers["Content-Type"] = "application/json"
     try:
-        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            status, raw = int(answer.status), bytes(answer.read(HTTP_MAX_BYTES + 1))
-    except urllib.error.HTTPError as refused:
-        with refused:
-            try:
-                found = _dict(json.loads(refused.read(64 * 1024) or b"{}"))
-                errors = _list(_dict(found.get("error")).get("errors")) or [{}]
-                reason = str(_dict(errors[0]).get("reason") or "")[:64]
-            except (ValueError, UnicodeError, OSError):
-                reason = ""
-            return refused.code, {"reason": reason} if reason else {}
-    except (OSError, ValueError):
+        reply = outbound_http.send(
+            method, url, headers=headers, content=body, timeout=SECONDS, max_bytes=HTTP_MAX_BYTES
+        )
+    except outbound_http.Failed:
         return 0, {}
+    status, raw = reply.status, reply.content
+    if not reply.ok:
+        try:
+            found = _dict(json.loads(raw[: 64 * 1024] or b"{}"))
+            errors = _list(_dict(found.get("error")).get("errors")) or [{}]
+            reason = str(_dict(errors[0]).get("reason") or "")[:64]
+        except (ValueError, UnicodeError):
+            reason = ""
+        return status, {"reason": reason} if reason else {}
     if len(raw) > HTTP_MAX_BYTES:
         raise Problem("gcal_size", "This Google Calendar response is too large; narrow the range", 502)
     if not raw and status in (200, 204):

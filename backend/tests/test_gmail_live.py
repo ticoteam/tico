@@ -1,12 +1,12 @@
 """Live Gmail reads use read-only tokens, bounded pages and the connector's normalizer."""
 
-import io
 import json
 
+import httpx
 import pytest
 
 from backend import gmail_live as G
-from backend import google_tokens
+from backend import google_tokens, outbound_http
 from backend.mail import gmail_query
 from backend.store import Problem
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http
@@ -101,19 +101,17 @@ def test_malformed_success_does_not_turn_into_an_empty_inbox(monkeypatch, minted
 
 
 def test_http_timeout_and_invalid_json_are_refusals_with_short_timeouts(monkeypatch, minted):
-    def timeout(request, *, timeout):
-        assert timeout == 10
-        assert request.get_header("Authorization") == "Bearer readonly-token"
-        raise TimeoutError()
+    def timeout(request):
+        assert request.extensions["timeout"]["read"] == 10
+        assert request.headers["Authorization"] == "Bearer readonly-token"
+        raise httpx.ReadTimeout("slow", request=request)
 
-    monkeypatch.setattr(G.urllib.request, "urlopen", timeout)
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(timeout))
     with pytest.raises(Problem, match="Gmail did not answer"):
         G.message(None, BOX, "m1")
 
-    class Response(io.BytesIO):
-        status = 200
-
-    monkeypatch.setattr(G.urllib.request, "urlopen", lambda *args, **kwargs: Response(b"<html>unavailable</html>"))
+    html = httpx.MockTransport(lambda request: httpx.Response(200, content=b"<html>unavailable</html>"))
+    monkeypatch.setattr(outbound_http, "TRANSPORT", html)
     with pytest.raises(Problem, match="Gmail did not answer"):
         G.list(None, BOX)
 
@@ -183,15 +181,12 @@ def test_modify_failures_are_refusals(gmail_http, minted, status, expected):
 
 
 def test_batch_modify_http_sends_json_and_accepts_an_empty_success(monkeypatch, minted):
-    class Response(io.BytesIO):
-        status = 204
+    def answer(request):
+        assert request.method == "POST" and request.headers["Content-Type"] == "application/json"
+        assert json.loads(request.content) == {"ids": ["m1"], "addLabelIds": [], "removeLabelIds": ["INBOX"]}
+        return httpx.Response(204)
 
-    def answer(request, *, timeout):
-        assert request.get_method() == "POST" and request.get_header("Content-type") == "application/json"
-        assert json.loads(request.data) == {"ids": ["m1"], "addLabelIds": [], "removeLabelIds": ["INBOX"]}
-        return Response(b"")
-
-    monkeypatch.setattr(G.urllib.request, "urlopen", answer)
+    monkeypatch.setattr(outbound_http, "TRANSPORT", httpx.MockTransport(answer))
     G.organize(None, BOX, ["m1"], remove=("INBOX",))
 
 

@@ -15,10 +15,10 @@ Participant is {name, earliestStartTime, latestEndTime, and one of signedinUser 
 
 import json
 import re
-from typing import Any, cast
-import urllib.error
 import urllib.parse
-import urllib.request
+from typing import Any, cast
+
+from . import outbound_http
 
 API = "https://meet.googleapis.com/v2/"
 SECONDS = 10  # the sweep polls every live call each beat, so one slow answer must not hold the others long
@@ -53,18 +53,11 @@ def meet_call(method: str, url: str, *, token: str, body: Json | None = None) ->
     if method in ("POST", "PATCH"):
         data = json.dumps(body or {}).encode()
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            status, raw = int(answer.status), bytes(answer.read())
-    except urllib.error.HTTPError as refused:
-        with refused:
-            try:
-                status, raw = refused.code, refused.read()
-            except OSError:
-                status, raw = refused.code, b""
-    except (OSError, ValueError):
+        reply = outbound_http.send(method, url, headers=headers, content=data, timeout=SECONDS)
+    except outbound_http.Failed:
         return 0, {}
+    status, raw = reply.status, reply.content
     try:
         parsed: object = json.loads(raw.decode() or "{}")
     except ValueError:

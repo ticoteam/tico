@@ -58,14 +58,13 @@ import sqlite3
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 
 from . import background
 from . import hubdb as H
+from . import outbound_http
 from . import people as P
 from . import task_privacy as privacy
 from . import visuals
@@ -156,15 +155,13 @@ class SlackAPI:
             headers["Content-Type"] = "application/json; charset=utf-8"
         elif params:
             url += "?" + urllib.parse.urlencode(params)
-        request = urllib.request.Request(url, data=body, headers=headers, method="POST" if post else "GET")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                status, hdrs, raw = response.status, dict(response.headers), response.read()
-        except urllib.error.HTTPError as exc:
-            with exc:
-                status, hdrs, raw = exc.code, dict(exc.headers or {}), exc.read()
-        except Exception as exc:  # URLError, socket timeout, TLS
-            raise SlackUnreachable(f"Slack {method}: {type(exc).__name__}") from exc
+            reply = outbound_http.send(
+                "POST" if post else "GET", url, headers=headers, content=body, timeout=self.timeout
+            )
+        except outbound_http.Failed as exc:
+            raise SlackUnreachable(f"Slack {method}: {type(exc.__cause__ or exc).__name__}") from exc
+        status, hdrs, raw = reply.status, reply.headers, reply.content
         lowered = {k.lower(): v for k, v in hdrs.items()}
         if status == 429:
             try:
@@ -292,25 +289,14 @@ class SlackAPI:
         """(status, content type, bytes) of a file on Slack's file host, with the bot token and no redirect followed:
         a redirect is Slack's sign-in page, and the token never goes anywhere else. Over `limit` bytes is refused."""
 
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
-
-        request = urllib.request.Request(
-            url, headers={"Authorization": "Bearer " + self.bot_token, "User-Agent": "tico-slack-gateway/1"}
-        )
+        headers = {"Authorization": "Bearer " + self.bot_token, "User-Agent": "tico-slack-gateway/1"}
         try:
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
-                status, kind, raw = (
-                    response.status,
-                    response.headers.get("Content-Type") or "",
-                    response.read(limit + 1),
-                )
-        except urllib.error.HTTPError as exc:
-            with exc:
-                return exc.code, "", b""
-        except Exception as exc:  # URLError, socket timeout, TLS
-            raise SlackUnreachable(f"Slack file download: {type(exc).__name__}") from exc
+            reply = outbound_http.send("GET", url, headers=headers, timeout=60, max_bytes=limit)
+        except outbound_http.Failed as exc:
+            raise SlackUnreachable(f"Slack file download: {type(exc.__cause__ or exc).__name__}") from exc
+        if not reply.ok:
+            return reply.status, "", b""
+        status, kind, raw = reply.status, reply.headers.get("Content-Type") or "", reply.content
         if len(raw) > limit:
             raise SlackError("files.download", "file_too_large")
         return status, kind, raw

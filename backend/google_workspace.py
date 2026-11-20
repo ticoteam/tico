@@ -22,9 +22,7 @@ import re
 import secrets
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +35,7 @@ from fastapi.responses import Response
 from pydantic import Field
 
 from . import models as M
-from . import routines
+from . import outbound_http, routines
 from .store import H, Problem
 
 WORKSPACE_SCOPES = {
@@ -356,18 +354,13 @@ def google_call(url, *, data=None, token=None):
     if data is not None:
         body = urllib.parse.urlencode(data).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded"
-    request = urllib.request.Request(url, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=GOOGLE_SECONDS) as answer:
-            status, raw = answer.status, answer.read()
-    except urllib.error.HTTPError as refused:
-        with refused:
-            try:
-                status, raw = refused.code, refused.read()
-            except OSError:
-                status, raw = refused.code, b""
-    except (OSError, ValueError):
+        reply = outbound_http.send(
+            "POST" if body is not None else "GET", url, headers=headers, content=body, timeout=GOOGLE_SECONDS
+        )
+    except outbound_http.Failed:
         return 0, {}
+    status, raw = reply.status, reply.content
     try:
         parsed = json.loads(raw.decode() or "{}")
     except ValueError:
