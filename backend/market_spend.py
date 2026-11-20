@@ -1235,12 +1235,7 @@ def sizing(conn, auth, who):
         }
     elif mine and questions.is_wait(mine.requirement_id):
         # A question filed as a task (backend/questions.py): answered on that task.
-        out["ask"] = {
-            "requirement_id": None,
-            "task_id": str(mine.requirement_id).removeprefix(questions.PREFIX),
-            "kind": "question",
-            "line": mine.line or "",
-        }
+        out["ask"] = {"requirement_id": None, "kind": "question", "line": mine.line or ""}
     elif mine:
         # Any other ask (an OK): its line, and the task to answer it on.
         found = conn.execute("SELECT kind, line FROM requirements WHERE id=?", (mine.requirement_id,)).fetchone()

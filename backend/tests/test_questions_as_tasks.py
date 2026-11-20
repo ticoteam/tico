@@ -487,18 +487,22 @@ def test_with_the_switch_off_a_link_is_left_out_and_the_mark_is_as_before(ruled)
     assert sql(api, "SELECT COUNT(*) AS n FROM question_marks WHERE cleared_at IS NULL") == [{"n": 1}]
 
 
-def test_a_reader_of_the_parent_who_cannot_read_the_question_sees_only_that_one_waits(c, general):
-    from backend import task_calls as TC
+def test_what_the_parent_waits_on_never_names_the_question(c, general):
+    from backend import note_outcomes, task_calls as TC
 
     made = H.task_create(c, BUILDER, "Renew the lease", "", BUILDER, private=True, readers=["cara"], lint=False)
     X.ran(c, made["id"], BUILDER)
     asked = _ask(c, E.task(c, made["id"]), checked=False)  # Ana is let in; the question is hers and the bot's
-    seen = TC.task_view(c, made["id"], CARA)
-    [wait] = [w for w in seen["waits"] if w["state"] == W.PERSON]
-    assert (wait["who"], wait["line"], wait["requirement_id"]) == (ANA, W.QUESTION_UNNAMED, None)
-    assert asked["task_id"] not in str(seen["waits"]) and "Friday" not in str(seen["waits"])
-    [own] = [w for w in TC.task_view(c, made["id"], ANA)["waits"] if w["state"] == W.PERSON]
-    assert own["line"] == ASKED.splitlines()[0] and own["requirement_id"] == Q.wait_id(asked)
+    for viewer in (CARA, ANA):  # whether or not they may open the question
+        [wait] = [w for w in TC.task_view(c, made["id"], viewer)["waits"] if w["state"] == W.PERSON]
+        assert (wait["who"], wait["line"], wait["requirement_id"]) == (ANA, "A question to Ana", "question:" + ANA)
+    said = str(TC.task_view(c, made["id"], CARA)) + str(W.of(c, E.task(c, made["id"])))
+    assert asked["task_id"] not in said and "Friday" not in said
+    # A note's outcome quotes what the task waits on: the same words, never the question's.
+    parent = _parent(c)
+    _ask(c, parent)
+    record = {"sent": {"task": parent["id"]}, "delivery": {"task_id": parent["id"]}}
+    assert note_outcomes.outcome(c, record, actor=ANA)["summary"] == "A question to Ana"
 
 
 def test_the_backfill_skips_a_mark_whose_refs_name_another_task(c, general):

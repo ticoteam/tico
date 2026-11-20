@@ -128,6 +128,17 @@ def wait_id(row: Mapping[str, Any]) -> str:
     return PREFIX + str(row["task_id"])
 
 
+def parent_wait_id(row: Mapping[str, Any]) -> str:
+    """A question's wait id on its parent (waiting_on.of): names the person it waits on, never the question's task, so
+    nothing that lists or tells what the parent waits on can name a question its reader may not open."""
+    return PREFIX + str(row["person_id"])
+
+
+def line(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
+    """What a question's wait on its parent says, to every reader: who it waits on, never its words."""
+    return f"A question to {H.actor_name(conn, row['person_id'])}"
+
+
 def is_wait(value: object) -> bool:
     """Whether a wait's id is a question's (`wait_id`)."""
     return str(value or "").startswith(PREFIX)
@@ -489,8 +500,9 @@ def _held_for_a_person(conn: sqlite3.Connection, q: Mapping[str, Any]) -> bool:
     visit: Row = (parent or {}).get("visit") or {}
     if not parent or parent.get("snooze") or (visit.get("level") or "owner") == "person":
         return True
-    mine = wait_id(q)
-    return any(w.state == W.PERSON and w.requirement_id != mine for w in W.of(conn, parent))
+    if any(other["task_id"] != q["task_id"] for other in on_parent(conn, parent)):
+        return True
+    return any(w.state == W.PERSON and not is_wait(w.requirement_id) for w in W.of(conn, parent))
 
 
 def _answered(conn: sqlite3.Connection, q: Row, by: str, words: str, message_id: str, *, wake: bool) -> Row:
