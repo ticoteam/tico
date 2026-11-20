@@ -10,8 +10,8 @@ describe('updater errors', () => {
   it('treats a missing feed or file as no update, not a failure', () => {
     expect(feedMissing(channelMissing)).toBe(true);
     expect(feedMissing(http(404))).toBe(true);
-    expect(feedMissing(new Error('Cannot download "https://github.com/x/Tico-1.2.0-universal.zip", status 404: Not Found'))).toBe(true);
-    expect(feedMissing(new Error('Cannot download "https://github.com/x/Tico-1.2.0-universal.zip", status 500: Error'))).toBe(false);
+    expect(feedMissing(new Error('Cannot download "https://github.com/x/Tico-1.2.0-arm64.zip", status 404: Not Found'))).toBe(true);
+    expect(feedMissing(new Error('Cannot download "https://github.com/x/Tico-1.2.0-arm64.zip", status 500: Error'))).toBe(false);
     expect(feedMissing(http(500))).toBe(false);
     expect(feedMissing(coded('ERR_UPDATER_INVALID_SIGNATURE'))).toBe(false);
     expect(feedMissing(new Error('net::ERR_INTERNET_DISCONNECTED'))).toBe(false);

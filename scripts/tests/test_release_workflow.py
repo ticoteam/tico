@@ -295,6 +295,59 @@ def test_each_app_builds_only_for_its_own_sources(app_build_decision):
     assert not app_build_decision("desktop", ["desktop/src/main/main.ts", ".github/workflows/desktop.yml"])
 
 
+def _electron_asset_steps():
+    return {step.get("name") or step.get("uses", "").split("@")[0]: step for step in JOBS["electron-assets"]["steps"]}
+
+
+def test_a_new_electron_build_keeps_the_earlier_blockmaps_and_uploads_its_feeds_last():
+    # Delta updates fetch the installed version's blockmap from the latest release, so a new build brings the earlier
+    # ones along; the carry-forward path copies them with everything else. The feeds still go up last.
+    steps = _electron_asset_steps()
+    names = list(steps)
+    keep = steps["Keep the earlier versions' blockmaps"]
+    assert (
+        names.index("actions/download-artifact")
+        < names.index(keep["name"])
+        < names.index("Add the Electron files to the release")
+    )
+    assert "outputs.build == 'true'" in keep["if"] and "outputs.previous != ''" in keep["if"]
+    assert "--skip-existing" in keep["run"] and "--clobber" not in keep["run"]
+    assert "--pattern '*.blockmap'" in steps["Carry the previous release's Electron files forward"]["run"]
+    upload = steps["Add the Electron files to the release"]["run"].strip().splitlines()
+    assert "! -name 'latest*.yml'" in "\n".join(upload[:-1]) and '"${feeds[@]}"' in upload[-1]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("gh", "warned"),
+    [
+        ('printf "%s\\n" "$*" >> "$GH_LOG"', False),
+        ('printf "%s\\n" "$*" >> "$GH_LOG"; echo "no assets match the file pattern" >&2; exit 1', True),
+    ],
+)
+def test_keeping_the_earlier_blockmaps_is_best_effort(tmp_path, gh, warned):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(f"#!/bin/sh\n{gh}\n")
+    (bin_dir / "gh").chmod(0o755)
+    log = tmp_path / "gh.log"
+    env = {
+        **os.environ,
+        "PATH": f'{bin_dir}{os.pathsep}{os.environ["PATH"]}',
+        "GH_LOG": str(log),
+        "PREVIOUS": "v1.0.0",
+        "GITHUB_REPOSITORY": "acme/tico",
+    }
+    script = _electron_asset_steps()["Keep the earlier versions' blockmaps"]["run"]
+    result = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text().splitlines()
+    assert len(calls) == 1  # a release without blockmaps is not retried
+    assert calls[0].startswith("release download v1.0.0 -R acme/tico --dir dist/electron --skip-existing")
+    assert "--pattern *.zip.blockmap --pattern *.exe.blockmap" in calls[0]
+    assert ("::warning::No earlier blockmaps from v1.0.0" in result.stdout) is warned
+
+
 # ---- The release train (train.yml), hotfixes (hotfix.yml) and the validations they dispatch (ci.yml) ----
 
 

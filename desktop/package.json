@@ -12,7 +12,7 @@
     "node": ">=24.15"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-local.mjs",
+    "build": "node scripts/build.mjs && node scripts/copy-local.mjs",
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -20,14 +20,13 @@
     "smoke": "npm run build && node scripts/smoke.mjs",
     "pack:mac": "npm run build && electron-builder --mac --dir"
   },
-  "dependencies": {
-    "electron-updater": "6.8.11"
-  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
     "electron": "45.4.1",
     "electron-builder": "26.18.0",
+    "electron-updater": "6.8.11",
+    "esbuild": "0.28.2",
     "eslint": "10.15.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.73.0",
