@@ -394,6 +394,8 @@ def test_a_permit_is_one_keyed_write_with_the_turn_token_from_its_file(monkeypat
     assert request.full_url == 'http://hub/api/v2/ci/permits'
     assert request.get_header('Authorization') == 'Bearer live-token'
     assert request.get_header('Idempotency-key') == '0123456789ab'
+    # Not urllib's default agent, which Tico's edge answers with 403 before Tico sees the ask.
+    assert request.get_header('User-agent') == 'tico-remote-run'
     assert json.loads(request.data) == {'task_id': 't1', 'remote_id': '0123456789ab', 'cpus': 4, 'minutes': 50}
 
 
