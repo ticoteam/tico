@@ -271,6 +271,9 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-play:hover{background:var(--hover)}
 .li-play.is-on{background:var(--well-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
 .li-play>b{font-weight:var(--w-strong);font-variant-numeric:tabular-nums;padding-right:2px}
+/* in Flow the pressed mark is a label, not a button: the × beside it leaves */
+span.li-play.is-on:hover{background:var(--well-2)}
+.flow-on{display:inline-flex;align-items:center;gap:2px}
 
 .li-run{flex:none;display:flex;align-items:center;gap:2px;height:30px;padding:0 10px 4px 16px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .li-run b{color:var(--ink)}

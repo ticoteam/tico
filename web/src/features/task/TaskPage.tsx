@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useRouter, useSearch } from '@tanstack/react-router';
+import { useEffect, useRef, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { Conversation, MessageBones, SessionLine, type Session } from '@/conversation';
@@ -16,6 +16,8 @@ import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
+import { leaveTask } from '@/lib';
+import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
@@ -29,7 +31,7 @@ import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, MatterBrief, useWaiting, WaitingOnYou, type Waiting } from './Waiting';
-import { waitSlugs } from './waits';
+import { waitSlugs, waitsNow } from './waits';
 import './task.css';
 
 export interface TaskPageProps {
@@ -125,11 +127,33 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = first !== null && tabs.some((x) => x.slug === first) ? first : defaultTab(tabs);
   const on = known ? tab : opened;
+  // Closing: the history steps back, and this page names no tab in the meantime.
+  const leaving = useRef(false);
   useEffect(() => {
-    if (known || unresolved || first === null) return;
+    if (known || unresolved || first === null || leaving.current) return;
     const a = tabAddress(t, opened, flow);
     void navigate({ to: a.to as never, search: a.search as never, replace: true });
   }, [known, unresolved, first, opened, flow, t, navigate]);
+  /* Answered outside Flow (Flow opens its next item itself): while something else on this task waits on the person,
+     its page opens; once nothing does, the task closes, back to the board, list or page it was opened from. */
+  const router = useRouter();
+  const client = useQueryClient();
+  const [seek, setSeek] = useState(0);
+  const sought = useRef(0);
+  useEffect(() => {
+    if (flow) return;
+    return onAnswered(() => {
+      if (waitsNow(client, t.id)) return setSeek((n) => n + 1);
+      leaving.current = true;
+      leaveTask(router);
+    });
+  }, [flow, t.id, client, router]);
+  const asks = tabs.find((x) => x.mark === 'ask')?.slug;
+  useEffect(() => {
+    if (seek === sought.current || !asks) return;
+    sought.current = seek;
+    if (asks !== on) void navigate({ to: tabAddress(t, asks, false).to as never });
+  }, [seek, asks, on, t, navigate]);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;

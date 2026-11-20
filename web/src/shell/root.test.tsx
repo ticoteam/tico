@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRoute, createRouter, Link, RouterProvider } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data/query-client';
@@ -7,13 +7,17 @@ import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
-import type { flowGroups as FlowGroups } from '@/features/tasks/routing';
+import type * as TasksRouting from '@/features/tasks/routing';
+import { pipelineTasksQuery } from '@/features/tasks/routing';
+import { forgetPlaces } from '@/lib';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists } = vi.hoisted(() => ({
   gate: { screen: null as string | null, setup: false },
+  /** Each pipeline's open tasks, as its list read gives them. */
+  lists: {} as Record<string, unknown[]>,
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
 }));
@@ -67,14 +71,25 @@ vi.mock('@/features/calls/routing', () => ({
   isCallActive: (c: { phase: string }) => c.phase === 'live',
 }));
 vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false }));
-vi.mock('@/features/tasks/routing', async () => ({
+vi.mock('@/features/tasks/routing', async () => {
+  const real = await vi.importActual<typeof TasksRouting>('@/features/tasks/routing');
+  return {
   // the real grouping: the open task's list draws Flow's sections from it
-  flowGroups: (await vi.importActual<{ flowGroups: typeof FlowGroups }>('@/features/tasks/routing')).flowGroups,
+  flowGroups: real.flowGroups,
+  // the real address checks: the list beside a task reads its pipeline with the filters its board had
+  filtersOf: real.filtersOf,
+  validateTasksSearch: real.validateTasksSearch,
+  pipelineTasksQuery: vi.fn((pipeline: string, f: object) => ({
+    queryKey: ['tasks', 'list', pipeline, JSON.stringify(f)],
+    queryFn: async () => ({ tasks: lists[pipeline] ?? [], cursor: '' }),
+    staleTime: Infinity,
+  })),
   flowQuery: q('flow', { count: 4, items: [] }),
   pipelinesQuery: q('pipelines', []),
   roadmapPipeline: () => null,
   firstPipeline: (p: { id: string }[]) => p[0]?.id ?? null,
-}));
+  };
+});
 vi.mock('@/features/team/exports', () => ({ TeammateChat: () => null }));
 vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }));
 vi.mock('@/features/team/routing', () => ({ teamSlug: (t: string) => t, whoHref: () => '/', groupsQuery: q('groups', []) }));
@@ -110,13 +125,27 @@ function show(at: string) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
   const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
+  const flow = createRoute({ getParentRoute: () => root, path: '/flow', component: () => <main className="pane page"><h1>Flow page</h1></main> });
   const editor = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/edit', component: () => <main className="pane page"><h1>Edit pipeline</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, task, editor]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
+  // a board whose card opens task 7 as the board's own card does: under its pipeline
+  const board = createRoute({
+    getParentRoute: () => root,
+    path: '/tasks/$pipeline',
+    component: () => (
+      <main className="pane page">
+        <h1>Board</h1>
+        <Link to="/tasks/$pipeline/$task" params={{ pipeline: 'eng', task: '7' }}>Bulk edit stock</Link>
+      </main>
+    ),
+  });
+  const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
+  const router = createRouter({ routeTree: root.addChildren([page, call, task, flow, editor, board, open]), context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+  return router;
 }
 
 function fakeDesktop() {
@@ -149,6 +178,8 @@ beforeEach(() => {
   gate.setup = false;
   catchUpRead.mockClear();
   queryClient.clear();
+  forgetPlaces();
+  for (const k of Object.keys(lists)) delete lists[k];
   resetDesktopReports();
 });
 afterEach(() => {
@@ -276,7 +307,7 @@ describe('an open task', () => {
   const item = (n: number, title: string, stage: string, late = false) => ({ id: `t${n}`, number: n, title, pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', late, stuck: false, since: '2026-11-18T09:00:00Z' });
   afterEach(() => at(1024));
 
-  it('has Flow in the menu’s place: what waits on you by pipeline and stage, the open task chosen; Close folds it @s135', async () => {
+  it('in Flow has what waits on you in the menu’s place, by pipeline and stage, the open task chosen @s135', async () => {
     at(1600);
     people(MAYA, QA);
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null }]);
@@ -289,14 +320,14 @@ describe('an open task', () => {
     expect(open.getAttribute('href')).toBe('/flow/7');
     expect(within(open).getByText('Late')).toBeTruthy();
     expect(within(list).getByRole('link', { name: /Postal codes/ }).classList.contains('is-on')).toBe(false);
-    expect(within(list).getByRole('link', { name: 'Flow' }).textContent).toBe('3');
+    // it says it is Flow, plainly
+    expect(within(list).getByRole('button', { name: 'Flow' })).toBeTruthy();
+    expect(within(list).getByText('Flow · 3')).toBeTruthy();
+    expect(within(list).getByRole('button', { name: 'Exit Flow' }).getAttribute('title')).toBe('Exit Flow');
     expect(await screen.findByText('task chat')).toBeTruthy();
     // a stage's name folds its rows
     fireEvent.click(within(list).getByRole('button', { name: /EngineeringQA/ }));
     expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
-    // Close tucks the list to its edge, out of reach until it opens
-    fireEvent.click(within(list).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull());
   });
 
   it('opened from a thread, keeps that thread beside it in place of the task’s own chat (plan/layers.html)', async () => {
@@ -313,6 +344,99 @@ describe('an open task', () => {
     expect(await screen.findByRole('heading', { name: 'Edit pipeline' })).toBeTruthy();
     expect(screen.queryByText('task chat')).toBeNull();
     expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull();
+  });
+});
+
+describe('a task opened from a board', () => {
+  const at = (w: number) =>
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    });
+  const ENG = { id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null };
+  const row = (n: number, title: string, stage: string) => ({ id: `t${n}`, number: n, title, status: 'open', pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', labels: [], late: false, turn: null, updated_at: '2026-11-18T09:00:00Z', version: 1 });
+  const waits = { id: 't9', number: 9, title: 'Postal codes', pipeline_id: 'eng', stage_id: 'qa', owner_id: 'bot:qa', late: false, stuck: false, since: '2026-11-18T09:00:00Z' };
+  beforeEach(() => {
+    at(1600);
+    people(MAYA, QA);
+    queryClient.setQueryData(['pipelines'], [ENG, { id: 'legal', name: 'Legal', stages: [], done: null }]);
+    queryClient.setQueryData(['flow'], { count: 3, items: [waits] });
+    lists.eng = [row(7, 'Bulk edit stock', 'qa'), row(5, 'Rate fallback', 'review')];
+  });
+  afterEach(() => at(1024));
+  const board = async () => {
+    const router = show('/tasks/eng?owner=bot%3Aqa');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    return router;
+  };
+
+  it('opens in place: beside it the same pipeline, as its board was filtered, the task chosen, never Flow; Back is the board again', async () => {
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/tasks/eng/7');
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull();
+    expect(within(list).getByRole('button', { name: 'Engineering' })).toBeTruthy();
+    expect(within(list).queryByRole('button', { name: 'Exit Flow' })).toBeNull();
+    const open = await within(list).findByRole('link', { name: /Bulk edit stock/ });
+    expect(open.classList.contains('is-on')).toBe(true);
+    expect(open.getAttribute('href')).toBe('/tasks/eng/7');
+    expect(within(list).getByRole('link', { name: /Rate fallback/ }).classList.contains('is-on')).toBe(false);
+    expect(within(list).getAllByRole('button', { name: /^(Review|QA)/ }).map((b) => b.textContent)).toEqual(['Review1', 'QA1']);
+    expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ owner: 'bot:qa' }));
+    // Flow is there to enter, not entered
+    expect(within(list).getByRole('link', { name: 'Flow' }).getAttribute('aria-pressed')).toBe('false');
+    expect(await screen.findByText('task chat')).toBeTruthy();
+    act(() => router.history.back());
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+  });
+
+  it('enters Flow only from its own play mark, and Escape leaves Flow for the task it was entered from', async () => {
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    fireEvent.click(within(list).getByRole('link', { name: 'Flow' }));
+    expect(await screen.findByRole('heading', { name: 'Flow page' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/flow');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/tasks/eng/7');
+  });
+
+  it('in Flow, × (Exit Flow) and Escape go back to the board it was entered from; Escape while typing stays', async () => {
+    const router = await board();
+    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
+    const list = await screen.findByRole('navigation', { name: 'Flow' });
+    expect(within(list).getByText('Flow · 3')).toBeTruthy();
+    fireEvent.click(within(list).getByRole('button', { name: 'Exit Flow' }));
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+
+    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
+    await screen.findByRole('navigation', { name: 'Flow' });
+    const field = document.body.appendChild(document.createElement('input'));
+    fireEvent.keyDown(field, { key: 'Escape' });
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe('/flow/9');
+    field.remove();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+    // off Flow, Escape goes nowhere
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe('/tasks/eng');
+  });
+
+  it('Back from Flow is the board as it was', async () => {
+    const router = await board();
+    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
+    await screen.findByRole('navigation', { name: 'Flow' });
+    act(() => router.history.back());
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
   });
 });
 

@@ -213,16 +213,18 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
       return;
     }
     if (e.key === 'Escape') {
-      if (drag.current) return endDrag(false);
-      if (forward) {
-        cause.current = 'fold';
-        return setOpened(null);
-      }
+      // an Escape the sheets take is marked taken, so a wider way out (leaving Flow) does not also run
       const t = e.target;
       const inChat = places.current.get('chat')?.contains(t as Node);
       const inPanel = places.current.get('panel')?.contains(t as Node);
-      if (inChat && p.arr === 'chat' && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
+      if (drag.current) endDrag(false);
+      else if (forward) {
+        cause.current = 'fold';
+        setOpened(null);
+      } else if (inChat && p.arr === 'chat' && p.onCloseChat && (!typing(t) || !(t as HTMLInputElement).value)) p.onCloseChat();
       else if (inPanel && p.onClosePanel) p.onClosePanel();
+      else return;
+      e.preventDefault();
       return;
     }
     if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;

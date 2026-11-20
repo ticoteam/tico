@@ -10,7 +10,7 @@ import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
-import { flowGroups, flowQuery, pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
+import { filtersOf, flowGroups, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teamSlug, whoHref } from '@/features/team/routing';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
@@ -54,6 +54,7 @@ import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName } from '@/tico/pageName';
+import { boardSearch, isFlowPath, leaveFlow, notePlace } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -177,6 +178,8 @@ function App() {
   // a team's page is a plain page (its thread is a row in Threads); a teammate's page is your DM with them
   const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
+  useNotePlaces();
+  useLeaveFlowKey(isFlowPath(at.path));
 
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
@@ -222,8 +225,11 @@ function App() {
   let list: ReactNode;
   if (arrangement === 'task') {
     const task = top === 'tasks' ? b : a;
-    // Task and Flow are one view: what waits on you stands in the menu's place, the open task chosen
-    list = task ? <TaskList open={decodeURIComponent(task)} /> : undefined;
+    /* Beside the open task, the list it was opened from, the task chosen: inside Flow, what waits on you; under a
+       pipeline, that pipeline's tasks as its board showed them. Flow is entered only on purpose. */
+    if (task && top === 'flow') list = <TaskList open={decodeURIComponent(task)} />;
+    // a task with no pipeline of its own (`all`) has no list: the menu stays in its place
+    else if (task && top === 'tasks' && a && a !== 'all') list = <PipelineList pipeline={decodeURIComponent(a)} open={decodeURIComponent(task)} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -497,6 +503,41 @@ function TeammateSheet({ who }: { who: string }) {
   );
 }
 
+/* ---------------------------------------------------------------- where the person came from */
+
+/** Every address shown is noted (lib/places.ts), so leaving Flow and closing a task go back to where they started. */
+function useNotePlaces() {
+  const router = useRouter();
+  useEffect(() => {
+    const note = (l: { pathname: string; searchStr: string; search: unknown; state: unknown }) =>
+      notePlace(l.pathname.replace(/^\/next(?=\/|$)/, '') || '/', l.searchStr, l.search as Record<string, unknown>, l.state);
+    note(router.state.location);
+    return router.subscribe('onResolved', (ev) => note(ev.toLocation));
+  }, [router]);
+}
+
+/** A field, or an open dialog or menu: their own Escape comes first. */
+const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"], dialog[open]';
+const typingIn = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+
+/** In Flow, Escape leaves it: back to the page it was entered from. Not while typing, nor over a dialog or a menu,
+    nor when a sheet took the key (its own Escape). */
+function useLeaveFlowKey(on: boolean) {
+  const router = useRouter();
+  useEffect(() => {
+    if (!on) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (typingIn(e.target) || document.querySelector(OVERLAY)) return;
+      e.preventDefault();
+      leaveFlow(router);
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [on, router]);
+}
+
 /* ---------------------------------------------------------------- an open task's list */
 
 function ListFace({ id }: { id: string | null }) {
@@ -508,11 +549,11 @@ function ListFace({ id }: { id: string | null }) {
    and stage, the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
    the list to the menu's icons. */
 function TaskList({ open }: { open: string }) {
-  const sheet = useSheet();
   const { data: flow } = useQuery(flowQuery);
   const { data: pipes = [] } = useQuery(pipelinesQuery);
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
+  const router = useRouter();
   const groups = flowGroups(flow?.items ?? [], pipes);
   return (
     <Sheet kind="list" label="Flow">
@@ -521,22 +562,22 @@ function TaskList({ open }: { open: string }) {
           align="start"
           trigger={
             <button className="li-pick" type="button">
-              All pipelines
+              Flow
               <Icon name="chevdown" />
             </button>
           }
         >
-          <MenuItem label="All pipelines" on onSelect={() => undefined} />
+          <MenuItem label="Flow" on onSelect={() => undefined} />
           {pipes.map((p) => (
             <MenuItem key={p.id} label={p.name} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(p.id)}` })} />
           ))}
         </DropMenu>
         <span className="grow" />
-        <Link to="/tasks" className="li-play is-on" aria-pressed aria-label="Flow" title="Flow">
+        <span className="li-play is-on">
           <FlowMark play live />
-          {flow?.count ? <b>{flow.count}</b> : null}
-        </Link>
-        {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}
+          <b>{flow?.count ? `Flow · ${flow.count}` : 'Flow'}</b>
+        </span>
+        <IconButton icon="close" label="Exit Flow" quiet onClick={() => leaveFlow(router)} />
       </header>
       <div className="nav-scroll li-body">
         {flow && !groups.length ? <Empty title="Nothing waits on you" /> : null}
@@ -582,5 +623,78 @@ function TaskList({ open }: { open: string }) {
         ))}
       </div>
     </Sheet>
+  );
+}
+
+/* Beside a task opened under a pipeline, in the menu's place: that pipeline's open tasks by stage, with the filters
+   its board was last shown with, the open task chosen. The pick goes to another pipeline's board, the play mark
+   enters Flow, and Close folds the list to the menu's icons. */
+function PipelineList({ pipeline, open }: { pipeline: string; open: string }) {
+  const sheet = useSheet();
+  const me = useQuery(meQuery).data?.id;
+  const { data: flow } = useQuery(flowQuery);
+  const { data: pipes } = useQuery(pipelinesQuery);
+  const p = pipes?.find((x) => x.id === pipeline);
+  const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
+  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
+  const rows = page?.tasks ?? [];
+  const stages = (p?.stages ?? []).map((s) => ({ ...s, items: rows.filter((t) => t.stage_id === s.id) })).filter((s) => s.items.length);
+  const name = p?.name ?? 'Tasks';
+  return (
+    <Sheet kind="list" label={name}>
+      <header className="li-head">
+        <DropMenu
+          align="start"
+          trigger={
+            <button className="li-pick" type="button">
+              {name}
+              <Icon name="chevdown" />
+            </button>
+          }
+        >
+          {(pipes ?? []).map((x) => (
+            <MenuItem key={x.id} label={x.name} on={x.id === pipeline} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(x.id)}` })} />
+          ))}
+        </DropMenu>
+        <span className="grow" />
+        <Link to="/flow" className="li-play" aria-pressed={false} aria-label="Flow" title="Flow">
+          <FlowMark play />
+          {flow?.count ? <b>{flow.count}</b> : null}
+        </Link>
+        {sheet.canFold ? <IconButton icon="close" label="Close" quiet onClick={sheet.toggleFold} /> : null}
+      </header>
+      <div className="nav-scroll li-body">
+        {page && !stages.length ? <Empty title="No open tasks" /> : null}
+        {stages.map((g) => (
+          <Fragment key={g.id}>
+            <div className="li-sec">
+              <h2 className="sec-name">
+                <FoldButton name={g.name} count={g.items.length} open={!shut.has(g.id)} onToggle={() => flip(g.id)} />
+              </h2>
+            </div>
+            {shut.has(g.id) ? null : g.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} me={me} />)}
+          </Fragment>
+        ))}
+      </div>
+    </Sheet>
+  );
+}
+
+function PipelineRow({ t, pipeline, open, me }: { t: TaskItem; pipeline: string; open: string; me: string | undefined }) {
+  const n = String(t.number ?? t.id);
+  const waits = !!me && t.turn?.state === 'person' && t.turn.who === me;
+  return (
+    <Link to="/tasks/$pipeline/$task" params={{ pipeline, task: n }} className={n === open || t.id === open ? 'li is-on' : 'li'} title={t.title} data-target={`task:${n}`}>
+      <span className="li-mark">{waits ? <FlowMark size={10} /> : null}</span>
+      <span className="li-main">
+        <span className="li-title">{t.title}</span>
+        {t.late ? <LatePill /> : null}
+      </span>
+      <span className="li-who">
+        <ListFace id={t.owner_id} />
+        <Ago at={t.stage_since ?? t.updated_at} className="row-age" />
+      </span>
+    </Link>
   );
 }

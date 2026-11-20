@@ -49,3 +49,18 @@ export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<bool
   );
   return found.some(Boolean);
 }
+
+/** Whether anything on a task waits on the person now, from what is already read: its own ask, or an email's OK hung
+    on it whose email is still to go out. */
+export function waitsNow(client: QueryClient, id: string): boolean {
+  const t = client.getQueryData(taskDetailQuery(id).queryKey);
+  if (!t) return false;
+  if (decisionOf(t)) return true;
+  return sendTasksOf(t).some((sid) => {
+    const sub = client.getQueryData(taskDetailQuery(sid).queryKey);
+    if (!sub || !decisionOf(sub)) return false;
+    const send = emailOf(decisionOf(sub));
+    const mail = send ? client.getQueryData(emailSendQuery(sub.id, send).queryKey) : undefined;
+    return !mail || stillToGo(mail.send.state);
+  });
+}
