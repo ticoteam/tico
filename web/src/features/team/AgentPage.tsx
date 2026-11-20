@@ -11,13 +11,13 @@ import { Link } from '@/kit/Link';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
-import { fmtDate, fmtMoney } from '@/lib';
+import { fmtMoney } from '@/lib';
 import { FiguresStrip, PageMore, Record as RecordPage, Section } from '@/pagekinds';
 import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
-import { CopiesSection, CopyFacts, CopyPick } from './Copies';
+import { CopiesSection, CopyFacts, CopyPick, useCanMakeCopy } from './Copies';
 import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
 import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
@@ -83,6 +83,10 @@ export function AgentPage({ actor, tab }: AgentPageProps) {
   );
 }
 
+/** "Tue, Nov 17, 4:20 PM" (rules.md dates). */
+const stamp = (iso: string) =>
+  new Date(iso).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 interface Head {
   title: string;
   path: string;
@@ -123,6 +127,8 @@ function AgentHead({
   const [archiving, setArchiving] = useState(false);
   const [listing, setListing] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const canCopy = useCanMakeCopy(slug);
   const { data: stop } = useQuery(lastStopQuery(slug));
   const { canEdit } = useLists(slug);
   const head: Head = {
@@ -132,11 +138,14 @@ function AgentHead({
     size: 'large',
     onRename: row?.can_manage === false ? undefined : (name) => void rename.run({ slug, name }),
     lead: <Avatar kind="agent" name={actor.name} hue={actor.hue} live={actor.working} size={36} />,
+    // The pick and the marks stand beside the name; the model is the one quiet line under it (t-bot).
     after: (
       <>
-        <CopyPick slug={slug} botId={row?.id ?? bareId(actor.id)} />
-        {paused && <Pill flag>Paused</Pill>}
-        <LastRun slug={slug} actor={actor} manage={row?.can_manage !== false} open={stopOpen} onOpenChange={setStopOpen} />
+        <span className="col-marks">
+          <CopyPick slug={slug} botId={row?.id ?? bareId(actor.id)} making={copying} onMaking={setCopying} />
+          {paused && <Pill flag>Paused</Pill>}
+          <LastRun slug={slug} actor={actor} manage={row?.can_manage !== false} open={stopOpen} onOpenChange={setStopOpen} />
+        </span>
         {sub && <p className="col-sub">{sub}</p>}
       </>
     ),
@@ -161,6 +170,7 @@ function AgentHead({
           <MenuItem label="Dream" icon="asleep" onSelect={() => void dream.run({ slug })} />
           {stop && <MenuItem label="Last run" icon="clock" onSelect={() => setStopOpen(true)} />}
           {canEdit && !settings && <MenuItem label="New list" icon="list" onSelect={() => setListing(true)} />}
+          {canCopy && <MenuItem label="Make my copy" icon="plus" onSelect={() => setCopying(true)} />}
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
@@ -312,6 +322,8 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const botId = bareId(actor.id);
   const team = teamOf(groups.data ?? [], 'agent', botId);
   const reportsTo = row?.reports_to ?? detail.data?.reports_to ?? '';
+  const bossName = detail.data?.reports_to_name;
+  const boss = reportsTo ? actors.find((a) => bareId(a.id) === bareId(reportsTo)) : bossName ? actors.find((a) => a.name === bossName) : undefined;
   const computer = computers.data?.find((c) => c.id === row?.machine?.runner_id) ?? computers.data?.find((c) => c.bots?.includes(botId));
   const role = row?.description ?? detail.data?.description ?? '';
   const manage = row?.can_manage !== false;
@@ -319,7 +331,10 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
   const history = historyOf(runs.data ?? [], learned.data ?? [], changes.data ?? []);
   const lead = (instructions.data?.content ?? '')
     .split(/\n\s*\n/)
-    .map((p) => p.replace(/^#+\s*/, '').trim())
+    // a heading is the file's own title (often the agent's name): the lines start with what it says
+    .filter((p) => !/^#+\s/.test(p.trim()))
+    // read as prose: no list dashes, emphasis or code marks
+    .map((p) => p.replace(/^\s*[-*]\s+/gm, '').replace(/\*\*|__|`/g, '').trim())
     .filter(Boolean)
     .slice(0, 2);
 
@@ -331,9 +346,12 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
           <Section name="Info">
             <Facts label="Info">
               <CopyFacts slug={slug} botId={botId} manage={manage} />
-              <LabelValue label="Role" onEdit={manage ? () => setEditing('role') : undefined}>
-                {role || 'None'}
-              </LabelValue>
+              {/* a role is a sentence: it wraps, and opens its editor (mates.css .fact.is-wrap) */}
+              <div className="fact-wrap">
+                <LabelValue label="Role" onEdit={manage ? () => setEditing('role') : undefined}>
+                  {role || 'None'}
+                </LabelValue>
+              </div>
               <PickLine
                 label="Team"
                 options={(groups.data ?? []).map((g) => ({ value: g.id, label: g.name }))}
@@ -347,6 +365,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
                 options={actors.filter((a) => a.id !== actor.id).map((a) => ({ value: bareId(a.id), label: a.name }))}
                 value={reportsTo}
                 shown={detail.data?.reports_to_name ?? 'Nobody'}
+                face={boss && <Avatar kind={boss.kind} name={boss.name} hue={boss.hue} size={22} decorative />}
                 action={manage ? 'agents.setReportsTo' : undefined}
                 input={(to) => ({ slug, to })}
               />
@@ -388,7 +407,7 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
                     <p key={i}>{p}</p>
                   ))}
                 </Link>
-                {instructions.data.updated_at && <p className="ins-by">{fmtDate(new Date(instructions.data.updated_at))}</p>}
+                {instructions.data.updated_at && <p className="ins-by">{stamp(instructions.data.updated_at)}</p>}
               </div>
             )}
             {row?.agent && manage && (

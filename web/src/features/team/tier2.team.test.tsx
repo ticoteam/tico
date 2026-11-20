@@ -275,7 +275,8 @@ describe('Copies of an agent', () => {
       return undefined;
     });
     show(<TeamWho who="ana" />, '/team/ana');
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy: Original' }));
+    // with no copy yet, Make my copy is in ⋯ (the pick beside the name comes with the first copy)
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Make my copy' }));
     const dialog = await screen.findByRole('dialog', { name: 'Make my copy' });
     expect(within(dialog).getByText(/You have no computer yet/)).toBeTruthy();

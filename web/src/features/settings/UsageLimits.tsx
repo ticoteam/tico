@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
 import type { UsageLimitView, UsageLimits } from '@/api/schema';
+import { configQuery } from '@/data';
 import { agentsQuery } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -16,7 +17,7 @@ import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { refusal } from '@/actions';
 import { Section, SidePanel } from '@/pagekinds';
-import { Foot, Meter, SwitchLine, Verb, Word, act, useEveryone, useFaces, usd } from './parts';
+import { Foot, Meter, SwitchLine, Verb, Word, act, dollars, useEveryone, useFaces, usd } from './parts';
 import { agentUsageQuery, limitsQuery, poolsOf, taskCapsQuery, type UsagePool } from './queries';
 import type { UsageSearch } from './Usage';
 
@@ -149,15 +150,25 @@ function subtree(groups: Record<string, UsagePool>, gid: string): Set<string> {
   return all;
 }
 
+/** Used, the limit and its period (t-limits): a row with no limit leaves those two empty. */
 function Spent({ spent, limit }: { spent: number | null; limit: number | null }) {
   return (
     <>
-      <span className="row-fig u-used">{usd(spent ?? 0)}</span>
-      <span className="row-fig l-of">{limit != null ? `of ${usd(limit)}` : 'No limit'}</span>
-      <span className="row-cell u-per">month</span>
+      <span className="row-fig u-used">{dollars(spent ?? 0)}</span>
+      <span className="row-fig l-of">{limit != null ? dollars(limit) : ''}</span>
+      <span className="row-cell u-per">{limit != null ? 'Month' : ''}</span>
     </>
   );
 }
+
+/** The column words, on the first section's head (t-limits). */
+const COLS = (
+  <span className="lim-cols" aria-hidden="true">
+    <span>Used</span>
+    <span>Limit</span>
+    <span>Per</span>
+  </span>
+);
 
 function State({ blocked, percent }: { blocked: string | null; percent: number }) {
   return blocked ? <Word>Paused</Word> : percent >= 90 ? <Pill flag>Near</Pill> : null;
@@ -169,12 +180,11 @@ function PoolRow({ id, name, pool, depth, search }: { id: string; name: string; 
     <Link
       to="/company/usage"
       search={openOf(search, id)}
-      className={pool.blocked ? 'row g-lim is-bad' : 'row g-lim'}
+      className={pool.blocked ? 'row g-lim is-pool is-bad' : 'row g-lim is-pool'}
       data-target={`limit:${id === POOL + COMPANY ? COMPANY : id.replace(POOL, 'team:')}`}
       aria-expanded={isOpen}
       title={name}
     >
-      <Icon name={id === POOL + COMPANY ? 'company' : 'people'} />
       <span className="row-title" style={depth ? { ['--depth' as string]: depth } : undefined}>
         {name}
         <State blocked={pool.blocked} percent={pool.percent} />
@@ -189,6 +199,8 @@ function PoolRow({ id, name, pool, depth, search }: { id: string; name: string; 
 
 export function Limits({ search }: { search: UsageSearch }) {
   const limits = useQuery(limitsQuery);
+  // the company's name, from what the app already read; this view sends no read of its own for it
+  const company = useQuery({ ...configQuery, enabled: false }).data?.company_name;
   const faces = useFaces();
   const [editing, setEditing] = useState<Editing>(null);
   const v = limits.data;
@@ -217,8 +229,8 @@ export function Limits({ search }: { search: UsageSearch }) {
         {v.may_edit_default && <ClearQueue teams={teams} />}
       </Section>
       {pools?.company && (
-        <Section name="Company" target="limit:company">
-          <PoolRow id={POOL + COMPANY} name="Whole company" pool={pools.company} search={search} />
+        <Section name="Company" target="limit:company" actions={COLS}>
+          <PoolRow id={POOL + COMPANY} name={company || 'Whole company'} pool={pools.company} search={search} />
         </Section>
       )}
       {teams.length > 0 && (

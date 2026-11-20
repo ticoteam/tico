@@ -6,7 +6,7 @@ import { Dialog } from '@/kit/Dialog';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { effortLabel } from './model';
+import { effortLabel, modelName } from './model';
 import { agentQuery, COMPACT_AT, modelsQuery, type AgentRow } from './queries';
 import './team.css';
 
@@ -113,7 +113,7 @@ export function ModelPicker({
               onClick={() => pickModel(m.id)}
             >
               <span className="radio-box" />
-              <span>{m.label}</span>
+              <span>{modelName(m.label)}</span>
               {m.id === data?.default?.model && <em>Default</em>}
             </button>
           ))}

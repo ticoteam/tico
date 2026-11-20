@@ -169,7 +169,8 @@ describe('Copies of an agent', () => {
       return undefined;
     });
     show(<TeamWho who="ana" />, '/team/ana');
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy: Original' }));
+    // with no copy yet, Make my copy is in ⋯ (the pick beside the name comes with the first copy)
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Make my copy' }));
     expect(await screen.findByRole('combobox', { name: 'Computer' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Make copy' }));

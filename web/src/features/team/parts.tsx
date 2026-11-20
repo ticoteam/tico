@@ -177,6 +177,7 @@ export function PickLine({
   input,
   onPick,
   trail,
+  face,
 }: {
   label: string;
   options: readonly SelectOption[];
@@ -189,6 +190,8 @@ export function PickLine({
   onPick?: (value: string) => void;
   /** At the line's end, outside the pick (LabelValue's `trail`). */
   trail?: ReactNode;
+  /** Before the value: the face of who it names (Reports to, t-settings). */
+  face?: ReactNode;
 }) {
   const save = useAction(action ?? '');
   const words = options.find((o) => o.value === value)?.label ?? shown;
@@ -196,13 +199,21 @@ export function PickLine({
   if (!pick)
     return (
       <LabelValue label={label} trail={trail}>
-        {words}
+        {face ? (
+          <span className="fact-face">
+            {face}
+            {words}
+          </span>
+        ) : (
+          words
+        )}
       </LabelValue>
     );
   const line = (
     <div className="fact">
       <span>{label}</span>
       <span className="fact-v">
+        {face}
         <Select
           label={label}
           labelHidden

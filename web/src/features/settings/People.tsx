@@ -108,16 +108,18 @@ export function Joining({ v }: { v: AccessFull }) {
         </Line>
         {v.member_bot_limit != null && (
           <Line label="Agents a person" target="setting:agent-limit">
-            <Field
-              label="Agents a person"
-              labelHidden
-              type="number"
-              wide={false}
-              value={limit}
-              onValueChange={setLimit}
-              error={badLimit ? '0 to 1000' : undefined}
-            />
-            <Verb onClick={saveLimit}>Save</Verb>
+            {/* a number saves on Enter or when you leave it (builder rules: text on Enter or blur) */}
+            <span className="set-num" onBlur={saveLimit} onKeyDown={(e) => e.key === 'Enter' && saveLimit()}>
+              <Field
+                label="Agents a person"
+                labelHidden
+                type="number"
+                wide={false}
+                value={limit}
+                onValueChange={setLimit}
+                error={badLimit ? '0 to 1000' : undefined}
+              />
+            </span>
           </Line>
         )}
       </Facts>

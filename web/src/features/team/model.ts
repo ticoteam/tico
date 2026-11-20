@@ -81,6 +81,15 @@ export const teamOf = (groups: readonly Group[], kind: 'agent' | 'person', id: s
   groups.find((g) => (kind === 'agent' ? g.bots : g.people).includes(id));
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const CLAUDE = new Set(['opus', 'sonnet', 'haiku', 'fable']);
+/** The server names models in lower case ("opus 5.5", "gpt 6.2 sol"); on screen they read "Claude Opus 5.5" and
+    "GPT 6.2 Sol" (rules.md). A name already in capitals is left as it is. */
+export function modelName(label: string | null | undefined): string {
+  if (!label) return '';
+  if (/[A-Z]/.test(label)) return label;
+  const words = label.split(' ').map((w) => (w === 'gpt' ? 'GPT' : cap(w)));
+  return CLAUDE.has(label.split(' ')[0] ?? '') ? `Claude ${words.join(' ')}` : words.join(' ');
+}
 const EFFORT: Record<string, string> = { xhigh: 'XHigh' };
 export const effortLabel = (e: string | null | undefined) => (e ? (EFFORT[e] ?? cap(e)) : 'Default');
 
@@ -89,7 +98,7 @@ export function modelLine(row: Pick<AgentRow, 'model' | 'resolved_model' | 'reso
   const id = row.resolved_model || row.model;
   const label = models?.find((m) => m.id === id)?.label ?? row.resolved_model_label ?? id;
   if (!label) return '';
-  return `${cap(label)}, ${effortLabel(row.reasoning_effort || null)}`;
+  return `${modelName(label)}, ${effortLabel(row.reasoning_effort || null)}`;
 }
 
 /* ---------------------------------------------------------------- figures */

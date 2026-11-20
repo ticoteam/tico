@@ -120,6 +120,13 @@ export function Foot({ children, open }: { children: ReactNode; open?: boolean }
 }
 
 /** Dollars: whole above 100, cents below. */
+/** Whole dollars, for a table of spend ("$1,284", "$40"; more.js): cents only below a dollar. */
+export function dollars(n: number | null | undefined): string {
+  if (n == null) return '—';
+  if (n > 0 && n < 1) return usd(n);
+  return '$' + Math.round(n).toLocaleString('en-US');
+}
+
 export function usd(n: number | null | undefined): string {
   if (n == null) return '—';
   if (n > 0 && n < 0.01) return '<$0.01';

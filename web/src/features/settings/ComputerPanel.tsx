@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { agentsQuery, computersQuery as teamComputers, whoHref } from '@/features/team/routing';
+import { agentsQuery, computersQuery as teamComputers, modelName, whoHref } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -134,7 +134,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
                 <Link key={r.slug} className="row cp-agent" href={a ? whoHref(a) : `/team/${encodeURIComponent(r.slug)}`} title={who}>
                   <Avatar kind="agent" name={who} hue={a?.hue} decorative />
                   <span className="row-title">{who}</span>
-                  <span className="row-cell">{(r.resolved_model_label ?? r.resolved_model ?? r.model ?? '').replace(/^Claude /, '')}</span>
+                  <span className="row-cell">{modelName(r.resolved_model_label ?? r.resolved_model ?? r.model).replace(/^Claude /, '')}</span>
                 </Link>
               );
             })

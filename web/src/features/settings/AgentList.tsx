@@ -4,7 +4,7 @@ import { useState, type HTMLAttributes } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery, useDirectory, type Directory } from '@/data';
 import { ModelPicker } from '@/features/team/exports';
-import { agentsQuery, computersQuery, type AgentRow } from '@/features/team/routing';
+import { agentsQuery, computersQuery, effortLabel, modelName, type AgentRow } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -139,7 +139,7 @@ function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: 
           label="Model"
           value={model || null}
           placeholder="Pick a model"
-          options={shown.map((m) => ({ value: m.id, label: m.label, ...(m.id === v?.default?.model ? { meta: 'Default' } : {}) }))}
+          options={shown.map((m) => ({ value: m.id, label: modelName(m.label), ...(m.id === v?.default?.model ? { meta: 'Default' } : {}) }))}
           onValueChange={(m) => {
             setModel(m);
             if (!usable.find((x) => x.id === m)?.efforts?.includes(effort)) setEffort('');
@@ -396,7 +396,7 @@ function AgentOpen({ slug, name, listed }: { slug: string; name: string; listed?
     <>
       <Facts label={name}>
         <Line label="Model">
-          {row?.resolved_model_label ?? row?.resolved_model ?? row?.model ?? 'None'}
+          {modelName(row?.resolved_model_label ?? row?.resolved_model ?? row?.model) || 'None'}
           {manage && row && <Verb onClick={() => setEditing('model')}>Change</Verb>}
         </Line>
         {listed && (
@@ -459,12 +459,11 @@ type Row = AgentRow & { compact_at?: number | null; task_model?: TaskModel | nul
 type Machine = NonNullable<ReturnType<typeof useMachines>>[number];
 
 const brief = (m?: string | null) => (m ?? '').replace(/^Claude /, '');
-const cap = (w?: string | null) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : '');
 const tokensK = (n?: number | null) => (!n ? '' : n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`);
 
 /** "Haiku 5.5, High, 400K": the model without its maker's name, its effort, where it compacts. */
 export function modelWords(r?: Row): string {
-  return [brief(r?.resolved_model_label ?? r?.resolved_model ?? r?.model), cap(r?.resolved_effort ?? r?.reasoning_effort), tokensK(r?.compact_at)]
+  return [brief(modelName(r?.resolved_model_label ?? r?.resolved_model ?? r?.model)), (r?.resolved_effort ?? r?.reasoning_effort) ? effortLabel(r?.resolved_effort ?? r?.reasoning_effort) : '', tokensK(r?.compact_at)]
     .filter(Boolean)
     .join(', ');
 }
@@ -526,7 +525,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
         <Select
           label="Model"
           value={model}
-          options={[{ value: '', label: 'Same as the agent' }, ...usable.map((m) => ({ value: m.id, label: m.label }))]}
+          options={[{ value: '', label: 'Same as the agent' }, ...usable.map((m) => ({ value: m.id, label: modelName(m.label) }))]}
           onValueChange={(m) => {
             setModel(m);
             if (!usable.find((x) => x.id === m)?.efforts?.includes(effort)) setEffort('');
@@ -536,7 +535,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
           <Select
             label="Effort"
             value={effort}
-            options={[{ value: '', label: 'Default' }, ...efforts.map((e) => ({ value: e, label: cap(e) }))]}
+            options={[{ value: '', label: 'Default' }, ...efforts.map((e) => ({ value: e, label: effortLabel(e) }))]}
             onValueChange={setEffort}
           />
         )}
@@ -598,7 +597,7 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
   const models = useQuery(modelsQuery);
   const manage = r?.can_manage !== false;
   const tm = r?.task_model;
-  const tasks = tm?.model ? brief(models.data?.models.find((m) => m.id === tm.model)?.label ?? tm.model) : '';
+  const tasks = tm?.model ? brief(modelName(models.data?.models.find((m) => m.id === tm.model)?.label ?? tm.model)) : '';
   const at = r?.machine?.runner_id;
   const computer = r?.machine?.label ?? machines.find((m) => m.id === at)?.label;
   const edit = (what: Change['what']) => () => onEdit({ what, slug, name: a.name });
@@ -618,7 +617,7 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
         {modelWords(r) || 'None'}
       </ValueButton>
       {tm?.model || tm?.reasoning_effort ? (
-        <ValueButton label={`${a.name}'s tasks`} more={cap(tm.reasoning_effort)} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
+        <ValueButton label={`${a.name}'s tasks`} more={tm.reasoning_effort ? effortLabel(tm.reasoning_effort) : undefined} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
           {tasks || 'Same'}
         </ValueButton>
       ) : (
@@ -704,6 +703,8 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
       })
     : all;
   const checked = [...picked].filter((s) => shown.some((a) => slugOf(a) === s));
+  // the head's box checks every agent shown that you may change
+  const mayPick = shown.map(slugOf).filter((x) => rowOf(x)?.can_manage !== false);
   const retired = (bots.data ?? []).filter((b) => b.state === 'archived' && mayRestore(b));
 
   // A computer or a subscription with no agents is still a group; an agent sits under the plan it uses first.
@@ -798,7 +799,8 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
             ) : (
               <>
                 <Search label="Search agents, models or computers" placeholder="Search agents, models or computers" value={q} onValueChange={setQ} />
-                <span className="tools-n">{agentsWord(shown.length)}</span>
+                {/* how many a search finds; the sections count the rest (t-settings-fleet) */}
+                {q.trim() && <span className="tools-n">{agentsWord(shown.length)}</span>}
               </>
             )}
             {!fixed && (
@@ -808,8 +810,13 @@ export function AgentList({ open, section = 'agents' }: { open?: string; section
               </span>
             )}
           </div>
-          <div className="tbl-head g-bots g-fleet" aria-hidden="true">
-            <span />
+          <div className="tbl-head g-bots g-fleet">
+            <Checkbox
+              label={<span className="set-hide">Check all</span>}
+              checked={mayPick.length > 0 && mayPick.every((x) => picked.has(x))}
+              disabled={mayPick.length === 0}
+              onCheckedChange={(on) => setPicked(on ? new Set(mayPick) : new Set())}
+            />
             <span />
             <span>Agent</span>
             <span>Model</span>

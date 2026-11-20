@@ -34,36 +34,44 @@ function useCopies(slug: string) {
   return { b, original, copies, mine, label, canMake };
 }
 
-/** The pick beside the name: Original, then each person's copy, then Make my copy. Nothing for an agent with neither. */
-export function CopyPick({ slug, botId }: { slug: string; botId: string }) {
+/** Whether you may make your own copy of this agent: ⋯ offers it while the agent has no copies yet. */
+export function useCanMakeCopy(slug: string): boolean {
+  const { canMake, copies } = useCopies(slug);
+  return canMake && copies.length === 0;
+}
+
+/** The pick beside the name: Original, then each person's copy, then Make my copy. Only once a copy exists (t-bot has
+    none; t-copy-pick); before that, Make my copy is in ⋯. `making` opens the Make my copy dialog from there. */
+export function CopyPick({ slug, botId, making, onMaking }: { slug: string; botId: string; making: boolean; onMaking: (open: boolean) => void }) {
   const open = useAction('team.open');
   const { b, original, copies, label, canMake } = useCopies(slug);
-  const [making, setMaking] = useState(false);
-  if (!b || (!b.shared && !copies.length)) return null;
+  if (!b) return null;
   const here = b.original === botId ? 'Original' : (copies.find((x) => x.id === botId) && label(copies.find((x) => x.id === botId)!)) || 'Original';
   return (
     <>
-      <Menu
-        align="start"
-        trigger={
-          <ValueButton look="scope" className="copy-pick" label={`Copy: ${here}`}>
-            {here}
-          </ValueButton>
-        }
-      >
-        <MenuItem label="Original" on={b.original === botId} onSelect={() => original && void open.run({ who: original.slug })} />
-        {copies.map((x) => (
-          // A copy opens on Settings: what is its own to change, then what follows the original (t-copy).
-          <MenuItem key={x.id} label={label(x)} on={x.id === botId} disabled={x.status === 'archived'} onSelect={() => void open.run({ who: x.slug, tab: 'settings' })} />
-        ))}
-        {canMake && (
-          <>
-            <MenuRule />
-            <MenuItem label="Make my copy" icon="plus" onSelect={() => setMaking(true)} />
-          </>
-        )}
-      </Menu>
-      {original && <MakeCopy open={making} onOpenChange={setMaking} source={original.slug} b={b} />}
+      {copies.length > 0 && (
+        <Menu
+          align="start"
+          trigger={
+            <ValueButton look="scope" className="copy-pick" label={`Copy: ${here}`}>
+              {here}
+            </ValueButton>
+          }
+        >
+          <MenuItem label="Original" on={b.original === botId} onSelect={() => original && void open.run({ who: original.slug })} />
+          {copies.map((x) => (
+            // A copy opens on Settings: what is its own to change, then what follows the original (t-copy).
+            <MenuItem key={x.id} label={label(x)} on={x.id === botId} disabled={x.status === 'archived'} onSelect={() => void open.run({ who: x.slug, tab: 'settings' })} />
+          ))}
+          {canMake && (
+            <>
+              <MenuRule />
+              <MenuItem label="Make my copy" icon="plus" onSelect={() => onMaking(true)} />
+            </>
+          )}
+        </Menu>
+      )}
+      {original && making && <MakeCopy open onOpenChange={onMaking} source={original.slug} b={b} />}
     </>
   );
 }
