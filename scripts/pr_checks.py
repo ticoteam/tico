@@ -150,6 +150,16 @@ def script_tests(root):
     )
 
 
+def large_deletion(changed, root):
+    """What makes a change a large deletion (rule 12), or None: a gone top-level folder, or more than LARGE_DELETION
+    gone files. It reads every changed path, owned data and unread ones included, before any rule filters them."""
+    gone = [n for n in changed if not (root / n).is_file()]
+    folders = sorted({n.split("/", 1)[0] for n in gone if "/" in n and not (root / n.split("/", 1)[0]).exists()})
+    if folders:
+        return f"top-level folder {', '.join(folders)} gone"
+    return f"{len(gone)} files gone" if len(gone) > LARGE_DELETION else None
+
+
 def with_slow(files, root, graph):
     """Those of `files` that hold a slow test."""
     return {f for f in files if (root / f).is_file() and (tree := graph.parse(f)) is not None and slow_tests(tree)}
@@ -1159,11 +1169,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if not changed:
         uncertain.append("empty diff: nothing to map")
         return plan(smoke(root), reason="empty diff: smoke set")
+    large = large_deletion(changed, root)  # rule 12 counts every gone path, owned data and unread ones included
     names = [n for n in changed if not unread(n)]
     owned = [n for n in names if owned_data(n)]  # OWNED_DATA first: these never reach the generic data path
     owned_tests = {test for n in owned for test in owned_data(n)[1]}
     names = [n for n in names if n not in owned]
-    if not names:
+    if not names and not large:
         if owned:
             return plan(owned_tests, reason=owned_reason(owned))
         return plan(reason="documentation that no test or script reads")
@@ -1268,14 +1279,12 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         script_sweeps |= with_slow(readers, root, graph)
     if workflows:
         notes.append("rule 11: a workflow runs the script tests that name it, slow tests included")
-    folders = sorted({n.split("/", 1)[0] for n in gone if "/" in n and not (root / n.split("/", 1)[0]).exists()})
-    if folders or len(gone) > LARGE_DELETION:  # rule 12
+    if large:  # rule 12
         everything = script_tests(root)
         guards |= set(everything)
         script_sweeps |= with_slow(everything, root, graph)
-        what = f"top-level folder {', '.join(folders)} gone" if folders else f"{len(gone)} files gone"
-        notes.append(f"rule 12: {what}: every script test, slow tests included")
-        uncertain.append(f"rule 12: {what}: every script test runs, slow tests included")
+        notes.append(f"rule 12: {large}: every script test, slow tests included")
+        uncertain.append(f"rule 12: {large}: every script test runs, slow tests included")
     if script_sweeps:
         sweeps = sorted(set(sweeps) | script_sweeps)
     python |= guards

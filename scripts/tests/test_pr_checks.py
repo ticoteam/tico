@@ -2855,6 +2855,18 @@ def test_a_large_deletion_runs_every_script_test_slow_tests_included(repo_map):
             assert set(every) <= set(light["guards"]), event
             assert slow <= set(light["sweeps"]) and light["contracts"], event
             assert "rule 12" in light["reason"]
+    # Owned data and unread files count too, though their own rules return before the dependency map (review of #4721).
+    for changed in (
+        [f"baselines/gone_{i}.json" for i in range(checks.LARGE_DELETION + 1)],
+        [f"docs/images/gone_{i}.png" for i in range(checks.LARGE_DELETION + 1)],
+        ["gone_folder/notes.md", "baselines/gone.json"],
+    ):
+        picked = checks.selection(changed, "pull_request", graph=repo_map, added=[])
+        assert set(every) <= set(picked["guards"]) and slow <= set(picked["sweeps"]), changed[0]
+        assert "rule 12" in picked["reason"]
+    # A few gone owned files stay with their owners' tests.
+    owned = checks.selection(["baselines/gone.json"], "pull_request", graph=repo_map, added=[])
+    assert owned["sweeps"] == [] and "rule 12" not in owned["reason"]
     # A few gone files in a folder that is still there are rule 1's, not rule 12's.
     few = light_plan([f"scripts/gone_{i}.py" for i in range(3)], "pull_request", repo_map, added=[])
     assert few["sweeps"] == [] and "rule 12" not in few["reason"]
