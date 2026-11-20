@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from . import background
 from . import scheduler as S
 from . import system_routines as SR
 from .store import H, Problem
@@ -1087,8 +1088,7 @@ class Outside:
                 LOG.error("Outside polls' pass failed: %s", type(exc).__name__)
 
     def start(self) -> "Outside":
-        self.thread = threading.Thread(target=self.run, name="tico-outside-polls", daemon=True)
-        self.thread.start()
+        self.thread = background.start("tico-outside-polls", self.run)
         return self
 
     def halt(self, timeout: float | None = None) -> None:

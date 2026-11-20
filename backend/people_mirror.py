@@ -41,7 +41,9 @@ def start(auth):
         if _looping:
             return
         _looping = True
-    threading.Thread(target=_loop, name="tico-people-mirror", daemon=True).start()
+    from . import background
+
+    background.start("tico-people-mirror", _loop)
 
 
 def _loop():

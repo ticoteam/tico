@@ -38,7 +38,7 @@ import threading
 import time
 import traceback
 
-from . import hubdb
+from . import background, hubdb
 
 
 def _now():
@@ -522,8 +522,7 @@ class Recorder:
                 except Exception as exc:
                     LOG.warning("Flight recorder drain failed: %s", type(exc).__name__)
 
-        self._drainer = threading.Thread(target=loop, name="tico-flight-drain", daemon=True)
-        self._drainer.start()
+        self._drainer = background.start("tico-flight-drain", loop)
 
     def stop_drain(self):
         if self._drainer is None:

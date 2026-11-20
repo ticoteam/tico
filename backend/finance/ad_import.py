@@ -36,11 +36,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, cast
 
+from .. import background
 from . import ad_warnings, key_use
 from .core import ledger as L
 from .core.org import SYSTEM
 from .context import load
-from .gateway_sync import Bell
 from .mercury import Opener
 from .store import ads as SA
 from .store import ap as SAP
@@ -816,36 +816,22 @@ def settings_changed(imp: SA.AdImport, history_from: str) -> SA.AdImport:
 
 
 # ------------------------------------------------------------------------------------------------ the worker
-BELL = Bell()
-_worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock()}
-
-
 def ring() -> None:
     BELL.ring()
 
 
+BELL = background.Bell()
+_worker = background.Loop("finance-ads", ring)
+
+
 def start(store: Any, vault: object, *, rehearsal: bool = False) -> None:
     """Start the worker (or restart it if it died). A rehearsal copy calls no platform, so it starts none."""
-    if rehearsal:
-        return
-    with _worker["lock"]:
-        thread = _worker["thread"]
-        if thread is not None and thread.is_alive():
-            return
-        if _worker["stop"].is_set():
-            _worker["stop"] = threading.Event()
-        made = threading.Thread(target=_loop, args=(store, vault, _worker["stop"]), name="finance-ads", daemon=True)
-        made.start()
-        _worker["thread"] = made
+    if not rehearsal:
+        _worker.start(_loop, store, vault)
 
 
 def stop() -> None:
-    _worker["stop"].set()
-    BELL.ring()
-    thread = _worker["thread"]
-    if thread is not None:
-        thread.join(5)
-    _worker["thread"] = None
+    _worker.stop()
 
 
 def _loop(store: Any, vault: object, halt: threading.Event) -> None:

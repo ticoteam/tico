@@ -32,7 +32,7 @@ from typing import Literal
 import httpx
 from pydantic import Field
 
-from . import support, team_rules
+from . import background, support, team_rules
 from .auth import Identity
 from .models import Contract
 from .names import SUPPORT_ACTOR
@@ -424,9 +424,7 @@ def wake(app):
         running = _runtime["worker"]
         if running and running.is_alive():
             return
-        thread = threading.Thread(target=_work, args=(app,), name="tico-support-access", daemon=True)
-        _runtime["worker"] = thread
-        thread.start()
+        _runtime["worker"] = background.start("tico-support-access", _work, app)
 
 
 def started(app, loop):

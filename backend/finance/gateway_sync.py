@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 
+from .. import background
 from . import jobs
 from . import usage as U
 from .context import is_set_up
@@ -357,66 +358,31 @@ def usage_step(
 
 
 # ------------------------------------------------------------------------------------------------ the thread
-class Bell:
-    """A doorbell: `ring` wakes the worker, and a ring while it was busy is not slept through."""
-
-    def __init__(self) -> None:
-        self.cond, self.rung = threading.Condition(), 0
-
-    def ring(self) -> None:
-        with self.cond:
-            self.rung += 1
-            self.cond.notify_all()
-
-    def wait(self, seen: int, timeout: float) -> int:
-        with self.cond:
-            if self.rung == seen:
-                self.cond.wait(timeout)
-            return self.rung
-
-
-BELL = Bell()
-_worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
-
-
 def ring() -> None:
     BELL.ring()
 
 
+BELL = background.Bell()
+_worker = background.Loop("finance-gateway", ring)
+_last: dict[str, tuple[Any, Any, Any, bool, Opener | None]] = {}  # the last start's arguments, for `ensure`
+
+
 def start(store: Any, vault: Any, settings: Any, *, rehearsal: bool = False, opener: Opener | None = None) -> None:
     """Start the thread (or restart it if it died). Safe to call again on every scheduler tick."""
-    with _worker["lock"]:
-        _worker["args"] = (store, vault, settings, rehearsal, opener)
-        thread = cast(threading.Thread | None, _worker["thread"])
-        if thread is not None and thread.is_alive():
-            return
-        if cast(threading.Event, _worker["stop"]).is_set():
-            _worker["stop"] = threading.Event()
-        made = threading.Thread(
-            target=_loop,
-            args=(store, vault, settings, rehearsal, opener, _worker["stop"]),
-            name="finance-gateway",
-            daemon=True,
-        )
-        made.start()
-        _worker["thread"] = made
+    _last["args"] = (store, vault, settings, rehearsal, opener)
+    _worker.start(_loop, store, vault, settings, rehearsal, opener)
 
 
 def ensure() -> None:
     """Restart a worker that died; nothing before the first `start`."""
-    args = cast(tuple[Any, Any, Any, bool, Opener | None] | None, _worker["args"])
-    if args and not cast(threading.Event, _worker["stop"]).is_set():
+    args = _last.get("args")
+    if args and not _worker.stopped():
         store, vault, settings, rehearsal, opener = args
         start(store, vault, settings, rehearsal=rehearsal, opener=opener)
 
 
 def stop() -> None:
-    cast(threading.Event, _worker["stop"]).set()
-    BELL.ring()
-    thread = cast(threading.Thread | None, _worker["thread"])
-    if thread is not None:
-        thread.join(5)
-    _worker["thread"] = None
+    _worker.stop()
 
 
 def step(store: Any, vault: Any, settings: Any, *, rehearsal: bool = False, opener: Opener | None = None) -> None:

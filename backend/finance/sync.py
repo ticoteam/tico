@@ -16,13 +16,13 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from .. import background
 from .. import outbox as O
 from . import banking, brex_sync, cards, payments, stripe_sync, transfers
 from .context import is_set_up, load
 from .core import feeds as F
 from .core.errors import FinanceError
 from .core.org import SYSTEM
-from .gateway_sync import Bell
 from .mercury import Answer, Mercury, Provider, base_url, error_text, listed, next_page
 from .store import banking as SK
 from .store import tico
@@ -1116,49 +1116,34 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ the thread
-BELL = Bell()
-# Set once a pass of the current worker has ended, so a test waits for it and not for a sleep. `start` clears it.
-FIRST_PASS = threading.Event()
-_worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
-
-
 def ring() -> None:
     BELL.ring()
+
+
+BELL = background.Bell()
+# Set once a pass of the current worker has ended, so a test waits for it and not for a sleep. `start` clears it.
+FIRST_PASS = threading.Event()
+_worker = background.Loop("finance-banking", ring)
+_last: dict[str, tuple[Any, Any, bool, Make | None]] = {}  # the last start's arguments, for `ensure`
 
 
 def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None = None) -> None:
     """Start the thread (or restart it if it died). Safe to call again on every scheduler tick. Registers the
     credential vault for sealing and reading payees' bank details, even when rehearsal withholds the worker."""
     tico.use_vault(vault)
-    with _worker["lock"]:
-        _worker["args"] = (store, vault, rehearsal, make)
-        thread = cast(threading.Thread | None, _worker["thread"])
-        if thread is not None and thread.is_alive():
-            return
-        if cast(threading.Event, _worker["stop"]).is_set():
-            _worker["stop"] = threading.Event()
-        FIRST_PASS.clear()
-        made = threading.Thread(
-            target=_loop, args=(store, vault, rehearsal, make, _worker["stop"]), name="finance-banking", daemon=True
-        )
-        made.start()
-        _worker["thread"] = made
+    _last["args"] = (store, vault, rehearsal, make)
+    _worker.start(_loop, store, vault, rehearsal, make, before=FIRST_PASS.clear)
 
 
 def ensure() -> None:
-    args = cast(tuple[Any, Any, bool, Make | None] | None, _worker["args"])
-    if args and not cast(threading.Event, _worker["stop"]).is_set():
+    args = _last.get("args")
+    if args and not _worker.stopped():
         store, vault, rehearsal, make = args
         start(store, vault, rehearsal=rehearsal, make=make)
 
 
 def stop() -> None:
-    cast(threading.Event, _worker["stop"]).set()
-    BELL.ring()
-    thread = cast(threading.Thread | None, _worker["thread"])
-    if thread is not None:
-        thread.join(5)
-    _worker["thread"] = None
+    _worker.stop()
 
 
 def pause(store: Any, at: str | None = None) -> float:
