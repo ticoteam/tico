@@ -138,6 +138,38 @@ def test_bucket_version_selection(bucket_version, github_expected):
     assert bool(requests) == github_expected
 
 
+def test_github_release_offers_the_manifests_installers_not_the_electron_apps():
+    # The same release carries the Electron app's Tico-<version>-... files, with the same suffixes, listed after.
+    base, release, value = github_fixture()
+    electron = [
+        "Tico-0.3.7-universal.dmg",
+        "Tico-0.3.7-setup.exe",
+        "Tico-0.3.7-x86_64.AppImage",
+        "Tico-0.3.7-amd64.deb",
+    ]
+    release["assets"] += [{"name": name, "browser_download_url": base + name, "size": 1} for name in electron]
+    value["installers"] = {
+        "mac": {"file": "Tico_universal.dmg", "signed": True},
+        "windows": {"file": "Tico_x64-setup.exe"},
+        "linux": {"file": "Tico.AppImage"},
+        "linux_deb": {"file": "Tico.deb"},
+    }
+    downloads = Downloads(
+        SimpleNamespace(blob_bucket="", runner_url="https://runner.example.com", public_url=""),
+        None,
+        httpx.MockTransport(lambda r: httpx.Response(200, json=release if r.url.host == "api.github.com" else value)),
+    )
+    downloads.version = "0.3.7"
+    installers = downloads.manifest()["installers"]
+    assert {os_name: entry["file"] for os_name, entry in installers.items()} == {
+        "mac": "Tico_universal.dmg",
+        "windows": "Tico_x64-setup.exe",
+        "linux": "Tico.AppImage",
+        "linux_deb": "Tico.deb",
+    }
+    assert installers["mac"]["signed"] is True
+
+
 def test_github_failure_is_unavailable_and_cached(api, failure="offline"):
     requests = []
 
