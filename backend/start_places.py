@@ -545,8 +545,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             out[rid]['starting'] += 1
         else:
             out[rid]['queued'] += 1
+    from . import read_cache
     from .execution import claim_refusal, queued_reasons
-    from .store import readiness_document
 
     runners = {
         row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)
@@ -578,7 +578,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     ):
         rid = row['runner_id']
         runner = runners.get(rid)
-        ready = readiness_document(runner['readiness']) if runner else {}
+        ready = read_cache.readiness(c, rid, runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         if not why and row['held']:
             # A notice batch, digest or routine run its release policy holds (backend/wake_presets.py): no claim takes

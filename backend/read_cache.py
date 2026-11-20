@@ -101,6 +101,15 @@ def value(c: Any, key: Hashable, build: Callable[[], T], shared: bool = False) -
     return values[key] if shared else deepcopy(values[key])
 
 
+def readiness(c: Any, runner_id: Any, text: Any) -> dict[str, Any]:
+    """Computer `runner_id`'s readiness document from `text`, its stored readiness as read in this snapshot: parsed once
+    a snapshot (a page asks it for every bot on the computer) and shared, so the caller must not change it. Outside a
+    snapshot it is parsed each time. A caller that changes the document parses its own (store.readiness_document)."""
+    from .store import readiness_document
+
+    return value(c, ("readiness", runner_id, len(text or "")), lambda: readiness_document(text), shared=True)
+
+
 def _selects(statement: str) -> bool:
     return statement.lstrip().upper().startswith("SELECT ")
 
