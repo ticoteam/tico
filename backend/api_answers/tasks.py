@@ -211,7 +211,7 @@ class TaskFields(TypedDict):
     important_requesters: NotRequired[int]
     matter: NotRequired[Matter]
     email_send: NotRequired[TaskEmailSend]
-    """The newest email send that belongs to this task or whose OK sits on it; absent when none. Its state changes reach open pages as this task's `tasks` events (kind `email_send`) on GET /api/v2/events"""
+    """The newest email send that belongs to this task or whose OK sits on it, while it is open or for a day after it ended; absent when none. Its state changes reach open pages as this task's `tasks` events (kind `email_send`) on GET /api/v2/events"""
 
 
 @answer

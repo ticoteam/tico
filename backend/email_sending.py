@@ -652,27 +652,49 @@ def public(row):
     }
 
 
-# What a task's row shows of the newest send that belongs to it or whose OK sits on it (`email_send`): the board card's
-# and the email tab's quiet line ("Sending · 1:40", "Sent 5:23 AM") and the toast after Approve read it.
+# What a task's row shows of a send that belongs to it or whose OK sits on it (`email_send`): the board card's and the
+# email tab's quiet line ("Sending · 1:40", "Sent 5:23 AM") and the toast after Approve read it.
 TASK_FIELDS = ("id", "state", "send_after", "finished_at", "detail")
+OPEN_STATES = ("waiting_approval", "pending", "dispatching")
+ENDED_STATES = ("sent", "failed", "canceled", "blocked", "unknown")
+SHOWN_ENDED_HOURS = 24  # a send that ended is shown this long
+ENDED_REACH_DAYS = 7  # how far back an ended send's own window (`send_after`) may have opened and still be shown
 
 
 def for_tasks(c, ids):
-    """{task id: its newest send's TASK_FIELDS}, for the tasks among `ids` that a send belongs to (`task_id`) or whose
-    OK it sits on (`approval_task_id`). Two indexed reads for a whole page of tasks."""
+    """{task id: the newest of its sends still open or ended in the last SHOWN_ENDED_HOURS, as TASK_FIELDS}, for the
+    tasks among `ids` that a send belongs to (`task_id`) or whose OK it sits on (`approval_task_id`). Read by state and
+    window (the email_sends_dispatch index), so a page of tasks reads only the sends that may be shown, however many
+    the company has sent."""
     ids = list(dict.fromkeys(i for i in ids if i))
     if not ids:
         return {}
+    now = H.now()
     marks = ",".join("?" * len(ids))
+    mine = f"(task_id IN ({marks}) OR approval_task_id IN ({marks}))"
     fields = ",".join(TASK_FIELDS)
-    newest = {}
-    for column in ("task_id", "approval_task_id"):
-        for row in c.execute(
-            f"SELECT {column} AS task,{fields},created_at,rowid AS n FROM email_sends WHERE {column} IN ({marks})", ids
-        ):
-            held = newest.get(row["task"])
+    rows = c.execute(
+        f"SELECT task_id,approval_task_id,{fields},created_at,rowid AS n FROM email_sends "
+        f"WHERE state IN ({','.join('?' * len(OPEN_STATES))}) AND {mine} "
+        f"UNION ALL SELECT task_id,approval_task_id,{fields},created_at,rowid AS n FROM email_sends "
+        f"WHERE state IN ({','.join('?' * len(ENDED_STATES))}) AND send_after>=? AND finished_at>=? AND {mine}",
+        (
+            *OPEN_STATES,
+            *ids,
+            *ids,
+            *ENDED_STATES,
+            H.shift(now, days=-ENDED_REACH_DAYS),
+            H.shift(now, hours=-SHOWN_ENDED_HOURS),
+            *ids,
+            *ids,
+        ),
+    ).fetchall()
+    wanted, newest = set(ids), {}
+    for row in rows:
+        for task in {row["task_id"], row["approval_task_id"]} & wanted:
+            held = newest.get(task)
             if held is None or (row["created_at"], row["n"]) > (held["created_at"], held["n"]):
-                newest[row["task"]] = row
+                newest[task] = row
     return {task: {key: row[key] for key in TASK_FIELDS} for task, row in newest.items()}
 
 

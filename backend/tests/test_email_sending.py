@@ -542,6 +542,9 @@ def test_each_move_of_a_send_reaches_its_tasks_on_the_stream_and_their_rows(inbo
     detail = inbox.get(f"/api/v2/tasks/{case}", headers=headers()).json()
     assert detail.get("task", detail)["email_send"] == moved[case]
     assert set(moved[case]) == {"id", "state", "send_after", "finished_at", "detail"}  # never the email itself
+    with store.transaction() as c:  # a day after it ended, the case no longer shows it
+        c.execute("UPDATE email_sends SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-25), queued["id"]))
+    assert listed()[case] is None
 
 
 def test_never_refuses_and_names_the_setting(inbox):
