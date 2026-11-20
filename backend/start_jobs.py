@@ -1,5 +1,6 @@
 """Idempotent startup work that runs beside the serving server, in order."""
 
+import os
 import sqlite3
 import time
 from contextlib import ExitStack, contextmanager
@@ -95,6 +96,16 @@ def run(store, onboarding, telemetry, vault=None):
             org_rule_check.regroup_reviews(c)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("rule_reviews", exc)
+    # Tico's library skills are approved skills in the directory, installable by anyone (backend/skill_library.py):
+    # one sha compare when this release changed none. TICO_SKILL_LIBRARY=off (the tests, conftest.py) skips it.
+    if os.environ.get("TICO_SKILL_LIBRARY", "").strip().lower() != "off":
+        try:
+            from . import skill_library
+
+            with _transaction(store) as c:
+                skill_library.seed_company(c, settings)
+        except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+            telemetry.capture("skill_library", exc)
     # Once: a stored key that is a tool's setting (a host, a region, a profile) becomes that setting, on a tool each of
     # its holders still gets it from (backend/tool_settings.py move_once). It reads values, so it needs the vault.
     if vault is not None:

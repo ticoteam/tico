@@ -4,6 +4,19 @@ Library › Skills is one list of every skill: the company's approved skills (wh
 skills Tico ships with its roles. A skill is a folder of text files with a `SKILL.md` at its root (`skills/<name>/` in a bot's
 repository, or `.claude/skills/<name>/`). Nothing from the directory reaches a bot or a person until it is installed explicitly.
 
+## Tico's library
+
+Tico's library skills (`templates/catalog/_shared/.claude/skills/`) are approved skills in every company's directory, so
+anyone can install one on any agent or person. Tico adds them at start and installs nothing; roles still ship their
+defaults to the agents made from them, as files in their repositories. Each one is marked as Tico's, with **Tico** as the
+approver of its versions; they're not screened. A release that changes one adds its next version (installs on latest
+get it, pinned ones stay). A skill the library drops is retired: it leaves the list and its installs stop resolving. Tico
+leaves a name alone when the company has its own skill of that name, or approved its own version on top of Tico's; then
+it is the company's skill, not Tico's, and the agents whose role ships the name (or their uses) don't count for it. If
+the library can't be read, or holds no valid skill, nothing is added or retired. Skills only one role ships (outside the
+library) are listed as before, not added. An agent whose role already ships a skill has it as a file: installing that
+skill on it again is refused ("already has it from its role"), a team install leaves it out, and Install doesn't offer it.
+
 ## Function
 
 Each skill has one job function, its main tag, in its `SKILL.md` frontmatter:
@@ -115,8 +128,8 @@ Library › Skills (`#/library/skills`) is one page.
 - A skill Tico ships opens its files, the roles that have it, and the bots made from those roles that you can see (not
   planned or archived ones; what the catalog gives them, and a bot may have changed its copy since). When roles ship
   different copies, the page shows one from a role that has bots here. Its usage is the daily counts (below) of the bots whose
-  role ships it, so who triggered it and people aren't shown. Once the directory has a version of it, its last use from
-  before stays.
+  role ships it, so who triggered it and people aren't shown. Once the directory has a version of it, its uses from
+  before count with the directory's, and it's on both its installs and those bots, each once.
 
 **Use in my Claude Code** shows the one line that sets up the skills helper on your computer, with Copy:
 `curl -fsSL --create-dirs <your Tico>/api/v2/skills/helper.mjs -o ~/.tico/skills-helper.mjs && node ~/.tico/skills-helper.mjs setup`.

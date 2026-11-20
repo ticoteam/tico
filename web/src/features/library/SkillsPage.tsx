@@ -357,7 +357,11 @@ function SkillPage({ name }: { name: string }) {
   const ask = asks.data?.find((p) => p.name === name);
   const use = usage.data?.find((u) => u.name === name);
   const shipped = d.data.skill.id === null ? d.data.shipped : undefined;
-  const holders = shipped?.bots.map((bot) => ({ id: bot.id, target: bot })) ?? d.data.installs;
+  // Its installs, and the agents made from a role that ships it (each once), when it is Tico's: the company's own
+  // skill of that name is another skill.
+  const installed = new Set(d.data.installs.map((i) => actorOf(i.target)));
+  const roleBots = d.data.skill.id === null || d.data.skill.from_tico ? (d.data.shipped?.bots ?? []) : [];
+  const holders = [...d.data.installs, ...roleBots.filter((bot) => !installed.has(actorOf(bot))).map((bot) => ({ id: bot.id, target: bot }))];
   const files = text.data?.files ?? shipped?.files ?? [];
   const extra = files.filter((f) => !/(^|\/)SKILL\.md$/i.test(f.path));
   const [installing, setInstalling] = useState(false);
@@ -395,7 +399,7 @@ function SkillPage({ name }: { name: string }) {
             {ask && <AskBar p={ask} />}
             {latest && (
               <p className="read-by">
-                <Face actor={latest.approved_by_id} />
+                <Face actor={latest.approved_by_id} name={latest.approved_by_id ? undefined : 'Tico'} />
                 <span>
                   v{latest.number}, {when(latest.approved_at)}
                 </span>
@@ -461,7 +465,7 @@ function SkillPage({ name }: { name: string }) {
               <Section name="Versions" count={d.data.versions.length}>
                 {d.data.versions.map((v) => (
                   <span key={v.number} className="sp-who">
-                    <Face actor={v.approved_by_id} />
+                    <Face actor={v.approved_by_id} name={v.approved_by_id ? undefined : 'Tico'} />
                     <span>v{v.number}</span>
                     <em>{when(v.approved_at)}</em>
                   </span>
@@ -794,7 +798,7 @@ function ApproveDevice({ code, onClose }: { code: string; onClose: () => void })
 /** Install (skills.ts skillsInstallDialog): for me, one agent, one person, or a team's current members; the latest
    version, or one pinned. */
 function InstallDialog({ name, versions, onClose }: { name: string; versions: SkillVersion[]; onClose: () => void }) {
-  const t = useQuery(installTargetsQuery);
+  const t = useQuery(installTargetsQuery(name));
   const [who, setWho] = useState<string | null>(null);
   const [version, setVersion] = useState('latest');
   const [busy, go] = useGo(onClose);

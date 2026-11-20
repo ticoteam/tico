@@ -389,15 +389,18 @@ export interface SkillVersion {
   sha256: string;
   description?: string;
   approved_at: string | null;
+  /** Null: Tico approved it (its library's version, backend/skill_library.py). */
   approved_by_id?: string | null;
 }
 /** One row per name (backend/skills.py skills_list). A skill only Tico ships has no id (`source: 'tico'`) and is on
-   the agents made from its roles: `on_count` counts them, `installs_count` stays 0. */
+   the agents made from its roles: `on_count` counts them, `installs_count` stays 0. A directory skill Tico also ships
+   is on its installs and those agents. `from_tico`: Tico's own (its library's, installable). */
 export interface SkillRow {
   id: string | null;
   name: string;
   description: string;
   source?: 'directory' | 'tico';
+  from_tico?: boolean;
   /** The job function its SKILL.md names (`legal`...); any value, or none. */
   function?: string | null;
   latest: SkillVersion | null;
@@ -430,7 +433,7 @@ export interface SkillInstall {
   target: SkillActor;
 }
 export interface SkillDetail {
-  skill: { id: string | null; name: string; description: string; latest: SkillVersion | null };
+  skill: { id: string | null; name: string; description: string; latest: SkillVersion | null; from_tico?: boolean };
   versions: SkillVersion[];
   installs: SkillInstall[];
   shipped?: { files?: SkillFile[]; bots: SkillActor[] };
@@ -521,10 +524,12 @@ export interface InstallTargets {
   teams: Array<{ id: string; name: string; targets: Array<{ target_type: 'Bot' | 'Human'; target_id: string }> }>;
 }
 
-export const installTargetsQuery = queryOptions({
-  queryKey: ['skills', 'install-targets'],
-  queryFn: () => api.get<InstallTargets>('/api/v2/skills/install-targets'),
-});
+/** Who may get this skill: the agents whose role already ships it are left out (they have it as a file). */
+export const installTargetsQuery = (skill: string) =>
+  queryOptions({
+    queryKey: ['skills', 'install-targets', skill],
+    queryFn: () => api.get<InstallTargets>(`/api/v2/skills/install-targets?skill=${enc(skill)}`),
+  });
 
 export type InstallFor = Array<{ target_type: 'Bot' | 'Human'; target_id: string }>;
 

@@ -184,7 +184,8 @@ def overview(c, auth, who, days, at=None, shipped=(), ships=None):
     else sees only themselves there). Then each skill Tico ships (`shipped`, names) that the directory does not have:
     the daily counts of the bots whose role ships it (`ships`, {bot id: names}), the only record of those uses (no
     trigger, no people, no one named). A directory skill Tico also ships keeps those bots' last use from before the
-    directory had it."""
+    directory had it; Tico's own (its library's, `from_tico`) also adds their uses (runner calls: trigger model), each
+    bot counted once."""
     at = at or datetime.now(timezone.utc)
     admin, me = _caller(c, auth, who)
     sub, args = _uses_sql(c, days, at)
@@ -234,13 +235,28 @@ def overview(c, auth, who, days, at=None, shipped=(), ships=None):
     for r in c.execute("SELECT skill_id, MAX(used_on) AS at FROM skill_usage_dailies GROUP BY skill_id"):
         e = entry(r["skill_id"])
         e["last_used_at"] = e["last_used_at"] or r["at"]
-    skills = c.execute("SELECT id, name FROM skills WHERE deleted_at IS NULL ORDER BY name").fetchall()
+    skills = c.execute(
+        "SELECT s.id, s.name, " + SK._FROM_TICO + " AS from_tico FROM skills s "
+        "LEFT JOIN skill_versions v ON v.id = s.latest_version_id WHERE s.deleted_at IS NULL ORDER BY s.name"
+    ).fetchall()
     ships = ships or {}
     counted = shipped_usage(c, at, days, shipped, ships)
-    for s in skills:
-        if s["name"] in counted:
-            e = entry(s["id"])
+    both = [s for s in skills if s["name"] in counted]
+    if both:
+        # Uses before the directory had it are daily counts; since, they are rows: two records, never one use twice.
+        before = _shipped_by_name(c, at, days, ships)
+        bots = {}
+        for r in c.execute(
+            f"SELECT skill_id, actor_id FROM ({sub}) WHERE actor_type='Bot' GROUP BY skill_id, actor_id", args
+        ):
+            bots.setdefault(r["skill_id"], set()).add(r["actor_id"])
+        for s in both:
+            e, old = entry(s["id"]), before.get(s["name"])
             e["last_used_at"] = _later(e["last_used_at"], counted[s["name"]]["last_used_at"])
+            if old and old["uses"] and s["from_tico"]:  # the company's own skill of the name is another skill
+                e["uses"] += old["uses"]
+                e["by_trigger"]["model"] += old["uses"]
+                e["bots"] += len(old["bots"] - bots.get(s["id"], set()))
     listed = {s["name"] for s in skills}
     return {
         "days": days,
@@ -270,6 +286,18 @@ def _shipped_daily(c, first, ships, name=None):
     return [r for r in rows if r["name"] in ships.get(r["bot_id"], ())]
 
 
+def _shipped_by_name(c, at, days, ships, name=None):
+    """{name: {uses, bots (the ids that used it in the window), last_used_at}} from the daily counts (`_shipped_daily`)."""
+    out = {}
+    for r in _shipped_daily(c, _bounds(at, days)[0], ships, name):
+        e = out.setdefault(r["name"], {"uses": 0, "bots": set(), "last_used_at": None})
+        e["uses"] += r["uses"] or 0
+        if r["days"]:
+            e["bots"].add(r["bot_id"])
+        e["last_used_at"] = _later(e["last_used_at"], r["last"])
+    return out
+
+
 def shipped_usage(c, at, days, names, ships: Mapping[str, Collection[str]]):
     """{name: {uses, bots, last_used_at, ...}} for skills Tico ships, from the daily counts by name and bot
     (`unlisted_skill_usage_dailies`, 90 days) of the bots whose role ships each (`ships`): bots' uses only, by day, with
@@ -277,18 +305,18 @@ def shipped_usage(c, at, days, names, ships: Mapping[str, Collection[str]]):
     wanted = set(names)
     if not wanted:
         return {}
-    out = {}
-    for r in _shipped_daily(c, _bounds(at, days)[0], ships):
-        if r["name"] not in wanted:
-            continue
-        e = out.setdefault(
-            r["name"],
-            {"uses": 0, "by_trigger": None, "people": None, "bots": 0, "last_used_at": None, "top": []},
-        )
-        e["uses"] += r["uses"] or 0
-        e["bots"] += 1 if r["days"] else 0
-        e["last_used_at"] = _later(e["last_used_at"], r["last"])
-    return out
+    return {
+        name: {
+            "uses": e["uses"],
+            "by_trigger": None,
+            "people": None,
+            "bots": len(e["bots"]),
+            "last_used_at": e["last_used_at"],
+            "top": [],
+        }
+        for name, e in _shipped_by_name(c, at, days, ships).items()
+        if name in wanted
+    }
 
 
 def unlisted_usage(c, at, days=UNUSED_DAYS, exclude: Mapping[str, Collection[str]] | None = None):
@@ -457,8 +485,9 @@ def unused_installs(c, at):
 def detail(c, auth, who, name, days, at=None, ships=None):
     """One skill's usage: totals, per actor (admins all; anyone else themselves), the last uses (admins all; anyone
     else their own and the ones they asked a bot for), and the coverage of the installs they may see. When Tico also
-    ships it, `last_used_at` keeps the last use by a bot whose role ships it (`ships`) from before the directory had it;
-    the counts are the directory's."""
+    ships it, `last_used_at` keeps the last use by a bot whose role ships it (`ships`) from before the directory had
+    it; when it is Tico's own (`from_tico`), those bots' uses from then (their daily counts: trigger model) count too,
+    in the totals and per actor (a bot's own row joins them), under the same visibility."""
     at = at or datetime.now(timezone.utc)
     skill = SK._skill_or_404(c, name)
     admin, me = _caller(c, auth, who)
@@ -477,13 +506,26 @@ def detail(c, auth, who, name, days, at=None, ships=None):
         a["uses"] += r["uses"]
         a["by_trigger"][r["trigger"]] = a["by_trigger"].get(r["trigger"], 0) + r["uses"]
         a["last_used_at"] = max(filter(None, (a["last_used_at"], r["last"])), default=None)
+    before = _shipped_daily(c, _bounds(at, days)[0], ships or {}, skill["name"])
+    if SK._from_tico(c, skill):  # the company's own skill of a shipped name is another skill: none of these
+        for r in before:
+            if not r["days"]:
+                continue
+            totals["uses"] += r["uses"]
+            totals["by_trigger"]["model"] += r["uses"]
+            a = actors.setdefault(
+                ("Bot", r["bot_id"]), {"uses": 0, "by_trigger": dict.fromkeys(TRIGGERS, 0), "last_used_at": None}
+            )
+            a["uses"] += r["uses"]
+            a["by_trigger"]["model"] += r["uses"]
+            a["last_used_at"] = _later(a["last_used_at"], r["last"])
     totals["people"] = sum(1 for t, _ in actors if t == "Human")
     totals["bots"] = sum(1 for t, _ in actors if t == "Bot")
     last = c.execute("SELECT MAX(used_at) FROM skill_usages WHERE skill_id=?", (skill["id"],)).fetchone()[0]
     totals["last_used_at"] = (
         last or c.execute("SELECT MAX(used_on) FROM skill_usage_dailies WHERE skill_id=?", (skill["id"],)).fetchone()[0]
     )
-    for r in _shipped_daily(c, _bounds(at, days)[0], ships or {}, skill["name"]):
+    for r in before:
         totals["last_used_at"] = _later(totals["last_used_at"], r["last"])
     shown = {k: v for k, v in actors.items() if admin or k == me}
     first = _bounds(at, days)[0]
@@ -610,15 +652,16 @@ def installed(c, auth, who):
     return {"installs": out}
 
 
-def targets(c, auth, who):
+def targets(c, auth, who, has_it: Collection[str] = ()):
     """Who the caller may install a skill for: bots they can write, people (an admin: everyone; anyone else:
-    themselves), and each team as its current members the caller may install for (nested teams included)."""
+    themselves), and each team as its current members the caller may install for (nested teams included). The bots in
+    `has_it` (whose role ships the skill: they have it in their repository) are left out everywhere."""
     from . import people as P
     from . import teammate_access
     from . import views
 
     admin, me = _caller(c, auth, who)
-    bots = _writable_bots(c, auth, who)
+    bots = [b for b in _writable_bots(c, auth, who) if b["id"] not in has_it]
     roster = views.roster(c, shared=True)
     shown = P.visible_people(roster)
     if admin:
@@ -686,11 +729,21 @@ def install(app, store, auth):
             "Who the caller may install a skill for: writable bots, people, and teams as current members",
         ),
     )
-    def skills_install_targets(request: Request):
-        """Who the caller may install for: bots they can write, people, and teams as their current members."""
+    def skills_install_targets(
+        request: Request,
+        skill: str = Query(default="", max_length=80, description="Leave out the bots whose role ships this skill"),
+    ):
+        """Who the caller may install for: bots they can write, people, and teams as their current members. With
+        `skill`, the bots whose role already ships a skill of that name are left out: they have it in their repository,
+        and installing it would give them a second copy (backend/skills.py refuses it)."""
         who = reader(request)
         with store.read() as c:
-            return targets(c, auth, who)
+            has_it = (
+                {b for b, names in SC.shipped_to(c, store.settings.catalog_dir).items() if skill in names}
+                if skill
+                else set()
+            )
+            return targets(c, auth, who, has_it)
 
     @app.get(
         "/api/v2/skills/installed",
@@ -722,7 +775,8 @@ def install(app, store, auth):
         shipped = SC.shipped(store.settings.catalog_dir)
         with store.read() as c:
             ships = SC.shipped_to(c, store.settings.catalog_dir) if name in shipped else {}
-            if name in shipped and not SK._skill(c, name):
+            listed = SK._skill(c, name)
+            if name in shipped and not (listed and not listed["deleted_at"]):
                 return shipped_detail(c, auth, who, name, _days(days), ships=ships)
             return detail(c, auth, who, name, _days(days), ships=ships)
 
