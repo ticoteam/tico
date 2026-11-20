@@ -70,7 +70,7 @@ def test_an_ask_files_a_question_the_parent_waits_on(c, general):
     with pytest.raises(H.Refused):
         QM.refuse_ending(c, BUILDER, parent["id"])
     [item] = [i for i in W.needs(c, ANA) if i["kind"] == Q.KIND]
-    assert item["task_id"] == asked["task_id"] and item["parent"]["id"] == parent["id"]
+    assert item["task_id"] == asked["task_id"] and "parent" not in item  # nothing of a task they may lose
     assert (item["asker"], item["round"], item["link_url"]) == (BUILDER, 1, "https://pay.example/login")
     # The parent's own asks list it once, as the question item, never as an ask on the parent.
     assert not [i for i in W.needs(c, ANA) if i.get("task_id") == parent["id"]]
@@ -162,7 +162,7 @@ def _two_stages(c):
 
 @pytest.mark.parametrize(
     "ending",
-    ["withdrawn", "closed_by_person", "done_by_person", "parent_ended", "parent_moved", "asker_gone", "person_gone"],
+    ["withdrawn", "closed_by_person", "parent_ended", "parent_moved", "asker_gone", "person_gone"],
 )
 def test_each_ending(c, general, ending):
     parent = _two_stages(c) if ending == "parent_moved" else _parent(c)
@@ -172,8 +172,6 @@ def test_each_ending(c, general, ending):
         Q.withdraw(c, qid, BUILDER)
     elif ending == "closed_by_person":
         E.move(c, qid, E.CLOSED, ANA, "Not mine")
-    elif ending == "done_by_person":
-        E.move(c, qid, E.DONE, ANA, "Did it")
     elif ending == "parent_ended":
         E.move(c, parent["id"], E.CLOSED, ANA, "Not needed")
     elif ending == "parent_moved":
@@ -184,9 +182,9 @@ def test_each_ending(c, general, ending):
     else:
         X.left(c, BEN)
         QM.clear_gone(c)
-    reason = {"closed_by_person": Q.WITHDRAWN, "done_by_person": Q.ANSWERED}.get(ending, ending)
+    reason = {"closed_by_person": Q.WITHDRAWN}.get(ending, ending)
     assert Q.get(c, qid)["ended_reason"] == reason
-    assert E.task(c, qid)["status"] == ("done" if ending == "done_by_person" else "closed")
+    assert E.task(c, qid)["status"] == "closed"
     assert Q.on_parent(c, E.task(c, parent["id"])) == []
     if ending in ("closed_by_person", "person_gone"):
         assert _queued(c, BUILDER) == 1  # the bot is told on the parent
@@ -202,14 +200,18 @@ def test_only_its_person_snoozes_it_and_their_snooze_hides_it(c, general):
     assert held["snoozed_until"] == "2030-01-07T13:00:00Z"
 
 
-def test_give_to_moves_it_to_another_person_and_never_to_a_bot(c, general):
+def test_give_to_moves_it_to_another_person_with_a_new_round_and_never_to_a_bot(c, general):
     asked = _ask(c, _parent(c))
     Q.give(c, asked["task_id"], BEN, ANA)
     assert Q.get(c, asked["task_id"])["person_id"] == BEN and E.task(c, asked["task_id"])["owner_id"] == BEN
     with pytest.raises(H.Refused):
         E.reassign(c, asked["task_id"], REVIEWER, BEN, "A bot can do it")
-    Q.answer(c, asked["task_id"], BEN, "Done.", 1)
-    assert Q.get(c, asked["task_id"])["answered_by_id"] == BEN
+    Q.give(c, asked["task_id"], ANA, BEN)  # back to Ana: what she saw at round 1 is not current again
+    with pytest.raises(Q.QuestionError) as stale:
+        Q.answer(c, asked["task_id"], ANA, "Friday.", 1)
+    assert stale.value.status == 409
+    Q.answer(c, asked["task_id"], ANA, "Friday.", 3)
+    assert Q.get(c, asked["task_id"])["answered_by_id"] == ANA
 
 
 def test_the_backfill_turns_each_open_task_question_mark_once(c, general):
@@ -291,14 +293,27 @@ def test_the_question_routes_reply_give_reassign_and_withdraw(ruled):
 
     asked = ask("Which tone?")
     qid = asked["task_id"]
-    # Ben's reply in the question's own chat is his answer to the round open now.
-    r = api.post(f"/api/v2/tasks/{qid}/comments", json={"text": "Warm."}, headers=headers("ben-test"))
+    # A post in the question's own chat is a comment: only the answer route, at the round shown, answers it.
+    r = api.post(f"/api/v2/tasks/{qid}/comments", json={"text": "Warm, I think?"}, headers=headers("ben-test"))
     assert r.status_code == 200, r.text
-    [row] = sql(api, "SELECT ended_reason, answered_by_id FROM questions WHERE task_id=?", (qid,))
-    assert (row["ended_reason"], row["answered_by_id"]) == ("answered", "human:ben")
+    assert sql(api, "SELECT ended_reason FROM questions WHERE task_id=?", (qid,)) == [{"ended_reason": None}]
+    r = api.post(
+        f"/api/v2/tasks/{qid}/question/answer", json={"text": "Warm.", "round": 1}, headers=headers("ben-test")
+    )
+    assert r.status_code == 200, r.text
     assert ask("And the length?")["round"] == 2
     r = api.post(f"/api/v2/tasks/{qid}/question/give", json={"to": "cara"}, headers=headers("ben-test"))
     assert r.status_code == 200 and r.json()["question"]["person"] == "human:cara", r.text
+    assert r.json()["question"]["round"] == 3
+    version = sql(api, "SELECT version FROM tasks WHERE id=?", (qid,))[0]["version"]
+    r = api.post(
+        f"/api/v2/tasks/{qid}/snooze",
+        json={"why": "After lunch", "until": "2031-01-01T13:00:00Z", "version": version},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+    listed = api.get("/api/v2/needs-you", headers=headers("cara-test")).json()
+    assert listed["snoozed_until"].startswith("2031-01-01T13:00:00") and not listed["items"]
     version = sql(api, "SELECT version FROM tasks WHERE id=?", (qid,))[0]["version"]
     r = api.post(
         f"/api/v2/tasks/{qid}/owner",
@@ -311,4 +326,72 @@ def test_the_question_routes_reply_give_reassign_and_withdraw(ruled):
     r = api.post(f"/api/v2/tasks/{qid}/question/withdraw", json={"reason": "Found it"}, headers=headers("ops-test"))
     assert r.status_code == 200 and r.json()["question"]["state"] == "withdrawn", r.text
     parent = api.get(f"/api/v2/tasks/{task['id']}", headers=headers("ops-test")).json()["task"]
-    assert parent["questions"] == []
+    assert "questions" not in parent
+
+
+def test_a_question_task_never_leaves_its_stage_and_generic_done_is_no_answer(c, general):
+    asked = _ask(c, _parent(c))
+    qid = asked["task_id"]
+    X.pipeline(c, "dev", "Dev", stages=({"name": "Build", "owner": "assignee"},), manager=MANAGER)
+    for move in (
+        lambda: E.move(c, qid, E.DONE, ANA, "Did it"),
+        lambda: E.refile(c, qid, "dev", None, ANA, "Belongs in Dev"),
+    ):
+        with pytest.raises(H.Refused) as refused:
+            move()
+        assert refused.value.detail == Q.STAYS
+    assert Q.get(c, qid)["ended_reason"] is None and E.task(c, qid)["status"] == "open"
+
+
+def test_the_relay_is_quiet_and_only_the_turn_holder_is_woken(c, general):
+    X.bot(c, "reviewer")
+    parent = _parent(c, by=REVIEWER)
+    X.ran(c, parent["id"], REVIEWER)
+    asked = _ask(c, parent)
+    before = _queued(c, REVIEWER)
+    Q.answer(c, asked["task_id"], ANA, "Yes, and ask @reviewer to look too.", 1)
+    relayed = [m for m in H.task_comments(c, parent["id"]) if m["body"].startswith("Re: ")]
+    assert len(relayed) == 1
+    mentioned = c.execute("SELECT COUNT(*) FROM message_mentions WHERE message_id=?", (relayed[0]["id"],))
+    assert mentioned.fetchone()[0] == 0
+    assert (_queued(c, REVIEWER) - before, _queued(c, BUILDER)) == (0, 1)
+
+
+def test_a_client_ref_never_keeps_a_question_mark_open(c, general):
+    parent = _parent(c)
+    mark = QM.ask(c, BUILDER, parent["id"], ANA, "Friday?")
+    H.task_comment(c, ANA, parent["id"], "Yes.", wake=False, extra_refs={"question_relay": True})
+    assert QM.get(c, mark["id"])["cleared_reason"] == "replied"
+
+
+def test_an_asker_gone_from_a_persons_task_is_said_on_its_chat(c, general):
+    row = H.task_create(c, BUILDER, "Book the venue", "", ANA, lint=False)
+    asked = _ask(c, E.task(c, row["id"]), person=BEN)
+    c.execute("UPDATE bots SET state='archived' WHERE id='builder'")
+    QM.clear_gone(c)
+    assert Q.get(c, asked["task_id"])["ended_reason"] == Q.ASKER_GONE
+    said = [m["body"] for m in H.task_comments(c, row["id"]) if m["sender_id"] == H.TICO_ACTOR]
+    assert any("can no longer work on this task" in b for b in said), said
+
+
+def test_the_backfill_leaves_a_dreams_question_and_one_that_carries_more_than_words(c, general):
+    dream = _parent(c, "Dream")
+    H.event(c, ANA, "dream.start", dream["id"], {})
+    QM.ask(c, BUILDER, dream["id"], ANA, "Keep the old rule?")
+    shown = _parent(c, "Pick a draft")
+    said = H.task_comment(c, BUILDER, shown["id"], "Which draft?", wake=False, extra_refs={"shows": ["page:draft"]})
+    QM.mark(c, BUILDER, said["id"], ANA)
+    done = Q.backfill(c)
+    assert done["turned"] == []
+    assert sorted(s["why"] for s in done["skipped"]) == [
+        "it is a dream's question, which Learnings reads and answers",
+        "its message carries more than words: shows",
+    ]
+    assert done["after"]["open_task_marks"] == 2
+
+
+def test_with_the_switch_off_a_task_read_has_no_question_keys(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    read = api.get(f"/api/v2/tasks/{task['id']}", headers=headers("ops-test")).json()["task"]
+    assert "questions" not in read and "question" not in read

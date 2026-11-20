@@ -152,15 +152,17 @@ description the rest. The same `tico task ask <id> --to <person> "line"` asks it
 where they do it. A ❓ in a direct chat, and one that shows a live browser to take over, stay ❓.
 
 - It runs every check a ❓ does, and lets the person into a private task the same way.
-- It is in the person's Needs you until they answer it, there or in its chat. Answering finishes it, posts the answer
-  on the task it was asked on as their message ("Re: <question>: <answer>"), and wakes the bot there once. Where that
-  task's readers may not read the answer, it stays on the question and the bot is pointed to it.
+- It is in the person's Needs you until they answer it with Answer (a post in its chat is a comment). Answering
+  finishes it, posts the answer on the task it was asked on as their message ("Re: <question>: <answer>", an @name in
+  it wakes no one), and wakes whoever has that task's turn now, once. Where that task's readers may not read the
+  answer, it stays on the question and the bot is pointed to it.
 - The same bot asking the same person again on the same task reopens the question with the new words; two bots asking
   are two questions.
 - While it is open the task it was asked on is the person's turn, as with a ❓: never Late, the bot not chased, and the
   bot can't finish, move or close it. The bot takes it back with `tico task close <question> -m "why"`.
-- It ends when that task ends or moves on, or when the bot or the person can no longer take part; Give to hands it to
-  another person who may be asked it. Only the person snoozes it.
+- It stays in the stage it was filed in: it is answered or closed, never moved on, refiled or marked Done. It ends
+  when that task ends or moves on, or when the bot or the person can no longer take part; Give to hands it to another
+  person who may be asked it, as a new round. Only the person snoozes it.
 
 Turn it on, and turn a company's open task ❓ into questions, with `python -m backend.manage questions <db> on` and
 `python -m backend.manage questions <db> backfill` (safe to run again; it prints counts before and after, and what it
