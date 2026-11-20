@@ -58,6 +58,7 @@ import {
 import { MenuLip } from '@/shell/phone';
 import { TicoSheet } from '@/tico';
 import { dot } from '@/tico/dot';
+import { useLookOnPage } from '@/tico/look';
 import { pageName } from '@/tico/pageName';
 import { boardSearch, isFlowPath, leaveFlow, notePlace } from '@/lib';
 
@@ -173,6 +174,7 @@ function App() {
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
+  useLookOnPage(signedIn);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();

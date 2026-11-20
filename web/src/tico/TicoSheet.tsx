@@ -12,6 +12,7 @@ import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
 import { askedFrom, usePageName } from './pageName';
 import { useTicoPower } from './power';
+import { useTicoName } from './look';
 import { TicoOff } from './TicoOff';
 
 /* Tico's sheet (system/shell.js ticoPane): the head with the Dot and search (talking to Tico or searching: both start
@@ -27,9 +28,11 @@ export function TicoSheet() {
   const name = usePageName();
   // On a phone the card draws Tico's one Dot itself, where the lip had it: the head has none of its own.
   const phone = usePhoneCards();
+  // your own name for it (Settings > Account > Your assistant)
+  const tico = useTicoName();
   return (
-    <Sheet kind="tico" label="Tico">
-      <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
+    <Sheet kind="tico" label={tico}>
+      <SheetHead kind="tico" title={tico} lead={phone ? undefined : <Dot size={TICO_MARK} />}>
         <IconButton icon="search" label="Search" onClick={() => openSearch()} />
       </SheetHead>
       {power?.available === false ? (
@@ -40,7 +43,7 @@ export function TicoSheet() {
         // The grey fault, then the one way out (the kit's empty-state row).
         <div className="chat-body">
           <div className="empty">
-            <Fault label="Tico did not load" size={16} />
+            <Fault label={`${tico} did not load`} size={16} />
             <div className="q-row">
               <Button onClick={() => room.refetch()}>Try again</Button>
             </div>
@@ -48,10 +51,10 @@ export function TicoSheet() {
         </div>
       ) : room.data === null ? (
         <div className="chat-body">
-          <Fault label="Tico has no chat yet" />
+          <Fault label={`${tico} has no chat yet`} />
         </div>
       ) : (
-        <MessageBones label="Loading Tico" />
+        <MessageBones label={`Loading ${tico}`} />
       )}
     </Sheet>
   );

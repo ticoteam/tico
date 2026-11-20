@@ -7,6 +7,7 @@ import { desktopApp, tellDesktopSigningOut } from '@/desktop';
 import { agentsQuery } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
+import { COLOR_NAME, DOT_COLORS, DOT_SPRITES, NAME_MAX, setLook } from '@/tico/look';
 import {
   addPerson,
   addSubscription,
@@ -135,6 +136,30 @@ export const setMotion = defineAction({
   run: (_ctx, { motion }) => setMotionChoice(motion),
   did: ({ motion }) => `Motion set to ${motion}`,
   target: () => setting('motion'),
+});
+
+// ---------------------------------------------------------------- your assistant (yours alone: tico/look.ts)
+
+export const setAssistantLook = defineAction({
+  id: 'settings.setAssistantLook',
+  title: 'Name your assistant or change its look',
+  kind: 'change',
+  input: z.strictObject({
+    // empty or null: back to Tico
+    name: z.optional(z.nullable(z.string().check(z.maxLength(NAME_MAX), z.describe('what you call your assistant')))),
+    color: z.optional(z.enum(DOT_COLORS)),
+    sprite: z.optional(z.nullable(z.enum(DOT_SPRITES))),
+  }),
+  run: async (_ctx, { name, color, sprite }) => {
+    await setLook({
+      ...(name !== undefined ? { name: name?.trim() || null } : {}),
+      ...(color !== undefined ? { color } : {}),
+      ...(sprite !== undefined ? { sprite } : {}),
+    });
+  },
+  did: ({ name, color, sprite }) =>
+    name !== undefined ? (name?.trim() ? `Your assistant is ${name.trim()}` : 'Your assistant is Tico again') : color ? `Color set to ${COLOR_NAME[color].toLowerCase()}` : sprite ? 'Sprite on' : 'Sprite off',
+  target: () => setting('assistant'),
 });
 
 // ---------------------------------------------------------------- you

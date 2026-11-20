@@ -17,6 +17,7 @@ import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
 import { Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
+import { AssistantSection } from './Assistant';
 import { Repositories, TeamIcon } from './Company';
 import { CompanyName } from './CompanyName';
 import { AllTokens, EXPIRES } from './CompanyTokens';
@@ -708,6 +709,7 @@ export function Account() {
           <Verb onClick={() => void run('settings.signOut', {}, { via: 'click' })}>Sign out</Verb>
         </Foot>
       </Section>
+      <AssistantSection />
       <Section name="This device" target="setting:device">
         <Facts label="This device">
           <Line label="Theme" target="setting:theme">
