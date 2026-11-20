@@ -31,6 +31,17 @@
 .money .table tr.is-net:hover td,.money .table tr.is-pct:hover td{background:none}
 .money .table .proj{color:var(--muted)}
 .money .table th.is-now{color:var(--ink);font-weight:var(--w-strong)}
+/* this month to date, in bold down its column (finance.js pnl: "this month to date in bold") */
+.money .table td.is-now:not(.zero){font-weight:var(--w-strong)}
+/* a row's words give way to its pill, which is never cut (Transactions' No line) */
+.money .tx-name{display:flex;align-items:center;min-width:0}
+.money .tx-name>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.money .tx-name .pill{flex-shrink:0}
+/* a row's ⋯ shows on the row under the pointer or in focus, not on every row at once */
+@media (hover:hover){
+  .money .table td.t-act .ib:not([aria-expanded="true"]){opacity:0}
+  .money .table tr:is(:hover,:focus-within) td.t-act .ib{opacity:1}
+}
 .money .table td .pill{margin-left:var(--s-2);vertical-align:1px}
 .money .table td.t-fig{font-weight:var(--w-strong)}
 .money .table tr.is-quiet td.t-fig{font-weight:var(--w-text)}
@@ -56,6 +67,10 @@
 .money .ctl-row{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-2h) var(--s-3);position:sticky;top:0;z-index:var(--z-stick);background:var(--surface)}
 .money .ctl-row+.t-scroll .table.is-stick thead th{top:52px}
 .money .ctl-row .count{font-size:var(--t-sm)}
+
+/* the figures stand clear of the tabs, with a rule under them before the sections (finance.css .fin-body, .widgets+.sec) */
+.money .pk-body>.widgets:first-child{margin-top:var(--s-2h)}
+.money .pk-body>.widgets+.pk-widgets{border-top:1px solid var(--line)}
 
 /* the overview's sections in one column, as the mock stacks them */
 .money .pk-widgets>.stack{grid-column:1/-1}
@@ -91,6 +106,14 @@
 .money .fr .row-fig .ib{margin-left:var(--s-1);vertical-align:middle}
 
 /* a definition: a word and what it means here, one line */
+
+/* the panel's body: the mock's 8 in from the sheet (finance.css .panel-body), and its section names on the rows' edge
+   (.panel .sec-head), not the page's margin */
+.money.pbody{padding:var(--s-1h) var(--s-2) var(--s-5)}
+.money.pbody .stage-head{padding:0 var(--s-2)}
+.money.pbody .pk-sec .table :is(th,td):first-child:not(.t-mark){padding-left:var(--s-2)}
+.money.pbody .facts{padding:var(--s-1h) 0 var(--s-2)}
+.money.pbody .facts+.pk-sec{margin-top:var(--s-2h);padding-top:var(--s-2h);border-top:1px solid var(--line)}
 
 /* the panel: one big figure, rows of name, word and figure, where a number comes from */
 .money .pfig{display:grid;gap:var(--s-1);padding:var(--s-2h) var(--s-2) var(--s-4)}
@@ -164,6 +187,7 @@
 .money .month-pick{display:inline-flex;align-items:center}
 .money .gr-chan{display:flex;align-items:center;gap:var(--s-2);min-width:0}
 .money .gr-chan .t-link{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.money .gr-noface{flex:none;width:var(--s-6)}
 .money .gr-over{display:block;font-size:var(--t-xs);color:var(--ink);font-weight:var(--w-strong)}
 .money .gr-n,.money .gr-est{margin-left:var(--s-1h);font-size:var(--t-xs);color:var(--faint);font-weight:var(--w-text)}
 .money .gr-health{display:grid;gap:var(--s-1);padding:var(--s-3) var(--page-x);font-size:var(--t-sm);color:var(--muted)}
@@ -178,6 +202,12 @@
 .money .gr-ret td .zero{white-space:normal}
 @container page (min-width:481px){
   .money .gr-tiles .widgets{grid-template-columns:repeat(var(--gr-n,4),minmax(0,1fr))}
+}
+/* five or six tiles in a narrow page (beside a chat or a panel) go three to a row, so no figure is cut */
+@container page (min-width:481px) and (max-width:760px){
+  .money .gr-tiles.is-many .widgets{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:var(--s-4)}
+  .money .gr-tiles.is-many .widget:nth-child(3n+1){padding-left:0;border-left:0}
+  .money .gr-tiles.is-many .widget:nth-child(3n){padding-right:0}
 }
 
 :where(html[data-layout="cards"]){

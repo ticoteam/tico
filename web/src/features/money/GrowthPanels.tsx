@@ -8,7 +8,7 @@ import { Empty } from '@/kit/Empty';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { OwnerButton } from '@/kit/OwnerButton';
 import { Section, SidePanel } from '@/pagekinds';
-import { axis, count, monShort, monthName, ratio, statusWord } from './model';
+import { axis, count, monShort, monthName, ratio, readDay, statusWord } from './model';
 import { Pfig, Prow, Ptrace, usePress } from './parts';
 import { growthChannelQuery, growthManager, pageOwnersQuery, type GrowthChannel, type GrowthPoint, type GrowthRead } from './queries';
 
@@ -65,7 +65,7 @@ export function ChannelPanel({ slug, month, row }: { slug: string; month: string
   const camps = q.data?.campaigns?.[slug] ?? [];
   return (
     <SidePanel title={c?.name ?? row?.name ?? (slug === 'unknown' ? 'Unknown' : slug)} target={`channel:${slug}`} onClose={() => void press('growth.closePanel', {})}>
-      <div className="money">
+      <div className="money pbody">
         {q.isPending ? (
           <SkeletonRows rows={4} />
         ) : q.isError ? (
@@ -118,7 +118,8 @@ function Origin({ read: d, c }: { read: GrowthRead; c?: GrowthChannel }) {
   const h = d.headline;
   const stale = d.health.stale_sources;
   const cost = c?.cost ?? h.cost.value;
-  const fresh = stale.length ? `Stale: ${stale.join(', ')}` : `As of ${fmtDate(d.as_of)}`;
+  const when = fmtDate(readDay(d.as_of));
+  const fresh = stale.length ? `Stale: ${stale.join(', ')}` : `As of ${when === 'Today' ? 'today' : when}`;
   const days = h.ltv?.window ? Number(h.ltv.window.replace(/\D/g, '')) : 0;
   const ltv = h.ltv?.value;
   const cac = c?.cac ?? h.cac.value;

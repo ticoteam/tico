@@ -88,6 +88,8 @@ export interface LineEntry {
   amount: number;
   vendor_name?: string;
   description?: string;
+  /** A bank row's own words: an entry from a feed often has no vendor or description. */
+  memo?: string;
   source?: string;
 }
 /** GET /api/v2/finance/lines/{account} (backend/finance/reads.py); the schema leaves it untyped. */

@@ -249,7 +249,7 @@ function Transactions() {
       <div className="ctl-row">
         <Search label="Search transactions" value={find} onValueChange={setFind} placeholder="Search" />
         <span className="grow" />
-        <span className="count">{`${plural(rows.length, 'entry', 'entries')}${hasMore ? '+' : ''}`}</span>
+        <span className="count">{hasMore ? `${rows.length.toLocaleString('en-US')}+ entries` : plural(rows.length, 'entry', 'entries')}</span>
       </div>
       {phone ? (
         <TxPhone rows={rows} onMore={more} edit={editing} />
@@ -399,8 +399,13 @@ function TxRow({ t, first, onShare, edit }: { t: Tx; first: boolean; onShare?: (
       <tr className={[t.pending && 'is-quiet', on && 'is-selected'].filter(Boolean).join(' ') || undefined}>
         <td className="t-words">{first ? fmtDate(t.date) : ''}</td>
         <td className="t-name">
-          <TxName t={t} edit={edit} />
-          {!t.account && <Pill flag>No line</Pill>}
+          {/* the words give way to the pill, which is never cut */}
+          <span className="tx-name">
+            <span>
+              <TxName t={t} edit={edit} />
+            </span>
+            {!t.account && <Pill flag>No line</Pill>}
+          </span>
         </td>
         <td className="t-words">{t.account ?? ''}</td>
         <td className="t-words">{sourceOf(t)}</td>
@@ -583,16 +588,21 @@ function Payables() {
     ['This week', week],
     ['Later', later],
   ];
+  // With nothing to pay, Add bill stands under the empty words instead of in the head.
+  const none = !!q.data && bills.length === 0 && drafts.length === 0;
+  const add = approves && (
+    <Button variant="primary" onClick={() => setAdding(true)}>
+      Add bill
+    </Button>
+  );
   return (
     <Page
       q={q}
-      empty={q.data && bills.length === 0 && drafts.length === 0 ? { title: 'Nothing to pay' } : undefined}
+      empty={none ? { title: 'Nothing to pay', action: add || undefined } : undefined}
       actions={
         approves && (
           <>
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              Add bill
-            </Button>
+            {!none && add}
             {adding && <AddBillDialog onOpenChange={setAdding} />}
           </>
         )
@@ -644,16 +654,20 @@ function Receivables() {
   const list = q.data?.invoices ?? [];
   const aging = q.data?.open.aging;
   const max = aging ? Math.max(1, ...AGES.map(([k]) => aging[k])) : 1;
+  const none = !!q.data && list.length === 0 && drafts.length === 0;
+  const add = may('finance.ar') && (
+    <Button variant="primary" onClick={() => setMaking(true)}>
+      New invoice
+    </Button>
+  );
   return (
     <Page
       q={q}
-      empty={q.data && list.length === 0 && drafts.length === 0 ? { title: 'Nobody owes you' } : undefined}
+      empty={none ? { title: 'Nobody owes you', action: add || undefined } : undefined}
       actions={
         may('finance.ar') && (
           <>
-            <Button variant="primary" onClick={() => setMaking(true)}>
-              New invoice
-            </Button>
+            {!none && add}
             {making && <NewInvoiceDialog onOpenChange={setMaking} />}
           </>
         )
@@ -714,7 +728,9 @@ function Side({ label, head, was, parts }: { label: string; head: string; was: W
         <tr>
           <Th>Account</Th>
           {was && <Th num>{was.head}</Th>}
-          <Th num>{head}</Th>
+          <Th num w="is-now">
+            {head}
+          </Th>
         </tr>
       </thead>
       <tbody>
@@ -728,19 +744,21 @@ function Side({ label, head, was, parts }: { label: string; head: string; was: W
               <tr key={`${p.name}:${r.code}:${r.name}`}>
                 <td className="t-name">{r.name}</td>
                 {was && <td className={before ? 'num t-was' : 'num zero t-was'}>{cash(before ?? 0)}</td>}
-                <td className={r.balance === 0 ? 'num zero' : 'num'}>{cash(r.balance)}</td>
+                <td className={r.balance === 0 ? 'num zero' : 'num t-fig'}>{cash(r.balance)}</td>
               </tr>
             );
           }),
-          <tr key={`t:${p.name}`} className="is-total">
-            <td className="t-name">{p.total}</td>
+          // A side of one part (Assets) ends on its total drawn as the statement's last line, named for the part, as
+          // the other side ends on Liabilities and equity.
+          <tr key={`t:${p.name}`} className={parts.length === 1 ? 'is-net' : 'is-total'}>
+            <td className="t-name">{parts.length === 1 ? p.name : p.total}</td>
             {was && <td className="num t-was">{cash(then(p.rows))}</td>}
             <td className="num">{cash(total(p.rows))}</td>
           </tr>,
         ])}
         {parts.length > 1 && (
           <tr className="is-net">
-            <td className="t-name">{parts.map((p) => p.name).join(' and ')}</td>
+            <td className="t-name">{parts.map((p, i) => (i ? p.name.toLowerCase() : p.name)).join(' and ')}</td>
             {was && <td className="num t-was">{cash(parts.reduce((a, p) => a + then(p.rows), 0))}</td>}
             <td className="num">{cash(parts.reduce((a, p) => a + total(p.rows), 0))}</td>
           </tr>
@@ -748,6 +766,14 @@ function Side({ label, head, was, parts }: { label: string; head: string; was: W
       </tbody>
     </Table>
   );
+}
+
+/** A balance column's day as a date, today too ("Nov 19"; "Dec 31, 2025" in another year): the switch already says Today. */
+function dayHead(iso: string) {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  const other = d.getFullYear() !== new Date().getFullYear();
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(other ? { year: 'numeric' } : {}) });
 }
 
 const AS_OF: { value: AsOf; label: string }[] = [
@@ -766,12 +792,12 @@ function Balance() {
   const c = useQuery(balanceQuery(compareDay(asof), as)).data;
   const [importing, setImporting] = useState(false);
   const d = q.data;
-  const head = d ? fmtDate(d.as_of) : '';
-  const was: Was = c && d && c.as_of !== d.as_of ? { head: fmtDate(c.as_of), at: new Map([...c.assets, ...c.liabilities, ...c.equity].map((a): [string, number] => [acctKey(a), a.balance])) } : null;
+  const head = d ? dayHead(d.as_of) : '';
+  const was: Was = c && d && c.as_of !== d.as_of ? { head: dayHead(c.as_of), at: new Map([...c.assets, ...c.liabilities, ...c.equity].map((a): [string, number] => [acctKey(a), a.balance])) } : null;
   return (
     <Page
       q={q}
-      actions={
+      tools={
         <span data-phone>
           <Segmented label="As of" options={AS_OF} value={asof} onValueChange={(v) => void press('finance.setAsOf', { asof: v })} />
         </span>
@@ -832,20 +858,24 @@ function Cards() {
     </>
   );
   const holder = (c: (typeof cards)[number]) => (/^(human|bot):/.test(c.holder) ? <Who id={c.holder} /> : c.holder);
+  const none = !!q.data && cards.length === 0;
+  const add = may('finance.cards') && (
+    <Button variant="primary" onClick={() => setMaking(true)}>
+      Add card
+    </Button>
+  );
   return (
     <Page
       q={q}
       actions={
         may('finance.cards') && (
           <>
-            <Button variant="primary" onClick={() => setMaking(true)}>
-              Add card
-            </Button>
+            {!none && add}
             {making && <CardDialog onOpenChange={setMaking} />}
           </>
         )
       }
-      empty={q.data && cards.length === 0 ? { title: 'No cards yet' } : undefined}
+      empty={none ? { title: 'No cards yet', action: add || undefined } : undefined}
       panel={open && <CardPanel id={open} />}
     >
       {phone ? (

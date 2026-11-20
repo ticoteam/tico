@@ -360,7 +360,7 @@ describe('Balance sheet @s408', () => {
   });
 
   it('exports the sheet, with its compare column, as a CSV @s408', async () => {
-    serve([[/balance-sheet\?as_of=/, sheet('2026-10-31', 300000)], [/balance-sheet/, sheet(today, 500000)]]);
+    serve([[`as_of=${today}`, sheet(today, 500000)], [/balance-sheet\?as_of=/, sheet('2026-10-31', 300000)]]);
     let file: Blob | null = null;
     const made = vi.fn((b: Blob) => {
       file = b;

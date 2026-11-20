@@ -110,7 +110,7 @@ export function DocPanel({ kind, id }: { kind: DocKind; id: string }) {
         ))
       }
     >
-      <div className="money">
+      <div className="money pbody">
         {q.isError ? (
           <Unread error={q.error} onRetry={() => void q.refetch()} />
         ) : (
@@ -218,7 +218,7 @@ export function CardPanel({ id }: { id: string }) {
         )
       }
     >
-      <div className="money">
+      <div className="money pbody">
         {q.isError ? (
           <Unread error={q.error} onRetry={() => void q.refetch()} />
         ) : (

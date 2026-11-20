@@ -127,7 +127,7 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
                     </ActLink>
                   </td>
                   <td className="t-words">{SEES[t.default] ?? ''}</td>
-                  <td className="t-words">{t.default === 'everything' || t.teammate === acc?.finance_approver ? 'Yes' : ''}</td>
+                  <td className="t-words">{t.default === 'everything' || t.teammate === acc?.finance_approver ? 'Any amount' : ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -185,7 +185,7 @@ function MatePanel({ mate: t, acc, viewing, onGive }: { mate: Mate; acc: AccessL
         )
       }
     >
-      <div className="money">
+      <div className="money pbody">
         <Facts label="Teammate">
           {path.length > 0 && <LabelValue label="Team">{path.join(' › ')}</LabelValue>}
           <LabelValue label="Kind">{t.kind === 'bot' ? 'Agent' : 'Person'}</LabelValue>

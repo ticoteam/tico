@@ -279,6 +279,14 @@ export function funnelSteps(h: Partial<GrowthRead['headline']>) {
   return steps.filter((s): s is [string, number] => s[1] != null).map(([name, n]) => ({ name, count: n }));
 }
 
+/** The read's day, never after the viewer's today: the server dates a read by its own (UTC) day, which in the evening
+    west of UTC is tomorrow here. */
+export const readDay = (asOf: string, now = new Date()) => {
+  const day = asOf.slice(0, 10);
+  const today = dayOf(now);
+  return day > today ? today : day;
+};
+
 /** The month the page opens on: the last full one. */
 export const lastFullMonth = (now = new Date()) => addMonths(ymOf(now), -1);
 
@@ -294,10 +302,12 @@ export const valueKind = (r: Pick<GrowthRead, 'segment' | 'headline'>): 'revenue
   r.segment?.value_kind ?? (r.headline.value ? 'retention' : 'revenue');
 
 /** When a cohort's kept share at a window can first be read: once its whole month is old enough ("Nov 30"). */
-export function firstRead(cohort: string, days: number) {
+export function firstRead(cohort: string, days: number, now = new Date()) {
   const [y, m] = parts(cohort);
   const d = new Date(y, m, 0);
   d.setDate(d.getDate() + days);
+  // A day already gone means the cohort is old enough and its count was never pushed: not a date to wait for.
+  if (d < now) return '';
   return `${MON[d.getMonth()]} ${d.getDate()}`;
 }
 

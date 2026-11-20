@@ -14,11 +14,12 @@ export type Tags = Record<string, string>;
 
 export type AsOf = 'today' | 'month' | 'year';
 
-/** The day the balance sheet is read at: today (undefined, the server's default), the last month end or year end. */
-export function asOfDay(asof: AsOf, now = new Date()): string | undefined {
+/** The day the balance sheet is read at: the viewer's today, the last month end or year end. Today is sent as the
+    viewer's own day: the server's default is its own (UTC) day, which in the evening west of UTC is tomorrow. */
+export function asOfDay(asof: AsOf, now = new Date()): string {
   if (asof === 'month') return dayOf(new Date(now.getFullYear(), now.getMonth(), 0));
   if (asof === 'year') return `${now.getFullYear() - 1}-12-31`;
-  return undefined;
+  return dayOf(now);
 }
 
 /** The day it is set beside: the month end or year end before the one shown (finance.js `bal`: Oct 31 beside today). */
