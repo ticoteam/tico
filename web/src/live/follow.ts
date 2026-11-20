@@ -5,9 +5,8 @@ import { restartLive, setScopeSource, type StreamScope, type Topic } from './str
 
 // What is on screen tells the stream what to send (backend/events.py narrowing): every task's change on a board,
 // one task's in its view, a person's or an agent's own tasks on their page, a thread's messages and run output while
-// it is open. Follows are counted, so two views of one thread follow it once. When the last follow of a scope is
-// released, the queries it fed are marked stale (not refetched): the stream no longer keeps them fresh, so the next
-// screen that shows them reads them again.
+// it is open. Follows are counted, so two views of one thread follow it once. When a scope stops, the queries it fed
+// become stale: the stream no longer keeps them fresh, so the next screen that shows them reads them again.
 
 export type FollowScope =
   | { allTasks: true }
@@ -24,6 +23,9 @@ export type FollowScope =
 const BASE: Topic[] = ['bots', 'needs', 'threads', 'calendar', 'setup', 'screen'];
 
 const counts = new Map<string, number>();
+// A quick trip away from a board can reuse its large list while the stream still covers it.
+const TASK_LIST_GRACE_MS = 5000;
+let tasksExpiry: ReturnType<typeof setTimeout> | undefined;
 
 const idOf = (scope: FollowScope): string => {
   const [kind, value] = Object.entries(scope)[0] as [string, unknown];
@@ -32,7 +34,7 @@ const idOf = (scope: FollowScope): string => {
 
 function scope(): StreamScope {
   const out: StreamScope = { topics: [...BASE], conversation: [], thread: [], task: [], party: [], meeting: [], place: [] };
-  let allTasks = false;
+  let allTasks = tasksExpiry !== undefined;
   const topics = new Set<Topic>(BASE);
   for (const id of counts.keys()) {
     const [kind, value] = id.split('\u0000') as [string, string];
@@ -65,7 +67,14 @@ export function follow(scope: FollowScope, feeds?: QueryKey[]): () => void {
   const id = idOf(scope);
   const n = counts.get(id) ?? 0;
   counts.set(id, n + 1);
-  if (!n) restartLive();
+  if ('allTasks' in scope && tasksExpiry !== undefined) {
+    clearTimeout(tasksExpiry);
+    tasksExpiry = undefined;
+  } else if (!n) restartLive();
+  const stop = () => {
+    restartLive();
+    for (const queryKey of feeds ?? fed(scope)) void queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
+  };
   let released = false;
   return () => {
     if (released) return;
@@ -73,8 +82,12 @@ export function follow(scope: FollowScope, feeds?: QueryKey[]): () => void {
     const left = (counts.get(id) ?? 1) - 1;
     if (left > 0) return void counts.set(id, left);
     counts.delete(id);
-    restartLive();
-    for (const queryKey of feeds ?? fed(scope)) void queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
+    if ('allTasks' in scope) {
+      tasksExpiry = setTimeout(() => {
+        tasksExpiry = undefined;
+        stop();
+      }, TASK_LIST_GRACE_MS);
+    } else stop();
   };
 }
 
@@ -90,5 +103,7 @@ export function useFollow(scope: FollowScope | null | undefined, feeds?: QueryKe
 
 /** Tests: forget every follow. */
 export function resetFollows(): void {
+  clearTimeout(tasksExpiry);
+  tasksExpiry = undefined;
   counts.clear();
 }

@@ -237,6 +237,35 @@ describe('the first connection', () => {
 });
 
 describe('follows', () => {
+  it('keeps a task list live across a quick return and marks it stale when the follow expires', () => {
+    const key = ['tasks', 'list', { status: 'open' }];
+    const read = vi.fn(async () => ({ tasks: [], cursor: '900.a' }));
+    queryClient.setQueryData<TaskList>(key, { tasks: [task('t1')], cursor: '900.a' });
+    const leave = follow({ allTasks: true });
+    startLive();
+    const stream = FakeEventSource.last;
+    stream.feed(opening(900));
+    expect(stream.params.get('topics')?.split(',')).toContain('tasks');
+
+    leave();
+    vi.advanceTimersByTime(1200);
+    stream.feed(taskFrame(901, task('t1', { title: 'Renamed while away', version: 2 })));
+    flushFrame();
+    const leaveAgain = follow({ allTasks: true });
+    offs.push(new QueryObserver(queryClient, { queryKey: key, queryFn: read }).subscribe(() => {}));
+    vi.advanceTimersByTime(5000);
+    expect(FakeEventSource.all).toEqual([stream]);
+    expect(queryClient.getQueryData<TaskList>(key)?.tasks[0]).toMatchObject({ title: 'Renamed while away' });
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+
+    leaveAgain();
+    vi.advanceTimersByTime(5030);
+    expect(FakeEventSource.last.params.get('topics')?.split(',')).not.toContain('tasks');
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('narrow the stream to what is on screen, and mark what they fed stale without reading it', () => {
     startLive();
     FakeEventSource.last.feed(opening(900));
