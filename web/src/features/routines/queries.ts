@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import type { AutomationOverviewRuns, AutomationTemplate, AutomationTemplates } from '@/api/schema';
+import type { AutomationOverviewRuns, AutomationRuns, AutomationStats, AutomationTemplate, AutomationTemplates } from '@/api/schema';
 import type { Dest } from './board';
 import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
 import type {
@@ -227,6 +227,57 @@ export function setFlow(id: string, flow: { steps: Step[]; destinations: Dest[] 
   });
 }
 
+/** Its trigger as saved (a new version); a schedule's run settings go with it. */
+export function setTrigger(id: string, trigger: Trigger) {
+  const change = (r: Routine): Routine => ({ ...r, trigger });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { trigger }, { idempotencyKey }),
+    settle: (cur: Routine[] | Routine | undefined, made) => (Array.isArray(cur) ? mapList(cur, id, () => made) : cur && made),
+  });
+}
+
+/** A new name, from the page's title. */
+export function renameRoutine(id: string, name: string) {
+  const change = (r: Routine): Routine => ({ ...r, name });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { name }, { idempotencyKey }),
+  });
+}
+
+/** A blank automation (the old "+" on a trigger): the person's own, off, no steps; it opens to be built. */
+export function createBlank(owner: string, trigger: Trigger) {
+  return write<Routine>({
+    key: routinesQuery.queryKey,
+    optimistic: (list: Routine[] | undefined) => list,
+    send: (idempotencyKey) =>
+      api.post<Routine>('/api/v2/automations', { name: 'New automation', owner, enabled: false, builtin: false, trigger, steps: [] }, { idempotencyKey }),
+    settle: (list: Routine[] | undefined, made) => list && [...list.filter((r) => r.id !== made.id), made],
+  });
+}
+
+/** Each automation's runs, failures and cost over a range, with its bars (GET /automations/stats, the old list's
+    counts). Tico's own jobs are counted under their ids too. */
+export const statsQuery = (range: RunRange) =>
+  queryOptions({
+    queryKey: ['routines', 'stats', range],
+    queryFn: ({ signal }) => api.get<AutomationStats>(`/api/v2/automations/stats?range=${range}`, { signal }),
+    staleTime: 60_000,
+  });
+
+/** One automation's runs, newest first, a page at a time (its Runs view). */
+export const runPagesQuery = (id: string) =>
+  infiniteQueryOptions({
+    queryKey: ['routines', 'run-pages', id],
+    queryFn: ({ signal, pageParam }) =>
+      api.get<AutomationRuns>(`/api/v2/automations/${enc(id)}/runs?limit=25${pageParam ? `&before=${enc(pageParam)}` : ''}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next || undefined,
+  });
+
 // ---------------------------------------------------------------- every run, across routines
 
 export const RUN_RANGES = ['5m', '1h', '24h', '7d'] as const;
@@ -236,11 +287,19 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type AnyRun = AutomationOverviewRuns['runs'][number];
 
 /** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
-export const allRunsQuery = (range: RunRange, status?: RunStatus) =>
+export const allRunsQuery = (range: RunRange, status?: RunStatus, by: { trigger?: string; owner?: string; ids?: string } = {}) =>
   infiniteQueryOptions({
-    queryKey: ['routines', 'all-runs', range, status ?? ''],
+    queryKey: ['routines', 'all-runs', range, status ?? '', by.trigger ?? '', by.owner ?? '', by.ids ?? ''],
     queryFn: ({ signal, pageParam }) => {
-      const q = new URLSearchParams({ range, limit: '50', ...(status ? { status } : {}), ...(pageParam ? { before: pageParam } : {}) });
+      const q = new URLSearchParams({
+        range,
+        limit: '50',
+        ...(status ? { status } : {}),
+        ...(by.trigger ? { trigger: by.trigger } : {}),
+        ...(by.owner ? { owner: by.owner } : {}),
+        ...(by.ids ? { ids: by.ids } : {}),
+        ...(pageParam ? { before: pageParam } : {}),
+      });
       return api.get<AutomationOverviewRuns>(`/api/v2/automations/runs?${q.toString()}`, { signal });
     },
     initialPageParam: '',

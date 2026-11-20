@@ -34,7 +34,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
       title="Maintenance"
       target="routine:maintenance"
       onClose={onClose}
-      actions={d && <HeadSwitch label={d.settings.paused ? 'Paused' : 'On'} checked={!d.settings.paused} disabled={!can} onChange={(on) => void press('routines.setMaintenance', { paused: !on })} />}
+      actions={d && <HeadSwitch label={d.settings.paused ? 'Paused' : 'On'} checked={!d.settings.paused} disabled={!can} onChange={(on) => void press('automations.setMaintenance', { paused: !on })} />}
     >
       <PanelRead q={m} what="Maintenance" />
       {d && (
@@ -49,7 +49,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
                   disabled={!can}
                   options={MAINTENANCE_EVERY}
                   value={(MAINTENANCE_EVERY.find((e) => e.value === d.settings.schedule)?.value ?? null) as MaintenanceEvery | null}
-                  onValueChange={(schedule) => void press('routines.setMaintenance', { schedule })}
+                  onValueChange={(schedule) => void press('automations.setMaintenance', { schedule })}
                 />
               </LabelValue>
             </Facts>
@@ -67,7 +67,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
                   labelHidden
                   checked={s.enabled}
                   disabled={!can || !!s.fixed}
-                  onCheckedChange={(on) => void press('routines.setMaintenance', { step: s.key, stepOn: on })}
+                  onCheckedChange={(on) => void press('automations.setMaintenance', { step: s.key, stepOn: on })}
                 />
               </div>
             ))}
@@ -77,7 +77,7 @@ function MaintenancePanel({ onClose }: { onClose: () => void }) {
       <section className="rail-sec">
         <h3>
           Last runs
-          {can && <Verb onClick={() => void press('routines.runMaintenance', {})}>Run now</Verb>}
+          {can && <Verb onClick={() => void press('automations.runMaintenance', {})}>Run now</Verb>}
         </h3>
         {(runs.data ?? []).map((r) => {
           const what = r.result ? agentWords(r.result) : r.ok === false ? 'Failed' : r.finished_at ? `${r.steps?.length ?? 0} steps` : 'Running';
@@ -112,7 +112,7 @@ function HeartbeatPanel({ onClose }: { onClose: () => void }) {
                   disabled={!d.can_change}
                   options={heartbeatChoices(d.interval_min, d.interval_max, d.interval_s)}
                   value={String(d.interval_s)}
-                  onValueChange={(v) => void press('routines.setHeartbeat', { seconds: Number(v) })}
+                  onValueChange={(v) => void press('automations.setHeartbeat', { seconds: Number(v) })}
                 />
               </LabelValue>
               {d.last_beat_at && (
@@ -136,7 +136,7 @@ function HeartbeatPanel({ onClose }: { onClose: () => void }) {
                     labelHidden
                     checked={s.on}
                     disabled={!s.can_change}
-                    onCheckedChange={(on) => void press('routines.setJob', { job: s.key, on })}
+                    onCheckedChange={(on) => void press('automations.setJob', { job: s.key, on })}
                   />
                 ) : (
                   <span className="row-age">{s.last_ms != null ? ms(s.last_ms) : ''}</span>
@@ -186,7 +186,7 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
               </span>
             </span>
             <span className="rr-field">
-              {job.controllable && job.on && job.can_change && <Verb onClick={() => void press('routines.runJob', { job: job.key })}>Run now</Verb>}
+              {job.controllable && job.on && job.can_change && <Verb onClick={() => void press('automations.runJob', { job: job.key })}>Run now</Verb>}
               {job.switch === false ? (
                 <span className="row-age">{job.last?.started_at ? <Ago at={job.last.started_at} /> : ''}</span>
               ) : (
@@ -195,7 +195,7 @@ function SystemPanel({ onClose }: { onClose: () => void }) {
                   labelHidden
                   checked={job.on}
                   disabled={job.can_change === false}
-                  onCheckedChange={(on) => void press('routines.setJob', { job: job.key, on })}
+                  onCheckedChange={(on) => void press('automations.setJob', { job: job.key, on })}
                 />
               )}
             </span>
@@ -241,7 +241,7 @@ function JobWhen({ job }: { job: SystemJob }) {
           look="quiet"
           options={presets.map((p) => ({ value: p.key, label: presetLabel(job, p) }))}
           value={job.preset ?? null}
-          onValueChange={(preset) => void press('routines.setJobSchedule', { job: job.key, preset, ...(preset === 'daily' && !job.at ? { at: '09:00' } : {}) })}
+          onValueChange={(preset) => void press('automations.setJobSchedule', { job: job.key, preset, ...(preset === 'daily' && !job.at ? { at: '09:00' } : {}) })}
         />
       ) : (
         presets.map((p) => <span key={p.key}>{presetLabel(job, p)}</span>)
@@ -253,7 +253,7 @@ function JobWhen({ job }: { job: SystemJob }) {
           look="quiet"
           options={timeChoices(job.at ?? '09:00')}
           value={job.at ?? null}
-          onValueChange={(at) => void press('routines.setJobSchedule', { job: job.key, at })}
+          onValueChange={(at) => void press('automations.setJobSchedule', { job: job.key, at })}
         />
       )}
     </>

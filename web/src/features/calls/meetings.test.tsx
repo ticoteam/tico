@@ -83,7 +83,7 @@ function show(path: string, basepath = '/') {
   });
   const cal = createRoute({ getParentRoute: () => root, path: '/calendar', validateSearch: calendarSearch, component: CalendarPage });
   const tools = createRoute({ getParentRoute: () => root, path: '/library/tools', component: () => null });
-  const routines = createRoute({ getParentRoute: () => root, path: '/company/routines', component: () => <p>Routines</p> });
+  const routines = createRoute({ getParentRoute: () => root, path: '/company/automations/$id', component: () => <p>Automation</p> });
   const router = createRouter({ basepath, routeTree: root.addChildren([cal, tools, routines]), history: createMemoryHistory({ initialEntries: [path] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -605,8 +605,8 @@ describe('Calendar, checked against the old app', () => {
     seed('week', [occ({ kind: 'run', title: 'Morning brief', links: { attempt: null, automation: 'au1', meeting: null, task: null, thread: null } })]);
     show(`/calendar?view=week&date=${DAY}&panel=event%3Ao1`);
     const panel = await screen.findByRole('complementary', { name: 'Morning brief' });
-    const link = within(panel).getByRole('link', { name: 'Routine' });
-    expect(link.getAttribute('href')).toBe('/company/routines?panel=routine%3Aau1');
+    const link = within(panel).getByRole('link', { name: 'Automation' });
+    expect(link.getAttribute('href')).toBe('/company/automations/au1?view=runs');
   });
 });
 

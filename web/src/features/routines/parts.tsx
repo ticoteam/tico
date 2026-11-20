@@ -312,6 +312,6 @@ export const RemoveItem = ({ onSelect, disabled }: { onSelect: () => void; disab
 
 /** The page's search: the field in the head (on a phone the page kind gives it its own line under the head). The words
     go to the address a beat after typing stops. */
-export function Find({ label, value, onFind }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void }) {
-  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" />;
+export function Find({ label, value, onFind, wide }: { label: string; value: string | undefined; onFind: (q: string | undefined) => void; wide?: boolean }) {
+  return <SettledSearch label={label} value={value ?? ''} onSettle={(q) => onFind(q || undefined)} placeholder="Search" wide={wide} />;
 }

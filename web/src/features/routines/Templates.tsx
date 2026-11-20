@@ -49,7 +49,7 @@ export function NewInbox({ onClose }: { onClose: () => void }) {
   const create = async () => {
     if (!who || !tid) return;
     setBusy(true);
-    const r = await pressOut<string>('routines.newInbox', { inbox: address, owner: who, template: tid, on });
+    const r = await pressOut<string>('automations.newInbox', { inbox: address, owner: who, template: tid, on });
     setBusy(false);
     if (r) onClose();
   };
@@ -116,7 +116,7 @@ export function ApplyTemplate({ routine, onClose }: { routine: Routine; onClose:
   const apply = async () => {
     if (!tid) return;
     setBusy(true);
-    const ok = await press('routines.applyTemplate', { routine: routine.id, template: tid });
+    const ok = await press('automations.applyTemplate', { routine: routine.id, template: tid });
     setBusy(false);
     if (ok) onClose();
   };

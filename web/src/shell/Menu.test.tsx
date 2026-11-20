@@ -87,7 +87,7 @@ describe('Menu', () => {
 
   it('opens the Company fold on a company page, with its pages, and keeps the Library shut @s1198', async () => {
     const nav = await show({}, '/company/finance');
-    for (const name of ['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Routines', 'Listening', 'Rules', 'Usage'])
+    for (const name of ['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Automations', 'Listening', 'Rules', 'Usage'])
       expect(within(nav).getByRole('link', { name }).getAttribute('href')).toBe(`/company/${name.toLowerCase()}`);
     expect(within(nav).getByRole('link', { name: 'Finance' }).getAttribute('aria-current')).toBe('page');
     expect(within(nav).queryByRole('link', { name: 'Docs' })).toBeNull();
@@ -131,13 +131,13 @@ describe('Menu', () => {
       return { router, view, go, nav, shape };
     }
 
-    it('opening a routine, a doc or a strategy page changes nothing in the menu', async () => {
-      const m = await at('/company/routines');
+    it('opening an automation, a doc or a strategy page changes nothing in the menu', async () => {
+      const m = await at('/company/automations');
       const before = m.shape();
-      await m.go('/company/routines?panel=builtin%3Amaintenance');
+      await m.go('/company/automations?panel=builtin%3Amaintenance');
       expect(m.shape()).toEqual(before);
-      await m.go('/company/routines/r1');
-      expect(m.shape().filter((r) => !r.includes('Routines'))).toEqual(before.filter((r) => !r.includes('Routines')));
+      await m.go('/company/automations/r1');
+      expect(m.shape().filter((r) => !r.includes('Automations'))).toEqual(before.filter((r) => !r.includes('Automations')));
       expect(m.nav().getByRole('button', { name: 'Company', expanded: true })).toBeTruthy();
     });
 

@@ -435,7 +435,7 @@
     },
     {
       "id": "agents.requestCloud",
-      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it",
+      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…, or `other` with its name or website): a seat holds its place, its first task waits there, and Tico support builds it",
       "kind": "change",
       "input": {
         "type": "object",
@@ -451,6 +451,16 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "a team's id"
+          },
+          "first_task": {
+            "type": "string",
+            "maxLength": 8000,
+            "description": "the first task, waiting on the seat until the agent connects"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "for `other`: the agent's name or website"
           }
         },
         "required": [
@@ -774,6 +784,981 @@
         "required": [
           "slug",
           "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.applyTemplate",
+      "title": "Move an inbox routine onto a template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "routine",
+          "template"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.closePanel",
+      "title": "Close the panel",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.create",
+      "title": "Add a routine",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^bot:\\S+$",
+            "description": "bot:<id>"
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "cron": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "pattern": "^\\S+( \\S+){4}$",
+            "description": "a five-part cron, like 0 9 * * 1-5"
+          },
+          "event": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "name",
+          "agent",
+          "instruction"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.discardVersion",
+      "title": "Discard an agent's proposed version",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          }
+        },
+        "required": [
+          "routine",
+          "n"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.edit",
+      "title": "Open one part of an automation's flow in the panel: a step, its trigger, a new step, a board part",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "edit": {
+            "type": "string",
+            "pattern": "^(trigger|versions|limit|new\\|[^|]{1,200}\\|\\d{1,3}\\|[a-z_]{1,20}|board\\|(rule|question|destination)\\|(\\d{1,3}|new)|board\\|llm|[\\w:.-]{1,200})$",
+            "description": "a step id, trigger, versions, limit, new|<list>|<at>|<type>, board|<part>|<i or new>, board|llm"
+          }
+        },
+        "required": [
+          "routine",
+          "edit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.endHold",
+      "title": "Release or drop a routine's held runs",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "action": {
+            "enum": [
+              "release",
+              "drop"
+            ]
+          }
+        },
+        "required": [
+          "routine",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.list",
+      "title": "Search or filter the automations or their runs, or pick the time range",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "state": {
+            "enum": [
+              "on",
+              "failed",
+              "hold",
+              "off"
+            ]
+          },
+          "range": {
+            "enum": [
+              "5m",
+              "1h",
+              "24h",
+              "7d"
+            ]
+          },
+          "tab": {
+            "enum": [
+              "runs"
+            ]
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "waiting",
+              "running",
+              "done"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.new",
+      "title": "Start a new routine",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.newInbox",
+      "title": "Add an inbox routine from a template",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "inbox": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^(human|person|bot|group):\\S+$",
+            "description": "human:<id>, bot:<id> or group:<id>"
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "inbox",
+          "owner",
+          "template"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.open",
+      "title": "Open an automation, on its flow or its runs",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "view": {
+            "enum": [
+              "flow",
+              "runs"
+            ]
+          }
+        },
+        "required": [
+          "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.openBuiltin",
+      "title": "Open Maintenance, Heartbeat or System jobs",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "which": {
+            "enum": [
+              "maintenance",
+              "heartbeat",
+              "system"
+            ]
+          }
+        },
+        "required": [
+          "which"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.pause",
+      "title": "Pause a routine",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.removeBoardItem",
+      "title": "Remove a rule, question or destination from a routine's board",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "part": {
+            "enum": [
+              "rule",
+              "question",
+              "destination"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "routine",
+          "part",
+          "at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.removeStep",
+      "title": "Remove one step from an automation's flow",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "step": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "routine",
+          "step"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.rename",
+      "title": "Rename an automation",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "routine",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.restoreVersion",
+      "title": "Restore a routine's version, or turn on a proposed one",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          }
+        },
+        "required": [
+          "routine",
+          "n"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.resume",
+      "title": "Turn a routine back on",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.runJob",
+      "title": "Run a system job now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.runMaintenance",
+      "title": "Run Maintenance now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.runNow",
+      "title": "Run a routine now",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.saveBoardItem",
+      "title": "Add or change a rule, question, destination or the LLM on a routine's board",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "part": {
+            "enum": [
+              "rule",
+              "question",
+              "destination",
+              "llm"
+            ]
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "when": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "op": {
+                  "enum": [
+                    "is",
+                    "is_not",
+                    "contains",
+                    "matches",
+                    ">=",
+                    "<="
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "field",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "match": {
+            "enum": [
+              "all",
+              "any"
+            ]
+          },
+          "then": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "do": {
+                  "enum": [
+                    "archive",
+                    "label",
+                    "star",
+                    "leave_for_you",
+                    "forward",
+                    "draft_reply",
+                    "send_reply",
+                    "unsubscribe",
+                    "create_task",
+                    "wake_bot",
+                    "assign",
+                    "note",
+                    "post_update",
+                    "call_webhook"
+                  ]
+                },
+                "args": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                }
+              },
+              "required": [
+                "do"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "goTo": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "moveOn": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "mode": {
+            "enum": [
+              "sort",
+              "draft",
+              "reply"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "dests": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          "unsure": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "routine",
+          "part"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.saveStep",
+      "title": "Add or change one step of an automation's flow",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "step": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "insert": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "at": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              }
+            },
+            "required": [
+              "key",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "routine",
+          "step"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setHeartbeat",
+      "title": "Set how often Heartbeat checks",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "seconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 60
+          }
+        },
+        "required": [
+          "seconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setJob",
+      "title": "Turn a system job on or off",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "job",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setJobSchedule",
+      "title": "Pick when a system job runs: a preset, or its daily time",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "preset": {
+            "enum": [
+              "15m",
+              "hourly",
+              "4h",
+              "daily",
+              "business"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 5,
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "a time, HH:MM"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setMaintenance",
+      "title": "Change Maintenance",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "schedule": {
+            "enum": [
+              "hourly",
+              "2h",
+              "3h",
+              "6h",
+              "12h",
+              "daily"
+            ]
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "step": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "stepOn": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setStepOn",
+      "title": "Turn one step of an automation's flow on or off",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "step": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "routine",
+          "step",
+          "on"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.setTrigger",
+      "title": "Change what starts an automation",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "trigger": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "routine",
+          "trigger"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.showRuns",
+      "title": "Show every run across routines",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": [
+              "failed",
+              "waiting",
+              "running",
+              "done"
+            ]
+          },
+          "range": {
+            "enum": [
+              "5m",
+              "1h",
+              "24h",
+              "7d"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.start",
+      "title": "Start a blank automation on a trigger, off, and open it",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "when": {
+            "enum": [
+              "schedule",
+              "event",
+              "due"
+            ]
+          }
+        },
+        "required": [
+          "when"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.testRun",
+      "title": "Test a routine with sample input",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sample": {
+            "type": "string",
+            "maxLength": 50000
+          }
+        },
+        "required": [
+          "routine"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "automations.update",
+      "title": "Change a routine",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^bot:\\S+$",
+            "description": "bot:<id>"
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "cron": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "pattern": "^\\S+( \\S+){4}$",
+            "description": "a five-part cron, like 0 9 * * 1-5"
+          },
+          "event": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_*-]+)+$",
+            "description": "an event name, like task.created"
+          }
+        },
+        "required": [
+          "routine"
         ],
         "additionalProperties": false
       }
@@ -5727,761 +6712,6 @@
         },
         "required": [
           "view"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.applyTemplate",
-      "title": "Move an inbox routine onto a template",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "template": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "routine",
-          "template"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.closePanel",
-      "title": "Close the panel",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.create",
-      "title": "Add a routine",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "agent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "pattern": "^bot:\\S+$",
-            "description": "bot:<id>"
-          },
-          "instruction": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 20000
-          },
-          "cron": {
-            "type": "string",
-            "minLength": 9,
-            "maxLength": 100,
-            "pattern": "^\\S+( \\S+){4}$",
-            "description": "a five-part cron, like 0 9 * * 1-5"
-          },
-          "event": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "name",
-          "agent",
-          "instruction"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.discardVersion",
-      "title": "Discard an agent's proposed version",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "n": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1000000
-          }
-        },
-        "required": [
-          "routine",
-          "n"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.endHold",
-      "title": "Release or drop a routine's held runs",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "action": {
-            "enum": [
-              "release",
-              "drop"
-            ]
-          }
-        },
-        "required": [
-          "routine",
-          "action"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.list",
-      "title": "Search or filter the routines",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "q": {
-            "type": "string",
-            "maxLength": 200
-          },
-          "state": {
-            "enum": [
-              "on",
-              "failed",
-              "hold",
-              "off"
-            ]
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.new",
-      "title": "Start a new routine",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.newInbox",
-      "title": "Add an inbox routine from a template",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "inbox": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 300
-          },
-          "owner": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "pattern": "^(human|person|bot|group):\\S+$",
-            "description": "human:<id>, bot:<id> or group:<id>"
-          },
-          "template": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "inbox",
-          "owner",
-          "template"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.open",
-      "title": "Open a routine",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.openBuiltin",
-      "title": "Open Maintenance, Heartbeat or System jobs",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "which": {
-            "enum": [
-              "maintenance",
-              "heartbeat",
-              "system"
-            ]
-          }
-        },
-        "required": [
-          "which"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.pause",
-      "title": "Pause a routine",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.removeBoardItem",
-      "title": "Remove a rule, question or destination from a routine's board",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "part": {
-            "enum": [
-              "rule",
-              "question",
-              "destination"
-            ]
-          },
-          "at": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 500
-          }
-        },
-        "required": [
-          "routine",
-          "part",
-          "at"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.restoreVersion",
-      "title": "Restore a routine's version, or turn on a proposed one",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "n": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1000000
-          }
-        },
-        "required": [
-          "routine",
-          "n"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.resume",
-      "title": "Turn a routine back on",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.runJob",
-      "title": "Run a system job now",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "job": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "job"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.runMaintenance",
-      "title": "Run Maintenance now",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.runNow",
-      "title": "Run a routine now",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.saveBoardItem",
-      "title": "Add or change a rule, question, destination or the LLM on a routine's board",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "part": {
-            "enum": [
-              "rule",
-              "question",
-              "destination",
-              "llm"
-            ]
-          },
-          "at": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 500
-          },
-          "when": {
-            "maxItems": 20,
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "field": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 200
-                },
-                "op": {
-                  "enum": [
-                    "is",
-                    "is_not",
-                    "contains",
-                    "matches",
-                    ">=",
-                    "<="
-                  ]
-                },
-                "value": {
-                  "type": "string",
-                  "maxLength": 2000
-                }
-              },
-              "required": [
-                "field",
-                "value"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "match": {
-            "enum": [
-              "all",
-              "any"
-            ]
-          },
-          "then": {
-            "maxItems": 20,
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "do": {
-                  "enum": [
-                    "archive",
-                    "label",
-                    "star",
-                    "leave_for_you",
-                    "forward",
-                    "draft_reply",
-                    "send_reply",
-                    "unsubscribe",
-                    "create_task",
-                    "wake_bot",
-                    "assign",
-                    "note",
-                    "post_update",
-                    "call_webhook"
-                  ]
-                },
-                "args": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string",
-                    "maxLength": 20000
-                  }
-                }
-              },
-              "required": [
-                "do"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "goTo": {
-            "type": "string",
-            "maxLength": 100
-          },
-          "moveOn": {
-            "type": "boolean"
-          },
-          "text": {
-            "type": "string",
-            "maxLength": 8000
-          },
-          "min": {
-            "anyOf": [
-              {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "mode": {
-            "enum": [
-              "sort",
-              "draft",
-              "reply"
-            ]
-          },
-          "prompt": {
-            "type": "string",
-            "maxLength": 20000
-          },
-          "dests": {
-            "maxItems": 50,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 100
-            }
-          },
-          "unsure": {
-            "type": "string",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "routine",
-          "part"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.setHeartbeat",
-      "title": "Set how often Heartbeat checks",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "seconds": {
-            "type": "integer",
-            "minimum": 5,
-            "maximum": 60
-          }
-        },
-        "required": [
-          "seconds"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.setJob",
-      "title": "Turn a system job on or off",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "job": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "job",
-          "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.setJobSchedule",
-      "title": "Pick when a system job runs: a preset, or its daily time",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "job": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "preset": {
-            "enum": [
-              "15m",
-              "hourly",
-              "4h",
-              "daily",
-              "business"
-            ]
-          },
-          "at": {
-            "type": "string",
-            "minLength": 5,
-            "maxLength": 5,
-            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-            "description": "a time, HH:MM"
-          }
-        },
-        "required": [
-          "job"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.setMaintenance",
-      "title": "Change Maintenance",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "schedule": {
-            "enum": [
-              "hourly",
-              "2h",
-              "3h",
-              "6h",
-              "12h",
-              "daily"
-            ]
-          },
-          "paused": {
-            "type": "boolean"
-          },
-          "step": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 60
-          },
-          "stepOn": {
-            "type": "boolean"
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.showRuns",
-      "title": "Show every run across routines",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "enum": [
-              "failed",
-              "waiting",
-              "running",
-              "done"
-            ]
-          },
-          "range": {
-            "enum": [
-              "5m",
-              "1h",
-              "24h",
-              "7d"
-            ]
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.testRun",
-      "title": "Test a routine with sample input",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "sample": {
-            "type": "string",
-            "maxLength": 50000
-          }
-        },
-        "required": [
-          "routine"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "routines.update",
-      "title": "Change a routine",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "routine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "agent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "pattern": "^bot:\\S+$",
-            "description": "bot:<id>"
-          },
-          "instruction": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 20000
-          },
-          "cron": {
-            "type": "string",
-            "minLength": 9,
-            "maxLength": 100,
-            "pattern": "^\\S+( \\S+){4}$",
-            "description": "a five-part cron, like 0 9 * * 1-5"
-          },
-          "event": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_*-]+)+$",
-            "description": "an event name, like task.created"
-          }
-        },
-        "required": [
-          "routine"
         ],
         "additionalProperties": false
       }

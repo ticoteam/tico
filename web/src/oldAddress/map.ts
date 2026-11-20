@@ -109,7 +109,7 @@ const SETTINGS_CARD_SECTION: Record<string, string> = {
 };
 /** System's cards that are a built-in agent's settings now (ui/app/pages-shell.ts SETTINGS_SYSTEM_BOTS). */
 const SYSTEM_AGENTS: Record<string, string> = { 'set-general-manager-card': 'general-manager', 'set-strategy-bot-card': 'strategy-owner' };
-const SYSTEM_JOBS = '/company/routines?panel=builtin:system';
+const SYSTEM_JOBS = '/company/automations?panel=builtin:system';
 
 function settingsAddress(tab: string, card: string, q: URLSearchParams): string {
   if (tab === 'strategy-bot') card = 'set-strategy-bot-card';
@@ -139,7 +139,7 @@ const RULES_TAB: Record<string, string> = {
 };
 /** Finance tabs both apps have; the old My budget is the overview now. */
 const FINANCE_TABS = new Set(['pnl', 'transactions', 'budgets', 'payables', 'receivables', 'balance', 'cards', 'tax', 'attribution', 'sources', 'access']);
-/** Automations' built-in rows (ui/app/automations-*.ts) at the Routines panel's. */
+/** Automations' built-in rows (ui/app/automations-*.ts) at the new page's panels. */
 const BUILTIN: Record<string, string> = { heartbeat: 'heartbeat', maintenance: 'maintenance', 'system-jobs': 'system' };
 
 /** The old Tools list's filters (and the Keys list's, ui/app/pages-shell.ts toolsKeysQuery) the new list keeps. */
@@ -206,17 +206,19 @@ export const ROWS: readonly Row[] = [
   { page: 'Growth (old Strategy tab)', path: new RegExp(`^#/strategy/growth${tail}$`), to: () => '/company/growth' },
   { page: 'Go-to-market sources', path: new RegExp(`^#/strategy/gtm/sources${tail}$`), to: () => '/company/growth' },
   { page: 'Go-to-market', path: new RegExp(`^#/strategy/gtm${tail}$`), to: () => '/company/strategy' },
-  { page: 'Routines (old Tasks view)', path: /^#\/(?:recurring|tasks\/routines)$/, to: () => '/company/routines' },
-  // Automations is Routines. One automation opens in its panel; Webhooks is a tab; the built-in jobs are panels.
+  { page: 'Routines (old Tasks view)', path: /^#\/(?:recurring|tasks\/routines)$/, to: () => '/company/automations' },
+  // Automations again. One automation is its own page (its Runs `?view=runs`); Webhooks is a tab; the built-in jobs are
+  // panels.
   {
     page: 'Automations',
     path: /^#\/automations(?:\/([^/]+)(?:\/([^/]+))?(?:\/.*)?)?$/,
     to: ([id, sub]) => {
       const name = dec(id);
-      if (!name || name === 'bot') return '/company/routines';
-      if (name === 'webhooks') return at('/company/routines', { tab: 'webhooks', panel: sub ? `hook:${dec(sub)}` : null });
+      if (!name || name === 'bot') return '/company/automations';
+      if (name === 'webhooks') return at('/company/automations', { tab: 'webhooks', panel: sub ? `hook:${dec(sub)}` : null });
       const builtin = BUILTIN[name];
-      return at('/company/routines', { panel: builtin ? `builtin:${builtin}` : `routine:${name}` });
+      if (builtin) return at('/company/automations', { panel: `builtin:${builtin}` });
+      return at(`/company/automations/${encodeURIComponent(name)}`, { view: sub === 'runs' ? 'runs' : null });
     },
   },
   // Listening; one listening automation is its watch (the same id).
@@ -350,7 +352,7 @@ export const ROWS: readonly Row[] = [
   {
     page: 'Webhooks, Triggers',
     path: /^#\/(?:triggers|webhooks|settings\/triggers|settings\/webhooks)(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([part]) => (part === 'outgoing' ? at('/library/tools', { kind: 'webhook' }) : part === 'gateway' ? '/settings/models' : at('/company/routines', { tab: 'webhooks' })),
+    to: ([part]) => (part === 'outgoing' ? at('/library/tools', { kind: 'webhook' }) : part === 'gateway' ? '/settings/models' : at('/company/automations', { tab: 'webhooks' })),
   },
   { page: 'Health', path: /^#\/health$/, to: () => '/settings/health' },
   { page: 'Settings › roadmap suggestions', path: /^#\/settings\/roadmap$/, to: () => '/settings/tasks' },

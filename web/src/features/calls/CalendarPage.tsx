@@ -232,7 +232,7 @@ function ListFind({ q, onFind }: { q: string; onFind: (q: string) => void }) {
 }
 
 const HAS_WORDS: Record<(typeof HAS)[number], string> = { summary: 'Has summary', recording: 'Has recording', tasks: 'Has tasks' };
-const ALSO_WORDS: Record<(typeof ALSO)[number], string> = { due: 'Due dates', run: 'Routines' };
+const ALSO_WORDS: Record<(typeof ALSO)[number], string> = { due: 'Due dates', run: 'Automations' };
 
 /** The old Meetings tabs, what a meeting kept, and more kinds than meetings: one filter (cal-merge.js filterMenu). */
 function ListFilter({ search, at }: { search: CalendarSearch; at: At }) {

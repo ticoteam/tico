@@ -380,7 +380,7 @@ function AppMenu({ note }: { note: ReactNode }) {
         onHelp={press('support.open')}
         onMessage={() => setMessaging(true)}
         onCall={() => setCalling(true)}
-        onAutomations={press('shell.goTo', { to: '/company/routines' })}
+        onAutomations={press('shell.goTo', { to: '/company/automations' })}
         companyMenu={<CompanyRows name={name} all={companies} />}
         accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
       />

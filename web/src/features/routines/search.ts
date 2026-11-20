@@ -6,10 +6,10 @@ import { orgRulesQuery, routinesQuery, stageRulesQuery } from './queries';
 
 const none = () => undefined;
 
-/* Cmd+K: routines by name, then rules (a company rule by its words, a stage rule by its name), each opening in its
+/* Cmd+K: automations by name, then rules (a company rule by its words, a stage rule by its name), each opening in its
    page's panel. */
 export const routinesSearch = defineSearch({
-  group: 'Routines',
+  group: 'Automations',
   order: 75,
   find: async (q) => {
     if (!q.trim()) return [];
@@ -21,7 +21,7 @@ export const routinesSearch = defineSearch({
     const hits: SearchHit[] = [
       ...(routines ?? [])
         .filter((r) => r.name && matches(r.name, q))
-        .map((r) => ({ key: `routine:${r.id}`, title: r.name ?? '', meta: 'Routine', lead: { icon: 'refresh' as const }, run: { id: 'routines.open', input: { routine: r.id } } })),
+        .map((r) => ({ key: `routine:${r.id}`, title: r.name ?? '', meta: 'Automation', lead: { icon: 'refresh' as const }, run: { id: 'automations.open', input: { routine: r.id } } })),
       ...(org ?? [])
         .filter((r) => matches(r.text, q))
         .map((r) => ({

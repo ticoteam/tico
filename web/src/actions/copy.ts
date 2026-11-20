@@ -32,7 +32,7 @@ export const pages: ReadonlyArray<readonly [string, string]> = [
   ['/threads', 'Threads'],
   ['/updates', 'Updates'],
   ['/company', 'Company'],
-  ...['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Routines', 'Listening', 'Rules', 'Usage'].map(
+  ...['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Automations', 'Listening', 'Rules', 'Usage'].map(
     (k) => [`/company/${k.toLowerCase()}`, `Company, ${k}`] as const,
   ),
   ['/library', 'Library'],

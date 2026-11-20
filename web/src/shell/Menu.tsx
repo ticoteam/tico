@@ -79,7 +79,7 @@ export interface MenuProps {
   threads?: ReactNode;
   onMessage?: () => void;
   onCall?: () => void;
-  /* the Threads tab's ⋯: its one item, Automations (filters are automations, in Routines) */
+  /* the Threads tab's ⋯: its one item, Automations (filters are automations, on Automations) */
   onAutomations?: () => void;
 }
 
@@ -90,7 +90,7 @@ const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
   { id: 'library', label: 'Library', icon: 'library' },
 ];
 const KIDS: Partial<Record<MenuRowId, string[]>> = {
-  company: ['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Routines', 'Listening', 'Rules', 'Usage'],
+  company: ['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Automations', 'Listening', 'Rules', 'Usage'],
   library: ['Files', 'Docs', 'Tools', 'Skills', 'Contacts'],
 };
 const slug = (s: string) => s.toLowerCase();
@@ -324,7 +324,7 @@ export function Menu(p: MenuProps) {
       <span className="acts">
         <IconButton icon="message" label="Message" size="sm" quiet onClick={p.onMessage} />
         <IconButton icon="call" label="Call" size="sm" quiet onClick={p.onCall} />
-        {talk === 'threads' && p.onAutomations && can('company/routines') ? (
+        {talk === 'threads' && p.onAutomations && can('company/automations') ? (
           <Drop trigger={<IconButton icon="more" label="More" size="sm" quiet />} side="bottom" align="end">
             <MenuItem label="Automations" icon="refresh" onSelect={p.onAutomations} />
           </Drop>

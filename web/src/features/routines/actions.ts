@@ -2,7 +2,8 @@ import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction, type Ctx } from '@/actions';
 import { meQuery } from '@/data';
-import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Part } from './board';
+import { ACTS, applyFlow, dropItem, flowOf, putItem, routineBoard, type Dest, type Part } from './board';
+import { dropStep, findStep, newTrigger, putStep, stepOn, type FlowStep } from './flow';
 import {
   addDue,
   addOrgRule,
@@ -15,6 +16,7 @@ import {
   addStageRule,
   createHook,
   updateHook,
+  createBlank,
   createRoutine,
   createWatch,
   decideOrgRule,
@@ -28,6 +30,7 @@ import {
   removeDue,
   removeHook,
   removeRoutine,
+  renameRoutine,
   restoreVersion,
   rotateHook,
   routineQuery,
@@ -42,6 +45,7 @@ import {
   setReach,
   setRoutineLimit,
   setRoutineOn,
+  setTrigger,
   setWatchTrigger,
   satisfyDue,
   signHook,
@@ -65,7 +69,9 @@ import { browserZone } from './words';
    or webhook opens in `?panel=`, so Back closes it; one watch is `/company/listening?watch=<id>`. Removing asks first in the page (the confirm is the control's, not the
    action's). Anything that makes or rotates a webhook's secret is the person's own press: `tico: false`. */
 
-export const ROUTINES = '/company/routines';
+export const ROUTINES = '/company/automations';
+/** One automation's own page: its flow, `?view=runs` its runs, `?edit=` the step or part open in the panel. */
+export const automationHref = (id: string) => `${ROUTINES}/${encodeURIComponent(id)}`;
 export const RULES = '/company/rules';
 export const LISTENING = '/company/listening';
 
@@ -104,17 +110,17 @@ async function said<T>(p: Promise<T>): Promise<T> {
 // ---------------------------------------------------------------- routines: views
 
 export const openRoutine = defineAction({
-  id: 'routines.open',
-  title: 'Open a routine',
+  id: 'automations.open',
+  title: 'Open an automation, on its flow or its runs',
   kind: 'view',
-  input: z.strictObject({ routine: id }),
-  run: ({ router }, { routine }) => go(router, ROUTINES, { panel: `routine:${routine}` }),
-  did: () => 'Opened the routine',
+  input: z.strictObject({ routine: id, view: z.optional(z.enum(['flow', 'runs'] as const)) }),
+  run: ({ router }, { routine, view }) => go(router, automationHref(routine), { view: view === 'runs' ? 'runs' : undefined }),
+  did: () => 'Opened the automation',
   target: ({ routine }) => ({ kind: 'routine', id: routine }),
 });
 
 export const openBuiltin = defineAction({
-  id: 'routines.openBuiltin',
+  id: 'automations.openBuiltin',
   title: 'Open Maintenance, Heartbeat or System jobs',
   kind: 'view',
   input: z.strictObject({ which: z.enum(BUILTINS) }),
@@ -124,7 +130,7 @@ export const openBuiltin = defineAction({
 });
 
 export const newRoutine = defineAction({
-  id: 'routines.new',
+  id: 'automations.new',
   title: 'Start a new routine',
   kind: 'view',
   input: z.strictObject({}),
@@ -134,7 +140,7 @@ export const newRoutine = defineAction({
 });
 
 export const closePanel = defineAction({
-  id: 'routines.closePanel',
+  id: 'automations.closePanel',
   title: 'Close the panel',
   kind: 'view',
   input: z.strictObject({}),
@@ -143,7 +149,7 @@ export const closePanel = defineAction({
 });
 
 export const showRuns = defineAction({
-  id: 'routines.showRuns',
+  id: 'automations.showRuns',
   title: 'Show every run across routines',
   kind: 'view',
   input: z.strictObject({
@@ -171,7 +177,7 @@ const triggerOf = (i: { cron?: string; event?: string }, was?: Trigger): Trigger
 };
 
 export const createRoutineAction = defineAction({
-  id: 'routines.create',
+  id: 'automations.create',
   title: 'Add a routine',
   kind: 'change',
   input: z.strictObject({
@@ -183,7 +189,7 @@ export const createRoutineAction = defineAction({
   }),
   run: async ({ router }, i) => {
     const made = await said(createRoutine({ name: i.name.trim(), agent: i.agent, instruction: i.instruction.trim(), trigger: triggerOf(i) }));
-    await go(router, ROUTINES, { panel: `routine:${made.id}` });
+    await go(router, automationHref(made.id));
     return made;
   },
   did: (i) => `Added ${i.name}`,
@@ -191,7 +197,7 @@ export const createRoutineAction = defineAction({
 });
 
 export const updateRoutineAction = defineAction({
-  id: 'routines.update',
+  id: 'automations.update',
   title: 'Change a routine',
   kind: 'change',
   input: z.strictObject({
@@ -220,7 +226,7 @@ export const updateRoutineAction = defineAction({
 });
 
 export const runNow = defineAction({
-  id: 'routines.runNow',
+  id: 'automations.runNow',
   title: 'Run a routine now',
   kind: 'change',
   input: z.strictObject({ routine: id }),
@@ -243,7 +249,7 @@ const sampleOf = (text: string | undefined): Record<string, unknown> | undefined
 };
 
 export const testRun = defineAction({
-  id: 'routines.testRun',
+  id: 'automations.testRun',
   title: 'Test a routine with sample input',
   kind: 'change',
   // `sample`: JSON standing in for what its trigger gives (a message, an event, a webhook body)
@@ -258,7 +264,7 @@ export const testRun = defineAction({
 });
 
 export const restoreVersionAction = defineAction({
-  id: 'routines.restoreVersion',
+  id: 'automations.restoreVersion',
   title: "Restore a routine's version, or turn on a proposed one",
   kind: 'change',
   input: z.strictObject({ routine: id, n: z.int().check(z.minimum(1), z.maximum(1_000_000)) }),
@@ -269,7 +275,7 @@ export const restoreVersionAction = defineAction({
 });
 
 export const discardVersionAction = defineAction({
-  id: 'routines.discardVersion',
+  id: 'automations.discardVersion',
   title: "Discard an agent's proposed version",
   kind: 'change',
   input: z.strictObject({ routine: id, n: z.int().check(z.minimum(1), z.maximum(1_000_000)) }),
@@ -280,7 +286,7 @@ export const discardVersionAction = defineAction({
 });
 
 export const pause = defineAction({
-  id: 'routines.pause',
+  id: 'automations.pause',
   title: 'Pause a routine',
   kind: 'change',
   input: z.strictObject({ routine: id }),
@@ -291,7 +297,7 @@ export const pause = defineAction({
 });
 
 export const setLimit = defineAction({
-  id: 'routines.setLimit',
+  id: 'automations.setLimit',
   title: "Set a routine's spend limit",
   kind: 'change',
   input: z.strictObject({ routine: id, per30m: z.nullable(z.number().check(z.minimum(0), z.maximum(100_000))) }),
@@ -304,7 +310,7 @@ export const setLimit = defineAction({
 });
 
 export const resume = defineAction({
-  id: 'routines.resume',
+  id: 'automations.resume',
   title: 'Turn a routine back on',
   kind: 'change',
   input: z.strictObject({ routine: id }),
@@ -316,7 +322,7 @@ export const resume = defineAction({
 
 /** The run guard held its runs (too many at once): release them in order, or drop them. */
 export const endHoldAction = defineAction({
-  id: 'routines.endHold',
+  id: 'automations.endHold',
   title: "Release or drop a routine's held runs",
   kind: 'change',
   input: z.strictObject({ routine: id, action: z.enum(['release', 'drop'] as const) }),
@@ -328,7 +334,7 @@ export const endHoldAction = defineAction({
 });
 
 export const removeRoutineAction = defineAction({
-  id: 'routines.remove',
+  id: 'automations.remove',
   title: 'Remove a routine',
   kind: 'change',
   input: z.strictObject({ routine: id }),
@@ -337,13 +343,13 @@ export const removeRoutineAction = defineAction({
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async ({ router }, i) => {
     await said(removeRoutine(i.routine));
-    await panelOff(router);
+    await go(router, ROUTINES);
   },
   did: () => 'Removed the routine',
 });
 
 export const setMaintenanceAction = defineAction({
-  id: 'routines.setMaintenance',
+  id: 'automations.setMaintenance',
   title: 'Change Maintenance',
   kind: 'change',
   input: z.strictObject({
@@ -359,7 +365,7 @@ export const setMaintenanceAction = defineAction({
 });
 
 export const runMaintenanceAction = defineAction({
-  id: 'routines.runMaintenance',
+  id: 'automations.runMaintenance',
   title: 'Run Maintenance now',
   kind: 'change',
   input: z.strictObject({}),
@@ -369,7 +375,7 @@ export const runMaintenanceAction = defineAction({
 });
 
 export const setHeartbeatAction = defineAction({
-  id: 'routines.setHeartbeat',
+  id: 'automations.setHeartbeat',
   title: 'Set how often Heartbeat checks',
   kind: 'change',
   input: z.strictObject({ seconds: z.int().check(z.minimum(5), z.maximum(60)) }),
@@ -379,7 +385,7 @@ export const setHeartbeatAction = defineAction({
 });
 
 export const runJobAction = defineAction({
-  id: 'routines.runJob',
+  id: 'automations.runJob',
   title: 'Run a system job now',
   kind: 'change',
   input: z.strictObject({ job: z.string().check(z.minLength(1), z.maxLength(100)) }),
@@ -389,7 +395,7 @@ export const runJobAction = defineAction({
 });
 
 export const setJobAction = defineAction({
-  id: 'routines.setJob',
+  id: 'automations.setJob',
   title: 'Turn a system job on or off',
   kind: 'change',
   input: z.strictObject({ job: z.string().check(z.minLength(1), z.maxLength(100)), on: z.boolean() }),
@@ -401,7 +407,7 @@ export const setJobAction = defineAction({
 export const JOB_PRESETS = ['15m', 'hourly', '4h', 'daily', 'business'] as const;
 
 export const setJobScheduleAction = defineAction({
-  id: 'routines.setJobSchedule',
+  id: 'automations.setJobSchedule',
   title: 'Pick when a system job runs: a preset, or its daily time',
   kind: 'change',
   input: z.strictObject({
@@ -419,13 +425,144 @@ export const ROUTINE_STATES = ['on', 'failed', 'hold', 'off'] as const;
 export type RoutineState = (typeof ROUTINE_STATES)[number];
 
 export const listRoutines = defineAction({
-  id: 'routines.list',
-  title: 'Search or filter the routines',
+  id: 'automations.list',
+  title: 'Search or filter the automations or their runs, or pick the time range',
   kind: 'view',
-  input: z.strictObject({ q: z.optional(z.string().check(z.maxLength(200))), state: z.optional(z.enum(ROUTINE_STATES)) }),
-  run: ({ router }, i) => go(router, ROUTINES, { q: i.q?.trim() || undefined, state: i.state }),
+  input: z.strictObject({
+    q: z.optional(z.string().check(z.maxLength(200))),
+    state: z.optional(z.enum(ROUTINE_STATES)),
+    range: z.optional(z.enum(RUN_RANGES)),
+    // the list it narrows: All (left out) or every run, then by the runs' own status too
+    tab: z.optional(z.enum(['runs'] as const)),
+    status: z.optional(z.enum(RUN_STATUSES)),
+  }),
+  run: ({ router }, i) =>
+    go(router, ROUTINES, {
+      tab: i.tab,
+      status: i.tab ? i.status : undefined,
+      q: i.q?.trim() || undefined,
+      state: i.state,
+      range: i.range === RUNS_RANGE ? undefined : i.range,
+    }),
   did: () => 'Listed the routines',
   target: () => ({ kind: 'tab', id: 'routines' }),
+});
+
+// ---------------------------------------------------------------- the flow: its trigger and its steps
+
+const flowStep = z.record(z.string(), z.unknown());
+const stepNotFound = () => Object.assign(new Error('That step is not in this automation'), { code: 'not_found: That step is not in this automation' });
+/** The routine as loaded, read first when it is not (so a write keeps every step it does not touch). */
+const loaded = async (ctx: Ctx, rid: string) => cached(ctx, rid) ?? (await ctx.queryClient.ensureQueryData(routineQuery(rid)));
+const destsOf = (r: Routine) => (Array.isArray(r.destinations) ? (r.destinations as Dest[]) : []);
+
+/** What `?edit=` may open on an automation's page: a step by its id, its trigger, a new step (`new|<list>|<at>|<type>`),
+    a board part (`board|rule|0`, `board|destination|new`, `board|llm`), its versions or its spend limit. */
+export const EDIT = /^(trigger|versions|limit|new\|[^|]{1,200}\|\d{1,3}\|[a-z_]{1,20}|board\|(rule|question|destination)\|(\d{1,3}|new)|board\|llm|[\w:.-]{1,200})$/;
+
+export const editPart = defineAction({
+  id: 'automations.edit',
+  title: "Open one part of an automation's flow in the panel: a step, its trigger, a new step, a board part",
+  kind: 'view',
+  input: z.strictObject({ routine: id, edit: z.string().check(z.regex(EDIT), z.describe('a step id, trigger, versions, limit, new|<list>|<at>|<type>, board|<part>|<i or new>, board|llm')) }),
+  run: ({ router }, i) => go(router, automationHref(i.routine), { edit: i.edit }),
+  did: () => 'Opened it',
+  target: (i) => ({ kind: 'panel', id: `edit:${i.edit}` }),
+});
+
+export const renameAutomation = defineAction({
+  id: 'automations.rename',
+  title: 'Rename an automation',
+  kind: 'change',
+  input: z.strictObject({ routine: id, name }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(renameRoutine(i.routine, i.name.trim())).then(() => undefined),
+  did: (i) => `Renamed to ${i.name.trim()}`,
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const startAutomation = defineAction({
+  id: 'automations.start',
+  title: 'Start a blank automation on a trigger, off, and open it',
+  kind: 'change',
+  input: z.strictObject({ when: z.enum(['schedule', 'event', 'due'] as const) }),
+  run: async (ctx, i) => {
+    const me = await ctx.queryClient.ensureQueryData(meQuery);
+    const made = await said(createBlank(ownerRef(me.id.includes(':') ? me.id : `human:${me.id}`), newTrigger(i.when)));
+    await go(ctx.router, automationHref(made.id));
+    return made.id;
+  },
+  did: () => 'Started an automation',
+  target: (_i, out) => (out ? { kind: 'routine', id: out } : null),
+});
+
+export const saveStep = defineAction({
+  id: 'automations.saveStep',
+  title: "Add or change one step of an automation's flow",
+  kind: 'change',
+  input: z.strictObject({
+    routine: id,
+    // the step as the flow holds it: id, type and the fields its type carries
+    step: flowStep,
+    // a new step's place: the list (`root`, `<paths id>:<i>`, `<paths id>:other`) and where in it
+    insert: z.optional(z.strictObject({ key: z.string().check(z.minLength(1), z.maxLength(200)), at: z.int().check(z.minimum(0), z.maximum(500)) })),
+  }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: async (ctx, i) => {
+    const r = await loaded(ctx, i.routine);
+    const step = i.step as FlowStep;
+    if (typeof step.id !== 'string' || typeof step.type !== 'string') throw Object.assign(new Error('A step needs an id and a type'), { code: 'bad_input: A step needs an id and a type' });
+    if (!i.insert && !findStep(r.steps, step.id)) throw stepNotFound();
+    return said(setFlow(i.routine, { steps: putStep(r.steps ?? [], step, i.insert), destinations: destsOf(r) })).then(() => undefined);
+  },
+  did: (i) => (i.insert ? 'Added the step' : 'Saved'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const removeStep = defineAction({
+  id: 'automations.removeStep',
+  title: "Remove one step from an automation's flow",
+  kind: 'change',
+  input: z.strictObject({ routine: id, step: id }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: async (ctx, i) => {
+    const r = await loaded(ctx, i.routine);
+    if (!findStep(r.steps, i.step)) throw stepNotFound();
+    return said(setFlow(i.routine, { steps: dropStep(r.steps ?? [], i.step), destinations: destsOf(r) })).then(() => undefined);
+  },
+  did: () => 'Removed the step',
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const setStepOnAction = defineAction({
+  id: 'automations.setStepOn',
+  title: "Turn one step of an automation's flow on or off",
+  kind: 'change',
+  input: z.strictObject({ routine: id, step: id, on: z.boolean() }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: async (ctx, i) => {
+    const r = await loaded(ctx, i.routine);
+    if (!findStep(r.steps, i.step)) throw stepNotFound();
+    return said(setFlow(i.routine, { steps: stepOn(r.steps ?? [], i.step, i.on), destinations: destsOf(r) })).then(() => undefined);
+  },
+  did: (i) => (i.on ? 'Step on' : 'Step off'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const setTriggerAction = defineAction({
+  id: 'automations.setTrigger',
+  title: 'Change what starts an automation',
+  kind: 'change',
+  // the trigger as the flow holds it: `type` and the fields it carries (cron and tz, name, first_due…, filters)
+  input: z.strictObject({ routine: id, trigger: z.record(z.string(), z.unknown()) }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => {
+    const t = i.trigger as unknown as Trigger;
+    if (typeof t.type !== 'string' || !t.type) throw Object.assign(new Error('Pick what starts it'), { code: 'bad_input: Pick what starts it' });
+    return said(setTrigger(i.routine, t)).then(() => undefined);
+  },
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 
 // ---------------------------------------------------------------- the board, inboxes and templates
@@ -437,7 +574,7 @@ const act = z.strictObject({ do: z.enum(Object.keys(ACTS)), args: z.optional(z.r
 const cond = z.strictObject({ field: z.string().check(z.minLength(1), z.maxLength(200)), op: z.optional(z.enum(['is', 'is_not', 'contains', 'matches', '>=', '<='] as const)), value: z.string().check(z.maxLength(2000)) });
 
 export const saveBoardItem = defineAction({
-  id: 'routines.saveBoardItem',
+  id: 'automations.saveBoardItem',
   title: "Add or change a rule, question, destination or the LLM on a routine's board",
   kind: 'change',
   input: z.strictObject({
@@ -472,7 +609,7 @@ export const saveBoardItem = defineAction({
 });
 
 export const removeBoardItem = defineAction({
-  id: 'routines.removeBoardItem',
+  id: 'automations.removeBoardItem',
   title: "Remove a rule, question or destination from a routine's board",
   kind: 'change',
   input: z.strictObject({ routine: id, part: z.enum(['rule', 'question', 'destination'] as const), at: z.int().check(z.minimum(0), z.maximum(500)) }),
@@ -492,7 +629,7 @@ export const removeBoardItem = defineAction({
 const ownerRef = (o: string) => o.replace(/^human:/, 'person:');
 
 export const newInbox = defineAction({
-  id: 'routines.newInbox',
+  id: 'automations.newInbox',
   title: 'Add an inbox routine from a template',
   kind: 'change',
   input: z.strictObject({
@@ -505,7 +642,7 @@ export const newInbox = defineAction({
   run: async ({ router }, i) => {
     const filled = await said(fillTemplate(i.template, ownerRef(i.owner), i.inbox.trim()));
     const made = await said(createInbox(filled, !!i.on));
-    await go(router, ROUTINES, { panel: `routine:${made.id}` });
+    await go(router, automationHref(made.id));
     return made.id;
   },
   did: (i) => `Added the ${i.inbox.trim()} inbox`,
@@ -513,7 +650,7 @@ export const newInbox = defineAction({
 });
 
 export const applyTemplate = defineAction({
-  id: 'routines.applyTemplate',
+  id: 'automations.applyTemplate',
   title: 'Move an inbox routine onto a template',
   kind: 'change',
   input: z.strictObject({ routine: id, template: z.string().check(z.minLength(1), z.maxLength(100)) }),

@@ -96,7 +96,7 @@ describe("kept from Tico, and the person's own press still works", () => {
     ['budget.removeRow', { budget: 'b1' }],
     ['usage.setLimit', { agent: 'qa', monthly: 100 }],
     ['usage.setDefaultLimit', { monthly: 100 }],
-    ['routines.setLimit', { routine: 'r1', per30m: 5 }],
+    ['automations.setLimit', { routine: 'r1', per30m: 5 }],
     // rights and who may read or use what
     ['people.invite', { email: 'new@example.test', role: 'admin' }],
     ['people.setRole', { person: 'p1', role: 'admin' }],
