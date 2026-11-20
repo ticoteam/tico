@@ -55,7 +55,11 @@ def test_enabled_provider_writes_answer_and_audit(api, monkeypatch, provider):
     assert out['citations'] and seen
     with api.app.state.store.read() as c:
         detail = json.loads(c.execute("SELECT detail FROM events WHERE action='market.ask'").fetchone()[0])
-    model = (providers.recommended(provider) or {})['id']
+    row = providers.recommended(provider) or {}
+    runtime = (providers.PROVIDER_BY_ID.get(provider) or {}).get('runtime')
+    if runtime and runtime not in (row.get('harnesses') or (runtime,)):
+        row = next(r for r in providers.provider_models(provider) if runtime in (r.get('harnesses') or ()))
+    model = row['id']
     if provider == 'openrouter':
         from clients.openrouter import model_id
 
