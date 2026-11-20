@@ -8,8 +8,8 @@ the index is rebuilt when the running version (or a file) changes, with no netwo
 """
 
 import functools
-import math
 import re
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -24,7 +24,10 @@ STOP = frozenset(
 )
 HEADING = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
 _lock = threading.Lock()
-_cache = {"key": None, "pages": {}}
+_cache = {"key": None, "pages": {}, "index": None}
+SECTION_BITS = 20  # a section's full-text rowid: its page's (or doc's) number shifted left, plus its position
+# Title, path, heading and body: a heading that has the words marks the section that answers them best.
+RANK = "bm25({table}, 3.0, 2.0, 6.0, 1.0)"
 
 
 def manual_url(version, name, anchor=""):
@@ -44,13 +47,9 @@ def _words(text):
     return re.findall(r"\w+", str(text).casefold())
 
 
-def _vocabulary(text):
-    """The distinct words of `text`, sorted, each after a space: `_has` finds a word by its start in one string."""
-    return "".join(" " + w for w in sorted(set(_words(text))))
-
-
 def page_text(name, text, title=None):
-    """A page's sections, each its heading, anchor, span of `text` (`section_text`) and word vocabularies."""
+    """A page's title and sections, each its heading, anchor and span of `text` (`section_text`); at least one, so a
+    page with no text is still found by its title."""
     provided_title = title
     title, sections, current, in_code, at = (
         title or name.replace("-", " ").title(),
@@ -74,30 +73,12 @@ def page_text(name, text, title=None):
         else:
             current["filled"] = current["filled"] or bool(line)
     sections.append({**current, "end": at})
-    out = []
-    for s in sections:
-        body = " ".join(text[s["start"] : s["end"]].split())
-        if s["heading"] or body:
-            out.append(
-                {
-                    "heading": s["heading"],
-                    "anchor": s["anchor"],
-                    "start": s["start"],
-                    "end": s["end"],
-                    "words": _vocabulary(s["heading"] + " " + body),
-                    "head_words": _vocabulary(s["heading"]),
-                }
-            )
-    title_words = _vocabulary(title + " " + name)
-    return {
-        "name": name,
-        "title": title,
-        "body": text,
-        "folded": text.casefold(),
-        "sections": out,
-        "title_words": title_words,
-        "words": _vocabulary(title_words + "".join(s["words"] for s in out)),  # the page's, for query_weights
-    }
+    out = [
+        {k: s[k] for k in ("heading", "anchor", "start", "end")}
+        for s in sections
+        if s["heading"] or text[s["start"] : s["end"]].strip()
+    ] or [{"heading": "", "anchor": "", "start": 0, "end": len(text)}]
+    return {"name": name, "title": title, "body": text, "sections": out}
 
 
 def section_text(page, section):
@@ -114,8 +95,44 @@ def pages():
         sources = tuple((f.stem, f.read_text(encoding="utf-8", errors="replace")) for f in files)
         key = (version, str(DOCS_DIR), sources)
         if _cache["key"] != key:
-            _cache.update(key=key, pages={name: page_text(name, text) for name, text in sources})
+            _cache.update(key=key, pages={name: page_text(name, text) for name, text in sources}, index=None)
         return _cache["pages"]
+
+
+def section_rows(number, title, path, page):
+    """The full-text rows of one page or doc (`page_text`), one per section."""
+    return [
+        ((number << SECTION_BITS) + n, title, path, s["heading"], page["body"][s["start"] : s["end"]])
+        for n, s in enumerate(page["sections"][: 1 << SECTION_BITS])
+    ]
+
+
+def best_sections(c, table, tokens):
+    """[(page or doc number, section rowid, bm25)]: the best-ranked section of each that has any of the words (each
+    a prefix, so a word being typed matches); bm25 is SQLite's, lower is better."""
+    expression = " OR ".join('"' + _stem(t) + '"*' for t in tokens)
+    return c.execute(
+        f"WITH hits AS MATERIALIZED (SELECT rowid AS section, {RANK.format(table=table)} AS rank FROM {table} "
+        f"WHERE {table} MATCH ?) SELECT section >> {SECTION_BITS}, section, MIN(rank) FROM hits "
+        f"GROUP BY section >> {SECTION_BITS}",
+        (expression,),
+    ).fetchall()
+
+
+def _index(found):
+    """The manual's sections in an in-memory full-text table, built once per `pages()` snapshot."""
+    if _cache["index"] is None or _cache["index"][0] is not found:
+        db = sqlite3.connect(":memory:", check_same_thread=False)
+        db.execute(
+            "CREATE VIRTUAL TABLE temp.sections USING fts5(title, path, heading, body, tokenize='porter unicode61')"
+        )
+        for number, page in enumerate(found.values()):
+            db.executemany(
+                "INSERT INTO sections(rowid,title,path,heading,body) VALUES(?,?,?,?,?)",
+                section_rows(number, page["title"], page["name"], page),
+            )
+        _cache["index"] = (found, db)
+    return _cache["index"][1]
 
 
 def _stem(token):
@@ -125,11 +142,6 @@ def _stem(token):
 def _hits(words, token):
     stem = _stem(token)
     return token in words or any(w.startswith(stem) for w in words)
-
-
-def _has(vocabulary, token):
-    """`_hits` on a `_vocabulary` string: some word starts with the stem (the token itself starts with it)."""
-    return " " + _stem(token) in vocabulary
 
 
 @functools.lru_cache(maxsize=8)
@@ -156,36 +168,6 @@ def query_words(q, glossary=None):
     if glossary is None:
         glossary = pages().get("glossary", {}).get("body", "")
     return list(_query_words(str(q), glossary))
-
-
-def query_weights(wanted):
-    corpus = [page["words"] for page in pages().values()]
-    return {term: 1 + math.log((len(corpus) + 1) / (1 + sum(_has(words, term) for words in corpus))) for term in wanted}
-
-
-def best_section(page, wanted, weights=None):
-    weights = weights or query_weights(wanted)
-    best = None
-    terms = [(t, " " + _stem(t), _stem(t)) for t in wanted]  # `_has` of each term is `key in` a vocabulary
-    terms = [term for term in terms if term[1] in page["words"]]  # one no word of the page has can match no section
-    titled = {t: key in page["title_words"] for t, key, _ in terms}
-    folded = page["folded"]
-    spans = len(folded) == len(page["body"])  # casefold kept each character one character, so the spans fit it
-    for section in page["sections"]:
-        words, head = section["words"], section["head_words"]
-        have = [term for term in terms if titled[term[0]] or term[1] in words]
-        if not have:
-            continue
-        at, to = section["start"], section["end"]
-        if not spans:
-            folded, at, to = page["body"][at:to].casefold(), 0, None
-        score = sum(
-            weights[t] * (10 + 5 * titled[t] + 15 * (key in head) + min(folded.count(stem, at, to), 5))
-            for t, key, stem in have
-        )
-        if best is None or score > best[0]:
-            best = (score, section)
-    return best
 
 
 def _excerpt(body, tokens):
@@ -222,18 +204,18 @@ def search(q, limit=20):
     wanted = query_words(q)
     if not wanted:
         return []
-    version, found = releases.version(), []
-    weights = query_weights(wanted)
-    for page in pages().values():
-        best = best_section(page, wanted, weights)
-        if best:
-            row = result(page, best[1], version, best[0])
-            row["section"], row["excerpt"] = best[1]["heading"], (page, best[1])  # made an excerpt once kept, below
-            found.append(row)
-    found.sort(key=lambda r: (-r["score"], r["path"]))
-    for row in found[:limit]:
-        row["excerpt"] = _excerpt(section_text(*row["excerpt"]), wanted)
-    return found[:limit]
+    version, found = releases.version(), pages()
+    listed = list(found.values())
+    with _lock:
+        best = best_sections(_index(found), "sections", wanted)
+    out = []
+    for number, section, rank in sorted(best, key=lambda hit: (hit[2], listed[hit[0]]["name"]))[:limit]:
+        page = listed[number]
+        chosen = page["sections"][section & ((1 << SECTION_BITS) - 1)]
+        row = result(page, chosen, version, -rank)
+        row.update(section=chosen["heading"], excerpt=_excerpt(section_text(page, chosen), wanted))
+        out.append(row)
+    return out
 
 
 def _name(ref):

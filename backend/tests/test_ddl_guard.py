@@ -3,7 +3,8 @@
 The code outside it still has CREATE TABLE/INDEX/TRIGGER/VIEW, ALTER TABLE and add_column calls that run at every start.
 backend/migrations/ddl_allowlist.txt counts them per file, and the count may only shrink: a file that grows, or a new file
 with one, fails and is told to write a migration; an entry above what the code has fails too, so the list follows the code
-down. Temporary objects (CREATE TEMP/TEMPORARY, backend/sql.py) never persist and are not counted.
+down. Temporary objects (CREATE TEMP/TEMPORARY, backend/sql.py; a virtual table named `temp.<name>`, backend/manual.py)
+never persist and are not counted.
 """
 
 import ast
@@ -13,8 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 ALLOWLIST = BACKEND / "migrations" / "ddl_allowlist.txt"
-# CREATE TEMP and CREATE TEMPORARY are absent by design: they match none of these keywords.
-DDL = re.compile(r"\bCREATE\s+(?:UNIQUE\s+|VIRTUAL\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)\b|\bALTER\s+TABLE\b")
+# CREATE TEMP and CREATE TEMPORARY are absent by design: they match none of these keywords; a virtual table, which has
+# no TEMP form, is temporary when its name is in the temp schema.
+DDL = re.compile(r"\bCREATE\s+(?:UNIQUE\s+|VIRTUAL\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)\b(?!\s+temp\.)|\bALTER\s+TABLE\b")
 
 
 def _docstrings(tree):
