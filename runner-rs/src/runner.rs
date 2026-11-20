@@ -1405,13 +1405,13 @@ impl Runner {
                 ));
             }
         }
+        // The company's providers changed: the config the harness relay reads (the runtimes it installs, the fallback
+        // models) is read again at once, even while a pass is running (relays.rs), and a full pass follows.
+        if clock.wants(&self.events, "config", None) {
+            crate::relays::config_changed();
+            self.events.ask(&["sync"]);
+        }
         if maintenance.is_none() {
-            // The company's providers changed: a full pass now, and the default runtime a computer with no bots
-            // installs is read again at once (relays.rs).
-            let changed = clock.wants(&self.events, "config", None);
-            if changed {
-                crate::relays::config_changed();
-            }
             // A credential changed in the app: its model keys are fetched again by this pass, not after KEY_REFRESH.
             if clock.wants(&self.events, "keys", None) {
                 for runtime in crate::harness_tools::runtimes() {
@@ -1421,7 +1421,7 @@ impl Runner {
                 }
                 readiness::request_probe();
             }
-            let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
+            let full = clock.wants(&self.events, "sync", Some(15.0));
             // A sign-in, sign-out or refusal changed: the heartbeat goes now. No probe is asked for here: a sign-in or
             // sign-out asks once its action has finished (login.rs Session::finish), so the probe reads the result.
             let dirty = self.sign_in.take_dirty();
