@@ -258,6 +258,9 @@ def feed_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     ).fetchone()
 
 
+MERGED_ACCOUNTS = 100  # feed_page reads up to this many money accounts one by one and merges them
+
+
 def feed_page(
     c: sqlite3.Connection,
     *,
@@ -312,7 +315,11 @@ def feed_page(
     if before:
         where.append("(txn_date<? OR (txn_date=? AND id<?))")
         args += [before[0], before[0], before[1]]
-    scopes = [("money_account_id=?", [m]) for m in dict.fromkeys(money_account_ids)]
+    accounts = list(dict.fromkeys(money_account_ids))
+    if len(accounts) <= MERGED_ACCOUNTS:
+        scopes = [("money_account_id=?", [m]) for m in accounts]
+    else:  # past SQLite's 500 arms to a compound read: one sorted read, as before
+        scopes = [(f"money_account_id IN ({_marks(accounts)})", accounts)]
     scopes += [(f"card_id IN ({_marks(card_ids)})", list(card_ids))] if card_ids else []
     scopes += [(f"entry_id IN ({_marks(entry_ids)})", list(entry_ids))] if entry_ids else []
     if not scopes:

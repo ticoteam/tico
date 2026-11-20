@@ -460,10 +460,13 @@ def _stream(
     Past SCAN rows it stops once it has any row to hand back, so a viewer who sees few of many rows still gets an
     answer quickly; it never hands back an empty page short of the end. With `floor`, the oldest row a full page of the
     other stream holds, it stops once its scan is older: nothing past there can make this page (a book whose entries
-    all show as their feed rows was read to its first entry on every page)."""
+    all show as their feed rows was read to its first entry on every page). It then says it stopped at `floor`, a row
+    the viewer sees, so the cursor never carries the key of a row they don't (the rows between were all hidden)."""
     out: list[tuple[tuple[str, str], Row]] = []
     scanned, at = 0, mark
-    while len(out) < most and (scanned < SCAN or not out) and not (floor and at and at < floor):
+    while len(out) < most and (scanned < SCAN or not out):
+        if floor and at and at < floor:
+            return out[:most], floor if mark is None or floor < mark else at, False
         batch = fetch(at, most * 2)
         if not batch:
             return out, at, True
