@@ -20,3 +20,8 @@
 html[data-layout="cards"] :is(.stage-head,.col-head) .sec-name{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink-2)}
 html[data-layout="cards"] :is(.stage-head,.col-head) .sec-fold[aria-expanded="true"]>.ico{display:none}
 .stage-head>.sec-sum{min-width:0;flex:0 100 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm);line-height:var(--lh-tight);font-variant-numeric:tabular-nums}
+/* On a phone the fold answers a 44px tap without growing: its hit area reaches 8px above and below. */
+:where(html[data-layout="cards"]){
+  .sec-fold{position:relative}
+  .sec-fold::before{content:"";position:absolute;inset:-8px 0}
+}
