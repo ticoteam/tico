@@ -364,17 +364,16 @@ def test_a_client_ref_never_keeps_a_question_mark_open(c, general):
     assert QM.get(c, mark["id"])["cleared_reason"] == "replied"
 
 
-def test_an_asker_gone_from_a_persons_task_is_said_on_its_chat(c, general):
-    row = H.task_create(c, BUILDER, "Book the venue", "", ANA, lint=False)
-    asked = _ask(c, E.task(c, row["id"]), person=BEN)
+def test_an_asker_gone_from_a_persons_task_writes_nothing_and_lets_nobody_in(c, general):
+    row = H.task_create(c, BUILDER, "Book the venue", "", ANA, private=True, lint=False)
+    asked = _ask(c, E.task(c, row["id"]), person=BEN, checked=False)
+    readers = c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0]
+    before = len(H.task_comments(c, row["id"]))
     c.execute("UPDATE bots SET state='archived' WHERE id='builder'")
     QM.clear_gone(c)
     assert Q.get(c, asked["task_id"])["ended_reason"] == Q.ASKER_GONE
-    [said] = [m for m in H.task_comments(c, row["id"]) if "can no longer work on this task" in (m["body"] or "")]
-    delivered = c.execute(
-        "SELECT reason FROM message_deliveries WHERE message_id=? AND recipient=?", (said["id"], ANA)
-    ).fetchall()
-    assert len(delivered) == 1  # unread for Ana, the person holding the task
+    assert len(H.task_comments(c, row["id"])) == before  # the ended question shows on it; nothing is said
+    assert c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0] == readers
 
 
 def test_the_backfill_leaves_a_dreams_question_and_one_that_carries_more_than_words(c, general):
@@ -393,7 +392,7 @@ def test_the_backfill_leaves_a_dreams_question_and_one_that_carries_more_than_wo
     assert done["turned"] == []
     assert sorted(s["why"] for s in done["skipped"]) == [
         "it is a dream's question, which Learnings reads and answers",
-        "its message carries more than words: shows",
+        "its message is not a plain ❓ comment on its task: it carries shows",
         "its message replies to another, whose readers it keeps",
     ]
     assert done["after"]["open_task_marks"] == 3
@@ -445,3 +444,44 @@ def test_the_wake_never_carries_the_answer_and_a_snoozed_parent_gets_none(c, gen
         ).fetchone()[0]
         == 0
     )
+
+
+def test_the_backfill_turns_only_a_plain_mark_on_its_tasks_own_thread(c, general):
+    chat = H.say(c, BUILDER, ANA, "Morning")
+    shared = H.task_create(c, ANA, "Plan the offsite", "", ANA, conversation_id=chat["conversation_id"], lint=False)
+    QM.ask(c, BUILDER, shared["id"], ANA, "Which week?", checked=False)
+    other = _parent(c, "Another")
+    named = _parent(c, "Pick the venue")
+    mark = QM.ask(c, BUILDER, named["id"], ANA, "Which venue?")
+    c.execute("UPDATE messages SET refs=json_set(refs, '$.task', ?) WHERE id=?", (other["id"], mark["message_id"]))
+    done = Q.backfill(c)
+    assert done["turned"] == []
+    assert sorted(s["why"] for s in done["skipped"]) == [
+        "it is not on its task's own thread (a shared chat, a sub-thread, or another room)",
+        "its message is not a plain ❓ comment on its task: unexpected task",
+    ]
+
+
+@pytest.mark.parametrize("hold", ["person_level", "an_ok"])
+def test_an_answer_wakes_nobody_while_the_parent_was_held_for_a_person(c, general, hold):
+    parent = _parent(c)
+    asked = _ask(c, parent)
+    if hold == "person_level":
+        c.execute("UPDATE visits SET level='person' WHERE task_id=? AND left_at IS NULL", (parent["id"],))
+    else:
+        X.ok_ask(c, parent["id"], BUILDER, "ben", "OK the venue?")
+    Q.answer(c, asked["task_id"], ANA, "Yes.", 1)
+    assert _queued(c, BUILDER) == 0
+
+
+def test_with_the_switch_off_a_link_is_left_out_and_the_mark_is_as_before(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/questions",
+        json={"to": "ana", "text": "Which tone?", "link": "https://acme.example/@ben/drafts"},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["comment"]["body"] == "Which tone?" and "question_task" not in r.json()
+    assert sql(api, "SELECT COUNT(*) AS n FROM question_marks WHERE cleared_at IS NULL") == [{"n": 1}]

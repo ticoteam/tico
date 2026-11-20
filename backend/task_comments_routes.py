@@ -336,8 +336,15 @@ def register(
 
             return mutate(request, body, answered)
         text = f"{body.text}\n\n{known.checked_line()}" if known else body.text
-        # The rules read the link as part of what is asked (backend/questions.py keeps it apart on the question).
-        checked = f"{text}\n\n{body.link}" if body.link else text
+        # A link goes only on a question task (backend/questions.py), where the rules read it as part of what is asked.
+        # A ❓ (the switch off) is written and checked exactly as before links: its words alone.
+        with store.read() as c:
+            try:
+                as_task = questions.asks_as_task(c, auth.resolve_task(c, who, tid))
+            except Problem:
+                as_task = False  # the write below refuses it as it always did
+        link = body.link if as_task else None
+        checked = f"{text}\n\n{link}" if link else text
         if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
             mutate(
                 request,
@@ -354,7 +361,7 @@ def register(
         )
 
         def write(c):
-            done = question_write(c, who, tid, text, to, rc, link=body.link)
+            done = question_write(c, who, tid, text, to, rc, link=link)
             if body.not_known and (done.get("comment") or {}).get("id"):
                 # Counted: Tico's answer did not cover it (Tasks spec criterion 12).
                 H.history_event(c, "task", auth.resolve_task(c, who, tid), who.actor, "ask_not_known", data={"to": to})
@@ -368,11 +375,10 @@ def register(
     def question_write(c, who, tid, text, to, rc, ingest=None, link=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
         transaction. Held by a rule, nothing is written and nothing is marked. With the company's questions_as_tasks
-        on, the question is a task filed under this one instead (`question_task_write`); `link` goes on it."""
+        on, the question is a task filed under this one instead (`question_task_write`); `link` goes on it, and a ❓
+        has none."""
         if questions.asks_as_task(c, auth.resolve_task(c, who, tid)):
             return question_task_write(c, who, tid, text, to, rc, link)
-        if link:
-            text = f"{text}\n\n{link}"  # a ❓ has no link of its own: it is in its words
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):

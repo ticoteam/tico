@@ -456,15 +456,32 @@ def answer(conn: sqlite3.Connection, task_id: str, by: str, text: str, round_: i
     words = str(text or "").strip()
     if not words:
         raise QuestionError("validation", "Write the answer", 422)
+    # Whether the parent may be woken is read from where it stood before this write: the answer's own progress resets a
+    # person-level ladder to its owner, which must not turn a person's hold into a bot's turn.
+    held = _held_for_a_person(conn, q)
     from . import threads as _threads
 
     # Quiet as its relay is: the answer goes to the bot by its one wake, never to an @name in its words.
     with cast(Any, _threads).relaying():
         said: Row = H.task_comment(conn, by, task_id, words, wake=False)
-    return _answered(conn, q, by, words, str(said["id"]))
+    return _answered(conn, q, by, words, str(said["id"]), wake=not held)
 
 
-def _answered(conn: sqlite3.Connection, q: Row, by: str, words: str, message_id: str) -> Row:
+def _held_for_a_person(conn: sqlite3.Connection, q: Mapping[str, Any]) -> bool:
+    """Whether the parent waits on a person now other than through this question (another question or ❓, an OK, a
+    page, a task to share), is at the ladder's person level, or is snoozed: then an answer wakes nobody."""
+    from . import waiting_on as _waiting_on
+
+    W = cast(Any, _waiting_on)
+    parent: Row | None = _engine().task(conn, q["parent_id"])
+    visit: Row = (parent or {}).get("visit") or {}
+    if not parent or parent.get("snooze") or (visit.get("level") or "owner") == "person":
+        return True
+    mine = wait_id(q)
+    return any(w.state == W.PERSON and w.requirement_id != mine for w in W.of(conn, parent))
+
+
+def _answered(conn: sqlite3.Connection, q: Row, by: str, words: str, message_id: str, *, wake: bool) -> Row:
     """The answer write's work once its checks passed (`answer`)."""
     E = _engine()
     qid, parent_id, asker = str(q["task_id"]), str(q["parent_id"]), str(q["asker_id"])
@@ -491,7 +508,7 @@ def _answered(conn: sqlite3.Connection, q: Row, by: str, words: str, message_id:
 
     parent: Row = E.task(conn, parent_id) or found
     turn = cast(Any, _waiting_on).turn(conn, parent)
-    if turn and _may_wake(conn, parent):
+    if wake and turn and _may_wake(conn, parent):
         # The answer's words never ride on the wake, a notice in the parent's chat: the bot reads them where it may,
         # in that chat (`relayed`) or on the question.
         name, number = H.actor_name(conn, by), own.get("number") or qid
@@ -743,17 +760,9 @@ def end_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
                 f"{H.actor_name(conn, asker)} can no longer work on this task, so its question to "
                 f"{H.actor_name(conn, q['person_id'])} was withdrawn. Ask again if it still matters."
             )
-            if H.is_human(holder):
-                # Said to them by an @ of their name, from a bot that writes Tico's notices to a person (the
-                # pipeline's manager, else BotOps: person_asks.author): Tico's own lines about a task reach nobody
-                # (hubdb.task_news), a bot's @ is unread for them on the task's chat. No push is sent for it.
-                from . import person_asks
-
-                pipe: Row = parent.get("pipeline") or {}
-                writer = person_asks.author(conn, pipe.get("manager_id")) or H.TICO_ACTOR
-                said = f"@{H.actor_name(conn, holder)} {told}"
-                H.task_comment(conn, writer, q["parent_id"], said, wake=False, checked=False)
-            elif holder and holder != asker:
+            # A person holding the parent sees the question ended there (its row and its closed task): nothing is
+            # written to them, so nothing about the task reaches anyone who does not already read it.
+            if H.is_bot(holder) and holder != asker:
                 _wake(
                     conn,
                     E.task(conn, q["parent_id"]) or parent,
@@ -770,9 +779,33 @@ def end_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
 # ---- the backfill ------------------------------------------------------------------------------------------------------
 
 
-# What a plain ❓ comment's message carries in its refs: its task, its delivery, its mark's mirror. Anything more
-# (attachments, files, pages shown, a live browser) is a part the question task would not carry: the backfill skips it.
-PLAIN_REFS = {"comment", "quiet", "send_defer_for", "send_way", "send_people", "task", "question", "via", "job"}
+# What a plain ❓ comment's message carries in its refs: that it is a comment on its task, its delivery, and its mark's
+# mirror. Anything more (attachments, files, pages shown, another task named, a live browser) is a part the question
+# task would not carry, or a reader it would not keep: the backfill skips it.
+PLAIN_REFS = {"comment", "quiet", "send_defer_for", "send_way", "send_people", "task", "question"}
+WAYS = (None, "steer", "queue", "defer")
+
+
+def _not_plain(refs: object, mark: Mapping[str, Any]) -> str:
+    """Why a ❓'s message refs are not exactly a plain comment's on the mark's own task, or "" when they are."""
+    if not isinstance(refs, dict):
+        return "no refs"
+    said = cast(Row, refs)
+    extra = sorted(set(said) - PLAIN_REFS)
+    if extra:
+        return "it carries " + ", ".join(extra)
+    question: Any = said.get("question")
+    checks = (
+        (said.get("comment") is True, "comment"),
+        (said.get("task") == mark["task_id"], "task"),
+        (isinstance(question, dict) and cast(Row, question).get("id") == mark["id"], "question"),
+        (said.get("quiet") in (None, True), "quiet"),
+        (said.get("send_way") in WAYS, "send_way"),
+        (said.get("send_defer_for") in (None, "never") or said.get("send_way") == "defer", "send_defer_for"),
+        (said.get("send_people") in (None, True), "send_people"),
+    )
+    bad = [name for ok, name in checks if not ok]
+    return ("unexpected " + ", ".join(bad)) if bad else ""
 
 
 def command(conn: Any, action: str, by: str) -> Row:
@@ -829,9 +862,9 @@ def backfill(conn: sqlite3.Connection) -> Row:
         if any(str(r).startswith("browser:") for r in shows):
             skip("it shows a live browser to take over")
             continue
-        carried = sorted(set(cast(Row, refs)) - PLAIN_REFS) if isinstance(refs, dict) else []
-        if carried:
-            skip("its message carries more than words: " + ", ".join(carried))
+        odd = _not_plain(cast(object, refs), mark)
+        if odd:
+            skip("its message is not a plain ❓ comment on its task: " + odd)
             continue
         if message.get("in_reply_to"):
             skip("its message replies to another, whose readers it keeps")
@@ -843,8 +876,9 @@ def backfill(conn: sqlite3.Connection) -> Row:
         if not asks_as_task(conn, parent["id"]):
             skip("it is a dream's question, which Learnings reads and answers")
             continue
-        if str(message.get("conversation_id")) != str(parent["conversation_id"]):
-            skip("it is not on its task's own chat (a sub-thread, or another room)")
+        own_thread = conn.execute("SELECT id FROM conversations WHERE task_id=?", (parent["id"],)).fetchall()
+        if len(own_thread) != 1 or str(message.get("conversation_id")) != str(own_thread[0][0]):
+            skip("it is not on its task's own thread (a shared chat, a sub-thread, or another room)")
             continue
         if not question_marks.answerable(conn, mark):
             skip("its person can no longer answer it")
