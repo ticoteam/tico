@@ -247,7 +247,7 @@ def validate_identity(c, who):
                 409,
             )
         return
-    # Read once a snapshot: the route's own `execution.runner` asks for the same row under the same write lock.
+    # Read once a snapshot: the route's own `execution.runner` asks for the same row (a write's SAVEPOINT reads it again).
     runner = read_cache.one(c, H.RUNNER_SQL, (who.runner_id,))
     if not runner:
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)

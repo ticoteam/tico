@@ -3531,7 +3531,7 @@ class Execution:
             raise Problem("identity", "A registered runner is required", 403)
         from .read_cache import one
 
-        # Once a snapshot: validate_identity read the same row under the same lock (a write in between reads it again).
+        # Once a snapshot: validate_identity reads the same row (a write's SAVEPOINT in between reads it again).
         return one(c, H.RUNNER_SQL, (who.runner_id,))
 
     @staticmethod
