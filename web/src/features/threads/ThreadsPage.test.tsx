@@ -235,14 +235,15 @@ describe('The menu\'s Threads list @s156', () => {
   beforeEach(() => people([]));
 
   it('shows a pending Threads read and lets the viewer recover if it fails', async () => {
-    const first = Promise.withResolvers<Reply>();
+    let finish!: (reply: Reply) => void;
+    const first = new Promise<Reply>((resolve) => { finish = resolve; });
     let reads = 0;
     serve((url) =>
-      url.startsWith('/api/v2/threads?sort=') ? (++reads === 1 ? first.promise : ok({ threads: [row('t1', 'Launch plan', 2)] })) : undefined,
+      url.startsWith('/api/v2/threads?sort=') ? (++reads === 1 ? first : ok({ threads: [row('t1', 'Launch plan', 2)] })) : undefined,
     );
     show(<MenuThreads asks={new Set()} />, '/threads');
     expect(await screen.findByRole('status', { name: 'Loading threads' })).toBeTruthy();
-    first.resolve({ status: 500, body: {} });
+    finish({ status: 500, body: {} });
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByTitle('Launch plan')).toBeTruthy();
     expect(reads).toBe(2);
