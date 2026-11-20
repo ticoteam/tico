@@ -523,14 +523,12 @@ class Blobs:
             stream.seek(start)
             return stream
         except FileNotFoundError as exc:
-            if not self.bucket and not self._earlier:
-                # Nowhere else holds it, so asking again finds nothing: not a 503 to retry. A rehearsal copy has no
-                # attachments (backend/devcopy.py), so there every file's bytes are missing while its rows are there.
+            if self.rehearsal and not self.bucket and not self._earlier:
+                # A rehearsal copy has no attachments (backend/devcopy.py): every file's rows are there and none of its
+                # bytes, so asking again finds nothing. Elsewhere a miss may be storage that failed to load: a 503.
                 raise Problem(
                     "file_missing",
-                    "A rehearsal copy has no attachments: this file's bytes are on the company's own server"
-                    if self.rehearsal
-                    else "This file's stored bytes are missing from this server",
+                    "A rehearsal copy has no attachments: this file's bytes are on the company's server",
                     404,
                 ) from exc
             raise Problem(

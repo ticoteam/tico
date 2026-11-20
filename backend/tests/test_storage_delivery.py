@@ -497,9 +497,10 @@ def test_json_receipt_replays_across_upgrade(api):
 
 
 @pytest.mark.parametrize('rehearsal', [False, True])
-def test_bytes_no_place_holds_answer_404_not_a_503_to_retry(api, rehearsal):
-    """A version whose bytes are on no disk or bucket this server reads (a rehearsal copy has no attachments) is a 404
-    that says so, not a 503 that invites a retry; its metadata still reads. Bytes behind a bucket that failed stay 503."""
+def test_a_rehearsal_answers_404_for_the_attachments_it_does_not_have(api, rehearsal):
+    """A rehearsal copy has no attachments (backend/devcopy.py): a version's bytes it lacks are a 404 that says so, not
+    a 503 that invites a retry, while its metadata still reads. Anywhere else a miss may be storage that failed to load
+    (a bucket whose keys did not decrypt), so it stays a 503; so does a rehearsal with an earlier bucket to read."""
     tid = task(api)
     first = attach(api, tid, 'plan.md', b'First plan')
     attach(api, tid, 'plan.md', b'Second plan')
@@ -514,8 +515,8 @@ def test_bytes_no_place_holds_answer_404_not_a_503_to_retry(api, rehearsal):
     h = headers('ana-test')
     assert api.get(f'/api/v2/files/{series}/meta?v=1', headers=h).status_code == 200
     missing = api.get(f'/api/v2/files/{series}?v=1', headers=h)
-    assert missing.status_code == 404 and missing.json()['error']['code'] == 'file_missing', missing.text
-    assert ('rehearsal' in missing.json()['error']['detail']) is rehearsal
+    assert missing.status_code == (404 if rehearsal else 503), missing.text
+    assert missing.json()['error']['code'] == ('file_missing' if rehearsal else 'blob_storage')
     assert api.get(f'/api/v2/files/{series}?v=2', headers=h).content == b'Second plan'
     blobs._earlier = [object()]  # an earlier bucket may hold it: that read failing is still worth a retry
     blobs._open_earlier = lambda digest, span: None

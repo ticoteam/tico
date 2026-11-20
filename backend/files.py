@@ -1805,19 +1805,26 @@ class Files:
                 )
             )
         out = once_per_content(listed)
-        assets = c.execute(
-            "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id,r.note,r.comment_id "
-            "FROM task_assets a JOIN blobs b ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id "
-            "LEFT JOIN task_file_reviews r ON r.file_id=b.id AND r.version=1 WHERE a.task_id=? "
-            "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)",
-            (task_id,),
-        ).fetchall()
-        # Each attachment's checks below read its links and the pages it may hold: all of them together, once.
-        privacy.prime_blobs(c, [b["id"] for b in assets])
-        prime_page_references(c, [b["id"] for b in assets])
-        for b in assets:
+        # A full page of files reads no attachments; else each chunk's checks (their links and the pages they may
+        # hold) are read together before the chunk is decided.
+        assets = (
+            []
+            if all_pages and len(out) >= limit
+            else c.execute(
+                "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id,r.note,"
+                "r.comment_id FROM task_assets a JOIN blobs b ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id "
+                "LEFT JOIN task_file_reviews r ON r.file_id=b.id AND r.version=1 WHERE a.task_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)",
+                (task_id,),
+            ).fetchall()
+        )
+        for k, b in enumerate(assets):
             if all_pages and len(out) >= limit:
                 break
+            if k % 100 == 0:
+                chunk = [a["id"] for a in assets[k : k + 100]]
+                privacy.prime_blobs(c, chunk)
+                prime_page_references(c, chunk)
             if not page_blob_visible(c, self.auth, who, b["id"]) or not privacy.blob_readable(c, actor, b["id"]):
                 continue
             out.append(

@@ -229,3 +229,11 @@ def test_a_tasks_file_list_reads_its_attachments_together_however_many_it_has(ap
             assert len(body["files"]) == n + 1  # the photos and the upload the task was made with
     for path in {path for _, path in counts}:
         assert counts[(5, path)] == counts[(45, path)], counts
+    # A photo also attached to a private task a reader may not open is left out of their list, in both forms.
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "human:ana", "Private", None, "human:ana", private=True)
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], "photo-7"))
+    for path in (f"/api/v2/tasks/{task['id']}/files", f"/api/v2/tasks/{task['id']}/files?all=1"):
+        mine = {f["id"] for f in get(api, path[len("/api/v2/") :])["files"]}
+        theirs = {f["id"] for f in get(api, path[len("/api/v2/") :], "ben-test")["files"]}
+        assert "photo-7" in mine and mine - theirs == {"photo-7"}, path
