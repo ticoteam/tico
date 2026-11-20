@@ -212,22 +212,23 @@ class BotRows:
                 self.queued = {slug: q["queued"] for slug, q in job_queues(c, who, read).items()}
             if self.wants("notes"):
                 self.notes = H.notes_waiting_counts(c, read, limit=500)
-            if self.wants("task_flow", "goal_active"):
+            if self.wants("task_flow"):
+                from . import waiting_on as W
+
                 stored = []
                 for part in H.chunks(read):
                     stored += c.execute(
-                        "SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) + ") AND status='open'",
+                        f"SELECT {W.SLIM_TASK_COLUMNS} FROM tasks WHERE owner_id IN ("
+                        + ",".join("?" * len(part))
+                        + ") AND status='open'",
                         ["bot:" + slug for slug in part],
                     ).fetchall()
                 tasks = {}
                 for task in map(dict, stored):
                     tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
-                # The rows just read stand for every one-task read of these tasks (H.task_untagged, the privacy checks,
-                # the waits' waiting_on.prime, a goal's room check). Their tags are not read: nothing here shows or
-                # checks one.
-                H.prime_task_rows(c, stored)
-                if self.wants("task_flow"):
-                    self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
+                # Prime only the slim wait cache (never SELECT *), so waiting_on_many reuses these rows directly.
+                W.prime_slim_tasks(c, stored)
+                self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
             if self.wants("claim_scoped", "claim_task"):
                 self.scopes = {
                     bot: row["claim_task"]

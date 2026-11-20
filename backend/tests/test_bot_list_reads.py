@@ -488,11 +488,11 @@ def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, 
 
 
 def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
-    """The bots' open tasks are read whole once, by owner, and that read stands for every one-task read of them after it
-    (H.task, task_engine.task, the waits' waiting_on.prime); every bot is read once, for each bot() after it. On TIDY
-    (Nov 19, 607 open bot tasks) the two extra reads of the tasks were 0.5-0.8 s a list under load."""
+    """The bots' open tasks are read once from the covering partial index (without body/title), and waiting_on_many
+    reuses those slim rows without reading SELECT * FROM tasks; every bot is read once."""
     import contextlib
 
+    from backend import waiting_on as W
     from backend.tests.helpers.statement_scope import measuring, recorder
 
     slugs = ["w1", "w2", "w3"]
@@ -518,8 +518,48 @@ def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
         with measuring(seen):
             response = api.get("/api/v2/bots", headers=T.headers("ana-test"))
     assert response.status_code == 200, response.text
-    whole = [sql for sql in seen if sql.startswith("SELECT * FROM tasks")]
-    assert len(whole) == 1 and "owner_id IN" in whole[0], whole
+    slim = [sql for sql in seen if sql.startswith(f"SELECT {W.SLIM_TASK_COLUMNS} FROM tasks")]
+    assert len(slim) == 1 and "owner_id IN" in slim[0], slim
+    assert not [sql for sql in seen if sql.startswith("SELECT * FROM tasks WHERE owner_id IN")], seen
+    assert not [sql for sql in seen if sql.startswith("SELECT * FROM tasks WHERE id IN")], seen
     # Nothing in the list shows or checks a task's tags (TIDY, Nov 19: 0.4 s a list under load to read them).
     assert not [sql for sql in seen if "task_tags" in sql], seen
     assert not [sql for sql in seen if sql.startswith("SELECT * FROM bots WHERE id=")], seen
+
+
+def test_task_flow_open_tasks_query_uses_covering_partial_index(api):
+    """BotRows reads open bot tasks purely from tasks_open_owner_flow without touching the tasks table or body pages."""
+    from backend import waiting_on as W
+
+    store = api.app.state.store
+    bots = [f"f{n:02d}" for n in range(60)]
+    add_bots(api, {slug: {} for slug in bots})
+    with store.transaction() as c:
+        old_rows(
+            c,
+            [
+                (
+                    H.new_id(),
+                    "Old",
+                    "x" * 4000,
+                    "human:ana",
+                    "bot:" + bots[n % 60],
+                    "done" if n % 9 else "open",
+                    H.now(),
+                    H.now(),
+                    0,
+                )
+                for n in range(4000)
+            ],
+        )
+        c.execute("ANALYZE")
+    marks = ",".join("?" * len(bots))
+    with store.read_transaction() as c:
+        plan = [
+            row[3]
+            for row in c.execute(
+                f"EXPLAIN QUERY PLAN SELECT {W.SLIM_TASK_COLUMNS} FROM tasks WHERE owner_id IN ({marks}) AND status='open'",
+                ["bot:" + b for b in bots],
+            )
+        ]
+    assert any("COVERING INDEX tasks_open_owner_flow" in line for line in plan), plan

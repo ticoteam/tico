@@ -916,16 +916,19 @@ def _install_request_guard(
                 {"error": exc.code, "detail": exc.detail, "retryable": exc.retryable, **getattr(exc, "extra", {})},
                 status_code=exc.status,
             )
+        extra = getattr(exc, "extra", None) or {}
+        headers = {"Retry-After": str(extra["retry_after"])} if exc.status == 429 and extra.get("retry_after") else None
         return JSONResponse(
             {
                 "error": {
                     "code": exc.code,
                     "detail": exc.detail,
                     "retryable": exc.retryable,
-                    **getattr(exc, "extra", {}),
+                    **extra,
                 }
             },
             status_code=exc.status,
+            headers=headers,
         )
 
     @app.exception_handler(sqlite3.OperationalError)
@@ -1584,8 +1587,6 @@ def _install_request_guard(
             ):
                 return RedirectResponse(owner_link.LINK_PATH, status_code=302)
             response = await problem_handler(request, exc)
-            if exc.status == 429 and (wait := (getattr(exc, "extra", None) or {}).get("retry_after")):
-                response.headers["Retry-After"] = str(wait)
             if exc.status == 401 and path == mcp_oauth.MCP_PATH:
                 # Where an agent with no token can sign in (backend/mcp_oauth.py, RFC 9728).
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
