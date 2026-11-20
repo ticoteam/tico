@@ -25,7 +25,9 @@ export const pages = defineSearch({
       .slice(0, HITS)
       .map(([to, title]) => {
         const icon = ICONS[to.split('/')[1] ?? ''];
-        return { key: `page:${to}`, title, ...(icon ? { lead: { icon } } : {}), run: { id: 'shell.goTo', input: { to } } };
+        // "Company, Finance" is Finance by name
+        const name = title.slice(title.lastIndexOf(', ') + 1).trim();
+        return { key: `page:${to}`, title, name, ...(icon ? { lead: { icon } } : {}), run: { id: 'shell.goTo', input: { to } } };
       });
   },
 });

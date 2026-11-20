@@ -435,7 +435,7 @@
     },
     {
       "id": "agents.requestCloud",
-      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…): a seat holds its place and Tico support builds it",
+      "title": "Request a cloud agent Tico does not connect yet (Devin, Jules…, or `other` with its name or website): a seat holds its place, its first task waits there, and Tico support builds it",
       "kind": "change",
       "input": {
         "type": "object",
@@ -451,6 +451,16 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "a team's id"
+          },
+          "first_task": {
+            "type": "string",
+            "maxLength": 8000,
+            "description": "the first task, waiting on the seat until the agent connects"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "for `other`: the agent's name or website"
           }
         },
         "required": [
@@ -5333,6 +5343,53 @@
       }
     },
     {
+      "id": "risk.addDate",
+      "title": "Add a date to a matter",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "starts_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "not before: a day 2026-12-08, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "due by: a day 2026-12-15, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "risk.addMatter",
       "title": "Add a matter to a risk",
       "kind": "change",
@@ -5362,6 +5419,62 @@
           "risk",
           "title",
           "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "risk.changeDate",
+      "title": "Change a matter's date, or mark it done",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "starts_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "not before: a day 2026-12-08, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "description": "due by: a day 2026-12-15, or a time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "done": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "task",
+          "date"
         ],
         "additionalProperties": false
       }
@@ -5508,6 +5621,31 @@
         },
         "required": [
           "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "risk.removeDate",
+      "title": "Remove a matter's date",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "date": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "task",
+          "date"
         ],
         "additionalProperties": false
       }
@@ -5864,7 +6002,7 @@
     },
     {
       "id": "routines.list",
-      "title": "Search or filter the routines",
+      "title": "Search or filter the routines, or search the incoming webhooks (tab: webhooks)",
       "kind": "view",
       "input": {
         "type": "object",
@@ -5879,6 +6017,11 @@
               "failed",
               "hold",
               "off"
+            ]
+          },
+          "tab": {
+            "enum": [
+              "webhooks"
             ]
           }
         },
@@ -8612,6 +8755,41 @@
       }
     },
     {
+      "id": "skills.edit",
+      "title": "Propose a change to a skill's text",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 90000
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "skills.install",
       "title": "Install a skill",
       "kind": "change",
@@ -10100,6 +10278,23 @@
       }
     },
     {
+      "id": "tasks.compose",
+      "title": "New task",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tasks.create",
       "title": "New task",
       "kind": "change",
@@ -10832,6 +11027,12 @@
               "person",
               "cloud"
             ]
+          },
+          "team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a team's id"
           }
         },
         "additionalProperties": false

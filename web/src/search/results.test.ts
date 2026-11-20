@@ -5,7 +5,7 @@ import type { AnyAction, Ctx } from '@/actions';
 // The pieces, not the index, so this test does not load the whole registry.
 import { defineAction } from '@/actions/types';
 import { defineSearch } from './providers';
-import { actionHits, gather, highlight, readRecent, remember, REMOTE_WAIT_MS, type Group } from './results';
+import { actionHits, gather, highlight, rank, readRecent, remember, REMOTE_WAIT_MS, score, type Group } from './results';
 
 const ctx: Ctx = { router: {} as AnyRouter, queryClient: {} as Ctx['queryClient'], via: 'search' };
 const goTo = defineAction({
@@ -34,6 +34,37 @@ describe('search', () => {
       { text: 'frost', hit: true },
       { text: ' guide', hit: false },
     ]);
+  });
+
+  it('scores a whole name, then its start, then the start of its words, then anywhere; short names first', () => {
+    const order = ['Billing', 'Billing Owner', 'Billing API: requests take 6.5 s since the deploy', 'Rental billing', 'Rebilling'];
+    const scores = order.map((t) => score(t, 'billing'));
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(score('#concierge-main', 'concierge')).toBeGreaterThan(score('Weekly Concierge recap, every Monday', 'concierge'));
+    expect(score('#412', '412')).toBe(score('#412', '#412'));
+    expect(score('Frost dates', 'frost cloth')).toBe(0);
+  });
+
+  it('puts the group with the best answer first, keeps a thing once, and drops an action that only opens it', () => {
+    const hit = (key: string, title: string, run: { id: string; input: unknown }, name?: string) => ({ key, title, run, ...(name ? { name } : {}) });
+    const groups: Group[] = [
+      { name: 'Tasks', hits: [hit('task:1', 'Recheck the billing export', { id: 'task.open', input: { task: 1 } })] },
+      { name: 'People', hits: [hit('bot:b', 'Billing Owner', { id: 'shell.goTo', input: { to: '/team/b' } })] },
+      { name: 'Pipelines', hits: [hit('pipeline:b', 'Billing', { id: 'tasks.open', input: { pipeline: 'b' } })] },
+      { name: 'Company', hits: [hit('pipeline:b2', 'Billing', { id: 'tasks.open', input: { pipeline: 'b' } })] },
+      { name: 'Settings', hits: [hit('settings:billing', 'Settings, Billing', { id: 'settings.open', input: { section: 'billing' } }, 'Billing')] },
+      {
+        name: 'Actions',
+        hits: [
+          hit('a1', 'Open Billing', { id: 'tasks.open', input: { pipeline: 'b' } }),
+          hit('a2', 'Open Billing Owner', { id: 'team.open', input: { who: 'b' } }),
+          hit('a3', 'Billing report', { id: 'money.report', input: {} }),
+        ],
+      },
+    ];
+    const ranked = rank(groups, 'billing');
+    expect(ranked.map((g) => g.name)).toEqual(['Pipelines', 'Settings', 'People', 'Actions', 'Tasks']);
+    expect(ranked.find((g) => g.name === 'Actions')?.hits.map((h) => h.title)).toEqual(['Billing report']);
   });
 
   it('offers actions as rows, skipping what the person cannot do', () => {

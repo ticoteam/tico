@@ -18,6 +18,7 @@ import {
   type Pipeline,
   type Skipped,
 } from './queries';
+import { firstPipeline } from './home';
 import { VIEW_PREF } from './search';
 import { createTag, createTaggedTask, moreTagTasks, saveTag, tagKeyOf } from './queries';
 
@@ -44,6 +45,21 @@ export const openTasks = defineAction({
       input: { pipeline: p.id },
       title: `Open ${p.name}`,
     })),
+});
+
+/** "New task" from search (or Tico): the pipeline opened last, with the New task box up. */
+export const composeTask = defineAction({
+  id: 'tasks.compose',
+  title: 'New task',
+  kind: 'view',
+  input: z.strictObject({ pipeline: z.optional(pipeline) }),
+  run: async ({ router, queryClient }, { pipeline: chosen }) => {
+    const to = chosen ?? firstPipeline(await queryClient.ensureQueryData(pipelinesQuery));
+    await router.navigate(to ? { to: where(to), search: { new: 1 } as never } : { to: '/tasks' });
+  },
+  did: () => 'Opened New task',
+  target: () => ({ kind: 'tasks', id: 'new' }),
+  offer: () => [{ input: {} as { pipeline?: string } }],
 });
 
 /** Board or list is remembered per pipeline; Archived is a place to look, so going back finds the view it left. */

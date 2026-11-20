@@ -296,7 +296,7 @@ export const filesQuery = (kind: string) =>
 export const fileSearchQuery = (text: string, kind = '') =>
   queryOptions({
     queryKey: ['files', 'search', text, kind],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind })}`, { signal }),
+    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string; updated_at?: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind })}`, { signal }),
     enabled: text.trim().length > 1,
   });
 
