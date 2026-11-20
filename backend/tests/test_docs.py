@@ -20,7 +20,11 @@ def test_create_edit_conflict_history_and_restore(api):
     assert found()["excerpt"] == "Refund within 30 days."
     second = edit(api, doc, body="Refund within 14 days.", note="Shorter window")["doc"]
     assert second["version"] == 2
-    assert found()["excerpt"] == "Refund within 14 days."  # search parses each version once, never an old one again
+    assert found()["excerpt"] == "Refund within 14 days."  # each write stores the new parse search reads
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE docs SET search_parse=NULL")  # as a database from before the stored parse
+    api.app.state.store.initialize(seed_market=False)  # the start parses each live doc
+    assert found()["excerpt"] == "Refund within 14 days."
     stale = edit(api, doc, who=BEN, body="mine", expected=409)  # ben still holds version 1
     assert stale["error"]["code"] == "version_conflict" and stale["error"]["version"] == 2
     assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == "Refund within 14 days."

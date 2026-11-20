@@ -140,14 +140,14 @@ def grow(api):
     with store.transaction() as c:
         for n in range(595):
             body = _doc(rnd, n)
-            path = f"_librarian/doc-{n}.md" if n < 8 else f"team/doc-{n}.md"
+            path, title = (f"_librarian/doc-{n}.md" if n < 8 else f"team/doc-{n}.md"), f"Doc {n} {_text(rnd, 2)}"
             c.execute(
                 "INSERT INTO docs(id,path,title,body,version,created_by_id,created_at,updated_by_id,updated_at) "
                 "VALUES(?,?,?,?,1,'human:ana',?,'human:ana',?)",
-                (f"doc-{n:04d}", path, f"Doc {n} {_text(rnd, 2)}", body, now, now),
+                (f"doc-{n:04d}", path, title, body, now, now),
             )
             rowid = c.execute("SELECT rowid FROM docs WHERE id=?", (f"doc-{n:04d}",)).fetchone()[0]
-            D.index(c, rowid, f"Doc {n}", path, body)
+            D.index(c, rowid, title, path, body)
 
 
 def reads(api):
