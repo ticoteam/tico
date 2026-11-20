@@ -1,9 +1,9 @@
 """The Mercury adapter (spec §8.1, §9): plain HTTP calls to Mercury's API with the company's own token, read at use
 time and never logged. It is only ever called outside a transaction, by the sync worker (finance/sync.py) and the
-connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a
-few times (backend/outbound_http.py); 401/403 on a write means the token's IP allowlist lacks this server; a redirect is never followed (the
-token stays with the host it was meant for) and a 3xx is a failed answer. The Vault host (full card numbers) is never
-called."""
+connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 on a read waits out
+Retry-After a few times, and a write is sent once (backend/outbound_http.py); 401/403 on a write means the token's IP
+allowlist lacks this server; a redirect is never followed (the token stays with the host it was meant for) and a 3xx is
+a failed answer. The Vault host (full card numbers) is never called."""
 
 import json
 import logging

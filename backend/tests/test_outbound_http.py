@@ -40,22 +40,23 @@ def test_a_redirect_comes_back_as_the_answer_and_the_token_stays_home():
     assert refused.value.status == 302
 
 
-def test_a_429_is_tried_again_for_a_read_and_a_write_until_the_tries_run_out():
-    for method in ("GET", "POST"):
+def test_a_429_is_tried_again_for_a_read_or_a_vouched_write_until_the_tries_run_out():
+    for method, vouched in (("GET", None), ("POST", True)):
         seen = []
         transport = _replying((429, {"Retry-After": "3"}), (429, {}), (200, {}), seen=seen)
-        assert H.send(method, "https://api.example/x", retries=3, transport=transport).json() == {"ok": True}
-        assert len(seen) == 3
+        reply = H.send(method, "https://api.example/x", retries=3, idempotent=vouched, transport=transport)
+        assert reply.json() == {"ok": True} and len(seen) == 3
     seen = []
     last = H.send("GET", "https://api.example/x", retries=1, transport=_replying((429, {}), (429, {}), seen=seen))
     assert (last.status, len(seen)) == (429, 2)
 
 
 def test_a_write_that_may_have_landed_is_never_sent_twice():
-    seen = []
-    transport = _replying((503, {}), (200, {}), seen=seen)
-    assert H.send("POST", "https://api.example/x", retries=3, retry_on={429, 503}, transport=transport).status == 503
-    assert len(seen) == 1
+    for status in (429, 503):
+        seen = []
+        transport = _replying((status, {}), (200, {}), seen=seen)
+        reply = H.send("POST", "https://api.example/x", retries=3, retry_on={429, 503}, transport=transport)
+        assert (reply.status, len(seen)) == (status, 1)
     seen = []
     dropped = _replying(httpx.ReadTimeout("slow"), (200, {}), seen=seen)
     with pytest.raises(H.Failed):
@@ -94,6 +95,7 @@ def test_the_wait_is_retry_after_capped_else_doubling():
     assert H.wait_for(reply("-5"), 0) == 0.0
     assert H.wait_for(reply("Wed, 21 Oct 2015 07:28:00 GMT"), 0) == 0.0  # a date already past
     assert [H.wait_for(reply(None), n) for n in range(3)] == [1.0, 2.0, 4.0]
+    assert [H.wait_for(reply(None), n, first_wait=2) for n in range(3)] == [2.0, 4.0, 8.0]
     assert H.wait_for(reply("soon"), 2) == 4.0
     assert H.wait_for(None, 10, max_wait=5) == 5
 
@@ -105,3 +107,25 @@ def test_the_test_transport_seam_and_the_request_shape(monkeypatch):
     (request,) = seen
     assert request.method == "POST" and request.url.params["a"] == "b c" and request.content == b"k=v"
     assert request.extensions["timeout"]["read"] == 2
+
+
+def test_max_bytes_reads_one_byte_past_the_limit_and_no_more():
+    big = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 5000))
+    assert len(H.send("GET", "https://api.example/x", max_bytes=10, transport=big).content) == 11
+    assert len(H.send("GET", "https://api.example/x", transport=big).content) == 5000
+
+
+class _CutShort(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b'{"message": "'
+        raise httpx.ReadError("connection dropped")
+
+
+def test_a_refusal_keeps_its_status_when_its_body_or_location_cannot_be_read():
+    cut = httpx.MockTransport(lambda request: httpx.Response(403, stream=_CutShort()))
+    assert H.send("GET", "https://api.example/x", transport=cut).status == 403
+    moved = httpx.MockTransport(lambda request: httpx.Response(302, headers={"Location": "https://h:99999/"}))
+    assert H.send("GET", "https://api.example/x", transport=moved).status == 302
+    cut_success = httpx.MockTransport(lambda request: httpx.Response(200, stream=_CutShort()))
+    with pytest.raises(H.Failed):
+        H.send("GET", "https://api.example/x", transport=cut_success)

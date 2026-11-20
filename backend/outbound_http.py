@@ -7,11 +7,13 @@ answer at all (a name that does not resolve, a refused or dropped connection, a 
 Failed, the one error this module raises; `Reply.check()` raises it for a refusal too, for a caller that wants only
 success.
 
-Retries are bounded and opt-in (`retries`, run by stamina). A reply `retry_on` names (its statuses, or a test of the
-reply) is tried again after the wait its Retry-After asks for, capped at `max_wait`, or 1, 2, 4... seconds when it names
-none; `retry_errors` also tries again a call that got no answer. A write (any method outside IDEMPOTENT) is tried again
-only on 429, which says the request was not taken: a write that may have landed (a 5xx, a dropped connection) is never
-sent twice. Retries that must outlive the process stay in the database (webhook_delivery, outbox, cloud_machines).
+Retries are bounded and opt-in (`retries`, run by stamina), and only for a request that is safe to send twice: an
+IDEMPOTENT method, or one the caller vouches for (`idempotent=True`: a POST that only reads, or that carries an
+idempotency key the service honours). A reply `retry_on` names (its statuses, or a test of the reply) is tried again
+after the wait its Retry-After asks for, capped at `max_wait`, or 1, 2, 4... seconds (from `first_wait`) when it names
+none; `retry_errors` also tries again a call that got no answer. Any other write is sent once, whatever comes back: even
+a 429 does not promise the write was not taken. Retries that must outlive the process stay in the database
+(webhook_delivery, outbox, cloud_machines).
 
 An address a person typed is not sent from here: backend/egress.py checks it and pins the address it checked.
 """
@@ -98,10 +100,11 @@ def retry_after(headers: Mapping[str, str]) -> float | None:
     return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
-def wait_for(reply: Reply | None, tried: int, max_wait: float = MAX_WAIT) -> float:
-    """The wait before try number `tried + 2`: the reply's Retry-After, else 2**tried seconds; at most `max_wait`."""
+def wait_for(reply: Reply | None, tried: int, max_wait: float = MAX_WAIT, first_wait: float = 1.0) -> float:
+    """The wait before try number `tried + 2`: the reply's Retry-After, else first_wait * 2**tried seconds; at most
+    `max_wait`."""
     asked = retry_after(reply.headers) if reply is not None else None
-    return min(asked if asked is not None else 2.0**tried, max_wait)
+    return min(asked if asked is not None else first_wait * 2.0**tried, max_wait)
 
 
 def send(
@@ -118,16 +121,20 @@ def send(
     retry_on: Collection[int] | Callable[[Reply], bool] = (429,),
     retry_errors: bool = False,
     max_wait: float = MAX_WAIT,
+    first_wait: float = 1.0,
     deadline: float | None = None,
     idempotent: bool | None = None,
+    max_bytes: int | None = None,
     follow_redirects: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> Reply:
     """One call to `url`, tried up to `retries` more times (see the module docstring); the last Reply, or Failed.
 
     `deadline` (time.monotonic) bounds the whole call: each try's timeout is what is left of it, and a wait that would end
-    past it is not taken (the reply in hand is returned). `idempotent` overrides the method's own rule, for a POST that
-    only reads (a search). `transport` stands in for the network in tests."""
+    past it is not taken (the reply in hand is returned). `idempotent` overrides the method's own rule: True for a POST
+    that only reads or carries an idempotency key the service honours. `max_bytes` reads the body only to one byte past
+    it, so a caller can refuse an answer too large without holding all of it. `transport` stands in for the network in
+    tests."""
     method = method.upper()
     idempotent = method in IDEMPOTENT if idempotent is None else idempotent
     statuses = frozenset[int]() if callable(retry_on) else frozenset(retry_on)
@@ -144,7 +151,7 @@ def send(
             reply = None
         else:
             return False
-        wait = wait_for(reply, len(waits), max_wait)
+        wait = wait_for(reply, len(waits), max_wait, first_wait)
         if deadline is not None and time.monotonic() + wait >= deadline:
             return False
         waits.append(wait)
@@ -168,10 +175,11 @@ def send(
                     json,
                     timeout,
                     deadline,
+                    max_bytes,
                     follow_redirects,
                     transport or TRANSPORT,
                 )
-                if wanted(reply) and (idempotent or reply.status == 429):
+                if wanted(reply) and idempotent:
                     raise _Again(reply)
                 return reply
     except _Again as again:
@@ -189,6 +197,7 @@ def _once(
     json: object,
     timeout: float,
     deadline: float | None,
+    max_bytes: int | None,
     follow_redirects: bool,
     transport: httpx.BaseTransport | None,
 ) -> Reply:
@@ -196,6 +205,7 @@ def _once(
         timeout = min(timeout, deadline - time.monotonic())
         if timeout <= 0:
             raise Failed("out of time")
+    answered: list[httpx.Response] = []  # the status line, kept when the body or a Location cannot be read
     try:
         # A client per call: no pooled connection that went stale between calls can turn a write into an unknown one.
         with httpx.Client(
@@ -203,10 +213,23 @@ def _once(
             follow_redirects=follow_redirects,
             transport=transport,
             verify=outbound_tls.context(),
+            event_hooks={"response": [answered.append]},
         ) as client:
-            response = client.request(
+            request = client.build_request(
                 method, url, headers=headers, params=params, content=content, data=data, json=json
             )
-            return Reply(response.status_code, response.headers, response.content)
+            response = client.send(request, stream=True)
+            try:
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body += chunk
+                    if max_bytes is not None and len(body) > max_bytes:
+                        del body[max_bytes + 1 :]
+                        break
+                return Reply(response.status_code, response.headers, bytes(body))
+            finally:
+                response.close()
     except (httpx.HTTPError, httpx.InvalidURL, OSError, ValueError) as exc:
+        if answered and not 200 <= answered[-1].status_code < 300:
+            return Reply(answered[-1].status_code, answered[-1].headers, b"")  # a refusal stays a refusal
         raise Failed(f"{type(exc).__name__}: no answer") from exc

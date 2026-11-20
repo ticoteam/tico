@@ -242,7 +242,8 @@ def _parse(raw: bytes) -> Any:
 @dataclass
 class Http:
     """One run's HTTP (backend/outbound_http.py): no redirects, rate limits waited out a few times (`throttled` says
-    which answers are one). A POST is a read here (a GAQL search), so a throttled one is tried again too."""
+    which answers are one). Every call here is safe to send twice: reads, GAQL searches (a POST that only reads) and
+    Google's refresh-token exchange."""
 
     transport: httpx.BaseTransport | None = None
 
@@ -279,8 +280,9 @@ class Http:
                 timeout=TIMEOUT,
                 retries=TRIES - 1,
                 retry_on=limited,
+                first_wait=2.0,
                 max_wait=MAX_WAIT,
-                idempotent=form is None,
+                idempotent=True,
                 transport=self.transport,
             )
         except outbound_http.Failed:
@@ -571,8 +573,20 @@ class _Meta:
             rows += [_dict(r) for r in _list(found.get("data"))]
             nxt = str(_dict(found.get("paging")).get("next") or "")
             parts = urllib.parse.urlsplit(nxt) if nxt else None
-            url = nxt if parts is not None and parts.scheme == "https" and parts.hostname == GRAPH_HOST else ""
+            url = (
+                _without_token(nxt)
+                if parts is not None and parts.scheme == "https" and parts.hostname == GRAPH_HOST
+                else ""
+            )
         return rows
+
+
+def _without_token(url: str) -> str:
+    """Graph's next-page link without the access_token it may carry: the token goes in the Authorization header only,
+    never in a URL that a log could keep."""
+    parts = urllib.parse.urlsplit(url)
+    kept = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(kept)))
 
 
 def _windows(start: str, end: str, size: int) -> list[tuple[str, str]]:
