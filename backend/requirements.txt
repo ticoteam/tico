@@ -11,6 +11,10 @@ anyio==4.15.1
     #   fastapi
     #   httpx
     #   starlette
+beautifulsoup4==4.15.0
+    # via
+    #   -r requirements.in
+    #   markdownify
 boto3==1.44.5
     # via -r requirements.in
 botocore==1.44.5
@@ -63,6 +67,10 @@ jmespath==1.1.0
     #   botocore
 livekit==1.1.21
     # via -r requirements.in
+lxml==6.1.3
+    # via -r requirements.in
+markdownify==1.2.4
+    # via -r requirements.in
 numpy==2.5.4
     # via livekit
 opentelemetry-api==1.45.2
@@ -111,12 +119,15 @@ six==1.17.0
     # via python-dateutil
 slack-sdk==3.47.0
     # via -r requirements.in
+soupsieve==4.1.2
+    # via beautifulsoup4
 starlette==1.10.0
     # via fastapi
 types-protobuf==7.35.1.20260906
     # via livekit
 typing-extensions==4.16.0
     # via
+    #   beautifulsoup4
     #   fastapi
     #   opentelemetry-api
     #   pydantic

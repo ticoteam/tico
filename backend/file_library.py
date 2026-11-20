@@ -24,10 +24,10 @@ import json
 import logging
 import secrets
 import sqlite3
-from html.parser import HTMLParser
 
 from fastapi import Request
 
+from . import html_convert
 from . import manual
 from . import page_links
 from . import names
@@ -180,34 +180,6 @@ def scan(c, select, where, params, limit, cursor, keep, budget=None, *, cursor_k
 
 
 # ---------------------------------------------------------------------------------------------- text
-class _Text(HTMLParser):
-    """The text a person sees on a page: no script, style or markup."""
-
-    SKIP = {"script", "style", "noscript", "template", "svg", "head"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.out, self.depth, self.title, self.in_title = [], 0, [], False
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "title":
-            self.in_title = True
-        elif tag in self.SKIP:
-            self.depth += 1
-
-    def handle_endtag(self, tag):
-        if tag == "title":
-            self.in_title = False
-        elif tag in self.SKIP and self.depth:
-            self.depth -= 1
-
-    def handle_data(self, data):
-        if self.in_title:
-            self.title.append(data)
-        elif not self.depth:
-            self.out.append(data)
-
-
 def extract(mime, data, full=False):
     """The searchable text of one version's bytes, or "" for a type Tico does not read (PDF and office files later).
     `full`: the whole text the bytes hold (up to READ_MAX bytes), with no cut for the search index (the Rules Owner reads it)."""
@@ -216,13 +188,8 @@ def extract(mime, data, full=False):
     if mime in TEXT_TYPES:
         text = data.decode("utf-8", errors="replace")
     elif mime == "text/html":
-        parser = _Text()
-        try:
-            parser.feed(data.decode("utf-8", errors="replace"))
-            parser.close()
-        except Exception:  # malformed markup: what was read so far
-            pass
-        text = " ".join(" ".join(parser.title + parser.out).split())
+        words, title = html_convert.to_text(data.decode("utf-8", errors="replace"))
+        text = " ".join((title + " " + words).split())
     elif mime in TABLE_TYPES:
         reader = csv.reader(io.StringIO(data.decode("utf-8", errors="replace")), delimiter=TABLE_TYPES[mime])
         rows = []
