@@ -7,6 +7,8 @@ export { FilesPage } from './FilesPage';
 // other file as its page; FilePreview draws one in place (a task's Details), FileFrame one whose type is known (a
 // task's file at a version, an email's attachment).
 export { FileFrame, FilePreview, FileViewerHost } from './FileViewer';
+// "Signed by Ana Example · Nov 20, 5:40 AM", for a version a person's signing made (a task's file bar).
+export { signedLine } from './signing';
 export { size as fileSize } from './parts';
 export { SkillsPage } from './SkillsPage';
 // The skills helper's code out of the address at startup (router.tsx), held for the Skills page.

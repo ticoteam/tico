@@ -103,6 +103,43 @@ SCHEMAS.update(
         "BotFileResult": obj({"file": "o", "created": "b"}, required=["file"]),
         "FileActivity": obj({"file": "s", "activity": "a"}, actors=ACTORS),
         "FileVersions": obj({"file": "s", "versions": "a"}),
+        "FileSigning": obj(
+            {
+                "id": "s",
+                "file_id": "s",
+                "task_id": "n",
+                "signer": {"type": "string", "description": "the person who signed, as an actor id (human:...)"},
+                "signer_name": "s",
+                "before_version": {"type": "integer", "description": "the version the person signed"},
+                "after_version": {"type": "integer", "description": "the version their signing made"},
+                "before_sha256": "s",
+                "after_sha256": "s",
+                "marks": items(obj({"kind": {"enum": ["signature", "text", "date"]}, "page": "i"})),
+                "created_at": "s",
+                "ip_address": {
+                    "type": ["string", "null"],
+                    "description": "people only: the address the signing came from",
+                },
+                "user_agent": {"type": ["string", "null"], "description": "people only: the browser it came from"},
+            },
+            required=[
+                "id",
+                "file_id",
+                "signer",
+                "signer_name",
+                "before_version",
+                "after_version",
+                "before_sha256",
+                "after_sha256",
+                "marks",
+                "created_at",
+            ],
+        ),
+        "FileSignings": obj({"file": "s", "signings": items(ref("FileSigning"))}),
+        "FileSigningResult": obj({"file_id": "s", "version": "i", "signing": ref("FileSigning")}),
+        "MySignature": obj(
+            {"signature": {"oneOf": [obj({"image": "s", "updated_at": "s"}), {"type": "null"}]}},
+        ),
         "LibraryFile": obj(
             {
                 "id": "s",

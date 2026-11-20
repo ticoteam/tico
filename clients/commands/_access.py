@@ -349,6 +349,7 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_growth_source_campaigns",
         "tico_growth_segment_show",  # a segment owner bot's read, not a person's; hidden for the listing's size cap
         "tico_growth_segment_list",  # the same
+        "tico_file_signings",  # a bot's read of who signed a file; the person sees it on the file. Same cap
         "tico_growth_segment_set",  # the Growth Manager's and an admin's setup, not a person's Assistant; same cap
         "tico_growth_rows_push",  # the Growth Manager's pushes, not a person's Assistant; same cap
         "tico_growth_costs_push",  # the same

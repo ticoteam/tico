@@ -1,14 +1,19 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { openPdf, type PdfDoc } from './pdf';
+import type { SignTarget } from './PdfSign';
+
+// Sign mode, its signature pad and pdf-lib load only when the person signs.
+const PdfSign = lazy(() => import('./PdfSign').then((m) => ({ default: m.PdfSign })));
 
 /* A PDF wherever it opens (an email's attachment or letter, a task's file, Files): its pages drawn by PDF.js as one
    long scroll, each fit to the width and drawn only as it nears the view, the same in every browser and on a phone.
-   Expand shows it over the whole window; Escape or Close brings it back. Where PDF.js cannot read it, it opens in a
-   tab of its own. */
+   Expand shows it over the whole window; Escape or Close brings it back. A task's PDF also offers Sign (PdfSign.tsx).
+   Where PDF.js cannot read it, it opens in a tab of its own. */
 
 /** A page's size in PDF points, as it is shown (its rotation applied). */
 export interface PageSize {
@@ -156,11 +161,17 @@ export function ZoomButtons({ zoom, onZoom }: { zoom: number; onZoom: (z: number
 
 const pagesOf = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
 
-/** `src` is what PDF.js reads (the file, or its bytes read here); `url` and `name` are what Download saves. */
-export function PdfView({ src, title, url, name }: { src: string; title: string; url: string; name?: string | null }) {
+/** `src` is what PDF.js reads (the file, or its bytes read here); `url` and `name` are what Download saves. `sign`, for
+    a task's PDF at its current version, offers Sign. */
+export function PdfView({ src, title, url, name, sign }: { src: string; title: string; url: string; name?: string | null; sign?: SignTarget }) {
   const pdf = usePdf(src);
   const [full, setFull] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [signing, setSigning] = useState(false);
+  const startSigning = () => {
+    setFull(false);
+    setSigning(true);
+  };
   if (pdf === 'failed')
     return (
       <div className="fv-none">
@@ -181,6 +192,11 @@ export function PdfView({ src, title, url, name }: { src: string; title: string;
         <span className="fv-pdf-count">{count}</span>
         <ZoomButtons zoom={zoom} onZoom={setZoom} />
         <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setFull(true)} />
+        {sign && (
+          <Button variant="quiet" icon="edit" className="fv-pdf-sign" onClick={startSigning}>
+            Sign
+          </Button>
+        )}
       </div>
       <BaseDialog.Root open={full} onOpenChange={setFull}>
         <BaseDialog.Portal>
@@ -192,6 +208,11 @@ export function PdfView({ src, title, url, name }: { src: string; title: string;
                 <span className="grow" />
                 <span className="fv-pdf-count">{count}</span>
                 <ZoomButtons zoom={zoom} onZoom={setZoom} />
+                {sign && (
+                  <Button variant="quiet" icon="edit" className="fv-pdf-sign" onClick={startSigning}>
+                    Sign
+                  </Button>
+                )}
                 <a className="ib" href={url} download={name || true} aria-label="Download" title="Download">
                   <Icon name="download" />
                 </a>
@@ -202,6 +223,11 @@ export function PdfView({ src, title, url, name }: { src: string; title: string;
           </BaseDialog.Viewport>
         </BaseDialog.Portal>
       </BaseDialog.Root>
+      {signing && sign && (
+        <Suspense fallback={null}>
+          <PdfSign doc={pdf.doc} sizes={pdf.sizes} title={title} target={sign} onClose={() => setSigning(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

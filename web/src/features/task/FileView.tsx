@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument, TaskFileView } from '@/api/schema';
 import { meQuery } from '@/data';
-import { FileFrame, FilePreview } from '@/features/library/exports';
+import { FileFrame, FilePreview, signedLine } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
@@ -96,8 +96,9 @@ export function PageBones() {
 }
 
 
-/** One version of a file as the frame draws it: a picture opens full size; anything else is the file viewer's. */
-function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?: () => void }) {
+/** One version of a file as the frame draws it: a picture opens full size; anything else is the file viewer's. A PDF at
+    its current version offers Sign when `signable`. */
+function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileVersion; onPicture?: () => void; signable?: boolean }) {
   const name = f.title || f.name;
   if (v.mime.startsWith('image/'))
     return onPicture ? (
@@ -108,7 +109,7 @@ function Body({ f, v, onPicture }: { f: TaskFileView; v: FileVersion; onPicture?
       <img src={v.url} alt={`${name}, v${v.n}`} />
     );
   if (isWord(f.name, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
-  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={f.name} size={v.size} signable={signable} />;
 }
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
@@ -132,6 +133,8 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const pair = versions.find((x) => v && x.n < v.n) ?? versions.find((x) => v && x.n > v.n);
   // The server's rule (ui/app/task-files.ts tfCanRemove): its owner, its requester, or someone who may move tasks.
   const mayRemove = t.mover || [t.owner_id, t.requester_id].includes(me.data?.id ?? '');
+  // Only a person signs (backend/file_signings.py); the server also checks they may write on the task.
+  const isPerson = me.data?.role === 'person' || me.data?.role === 'owner';
   // The task's pictures, each at its current version: the full size view walks them.
   const pictures = list.flatMap((x) => {
     const cur = currentOf(x);
@@ -201,6 +204,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
         ) : null}
         {v && <Face id={v.by} decorative />}
         {v && <Ago at={v.created_at} />}
+        {v?.signed && <small className="fv-signed">{signedLine(v.signed)}</small>}
         <span className="grow" />
         {list.length > 1 && i >= 0 && (
           <span className="fv-n">
@@ -227,7 +231,9 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
             ))}
         </div>
       ) : (
-        <div className="frame fv">{v && f && <Body f={f} v={v} onPicture={v === current ? () => showPicture(f.id) : undefined} />}</div>
+        <div className="frame fv">
+          {v && f && <Body f={f} v={v} onPicture={v === current ? () => showPicture(f.id) : undefined} signable={v === current && isPerson} />}
+        </div>
       )}
       <PictureViewer pictures={pictures} at={fullAt >= 0 ? fullAt : null} onAtChange={(i) => showPicture(i == null ? null : (pictures[i]?.id ?? null))} />
     </>

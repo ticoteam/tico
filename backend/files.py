@@ -1750,6 +1750,9 @@ class Files:
         rows = list(islice(candidates, limit) if all_pages else candidates)
         actor = privacy.actor(who)
         histories = task_file_versions(c, actor, [r["id"] for r in rows], limit=50 if all_pages else 0)
+        from .file_signings import signed_versions
+
+        signed = signed_versions(c, [r["id"] for r in rows if r["mime"] == "application/pdf"])
         if all_pages:
             page_links.prime(c, [row for row in rows if row["page_id"]])
         listed = []
@@ -1798,6 +1801,7 @@ class Files:
                                 if v["thumb_blob_id"]
                                 else None,
                                 "url": f"/api/v2/files/{fid}?v={v['version']}",
+                                "signed": signed.get((fid, v["version"])),
                             }
                             for v in history
                         ],
@@ -2648,11 +2652,15 @@ class Files:
             row = self.visible_file(c, who, fid)
             caches = {"repo": {}}
             out = []
+            from .file_signings import signed_versions
+
+            signed = signed_versions(c, [fid])
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (fid,)):
                 out.append(
                     {
                         "version": v["version"],
                         "current": v["version"] == row["current_version"],
+                        "signed": signed.get((fid, v["version"])),
                         "name": v["name"],
                         "size": v["size"],
                         "mime": v["mime"],
@@ -3028,4 +3036,7 @@ def install_files(app, store, auth, blobs, mutate):
     def version_bytes(request: Request, fid: str, number: int):
         return files.serve(request.state.identity, fid, number, request=request)
 
+    from . import file_signings
+
+    file_signings.install(app, store, auth, blobs, files, mutate)
     return files

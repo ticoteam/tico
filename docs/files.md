@@ -262,6 +262,27 @@ Librarian, which searches files beside the docs.
 `kind` accepts the Library's kinds (`page`, `document`, `image`, `data`, `media`, `other`). The task's **Link page**
 picker searches with `kind=page`.
 
+## Signing a PDF
+
+A person signs a task's PDF in Tico: **Sign** on the PDF, at its current version in the task's files or in Library ›
+Files, opens sign mode over its pages. **Signature** places
+their signature, drawn once with a mouse, pen or finger and kept on their profile for every PDF after (**Redraw
+signature** replaces it); **Text** places a short line (a name, a title) and **Date** today's date, both editable. A tap
+on a page places the mark; it is dragged to move and sized by its corner. **Save** writes the marks into the PDF for
+good in the browser (pdf-lib) and sends it as the file's next version; the version signed stays as it was. **Cancel** or
+Escape leaves the file untouched.
+
+Each signing is recorded and never changed: who signed, when, the file, the version signed and the version it made, the
+SHA-256 of both, what was added on which page, and the address and browser it came from. The version shows **Signed by
+Ana Example · Nov 20, 5:40 AM**. Only the person signs, in their own session: never a bot, a service key, Tico support
+or the Assistant. Marks drawn on a version that is no longer the current one are refused (409).
+
+`GET /api/v2/files/{id}/signings`, `tico file signings ID` and the `tico_file_signings` tool read the record for anyone
+who may see the file (a bot sees it without the address and browser), so a bot can tell a declaration was signed and
+attach the version the signing made. `POST /api/v2/files/{id}/signings` (multipart: `file`, `version`, `marks`) signs;
+`GET`/`PUT`/`DELETE /api/v2/me/signature` read, replace and remove the person's signature. A file's versions
+(`/api/v2/files/{id}/versions`, a task's file list) carry `signed` on a version a signing made.
+
 ## Deleting a file for good
 
 For a file that holds something it shouldn't. **Only the owner** deletes a file for good: **Delete for good** in a

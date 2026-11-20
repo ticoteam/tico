@@ -48,7 +48,8 @@ import type {
   WebhookShown,
   WebhookUpdate,
 } from '@/api/schema';
-import { QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import { keys, QUIET_STALE_MS, queryClient, quietRoot, write } from '@/data';
+import type { Mark, Signed, Signing } from './signing';
 import type { DocsSearchResults } from '@/api/schema';
 
 /* Every Library call. Docs, files, skills, tools and contacts have no live topic (backend/events.py): they are read
@@ -280,6 +281,8 @@ export interface FileVersion {
   actor: string | null;
   created_at: string;
   url: string;
+  /** Set on a version a person's signing in Tico made. */
+  signed?: Signed | null;
 }
 
 export const filesQuery = (kind: string) =>
@@ -328,6 +331,50 @@ export function uploadFile(task: string, file: File) {
     optimistic: (cur: unknown) => cur,
     send: (idempotencyKey) => api.post(`/api/v2/tasks/${enc(task)}/files`, fd, { idempotencyKey }),
   });
+}
+
+// ---------------------------------------------------------------- signing (backend/file_signings.py)
+
+const SIGNATURE_KEY = ['me', 'signature'] as const;
+
+export const signatureQuery = queryOptions({
+  queryKey: SIGNATURE_KEY,
+  queryFn: () => api.get<{ signature: { image: string; updated_at: string } | null }>('/api/v2/me/signature').then((r) => r.signature),
+});
+
+/** Save the person's signature (a PNG data URL), in place of any before it. */
+export function saveSignature(image: string) {
+  return write({
+    key: SIGNATURE_KEY,
+    optimistic: (cur: unknown) => cur,
+    wait: true,
+    settle: (_cur: unknown, answer: { signature: { image: string; updated_at: string } }) => answer.signature,
+    send: (idempotencyKey) => api.put<{ signature: { image: string; updated_at: string } }>('/api/v2/me/signature', { image }, { idempotencyKey }),
+  });
+}
+
+/** The bytes of one version, as the server keeps them. */
+export async function versionBytes(file: string, version: number): Promise<Uint8Array> {
+  const res = await fetch(`/api/v2/files/${enc(file)}/versions/${version}`, { credentials: 'same-origin' });
+  if (!res.ok) throw new ApiError(res.status, `http_${res.status}`, 'This file did not load', res.status >= 500);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+/** Send the signed PDF as the next version of `file`, signed on `version`. The views of the file read it again. */
+export async function signFile(file: string, version: number, name: string, signed: Uint8Array, marks: Mark[]) {
+  const fd = new FormData();
+  fd.append('version', String(version));
+  fd.append('marks', JSON.stringify(marks.map((m) => ({ kind: m.kind, page: m.page }))));
+  fd.append('file', new Blob([signed as BlobPart], { type: 'application/pdf' }), name);
+  const answer = await write({
+    key: ['files', 'versions', file],
+    optimistic: (cur: unknown) => cur,
+    wait: true,
+    send: (idempotencyKey) => api.post<{ file_id: string; version: number; signing: Signing }>(`/api/v2/files/${enc(file)}/signings`, fd, { idempotencyKey }),
+  });
+  void queryClient.invalidateQueries({ queryKey: ['files'] });
+  if (answer.signing.task_id) void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(answer.signing.task_id) });
+  return answer;
 }
 
 // ---------------------------------------------------------------- skills

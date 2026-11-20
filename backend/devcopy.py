@@ -418,6 +418,8 @@ KEEP = (
             "bot_control",
             "bot_file_activity",
             "bot_file_versions",
+            "file_signings",  # who signed which file version in Tico: a record, it reaches nothing
+            "signatures",  # each person's saved signature, placed only by that person
             "bot_files",
             "bot_memory_documents",
             "bot_memory_oversized",
