@@ -1,7 +1,5 @@
 # Tico desktop app
 
-> **Beta** on Mac: the Mac app stays Beta until it is signed ([#45](https://github.com/ticoteam/tico/issues/45)); the Windows and Linux apps are not Beta. See [Beta features](support.md#beta-features).
-
 Download **Tico** from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
 The same app connects to any Tico server and holds several companies, each with its own sign-in.
 A company with its own app offers it in its Tico menu ([below](#your-companys-app)).
