@@ -75,6 +75,7 @@ export function StagePick({ t }: { t: TaskData }) {
   const mine = useStages(t);
   // A forward move the stage refused for what is missing: the list, and the person's way past it with a reason.
   const [held, setHeld] = useState<Held | null>(null);
+  const [reopening, setReopening] = useState(false);
   const label = t.status === 'open' ? (t.stage?.name ?? 'No stage') : t.status === 'done' ? 'Done' : 'Closed';
   const move = async (to: string, name: string) => {
     const r = await run('task.move', { task: t.id, to }, { via: 'click' });
@@ -104,11 +105,44 @@ export function StagePick({ t }: { t: TaskData }) {
             <MenuItem label="Close" icon="archive" onSelect={() => void move('closed', 'Closed')} />
           </>
         ) : (
-          <MenuItem label="Reopen" icon="refresh" onSelect={() => void move('reopen', 'Open')} />
+          <MenuItem label="Reopen" icon="refresh" onSelect={() => setReopening(true)} />
         )}
       </Menu>
       {held && <MoveAnyway t={t} held={held} onClose={() => setHeld(null)} />}
+      {reopening && <ReopenAsk t={t} onClose={() => setReopening(false)} />}
     </>
+  );
+}
+
+/** "Reopen it?": a finished task opens again only with a reason. */
+function ReopenAsk({ t, onClose }: { t: TaskData; onClose: () => void }) {
+  const [why, setWhy] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const press = async () => {
+    setBusy(true);
+    setError('');
+    const r = await run('task.move', { task: t.id, to: 'reopen', why: why.trim() }, { via: 'click' });
+    setBusy(false);
+    if (r.ok) return onClose();
+    setError(reasonOf(r.error));
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Reopen it?"
+      actions={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press()}>
+            Reopen
+          </Button>
+        </>
+      }
+    >
+      <Field label="Why reopen it?" area autoFocus value={why} onValueChange={setWhy} error={error || undefined} />
+    </Dialog>
   );
 }
 
@@ -275,9 +309,9 @@ export function FlowTop({ t, more }: { t: TaskData; more?: ReactNode }) {
 
 type Asking = 'move' | 'reopen' | 'delete' | null;
 
-/** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the old task
-    window's rest (ui/app/task-props.ts): watch the agent's session, copy the link, move to another pipeline,
-    reopen with a reason, delete. Reopen and Delete ask first. */
+/** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the rest:
+    watch the agent's session, copy the link, move to another pipeline, reopen with a reason, delete. Reopen and Delete
+    ask first. */
 export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; flow?: boolean; details?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
   const [why, setWhy] = useState('');
@@ -432,21 +466,7 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
         {error && <p className="an-err">{error}</p>}
       </Dialog>
 
-      <Dialog
-        open={asking === 'reopen'}
-        onOpenChange={(o) => !o && close()}
-        title="Reopen it?"
-        actions={
-          <>
-            {cancel}
-            <Button variant="primary" busy={busy} disabled={!why.trim() || busy} onClick={() => press('task.move', { to: 'reopen', why: why.trim() })}>
-              Reopen
-            </Button>
-          </>
-        }
-      >
-        <Field label="Why reopen it?" area autoFocus value={why} onValueChange={setWhy} error={error || undefined} />
-      </Dialog>
+      {asking === 'reopen' && <ReopenAsk t={t} onClose={close} />}
 
       <Dialog
         open={asking === 'delete'}

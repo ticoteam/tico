@@ -595,6 +595,18 @@ describe('the task’s More menu', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'reopen', why: 'The fix broke on Safari' } }));
   });
 
+  it('asks why when the stage picker reopens a finished task', async () => {
+    serve(reads(task({ status: 'done' } as Partial<TaskData>)));
+    details();
+    fireEvent.click(await screen.findByRole('button', { name: 'Stage: Done' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reopen' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reopen it?' });
+    expect(sent).toEqual([]);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Why reopen it?' }), { target: { value: 'Still broken' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'reopen', why: 'Still broken' } }));
+  });
+
   it('moves the task to another pipeline and copies its link @s58', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
